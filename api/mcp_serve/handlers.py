@@ -275,9 +275,16 @@ async def _call_goals_list(
     limit = min(limit, 50)
 
     board = _goal_board(container)
-    # ALWAYS pass user_id — GoalBoard.list(user_id=None) is a cross-tenant
-    # read across every tenant's goals (see the plan's tenancy warning).
-    goals = board.list(user_id=user_id, status=status, limit=limit)
+    # B17: `board.list` is the DISPATCHER's order (priority DESC, created_at
+    # ASC) — used as a view it shows an external MCP client the OLDEST rows and
+    # can hide every recent goal. `list_recent` is the one "what is on my
+    # board" reader (newest first, tenant-scoped).
+    # ALWAYS pass user_id — a board read with user_id=None is cross-tenant.
+    goals = board.list_recent(
+        user_id=user_id,
+        statuses=(status,) if status else None,
+        limit=limit,
+    )
     return _text_result({"goals": [_goal_summary(g) for g in goals]})
 
 

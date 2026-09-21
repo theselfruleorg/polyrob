@@ -1,9 +1,16 @@
 """``/apps`` — the durable app service on the phone (032). Thin plumbing over
-``core.app_service.owner_ops`` so every seat renders the same text."""
+``core.app_service.owner_ops`` so every seat renders the same text.
+
+``via`` is the SEAT that ran the verb, and it lands in the audit trail beside
+the decision. It used to be the literal ``"telegram"``, so a REPL or CLI
+approve/kill was recorded as having come from the phone — the one field whose
+whole job is to say WHERE an owner decision was made.
+"""
 from typing import List
 
 
-def apps_reply(user_id: str, data_dir: str, args: List[str]) -> str:
+def apps_reply(user_id: str, data_dir: str, args: List[str],
+               via: str = "telegram") -> str:
     from core.app_service import owner_ops
     from core.app_service.registry import AppServiceRegistry, default_app_services_db
     reg = AppServiceRegistry(default_app_services_db())
@@ -16,11 +23,11 @@ def apps_reply(user_id: str, data_dir: str, args: List[str]) -> str:
     if sub == "show":
         return "\n".join(owner_ops.show_lines(reg, user_id, rest[0]))
     if sub == "approve":
-        return owner_ops.approve(reg, rest[0], user_id, via="telegram")[1]
+        return owner_ops.approve(reg, rest[0], user_id, via=via)[1]
     if sub == "reject":
-        return owner_ops.reject(reg, rest[0], user_id, via="telegram")[1]
+        return owner_ops.reject(reg, rest[0], user_id, via=via)[1]
     if sub == "kill":
-        return owner_ops.kill(reg, rest[0], user_id, via="telegram")[1]
+        return owner_ops.kill(reg, rest[0], user_id, via=via)[1]
     if sub == "logs":
         n = 30
         if len(rest) > 1:

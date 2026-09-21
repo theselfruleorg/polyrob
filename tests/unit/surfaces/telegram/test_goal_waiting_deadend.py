@@ -25,6 +25,12 @@ class _Board:
         self._edges = edges or {}
 
     def list(self, user_id=None, limit=1000):
+        # D11/E21: the dispatcher's own priority-ordered window. It must NEVER
+        # back an id lookup — a `list` call from a view path is the bug this
+        # fake exists to catch, so it raises rather than answering.
+        raise AssertionError("board.list is the dispatcher order, never a view")
+
+    def list_recent(self, user_id=None, statuses=None, limit=30):
         return list(self._goals.values())
 
     def get(self, gid, user_id=None):

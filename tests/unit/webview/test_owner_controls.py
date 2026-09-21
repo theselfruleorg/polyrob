@@ -18,6 +18,10 @@ def _client(monkeypatch, tmp_path, user_id="u1"):
     import webview.pages as pages
     monkeypatch.setattr(pages, "_effective_user_id", lambda req: user_id)
     monkeypatch.setattr(pages, "_data_dir", lambda: str(tmp_path))
+    # 043 A8/E2: `/api/webgate/pending` composes through
+    # `webview.inbox.build_inbox`, whose collectors resolve the data home
+    # via `webgate.data_dir()`. Patch the ONE seam both readers share.
+    monkeypatch.setattr(pages.webgate, "data_dir", lambda: str(tmp_path))
     app = FastAPI()
     app.include_router(pages.router)
     # 043 phase 5: pages.router carries the /api/webgate/* endpoints; the

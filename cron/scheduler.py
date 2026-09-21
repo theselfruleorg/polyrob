@@ -102,6 +102,10 @@ class TickResult:
     #: FIX 3: cut off by the duration cap while an owner approval ask THIS run
     #: opened was still open — not the job's failure (see ``_run_one``).
     deferred: List[str] = field(default_factory=list)
+    #: 057 WS-C (A3): goal ids pre-empted for a due pre-empting job on this tick.
+    #: A tick that yielded DID work (it moved the board), so the idle-backoff
+    #: ticker must not treat it as an empty tick.
+    yielded: List[str] = field(default_factory=list)
     skipped_locked: bool = False
     skipped_busy: bool = False
 
@@ -128,46 +132,56 @@ class CronScheduler:
         the process. Wired by core/autonomy_runtime.py; None = never yield."""
         self._yield_hook = hook
 
-    async def _maybe_yield_for_money(self, now: datetime) -> bool:
-        """True iff a running goal was yielded for a due money job this tick."""
+    async def _maybe_yield_for_money(self, now: datetime) -> List[str]:
+        """The goal ids pre-empted for a due PRE-EMPTING job, or ``[]``.
+
+        057 WS-C (A3/B7): called under the held TickLock (a yield outside it left
+        a multi-worker double-pre-emption window), and keyed on
+        ``cron.jobs.job_preempts`` — ``payload.preempts``, defaulting to the
+        money class — rather than on the priority class alone."""
         hook = getattr(self, "_yield_hook", None)
         if hook is None:
-            return False
+            return []
         try:
             from core.config_policy import AutonomyConfig
             if not AutonomyConfig.goal_yield_for_money_rail():
-                return False
+                return []
             from core.interactive_gate import read_turn_marker
             if read_turn_marker() is not None:
-                return False  # a human turn outranks every rail (D2)
-            from cron.jobs import is_money_job
-            due = [j for j in self.store.due(now) if is_money_job(j)]
+                return []  # a human turn outranks every rail (D2)
+            from cron.jobs import job_preempts
+            due = [j for j in self.store.due(now) if job_preempts(j)]
             if not due:
-                return False
+                return []
             job = due[0]
             held = await hook(job)
             if held:
-                logger.warning("cron: money job %s due — yielded running goal(s) %s",
+                logger.warning("cron: pre-empting job %s due — yielded running goal(s) %s",
                                job.id, held)
-            return bool(held)
+            return list(held or [])
         except Exception:
             logger.debug("yield-for-money probe failed", exc_info=True)
-            return False
+            return []
 
     async def tick(self, now: Optional[datetime] = None) -> TickResult:
         from core.interactive_gate import is_interactive_busy
         now = now or datetime.now()
-        if is_interactive_busy():
-            # A human mid-turn (REPL / owner chat) or a goal run holds the shared
-            # workspace. 056 WS5: a due MONEY job may pre-empt a GOAL (never a
-            # human turn); otherwise defer — jobs stay due for the next idle tick.
-            if not (await self._maybe_yield_for_money(now) and not is_interactive_busy()):
-                return TickResult(skipped_busy=True)
+        # 057 WS-C (A3): the busy probe and the yield now run INSIDE the TickLock.
+        # They used to run before it, so under workers>1 two processes could both
+        # decide to pre-empt the same goal for the same due job.
         lock = TickLock(self.lock_path)
         if not lock.acquire():
             logger.debug("cron tick skipped: lock held")
             return TickResult(skipped_locked=True)
+        yielded: List[str] = []
         try:
+            if is_interactive_busy():
+                # A human mid-turn (REPL / owner chat) or a goal run holds the shared
+                # workspace. 056 WS5: a due PRE-EMPTING job may pre-empt a GOAL (never
+                # a human turn); otherwise defer — jobs stay due for the next idle tick.
+                yielded = await self._maybe_yield_for_money(now)
+                if not (yielded and not is_interactive_busy()):
+                    return TickResult(skipped_busy=True, yielded=yielded)
             # C2: also hold the cross-process workspace lock so a cron run in this
             # process doesn't mutate the shared CWD workspace while a `rob` REPL in
             # another process is mid-turn. Non-blocking (timeout=0). Acquire is
@@ -179,13 +193,19 @@ class CronScheduler:
                 ws.__enter__()
             except Exception:
                 logger.debug("cron tick skipped: workspace lock unavailable/held")
-                return TickResult(skipped_busy=True)
+                return TickResult(skipped_busy=True, yielded=yielded)
             # Heartbeat the tick lock so a legitimately long tick (>_LOCK_STALE_SECONDS)
             # is never seen as stale + stolen by another worker (which would then
             # reclaim + double-run this tick's in-flight jobs).
             hb = asyncio.create_task(self._lock_heartbeat(lock))
             try:
-                return await self._run_due(now)
+                # 057 WS-C (A3): after a yield THIS tick runs only the jobs that
+                # earned the pre-emption. One money yield used to open the gate
+                # for the whole due set, so the ops backlog ran on the goal's
+                # cancelled slot and the rail still waited behind it.
+                result = await self._run_due(now, preempting_only=bool(yielded))
+                result.yielded = yielded
+                return result
             finally:
                 hb.cancel()
                 try:
@@ -204,13 +224,16 @@ class CronScheduler:
         except asyncio.CancelledError:
             pass
 
-    async def _run_due(self, now: datetime) -> TickResult:
+    async def _run_due(self, now: datetime, *, preempting_only: bool = False) -> TickResult:
         result = TickResult()
+        from cron.jobs import job_preempts
         # Reclaim crash-orphaned 'running' jobs here — we hold the TickLock, so any
         # 'running' row is genuinely stale (a live run always writes a terminal status
         # after itself). This replaces the unsafe reclaim-in-__init__.
         self.store.reclaim_stale_running()
         for job in self.store.due(now):
+            if preempting_only and not job_preempts(job):
+                continue  # 057 WS-C (A3): it waits for the next tick
             # Atomic claim: only run if WE flipped it scheduled->running. Guards against
             # ever double-running a job (defense-in-depth alongside the TickLock).
             if not self.store.claim_for_run(job.id):

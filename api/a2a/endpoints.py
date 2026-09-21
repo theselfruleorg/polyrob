@@ -8,8 +8,11 @@ Supported Methods:
 - tasks/get: Get task status
 - tasks/list: List tasks with pagination
 - tasks/cancel: Cancel a task
-- tasks/resubscribe: Resubscribe to streaming events
 - tasks/pushNotificationConfig/*: Push notification management
+
+Not available over JSON-RPC:
+- tasks/resubscribe: returns an SSE stream — use POST /a2a/tasks/resubscribe.
+  Calling it here answers 501 naming that route (B26).
 
 Reference: https://a2a-protocol.org/latest/specification/
 """
@@ -30,8 +33,28 @@ from api.payment_verification import verify_payment_for_request, payment_require
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/a2a", tags=["a2a"])
 
-# A2A-specific error code for payment required
-A2A_ERROR_PAYMENT_REQUIRED = -32402
+# B24: ONE payment-required code. This module used to define its own -32402
+# alongside `A2AErrorCode.PAYMENT_REQUIRED = -32005` in api/a2a/models.py, so
+# the same condition was reported with two different codes depending on which
+# path produced it, and a client switching on the code saw an unknown error.
+A2A_ERROR_PAYMENT_REQUIRED = A2AErrorCode.PAYMENT_REQUIRED
+
+
+class A2AMethodNotFound(Exception):
+    """Raised for an unknown JSON-RPC method.
+
+    B25: the handler used to `raise HTTPException(400, ...)` for this, which
+    the RPC wrapper mapped to INTERNAL_ERROR — `METHOD_NOT_FOUND` (-32601) was
+    unreachable, and a client could not tell a typo from a server fault.
+    """
+
+
+class A2ATaskNotFound(Exception):
+    """Raised when a task id does not resolve — maps to TASK_NOT_FOUND (B25)."""
+
+
+class A2ATaskNotCancelable(Exception):
+    """Raised when a task is already terminal — maps to TASK_NOT_CANCELABLE."""
 
 
 def get_task_handler(request: Request) -> A2ATaskHandler:
@@ -44,6 +67,31 @@ def get_task_handler(request: Request) -> A2ATaskHandler:
 # Permissive auth policy (accepts x402, JWT, and API-key auth).
 # Delegates to the canonical implementation in api.dependencies.
 from api.dependencies import get_user_permissive as get_authenticated_user
+
+
+def _code_for_status(status_code: int) -> int:
+    """Map an HTTP status raised inside a handler onto an A2A error code (B25)."""
+    if status_code == 401:
+        return A2AErrorCode.AUTHENTICATION_REQUIRED
+    if status_code == 402:
+        return A2AErrorCode.PAYMENT_REQUIRED
+    if status_code == 404:
+        return A2AErrorCode.TASK_NOT_FOUND
+    if status_code in (400, 422):
+        return A2AErrorCode.INVALID_PARAMS
+    if status_code == 501:
+        return A2AErrorCode.UNSUPPORTED_OPERATION
+    return A2AErrorCode.INTERNAL_ERROR
+
+
+def _code_for_value_error(message: str) -> int:
+    """Map the handler's ValueError text onto an A2A error code (B25)."""
+    text = (message or "").lower()
+    if "not found" in text or "could not be created" in text:
+        return A2AErrorCode.TASK_NOT_FOUND
+    if "terminal state" in text:
+        return A2AErrorCode.TASK_NOT_CANCELABLE
+    return A2AErrorCode.INVALID_PARAMS
 
 
 @router.post("/rpc")
@@ -93,15 +141,35 @@ async def a2a_rpc_endpoint(
         return JSONRPCResponse(
             id=request_id,
             error=JSONRPCError(
-                code=A2AErrorCode.AUTHENTICATION_REQUIRED if e.status_code == 401 else A2AErrorCode.INTERNAL_ERROR,
+                code=_code_for_status(e.status_code),
                 message=e.detail
             )
         )
-    except ValueError as e:
+    except A2AMethodNotFound as e:
+        return JSONRPCResponse(
+            id=request_id,
+            error=JSONRPCError(code=A2AErrorCode.METHOD_NOT_FOUND, message=str(e)),
+        )
+    except A2ATaskNotFound as e:
+        return JSONRPCResponse(
+            id=request_id,
+            error=JSONRPCError(code=A2AErrorCode.TASK_NOT_FOUND, message=str(e)),
+        )
+    except A2ATaskNotCancelable as e:
         return JSONRPCResponse(
             id=request_id,
             error=JSONRPCError(
-                code=A2AErrorCode.INVALID_PARAMS,
+                code=A2AErrorCode.TASK_NOT_CANCELABLE, message=str(e)),
+        )
+    except ValueError as e:
+        # B25: the handler signals "no such task" / "already terminal" as a
+        # ValueError whose text starts with a known phrase; map those onto the
+        # A2A codes a client can branch on instead of flattening every one to
+        # INVALID_PARAMS.
+        return JSONRPCResponse(
+            id=request_id,
+            error=JSONRPCError(
+                code=_code_for_value_error(str(e)),
                 message=str(e)
             )
         )
@@ -212,11 +280,21 @@ async def _handle_rpc_method(
         success = await handler.delete_push_notification_config(task_id, user_id=user_id)
         return {"success": success}
 
-    else:
+    elif method == "tasks/resubscribe":
+        # B26: `tasks/resubscribe` returns an SSE STREAM in the A2A spec, and a
+        # JSON-RPC POST here cannot return one. Saying so — with the route that
+        # can — is honest; the module docstring used to LIST this method while
+        # nothing implemented it, so a client got "internal error".
         raise HTTPException(
-            status_code=400,
-            detail=f"Method '{method}' not found"
+            status_code=501,
+            detail=("tasks/resubscribe delivers an SSE stream and is not "
+                    "expressible over /a2a/rpc — POST /a2a/tasks/resubscribe "
+                    "(body: {\"id\": \"<taskId>\", \"historyLength\": N}) "
+                    "instead."),
         )
+
+    else:
+        raise A2AMethodNotFound(f"Method '{method}' not found")
 
 
 # =============================================================================

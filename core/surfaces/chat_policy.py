@@ -176,15 +176,28 @@ def load(home_dir, owner_uid, surface, chat_id, *,
     if path is None or not path.is_file():
         return base
     cache_key = str(path)
+    cached = _CACHE.get(cache_key)
     try:
         mtime = path.stat().st_mtime_ns
-        cached = _CACHE.get(cache_key)
         if cached and cached[0] == mtime:
             return cached[1]
         flat = _read_flat(path)
     except Exception as e:
-        logger.warning("chat policy unreadable (%s) — using defaults: %s", path, e)
-        return base
+        # D62: the file EXISTS and cannot be parsed. Falling back to
+        # `defaults()` silently dropped `chat.mute_until` and `chat.mode`, so a
+        # corrupt overlay UN-MUTED the room it was muting — the one failure a
+        # quiet room can never notice. Keep the last good policy if this
+        # process ever read one; otherwise fail toward `listen` (the room keeps
+        # logging, only the owner and its admins are answered) rather than back
+        # to the wider default.
+        if cached:
+            logger.warning("chat policy unreadable (%s) — keeping the last good "
+                           "policy: %s", path, e)
+            return cached[1]
+        logger.warning("chat policy unreadable (%s) — falling back to `listen` "
+                       "(owner/admin only) so a corrupt file cannot widen the "
+                       "room: %s", path, e)
+        return base.with_mode("listen")
     kw: dict = {}
     for key, value in flat.items():
         if not key.startswith("chat."):
@@ -334,6 +347,7 @@ def _in_quiet_hours(window: str, now: Optional[float] = None) -> bool:
 
 def mode_allows_trigger(policy: ChatPolicy, *, mentioned: bool, role: str,
                         wake_hit: bool, is_command: bool = False,
+                        granted_command: bool = False,
                         now: Optional[float] = None) -> bool:
     """May this line wake the agent in this room?
 
@@ -344,7 +358,14 @@ def mode_allows_trigger(policy: ChatPolicy, *, mentioned: bool, role: str,
     by definition directed at the bot even with no ``@handle`` attached
     (``is_command`` — the first token of the line starts with ``/``; a plain
     member's ``/…`` line does NOT get this bonus, so ``/groups allow here``
-    still can't be forced open by a stranger). This is how ``/mute here 1h``
+    still can't be forced open by a stranger — UNLESS this room's own owner
+    GRANTED that verb to members (``granted_command``, D13). Without that
+    exception the 046 member grant was reachable only from an ``active`` room:
+    the room's owner enabled ``/mute`` for members, the member typed it, and a
+    ``mention``-mode room refused the line before the grant was ever consulted.
+    The grant is the owner's decision, resolved from ``chat.member_verbs``
+    against a CLOSED set at the routing boundary — it widens nobody else.)
+    This is how ``/mute here 1h``
     reaches the dispatcher's admin-verb routing from a room already demoted to
     ``listen`` — without it, the mute-lift command could never be typed
     without first re-addressing the muted bot.
@@ -376,7 +397,8 @@ def mode_allows_trigger(policy: ChatPolicy, *, mentioned: bool, role: str,
         muted = False
     if muted or _in_quiet_hours(policy.quiet_hours, now):
         mode = "listen"
-    addressed = mentioned or wake_hit or (is_command and role in ("owner", "admin"))
+    addressed = mentioned or wake_hit or (
+        is_command and (role in ("owner", "admin") or granted_command))
     if mode == "listen":
         return role in ("owner", "admin") and addressed
     if mode == "active":

@@ -1,3 +1,4 @@
+from core.app_service.owner_ops import APPS_EMPTY_LINE
 """032 — the owner verbs and the status-snapshot section every seat renders from."""
 import os
 
@@ -40,7 +41,7 @@ def test_approve_reject_kill_and_lines(tmp_path):
     ok, msg = owner_ops.reject(r3, "st", "u1", via="cli")
     assert ok and r3.get("st", "u1")["status"] == "stopped"
     assert owner_ops.row_json(r3.get("st", "u1"))["where"] == "not running"
-    assert owner_ops.list_lines(r3, "nobody") == ["No apps."]
+    assert owner_ops.list_lines(r3, "nobody") == [owner_ops.APPS_EMPTY_LINE]
 
 
 def test_logs_tail(tmp_path):

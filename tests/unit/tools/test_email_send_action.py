@@ -241,3 +241,94 @@ async def test_denied_target_text_unchanged_under_allowlist_policy(monkeypatch):
     assert result.error == (
         "target not on owner allowlist; ask the owner to run "
         "`polyrob owner allow email stranger@example.com`")
+
+
+# --- D9 / D19 / D31 / D66 (2026-09-21 interface audit) ----------------------
+
+class _ForgedCtx(_Ctx):
+    """An autonomous/forged turn — what a goal or cron run looks like."""
+
+    def __init__(self):
+        super().__init__()
+        self.is_sub_agent = False
+        self.role = "orchestrator"
+        self.metadata = {"turn_kind": "self_wake"}
+
+
+@pytest.mark.asyncio
+async def test_a_paused_owner_blocks_an_autonomous_email(monkeypatch, tmp_path):
+    """D9: `email_send` had NO pause probe, so `/pause pings`, `/pause social`
+    and even `/pause all` left this escape hatch wide open for a goal or cron
+    session — the dominant autonomous outbound path."""
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("POLYROB_OWNER_EMAIL", "owner@example.com")
+    import core.autonomy_control as ac
+    ac.pause(str(tmp_path), scopes=("all",))
+    try:
+        tool = _tool(container=_FakeContainer(convo=_convo(), corr=_corr()))
+        smtp = _FakeSMTP()
+        tool.smtp_connection = smtp
+        res = await tool.email_send(
+            EmailSendAction(to="owner@example.com", subject="s", body="b"),
+            execution_context=_ForgedCtx())
+        assert res.error and "paused" in res.error.lower()
+        assert smtp.sent == []          # nothing left the box
+    finally:
+        ac.resume(str(tmp_path))
+
+
+@pytest.mark.asyncio
+async def test_a_secret_shape_is_scrubbed_before_the_mail_leaves(monkeypatch):
+    """D66: this tool owns its own SMTP connection and bypassed
+    `MessageRouter.publish`, so it was the ONE outbound path that could mail a
+    key out verbatim."""
+    monkeypatch.setenv("POLYROB_OWNER_EMAIL", "owner@example.com")
+    convo = _convo()
+    tool = _tool(container=_FakeContainer(convo=convo, corr=_corr()))
+    smtp = _FakeSMTP()
+    tool.smtp_connection = smtp
+    secret = "sk-ant-api03-" + "C" * 40
+    res = await tool.email_send(
+        EmailSendAction(to="owner@example.com", subject="keys",
+                        body=f"here it is: {secret}"),
+        execution_context=_Ctx())
+    assert res.error is None
+    body = smtp.sent[0].get_payload()
+    assert secret not in str(body)
+
+
+@pytest.mark.asyncio
+async def test_the_scrubbed_body_is_the_one_string_recorded(monkeypatch):
+    """The cooldown gate hashes the body the store records; two spellings make
+    the hashes unmatchable, which kills the gate while it still looks present."""
+    monkeypatch.setenv("POLYROB_OWNER_EMAIL", "owner@example.com")
+    convo = _convo()
+    tool = _tool(container=_FakeContainer(convo=convo, corr=_corr()))
+    tool.smtp_connection = _FakeSMTP()
+    secret = "sk-ant-api03-" + "D" * 40
+    await tool.email_send(
+        EmailSendAction(to="owner@example.com", subject="k", body=f"x {secret}"),
+        execution_context=_Ctx())
+    rows = convo.history("rob", "email", "owner@example.com")
+    assert rows and secret not in rows[-1]["body"]
+
+
+@pytest.mark.asyncio
+async def test_a_non_owner_send_anchors_its_message_id(monkeypatch):
+    """D31: the minted Message-ID was dropped, so a reply's In-Reply-To had
+    nothing to resolve on and a second session talking to the same address was
+    ambiguous."""
+    monkeypatch.setenv("POLYROB_OWNER_EMAIL", "owner@example.com")
+    monkeypatch.setenv("CORRESPONDENT_ACCESS_ENABLED", "true")
+    monkeypatch.setenv("CORRESPONDENT_REQUIRE_APPROVAL", "false")
+    al = _al()
+    al.allow("rob", "email", "them@acme.com")
+    corr = _corr()
+    tool = _tool(container=_FakeContainer(allowlist=al, convo=_convo(), corr=corr))
+    tool.smtp_connection = _FakeSMTP()
+    res = await tool.email_send(
+        EmailSendAction(to="them@acme.com", subject="hello", body="the quote"),
+        execution_context=_Ctx())
+    assert res.error is None
+    anchored = [r for r in corr.list("rob") if r.get("thread_id")]
+    assert anchored, "the outbound Message-ID was never bound to the session"

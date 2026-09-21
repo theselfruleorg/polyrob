@@ -7,11 +7,9 @@
     is_new   the hero, four starters, the composer. No model picker, no tool
              checkboxes, no max-steps slider — they move to Agent › Settings in
              phase 4, and the session request carries only the task.
-    bound    the thread, live, driven by the EXISTING chat modules. They read
-             the session from document.body's data attributes
-             (ui-utils.js::SessionStateManager.init), which is why no inline
-             script is needed here and why those modules are imported rather
-             than copied.
+    bound    the thread, live, drawn by static/app/transcript.js. It reads
+             the session from document.body's data attributes, which is why no
+             inline script is needed here.
 
   The read-only frame comes from shell.html and is stated ONCE there; all this
   page does is swap the composer for the sentence that says why it is off. The
@@ -127,16 +125,49 @@
         <p class="composer-input">{{ t('chat.read_only.composer') }}</p>
       </div>
       <p class="composer-note">{{ t('chat.read_only.note') }}</p>
+      {# E14: an owner verb typed here is refused too. Before this the box said
+         only that the console could not TALK, so `/pause` looked like a thing
+         you could still do from a read-only seat. #}
+      <p class="composer-note">{{ t('chat.read_only.verbs') }}</p>
 {%- else %}
       <form class="composer" id="chat-composer" data-unreachable="{{ t('chat.action_unavailable') }}">
         <textarea class="composer-input" id="chat-input" rows="1"
                   aria-label="{{ t('chat.composer.label') }}"
                   placeholder="{{ t('chat.composer.placeholder') if is_new else t('chat.composer.placeholder_busy') }}"></textarea>
+{%- if not is_new %}
+        {# A24: the file picker the README has always described. The `accept=`
+           is rendered from the ONE upload allowlist
+           (core.surfaces.inbound_attachments), never hand-written here; the
+           per-file cap and the MIME sniff are the endpoint's. It exists only
+           on a BOUND session, because the upload route is session-scoped —
+           the cold open has no folder to put a file in yet. #}
+        {# ⚠️ `upload_accept` is a Jinja global installed by
+           webview/template_globals.py::register, which `pages_new`'s OWN
+           environment does not currently call — so the attribute is emitted
+           only when the list is really there. An `accept=""` would tell the
+           browser "any file", which is a claim about the allowlist, and a
+           wrong one; an ABSENT accept claims nothing and the endpoint still
+           refuses. #}
+        <input type="file" id="chat-file"{% if upload_accept %} accept="{{ upload_accept }}"{% endif %} multiple hidden>
+        <button class="btn btn-quiet" id="chat-attach" type="button"
+                aria-label="{{ t('chat.attach') }}">{{ t('chat.attach') }}</button>
+{%- endif %}
         <button class="send" id="chat-send-btn" type="submit"
                 aria-label="{{ t('chat.send') }}">&#8593;</button>
       </form>
     <p id="chat-create-status" class="note" role="status"></p>
+      <div id="chat-attached"></div>
       <p class="composer-note">{{ t('chat.composer.hint') }}</p>
+{%- if not is_new %}
+    <div id="attach-copy" hidden
+         data-session_id="{{ session_id }}"
+         data-attach="{{ t('chat.attach') }}"
+         data-attach_sending="{{ t('chat.attach_sending') }}"
+         data-attach_done="{{ t('chat.attach_done') }}"
+         data-attach_failed="{{ t('chat.attach_failed') }}"
+         data-attach_unreachable="{{ t('chat.attach_unreachable') }}"></div>
+    <script src="/static/app/file-attach.js" type="module"></script>
+{%- endif %}
 {%- endif %}
     </div>
     <p class="sources">{{ t('chat.sources')|safe }}</p>

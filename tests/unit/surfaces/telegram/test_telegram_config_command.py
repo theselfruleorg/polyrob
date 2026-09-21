@@ -50,6 +50,11 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     monkeypatch.setenv("POLYROB_INSTANCE_ID", "rob")
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
+    # D38: preferences live under `prefs_home_dir()` — the resolved DATA HOME —
+    # not under a container's `config.data_dir`. Pointing only the container at
+    # tmp_path is exactly the shadow-tree bug this fix closes, so the test must
+    # move the real home too or it asserts against a tree nothing reads.
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
     return tmp_path
 
 
@@ -148,7 +153,7 @@ async def test_config_set_safe_key_writes_immediately(env):
 async def test_config_set_unknown_key_names_valid_groups(env):
     out = await act_on_inbound(
         _Agent(str(env)), _cmd("/config", "/config set nope.nothing value"))
-    assert "unknown" in out.lower()
+    assert "unknown key" in out.lower()
     # at least one real PREF_SCHEMA group is named as a hint
     assert "style" in out or "budget" in out or "approvals" in out
 

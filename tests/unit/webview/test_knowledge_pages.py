@@ -154,9 +154,10 @@ def test_skills_endpoint_failopen(monkeypatch):
 
 
 def test_skills_endpoint_reports_error_field(monkeypatch):
-    """030 D4: a RAISING skill-manager yields the same JSON shape PLUS an
-    ``error`` field, still HTTP 200 (the page renders a distinct error state)
-    — a broken catalog read must not masquerade as count:0 "no skills"."""
+    """030 D4 / 043 A9: a RAISING skill-manager yields the same JSON shape with
+    ``error`` set AND ``items``/``catalog``/``count`` null, still HTTP 200 (the
+    page renders a distinct error state) — a broken catalog read must not
+    masquerade as ``count: 0``, and an empty LIST is exactly that sentence."""
     client, knowledge = _client()
     monkeypatch.setattr(knowledge, "_effective_user_id", lambda request: "owner-1")
     monkeypatch.setattr(knowledge, "_data_dir", lambda: "/nonexistent")
@@ -169,12 +170,14 @@ def test_skills_endpoint_reports_error_field(monkeypatch):
     r = client.get("/api/webgate/knowledge/skills")
     assert r.status_code == 200
     body = r.json()
-    assert body["catalog"] == [] and body["count"] == 0
+    assert body["items"] is None and body["catalog"] is None
+    assert body["count"] is None
     assert "skills dir unreadable" in body["error"]
 
 
-def test_skills_endpoint_no_error_field_on_success(monkeypatch):
-    """The happy path stays shape-identical — no ``error`` key sneaks in."""
+def test_skills_endpoint_reports_no_error_on_success(monkeypatch):
+    """The happy path carries ``error: None`` — the key is always present (A9),
+    and ``items`` is a real empty list, which means "I read it, it is empty"."""
     client, knowledge = _client()
     monkeypatch.setattr(knowledge, "_effective_user_id", lambda request: "owner-1")
     monkeypatch.setattr(knowledge, "_data_dir", lambda: "/nonexistent")
@@ -189,5 +192,50 @@ def test_skills_endpoint_no_error_field_on_success(monkeypatch):
 
     monkeypatch.setattr(sm_mod, "get_skill_manager", lambda: _SM())
     body = client.get("/api/webgate/knowledge/skills").json()
-    assert "error" not in body
-    assert body["catalog"] == []
+    assert body["error"] is None
+    assert body["items"] == [] and body["catalog"] == [] and body["count"] == 0
+    # The reuse-stats leg is a SEPARATE read (its store is not on this path in
+    # this fixture) and names itself rather than decorating every row with a
+    # silent zero — A9's ``usage_error``.
+    assert "usage_error" in body
+
+
+# --- 2026-09-21 revalidation: "not configured" is not "unreadable" ----------- #
+
+@pytest.mark.parametrize("path", ["/api/webgate/knowledge/notes",
+                                  "/api/webgate/knowledge/episodes",
+                                  "/api/webgate/knowledge/kb"])
+def test_no_provider_is_an_empty_answer_with_a_reason_not_an_error(monkeypatch,
+                                                                   path):
+    """⚠️ A9 residue. With no memory provider these answered ``error:
+    "memory_provider_unavailable"`` (and two siblings ``notes_unavailable`` /
+    ``episodes_unavailable``), and every client treats a set ``error`` as a
+    FAILED READ — `agent.js::renderKb` draws the dashed unreadable entry and
+    puts the raw token on screen. An instance with no memory backend was told
+    the console could not read its knowledge base, in a machine name."""
+    client, knowledge = _client()
+    monkeypatch.setattr(knowledge, "_memory_provider", lambda: None)
+    monkeypatch.setattr(knowledge, "_effective_user_id", lambda request: "alice")
+
+    body = client.get(path).json()
+    assert body["items"] == [] and body["count"] == 0
+    assert body["error"] is None, "a configuration fact is not a read failure"
+    assert body["reason"], "an empty list with no reason is a confident zero"
+    # Owner copy, never a machine token.
+    assert "_unavailable" not in body["reason"] and " " in body["reason"]
+
+
+def test_a_provider_that_raises_is_still_an_error_with_null_items(monkeypatch):
+    """The other half of the same rule: a FAULT keeps ``items: null``."""
+    client, knowledge = _client()
+
+    class _Boom:
+        async def kb_list_sources(self, *, user_id=None, collection=None):
+            raise OSError("memory.db is locked")
+
+    monkeypatch.setattr(knowledge, "_memory_provider", lambda: _Boom())
+    monkeypatch.setattr(knowledge, "_effective_user_id", lambda request: "alice")
+
+    body = client.get("/api/webgate/knowledge/kb").json()
+    assert body["items"] is None and body["count"] is None
+    assert "memory.db is locked" in body["error"]

@@ -20,6 +20,12 @@ AUTONOMY_TICK = "autonomy_tick"
 #: disabled gate) is never mistaken for a silently-dead one.
 AUTONOMY_STARTED = "autonomy_started"
 CRON_RUN = "cron_run"
+#: Tell once (2026-09-21): the outcome of a cron job's OUT-OF-BAND delivery —
+#: `sent` / `deferred` / `suppressed` / `already_told` / `failed`. Separate from
+#: `cron_run`, which names how the RUN ended: a job can finish `done` and still
+#: skip its echo because the run already told the owner, and a skipped echo is a
+#: decision every seat can show rather than a silent no-op.
+CRON_DELIVERY = "cron_delivery"
 #: 056 WS4/WS9: an SMTP login was rejected (535) — the layering-safe fact the
 #: status snapshot turns into a health WARN with the remedy.
 EMAIL_AUTH_REJECTED = "email_auth_rejected"
@@ -86,6 +92,11 @@ PAYMENT_REQUESTED = "payment_requested"
 PAYMENT_SETTLED = "payment_settled"
 PAYMENT_EXPIRED = "payment_expired"
 PAYMENT_UNMATCHED = "payment_unmatched"
+#: A SETTLED machine payment whose request then failed downstream (a 401/403/5xx
+#: after the facilitator took the money) — we owe a refund. The DB row's
+#: ``refund_due`` status alone is invisible to a filtered listing, so the fact
+#: also rides as an owner-notified event (2026-09-21 revalidation).
+PAYMENT_REFUND_DUE = "payment_refund_due"
 #: An inbound treasury transfer confirmed as our OWN trade proceeds (an exact
 #: broadcast-hash match against the wallet audit ledger) rather than a payment.
 #: Not an owner notice — but never a silent skip either.

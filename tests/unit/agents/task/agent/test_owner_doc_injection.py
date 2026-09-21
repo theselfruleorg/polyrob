@@ -154,3 +154,54 @@ def test_absent_contract_and_no_style_prefs_is_byte_identical(tmp_path):
         p for p in ("", _soul, _owner_doc, _contract_block, _self_doc) if p
     )
     assert with_contract_slot == control == "SOUL\n\nSELF"
+
+
+# --- 057 WS-D: the age header ------------------------------------------------
+
+def _owner_block(tmp_path, uid: str) -> str:
+    """Mirror construction.py's owner-facts heading computation exactly."""
+    from core.doc_age import measure_doc_age, render_age_header
+    doc = load_owner_doc(tmp_path, uid)
+    if not doc:
+        return ""
+    head = (render_age_header("Owner facts", doc)
+            if measure_doc_age(doc).dated else "## Owner facts")
+    return head + "\n\n" + doc
+
+
+def test_unstamped_owner_doc_keeps_the_bare_heading(tmp_path):
+    """Default byte-identical: no provenance stamps => the pre-057 heading."""
+    OwnerDocWriter(tmp_path).propose("Owner prefers metric units.", user_id="u1",
+                                     created_by="user", pending=False)
+    assert _owner_block(tmp_path, "u1").startswith("## Owner facts\n\n")
+
+
+def test_stamped_owner_doc_heading_states_its_age(tmp_path):
+    OwnerDocWriter(tmp_path).propose(
+        "Owner prefers metric units.", user_id="u1", created_by="user",
+        pending=False, source="owner said", observed_at="2026-09-19")
+    head = _owner_block(tmp_path, "u1").splitlines()[0]
+    assert head.startswith("## Owner facts (")
+    assert "last write 2026-09-19" in head
+
+
+def test_partially_stamped_doc_reports_the_undated_lines(tmp_path):
+    w = OwnerDocWriter(tmp_path)
+    w.propose("An old unsourced fact.", user_id="u1", created_by="user",
+              pending=False)
+    w.propose("An old unsourced fact.\nA new measured fact.", user_id="u1",
+              created_by="user", pending=False, source="measured",
+              observed_at="2026-09-19")
+    head = _owner_block(tmp_path, "u1").splitlines()[0]
+    assert "undated" in head          # the old line is NOT reported as fresh
+
+
+def test_construction_actually_renders_the_age_header():
+    """Pin the call site: the mirror above is only honest if construction.py
+    really routes both identity docs through core.doc_age."""
+    import inspect
+    from agents.task.agent.core import construction
+    src = inspect.getsource(construction)
+    assert "render_age_header" in src
+    assert "measure_doc_age" in src
+    assert '"Owner facts"' in src

@@ -11,6 +11,8 @@ import os
 
 import click
 
+from cli._admin_home import as_root_option
+
 
 @click.group("apps")
 def apps():
@@ -19,21 +21,34 @@ def apps():
     ensure_env_loaded()
 
 
-def _data_dir() -> str:
+def _data_dir(write: "bool | None" = None) -> str:
     from cli._admin_home import admin_data_dir
-    return admin_data_dir()
+    return admin_data_dir(write=write)
 
 
-def _registry():
+def _registry(*, write: "bool | None" = None):
     from core.app_service.registry import AppServiceRegistry, default_app_services_db
-    return AppServiceRegistry(default_app_services_db(data_dir=_data_dir()))
+    return AppServiceRegistry(default_app_services_db(data_dir=_data_dir(write)))
 
 
 def _tenant(user):
     """The ONE owner-tenant resolver, so `polyrob apps …`, the console's `/apps`
-    and the agent's own rows name one bucket."""
-    from core.instance import resolve_owner_user_id
-    return user or resolve_owner_user_id()
+    and the agent's own rows name one bucket.
+
+    C24: this read ``core.instance.resolve_owner_user_id``, which resolves from
+    the SHELL's environment — on a deployed box, where systemd exports the
+    binding and an SSH shell carries none, the owner's own `polyrob apps list`
+    named a different tenant from the one the agent's rows were written under
+    and answered a confident empty list. ``admin_owner_principal`` adopts the
+    deployment's declaration, exactly as ``admin_data_dir`` adopts its home.
+    """
+    if user:
+        return user
+    from core.admin_data_home import AmbiguousDataHome, admin_owner_principal
+    try:
+        return admin_owner_principal()
+    except AmbiguousDataHome as exc:
+        raise click.ClickException(str(exc))
 
 
 async def default_sys_runner(argv, *, input=None, timeout=None):
@@ -110,12 +125,19 @@ def _print_lines(lines):
 def list_cmd(user, as_json):
     """List this tenant's apps with status, URL and last health."""
     from core.app_service.owner_ops import list_lines, row_json
-    reg = _registry()
+    reg = _registry(write=False)
     tenant = _tenant(user)
     if as_json:
         click.echo(_json.dumps([row_json(r) for r in reg.list_for(tenant)], indent=2, default=str))
         return
-    _print_lines(list_lines(reg, tenant))
+    lines = list(list_lines(reg, tenant))
+    if not lines:
+        # C47: an empty list printed NOTHING at all — indistinguishable from a
+        # verb that silently failed. One grammar, and it says which tenant.
+        from cli.ui.candy import empty
+        click.echo(empty("apps", f"nothing has been deployed by tenant {tenant}"))
+        return
+    _print_lines(lines)
 
 
 @apps.command("show")
@@ -124,16 +146,17 @@ def list_cmd(user, as_json):
 def show_cmd(slug, user):
     """Show one app in full."""
     from core.app_service.owner_ops import show_lines
-    _print_lines(show_lines(_registry(), _tenant(user), slug))
+    _print_lines(show_lines(_registry(write=False), _tenant(user), slug))
 
 
 @apps.command("approve")
 @click.argument("slug")
 @click.option("--user", default=None)
+@as_root_option
 def approve_cmd(slug, user):
     """Approve a PENDING app's address (the owner decision the agent waits for)."""
     from core.app_service.owner_ops import approve
-    ok, msg = approve(_registry(), slug, _tenant(user), via="cli")
+    ok, msg = approve(_registry(write=True), slug, _tenant(user), via="cli")
     click.echo(msg)
     if not ok:
         raise SystemExit(1)
@@ -142,10 +165,11 @@ def approve_cmd(slug, user):
 @apps.command("reject")
 @click.argument("slug")
 @click.option("--user", default=None)
+@as_root_option
 def reject_cmd(slug, user):
     """Reject a PENDING app (it never runs)."""
     from core.app_service.owner_ops import reject
-    ok, msg = reject(_registry(), slug, _tenant(user), via="cli")
+    ok, msg = reject(_registry(write=True), slug, _tenant(user), via="cli")
     click.echo(msg)
     if not ok:
         raise SystemExit(1)
@@ -154,10 +178,11 @@ def reject_cmd(slug, user):
 @apps.command("kill")
 @click.argument("slug")
 @click.option("--user", default=None)
+@as_root_option
 def kill_cmd(slug, user):
     """Stop a running app (container + stanza removed on the next tick)."""
     from core.app_service.owner_ops import kill
-    ok, msg = kill(_registry(), slug, _tenant(user), via="cli")
+    ok, msg = kill(_registry(write=True), slug, _tenant(user), via="cli")
     click.echo(msg)
     if not ok:
         raise SystemExit(1)
@@ -170,5 +195,5 @@ def kill_cmd(slug, user):
 def logs_cmd(slug, lines, user):
     """Read an app's recent log lines (refreshed by the supervisor each tick)."""
     from core.app_service.owner_ops import logs_tail
-    click.echo(logs_tail(_data_dir(), _tenant(user), slug, lines), nl=False)
+    click.echo(logs_tail(_data_dir(write=False), _tenant(user), slug, lines), nl=False)
     click.echo()

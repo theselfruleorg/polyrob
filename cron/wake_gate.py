@@ -238,10 +238,19 @@ def compute_wake_fingerprint(
 
 
 def gate_applies(job: Any) -> bool:
-    """Both guards: the global flag AND the per-job opt-in (never delivery jobs)."""
+    """Both guards: the global flag AND the per-job opt-in (never delivery jobs).
+
+    057 WS-C (A4): a MONEY job is never change-gated. The fingerprint reads the
+    goal board, other cron runs and the newest episode — none of which moves when
+    a price does, so a treasury rail carrying ``change_gated`` would $0-skip the
+    tick that was supposed to look at the market. The carve-out is on the class,
+    not on the flag, so it holds however the job was authored."""
     try:
         from core.config_policy import AutonomyConfig
         if not AutonomyConfig.wake_change_gate():
+            return False
+        from cron.jobs import is_money_job
+        if is_money_job(job):
             return False
         payload = dict(getattr(job, "payload", None) or {})
         return bool(payload.get("change_gated")) and not payload.get("deliver")

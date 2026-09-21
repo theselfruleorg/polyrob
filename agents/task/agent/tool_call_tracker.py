@@ -263,6 +263,9 @@ class ToolCallTracker:
                         os.fsync(f.fileno())
 
                     os.replace(temp_path, str(filepath))
+                    # mkstemp births 0600; the shared data home needs group-write.
+                    from core.data_perms import apply_birth_mode
+                    apply_birth_mode(filepath)
                     return True
 
                 except Exception:

@@ -12,14 +12,32 @@ from core.surfaces.group_ledger import LedgerRow
 logger = logging.getLogger(__name__)
 
 
+#: Rooms whose allowlist probe has already failed once in this process (D59).
+_ALLOWLIST_FAULT_WARNED: set = set()
+
+
 def _allowed(container: Any, surface: str, chat_id: str) -> bool:
+    """Is this room allowlisted? Fail-CLOSED, and SAY SO (D59).
+
+    ⚠️ A probe fault means the line is NOT written to the room log, so the next
+    room turn and the service job answer from a log that is silently missing
+    messages — the one failure whose symptom ("the agent ignored what we said")
+    reads as a model problem. Refusing quietly at DEBUG made that undiagnosable;
+    one WARN per room per process names it without flooding.
+    """
     try:
         from core.surfaces.group_allowlist import GroupAllowlist
         from core.runtime_paths import container_data_home
         data_dir = container_data_home(container)
         return GroupAllowlist(os.path.join(data_dir, "group_allowlist.db")).is_allowed(surface, chat_id)
     except Exception as e:
-        logger.debug("ledger ingest allowlist probe failed (skip): %s", e)
+        key = f"{surface}:{chat_id}"
+        if key not in _ALLOWLIST_FAULT_WARNED:
+            _ALLOWLIST_FAULT_WARNED.add(key)
+            logger.warning(
+                "room %s: the group allowlist is unreadable (%s) — its lines "
+                "are NOT being written to the room log, so the next room turn "
+                "will answer from an incomplete record", key, e)
         return False
 
 
@@ -132,6 +150,74 @@ def record_inbound_to_ledger(container: Any, inbound: Any, *, role: str, is_owne
         return True
     except Exception as e:
         logger.warning("ledger append failed for %s:%s: %s", src.surface_id, src.chat_id, e)
+        return False
+
+
+def record_anonymous_to_ledger(container: Any, *, surface: str,
+                               raw_update: dict) -> bool:
+    """Record an ANONYMOUS-SENDER room line (D57).
+
+    ⚠️ A Telegram anonymous admin (or a ``sender_chat`` line) carries no
+    principal, so it can never be routed: no tier, no role, no command. It was
+    therefore dropped BEFORE the ledger, which made ``docs/guide/groups.md``'s
+    promise — "every allowed-room line … is written to the room ledger before
+    any other gate runs" — false for exactly the line an admin is most likely
+    to post. The room's next turn then answered around a message everyone else
+    in the room could see.
+
+    It is stored as an ANONYMOUS row: ``sender_id=""``, ``sender_name`` the
+    posting chat's title if Telegram gave one, ``role_at_write="member"`` (an
+    unauthenticated line is never more than a member's). Nothing here routes,
+    replies, or spends — this is the record, not a decision.
+
+    Fail-open to ``False``: a ledger fault costs this line its record, never the
+    caller's drop.
+    """
+    try:
+        msg = (raw_update.get("message") or raw_update.get("edited_message")
+               or raw_update.get("channel_post")
+               or raw_update.get("edited_channel_post") or {})
+        chat = msg.get("chat") or {}
+        chat_id = chat.get("id")
+        mid = msg.get("message_id")
+        if chat_id is None or mid is None:
+            return False
+        chat_id = str(chat_id)
+        if not _allowed(container, surface, chat_id):
+            return False
+        ledger = container.get_service("group_ledger") if container else None
+        if ledger is None:
+            return False
+        text = str(msg.get("text") or msg.get("caption") or "")
+        event = _service_event(msg)
+        if event:
+            kind, text = "service", event
+        elif any(msg.get(f) is not None
+                 for f in ("photo", "document", "video", "animation",
+                           "video_note", "sticker", "audio", "voice")):
+            kind = "media"
+        elif raw_update.get("edited_message") or raw_update.get("edited_channel_post"):
+            kind = "edit"
+        elif not text.strip():
+            return False        # nothing to attribute — never a blank line
+        else:
+            kind = "text"
+        sender_chat = msg.get("sender_chat") or {}
+        name = str(sender_chat.get("title") or chat.get("title") or "anonymous")
+        reply = (msg.get("reply_to_message") or {}).get("message_id")
+        row = LedgerRow(
+            surface=surface, chat_id=chat_id,
+            thread_id=(str(msg.get("message_thread_id"))
+                       if msg.get("message_thread_id") is not None else None),
+            message_id=str(mid), ts=float(msg.get("date") or time.time()),
+            sender_id="", sender_name=name, sender_is_bot=False,
+            role_at_write="member", kind=kind, text=text,
+            reply_to_message_id=(str(reply) if reply is not None else None),
+            mentions_bot=False, media_path=None)
+        ledger.append(row)
+        return True
+    except Exception as e:
+        logger.warning("anonymous room line not recorded for %s: %s", surface, e)
         return False
 
 

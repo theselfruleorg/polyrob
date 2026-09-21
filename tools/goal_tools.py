@@ -197,6 +197,14 @@ class GoalCreateAction(BaseModel):
                      "allowlist; money-spend/code-exec/cron are never granted. If unset, tools "
                      "are inferred from the goal text and a safe baseline is applied."),
     )
+    rig: Optional[str] = Field(
+        None,
+        description=("Optional NAMED tool rig instead of an explicit `tools` list: "
+                     "'money_rail', 'social', 'research', 'ops', or 'full'. A narrow rig "
+                     "ships far fewer tool schemas on every step of the run, which is most "
+                     "of what a goal costs. `tools`, when set, always wins. A rig is a "
+                     "REQUEST, not a grant — money tools still need an owner grant."),
+    )
     objective_id: Optional[str] = Field(None, description="Parent objective this goal advances.")
     depends_on: Optional[List[str]] = Field(
         None,
@@ -234,6 +242,20 @@ class GoalCreateAction(BaseModel):
                      "it in plain-English `acceptance` instead and let the completion judge "
                      "read it."),
     )
+
+
+class GoalAskAction(BaseModel):
+    """A durable OWNER-FACING need: "I require a decision/resource from you to proceed"."""
+    what: str = Field(..., min_length=8, max_length=600, description=(
+        "The decision or resource you need from the owner, as ONE question they can answer in a "
+        "word or two (name the options: 'A) … or B) …'). This lands on the durable board, shows in "
+        "/status, `owner pending` and the daily digest, and is deduplicated: a matching OPEN ask "
+        "is refreshed, never duplicated — so raise it EVERY time you skip on it; never fall back to "
+        "'I asked once, I will not spam'."))
+    why: str = Field("", max_length=1200, description=(
+        "Evidence: what is blocked, since when, what you tried, the numbers. Written for a phone."))
+    blocks_goal_ids: Optional[List[str]] = Field(None, description=(
+        "Goal ids this ask blocks (they are HELD until the owner answers, then re-armed)."))
 
 
 class GoalListAction(BaseModel):
@@ -395,6 +417,19 @@ class GoalTool(BaseTool):
                     logger.info("goal_create: inferred tools %s from goal text", sorted(inferred))
         if allowed or inferred:
             payload["tools"] = sorted(set(allowed) | inferred | set(_SELF_GOAL_BASELINE_TOOLS))
+        if params.rig:
+            # 057 WS-A. Validated HERE so an unknown name is refused with the
+            # valid list rather than stored and silently ignored at dispatch.
+            # Stored even when `tools` is also set: `tools` wins at dispatch
+            # (resolve_rig_tools), and dropping the rig would lose the author's
+            # stated intent for a later edit.
+            from core.config_policy.rigs import is_rig, rig_names
+            if not is_rig(params.rig):
+                return ActionResult(
+                    error=f"Unknown tool rig '{params.rig}'. Valid rigs: "
+                          f"{', '.join(rig_names())}.",
+                    include_in_memory=True)
+            payload["rig"] = params.rig.strip().lower()
         board = self._resolve_board()
         parent_id = None
         if params.objective_id:
@@ -440,6 +475,41 @@ class GoalTool(BaseTool):
         warn_note = f"\n{mismatch_warning}" if mismatch_warning else ""
         return ActionResult(extracted_content=f"Created goal `{goal.id}` (status={goal.status}){tool_note}{dep_note}: {goal.title}{drop_note}{warn_note}",
                             include_in_memory=True)
+
+    @BaseTool.action("Raise a DURABLE owner ask when a run needs an OWNER DECISION or resource to "
+                     "proceed (a rule ambiguity, a grant, a top-up). Lands on the board, shows in "
+                     "/status, `owner pending` and the daily digest; dedups against your OPEN asks, so "
+                     "call it every time you skip on the same blocker — it will not spam.",
+                     param_model=GoalAskAction)
+    async def goal_ask(self, params: GoalAskAction, execution_context=None) -> ActionResult:
+        # A leaf / sub-agent reports to its parent, not to the owner: refuse.
+        if getattr(execution_context, "is_sub_agent", False) or \
+                str(getattr(execution_context, "role", "") or "") == "leaf":
+            return ActionResult(error="Refused: a leaf/sub-agent cannot raise an owner ask — "
+                                      "return the blocker to your parent instead.",
+                                include_in_memory=True)
+        user_id = self._user(execution_context)
+        sid = str(getattr(execution_context, "session_id", "") or "")
+        board = self._resolve_board()
+        before = {a.id for a in board.asks(user_id=user_id, status="open")}
+        ask = board.create_ask(
+            user_id=user_id, what=params.what.strip(), why=(params.why or "").strip(),
+            blocks_goal_ids=list(params.blocks_goal_ids or []),
+            extra_payload={"origin": "agent", "session_id": sid})
+        if ask.id in before:
+            import datetime as _dt
+            since = _dt.datetime.fromtimestamp(float(ask.created_at or 0), tz=_dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+            return ActionResult(
+                extracted_content=(f"Ask `{ask.id}` is ALREADY OPEN since {since} (refreshed, not duplicated — "
+                                   f"the store dedups, no need to re-ask in chat). The owner sees it in /status, "
+                                   f"`owner pending` and the daily digest; until it is answered, keep applying the "
+                                   f"conservative reading and log the skip against ask {ask.id}."),
+                include_in_memory=True)
+        return ActionResult(
+            extracted_content=(f"Raised owner ask `{ask.id}` (open): {ask.title}. It stays visible on every owner "
+                               f"seat until answered; re-calling goal_ask with the same question refreshes it. "
+                               f"Log skips against ask {ask.id} and do NOT also message the owner about it."),
+            include_in_memory=True)
 
     @BaseTool.action("List your durable goals, newest first — LIVE ones by default "
                      "(pass status='done'/'cancelled' for history).",

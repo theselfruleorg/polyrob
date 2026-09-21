@@ -47,22 +47,23 @@ def _client(monkeypatch, posture, owner_creds=False):
     return TestClient(srv._fastapi)
 
 
-def test_local_backfill_open(monkeypatch):
+def test_local_page_and_backfill_are_both_gone(monkeypatch):
+    """043 §9 deleted the /activity PAGE; 043 A30 deleted its backfill READER.
+
+    Work › Log reads the same events through ``GET /api/webgate/log``, which is
+    tenant-scoped; the deleted route answered the CROSS-TENANT stream. Both are
+    404 in every posture now, including the open one.
+    """
     client = _client(monkeypatch, "local")
-    # 043 §9: the /activity PAGE is deleted; only the backfill reader (which
-    # Work › Log consumes) remains, open in local.
     assert client.get("/activity").status_code == 404
-    back = client.get("/api/activity/backfill")
-    assert back.status_code == 200
-    assert isinstance(back.json()["events"], list)
+    assert client.get("/api/activity/backfill").status_code == 404
 
 
 def test_own_ops_unauthenticated_denied(monkeypatch):
     client = _client(monkeypatch, "own_ops", owner_creds=True)
     page = client.get("/activity", follow_redirects=False)
     assert page.status_code in (302, 303, 307, 401)
-    back = client.get("/api/activity/backfill")
-    assert back.status_code == 401
+    assert client.get("/api/activity/backfill").status_code in (401, 404)
 
 
 def test_own_ops_owner_cookie_allowed(monkeypatch):
@@ -77,11 +78,11 @@ def test_own_ops_owner_cookie_allowed(monkeypatch):
                         headers={"Origin": "http://testserver"},
                         follow_redirects=False)
     assert login.status_code in (302, 303)
-    # 043 §9: the /activity PAGE is deleted (404 for an authenticated owner too);
-    # the backfill reader the owner cookie unlocks is what stays.
+    # 043 §9 + A30: the PAGE and its reader are both deleted — 404 even for the
+    # authenticated owner. What the cookie still unlocks is the live socket
+    # room (``join_activity``) and the tenant-scoped ``GET /api/webgate/log``.
     assert client.get("/activity").status_code == 404
-    back = client.get("/api/activity/backfill")
-    assert back.status_code == 200
+    assert client.get("/api/activity/backfill").status_code == 404
 
 
 def test_flag_off_is_404_even_in_local(monkeypatch):

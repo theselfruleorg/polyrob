@@ -69,7 +69,11 @@ def test_owner_send_is_recorded_on_the_delivery_rail(tmp_path):
     assert rows, "an owner-tier message-tool send must land in the rail's ledger"
     attrs = rows[0]["attrs"]
     assert attrs["outcome"] == "sent"
-    assert attrs["lane"] == "normal"       # it spends the owner's budget
+    # D20 (2026-09-21): the row is BOOKED so the window stays honest about what
+    # the owner received, but it rides the `exempt` lane — this path is gated by
+    # its own 2h cooldown, not by the daily cap, so it must not be able to spend
+    # a budget it cannot be denied for.
+    assert attrs["lane"] == "exempt"
     assert attrs["text"] == "the owner report"
     assert rows[0]["source"] == "message_tool"
 
@@ -78,3 +82,54 @@ def test_a_failed_owner_send_is_not_booked(tmp_path):
     res = _send(router=_Router(ok=False))
     assert res["success"] is False
     assert _rail_rows(tmp_path) == []
+
+
+# --- D20 / D24 (2026-09-21 interface audit) --------------------------------
+
+def test_the_booked_row_rides_the_exempt_lane(tmp_path):
+    """D20: this path is gated by its OWN 2h cooldown, not by the daily cap, so
+    an unbounded producer was spending a budget only OTHER producers can be
+    denied for — the same shape C1 removed for the critical lane."""
+    from core.surfaces.user_delivery import PRIORITY_EXEMPT, _budgeted
+
+    res = _send()
+    assert res["success"] is True
+    rows = _rail_rows(tmp_path)
+    assert rows, "the owner send was not booked at all"
+    assert rows[-1]["attrs"]["lane"] == PRIORITY_EXEMPT
+    # …and it is dropped from the counted window.
+    assert _budgeted(rows) == []
+
+
+class _Orch:
+    pass
+
+
+class _Controller:
+    def __init__(self, orch):
+        self.orchestrator = orch
+
+
+def test_an_owner_send_records_the_turn_reply(tmp_path):
+    """D24: the `message` tool never marked the turn, so an UNBOUND seat (raw
+    API, chat_once, /v1) fell back to scanning history, found done()'s
+    "✅ Task Complete\\n\\n<recap>" as the last AIMessage, and returned a
+    third-person recap as the answer."""
+    from core.surfaces.turn_reply import last_reply_text
+
+    orch = _Orch()
+    res = _send(controller=_Controller(orch))
+    assert res["success"] is True
+    assert last_reply_text(orch) == "the owner report"
+
+
+def test_a_non_owner_send_does_not_claim_the_turn(tmp_path, monkeypatch):
+    """A post to a third party is not the answer the USER reads."""
+    from core.surfaces.turn_reply import last_reply_text
+
+    monkeypatch.setenv("OUTBOUND_POLICY", "open")
+    orch = _Orch()
+    res = _send(controller=_Controller(orch), target="them@acme.com",
+                surface="email", owner_targets={"email": "owner@example.com"})
+    assert res.get("tier") != "owner"
+    assert last_reply_text(orch) is None

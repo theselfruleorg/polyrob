@@ -5,6 +5,7 @@ resolved provider/model, the active memory backend, and the POLYROB_LOCAL footgu
 flips a group of safe autonomy flags ON). Pure ``doctor_report`` does the work so it
 is testable without a live container.
 """
+import contextlib
 import importlib.util
 import os
 import sys
@@ -152,6 +153,32 @@ def live_activity_line() -> str:
         )
 
 
+def doctor_data_home(env: dict) -> str:
+    """The data home every probe in this report reads.
+
+    C39: three call sites resolved it as ``POLYROB_DATA_DIR`` else
+    ``resolve_data_home()`` else the literal ``"data"``, while
+    :func:`build_doctor_snapshot` resolved it through ``admin_data_home`` — so
+    on a deployed box the SAME report read the schema, the avatar and the
+    "data dir:" line out of one tree and its health block out of another.
+    ``admin_data_dir(write=False)`` is the 031 seam; a read is never refused.
+    """
+    explicit = (env.get("POLYROB_DATA_DIR") or "").strip()
+    if explicit:
+        return explicit
+    from cli._admin_home import admin_data_dir
+    try:
+        return admin_data_dir(write=False)
+    except Exception:
+        # The admin seam REFUSES an ambiguous deployed home. The report must
+        # still print, so fall through to the shell resolution — the status
+        # block below renders that refusal in its own words, so this is not a
+        # dropped fact.
+        resolved = ""
+    from core.runtime_paths import resolve_data_home
+    return resolved or str(resolve_data_home())
+
+
 def schema_status_line(env: dict) -> str:
     """DB-schema-vs-code check (U10): compare bot.db's recorded schema version
     against the code's migration HEAD. Read-only; never raises."""
@@ -160,13 +187,7 @@ def schema_status_line(env: dict) -> str:
         head = latest_migration_version()
     except Exception:
         return "db schema: unknown (could not resolve code schema version)"
-    data_home = (env.get("POLYROB_DATA_DIR") or "").strip()
-    if not data_home:
-        try:
-            from core.runtime_paths import resolve_data_home
-            data_home = str(resolve_data_home())
-        except Exception:
-            data_home = "data"
+    data_home = doctor_data_home(env)
     db_path = Path(data_home) / "database" / "bot.db"
     if not db_path.is_file():
         return f"db schema: no bot.db yet (baselined at {head} on first boot)"
@@ -203,14 +224,7 @@ def setup_lines(env: dict) -> list[str]:
     ``env`` for detection; each unset item carries its one-command remedy."""
     out: list[str] = []
 
-    # data home (mirror schema_status_line's resolution)
-    data_home = (env.get("POLYROB_DATA_DIR") or "").strip()
-    if not data_home:
-        try:
-            from core.runtime_paths import resolve_data_home
-            data_home = str(resolve_data_home())
-        except Exception:
-            data_home = "data"
+    data_home = doctor_data_home(env)
 
     # avatar
     try:
@@ -612,9 +626,11 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
         _on = _auton()
         lines.append(f"autonomy: {'ON' if _on else 'OFF'} (AUTONOMY_ENABLED)")
         if not _on:
+            # E18: four seats offered four different remedies for one switch;
+            # the canonical one is the verb, not the flag name.
             lines.append("  self-directed loops (self-wake / goals + planner / curator / "
                          "background-review / self-editing) are OFF — the agent acts only "
-                         "on your messages. Enable: AUTONOMY_ENABLED=true (or `polyrob init`).")
+                         "on your messages. Turn them on: `polyrob autonomy on`.")
     except Exception:
         lines.append("autonomy: unknown (AUTONOMY_ENABLED)")
 
@@ -632,13 +648,7 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
 
     # Where this instance's data + config live — new-user orientation ("what's
     # running and where"). Data home mirrors schema_status_line's resolution.
-    _data_home = (env.get("POLYROB_DATA_DIR") or "").strip()
-    if not _data_home:
-        try:
-            from core.runtime_paths import resolve_data_home
-            _data_home = str(resolve_data_home())
-        except Exception:
-            _data_home = "data"
+    _data_home = doctor_data_home(env)
     lines.append(f"data dir: {_data_home}")
     try:
         from core.paths import env_file_candidates
@@ -838,21 +848,27 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
 
 
 def health_lines(owner: "str | None", *, prefix: str = "  ") -> list[str]:
-    """The status-snapshot health block for the doctor report (pure over the
-    resolved owner; the snapshot reads the data home read-only)."""
+    """The status-snapshot health block for the doctor report.
+
+    C38: this built its OWN snapshot (no ``data_dir``, ``include_money=False``)
+    while the report's headline came from :func:`build_doctor_snapshot` (the
+    admin home, money included). One `polyrob doctor --json` therefore carried
+    TWO verdicts about one instance, computed from two homes, and nothing said
+    which to believe. ONE snapshot now backs both.
+    """
     try:
-        from core.status_snapshot import build_status_snapshot
         from core.status_render import pause_headline, render_health_lines
-        if not owner:
-            return ["health: unavailable (no owner principal bound — the snapshot is "
-                    "tenant-scoped; set POLYROB_OWNER_USER_ID)"]
-        snap = build_status_snapshot(str(owner), include_money=False)
+        snap, error_line = build_doctor_snapshot()
+        if snap is None:
+            return [error_line or "health: unavailable (the status snapshot "
+                                  "could not be built)"]
         # 031: the pause state leads every seat, before health (CLI verbs here).
         out = ([pause_headline(snap, resume_hint="`polyrob autonomy resume`",
                                pause_hint="`polyrob autonomy pause`")]
                + render_health_lines(snap, prefix=prefix))
         # the doctor report is lower-case; the health line is index 1 (the pause
-        # line leads since 031)
+        # line leads since 031). *owner* is unused now that the snapshot is
+        # shared — kept in the signature because callers pass it positionally.
         for _i, _ln in enumerate(out):
             if _ln.startswith("Health:"):
                 out[_i] = _ln.replace("Health:", "health:", 1)
@@ -867,6 +883,37 @@ def health_lines(owner: "str | None", *, prefix: str = "  ") -> list[str]:
 #: (``cli/ui/commands/h_diag.py::h_doctor``) print the identical words
 #: (043 A13 fix round 1, Important 3).
 DOCTOR_FULL_POINTER = "run `polyrob doctor --full` for every check"
+
+
+#: C38: ONE snapshot per INVOCATION — not per process. Two callers (the
+#: headline and the report's health block) used to build two, which is both a
+#: double cost and, because each build reads the clock and the stores again, a
+#: way for ONE command to print two different verdicts about one instance.
+#:
+#: ⚠️ Deliberately NOT a process-lifetime memo: a long-lived REPL would then
+#: answer `/doctor` from a snapshot taken minutes ago and call it current,
+#: which is the confident-stale failure this module exists to avoid. The scope
+#: is opened by the verb that renders more than once.
+_DOCTOR_SNAPSHOT_CACHE: "tuple | None" = None
+_DOCTOR_SNAPSHOT_SCOPED = False
+
+
+def reset_doctor_snapshot_cache() -> None:
+    """Forget the memoized snapshot (tests)."""
+    global _DOCTOR_SNAPSHOT_CACHE
+    _DOCTOR_SNAPSHOT_CACHE = None
+
+
+@contextlib.contextmanager
+def doctor_snapshot_scope():
+    """Within this block every ``build_doctor_snapshot()`` returns ONE snapshot."""
+    global _DOCTOR_SNAPSHOT_CACHE, _DOCTOR_SNAPSHOT_SCOPED
+    prev_cache, prev_scoped = _DOCTOR_SNAPSHOT_CACHE, _DOCTOR_SNAPSHOT_SCOPED
+    _DOCTOR_SNAPSHOT_CACHE, _DOCTOR_SNAPSHOT_SCOPED = None, True
+    try:
+        yield
+    finally:
+        _DOCTOR_SNAPSHOT_CACHE, _DOCTOR_SNAPSHOT_SCOPED = prev_cache, prev_scoped
 
 
 def build_doctor_snapshot():
@@ -889,21 +936,85 @@ def build_doctor_snapshot():
     construction — `doctor` must never crash because the status SSOT
     couldn't be read.
     """
+    global _DOCTOR_SNAPSHOT_CACHE
+    if not _DOCTOR_SNAPSHOT_SCOPED:
+        return _build_doctor_snapshot_uncached()
+    if _DOCTOR_SNAPSHOT_CACHE is None:
+        _DOCTOR_SNAPSHOT_CACHE = _build_doctor_snapshot_uncached()
+    return _DOCTOR_SNAPSHOT_CACHE
+
+
+def _build_doctor_snapshot_uncached():
     try:
-        from core.admin_data_home import AmbiguousDataHome, admin_data_home
-        from core.identity import resolve_identity
+        from core.admin_data_home import (
+            AmbiguousDataHome, DeployedEnvUnreadable, admin_data_home,
+            admin_owner_principal,
+        )
         from core.status_snapshot import build_status_snapshot
 
-        owner = resolve_identity()
+        # 2026-09-21 (live check on prod): `resolve_identity()` read the SHELL's
+        # tenant, so on the box `polyrob doctor` rendered a confident $0.00 money
+        # block for `local` while `polyrob finance` showed the owner's real
+        # figures. The owner seam reads the deployment's declaration and
+        # REFUSES (never guesses) when it cannot — a refusal renders below.
+        try:
+            owner = admin_owner_principal()
+        except DeployedEnvUnreadable as exc:
+            return None, f"status: unavailable ({exc})"
         try:
             data_home = admin_data_home(
                 echo=lambda m: click.echo(click.style(m, fg="yellow"), err=True))
         except AmbiguousDataHome as exc:
             return None, f"status: unavailable ({exc})"
-        snap = build_status_snapshot(str(owner), data_dir=data_home, include_money=True)
+        # 2026-09-21: the money section needs a db and this process has no DI
+        # container — build the ledger the way `polyrob finance` does (the live
+        # bot.db under the deployed home) and hand it in; with no bot.db the
+        # ledger's legs render unavailable instead of "could not verify: money".
+        ledger = None
+        try:
+            from cli._admin_home import admin_bot_db_path
+            from cli.ui.commands.h_finance import ledger_standalone
+            ledger = ledger_standalone(str(owner), days=1, db_path=admin_bot_db_path())
+        except Exception:
+            ledger = None
+        snap = build_status_snapshot(str(owner), data_dir=data_home, include_money=True,
+                                     ledger=ledger)
         return snap, None
     except Exception as e:
         return None, f"status: unavailable ({type(e).__name__}: {str(e)[:120]})"
+
+
+def _snapshot_json() -> dict:
+    """The doctor's snapshot as DATA: every typed section plus ranked health.
+
+    A section the snapshot could not read is still present, carrying its state
+    and its reason — the same contract the text seats render, so a consumer of
+    `--json` can tell "unreadable" from "empty" without parsing English.
+    """
+    snap, error_line = build_doctor_snapshot()
+    if snap is None:
+        return {"available": False, "error": error_line}
+    out = {
+        "available": True,
+        "user_id": snap.user_id,
+        "generated_at": snap.generated_at,
+        "window_sec": snap.window_sec,
+        "overall": snap.overall,
+        "unavailable_sources": list(snap.unavailable_sources),
+        "health": [{"key": h.key, "text": h.text, "remedy": h.remedy,
+                    "severity": h.severity} for h in snap.health],
+        "sections": {},
+    }
+    for name, sec in snap.sections.items():
+        out["sections"][name] = {
+            "state": sec.state,
+            "reason": sec.reason,
+            "lines": list(sec.lines),
+            "data": sec.data,
+            "health": [{"key": h.key, "text": h.text, "remedy": h.remedy,
+                        "severity": h.severity} for h in sec.health],
+        }
+    return out
 
 
 def status_snapshot_lines() -> list:
@@ -1103,6 +1214,36 @@ def flags_report(env: dict, local_absent_means_on: bool = True, *,
     return lines
 
 
+def perms_report(*, strict: bool = False, as_json: bool = False) -> int:
+    """`doctor --perms` body (WS-G): audit the DEPLOYED data home's group
+    ownership. Returns the process exit code — 0 unless ``strict`` and the
+    audit actually RAN and found an offender. A skipped audit (no
+    `polyrob-data` group: every dev checkout) is never a failure, and never
+    renders as a pass."""
+    from core.data_perms import audit_data_perms, render_perms_lines
+    from cli._admin_home import admin_data_dir
+
+    report = audit_data_perms(admin_data_dir(write=False))
+    lines = render_perms_lines(report)
+    if as_json:
+        import json as _json
+        click.echo(_json.dumps({
+            "data_dir": report.data_dir, "group": report.group,
+            "skipped": report.skipped, "skip_reason": report.skip_reason,
+            "scanned": report.scanned, "truncated": report.truncated,
+            "ok": report.ok, "offender_total": report.offender_total,
+            "counts": report.counts,
+            "offenders": [{"path": o.path, "kind": o.kind, "reasons": o.reasons,
+                           "owner": o.owner, "group": o.group, "mode": o.mode}
+                          for o in report.offenders],
+            "remedy": report.remedy, "report": lines,
+        }, indent=2))
+    else:
+        for line in lines:
+            click.echo(line)
+    return 1 if (strict and not report.skipped and report.offender_total) else 0
+
+
 @click.command("doctor")
 @click.option("--flags", "show_flags", is_flag=True,
               help="Dump every registered env flag with its resolved value and source.")
@@ -1118,11 +1259,21 @@ def flags_report(env: dict, local_absent_means_on: bool = True, *,
 @click.option("--full", "show_full", is_flag=True,
               help="Print the full check transcript after the status snapshot "
                    "(the whole pre-043 `doctor` report). No effect with --flags.")
+@click.option("--perms", "show_perms", is_flag=True,
+              help="Audit the shared data home: every file/dir not group "
+                   "`polyrob-data`, not group-writable (dirs: not setgid), or "
+                   "root-owned under auto/, wallet/, locks/.")
+@click.option("--strict", "perms_strict", is_flag=True,
+              help="With --perms: exit non-zero when the audit finds an "
+                   "offender (CI / deploy gate).")
 @click.option("--json", "as_json", is_flag=True,
-              help="Emit as JSON ({\"report\": [lines], \"status\": [lines]}; "
-                   "--flags mode emits {\"report\": [lines]} only).")
+              help="Emit as JSON: the typed status snapshot (every section with "
+                   "its state/reason/data + ranked health) plus the rendered "
+                   "prose. --full adds the whole check transcript; --flags mode "
+                   "emits {\"report\": [lines]} only.")
 def doctor(show_flags: bool, flag_group: str | None, flag_search: str | None,
-           flag_changed: bool, show_full: bool, as_json: bool):
+           flag_changed: bool, show_full: bool, show_perms: bool,
+           perms_strict: bool, as_json: bool):
     """Health snapshot first (pause state, ranked issues, every status
     section) — the same view `polyrob autonomy status` renders. The full
     check transcript (resolved providers/model, memory backend, config
@@ -1135,6 +1286,9 @@ def doctor(show_flags: bool, flag_group: str | None, flag_search: str | None,
     setup_sqlite_compat()
     load_env(local_mode=True)
     show_flags = show_flags or bool(flag_group) or bool(flag_search) or flag_changed
+
+    if show_perms:
+        raise SystemExit(perms_report(strict=perms_strict, as_json=as_json))
 
     if show_flags:
         report = flags_report(dict(os.environ), group=flag_group,
@@ -1152,11 +1306,25 @@ def doctor(show_flags: bool, flag_group: str | None, flag_search: str | None,
     # /system page) — the full check transcript (`doctor_report`, its own
     # provider/DB/skill probes) is detail, not the headline, computed only
     # when actually needed: under --full, or folded into --json.
+    with doctor_snapshot_scope():
+        _emit_doctor(show_full, as_json)
+
+
+def _emit_doctor(show_full: bool, as_json: bool) -> None:
     status = status_snapshot_lines()
     if as_json:
         import json as _json
-        report = doctor_report(dict(os.environ))
-        click.echo(_json.dumps({"report": report, "status": status}, indent=2))
+        # C37: `--json` used to emit two arrays of ENGLISH SENTENCES — a
+        # machine-readable wrapper around prose, which a consumer can only
+        # regex. The typed `build_status_snapshot` sections and the ranked
+        # health items ride alongside the prose now, and `--full` means the
+        # same thing it does on the text view: the transcript is detail, so it
+        # is computed (and shipped) only when asked for.
+        payload = {"status": status, "snapshot": _snapshot_json()}
+        payload["report"] = (doctor_report(dict(os.environ)) if show_full
+                             else [DOCTOR_FULL_POINTER])
+        payload["full"] = bool(show_full)
+        click.echo(_json.dumps(payload, indent=2, default=str))
         return
     for line in status:
         click.echo(line)

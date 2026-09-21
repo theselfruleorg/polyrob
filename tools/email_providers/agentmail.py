@@ -63,6 +63,42 @@ def _atomic_write_json(path: Path, payload: dict) -> None:
         raise
 
 
+def normalize_agentmail_attachments(raw: Any) -> List[dict]:
+    """AgentMail attachment objects -> the ONE ``{filename, mime, data}`` shape.
+
+    The same shape ``surfaces.email.harness._attachments`` produces for IMAP, so
+    everything downstream (``_attachment_media`` -> ``Media`` -> the inbound
+    media rail) is transport-blind (D26).
+
+    ⚠️ ``data`` is ``None`` when the provider gave metadata but no bytes (it
+    lists attachments with an id and offers them on a separate endpoint). The
+    entry is KEPT (D64): an attachment that exists and could not be read must
+    be NAMED on the turn with its reason. Dropping it is how the agent comes to
+    answer as though the mail were empty.
+    """
+    out: List[dict] = []
+    for att in (raw or []):
+        if not isinstance(att, dict):
+            continue
+        data = None
+        blob = att.get("content") or att.get("data")
+        if isinstance(blob, (bytes, bytearray)):
+            data = bytes(blob)
+        elif isinstance(blob, str) and blob:
+            try:
+                data = base64.b64decode(blob, validate=False)
+            except Exception as e:
+                logger.warning("agentmail attachment %r is not decodable base64: %s",
+                               att.get("filename"), e)
+                data = None
+        out.append({
+            "filename": att.get("filename") or att.get("name"),
+            "mime": att.get("content_type") or att.get("mime") or att.get("type"),
+            "data": data,
+        })
+    return out
+
+
 class AgentMailClient:
     """Async HTTP client for one AgentMail inbox (the agent's own address)."""
 

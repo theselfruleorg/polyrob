@@ -27,7 +27,7 @@ from agents.task.agent.message_manager.views import (
 
 class _FailingLLM:
     """Always raises a non-transient RuntimeError."""
-    async def ainvoke(self, messages):
+    async def ainvoke(self, messages, **kwargs):
         raise RuntimeError("summarizer unavailable for testing")
 
 

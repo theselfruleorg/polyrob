@@ -93,12 +93,29 @@ before 2026-09-17 an agent could ask and never learn the answer.
 
 ## Proving completion (non-negotiable)
 
-- **Done = a live URL or tweet/DM id returned by the write call.** A saved draft file, a
 - **Done = the write tool's live URL, id, or explicit sent acknowledgement.** A saved
   draft file, plan, or "ready to post" is NOT completion of a posting goal.
 - After a successful write, capture the returned id/URL and put it in your OUTCOME line.
 - If the write is disabled, rejected, or you should not post (policy, approval, safety),
   do NOT claim success — finish with `OUTCOME: BLOCKED — <exactly what you need>`.
+
+## Proof per rail
+
+What counts as proof is DIFFERENT on each rail, and getting it wrong costs a turn
+in both directions. Every write tool now returns its own `proof:` line — read it
+instead of going to look for the post. The full table is
+`docs/guide/rails-verification.md` (generated from `core/rails/verification.py`).
+
+- **X post / X reply** — the returned status URL or id IS the proof, and it is
+  fetchable. No URL back means it did not publish.
+- **Telegram channel** — the send receipt IS the verification. You cannot read your
+  own channel posts back: Telegram never delivers them as updates, so an empty
+  `room_read` says NOTHING about whether your post rendered. Never report a
+  delivered post as unconfirmed because you could not find it.
+- **Telegram group/room** — receipt, confirmable by `room_read(room=<chat_id>)`. A
+  missing line is a capture gap or the retention window, not proof of failure.
+- **Email** — the Message-ID on the send result. Accepted for delivery is not read.
+- **On-chain** — a receipt is not a result: read the resulting state back.
 
 ## Safety
 

@@ -66,7 +66,9 @@ def test_live_body_names_every_running_actor_for_the_tenant(tmp_path, monkeypatc
     assert body["sessions"][0]["task"] == "EXIT-MONITOR run"
     assert body["sessions"][0]["status"] == "running"
     assert body["count"] == 3
-    assert body["unreadable"] == {}
+    assert body["unreadable"] == []
+    # 043 A37: every store answered, so the count is a MEASUREMENT.
+    assert body["partial"] is False
 
 
 def test_live_body_names_a_missing_store_never_a_confident_zero(tmp_path):
@@ -74,8 +76,10 @@ def test_live_body_names_a_missing_store_never_a_confident_zero(tmp_path):
     data.mkdir()
     body = mod._live_body("rob", str(data), str(tmp_path / "nowhere"))
     assert body["goals"] is None and body["cron"] is None and body["sessions"] is None
-    assert set(body["unreadable"]) == {"goals", "cron", "sessions"}
+    assert {line.split(":", 1)[0] for line in body["unreadable"]} == {
+        "goals", "cron", "sessions"}
     assert body["count"] is None
+    assert body["partial"] is True
 
 
 def test_live_body_drops_a_dead_owner_pid(tmp_path):
@@ -95,6 +99,7 @@ def test_live_route_scopes_to_the_effective_tenant(tmp_path, monkeypatch):
     assert resp.status_code == 200
     body = resp.json()
     assert body["count"] == 3 and body["user_id"] == "rob"
+    assert body["partial"] is False and body["unreadable"] == []
 
 
 def test_live_count_feeds_the_head_line(tmp_path, monkeypatch):
@@ -102,10 +107,11 @@ def test_live_count_feeds_the_head_line(tmp_path, monkeypatch):
     monkeypatch.setattr(mod.webgate, "data_dir", lambda: data)
     monkeypatch.setattr(mod, "_sessions_root", lambda: root)
     monkeypatch.setattr(mod, "_tenant", lambda request: ("rob", None))
-    assert mod._live_count(object()) == 3
-    # A tenant the shell cannot name is 0 in-progress, never a crash.
+    assert mod._live_count(object()) == (3, False)
+    # A tenant the shell cannot name is 0 in-progress and PARTIAL (the zero is
+    # "I could not look", not "nothing is running"), never a crash.
     monkeypatch.setattr(mod, "_tenant", lambda request: (None, "unbound"))
-    assert mod._live_count(object()) == 0
+    assert mod._live_count(object()) == (0, True)
 
 
 def test_head_line_says_how_many_things_are_in_progress(monkeypatch):
@@ -113,13 +119,25 @@ def test_head_line_says_how_many_things_are_in_progress(monkeypatch):
     from webview.copy import t
     monkeypatch.setattr(mod, "_pause_headline", lambda: t("shell.state.running"))
     monkeypatch.setattr(mod, "_inbox_summary", lambda request: compose([], {"asks": "ok"}))
-    monkeypatch.setattr(mod, "_live_count", lambda request: 2)
+    monkeypatch.setattr(mod, "_live_count", lambda request: (2, False))
     app = FastAPI()
     app.include_router(mod.router)
     html = TestClient(app).get("/work").text
     assert "Rob is running, 2 in progress." in html
-    monkeypatch.setattr(mod, "_live_count", lambda request: 0)
+    monkeypatch.setattr(mod, "_live_count", lambda request: (0, False))
     assert "Rob is running. Nothing needs you." in TestClient(app).get("/work").text
+
+
+def test_head_line_says_the_count_is_a_floor_when_a_store_refused(monkeypatch):
+    """043 A37: ``2+``, not ``2``, when one of the three stores did not answer."""
+    from core.surfaces.inbox import compose
+    from webview.copy import t
+    monkeypatch.setattr(mod, "_pause_headline", lambda: t("shell.state.running"))
+    monkeypatch.setattr(mod, "_inbox_summary", lambda request: compose([], {"asks": "ok"}))
+    monkeypatch.setattr(mod, "_live_count", lambda request: (2, True))
+    app = FastAPI()
+    app.include_router(mod.router)
+    assert "Rob is running, 2+ in progress." in TestClient(app).get("/work").text
 
 
 def test_head_route_renders_the_same_two_lines_as_the_shell(monkeypatch):
@@ -127,7 +145,7 @@ def test_head_route_renders_the_same_two_lines_as_the_shell(monkeypatch):
     from webview.copy import t
     monkeypatch.setattr(mod, "_pause_headline", lambda: t("shell.state.running"))
     monkeypatch.setattr(mod, "_inbox_summary", lambda request: compose([], {"asks": "ok"}))
-    monkeypatch.setattr(mod, "_live_count", lambda request: 1)
+    monkeypatch.setattr(mod, "_live_count", lambda request: (1, False))
     app = FastAPI()
     app.include_router(mod.api_router)
     body = TestClient(app).get("/api/webgate/head").json()
@@ -140,7 +158,7 @@ def test_shell_loads_the_live_module(monkeypatch):
     from core.surfaces.inbox import compose
     monkeypatch.setattr(mod, "_pause_headline", lambda: "")
     monkeypatch.setattr(mod, "_inbox_summary", lambda request: compose([], {"asks": "ok"}))
-    monkeypatch.setattr(mod, "_live_count", lambda request: 0)
+    monkeypatch.setattr(mod, "_live_count", lambda request: (0, False))
     app = FastAPI()
     app.include_router(mod.router)
     html = TestClient(app).get("/inbox").text
@@ -151,7 +169,7 @@ def test_shell_offers_logout_only_where_a_login_exists(monkeypatch):
     from core.surfaces.inbox import compose
     monkeypatch.setattr(mod, "_pause_headline", lambda: "")
     monkeypatch.setattr(mod, "_inbox_summary", lambda request: compose([], {"asks": "ok"}))
-    monkeypatch.setattr(mod, "_live_count", lambda request: 0)
+    monkeypatch.setattr(mod, "_live_count", lambda request: (0, False))
     app = FastAPI()
     app.include_router(mod.router)
     monkeypatch.setattr(mod, "_show_logout", lambda: True)
@@ -167,5 +185,9 @@ def test_live_metadata_failure_is_named(tmp_path):
     (Path(root) / 'rob' / 's-live' / 'status.json').write_text('broken')
     body = mod._live_body('rob', data, root)
     assert body['sessions'][0]['status'] is None
-    assert 'session:s-live:status' in body['unreadable']
+    assert any(line.startswith('session:s-live:status:')
+               for line in body['unreadable'])
+    # NOT partial: the session is still COUNTED, so the number is exact —
+    # only a whole list that did not answer makes the count a floor.
+    assert body['partial'] is False
     assert body['count_unit'] == 'actors'

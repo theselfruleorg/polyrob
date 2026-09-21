@@ -158,15 +158,22 @@ async def test_empty_ledger_never_implies_own_posts_failed(home):
     rendered" — while the owner was looking at the rendered posts. Telegram
     never delivers a bot's OWN messages back as updates, so an empty ledger
     says nothing about delivery; the send receipt is the confirmation. Both the
-    room listing and the per-room read must say so."""
+    room listing and the per-room read must say so.
+
+    057 WS-E: that sentence is no longer written here — both sites CITE the one
+    verification table, which is also what the SEND path renders. Pin the exact
+    row rather than a substring, so a reworded table cannot quietly drop it."""
+    from core.rails.verification import verification_line
     chat = _seed_room(home, chat_id="-1001000000001", note="Announcement channel (@example_channel)")
     c = _Controller(home)
     fn, model = _action(c)
     per_room = (await fn(model(room=chat), _ctx())).extracted_content
     listing = (await fn(model(room=None), _ctx())).extracted_content
+    proof = verification_line("telegram_channel")
+    assert "cannot read its own channel posts" in proof
     for out in (per_room, listing):
-        assert "OWN" in out and "receipt" in out, out
-        assert "never" in out.lower()
+        assert proof in out, out
+        assert "rails-verification.md" in out
 
 
 @pytest.mark.asyncio
@@ -191,3 +198,58 @@ async def test_since_minutes_filters_old_lines(home):
     out = res.extracted_content
     assert "one minute old" in out
     assert "two hours old" not in out
+
+
+# --- 057 WS-D: labels are labels ---------------------------------------------
+
+def _set_chat_name(home, chat_id, name, monkeypatch, owner_uid="rob"):
+    """Write chat.name under the OWNER tenant the action's own resolver reads."""
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", owner_uid)
+    from core.instance import resolve_owner_user_id
+    from core.surfaces import chat_policy
+    ok, msg = chat_policy.set(str(home), resolve_owner_user_id(), "telegram",
+                              chat_id, "chat.name", name)
+    assert ok, msg
+
+
+@pytest.mark.asyncio
+async def test_note_is_never_rendered_as_the_room_title(home):
+    """The owner's allowlist note is a LABEL. It must never occupy the quoted
+    title position — that is the defect 057 R3 names (and the 09-19 'fix' only
+    retyped the data)."""
+    chat = _seed_room(home, note="ask before posting")
+    _seed_lines(home, chat, [("@a", "hi")])
+    c = _Controller(home)
+    fn, model = _action(c)
+    for res in (await fn(model(), _ctx()), await fn(model(room=chat), _ctx())):
+        out = res.extracted_content
+        # with no chat.name set, the room renders under its ADDRESS
+        assert f'telegram:{chat} "telegram:{chat}"' in out
+        # the note NEVER occupies the quoted title slot …
+        assert f'telegram:{chat} "ask before posting"' not in out
+        # … it renders behind an explicit `label:` marker, with its date
+        assert 'label: "ask before posting" (set ' in out
+
+
+@pytest.mark.asyncio
+async def test_name_comes_from_chat_policy(home, monkeypatch):
+    chat = _seed_room(home, note="ask before posting")
+    _set_chat_name(home, chat, "The Public Den", monkeypatch)
+    c = _Controller(home)
+    fn, model = _action(c)
+    out = (await fn(model(room=chat), _ctx())).extracted_content
+    assert '"The Public Den"' in out
+    assert 'label: "ask before posting"' in out
+    assert out.index('"The Public Den"') < out.index('label:')
+
+
+@pytest.mark.asyncio
+async def test_a_room_is_still_findable_by_its_label(home):
+    """Renaming the field must not make the owner's own words unusable as a
+    search fragment — that would be a regression dressed as a fix."""
+    chat = _seed_room(home, note="the den")
+    _seed_lines(home, chat, [("@a", "hi")])
+    c = _Controller(home)
+    fn, model = _action(c)
+    out = (await fn(model(room="the den"), _ctx())).extracted_content
+    assert "@a" in out and "hi" in out

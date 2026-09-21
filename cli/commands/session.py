@@ -23,6 +23,31 @@ _SESSION_HELP_SECTIONS = [
 ]
 
 
+def _data_root():
+    """The session ARTIFACT tree these verbs read.
+
+    C25: every verb here called ``pm().data_root``, which resolves from the
+    SHELL — ``DATA_ROOT``, else ``POLYROB_DATA_DIR/sessions``, else the legacy
+    ``./data/task``. On a deployed box, where systemd exports the data home and
+    an owner's SSH shell carries none, that is a directory the service has
+    never written, so `polyrob session list|history|costs|tools` answered a
+    confident "not found" over a live tree. When the ADMIN home (the 031 seam)
+    holds a ``sessions`` tree, that one wins; otherwise the shell resolution is
+    unchanged, so a dev checkout is byte-identical.
+    """
+    from pathlib import Path as _P
+
+    from agents.task.path import pm
+    try:
+        from cli._admin_home import admin_data_dir
+        deployed = _P(admin_data_dir(write=False)) / "sessions"
+        if deployed.is_dir():
+            return deployed
+    except Exception:
+        pass
+    return pm().data_root
+
+
 @click.group("session", cls=GroupedGroup, help_sections=_SESSION_HELP_SECTIONS,
              epilog="Continue a session's execution with: polyrob run --resume <id>")
 def session():
@@ -62,7 +87,7 @@ def session_history(session_id: str, dump):
 
     from agents.task.path import pm
 
-    checkpoints = find_compaction_checkpoints(pm().data_root, session_id)
+    checkpoints = find_compaction_checkpoints(_data_root(), session_id)
     if not checkpoints:
         click.echo(f"No compaction checkpoints found for session matching '{session_id}'")
         return
@@ -164,7 +189,7 @@ async def _session_tail(session_id: str, follow: bool = False):
 
     from agents.task.path import pm
 
-    directory = session_directory(pm().data_root, session_id)
+    directory = session_directory(_data_root(), session_id)
     feed_dir = directory / "feed" if directory else None
 
     if not feed_dir or not feed_dir.exists():
@@ -342,9 +367,9 @@ def _render_training_format(session_id, session_info, session_dir, fmt) -> dict:
 
     labels = None
     try:
-        # memory.db lives in BotConfig.data_dir — the PARENT of pm().data_root
+        # memory.db lives in BotConfig.data_dir — the PARENT of the session tree
         # on the local CLI — so resolve it instead of assuming data_root.
-        memory_db = find_memory_db(pm().data_root)
+        memory_db = find_memory_db(_data_root())
         user_id = (session_info or {}).get("user_id") or ""
         if memory_db is not None:
             labels = load_episode_labels(memory_db, str(user_id), session_id)
@@ -371,7 +396,7 @@ async def _session_export(session_id: str, output: Optional[str], format: str):
         output = f"{session_id}_export.{format}"
 
     # Find session directory
-    data_root = pm().data_root
+    data_root = _data_root()
     session_dir = session_directory(data_root, session_id)
 
     if not session_dir:
@@ -490,7 +515,7 @@ def session_artifacts(session_id: str):
     """List artifacts (screenshots, downloads, outputs) for a session."""
     from agents.task.path import pm
 
-    data_root = pm().data_root
+    data_root = _data_root()
     session_dir = session_directory(data_root, session_id)
 
     if not session_dir:
@@ -533,58 +558,62 @@ async def _session_costs(session_id: str, as_json: bool):
         click.echo("TaskAgent not available")
         sys.exit(1)
 
-    # Try to get breakdown from usage tracker
+    costs = {"session_id": session_id, "breakdown": "unavailable", "errors": []}
+
+    # C52: `except Exception: pass` turned a live tracker fault into the SAME
+    # "unavailable" a session with no tracker produces, and the on-disk
+    # fallback was then printed as if it were the whole cost.
     orchestrator = None
     try:
         orchestrator = task_agent.get_orchestrator(session_id)
-    except Exception:
-        pass
-
-    costs = {"session_id": session_id, "breakdown": "unavailable"}
+    except Exception as exc:
+        costs["errors"].append(f"orchestrator lookup: {type(exc).__name__}: {exc}")
 
     if orchestrator and hasattr(orchestrator, "usage_tracker"):
         try:
-            breakdown = await orchestrator.usage_tracker.get_session_breakdown(session_id)
-            costs["breakdown"] = breakdown
-        except Exception:
-            pass
+            costs["breakdown"] = await orchestrator.usage_tracker.get_session_breakdown(
+                session_id)
+        except Exception as exc:
+            costs["errors"].append(f"usage tracker: {type(exc).__name__}: {exc}")
 
-    # Fallback: read llm_usage files
+    # Fallback: the per-call llm_usage records on disk.
     if costs["breakdown"] == "unavailable":
-        from agents.task.path import pm
-        data_root = pm().data_root
+        # C59: this carried its OWN three-pattern glob while `session_directory`
+        # (cli/session_paths.py) is what every sibling verb resolves through —
+        # including its AMBIGUITY refusal, which the private glob silently
+        # resolved by taking whichever directory the first pattern found.
         session_dir = None
-        patterns = [
-            f"*/{session_id}*/",
-            f"*/sessions/{session_id}*/",
-            f"*/*{session_id}*/",
-        ]
-        for pattern in patterns:
-            for path in data_root.glob(pattern):
-                if path.is_dir():
-                    session_dir = path
-                    break
-            if session_dir:
-                break
-
+        try:
+            session_dir = session_directory(_data_root(), session_id)
+        except click.ClickException as exc:
+            costs["errors"].append(str(exc))
         if session_dir:
             usage = _summarize_llm_usage(session_dir)
             if usage:
                 costs["llm_usage"] = usage
+        else:
+            costs["errors"].append(
+                f"no session directory for {session_id} under {_data_root()}")
 
     if as_json:
         click.echo(json.dumps(costs, indent=2, default=str))
+        return
+    click.echo(f"Costs for session {session_id}:")
+    if isinstance(costs["breakdown"], dict):
+        click.echo(f"  Total credits: {costs['breakdown'].get('total_credits', 0)}")
+    elif costs.get("llm_usage"):
+        u = costs["llm_usage"]
+        click.echo(f"  On-disk usage: {u['records']} call(s), "
+                   f"{u['total_tokens']} tokens, ~${u['total_cost_estimate']} est.")
+        click.echo(click.style(
+            "  (no live usage tracker — this is what the session WROTE, which "
+            "is a floor, not necessarily the whole cost)", dim=True))
     else:
-        click.echo(f"Costs for session {session_id[:16]}:")
-        if isinstance(costs["breakdown"], dict):
-            total = costs["breakdown"].get("total_credits", 0)
-            click.echo(f"  Total credits: {total}")
-        elif costs.get("llm_usage"):
-            u = costs["llm_usage"]
-            click.echo(f"  On-disk usage: {u['records']} call(s), "
-                       f"{u['total_tokens']} tokens, ~${u['total_cost_estimate']} est.")
-        else:
-            click.echo(f"  {costs['breakdown']}")
+        click.echo(click.style(
+            "  cost UNKNOWN — no live tracker and no usage records on disk",
+            fg="yellow"))
+    for err in costs["errors"]:
+        click.echo(click.style(f"  ? {err}", fg="yellow"))
 
 
 @session.command("tools")
@@ -594,7 +623,7 @@ def session_tools(session_id: str, as_json: bool):
     """Show tools used in a session."""
     from agents.task.path import pm
 
-    data_root = pm().data_root
+    data_root = _data_root()
     session_dir = session_directory(data_root, session_id)
 
     if not session_dir:
@@ -617,7 +646,7 @@ def session_tools(session_id: str, as_json: bool):
     if as_json:
         click.echo(json.dumps(tool_calls, indent=2))
     else:
-        click.echo(f"Tools used in session {session_id[:16]}:")
+        click.echo(f"Tools used in session {session_id}:")
         if tool_calls:
             for name, count in sorted(tool_calls.items(), key=lambda x: -x[1]):
                 click.echo(f"  {name}: {count}")

@@ -258,7 +258,7 @@ def resolve_pending_target(target: str, pending: Any) -> Optional[Dict[str, Any]
 def decide_pending(kind: str, item_id: Any, *, approve: bool, user_id: str,
                    home_dir: Any, instance_id: str, board: Any = None,
                    correspondent_registry: Any = None,
-                   task_agent: Any = None) -> tuple:
+                   task_agent: Any = None, answer: str = "") -> tuple:
     """Record the owner's decision on ONE item of the union. ``(ok, message)``.
 
     The union holds three kinds of thing and each has its own decider. Routing
@@ -281,7 +281,8 @@ def decide_pending(kind: str, item_id: Any, *, approve: bool, user_id: str,
         # session (resume-on-grant) instead of waiting for a byte-identical
         # retry to happen by luck.
         return decide_tool_approval(board, item_id, user_id=user_id,
-                                    approved=approve, task_agent=task_agent)
+                                    approved=approve, task_agent=task_agent,
+                                    answer=answer)
     if kind == "correspondent":
         surface, _, address = item_id.partition(":")
         if not surface or not address:
@@ -393,7 +394,8 @@ def _wake_queue_for_board(board: Any):
 
 
 def decide_tool_approval(board: Any, display_id: str, *, user_id: str,
-                         approved: bool, task_agent: Any = None) -> tuple:
+                         approved: bool, task_agent: Any = None,
+                         answer: str = "") -> tuple:
     """Resolve a (possibly ``tap-``-prefixed) ask id back to the real ask id and
     record the owner's decision. Returns ``(ok, message)`` — the shared handler
     behind Telegram `/approve` `/reject` and `polyrob owner promote/reject
@@ -419,7 +421,10 @@ def decide_tool_approval(board: Any, display_id: str, *, user_id: str,
         row = board.get(real_id)  # unscoped on purpose: decide_ask below is the tenant gate
     except Exception:
         row = None
-    ok, _ = board.decide_ask(real_id, user_id=user_id, approved=approved)
+    # A27 (2026-09-21): the owner's written answer rides INTO the decision so
+    # the unblocked run learns what was said, not only that it was allowed.
+    ok, _ = board.decide_ask(real_id, user_id=user_id, approved=approved,
+                             answer=(answer or "").strip())
     if not ok:
         return False, f"no open tool-approval request '{display_id}'"
     verb = "approved" if approved else "rejected"

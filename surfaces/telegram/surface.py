@@ -203,7 +203,19 @@ class TelegramSurface(Surface):
             # file, bot rejection, ...) never takes the text down with it — the text
             # above has already landed. See _send_media.
             if msg.media:
-                await self._send_media(chat_id, msg.media, self._parse_mode())
+                failed = await self._send_media(chat_id, msg.media,
+                                                self._parse_mode())
+                if failed:
+                    # ⚠️ D56: SAID, not just logged. The text above carries the
+                    # message; the reader needs to know a picture is MISSING
+                    # rather than wonder whether they missed it — which is
+                    # exactly what an unsent invoice CARD looks like. The
+                    # harness's own reply path already says this; the surface's
+                    # did not, so every router-delivered card failed silently.
+                    await self.send_text(
+                        chat_id,
+                        f"(I could not attach {failed} file(s) — everything "
+                        f"you need is in the message above.)")
             return SendResult(success=True, surface_message_id=str(last_id) if last_id is not None else None)
         except Exception as e:  # fail-open: never raise into the loop
             logger.error("TelegramSurface.send to %s failed: %s", chat_id, e, exc_info=True)
@@ -221,11 +233,13 @@ class TelegramSurface(Surface):
                                  _TELEGRAM_CAPTION_MAX - 1)[0]
         return head + "…"
 
-    async def _send_media(self, chat_id: str, media: list, parse_mode) -> None:
-        """Send each renderable media entry (path + kind) as a photo/document, alongside
-        the text already delivered by send(). Fail-open per entry: a missing/unreadable
-        file or a raising bot call is logged at WARN and the next entry is tried — the
-        text above is never affected (this runs after the text send succeeds).
+    async def _send_media(self, chat_id: str, media: list, parse_mode) -> int:
+        """Send each renderable media entry (path + kind) as a photo/document.
+
+        Returns the number of entries that did NOT go (D56) so the caller can
+        say so. Fail-open per entry: a missing/unreadable file or a raising bot
+        call is logged at WARN and the next entry is tried — the text above is
+        never affected (this runs after the text send succeeds).
 
         030 L8: the caption is the entry's EXPLICIT ``caption`` only. The message
         text has already been sent as its own bubble — repeating its first 1024
@@ -236,6 +250,7 @@ class TelegramSurface(Surface):
         # (mirrors harness.py/voice.py); only paid when there is media to send.
         from aiogram.types import FSInputFile
 
+        failed = 0
         for entry in media:
             if not isinstance(entry, dict):
                 continue
@@ -244,6 +259,7 @@ class TelegramSurface(Surface):
                 continue  # not a renderable entry (e.g. the legacy email-subject shape)
             if not (os.path.isfile(path) and os.access(path, os.R_OK)):
                 logger.warning("TelegramSurface: media path missing/unreadable, skipping: %s", path)
+                failed += 1
                 continue
             caption = self._caption_for(entry.get("caption") or "")
             try:
@@ -260,6 +276,8 @@ class TelegramSurface(Surface):
                             chat_id, file, caption=caption, parse_mode=parse_mode))
             except Exception as e:
                 logger.warning("TelegramSurface: failed to send media %s: %s", path, e)
+                failed += 1
+        return failed
 
     # --- #8 incremental streaming: the engine lives in the base Surface; Telegram only
     #     supplies the transport primitives (send/edit/overflow) + its policy hooks. ---

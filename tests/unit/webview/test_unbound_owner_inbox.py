@@ -192,12 +192,21 @@ def test_the_page_says_WHY_it_could_not_read_them(monkeypatch):
 
 
 def test_a_mixed_set_of_refusals_invents_no_single_reason(monkeypatch):
-    """Five different failures do not collapse into one sentence."""
+    """Five different failures do not collapse into one sentence.
+
+    043 A36: the reason is read from the TYPED ``source_reasons`` mapping
+    (``webview.inbox.with_source_reasons``) — the render site no longer slices
+    the composer's own prose.
+    """
     import webview.pages_new as mod
     from core.surfaces.inbox import compose
-    body = compose([], {"asks": "unreadable(locked)", "apps": "unreadable(disk)"})
+    from webview.inbox import with_source_reasons
+    body = with_source_reasons(
+        compose([], {"asks": "unreadable(locked)", "apps": "unreadable(disk)"}))
     assert mod._shared_refusal(body, ["asks", "apps"]) == ""
-    one = compose([], {"asks": "unreadable(same)", "apps": "unreadable(same)"})
+    one = with_source_reasons(
+        compose([], {"asks": "unreadable(same)", "apps": "unreadable(same)"}))
+    assert one["source_reasons"] == {"asks": "same", "apps": "same"}
     assert mod._shared_refusal(one, ["asks", "apps"]) == "same"
 
 

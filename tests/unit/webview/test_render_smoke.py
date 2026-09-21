@@ -1,23 +1,34 @@
-"""P3 — render smoke: the layout.html webgate page serves 200 and links the
-design system.
+"""P3 — render smoke: the layout.html shell links the design system.
 
-The surviving layout.html page (`/pending`) must render in single-user mode and
-pull in the design-system stylesheets (`variables.css` then `components.css`)
-wired into ``layout.html`` <head>. This proves the targeted CSS cleanup is
+``layout.html`` must pull in the design-system stylesheets (`variables.css`
+then `components.css`, before `style.css`) and render the console name, the
+branding links and the real version. This proves the targeted CSS cleanup is
 actually loaded by the pages, not just present on disk.
 
-⚠️ 043 phase 5: `/` is now the new chat shell (app.css), and the legacy index
-dashboard is deleted, so these render assertions target `/pending` — the one
-surviving page on the ``layout.html`` shell.
+⚠️ A21 (2026-09-21) deleted `/pending`, which was the last ``layout.html``
+page reachable over HTTP in the single-user posture — `/` is the new chat
+shell (app.css), `/owner-login` and `/signin` exist only in the authenticated
+postures, and `error.html` only answers a refusal. So these assertions render
+``status.html`` (a surviving ``layout.html`` page) through the server's OWN
+template engine, the way ``test_signin_has_no_placeholder_legal_links``
+already did for ``signin.html``. The subject is the SHELL either way; going
+through a route only ever added a page that could be deleted out from under
+the test.
 """
 import importlib
 
 import pytest
 from fastapi.testclient import TestClient
 
-#: The surviving layout.html-based webgate page (the console's design-system
-#: shell). `/` is the new chat shell now and uses app.css instead.
-_PAGE = "/pending"
+#: A surviving ``layout.html`` page, rendered directly (see the module
+#: docstring): no single-user HTTP route serves one any more.
+_LAYOUT_TEMPLATE = "status.html"
+
+
+def _layout_html(server) -> str:
+    """``layout.html`` as the console itself renders it, through its own env."""
+    return server._templates.get_template(_LAYOUT_TEMPLATE).render(
+        request=None, instance_id="polyrob", version="0.0.0-test")
 
 
 def _reload_server(monkeypatch, multitenant=False):
@@ -27,22 +38,18 @@ def _reload_server(monkeypatch, multitenant=False):
     return importlib.reload(server)
 
 
-@pytest.mark.parametrize("path", [_PAGE])
-def test_page_renders_and_links_design_system(monkeypatch, path):
+def test_page_renders_and_links_design_system(monkeypatch):
     server = _reload_server(monkeypatch, multitenant=False)
-    client = TestClient(server._fastapi)
-    r = client.get(path)
-    assert r.status_code == 200, f"{path} -> {r.status_code}"
-    html = r.text
-    assert "/static/css/variables.css" in html, f"{path} missing variables.css link"
-    assert "/static/css/components.css" in html, f"{path} missing components.css link"
+    html = _layout_html(server)
+    assert html.strip(), f"{_LAYOUT_TEMPLATE} rendered nothing"
+    assert "/static/css/variables.css" in html, "missing variables.css link"
+    assert "/static/css/components.css" in html, "missing components.css link"
 
 
 def test_design_system_loads_before_style(monkeypatch):
     """variables.css + components.css must precede style.css in the <head>."""
     server = _reload_server(monkeypatch, multitenant=False)
-    client = TestClient(server._fastapi)
-    html = client.get(_PAGE).text
+    html = _layout_html(server)
     i_vars = html.find("/static/css/variables.css")
     i_comp = html.find("/static/css/components.css")
     i_style = html.find("/static/css/style.css")
@@ -56,16 +63,14 @@ def test_fastapi_title_is_polyrob_console(monkeypatch):
 
 def test_index_page_shows_console_display_name(monkeypatch):
     server = _reload_server(monkeypatch, multitenant=False)
-    client = TestClient(server._fastapi)
-    html = client.get(_PAGE).text
+    html = _layout_html(server)
     assert "POLYROB Console" in html
 
 
 def test_index_page_honors_console_name_override(monkeypatch):
     monkeypatch.setenv("POLYROB_CONSOLE_NAME", "Rob Console")
     server = _reload_server(monkeypatch, multitenant=False)
-    client = TestClient(server._fastapi)
-    html = client.get(_PAGE).text
+    html = _layout_html(server)
     assert "Rob Console" in html
     assert "POLYROB Console" not in html
 
@@ -89,8 +94,7 @@ def test_index_page_uses_branding_config_defaults(monkeypatch):
     # host / framework-author domain footer links (no dead links on an
     # unconfigured deploy).
     server = _reload_server(monkeypatch, multitenant=False)
-    client = TestClient(server._fastapi)
-    html = client.get(_PAGE).text
+    html = _layout_html(server)
     assert "your-polyrob-host.example" not in html
     assert "theselfrule.org" not in html
     # Beta banner removed 2026-07-06 — must never come back
@@ -102,8 +106,7 @@ def test_index_page_honors_branding_overrides(monkeypatch):
     monkeypatch.setenv("POLYROB_BRAND_URL", "https://brand.example")
     monkeypatch.setenv("POLYROB_ORG_URL", "https://org.example")
     server = _reload_server(monkeypatch, multitenant=False)
-    client = TestClient(server._fastapi)
-    html = client.get(_PAGE).text
+    html = _layout_html(server)
     assert "brand.example" in html
     assert "org.example" in html
     assert "your-polyrob-host.example" not in html
@@ -112,8 +115,8 @@ def test_index_page_honors_branding_overrides(monkeypatch):
 def test_footer_renders_real_version(monkeypatch):
     from core.version import get_version
     server = _reload_server(monkeypatch, multitenant=False)
-    client = TestClient(server._fastapi)
-    html = client.get(_PAGE).text
+    html = server._templates.get_template(_LAYOUT_TEMPLATE).render(
+        request=None, instance_id="polyrob", version=get_version())
     assert f"ver. {get_version()}" in html
     assert "1.0.0. 2025" not in html
 
@@ -155,8 +158,7 @@ def test_rebrand_did_not_add_new_stylesheet_links(monkeypatch):
     page-wide literal that was never 3 to begin with.
     """
     server = _reload_server(monkeypatch, multitenant=False)
-    client = TestClient(server._fastapi)
-    html = client.get(_PAGE).text
+    html = _layout_html(server)
     assert html.count("/static/css/variables.css") == 1
     assert html.count("/static/css/components.css") == 1
     assert html.count("/static/css/style.css") == 1

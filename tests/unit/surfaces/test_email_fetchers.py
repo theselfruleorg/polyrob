@@ -144,3 +144,41 @@ async def test_agentmail_fetcher_skips_messages_from_self(tmp_path):
     fetcher = AgentMailFetcher(client, dedup)
     out = await fetcher.fetch_unread()
     assert [n["message_id"] for _, n in out] == ["m2"]
+
+
+# --- 057 WS-F: inbound must not wait on the SEND half ---------------------
+
+class _SmtpDeadTool:
+    """A tool whose SMTP login is refused but whose IMAP half is fine."""
+
+    def __init__(self, conn):
+        self.imap_connection = conn
+        self.calls = []
+
+    async def ensure_initialized(self):
+        self.calls.append("full")
+        raise RuntimeError("SMTP connection test failed: login rejected (535)")
+
+    async def ensure_imap(self):
+        self.calls.append("imap")
+
+    async def _connect_imap(self):
+        return None
+
+
+@pytest.mark.asyncio
+async def test_imap_fetcher_uses_the_receive_half_only():
+    """A 535 on send used to stop inbound mail and log an ERROR every 60 s poll."""
+    conn = _FakeImapConn({b"1": RAW})
+    tool = _SmtpDeadTool(conn)
+    out = await ImapFetcher(tool).fetch_unread()
+    assert len(out) == 1
+    assert tool.calls == ["imap"], "the poll must never run the SMTP probe"
+
+
+@pytest.mark.asyncio
+async def test_imap_fetcher_falls_back_for_a_tool_without_the_seam():
+    """Duck-typed/legacy tools keep working (fail-open seam lookup)."""
+    conn = _FakeImapConn({b"1": RAW})
+    out = await ImapFetcher(_FakeImapTool(conn)).fetch_unread()
+    assert len(out) == 1

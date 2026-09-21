@@ -90,7 +90,7 @@ _SUPPRESSED_PREFIX = "[suppressed by daily proactive-message cap"
 SECTION_ORDER = ("session", "providers", "work", "approvals", "loops",
                  "delivery", "posture", "security", "identity", "apps",
                  "groups", "room_actions", "creations", "collectibles", "liquidity",
-                 "wallet", "money")
+                 "wallet", "money", "economics")
 
 
 @dataclass
@@ -490,6 +490,37 @@ def _work_section(user_id: str, goals_db: str, tele: Section, now: float) -> Sec
         sec.data["runs_window"] = by
         sec.lines.append("24h goal runs: " + (", ".join(f"{k}={v}" for k, v in sorted(by.items()))
                                              or "none"))
+        # 057 WS-C: a pre-emption is a first-class outcome — the 16 yields of
+        # 2026-09-19 were counted by hand because nothing rendered them.
+        yielded = [r for r in runs if (r["attrs"] or {}).get("outcome") == "yielded"]
+        resumed = [r for r in runs if (r["attrs"] or {}).get("outcome") == "resumed"]
+        deferred = [r for r in runs if (r["attrs"] or {}).get("outcome") == "deferred"]
+        if yielded or resumed or deferred:
+            per_goal: Dict[str, int] = {}
+            for r in yielded:
+                g = str((r["attrs"] or {}).get("goal_id") or "?")[:12]
+                per_goal[g] = per_goal.get(g, 0) + 1
+            reasons: Dict[str, int] = {}
+            for r in deferred:
+                rs = str((r["attrs"] or {}).get("reason") or "?").split(":")[0]
+                reasons[rs] = reasons.get(rs, 0) + 1
+            worst = max(per_goal.items(), key=lambda kv: kv[1]) if per_goal else None
+            line = f"pre-emption 24h: yielded ×{len(yielded)} · resumed ×{len(resumed)}"
+            if deferred:
+                line += " · deferred ×%d (%s)" % (
+                    len(deferred), ", ".join(f"{k} {v}" for k, v in sorted(reasons.items())))
+            if worst and worst[1] >= 3:
+                line += f" · goal {worst[0]} yielded {worst[1]}×"
+            sec.lines.append(line)
+            sec.data["preemption"] = {"yielded": len(yielded), "resumed": len(resumed),
+                                      "deferred": len(deferred), "per_goal": per_goal}
+            if yielded and not resumed and len(yielded) >= 3:
+                sec.health.append(HealthItem(
+                    key="yields_not_resumed", severity=SEVERITY_WARN,
+                    text=f"{len(yielded)} goal yields in 24h and no resume — each restart "
+                         f"re-reads the world from scratch",
+                    remedy="set GOAL_RESUME_SAME_SESSION=true and GOAL_YIELD_GRACE_SEC=90; "
+                           "mark read-only rails `polyrob cron edit <id> --no-preempts`"))
     else:
         sec.lines.append(f"24h goal-run counts unavailable ({tele.reason})")
     for a in asks:
@@ -549,6 +580,87 @@ def _approvals_section(user_id: str, data_dir: str, goals_db: str) -> Section:
             # one token of its own.
             remedy="/pending · /approve_all · /reject_all"))
     return sec
+
+
+def _rail_verdicts():
+    """Durable rail verdicts (smtp / twitter_api / missing_key), aggregated by
+    kind: an account out of X credit is ONE outage, not one per endpoint."""
+    from core.credential_verdicts import active
+    by_kind: Dict[str, Any] = {}
+    for v in active():
+        cur = by_kind.get(v.kind)
+        if cur is None:
+            by_kind[v.kind] = v
+        else:
+            # earliest first_seen, latest last_seen, summed count
+            by_kind[v.kind] = type(v)(
+                kind=v.kind, key=cur.key, first_seen=min(cur.first_seen, v.first_seen),
+                last_seen=max(cur.last_seen, v.last_seen), count=cur.count + v.count,
+                code=cur.code or v.code, remedy=cur.remedy or v.remedy,
+                ttl_sec=cur.ttl_sec or v.ttl_sec)
+    return sorted(by_kind.values(), key=lambda v: v.first_seen)
+
+
+def _email_tool_drop_note() -> str:
+    """Whether a standing SMTP 535 actually removes `email` from the autonomous
+    toolset right now — the condition, never an assertion.
+
+    ⚠️ Layering: `agents/task/constants.py::effective_autonomous_tools` OWNS
+    this rule and core may not import it (`tests/test_layering_ratchet.py`
+    forbids every `core/ -> agents.task.constants` edge). The two inputs it
+    reads are both core-readable, so the CONDITION is re-derived from the same
+    sources and pinned against the owner by
+    `tests/unit/core/test_status_snapshot.py`.
+    """
+    from core.env import bool_env
+    try:
+        from core.config_policy.capability_toggles import email_provider
+        provider = email_provider()
+    except Exception:
+        return ""  # cannot tell => claim nothing
+    if provider != "smtp":
+        return " — the agent's mail rides AgentMail, so sending is unaffected"
+    if bool_env("STABLE_AUTONOMOUS_TOOLSET", False):
+        return (" — autonomous runs still load the email tool (the toolset is "
+                "frozen); every send refuses with this reason")
+    return " — autonomous runs no longer request the email tool"
+
+
+def _rail_verdict_line(v):
+    """One line per standing verdict with its SINCE clock. Returns
+    (text, severity-or-None, health key); a missing optional key is INFO (a
+    choice, not a fault) and raises no health item."""
+    from core.credential_verdicts import since_text
+    since = since_text(v)
+    n = int(v.count or 0)
+    if v.kind == "smtp":
+        # D69: the old text asserted "autonomous runs no longer request the
+        # email tool" unconditionally. That drop is conditional
+        # (`agents/task/constants.py::effective_autonomous_tools`): it does not
+        # happen under an AgentMail transport, and it does not happen at all
+        # when the requested toolset is frozen. Asserting it either way is a
+        # confident claim about a thing this module cannot see, so the line now
+        # states the CONDITION it can.
+        return (f"email: SMTP login rejected (535) since {since}, {n} rejection(s)"
+                f"{_email_tool_drop_note()}",
+                SEVERITY_WARN, "email_auth_rejected")
+    if v.kind == "imap":
+        # D28: the RECEIVE half. Before this an inbound outage was rendered
+        # nowhere at all — the mailbox simply went quiet and "no new mail" was
+        # indistinguishable from "I cannot read the mailbox".
+        return (f"email: INBOUND mailbox unreadable since {since}, {n} failure(s) — "
+                f"new mail is NOT being received; "
+                f"{v.remedy or 're-check the mailbox credential'}",
+                SEVERITY_WARN, "email_inbound_rejected")
+    if v.kind == "twitter_api":
+        return (f"x api: {v.code or '402'} since {since}, {n} call(s) refused — "
+                f"browser rail (x_browser) needs no API credits",
+                SEVERITY_WARN, "x_api_rejected")
+    if v.kind == "missing_key":
+        return (f"{v.key}: no API key since {since} (optional tool, not loaded)", None,
+                f"missing_key:{v.key}")
+    return (f"{v.kind} {v.key}: {v.code or 'rejected'} since {since}, {n}×",
+            SEVERITY_WARN, f"rail_{v.kind}")
 
 
 def _loops_section(user_id: str, cron_db: str, tele: Section, now: float,
@@ -611,6 +723,19 @@ def _loops_section(user_id: str, cron_db: str, tele: Section, now: float,
         sec.lines.append(f"turn: {m.get('kind') or 'turn'} active since "
                          f"{_hhmm(m.get('started'))} (session {str(m.get('session_id') or '')[:8]})")
     sec.data["live_actors"] = live
+    # 057 WS-F: standing external-rail verdicts come from the durable store
+    # (verdicts.db, first_seen/last_seen/count), not from the 24 h telemetry
+    # window — the email tool no longer re-probes SMTP every poll, so the
+    # window would go blind on a CONTINUING outage. A row exists only while
+    # the rail is unresolved; a success clears it.
+    for v in _rail_verdicts():
+        line, sev, key = _rail_verdict_line(v)
+        sec.lines.append(line)
+        if v.kind == "smtp":
+            sec.data["email_auth_rejected_at"] = v.last_seen
+        if sev is not None:
+            sec.health.append(HealthItem(key=key, severity=sev, text=line,
+                                         remedy=v.remedy or ""))
     # The cron store may not exist yet (fresh install, or a posture without
     # cron). That is a fact about cron, not about the pause state above: report
     # it inside the section rather than making the whole section unreadable.
@@ -661,6 +786,17 @@ def _loops_section(user_id: str, cron_db: str, tele: Section, now: float,
                 slot["last_started"] = r.get("ts")
         sec.data["rails"] = rails
         cut = []
+        # 057 WS-C: a job cut TWICE in the window is not a fluke — name the cap
+        # it needs (its own longest completed run) rather than the last cut.
+        cuts_per_job: Dict[str, int] = {}
+        longest_done: Dict[str, float] = {}
+        for r in _tele_rows(tele, _K_CRON_RUN):
+            a = r["attrs"] or {}
+            jid = str(a.get("job_id") or "")
+            if a.get("outcome") == "cut_by_cap":
+                cuts_per_job[jid] = cuts_per_job.get(jid, 0) + 1
+            elif a.get("outcome") == "done" and a.get("duration_s") is not None:
+                longest_done[jid] = max(longest_done.get(jid, 0.0), float(a["duration_s"]))
         for j in (jobs if "cron_reason" not in sec.data else []):
             if not int(j.get("enabled") or 0):
                 continue
@@ -686,20 +822,26 @@ def _loops_section(user_id: str, cron_db: str, tele: Section, now: float,
                 text="rail run cut: " + "; ".join(cut[:4]),
                 remedy="cut_by_cap → widen `polyrob cron edit <id> --max-duration`; "
                        "cut_by_restart → deploy only via scripts/deploy_when_idle.sh"))
+        repeats = []
+        for j in (jobs if "cron_reason" not in sec.data else []):
+            jid = str(j.get("id") or "")
+            if int(j.get("enabled") or 0) and cuts_per_job.get(jid, 0) >= 2:
+                name = (j.get("task") or "")[:28].strip()
+                need = longest_done.get(jid)
+                repeats.append(f"{name} cut {cuts_per_job[jid]}× in 24h"
+                               + (f" (longest completed run {int(need // 60)}m)" if need else ""))
+        if repeats:
+            sec.data["rail_cut_repeat"] = repeats
+            sec.health.append(HealthItem(
+                key="rail_cut_repeat", severity=SEVERITY_WARN,
+                text="rail cap too small: " + "; ".join(repeats[:4]),
+                remedy="raise `polyrob cron edit <id> --max-duration` above the longest completed "
+                       "run, or narrow the job's rig (`--rig money_rail`) so its steps are shorter"))
         # 056 WS4/WS9: an external rail the deploy cannot use is a HEALTH fact, not a
         # blocked goal discovered hours later. The email tool records a 535 as an
         # event (core cannot import tools); the autonomous toolset already stops
         # requesting `email` while the rejection is fresh.
         _external_rail_health(sec, tele)
-        rej = _tele_rows(tele, "email_auth_rejected")
-        if rej:
-            sec.data["email_auth_rejected_at"] = rej[0].get("ts")
-            sec.health.append(HealthItem(
-                key="email_auth_rejected", severity=SEVERITY_WARN,
-                text=f"email: SMTP login rejected (535), last {_hhmm(rej[0].get('ts'))} — "
-                     f"autonomous runs no longer request the email tool",
-                remedy="set a valid GMAIL_APP_PASSWORD, or EMAIL_PROVIDER=agentmail + "
-                       "AGENTMAIL_API_KEY (zero-setup inbox)"))
         # Loop liveness from the supervisor heartbeat (autonomy_tick). A loop
         # that should run but has no fresh heartbeat is reported as such — a
         # dead ticker must never render identically to a healthy one.
@@ -905,8 +1047,13 @@ def _digest_health(user_id: str, data_dir: str) -> List[HealthItem]:
 def _delivery_section(user_id: str, data_dir: str, tele: Section, container: Any,
                       now: float) -> Section:
     sec = Section(name="delivery")
+    from core.runtime_paths import prefs_home_dir
     from core.surfaces.user_delivery import _reserved_slots, effective_daily_cap
-    cap = int(effective_daily_cap(user_id, data_dir))
+    # D33: the cap the GATE reads, which resolves `prefs_home_dir()` — the
+    # identity axis. Passing `data_dir` read `<data_home>/data` on a server, a
+    # shadow no preference writer ever writes to, so `/status` reported the env
+    # default while the rail enforced the owner's raised value (or the reverse).
+    cap = int(effective_daily_cap(user_id, prefs_home_dir()))
     sec.data["cap"] = cap
     if not tele.available:
         # The cap gate's memory IS the telemetry log: without it we cannot say
@@ -914,25 +1061,43 @@ def _delivery_section(user_id: str, data_dir: str, tele: Section, container: Any
         raise RuntimeError(f"delivery rail memory unreadable ({tele.reason})")
     outcomes: Dict[str, int] = {}
     by_source: Dict[str, int] = {}
-    for r in _tele_rows(tele, _K_USER_DELIVERY):
+    rows = _tele_rows(tele, _K_USER_DELIVERY)
+    for r in rows:
         o = (r["attrs"] or {}).get("outcome") or "?"
         outcomes[o] = outcomes.get(o, 0) + 1
         if o == "capped":
             src = r.get("source") or "?"
             by_source[src] = by_source.get(src, 0) + 1
-    consumed = outcomes.get("sent", 0) + outcomes.get("fallback", 0)
+    # D46: "cap used" must be the number the GATE counts, so the ONE predicate
+    # decides it here too. Every critical/exempt-lane row was included, so the
+    # figure routinely read over the cap while nothing was being denied — and
+    # an owner reading "41/30 cap used" cannot act on it.
+    from core.surfaces.user_delivery import _budgeted, _CONSUMED_OUTCOMES
+    _spent = [r for r in rows
+              if (r["attrs"] or {}).get("outcome") in _CONSUMED_OUTCOMES]
+    consumed = len(_budgeted(_spent))
+    uncounted = len(_spent) - consumed
     capped = outcomes.get("capped", 0)
     suppressed_notices = sum(
         1 for r in _tele_rows(tele, _K_OWNER_NOTICE)
         if str((r["attrs"] or {}).get("text") or "").startswith(_SUPPRESSED_PREFIX))
     sec.data.update({"outcomes": outcomes, "consumed": consumed, "capped": capped,
+                     "uncounted": uncounted,
                      "capped_by_source": by_source, "suppressed_notices": suppressed_notices,
                      "reserved_slots": _reserved_slots()})
     sec.lines.append(
         f"owner messages 24h: {consumed}/{cap} cap used, {capped} suppressed, "
-        f"{outcomes.get('fallback', 0)} fallback, {outcomes.get('paused', 0)} paused, "
+        f"{outcomes.get('fallback', 0)} fallback, {outcomes.get('no_sink', 0)} no sink, "
+        f"{outcomes.get('paused', 0)} paused, "
         f"{outcomes.get('deduped', 0)} deduped, {outcomes.get('rate_limited', 0)} rate-limited, "
         f"{outcomes.get('quiet_held', 0)} held (quiet hours)")
+    if uncounted:
+        # D46: its OWN line, never folded into "cap used". These landed and are
+        # exempt from the cap by design; hiding them would make the delivered
+        # total look smaller than it is.
+        sec.lines.append(
+            f"plus {uncounted} delivered on an uncapped lane (critical / the "
+            f"message tool) — these do not spend the cap")
     if capped:
         top = ", ".join(f"{k}={v}" for k, v in sorted(by_source.items(), key=lambda kv: -kv[1])[:3])
         sec.health.append(HealthItem(
@@ -956,6 +1121,7 @@ def _delivery_section(user_id: str, data_dir: str, tele: Section, container: Any
         sec.health.append(HealthItem(
             key="run_outcome_degraded", severity=SEVERITY_WARN,
             text=f"{degraded} run(s) finished DEGRADED in 24h", remedy="/recap"))
+    _outbound_queue_lines(sec, data_dir, container=container)
     # Surface circuits (live objects; only when a container is at hand).
     if container is not None:
         from core.surfaces.health import surface_health
@@ -970,6 +1136,91 @@ def _delivery_section(user_id: str, data_dir: str, tele: Section, container: Any
             if r.get("dead_targets"):
                 sec.lines.append(f"{r['surface_id']}: {r['dead_targets']} dead target(s)")
     return sec
+
+
+def _outbound_queue_db(data_dir: str) -> str:
+    """Where ``outbox.db`` lives — beside the other surface stores.
+
+    ⚠️ ``data_dir``, NOT the telemetry db's directory. ``core/surfaces/
+    bootstrap.py`` builds the queue at ``<container.config.data_dir>/
+    outbox.db``, beside ``surfaces.db`` / ``correspondents.db`` (which this
+    module already resolves the same way). ``telemetry_events.db`` resolves on
+    the SIDECAR axis (``core.runtime_paths.sidecar_db_path``, plus a
+    ``TELEMETRY_EVENT_LOG_PATH`` override), which on a server is one directory
+    ABOVE ``config.data_dir`` — so deriving the queue from it looked in a
+    directory the queue is not in and rendered a live queue, dead letters and
+    all, as "no outbox.db on this deployment".
+    """
+    import os as _os
+    return _os.path.join(data_dir or ".", "outbox.db")
+
+
+def _outbound_queue_lines(sec: Section, data_dir: str, container: Any = None) -> None:
+    """D22: the durable outbound queue's depth and its DEAD LETTERS.
+
+    ``OutboundDeliveryQueue.counts()`` had no caller anywhere in the tree, so a
+    dead-lettered row — a message the queue tried N times and GAVE UP on — was
+    a message the owner never received and no seat could name.
+
+    ⚠️ The REGISTERED queue wins when there is one. In the process that owns
+    the surface bus the queue is a live service, so asking the container is an
+    answer rather than a guess — and it cannot disagree with the object the
+    router is actually enqueuing into. The path is the fallback for the seats
+    with no bus (``polyrob doctor``, the CLI), and it is derived the way
+    ``core/surfaces/bootstrap.py`` derives it.
+
+    ⚠️ A missing ``outbox.db`` renders ``unavailable``, and the read never
+    creates it: on a deploy with no durable queue "nothing queued" and "there is
+    no queue" are different facts.
+    """
+    import os as _os
+    q = None
+    try:
+        q = container.get_service("outbound_queue") if container is not None else None
+    except Exception as e:
+        logger.warning("status: outbound queue service probe failed: %s", e)
+        q = None
+    path = _outbound_queue_db(data_dir)
+    if q is None and not _os.path.exists(path):
+        sec.data["outbound_queue"] = None
+        # ⚠️ Name WHERE it looked. "no durable queue on this deployment" is a
+        # claim about the deployment; all this read knows is that one path held
+        # no file and no bus was registered on this seat. A seat whose home
+        # resolution differs from the daemon's would otherwise report a live
+        # queue, dead letters and all, as a queue that does not exist.
+        sec.lines.append(f"outbound queue: unavailable (no bus on this seat and "
+                         f"no queue at {path})")
+        return
+    try:
+        if q is None:
+            from core.surfaces.outbound_queue import OutboundDeliveryQueue
+            q = OutboundDeliveryQueue(path)
+        counts = q.counts()
+        dead = q.dead_letters(limit=3)
+    except Exception as e:
+        sec.data["outbound_queue"] = None
+        sec.lines.append(f"outbound queue: unavailable ({type(e).__name__}: "
+                         f"{str(e)[:120]})")
+        return
+    sec.data["outbound_queue"] = counts
+    sec.data["outbound_dead_letters"] = dead
+    sec.lines.append(
+        f"outbound queue: {counts.get('pending', 0)} pending, "
+        f"{counts.get('inflight', 0)} in flight, "
+        f"{counts.get('delivered', 0)} delivered, {counts.get('dead', 0)} dead")
+    n_dead = int(counts.get("dead", 0) or 0)
+    if n_dead:
+        for row in dead:
+            sec.lines.append(
+                f"  dead: {row.get('surface_id')} -> {row.get('dest')} after "
+                f"{row.get('attempts')} attempt(s) — "
+                f"{str(row.get('last_error') or 'no error recorded')[:100]}")
+        sec.health.append(HealthItem(
+            key="outbound_dead_letters", severity=SEVERITY_WARN,
+            text=f"{n_dead} outbound message(s) were dead-lettered — the queue "
+                 f"gave up and nobody received them",
+            remedy="/missed to read what was undelivered; check the surface is "
+                   "online, then re-send"))
 
 
 def _apps_section(user_id: str, data_dir: str) -> Section:
@@ -1080,6 +1331,7 @@ def _groups_section(user_id: str, data_dir: str) -> Section:
         sec.data["rooms"] = []
         return sec
     from core.surfaces.chat_policy import load_for_chat
+    from core.surfaces.room_label import render_room_label, room_name
     from core.surfaces.group_allowlist import GroupAllowlist
     rows = GroupAllowlist(allow_db).list_all()
     active = [r for r in rows if r.get("status") == "active"]
@@ -1121,7 +1373,10 @@ def _groups_section(user_id: str, data_dir: str) -> Section:
             note = "surfaces.db absent"
         out_rows.append({
             "surface": surface, "chat_id": chat_id,
-            "name": pol.name or r.get("note") or chat_id,
+            # 057 WS-D: the NAME is `chat.name` (else `<surface>:<chat_id>`); the
+            # owner's allowlist note is a dated LABEL, never the room's title.
+            "name": room_name(r, pol),
+            "label": render_room_label(r),
             "mode": pol.mode,
             "replies_today": replies_today,
             "ledger_rows": ledger_rows,
@@ -1134,6 +1389,8 @@ def _groups_section(user_id: str, data_dir: str) -> Section:
         line = (f"{row['surface']}:{row['chat_id']} \"{row['name']}\" mode={row['mode']} "
                 f"replies_today={row['replies_today']} ledger={row['ledger_rows']} "
                 f"last={_hhmm(row['last_write'])}")
+        if row.get("label"):
+            line += f" {row['label']}"
         if row["note"]:
             line += f" ({row['note']})"
         sec.lines.append(line)
@@ -1229,6 +1486,30 @@ def _security_section(user_id: str, data_dir: str, now: float,
             key="injection_flagged", severity=SEVERITY_WARN,
             text=f"{r.flagged} threat-scan flag(s) in the window",
             remedy="review injection_flagged rows in telemetry_events"))
+    # 057 WS-G: a shared data home the sibling identities cannot write is a
+    # security fact, not an ops chore — it is what turns a de-rooted unit into
+    # "attempt to write a readonly database". Bounded walk; a box with no
+    # `polyrob-data` group SKIPS and says so (a skipped audit is never `ok`).
+    try:
+        from core.data_perms import audit_data_perms
+        perms = audit_data_perms(data_dir, max_offenders=3, max_entries=2000)
+        sec.data["data_perms"] = {
+            "skipped": perms.skipped, "reason": perms.skip_reason,
+            "scanned": perms.scanned, "truncated": perms.truncated,
+            "offenders": perms.offender_total, "counts": perms.counts,
+            "first": [o.render() for o in perms.offenders],
+        }
+        sec.lines.append(perms.headline)
+        if not perms.skipped and perms.offender_total:
+            sec.health.append(HealthItem(
+                key="data_perms", severity=SEVERITY_WARN,
+                text=(f"{perms.offender_total} entr(ies) under {data_dir} the shared "
+                      f"group cannot write" + (" (first 2000 checked)" if perms.truncated else "")
+                      + ": " + "; ".join(o.path for o in perms.offenders)),
+                remedy="re-run scripts/deploy_when_idle.sh (its ownership pass), or "
+                       "`polyrob doctor --perms` to name them all"))
+    except Exception as e:  # the walk must never take the security section down
+        sec.lines.append(f"data perms: not checked ({type(e).__name__}: {e})")
     return sec
 
 
@@ -1504,20 +1785,48 @@ def _money_section(user_id: str, ledger: Any, data_dir: Optional[str] = None) ->
     sec = Section(name="money", data={"ledger": ledger})
     r = ledger.get("runtime") or {}
     t = ledger.get("treasury") or {}
-    spend = float(r.get("spend_window_usd") or 0.0)
-    total = float(r.get("spend_total_usd") or 0.0)
-    line = f"runtime cost (owner's compute bill): ${spend:.2f} last 24h · ${total:.2f} total"
-    if r.get("provider_balance_usd") is not None:
-        line += f" · provider balance ${float(r['provider_balance_usd']):.2f}"
+    # 2026-09-21: a leg that did NOT read renders `unavailable`, never `$0.00`
+    # — the availability note below already marks the section degraded, but
+    # the figure line above it read as a confident zero on a fresh home.
+    if r.get("available") is False:
+        line = "runtime cost (owner's compute bill): unavailable (usage records not readable)"
+    else:
+        spend = float(r.get("spend_window_usd") or 0.0)
+        total = float(r.get("spend_total_usd") or 0.0)
+        line = f"runtime cost (owner's compute bill): ${spend:.2f} last 24h · ${total:.2f} total"
+        if r.get("provider_balance_usd") is not None:
+            line += f" · provider balance ${float(r['provider_balance_usd']):.2f}"
     sec.lines.append(line)
-    net = float(t.get("net_usd") or 0.0)
-    line = (f"treasury cash flow (income − spend; open positions NOT included): "
-            f"net ${net:+.2f}")
+    if t.get("available") is False:
+        line = ("treasury cash flow (income − spend; open positions NOT included): "
+                "unavailable (invoice or wallet ledger not readable)")
+    else:
+        net = float(t.get("net_usd") or 0.0)
+        line = (f"treasury cash flow (income − spend; open positions NOT included): "
+                f"net ${net:+.2f}")
     if t.get("balance_usd") is not None:
         line += f" · USDC balance ${float(t['balance_usd']):.2f}"
     if int(t.get("pending_count") or 0):
         line += f" · {int(t['pending_count'])} pending invoice(s) ${float(t.get('pending_usd') or 0):.2f}"
     sec.lines.append(line)
+    # A settled machine payment whose work then failed downstream
+    # (`modules/x402/x402_integration.py::mark_payment_refund_due`). ⚠️ Its OWN
+    # line and its own health item: it is money the agent TOOK and owes back,
+    # so folding it into the net figure would net a debt against income and
+    # show a healthier treasury the more the agent owes. The obligation only
+    # grows while nobody acts on it, and `refund_due` is a status no invoice
+    # listing showed until 2026-09-21, so no seat could name it at all.
+    _refund_n = int(t.get("refund_due_count") or 0)
+    if _refund_n:
+        _refund_usd = float(t.get("refund_due_usd") or 0.0)
+        sec.lines.append(
+            f"⚠ refund owed: ${_refund_usd:.2f} across {_refund_n} settled "
+            f"payment(s) we did not deliver on (NOT netted above)")
+        sec.health.append(HealthItem(
+            key="payment_refund_due", severity=SEVERITY_WARN,
+            text=(f"{_refund_n} settled payment(s) worth ${_refund_usd:.2f} are "
+                  f"owed back — the work failed after the money arrived"),
+            remedy="`/invoices refund_due` to see them, then refund each payer"))
     # Positions are read separately and must never take the money section down:
     # a missing ledger is a fact about the ledger, not about the treasury.
     try:
@@ -1689,6 +1998,95 @@ def _creations_section(user_id: str, data_dir: str) -> Section:
     return sec
 
 
+def moves_section(user_id: str, data_dir: str, *, limit: int = 20) -> Section:
+    """Every MOVE the wallet made — the generic sibling of ``_creations_section``.
+
+    PUBLIC because the console renders it directly (E24 lists ``moves`` among
+    the rows no seat had). Same source and same discipline as creations:
+    read-only over ``wallet_spend`` telemetry, tenant-scoped, newest first,
+    never CREATING the store.
+
+    ⚠️ Derived from the SPEND ledger, so it answers "what did I send" and never
+    "what do I hold" — a row exists only for an outflow the guard authorized.
+    An unparseable row is COUNTED and surfaced rather than dropped: "nothing
+    moved" must never come to mean "I could not tell".
+
+    Each move carries ``url`` — a block-explorer link, exactly as
+    ``_creations_section`` does — when the row recorded BOTH a chain and a
+    transaction reference, and ``None`` otherwise. The console renders it as
+    the row's one action, so building it here keeps the link and the row that
+    justifies it in one place instead of two readers deriving it apart.
+    """
+    from core.wallet.chains import explorer_url
+    sec = Section(name="moves")
+    rows = _rows(
+        _telemetry_db_path(data_dir),
+        "SELECT ts, attrs FROM telemetry_events WHERE kind='wallet_spend' "
+        "AND user_id=? ORDER BY ts DESC LIMIT 400",
+        (user_id,))
+    moves: List[Dict[str, Any]] = []
+    unreadable = 0
+    total_usd = 0.0
+    priced = 0
+    for row in rows:
+        try:
+            attrs = json.loads(row.get("attrs") or "{}")
+        except Exception:
+            unreadable += 1
+            continue
+        usd = attrs.get("amount_usd")
+        try:
+            if usd is not None:
+                total_usd += float(usd)
+                priced += 1
+        except (TypeError, ValueError):
+            usd = None
+        chain = attrs.get("chain")
+        tx = attrs.get("result_ref")
+        moves.append({
+            "action": str(attrs.get("action") or ""),
+            "asset": attrs.get("asset"),
+            "to": attrs.get("counterparty"),
+            "chain": chain,
+            "tx": tx,
+            "url": explorer_url(chain, "tx", str(tx)) if (chain and tx) else None,
+            "usd": usd,
+            "ts": row.get("ts"),
+        })
+    sec.data["moves"] = moves[:limit]
+    sec.data["total"] = len(moves)
+    sec.data["unreadable_rows"] = unreadable
+    #: ``None``, never 0.0, when NO row carried a price — an unpriced move is
+    #: not a free one.
+    sec.data["total_usd"] = round(total_usd, 4) if priced else None
+    if unreadable:
+        sec.lines.append(f"⚠ {unreadable} spend row(s) could not be read — this "
+                         f"list may be incomplete")
+        sec.health.append(HealthItem(
+            key="moves_unreadable", severity=SEVERITY_WARN,
+            text=(f"{unreadable} wallet_spend row(s) did not parse, so what the "
+                  f"wallet moved cannot be listed in full"),
+            remedy="check telemetry_events for malformed attrs"))
+    if not moves:
+        sec.lines.append("nothing moved"
+                         + (" (that could be read)" if unreadable else ""))
+        return sec
+    priced_note = (f", ${sec.data['total_usd']:,.2f} total" if priced
+                   else ", none priced")
+    sec.lines.append(f"{len(moves)} move(s){priced_note}")
+    for item in moves[:5]:
+        amount = (f"${item['usd']:,.2f}" if item.get("usd") is not None
+                  else "amount unrecorded")
+        sec.lines.append(
+            f"{item['action'] or 'move'}: {amount} "
+            f"{item.get('asset') or ''} -> {item.get('to') or 'unrecorded'}"
+            f"{(' on ' + str(item['chain'])) if item.get('chain') else ''} "
+            f"({_hhmm(item.get('ts'))})".replace("  ", " "))
+    if len(moves) > 5:
+        sec.lines.append(f"…and {len(moves) - 5} more")
+    return sec
+
+
 #: NFT move verbs, by their `gate.record(action=...)` name. Derived from the
 #: spend ledger for the same reason CREATION_VERBS is: the record already
 #: exists, so nothing new has to be written to read it back.
@@ -1813,4 +2211,29 @@ def build_status_snapshot(user_id: str, *, data_dir: Optional[str] = None,
         from core.runtime_paths import data_dir_or_home
         sections["money"] = _guarded("money", _money_section, uid, ledger,
                                      data_dir_or_home(data_dir))
+    _attach_economics(uid, now, window_sec, sections, data_dir, ledger)
     return _assemble(uid, now, window_sec, sections)
+
+
+def _attach_economics(uid: str, now: float, window_sec: int,
+                      sections: Dict[str, Section], data_dir: Optional[str],
+                      ledger: Any) -> None:
+    """057 WS-I: the per-call cost/latency section, built from ``usage_records``.
+    The runway item needs a READ balance; the ledger carries one only when the
+    caller asked for ``include_balances`` — otherwise the section still renders
+    burn and the runway line is simply absent (never a guessed number)."""
+    from core.runtime_paths import data_dir_or_home
+    from core.status_economics import economics_section, runway_health
+    if not uid:
+        sections["economics"] = Section(name="economics", state=STATE_UNAVAILABLE,
+                                        reason="no tenant (empty user_id)")
+        return
+    sec = _guarded("economics", economics_section, uid, data_dir_or_home(data_dir),
+                   now=now, window_sec=window_sec)
+    sections["economics"] = sec
+    if sec.available and isinstance(ledger, dict):
+        bal = (ledger.get("runtime") or {}).get("provider_balance_usd")
+        try:
+            runway_health(sec, bal)
+        except Exception as e:  # never take the section down over the runway line
+            sec.lines.append(f"budget runway: UNKNOWN ({type(e).__name__}: {e})")

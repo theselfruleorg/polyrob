@@ -44,10 +44,14 @@ def read_autonomy_snapshot(user_id: str, data_dir: str = "data") -> Optional[dic
             try:
                 from agents.task.goals.board import GoalBoard
 
-                all_goals = GoalBoard(goals_db).list(user_id=user_id)
-                goals = len(
-                    [g for g in all_goals if getattr(g, "status", "") not in ("done", "cancelled")]
-                )
+                # C16: ``status_counts`` counts EVERY row of this tenant.
+                # ``board.list`` is the dispatcher's ``priority DESC … LIMIT``
+                # order, so the old count here was "open goals among the
+                # highest-priority 100" — a number that silently stopped
+                # growing on a busy board and read as a plateau, not a window.
+                counts = GoalBoard(goals_db).status_counts(user_id=user_id)
+                goals = sum(n for status, n in counts.items()
+                            if status not in ("done", "cancelled"))
             except Exception:
                 goals = None
     except Exception:

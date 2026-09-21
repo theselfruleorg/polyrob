@@ -656,6 +656,12 @@ export function renderMoves(root, bridges, moves, creations, copy, opts = {}) {
   root.appendChild(inflightSection(bridges, copy, nowMs));
   root.appendChild(recentMovesSection(moves, copy, nowMs));
   root.appendChild(madeSection(creations, copy, nowMs));
+  // A25: Money has exactly ONE mutation (settle an invoice), and this pane
+  // reports bridges, launches and deployments it cannot start. Say where those
+  // verbs live rather than leaving a page that looks like a trading desk with
+  // its buttons missing. The reach decision is recorded: the terminal and
+  // Telegram own the money verbs; the console reports them.
+  root.appendChild(el("p", "sources", (copy && copy.mv_reach) || ""));
   return "moves";
 }
 
@@ -865,6 +871,24 @@ export function renderCash(root, ledger, copy, opts = {}) {
   books.appendChild(el("p", "no-sum", (copy && copy.cash_no_sum) || ""));
   root.appendChild(books);
 
+  // ⚠️ Money TAKEN for something never delivered. It is not income and it is
+  // not a pending invoice, so it sits in neither book — and before this line
+  // the console's Cash screen was the one seat that never mentioned it, while
+  // the terminal ledger has always printed it. Drawn only when the ledger says
+  // there IS one; a zero is not a debt, and a line that is always there stops
+  // being read.
+  const refundCount = Number(t.refund_due_count);
+  if (Number.isFinite(refundCount) && refundCount > 0) {
+    const owed = el("p", "entry-meta is-needs-you");
+    owed.dataset.refundDue = String(refundCount);
+    owed.textContent = formatVars(copy && copy.cash_refund_due, {
+      // An unreadable amount is a dash, never `$0.00` — "we owe nothing back"
+      // is exactly the wrong reading of a figure we could not total.
+      amount: fmtUsd(t.refund_due_usd) || DASH, count: refundCount,
+    });
+    root.appendChild(owed);
+  }
+
   const section = el("div", "section");
   section.style.marginTop = "var(--s6)";
   const head = el("div", "section-head");
@@ -984,11 +1008,16 @@ export function renderInvoices(root, data, copy, opts = {}) {
   }
 
   const rows = (data && data.invoices) || [];
-  const outstanding = rows
-    .filter((r) => r && r.status === "pending")
-    .reduce((s, r) => s + (Number(r.amount_usd) || 0), 0);
+  // ⚠️ A35: this used to SUM the rows on screen — and the rows on screen are
+  // one page (50). An owner with 51 outstanding invoices was shown a confident
+  // total that was simply wrong, and it got wronger the more they were owed.
+  // The total is the server's now, over every row; a total it could not
+  // compute is a dash, never a number derived from a window.
+  const serverTotal = data && data.outstanding_usd_total;
+  const outstanding = (typeof serverTotal === "number" && Number.isFinite(serverTotal))
+    ? fmtUsd(serverTotal) : DASH;
   head.appendChild(el("span", "section-aside",
-    formatVars(copy && copy.inv_aside, { amount: fmtUsd(outstanding) || DASH })));
+    formatVars(copy && copy.inv_aside, { amount: outstanding || DASH })));
   section.appendChild(head);
 
   if (!rows.length) {
@@ -1006,6 +1035,21 @@ export function renderInvoices(root, data, copy, opts = {}) {
     rows.forEach((inv) => tbody.appendChild(invoiceRow(inv, copy, nowMs, readOnly)));
     table.appendChild(tbody);
     section.appendChild(table);
+    // A35: the page is a WINDOW. Say so when the server says there is more,
+    // rather than letting the list read as the whole book.
+    if (data && data.truncated) {
+      section.appendChild(el("p", "entry-meta", (copy && copy.inv_truncated) || ""));
+    }
+    // ⚠️ One unreadable amount withdraws the TOTAL: the server answers
+    // `outstanding_usd_total: null` rather than a sum with a row quietly
+    // dropped out of it, so the aside above is already a dash. This line says
+    // HOW MANY rows caused that — "I cannot total this" is only useful beside
+    // the reason it cannot.
+    const unpriced = Number(data && data.outstanding_unpriced);
+    if (Number.isFinite(unpriced) && unpriced > 0) {
+      section.appendChild(el("p", "entry-meta",
+        formatVars(copy && copy.inv_unpriced, { count: unpriced })));
+    }
     section.appendChild(el("p", "entry-meta", (copy && copy.inv_note) || ""));
   }
   root.appendChild(section);
@@ -1166,6 +1210,17 @@ function bind() {
     if (!liquidityPane) return;
     getJson("/api/webgate/liquidity" + (onchain ? "?onchain=true" : ""))
       .then((section) => {
+        // ⚠️ A4: `getJson` answers `{error: "<status>"}` on ANY non-200, and
+        // that object was rendered as though it were a Section — no `name`, no
+        // `lines`, no `state`. The pane drew an empty heading and nothing
+        // else, so a refused or failed liquidity read looked exactly like a
+        // book with no positions in it. Branch on `error` FIRST.
+        if (!section || section.error) {
+          liquidityPane.replaceChildren(dashedEntry(
+            (section && section.error) || "", copy,
+            "liq_unreadable", "liq_unreadable_why"));
+          return;
+        }
         liquidityPane.replaceChildren(el("h2", "section-title", section.name));
         const lines = section.state === "unavailable" ? [section.reason] : section.lines;
         for (const line of lines || []) liquidityPane.appendChild(el("p", "state-body", line));
@@ -1176,7 +1231,8 @@ function bind() {
         }
       })
       .catch((err) => {
-        liquidityPane.replaceChildren(el("p", "state-body unknown", String(err.message || err)));
+        liquidityPane.replaceChildren(dashedEntry(String(err.message || err), copy,
+          "liq_unreadable", "liq_unreadable_why"));
       });
   }
   const liquidityRecheck = byId("money-liquidity-recheck");

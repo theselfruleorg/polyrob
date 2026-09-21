@@ -91,6 +91,11 @@ SIDECAR_DB_NAMES = (
     # SESSION_REGISTRY_BACKEND=sqlite; a rollback that skips it leaves live
     # sessions routed to a PID that no longer exists.
     "session_registry.db",  # agents/task_agent_lite.py (SqliteSessionRegistry)
+    # 057 WS-F: standing external-rail refusals (SMTP 535, X API 402, missing
+    # key). The row carries first_seen, which is the ONLY record of when an
+    # outage began — losing it re-probes every dead rail and resets every
+    # "since <first failure>" line to now.
+    "verdicts.db",          # core/credential_verdicts.py
 )
 
 _PathLike = Union[str, Path]

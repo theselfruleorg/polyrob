@@ -64,7 +64,9 @@ class InvoiceParams(BaseModel):
 
 
 class InvoiceListParams(BaseModel):
-    status: Optional[str] = Field(None, description="Filter: pending|completed|expired (default all)")
+    status: Optional[str] = Field(
+        None, description="Filter: pending|settling|completed|settled_no_tx|expired|refund_due "
+                          "(default all; refund_due = a settled payment we owe back)")
 
 
 class AccountingParams(BaseModel):
@@ -217,7 +219,10 @@ class X402InvoiceTool(BaseTool):
         if not user_id:
             return self._ar(error=f"x402_invoices refused: {_ANON_REFUSED}")
         try:
-            from modules.x402.invoicing import list_payment_requests
+            from modules.x402.invoicing import INVOICE_STATUSES, list_payment_requests
+            if params.status and params.status not in INVOICE_STATUSES:
+                return self._ar(error=f"x402_invoices refused: unknown status "
+                                      f"{params.status!r} (one of {', '.join(INVOICE_STATUSES)})")
             rows = await list_payment_requests(user_id=user_id, status=params.status)
         except Exception as e:
             return self._ar(error=f"x402_invoices failed: {e}")

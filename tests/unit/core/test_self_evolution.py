@@ -222,8 +222,9 @@ async def test_push_owner_message_records_notice_when_no_sink(monkeypatch):
     import core.self_evolution as se
     import core.surfaces.user_delivery as ud
     calls = []
-    monkeypatch.setattr(ud, "_record_notice",
-                        lambda event_log, user_id, text: calls.append(text))
+    monkeypatch.setattr(
+        ud, "_record_notice",
+        lambda event_log, user_id, text, **kw: calls.append(text))
 
     class _NoSink:
         def get_service(self, name):
@@ -246,8 +247,9 @@ async def test_push_owner_message_no_notice_when_delivered(monkeypatch):
     import core.surfaces.user_delivery as ud
     monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "28436760")
     calls = []
-    monkeypatch.setattr(ud, "_record_notice",
-                        lambda event_log, user_id, text: calls.append(text))
+    monkeypatch.setattr(
+        ud, "_record_notice",
+        lambda event_log, user_id, text, **kw: calls.append(text))
 
     class _Sink:
         async def send_message(self, chat_id, text):

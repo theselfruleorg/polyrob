@@ -14,6 +14,9 @@ from click.testing import CliRunner
 def box(tmp_path, monkeypatch):
     """A box with no deployment; both probes point at empty tmp locations."""
     monkeypatch.delenv("POLYROB_DATA_DIR", raising=False)
+    # These tests exercise the data-home SEAM, not the WS-G root guard (which
+    # has its own tests): on a root-run box the write verbs would refuse.
+    monkeypatch.setenv("POLYROB_ALLOW_ROOT_CLI", "1")
     monkeypatch.setattr("cli.commands._bootstrap._env_loaded", True)
     local = tmp_path / "shell_local"
     monkeypatch.setattr("core.runtime_paths.resolve_data_home", lambda: local)

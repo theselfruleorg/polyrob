@@ -72,7 +72,13 @@ def _resolve_role(result: Any, container: Any = None, surface: Optional[str] = N
     role was never resolved for THAT room — consult `group_roles` directly
     (044 T18 fix round 1, Critical 1b) rather than defaulting an admin to
     `member` or, worse, carrying his stamped `admin` across rooms (Critical 4).
-    Never raises — an unreadable check reads as `member` (least privilege)."""
+
+    ⚠️ Never raises, and the OWNER is resolved BEFORE any row is read, so a
+    fault can never lock him out of his own room. For everyone else the read
+    fails CLOSED to `blocked` (D3, `group_admin.room_role`): `blocked` is the
+    room's only per-member deny and it lives in the very store this consults,
+    so answering `member` on a fault un-blocked everyone an owner had blocked.
+    """
     identity = result.inbound.identity
     chat_role = getattr(identity, "chat_role", None)
     here = _targets_here(result, surface, chat_id)
@@ -93,6 +99,29 @@ def _resolve_role(result: Any, container: Any = None, surface: Optional[str] = N
 def _here(result: Any) -> Tuple[Optional[str], Optional[str]]:
     source = result.inbound.identity.source
     return getattr(source, "surface_id", None), getattr(source, "chat_id", None)
+
+
+def _room_shape(result: Any, surface: Optional[str],
+                chat_id: Optional[str]) -> Tuple[str, str]:
+    """``(chat_type, thread_id)`` of the room a verb targets (D23).
+
+    Only the message's OWN source can answer this, so it answers for `here`
+    and for an explicit pair that names the same room; a verb aimed at a
+    DIFFERENT room from a DM returns ``("", "")`` and the caller keeps its
+    historical fallback. Never raises — a shape we cannot read costs the job
+    its thread, never the verb.
+    """
+    try:
+        if not _targets_here(result, surface, chat_id):
+            return "", ""
+        source = result.inbound.identity.source
+        ctype = str(getattr(source, "chat_type", "") or "")
+        if ctype in ("", "dm"):
+            return "", ""
+        return ctype, str(getattr(source, "thread_id", "") or "")
+    except Exception as e:
+        logger.debug("group_ops: room shape probe failed: %s", e)
+        return "", ""
 
 
 def _room_title_from_raw(result: Any) -> str:
@@ -183,18 +212,26 @@ def _resolve_target(task_agent: Any, result: Any, rest: List[str]):
     return _split_target(rest, result)
 
 
-def _gate(verb: str, role: str, rest: List[str]) -> Optional[str]:
-    """`None` = allowed; else the refusal text."""
+def _gate(verb: str, role: str, tail: List[str]) -> Optional[str]:
+    """`None` = allowed; else the refusal text.
+
+    ⚠️ D2: ``tail`` is the TARGET-RESOLVED argument list (`tail_args`) — the
+    SAME list the grant itself reads — never the raw `rest`. The gate used to
+    read ``rest[-1]`` while the grant wrote ``tail_args[1]``, so
+    ``/groups role here 123 admin blocked`` showed the gate a trailing
+    ``blocked`` and handed the store an ``admin``: a room admin promoting
+    himself with one extra word.
+    """
     if verb not in _KNOWN_VERBS:
         return (f"Unknown /groups verb {verb!r}. Try: allow, deny, list, use, mode, "
                 f"set, role, tail, service, admins.")
     if verb == "role":
         if role == "owner":
             return None
-        # The last token is the role being granted, whether the caller used
-        # `here` or an explicit `<surface> <chat_id>` pair.
-        granted = rest[-1].lower() if rest else ""
-        if role == "admin" and granted == "blocked":
+        # `<user_ref> <role>` — position 1 is the role the store will be given.
+        # Anything else in the line is surplus and grants nothing.
+        granted = tail[1].lower() if len(tail) > 1 else ""
+        if role == "admin" and granted == "blocked" and len(tail) == 2:
             return None
         return _OWNER_ONLY_TEXT
     if verb in _FOCUS_VERBS:
@@ -221,7 +258,7 @@ async def groups_reply(task_agent: Any, result: Any, args: List[str]) -> str:
 
     role = _resolve_role(result, container, surface, chat_id)
 
-    denial = _gate(verb, role, rest)
+    denial = _gate(verb, role, tail_args)
     if denial is not None:
         return denial
 
@@ -301,8 +338,14 @@ async def groups_reply(task_agent: Any, result: Any, args: List[str]) -> str:
         # 044 T20: the service verb's helper lives in the cron tier (a core
         # module may not import cron) — same ONE-helper contract as group_admin.
         from cron.room_service import service as _room_service
+        # D23: the room's REAL chat type and thread, resolved from the message
+        # when it names `here`. A job that hardcoded `supergroup` bound the
+        # wrong session key in a plain group or a channel, and dropped the
+        # forum topic entirely.
+        _ctype, _thread = _room_shape(result, surface, chat_id)
         return _room_service(container, owner_uid, surface, chat_id,
-                             every=every, max_replies=max_replies)
+                             every=every, max_replies=max_replies,
+                             chat_type=_ctype, thread_id=_thread)
     if verb == "admins":
         return await _admins_reply(task_agent, surface, chat_id)
 
@@ -648,7 +691,12 @@ async def _apply_free(task_agent: Any, surface: str, chat_id: str, verb: str,
         return f"❌ {why[0]}"
     if _bot(task_agent) is None:
         return "❌ I have no chat connection to do that with."
-    held = _rights_fn(task_agent)(surface, str(chat_id))
+    # ⚠️ D10: `_rights_fn` returns an ASYNC probe. Calling it without awaiting
+    # produced a coroutine, and `in` against a coroutine is a TypeError — so an
+    # owner's or admin's FREE `/mute` / `/ban` / `/unmute` / `/unban` raised
+    # before it ever reached Telegram. `_awaited` keeps a sync test double
+    # working.
+    held = await _awaited(_rights_fn(task_agent)(surface, str(chat_id))) or set()
     if eff.telegram_right not in held:
         return (f"❌ I need the {eff.telegram_right} permission in this chat "
                 f"to {verb} anyone.")
@@ -738,7 +786,10 @@ async def _moderation_reply(task_agent: Any, result: Any, args: List[str], verb:
     if target_is_bot:
         # Replying to the AGENT's own message names the bot. It is never a
         # target — and a paid one would be the room buying the agent's silence.
-        return "❌ That person cannot be targeted here."
+        # D61: said in the room. It names nobody but the person who typed it.
+        from core.surfaces.command_reply import CommandReply
+        return CommandReply("❌ That person cannot be targeted here.",
+                            to_room=True)
     role = _resolve_role(result, container, surface, chat_id)
     identity = result.inbound.identity
     requester = str(getattr(identity, "raw_user_id", None) or identity.user_id)
@@ -757,8 +808,16 @@ async def _moderation_reply(task_agent: Any, result: Any, args: List[str], verb:
     # that never granted the verb to members.
     if (role not in ("owner", "admin")
             and not _member_may_use(container, surface, str(chat_id), verb)):
-        return (f"/{verb} is not a member verb in this room. An owner enables "
-                f"it with `/groups set here member_verbs help,{verb}`.")
+        # ⚠️ D61: answered IN THE ROOM, like every other member-facing refusal
+        # (see ROOM_FACING_REFUSALS). A bare string is redirected to the
+        # OWNER's DM by the harness, so the member who typed it saw nothing at
+        # all and the room concluded the verb was broken. The sentence names
+        # only this room's own configuration — no cap, no asset, no rail state.
+        from core.surfaces.command_reply import CommandReply
+        return CommandReply(
+            f"/{verb} is not a member verb in this room. Its owner can enable "
+            f"it with `/groups set here member_verbs help,{verb}`.",
+            to_room=True)
 
     return await _paid_offer(task_agent, container, surface, str(chat_id), verb,
                              target_id, target_name, requester, duration)
@@ -953,5 +1012,9 @@ async def paid_reply(task_agent: Any, result: Any, args: List[str]):
             return "Usage: /paid cancel <offer_id>"
         identity = result.inbound.identity
         by = str(getattr(identity, "raw_user_id", None) or identity.user_id)
-        return adm.cancel(container, rest[0], by=by)
+        # D15: scoped to THIS room. `/paid` is reachable by a room ADMIN, and
+        # `/paid offers` prints ids in full — unscoped, one room's admin could
+        # withdraw another room's offer by quoting its id.
+        return adm.cancel(container, rest[0], by=by,
+                          surface=surface, chat_id=str(chat_id))
     return f"Unknown /paid verb {verb!r}."

@@ -11,9 +11,11 @@ from core.surfaces.dispatcher import _COMMANDS
 from core.verbs import (
     GROUP_ORDER,
     PALETTE_EXCLUDED,
+    SEAT_LOCAL,
     VERB_TABLE,
     Verb,
     grouped,
+    seat_verbs,
     verb_for,
 )
 
@@ -51,8 +53,36 @@ def test_every_routable_command_has_exactly_one_row():
     table_names = [v.name for v in VERB_TABLE]
     # No duplicate rows.
     assert len(table_names) == len(set(table_names)), "duplicate verb row"
-    # Bijection with _COMMANDS (minus the two excluded): no missing, no stale.
-    assert set(table_names) == _routable()
+    # Bijection with _COMMANDS (minus the two excluded and the seat-local
+    # rows): no missing, no stale. A SEAT-LOCAL verb is deliberately absent
+    # from `_COMMANDS` — it never arrives as an inbound line on any surface,
+    # it is typed into one seat's own reader.
+    assert set(table_names) - SEAT_LOCAL == _routable()
+
+
+def test_a_seat_local_row_is_never_routable():
+    """The other direction. A verb in `_COMMANDS` arrives from the wire and
+    must be handled by every surface that routes it — so it cannot also claim
+    to belong to one seat."""
+    assert not (SEAT_LOCAL & set(_COMMANDS))
+
+
+def test_seat_local_rows_name_a_real_seat():
+    seats = {s for v in VERB_TABLE for s in v.seats}
+    assert seats <= {"repl", "telegram", "console", "cli"}, (
+        f"unknown seat name(s): {sorted(seats - {'repl', 'telegram', 'console', 'cli'})}")
+
+
+def test_seat_verbs_filters_and_grouped_agrees():
+    repl = {v.name for v in seat_verbs("repl")}
+    telegram = {v.name for v in seat_verbs("telegram")}
+    # Every universal verb is on both seats; a repl-only verb is on one.
+    assert "/gates" in repl and "/gates" not in telegram
+    assert "/meter" in repl and "/meter" not in telegram
+    assert "/status" in repl and "/status" in telegram
+    # `grouped(seat)` renders exactly `seat_verbs(seat)`.
+    flat = {v.name for _, rows in grouped("telegram") for v in rows}
+    assert flat == telegram
 
 
 def test_the_two_excluded_verbs_have_no_row():
@@ -99,7 +129,7 @@ def test_verb_for_resolves_an_alias():
     assert verb_for("/?") is verb_for("/help")
 
 
-def test_grouped_covers_every_row_in_group_order():
+def test_grouped_with_no_seat_covers_every_row_in_group_order():
     seen_groups = [g for g, _ in grouped()]
     # Groups appear in GROUP_ORDER order (empty groups omitted).
     assert seen_groups == [g for g in GROUP_ORDER if g in seen_groups]

@@ -42,6 +42,7 @@ _SECTION_TITLES = {
     "liquidity": "Liquidity",
     "wallet": "Wallet",
     "money": "Money",
+    "economics": "Economics",
 }
 
 

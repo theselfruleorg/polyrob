@@ -182,7 +182,11 @@ Every room turn — owner included — runs on a `SessionProfile.PUBLIC` session
 fixed, read-only toolset (`GROUP_TURN_TOOLS`, default
 `task,web_fetch,defi_data`). That list is a **bound, not a floor**: unlike a private session, a
 room is never widened with the base defaults, so it has no `filesystem` and no
-`browser`, and `GROUP_TURN_TOOLS=""` really does mean "can only chat". The
+`browser`, and `GROUP_TURN_TOOLS=""` really does mean "can only chat". The env
+can only ever NARROW that list: naming anything outside `task`, `web_fetch` and
+`defi_data` drops it with a WARN, so a tool added to POLYROB next month is
+refused from a public room by default and has to be named room-safe in
+`core/surfaces/room_policy.py` before it can be reached from one. The
 session carries none of the owner tenant's private state: no owner facts, no
 SOUL/SELF docs, no tenant memory prefetch or write, no episodic digest, no
 episode WRITTEN at the end either, no live-health note, no `<environment>` block,
@@ -297,6 +301,13 @@ what it IS (`kind=service`, e.g. "joined the room"), never as a member line with
 text. A line from a chat the owner has NOT allowlisted is never stored and never
 processed at all — it is dropped before the agent does any work on it. (On a
 non-Telegram surface nothing is recorded at all — see [Prerequisites](#prerequisites).)
+
+A line posted **anonymously** — a Telegram anonymous admin, or anything sent as
+the chat itself — carries no principal, so it can never be routed: no role, no
+command, no reply. It is still written to the ledger, as an anonymous row
+(`sender_id` empty, the posting chat's title as the name, role `member`), so
+the next room turn answers with the room's full record rather than around a
+message everyone present can see.
 
 Retention is bounded two ways: `GROUP_LEDGER_MAX_ROWS_PER_CHAT` (default `2000`, oldest
 rows pruned first) and `GROUP_LEDGER_RETENTION_DAYS` (default `14`, wall-clock age,

@@ -20,32 +20,47 @@ that profile's.
 from __future__ import annotations
 
 from cli.ui.commands.h_owner import _admin_data_dir, _tenant
+async def _awaited(value):
+    """Return *value*, awaiting it when the helper is a coroutine.
+
+    ⚠️ The ``surfaces.telegram`` reply helpers are migrating from sync to async
+    one verb at a time (D12: a sync money helper blocked the event loop). A REPL
+    consumer that hard-codes one shape breaks the moment its helper flips — and
+    breaks SILENTLY, emitting the repr of a coroutine as if it were the answer.
+    This shim makes the seat correct under both shapes.
+    """
+    import inspect
+    return await value if inspect.isawaitable(value) else value
 
 
-def h_wallet(ctx) -> None:
+
+async def h_wallet(ctx) -> None:
     """Addresses, network, caps — and the one cap the owner may set from chat."""
     from surfaces.telegram import owner_ops
     ctx.emit(
-        owner_ops.wallet_reply(list(ctx.args or []),
-                               user_id=_tenant(ctx), data_dir=_admin_data_dir(ctx)),
+        await _awaited(owner_ops.wallet_reply(
+            list(ctx.args or []), user_id=_tenant(ctx),
+            data_dir=_admin_data_dir(write=None))),
         title="wallet",
     )
 
 
-def h_trade(ctx) -> None:
+async def h_trade(ctx) -> None:
     """Seed a run that carries the money verb — the owner asking IS the grant."""
     from surfaces.telegram import owner_ops
     ctx.emit(
-        owner_ops.trade_reply(_tenant(ctx), _admin_data_dir(ctx), list(ctx.args or [])),
+        await _awaited(owner_ops.trade_reply(
+            _tenant(ctx), _admin_data_dir(write=True), list(ctx.args or []))),
         title="trade",
     )
 
 
-def h_bridge(ctx) -> None:
+async def h_bridge(ctx) -> None:
     """Move NATIVE value between chains. Bare = quote; add ``go`` to execute."""
     from surfaces.telegram import owner_ops
     ctx.emit(
-        owner_ops.bridge_reply(_tenant(ctx), _admin_data_dir(ctx), list(ctx.args or [])),
+        await _awaited(owner_ops.bridge_reply(
+            _tenant(ctx), _admin_data_dir(write=True), list(ctx.args or []))),
         title="bridge",
     )
 
@@ -79,8 +94,8 @@ HELP_TRADE = (
     "  IS the authorization a self-written goal cannot express.\n"
     "\n"
     "  Nothing here widens a cap. Every spend is still bounded by the\n"
-    "  per-transaction ceiling and still queues for /approve above the\n"
-    "  autonomous ceiling.",
+    "  per-transaction ceiling; above the autonomous ceiling it waits in\n"
+    "  /inbox until you /approve <id> it.",
     "`/trade` on Telegram.",
 )
 
@@ -88,7 +103,8 @@ HELP_BRIDGE = (
     "  Move NATIVE value between chains (SOL on solana, ETH on an EVM chain).\n"
     "  Bare form QUOTES — it asserts everything and broadcasts nothing. Add\n"
     "  'go' to execute: under your autonomous ceiling it runs and reports;\n"
-    "  above it, the durable owner queue holds it and you decide in /pending.\n"
+    "  above it, the durable owner queue holds it — /inbox shows it and\n"
+    "  /approve <id> releases it.\n"
     "\n"
     "    /bridge solana robinhood 0.9        quote only\n"
     "    /bridge solana robinhood 0.9 go     execute",
@@ -129,6 +145,6 @@ def register(reg, Command) -> None:
     reg.register(Command(
         "dev", h_dev,
         "Drive the on-host dev-loop rail (027) without leaving the terminal",
-        usage="<free text>", group="work", raw_arguments=True,
+        usage="<free text>", group="control", raw_arguments=True,
         help_long=HELP_DEV[0], elsewhere=HELP_DEV[1],
     ))

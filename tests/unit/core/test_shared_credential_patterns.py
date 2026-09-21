@@ -40,3 +40,20 @@ def test_battery_covers_every_documented_shape():
 def test_scrubbers_keep_distinct_redaction_markers():
     # They share the battery but not the marker (persisted uses a tagged shape).
     assert persisted.REDACTED != display.REDACTED
+
+
+def test_wallet_shaped_kv_keys_are_claimed():
+    """2026-09-21 revalidation: private_key / mnemonic / seed_phrase /
+    passphrase / keystore under a KV shape are credentials, prefixed or not."""
+    from core.secret_scrub import scrub_secret_shapes
+    key = "0x" + "ab" * 32
+    words = "abandon ability able about above absent absorb abstract absurd abuse access accident"
+    for line in (f"private_key={key}", f"PRIVATE_KEY: {key}", f"WALLET_PRIVATE_KEY={key}",
+                 f"mnemonic={words.replace(' ', '-')}", f"seed_phrase='{words.replace(' ', '_')}'",
+                 "passphrase=correct-horse-battery-staple", "keystore=eyJ2ZXJzaW9uIjozfQ"):
+        out = scrub_secret_shapes(line)
+        assert key not in out and "abandon-ability" not in out and "correct-horse" not in out \
+            and "eyJ2ZXJz" not in out, (line, out)
+    # a public fact under the bare key `token` stays a public fact
+    addr = "0x" + "ab" * 20
+    assert addr in scrub_secret_shapes(f"token: {addr}")

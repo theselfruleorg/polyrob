@@ -126,7 +126,26 @@ def test_tail_empty_then_populated(tmp_path):
     assert "bob" in out2 and "hello room" in out2
 
 
-def test_tail_falls_back_to_a_fresh_handle_without_a_registered_service(tmp_path):
+def test_tail_never_creates_the_store_it_reads(tmp_path):
+    """D58: a READ never CREATES a store.
+
+    ``GroupLedger.__init__`` runs its DDL, so `/groups tail` on a box that has
+    never logged a room line MINTED an empty ``surfaces.db`` and then reported
+    "no ledger rows" — indistinguishable from a room that was genuinely silent,
+    over a file the owner never asked for.
+    """
+    import os
+    c = _C(tmp_path, with_services=False)
+    out = group_admin.tail(c, "telegram", "-1", 10)
+    assert "no room log on this box yet" in out.lower()
+    assert not os.path.exists(os.path.join(str(tmp_path), "surfaces.db"))
+
+
+def test_tail_reads_an_existing_store_without_a_registered_service(tmp_path):
+    """The fallback handle still works once the store genuinely exists."""
+    import os
+    from core.surfaces.group_ledger import GroupLedger
+    GroupLedger(os.path.join(str(tmp_path), "surfaces.db"))
     c = _C(tmp_path, with_services=False)
     out = group_admin.tail(c, "telegram", "-1", 10)
     assert "no ledger rows" in out.lower()

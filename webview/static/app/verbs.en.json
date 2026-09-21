@@ -50,6 +50,12 @@
       "aliases": []
     },
     {
+      "name": "/missed",
+      "group": "needs you",
+      "help": "Messages I could not deliver live: capped, paused, or undelivered",
+      "aliases": []
+    },
+    {
       "name": "/fulfill",
       "group": "needs you",
       "help": "Mark an ask fulfilled so its work can continue",
@@ -134,6 +140,24 @@
       "aliases": []
     },
     {
+      "name": "/claim",
+      "group": "money",
+      "help": "Collect the creator fees a launchpad already owes me",
+      "aliases": []
+    },
+    {
+      "name": "/nft",
+      "group": "money",
+      "help": "Collectibles I hold: look, send one, or revoke an approval",
+      "aliases": []
+    },
+    {
+      "name": "/dapp",
+      "group": "money",
+      "help": "Web pages my wallet is connected to, and how to cut one off",
+      "aliases": []
+    },
+    {
       "name": "/paid",
       "group": "money",
       "help": "Paid room actions: status, pricing, and offers",
@@ -203,6 +227,18 @@
       "name": "/files",
       "group": "look",
       "help": "Recent files I produced",
+      "aliases": []
+    },
+    {
+      "name": "/cwd",
+      "group": "look",
+      "help": "The directory I am working in right now",
+      "aliases": []
+    },
+    {
+      "name": "/contacts",
+      "group": "look",
+      "help": "Who I have been writing to, and the transcript with one of them",
       "aliases": []
     },
     {
@@ -278,6 +314,12 @@
       "aliases": []
     },
     {
+      "name": "/identity",
+      "group": "display",
+      "help": "My on-chain identity: register it, or update where it is published",
+      "aliases": []
+    },
+    {
       "name": "/help",
       "group": "leave",
       "help": "This help, or the detail for one verb",
@@ -285,12 +327,6 @@
         "/h",
         "/?"
       ]
-    },
-    {
-      "name": "/missed",
-      "group": "leave",
-      "help": "Owner messages the daily cap suppressed",
-      "aliases": []
     }
   ]
 }

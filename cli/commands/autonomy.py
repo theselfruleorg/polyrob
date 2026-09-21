@@ -28,6 +28,8 @@ import json as _json
 
 import click
 
+from cli._admin_home import as_root_option
+
 
 @click.group("autonomy")
 def autonomy():
@@ -36,7 +38,7 @@ def autonomy():
     ensure_env_loaded()
 
 
-def _data_dir() -> str:
+def _data_dir(*, write: "bool | None" = None) -> str:
     """The SAME data-home resolution `polyrob owner` uses (SSOT seam).
 
     031: NOT `resolve_data_home()` directly. That resolver never applies the
@@ -45,9 +47,14 @@ def _data_dir() -> str:
     "Paused everything" the daemon never saw. `core.admin_data_home` adopts the
     deployed home when it can read it and REFUSES when it cannot; a purely local
     box is unchanged and silent.
+
+    057 WS-G: ``write`` declares intent for the euid guard — a MUTATING verb
+    (pause/halt/resume) run as root on a deployed box is refused with the
+    `sudo -u polyrob-agent` remedy, because the rows it would write there
+    belong to the de-rooted service identities.
     """
     from cli._admin_home import admin_data_dir
-    return admin_data_dir()
+    return admin_data_dir(write=write)
 
 
 def _write_flag(key: str, value: str, *, is_global: bool) -> None:
@@ -85,7 +92,7 @@ def status_cmd(as_json):
     from core.identity import resolve_identity
 
     user_id = resolve_identity()
-    snap = _autonomy_snapshot(user_id, _data_dir())
+    snap = _autonomy_snapshot(user_id, _data_dir(write=False))
     _pause = snap.get("pause") or {}  # 031: the ONE pause record (read once, in the snapshot)
     rows = build_posture_card()
     # 2026-08-28 status SSOT: the health block every seat renders, first.
@@ -94,7 +101,7 @@ def status_cmd(as_json):
     try:
         from core.status_snapshot import build_status_snapshot
         from core.status_render import render_health_lines
-        status = build_status_snapshot(user_id, data_dir=_data_dir(), include_money=False)
+        status = build_status_snapshot(user_id, data_dir=_data_dir(write=False), include_money=False)
         health_rows = [{"key": h.key, "severity": h.severity, "text": h.text,
                         "remedy": h.remedy} for h in status.health]
         health_text = render_health_lines(status, prefix="  ")
@@ -187,6 +194,7 @@ def off_cmd(mode, is_global):
 @autonomy.command("pause")
 @click.argument("scopes", nargs=-1)
 @click.option("--for", "duration", default=None, help="Auto-resume after e.g. 90m, 6h, 2d")
+@as_root_option
 def pause_cmd(scopes, duration):
     """Pause autonomous work NOW (no restart): everything, or a WORD —
     trading, background, messages, deploying (or a raw scope).
@@ -201,23 +209,25 @@ def pause_cmd(scopes, duration):
         sc, minutes = parse_pause_args(args)
     except ValueError as e:
         raise click.ClickException(str(e))
-    res = pause_autonomy(_data_dir(), scopes=sc, duration_minutes=minutes,
+    res = pause_autonomy(_data_dir(write=True), scopes=sc, duration_minutes=minutes,
                          reason="polyrob autonomy pause", via="cli")
     click.echo(render_pause_result(res, resume_hint="`polyrob autonomy resume`",
                                    status_hint="`polyrob autonomy status`", chat=False))
 
 
 @autonomy.command("halt")
+@as_root_option
 def halt_cmd():
     """Alias of `polyrob autonomy pause` (everything)."""
     from core.surfaces.owner_admin import pause_autonomy, render_pause_result
-    res = pause_autonomy(_data_dir(), scopes=("all",), reason="polyrob autonomy halt", via="cli")
+    res = pause_autonomy(_data_dir(write=True), scopes=("all",), reason="polyrob autonomy halt", via="cli")
     click.echo(render_pause_result(res, resume_hint="`polyrob autonomy resume`",
                                    status_hint="`polyrob autonomy status`", chat=False))
 
 
 @autonomy.command("resume")
 @click.argument("scopes", nargs=-1)
+@as_root_option
 def resume_cmd(scopes):
     """Lift the pause (everything, or a WORD/scope)."""
     from core.surfaces.owner_admin import render_resume_result, resume_autonomy_scopes
@@ -228,5 +238,5 @@ def resume_cmd(scopes):
         raise click.ClickException(str(e))
     if minutes is not None:
         raise click.ClickException("resume takes scopes only (no duration)")
-    res = resume_autonomy_scopes(_data_dir(), scopes=None if sc == ("all",) else sc, via="cli")
+    res = resume_autonomy_scopes(_data_dir(write=True), scopes=None if sc == ("all",) else sc, via="cli")
     click.echo(render_resume_result(res, halt_hint="`polyrob autonomy pause`"))

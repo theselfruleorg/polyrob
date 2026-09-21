@@ -113,19 +113,18 @@ def translate_llm_error(error: Exception, context: str = "") -> Exception:
 _DEFAULT_OUTPUT_TOKEN_CAP = 16384
 
 
-def _output_token_cap() -> int:
-    """Absolute per-request completion-token ceiling (env ``LLM_MAX_OUTPUT_TOKENS``).
+def _output_token_cap(client=None) -> int:
+    """Absolute per-request completion-token ceiling (env ``LLM_MAX_OUTPUT_TOKENS``),
+    narrowed by this session's ``AUTONOMOUS_MAX_OUTPUT_TOKENS`` budget when one
+    was stamped (057 WS-B — latency is output-bound; see modules/llm/output_budget).
 
     Models advertise huge completion limits (e.g. GLM-5.2 = 262144). Requesting
     the full ceiling wastes cost and makes credit-metered providers (OpenRouter)
     pre-authorize the entire amount, producing spurious HTTP 402s when the balance
     can't cover it. Cap every request to a sane default; override per-deployment.
     """
-    try:
-        v = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", str(_DEFAULT_OUTPUT_TOKEN_CAP)))
-        return v if v > 0 else _DEFAULT_OUTPUT_TOKEN_CAP
-    except (TypeError, ValueError):
-        return _DEFAULT_OUTPUT_TOKEN_CAP
+    from modules.llm.output_budget import output_token_cap
+    return output_token_cap(client, _DEFAULT_OUTPUT_TOKEN_CAP)
 
 
 class LLMClient(BaseModule):
@@ -394,7 +393,7 @@ class LLMClient(BaseModule):
 
         # Absolute per-request output cap (cost + credit pre-auth guard). Binds
         # before the model/context clamps so a huge model ceiling never leaks out.
-        cap = _output_token_cap()
+        cap = _output_token_cap(self)
         if max_tokens_value > cap:
             max_tokens_value = cap
 

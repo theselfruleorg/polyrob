@@ -46,20 +46,28 @@ def _rules_immediate(is_forged: bool) -> bool:
 
 
 def _write_doc(writer, params, *, user_id: str, created_by: str, immediate: bool):
-	"""One write path for both identity docs: update|patch, immediate or queued."""
+	"""One write path for both identity docs: update|patch, immediate or queued.
+
+	057 WS-D: `source`/`observed_at` ride through to the writer, which stamps the
+	NEW or CHANGED lines ` [from: <source> <date>]`. Both are optional — with
+	neither, the write is byte-identical to pre-057 unless
+	`DOC_CLAIM_PROVENANCE_REQUIRED` is armed.
+	"""
+	prov = {"source": getattr(params, "source", None),
+	        "observed_at": getattr(params, "observed_at", None)}
 	if params.action == "update":
 		if not params.content:
 			return None, "update requires `content`."
 		if immediate:
 			return writer.apply_now(params.content, user_id=user_id,
-			                        created_by=created_by), None
+			                        created_by=created_by, **prov), None
 		return writer.propose(params.content, user_id=user_id,
-		                      created_by=created_by, pending=True), None
+		                      created_by=created_by, pending=True, **prov), None
 	if params.old_string is None or params.new_string is None:
 		return None, "patch requires `old_string` and `new_string`."
 	res = writer.patch(user_id=user_id, old_string=params.old_string,
 	                   new_string=params.new_string, replace_all=params.replace_all,
-	                   created_by=created_by, pending=not immediate)
+	                   created_by=created_by, pending=not immediate, **prov)
 	if immediate and res.ok and not res.pending:
 		# same honesty rule as apply_now: a superseded draft must leave the queue
 		writer.retire_pending(user_id=user_id)
@@ -186,6 +194,13 @@ class DocAuthoringMixin:
 			old_string: Optional[str] = None   # patch: exact text to replace
 			new_string: Optional[str] = None   # patch: replacement
 			replace_all: bool = False
+			# 057 WS-D — provenance. `source` = where this came from (free text:
+			# 'room_read', 'owner said', 'measured'); `observed_at` = the ISO date
+			# it was true (defaults to today). Given, they stamp every NEW or
+			# CHANGED line ` [from: <source> <date>]` — and that stamp is part of
+			# the body, so it counts toward the char cap.
+			source: Optional[str] = None
+			observed_at: Optional[str] = None
 
 		@self.registry.action(
 			"Refine your evolving SELF context — YOUR OWN durable notes: lessons "
@@ -197,7 +212,10 @@ class DocAuthoringMixin:
 			"consolidate, don't sprawl); action='patch' edits by exact-string replace; "
 			"action='promote' activates your pending draft (owner-only). Updates/patches "
 			"are QUARANTINED for review and apply next session. This is NOT your core "
-			"identity/boundaries (those are operator-owned).",
+			"identity/boundaries (those are operator-owned). "
+			"Pass source= (where it came from: 'measured', 'owner said', 'room_read') "
+			"and observed_at=YYYY-MM-DD (defaults to today) so each new or changed line "
+			"is written with its provenance; that stamp counts toward the char cap.",
 			param_model=SelfContextManageAction,
 		)
 		async def self_context_manage(params: SelfContextManageAction, execution_context=None) -> ActionResult:
@@ -348,6 +366,13 @@ class DocAuthoringMixin:
 			old_string: Optional[str] = None   # patch: exact text to replace
 			new_string: Optional[str] = None   # patch: replacement
 			replace_all: bool = False
+			# 057 WS-D — provenance. `source` = where this came from (free text:
+			# 'room_read', 'owner said', 'measured'); `observed_at` = the ISO date
+			# it was true (defaults to today). Given, they stamp every NEW or
+			# CHANGED line ` [from: <source> <date>]` — and that stamp is part of
+			# the body, so it counts toward the char cap.
+			source: Optional[str] = None
+			observed_at: Optional[str] = None
 
 		@self.registry.action(
 			"Record the OWNER's durable facts and STANDING RULES — their timezone, "
@@ -360,7 +385,12 @@ class DocAuthoringMixin:
 			"action='read' returns it; action='update' replaces it (consolidate, keep "
 			"only durable facts); action='patch' edits by exact-string replace; "
 			"action='promote' activates your pending draft (owner-only). Updates/patches "
-			"are QUARANTINED for review and apply next session.",
+			"are QUARANTINED for review and apply next session. "
+			"Pass source= (where the fact came from: 'owner said', 'measured', "
+			"'room_read') and observed_at=YYYY-MM-DD (defaults to today) so each new or "
+			"changed line is written with its provenance; that stamp counts toward the "
+			"char cap. A line that CLAIMS something about the world (broken, blocked, "
+			"disabled, lacks permission, since …) may be refused without a source.",
 			param_model=OwnerDocManageAction,
 		)
 		async def owner_doc_manage(params: OwnerDocManageAction, execution_context=None) -> ActionResult:

@@ -58,10 +58,21 @@ def row_json(row: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+#: Owner copy names a VERB, never a bare env flag (the house grammar
+#: ``cli/_flag_warn.py`` established): the operator can act on
+#: ``polyrob config set …``, and cannot act on ``AGENT_BUILDER_MODE=ship``.
+APPS_EMPTY_LINE = ("no apps yet — the agent deploys one with its app_service "
+                   "tool; arm it with `polyrob config set AGENT_BUILDER_MODE "
+                   "ship --global` (takes effect: restart). A deployed app "
+                   "appears here as pending until you approve it")
+
+
 def list_lines(registry: AppServiceRegistry, user_id: str) -> List[str]:
     rows = registry.list_for(user_id)
     if not rows:
-        return ["No apps."]
+        # C47: ONE empty grammar on every seat (core renders for all four), and
+        # it names what makes the list non-empty rather than a bare "No apps."
+        return [APPS_EMPTY_LINE]
     lines = [f"{len(rows)} app(s):"]
     for r in rows:
         tail = ""

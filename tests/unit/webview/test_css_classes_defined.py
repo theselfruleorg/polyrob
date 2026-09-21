@@ -78,8 +78,11 @@ def test_selector_defined_somewhere(selector):
 def test_webgate_scan_finds_the_known_core_classes():
     """Guard the scanner itself — if the regex rots, the parametrized list
     silently shrinks to nothing and the suite goes green vacuously."""
-    for expected in ("webgate-page", "webgate-header", "webgate-list",
-                     "webgate-pause-headline", "webgate-readonly-banner"):
+    # ⚠️ A21 (2026-09-21) deleted pending.html, the last template that used
+    # `webgate-page` / `webgate-header` / `webgate-list`. The two survivors are
+    # layout.html's own, and they are enough to prove the scanner still reads a
+    # template — which is the only thing this guard is for.
+    for expected in ("webgate-pause-headline", "webgate-readonly-banner"):
         assert expected in _WEBGATE_CLASSES, (
             f"template scan lost {expected!r} — scanner regex or templates changed"
         )

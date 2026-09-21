@@ -21,11 +21,12 @@ labels, never a secret; ``revoke`` deactivates by prefix.
 from __future__ import annotations
 
 import asyncio
-import os
 import sqlite3
 from pathlib import Path
 
 import click
+
+from cli._admin_home import as_root_option
 
 # The ``api_keys`` DDL is owned by ``modules/database/auth_tables.py`` (the
 # server's schema init); this is a byte-compatible ``IF NOT EXISTS`` mirror so
@@ -97,28 +98,45 @@ class _OwnerTier:
         return "owner"
 
 
-def _bot_db_path() -> Path:
-    """The ``bot.db`` the API validates keys from — mirrors the resolution in
-    ``cli/commands/doctor.py`` so the CLI writes where the server reads."""
-    data_home = (os.environ.get("POLYROB_DATA_DIR") or "").strip()
-    if not data_home:
-        try:
-            from core.runtime_paths import resolve_data_home
-            data_home = str(resolve_data_home())
-        except Exception:
-            data_home = "data"
-    return Path(data_home) / "database" / "bot.db"
+def _bot_db_path(*, write: "bool | None" = None) -> Path:
+    """The ``bot.db`` the API validates keys from.
+
+    C7: this was a THIRD home resolver — ``POLYROB_DATA_DIR`` else
+    ``resolve_data_home()`` else the literal string ``"data"``. On a deployed
+    box with no ``POLYROB_DATA_DIR`` in the owner's shell it therefore MINTED a
+    key into ``./data/database/bot.db``, a file the running API has never
+    opened, and printed a secret the owner then could not authenticate with.
+    Worse, the fallback CREATES that file, so the mistake left a decoy store
+    behind. The seam is ``admin_data_dir`` (031), and an EXISTING bot.db under
+    the manifest layout wins over the canonical path so a legacy install is not
+    forked into a second file.
+    """
+    from cli._admin_home import admin_data_dir
+    home = admin_data_dir(write=write)
+    try:
+        from core.db_manifest import candidate_sqlite_dbs
+        for candidate in candidate_sqlite_dbs(home):
+            if candidate.name == "bot.db" and candidate.is_file():
+                return Path(candidate)
+    except Exception:
+        pass
+    return Path(home) / "database" / "bot.db"
 
 
 def _owner_user_id() -> str:
-    from core.instance import resolve_owner_user_id
-    return resolve_owner_user_id(os.environ)
+    """The owner tenant a key is minted for — the ONE admin resolver, so a key
+    created in an SSH shell belongs to the tenant the service authenticates."""
+    from core.admin_data_home import AmbiguousDataHome, admin_owner_principal
+    try:
+        return admin_owner_principal()
+    except AmbiguousDataHome as exc:
+        raise click.ClickException(str(exc))
 
 
-def _manager_and_db():
+def _manager_and_db(*, write: "bool | None" = None):
     from modules.auth.api_key_manager import APIKeyManager
 
-    db = _CliDB(_bot_db_path())
+    db = _CliDB(_bot_db_path(write=write))
     return APIKeyManager(db=db, tier_manager=_OwnerTier()), db
 
 
@@ -127,7 +145,9 @@ def keys():
     """Create, list and revoke API keys for the A2A / OpenAI-compat surfaces.
 
     The keys authenticate over ``X-API-KEY: rob_…`` against the SAME store the
-    API server reads, so a key minted here is usable immediately.
+    API server reads — the ADMIN data home (``cli/_admin_home.py``, the 031
+    rule), so a key minted in an SSH shell on a deployed box lands where the
+    running service validates it (C7) and is usable immediately.
     """
     from cli.commands._bootstrap import ensure_env_loaded
 
@@ -137,13 +157,15 @@ def keys():
 @keys.command("list")
 def list_cmd():
     """List this owner's API keys — prefixes and labels only, never a secret."""
-    mgr, db = _manager_and_db()
+    mgr, db = _manager_and_db(write=False)
     try:
         rows = asyncio.run(mgr.list_user_keys(_owner_user_id()))
     finally:
         db.close()
     if not rows:
-        click.echo("no API keys — create one: `polyrob keys create --name <label>`")
+        from cli.ui.candy import empty
+        click.echo(empty("API keys",
+                         "create one: `polyrob keys create --name <label>`"))
         return
     for r in rows:
         state = "active" if r.get("is_active") else "revoked"
@@ -158,12 +180,13 @@ def list_cmd():
               help="A label for the key (shown by `list`).")
 @click.option("--expires-days", type=int, default=None,
               help="Days until the key expires (default: never).")
+@as_root_option
 def create_cmd(name, expires_days):
     """Mint a new API key and print it ONCE.
 
     The secret is never stored in plain text and never reprinted — copy it now.
     """
-    mgr, db = _manager_and_db()
+    mgr, db = _manager_and_db(write=True)
     try:
         result = asyncio.run(mgr.generate_api_key(
             user_id=_owner_user_id(), name=name, expires_days=expires_days))
@@ -182,9 +205,10 @@ def create_cmd(name, expires_days):
 
 @keys.command("revoke")
 @click.argument("prefix")
+@as_root_option
 def revoke_cmd(prefix):
     """Revoke the key with PREFIX (the 12-char `rob_…` shown by `list`)."""
-    mgr, db = _manager_and_db()
+    mgr, db = _manager_and_db(write=True)
     try:
         ok = asyncio.run(mgr.revoke_key(_owner_user_id(), prefix))
     finally:

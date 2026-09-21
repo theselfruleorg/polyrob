@@ -48,6 +48,22 @@ def _capped_reserve(max_completion_tokens: int) -> int:
 	return max_completion_tokens
 
 
+def autonomous_context_budget() -> int:
+	"""``AUTONOMOUS_CONTEXT_BUDGET_TOKENS`` — a per-session input budget for an
+	AUTONOMOUS (cron/goal) run. ``0`` (default) = off, byte-identical.
+
+	057 WS-B. The compaction thresholds in ``agent/core/step.py`` are PERCENTAGES
+	of ``max_input``. On prod the model window is 1,048,576 and the operator cap
+	``TASK_MAX_INPUT_TOKENS=200000``, so 85%/95% mean 170k/190k while a real goal
+	history is 36-144k: compaction was not "missing", it was UNREACHABLE. A
+	budget of ~96k makes those thresholds 82k/91k, i.e. reachable, for the
+	session class that has no human watching it — an owner's chat keeps the
+	model window.
+	"""
+	from core.env import int_env
+	return int_env("AUTONOMOUS_CONTEXT_BUDGET_TOKENS", 0)
+
+
 def count_tool_schemas_enabled() -> bool:
 	"""Whether the gauge includes the tool-schema (`tools` param) tokens (P4).
 
@@ -65,14 +81,49 @@ class TokenCounterMixin:
 
 	def _calculate_token_limits(self, llm: BaseChatModel,
 	                            max_input_override: Optional[int]) -> tuple:
-		"""Calculate token limits from model config (SINGLE SOURCE OF TRUTH).
+		"""Token limits for this session (SINGLE SOURCE OF TRUTH).
 
-		Args:
-			llm: Language model instance
-			max_input_override: Optional explicit limit (None = auto-calculate)
+		Two layers, in this order:
+
+		1. :meth:`_model_token_limits` — the model window (or an explicit
+		   constructor / ``TASK_MAX_INPUT_TOKENS`` override).
+		2. 057 WS-B — the SESSION-CLASS budget: an autonomous (cron/goal) run is
+		   additionally clamped to ``AUTONOMOUS_CONTEXT_BUDGET_TOKENS`` so the
+		   85%/95% compaction thresholds are reachable within its real history
+		   size. ``0`` (default) = no clamp.
 
 		Returns:
 			(max_input_tokens, safe_input_tokens, completion_reserve)
+		"""
+		max_input, safe_input, reserve = self._model_token_limits(llm, max_input_override)
+		self._history_budget_tokens = 0
+		budget = autonomous_context_budget()
+		if budget > 0 and max_input > budget:
+			from agents.task.session_class import is_autonomous_session
+			if is_autonomous_session(getattr(self, "session_id", None)):
+				# The budget bounds what the run CONTROLS — its conversation
+				# history — and drives the compaction gauge only. It must NOT
+				# clamp max_input/safe_input: the pre-call safety check counts the
+				# FIXED prefix too (system + foundation + tool schemas + catalog,
+				# ~60-90k on a full rig), and a clamped safe limit made a run
+				# overflow at step 1 with no model call (prod 2026-09-20 04:40Z,
+				# WATCHER rail: 105,568 > 91,200 while history was 27k).
+				self._history_budget_tokens = budget
+				self.logger.info(
+					f"AUTONOMOUS_CONTEXT_BUDGET_TOKENS: history budget={budget} "
+					f"(compaction gauge; safe_input stays {safe_input})")
+		return max_input, safe_input, reserve
+
+	def _model_token_limits(self, llm: BaseChatModel,
+	                        max_input_override: Optional[int]) -> tuple:
+		"""The MODEL-derived limits (or an explicit override).
+
+		``TASK_MAX_INPUT_TOKENS`` is an operational ceiling on the input budget
+		for EVERY session in the process, regardless of class. It is NOT a
+		compaction knob — because compaction fires at a percentage of whatever
+		this returns, raising it postpones compaction and lowering it makes a
+		chat turn compact early. Use ``AUTONOMOUS_CONTEXT_BUDGET_TOKENS`` when
+		what you mean is "cron/goal runs should compact sooner".
 		"""
 		from modules.llm.model_registry import get_model_config
 		from agents.task.robust_parse_config import RobustParseConfig
@@ -458,7 +509,16 @@ class TokenCounterMixin:
 		if self.max_input_tokens <= 0:
 			return 0.0
 		total_tokens = self.get_actual_token_count()
-		return min(1.0, total_tokens / self.max_input_tokens)
+		return min(1.0, max(total_tokens / self.max_input_tokens, self._history_budget_ratio()))
+
+	def _history_budget_ratio(self) -> float:
+		"""057 WS-B: conversation history against the autonomous budget (0 when
+		no budget). Read by BOTH gauges so compaction fires on history size
+		while the pre-call safety check keeps the model window."""
+		budget = int(getattr(self, "_history_budget_tokens", 0) or 0)
+		if budget <= 0:
+			return 0.0
+		return float(getattr(self.history, "total_tokens", 0) or 0) / budget
 
 	def check_token_safety(self,
 	                       additional_messages: Optional[List[BaseMessage]] = None,
@@ -599,5 +659,5 @@ class TokenCounterMixin:
 
 		# Use get_actual_token_count for complete picture including H-MEM
 		total_tokens = self.get_actual_token_count()
-		usage_pct = (total_tokens / self.max_input_tokens) * 100
+		usage_pct = max(total_tokens / self.max_input_tokens, self._history_budget_ratio()) * 100
 		return min(usage_pct, 100.0)

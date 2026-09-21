@@ -93,20 +93,52 @@ async def test_delivery_fires_when_enabled(monkeypatch):
     monkeypatch.setenv("CRON_DELIVERY_ENABLED", "true")
     calls = {}
 
+    # ⚠️ `deliver_result_ex` returns a STRING (`sent`/`deferred`/`suppressed`/
+    # `failed`), not the bool its `deliver_result` shim does. A fake that
+    # returns True still passes `delivery_outcome`, which accepts both — so it
+    # proves nothing about the contract the runner now depends on.
     async def fake_deliver(task_agent, job, final, *, target, deliver_target=None,
                            session_id=None):
         calls["target"] = target
         calls["final"] = final
         calls["session_id"] = session_id
-        return True
+        return "sent"
 
-    monkeypatch.setattr(cron_delivery, "deliver_result", fake_deliver)
+    monkeypatch.setattr(cron_delivery, "deliver_result_ex", fake_deliver)
     agent = _FakeTaskAgent(final="hello")
     runner = make_agent_runner(agent)
     await runner(_job(payload={"deliver": "email"}))
     assert calls["target"] == "email"
     assert calls["final"] == "hello"
     assert calls["session_id"] == "sess-1"  # Task 7: threaded through for surfaced-marking
+
+
+@pytest.mark.asyncio
+async def test_the_journal_line_carries_deferred_not_failed(monkeypatch, caplog):
+    """D45: a held/deduped/capped/paused/queued report is RECORDED, not lost.
+
+    The runner's `logger.info` line IS the cron journal. Logging every one of
+    those as a send FAILURE made a working rail read as a broken one, which is
+    how a real failure stops being noticed.
+    """
+    import logging
+
+    monkeypatch.setenv("CRON_RUN_LOOP", "true")
+    monkeypatch.setenv("CRON_DELIVERY_ENABLED", "true")
+
+    async def fake_deliver(task_agent, job, final, *, target, deliver_target=None,
+                           session_id=None):
+        return "deferred"
+
+    monkeypatch.setattr(cron_delivery, "deliver_result_ex", fake_deliver)
+    runner = make_agent_runner(_FakeTaskAgent(final="the report"))
+    with caplog.at_level(logging.INFO, logger="cron.runner"):
+        await runner(_job(payload={"deliver": "telegram"}))
+    line = [r.getMessage() for r in caplog.records
+            if "out-of-band delivery" in r.getMessage()]
+    assert line, "the delivery outcome never reached the journal"
+    assert "outcome=deferred" in line[-1]
+    assert "outcome=failed" not in line[-1]
 
 
 @pytest.mark.asyncio
@@ -117,9 +149,9 @@ async def test_delivery_skipped_when_flag_off(monkeypatch):
 
     async def fake_deliver(*a, **k):
         fired["x"] = True
-        return True
+        return "sent"
 
-    monkeypatch.setattr(cron_delivery, "deliver_result", fake_deliver)
+    monkeypatch.setattr(cron_delivery, "deliver_result_ex", fake_deliver)
     runner = make_agent_runner(_FakeTaskAgent())
     await runner(_job(payload={"deliver": "email"}))
     assert fired["x"] is False
@@ -265,3 +297,29 @@ def test_delivery_outcome_distinguishes_suppressed_from_failed():
     assert cron_delivery.delivery_outcome("[SILENT] nothing new", ok=False) == "suppressed"
     assert cron_delivery.delivery_outcome("here is your digest", ok=True) == "sent"
     assert cron_delivery.delivery_outcome("here is your digest", ok=False) == "failed"
+
+
+@pytest.mark.asyncio
+async def test_an_already_told_echo_is_recorded_in_the_ledger(monkeypatch, caplog):
+    """Tell once (2026-09-21): a skipped echo is a DECISION the ledger shows —
+    a `cron_delivery` event with outcome=already_told — never a silent no-op."""
+    import logging
+
+    monkeypatch.setenv("CRON_RUN_LOOP", "true")
+    monkeypatch.setenv("CRON_DELIVERY_ENABLED", "true")
+
+    async def fake_deliver(task_agent, job, final, *, target, deliver_target=None,
+                           session_id=None):
+        return "already_told"
+
+    monkeypatch.setattr(cron_delivery, "deliver_result_ex", fake_deliver)
+    events = []
+    import cron.runner as cr
+    monkeypatch.setattr(cr, "_delivery_ev",
+                        lambda job, outcome, target: events.append((job.id, outcome, target)))
+    runner = make_agent_runner(_FakeTaskAgent(final="the report"))
+    with caplog.at_level(logging.INFO, logger="cron.runner"):
+        await runner(_job(payload={"deliver": "telegram"}))
+    assert events == [("j1", "already_told", "telegram")]
+    line = [r.getMessage() for r in caplog.records if "out-of-band delivery" in r.getMessage()]
+    assert "outcome=already_told" in line[-1]

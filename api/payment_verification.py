@@ -49,6 +49,21 @@ async def verify_payment_for_request(
             "endpoint": request.url.path
         }
 
+    # OPTION 0b: the operator SERVICE token (B4). It used to arrive as
+    # role="admin" and take the branch above — i.e. `API_AUTH_TOKEN` was a full
+    # admin credential. It now carries its own role, so it keeps the one thing
+    # it legitimately needs (a machine-to-machine caller is not billed
+    # per-request) and none of the admin privilege.
+    from api.auth_constants import is_service_role
+    if bypass_enabled and is_service_role(role):
+        logger.info("✅ service token bypassed payment check for %s", request.url.path)
+        return "service_bypass", {
+            "user_id": user_id,
+            "role": role,
+            "bypass_reason": "operator_service_token",
+            "endpoint": request.url.path,
+        }
+
     # OPTION 1: Check for x402 payment FIRST (middleware already verified)
     # This must come before credit check because x402 users have user_id set
     payment_method = getattr(request.state, 'payment_method', None)

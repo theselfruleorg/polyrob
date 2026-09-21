@@ -24,7 +24,7 @@ class _StubLLM:
         self.empty = empty
         self.calls: list = []
 
-    async def ainvoke(self, messages):
+    async def ainvoke(self, messages, **kwargs):
         self.calls.append(messages)
         if self.fail:
             raise RuntimeError("aux model down")

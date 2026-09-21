@@ -40,3 +40,16 @@ async def x402_db(tmp_path):
         yield db
     finally:
         await db.close()
+
+
+@pytest.fixture(autouse=True)
+def _reset_treasury_cache():
+    """B41 caches the advertised treasury address per PROCESS.
+
+    These tests monkeypatch the wallet/env the resolver reads, so the cache
+    must not carry one test's answer into the next.
+    """
+    from api.x402_advertisement import reset_treasury_cache
+    reset_treasury_cache()
+    yield
+    reset_treasury_cache()

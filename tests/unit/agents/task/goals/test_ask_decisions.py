@@ -168,3 +168,40 @@ def test_consume_ask_grant_survives_payload_compaction(board):
     assert board.consume_ask_grant(a.id) is True
     assert board.consume_ask_grant(a.id) is False  # already consumed
     assert board.get(a.id).payload["grant_consumed"] is True
+
+
+def test_decide_ask_answer_rides_into_the_unblocked_goal(board):
+    """A27 (2026-09-21): the owner's ANSWER lands on the ask and on each
+    dependent goal's owner_unblocked stamp, and the retry prompt renders it —
+    an unblocked run learns WHAT the owner said, not only that it was unblocked."""
+    from agents.task.goals.context import build_goal_run_task
+    g = board.create(user_id="rob", title="Post the launch thread")
+    board.claim(g.id, "w", ttl_seconds=60)
+    board.record_failure(g.id, error="which key?")
+    board.claim(g.id, "w", ttl_seconds=60)
+    board.record_failure(g.id, error="which key?")
+    a = board.create_ask(user_id="rob", what="Which API key?", blocks_goal_ids=[g.id])
+
+    ok, unblocked = board.decide_ask(a.id, user_id="rob", approved=True,
+                                     answer="  use the SANDBOX key \n please ")
+
+    assert ok is True and unblocked == 1
+    assert board.get(a.id).payload["answer"] == "use the SANDBOX key \n please".strip()
+    dep = board.get(g.id)
+    assert dep.payload["owner_unblocked"]["answer"].startswith("use the SANDBOX key")
+    prompt = build_goal_run_task(dep, None)
+    assert "the owner answered: use the SANDBOX key" in prompt
+
+
+def test_decide_ask_empty_answer_writes_nothing(board):
+    a = board.create_ask(user_id="rob", what="Grant access")
+    ok, _ = board.decide_ask(a.id, user_id="rob", approved=False, answer="   ")
+    assert ok is True
+    assert "answer" not in board.get(a.id).payload
+
+
+def test_decide_ask_refused_decision_records_no_answer(board):
+    a = board.create_ask(user_id="rob", what="Grant access")
+    ok, _ = board.decide_ask(a.id, user_id="someone-else", approved=True, answer="x")
+    assert ok is False
+    assert "answer" not in (board.get(a.id).payload or {})

@@ -810,7 +810,114 @@ class AutonomyHandles:
         except Exception as e:
             logger.debug("room-action expiry sweep failed (%s)", e)
 
+    # --- 057 WS-H: clean shutdown -------------------------------------------
+    # Until this existed, SIGTERM signalled the loop tasks and then force-cancelled
+    # them after `_STOP_GRACE_SEC`, leaving the in-flight cron/goal run with a bare
+    # `started` in the ledger and its row stuck at `running` until the NEXT boot's
+    # orphan reclaim named it. Three `stop-sigterm timed out -> Killing` in 7 d
+    # (prod, 2026-09-19) came from the same place: the grace window waited on an
+    # LLM call that was never going to answer inside it.
+    #
+    # So the drain runs FIRST: the in-flight work records its own terminal event,
+    # its row goes back to a re-runnable state, and the task is CANCELLED (which
+    # cancels the awaited LLM call) rather than awaited. Fail-open in every limb —
+    # a shutdown that cannot write a breadcrumb must still shut down.
+
+    def _shutdown_drain_enabled(self) -> bool:
+        from core.env import bool_env
+        return bool_env("AUTONOMY_SHUTDOWN_DRAIN", True)
+
+    def _drain_cron(self) -> None:
+        """Record `cut_by_restart` for the running cron job and cancel it.
+
+        Duck-typed on purpose (core may not import `cron.*`): the scheduler owns
+        `_current` / `_current_job` / `_terminal_ev` / `store`. The row is put
+        back to `scheduled` so the next boot's `reclaim_stale_running` does not
+        emit a SECOND terminal event for the same run — one run, one ending.
+        """
+        sched = getattr(self._loops.get("cron"), "scheduler", None)
+        if sched is None:
+            return
+        task = getattr(sched, "_current", None)
+        job = getattr(sched, "_current_job", None)
+        if task is None or job is None or task.done():
+            return
+        jid = getattr(job, "id", "?")
+        try:
+            ev = getattr(type(sched), "_terminal_ev", None)
+            if callable(ev):
+                ev(job, "cut_by_restart", "process shutdown")
+        except Exception:
+            logger.debug("shutdown: cron terminal event failed for %s", jid, exc_info=True)
+        try:
+            store = getattr(sched, "store", None)
+            set_status = getattr(store, "set_status", None)
+            if callable(set_status):
+                set_status(jid, "scheduled")
+        except Exception:
+            logger.debug("shutdown: cron requeue failed for %s", jid, exc_info=True)
+        try:
+            task.cancel()
+            logger.warning("shutdown: cut the in-flight cron run %s (cut_by_restart)", jid)
+        except Exception:
+            logger.debug("shutdown: cron cancel failed for %s", jid, exc_info=True)
+
+    async def _drain_goals(self) -> None:
+        """Cancel this worker's goal runs, return their rows to `ready` (no
+        failure increment — a restart is not the goal's fault) and record a
+        `cut_by_restart` goal_run event each, so the ledger has an ending."""
+        goals = self._loops.get("goals")
+        dispatcher = getattr(goals, "dispatcher", None)
+        if dispatcher is None:
+            return
+        held = []
+        try:
+            held = await asyncio.wait_for(
+                dispatcher.hold_inflight("process shutdown (cut_by_restart)"),
+                timeout=_STOP_GRACE_SEC)
+        except asyncio.TimeoutError:
+            logger.warning("shutdown: goal hold did not finish in %ss", _STOP_GRACE_SEC)
+        except Exception:
+            logger.debug("shutdown: goal hold failed", exc_info=True)
+        if not held:
+            return
+        logger.warning("shutdown: cut %d in-flight goal run(s) (cut_by_restart)", len(held))
+        try:
+            from core.event_log import event_log_enabled, get_event_log
+            if not event_log_enabled():
+                return
+            board = getattr(dispatcher, "board", None)
+            log = get_event_log()
+            for gid in held:
+                user_id = ""
+                try:
+                    row = board.get(gid) if board is not None else None
+                    user_id = getattr(row, "user_id", "") or ""
+                except Exception:
+                    user_id = ""
+                log.record("goal_run", user_id=user_id, source="goal", goal_id=gid,
+                           outcome="cut_by_restart", reason="process shutdown")
+        except Exception:
+            logger.debug("shutdown: goal terminal events failed", exc_info=True)
+
+    async def drain_inflight(self) -> None:
+        """Give the in-flight cron/goal work an honest ending before the loops
+        are torn down. Never raises."""
+        if not self._shutdown_drain_enabled():
+            return
+        try:
+            self._drain_cron()
+        except Exception:
+            logger.debug("shutdown: cron drain failed", exc_info=True)
+        try:
+            await self._drain_goals()
+        except Exception:
+            logger.debug("shutdown: goal drain failed", exc_info=True)
+
     async def stop(self) -> None:
+        # 057 WS-H: the in-flight run records its own ending (and its LLM call is
+        # CANCELLED, not awaited) before anything is torn down.
+        await self.drain_inflight()
         try:
             from core.autonomy_control import unregister_transition_hook
             unregister_transition_hook(self.on_pause_transition)

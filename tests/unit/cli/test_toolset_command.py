@@ -15,6 +15,19 @@ import unittest.mock as mock
 from click.testing import CliRunner
 
 
+@pytest.fixture(autouse=True)
+def _data_home_is_tmp(tmp_path, monkeypatch):
+    """C2 (2026-09-21): the REPL's owner/identity homes resolve through the ONE
+    seam (``core.runtime_paths.prefs_home_dir`` / ``cli._admin_home``), not the
+    container's ``config.data_dir`` — which was the shadow tree the preference
+    WRITERS never used. These tests hand the handler ``tmp_path`` through the
+    container, so point the resolved data home at the SAME directory; without
+    it a write test would land in the developer's real data home.
+    """
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
+
+
+
 # ---------------------------------------------------------------------------
 # run --toolset (CLI option parse)
 # ---------------------------------------------------------------------------

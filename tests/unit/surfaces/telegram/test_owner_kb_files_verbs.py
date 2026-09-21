@@ -89,7 +89,9 @@ async def test_kb_returns_search_results(env, monkeypatch):
 async def test_kb_honest_when_disabled(env, monkeypatch):
     monkeypatch.setenv("KB_ENABLED", "false")
     out = await act_on_inbound(_Agent(str(env)), _cmd("/kb", "/kb anything"))
-    assert "disabled" in out.lower() or "not enabled" in out.lower()
+    # D72: owner copy names the ACTION, never the env flag on its own.
+    assert "switched off" in out.lower()
+    assert "polyrob config set" in out.lower()
 
 
 @pytest.mark.asyncio

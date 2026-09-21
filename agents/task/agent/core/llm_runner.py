@@ -218,6 +218,83 @@ class LLMRunnerMixin:
 		self.AgentOutput = AgentOutput.type_with_custom_actions(self.ActionModel)
 		self._action_model_names = current_names
 
+	def _timeout_recovery_output(self, timeout: float) -> AgentOutput:
+		"""The AgentOutput a step ends with after the LLM timed out twice.
+
+		INTERACTIVE session: a ``send_message`` telling the user to retry — the
+		session stays alive and the human decides. AUTONOMOUS session (cron /
+		goal / planner run): NO message. There is no user to "send another
+		message"; the loop itself re-asks the model on the next step, and the
+		only reader of that text is the owner's Telegram via the cron delivery
+		rail (prod 2026-09-21 07:05Z, 09-20: "⚠️ The AI took too long to
+		respond … Please send another message" delivered as an owner DM). An
+		empty action list is the same shape the last-resort branch already
+		returns; the brain state names the timeout so the next step has it.
+		"""
+		# AgentOutput and AgentBrain already imported globally
+		try:
+			from agents.task.session_class import is_autonomous_session
+			autonomous = bool(is_autonomous_session(getattr(self, "session_id", None)))
+		except Exception:
+			autonomous = False  # fail-open to the interactive shape
+		if autonomous:
+			self.logger.info(
+				"Recovery: autonomous session — no user notice; the next step retries"
+			)
+			return AgentOutput(
+				current_state=AgentBrain(
+					page_summary="LLM timeout occurred - continuing on the next step",
+					memory=(f"Step {self.state.n_steps}: LLM timed out after {timeout:.0f}s "
+					        f"(twice). No message sent — this is an autonomous run; retry the "
+					        f"same step with a shorter, more focused request."),
+					evaluation_previous_goal="Timeout - LLM response took too long",
+					next_goal="Retry the timed-out step with a smaller request",
+					reasoning="Autonomous run: a timeout is retried by the loop, not reported to a user.",
+				),
+				action=[],
+			)
+
+		recovery_brain = AgentBrain(
+			page_summary="LLM timeout occurred - will notify user and await guidance",
+			memory=f"Step {self.state.n_steps}: LLM timed out after multiple retries. Will inform user and wait for guidance.",
+			evaluation_previous_goal="Timeout - LLM response took too long",
+			next_goal="Notify user about timeout and await guidance to continue",
+			reasoning="LLM timeout occurred. Instead of ending task, notify user so they can decide how to proceed."
+		)
+
+		# Try to use send_message action to notify user (preferred over done)
+		# This keeps the session alive and allows the user to retry
+		recovery_actions = []
+		try:
+			ActionModel = self.controller.create_action_model()
+			available_actions = self.controller.get_action_names()
+
+			# Check if send_message is available (preferred - keeps session alive)
+			if 'send_message' in available_actions:
+				recovery_actions = [ActionModel(send_message={
+					"text": f"⚠️ The AI took too long to respond (timeout after {timeout:.0f}s). "
+					        f"This can happen with complex tasks. Please send another message to retry or simplify your request."
+				})]
+				self.logger.info("Recovery: notified user via send_message (session continues)")
+				# DON'T mark as done - session stays alive
+			else:
+				# Fallback to done if send_message not available
+				recovery_actions = [ActionModel(done={
+					"text": f"LLM timeout at step {self.state.n_steps} after {timeout:.0f}s. "
+					        f"Please start a new request - complex tasks may need to be broken down."
+				})]
+				self.logger.info("Recovery: created done action after timeout (send_message not available)")
+
+		except Exception as e:
+			self.logger.error(f"Could not create recovery action: {e}")
+			# Last resort: empty but with proper brain state
+			recovery_actions = []
+
+		return AgentOutput(
+			current_state=recovery_brain,
+			action=recovery_actions
+		)
+
 	@time_execution_async('--get_next_action')
 	async def get_next_action(self, input_messages: list[BaseMessage]) -> AgentOutput:
 		"""Get next action from the model with enhanced retry logic and token safety.
@@ -309,6 +386,14 @@ class LLMRunnerMixin:
 			use_vision=self.use_vision
 		)
 		
+		# 057 WS-B: stamp this session's OUTPUT budget on the active client.
+		# Re-stamped every step on purpose — a provider fallback builds a new
+		# client mid-run, and a budget that silently stopped applying after a
+		# fallback would be a budget nobody could trust. No-op unless
+		# AUTONOMOUS_MAX_OUTPUT_TOKENS is set AND this is a cron/goal session.
+		from agents.task.session_class import apply_session_output_budget
+		apply_session_output_budget(self.llm, self.session_id)
+
 		# CRITICAL FIX: Add timeout wrapper to prevent infinite hangs
 		# Also handle LLM-specific errors with automatic provider fallback
 		try:
@@ -316,7 +401,15 @@ class LLMRunnerMixin:
 				self._get_next_action_internal(input_messages),
 				timeout=timeout
 			)
-			return result
+			# 057 WS-B: the timeout ladder measures a STREAK — a completed call
+			# resets it.
+			from agents.task.agent.core.timeout_reroute import note_success
+			note_success(self)
+			# 057 WS-B: a cut-off answer is a FACT (finish_reason=length), not
+			# malformed JSON — re-run the step once with the reason named,
+			# instead of repairing a truncated answer by guessing.
+			from agents.task.agent.core.output_truncation import handle_truncated_output
+			return await handle_truncated_output(self, input_messages, timeout, result)
 		
 		except (LLMRateLimitError, LLMAuthenticationError, LLMConnectionError) as llm_error:
 			error_type = type(llm_error).__name__
@@ -512,13 +605,29 @@ class LLMRunnerMixin:
 			
 			self.logger.error(f"LLM call timed out after {timeout:.0f} seconds - implementing recovery strategy", exc_info=True)
 
+			# 057 WS-B: consecutive timeouts are a ROUTING fact. A timeout never
+			# triggered provider fallback, so a stalled upstream was retried on
+			# the SAME upstream. 2 in a row => order this session's upstreams by
+			# latency; 3 in a row => stop retrying and end the step honestly (the
+			# worst retrying step is timeout + 180 s ≈ 570 s against a 600 s cron
+			# cap, which is how a cap gets hit). Inert unless LLM_TIMEOUT_REROUTE.
+			from agents.task.agent.core.timeout_reroute import (
+				maybe_reroute, note_timeout, should_stop_retrying)
+			_timeout_streak = note_timeout(self)
+			maybe_reroute(self, _timeout_streak)
+
 			# Clear any pending tool calls from tracker
 			if hasattr(self, 'tool_call_tracker') and self.tool_call_tracker:
 				self.tool_call_tracker.complete_step()
 				self.logger.debug("Cleared tool call tracker after timeout")
 
 			# Try to reduce context size and retry once
-			if hasattr(self, 'message_manager') and len(input_messages) > 5:
+			if should_stop_retrying(_timeout_streak):
+				self.logger.error(
+					"%d consecutive LLM timeouts — ending this step with no further "
+					"retry. A third timeout in a row is a statement about the route, "
+					"not about this prompt.", _timeout_streak)
+			elif hasattr(self, 'message_manager') and len(input_messages) > 5:
 				self.logger.info("Attempting recovery with reduced context")
 				try:
 					# Keep system message and most recent tool call pairs to maintain context
@@ -555,7 +664,12 @@ class LLMRunnerMixin:
 					if len(reduced_messages) < 3:
 						reduced_messages = input_messages[-5:]  # Fallback to last 5 messages
 
-					reduced_timeout = min(180.0, timeout * 0.75)  # Give recovery 75% of original timeout (min 180s)
+					# 75% of the original budget, CAPPED at 180 s (the comment here
+					# said "min 180s" for two years; `min(...)` is a ceiling, and
+					# the behaviour — deliberately — is the ceiling: the worst
+					# step is timeout + 180 s, and a floor would push it past the
+					# 600 s cron cap). Behaviour unchanged; the sentence is not.
+					reduced_timeout = min(180.0, timeout * 0.75)
 					
 					result = await asyncio.wait_for(
 						self._get_next_action_internal(reduced_messages),
@@ -568,48 +682,7 @@ class LLMRunnerMixin:
 				except Exception as e:
 					self.logger.warning(f"Recovery attempt failed: {e}")
 
-			# IMPROVED RECOVERY: Try to continue instead of ending task
-			# AgentOutput and AgentBrain already imported globally
-
-			# Create safe fallback brain state
-			recovery_brain = AgentBrain(
-				page_summary="LLM timeout occurred - will notify user and await guidance",
-				memory=f"Step {self.state.n_steps}: LLM timed out after multiple retries. Will inform user and wait for guidance.",
-				evaluation_previous_goal="Timeout - LLM response took too long",
-				next_goal="Notify user about timeout and await guidance to continue",
-				reasoning="LLM timeout occurred. Instead of ending task, notify user so they can decide how to proceed."
-			)
-
-			# Try to use send_message action to notify user (preferred over done)
-			# This keeps the session alive and allows the user to retry
-			recovery_actions = []
-			try:
-				ActionModel = self.controller.create_action_model()
-				available_actions = self.controller.get_action_names()
-				
-				# Check if send_message is available (preferred - keeps session alive)
-				if 'send_message' in available_actions:
-					recovery_actions = [ActionModel(send_message={
-						"text": f"⚠️ The AI took too long to respond (timeout after {timeout:.0f}s). "
-						        f"This can happen with complex tasks. Please send another message to retry or simplify your request."
-					})]
-					self.logger.info("Recovery: notified user via send_message (session continues)")
-					# DON'T mark as done - session stays alive
-				else:
-					# Fallback to done if send_message not available
-					recovery_actions = [ActionModel(done={
-						"text": f"LLM timeout at step {self.state.n_steps} after {timeout:.0f}s. "
-						        f"Please start a new request - complex tasks may need to be broken down."
-					})]
-					self.logger.info("Recovery: created done action after timeout (send_message not available)")
-					
-			except Exception as e:
-				self.logger.error(f"Could not create recovery action: {e}")
-				# Last resort: empty but with proper brain state
-				recovery_actions = []
-
-			return AgentOutput(
-				current_state=recovery_brain,
-				action=recovery_actions
-			)
+			# IMPROVED RECOVERY: continue instead of ending the task. The shape
+			# depends on WHO is on the other end — see _timeout_recovery_output.
+			return self._timeout_recovery_output(timeout)
 

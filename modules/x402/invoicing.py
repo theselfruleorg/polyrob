@@ -32,10 +32,10 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
-
 #: 046: defined in `invoice_assets` and imported here, not the reverse —
 #: that module is imported BY this one for the re-exports below.
 from modules.x402.invoice_assets import INVOICE_KIND  # noqa: E402
+from modules.x402.invoice_status import INVOICE_STATUSES, INCOME_STATUSES  # noqa: F401  (re-export)
 
 
 def _norm_tx(tx_hash) -> Optional[str]:

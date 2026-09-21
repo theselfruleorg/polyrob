@@ -29,7 +29,10 @@ class A2ATaskState(str, Enum):
     - failed: Task processing failed
     - canceled: User-initiated cancellation
     - rejected: Agent declined execution
-    - unknown: Unknown/undefined terminal state
+
+    Not a state at all:
+    - unknown: the mapper could not read the task's state. Deliberately NOT
+      terminal (B9) — "I could not tell" must never be served as "finished".
     """
     SUBMITTED = "submitted"
     WORKING = "working"
@@ -43,10 +46,16 @@ class A2ATaskState(str, Enum):
 
     @classmethod
     def is_terminal(cls, state: 'A2ATaskState') -> bool:
-        """Check if state is terminal (no further transitions allowed)."""
+        """Check if state is terminal (no further transitions allowed).
+
+        B9: ``UNKNOWN`` is NOT terminal. It means "this state could not be
+        mapped", which is a statement about the reader, not about the task —
+        counting it as terminal made every unmapped status (e.g. a session
+        still `initializing`) report as finished, refuse further messages, and
+        end its SSE stream.
+        """
         return state in [
-            cls.COMPLETED, cls.FAILED, cls.CANCELED,
-            cls.REJECTED, cls.UNKNOWN
+            cls.COMPLETED, cls.FAILED, cls.CANCELED, cls.REJECTED
         ]
 
     @classmethod
@@ -203,15 +212,50 @@ class SetPushNotificationConfigRequest(BaseModel):
 
 
 class TaskStatusUpdateEvent(BaseModel):
-    """Task status update event in streaming response."""
-    task: A2ATask
+    """Task status update event in streaming response.
+
+    B27: the spec's frame carries ``taskId``, ``contextId``, ``kind`` and
+    ``status`` at the TOP level — a client discriminates on ``kind`` and reads
+    ``status.state`` without unwrapping anything. This model only had
+    ``task``+``final``, so a spec-conformant consumer saw no ``kind`` and no
+    ``status`` and could not route the frame at all. The nested ``task`` is
+    kept (POLYROB's own console reads it) but the spec fields are now emitted
+    beside it, derived in :meth:`from_task` so the two can never disagree.
+    """
+    taskId: str
+    contextId: str
+    kind: Literal['status-update'] = 'status-update'
+    status: A2ATaskStatus
     final: bool = False  # True if this is the final update
+    task: A2ATask
+    metadata: Optional[Dict[str, Any]] = None
+
+    @classmethod
+    def from_task(cls, task: A2ATask, *, final: bool = False,
+                  metadata: Optional[Dict[str, Any]] = None
+                  ) -> "TaskStatusUpdateEvent":
+        """Build the frame from the task it describes (the ONE constructor)."""
+        return cls(
+            taskId=task.id,
+            contextId=task.contextId,
+            status=task.status,
+            final=final,
+            task=task,
+            metadata=metadata,
+        )
 
 
 class TaskArtifactUpdateEvent(BaseModel):
-    """Artifact update event in streaming response."""
+    """Artifact update event in streaming response.
+
+    B27: ``kind`` + ``contextId`` are spec fields a client discriminates on.
+    """
     taskId: str
+    contextId: Optional[str] = None
+    kind: Literal['artifact-update'] = 'artifact-update'
     artifact: A2AArtifact
+    append: Optional[bool] = None
+    lastChunk: Optional[bool] = None
 
 
 class JSONRPCRequest(BaseModel):

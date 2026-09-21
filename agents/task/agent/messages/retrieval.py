@@ -363,8 +363,67 @@ class MessageRetrievalMixin:
 		return messages
 
 
+	def note_call_usage(self, *, output_tokens: int = 0, input_tokens: int = 0,
+	                    cached_tokens: int = 0) -> None:
+		"""Record one completed LLM call's shape (057 WS-B).
+
+		Fed from the ONE billing choke point in ``next_action_internal`` — the
+		same extraction the usage record already performs, so there is no second
+		read of the provider's usage block. Two facts are kept, both tiny:
+		the last TWO output sizes (what :meth:`calculate_llm_timeout` scales on)
+		and the last call's UNCACHED input (80% of prod input is cache-served at
+		1/50th price and also ~1/50th of the latency, so counting the whole
+		prompt overstates the wait).
+		"""
+		try:
+			if output_tokens and output_tokens > 0:
+				recent = list(getattr(self, "_recent_output_tokens", []))
+				recent.append(int(output_tokens))
+				self._recent_output_tokens = recent[-2:]
+			if input_tokens and input_tokens > 0:
+				self._last_uncached_input = max(0, int(input_tokens) - int(cached_tokens or 0))
+		except Exception:  # pragma: no cover - an observation never fails a run
+			self.logger.debug("note_call_usage skipped", exc_info=True)
+
+	def _timeout_by_output(self, use_vision: bool) -> float:
+		"""057 WS-B: timeout scaled by EXPECTED OUTPUT, not by input.
+
+		Measured on prod over 24 h: <=1k output -> 13 s, 5k -> 101 s, 16k -> 272 s,
+		while uncached INPUT was flat at 41-63 s across every bucket. The legacy
+		ladder below scales on input, so it hands a 600 s budget to a small-output
+		call in a big context and a 180 s budget to a 16k-token file write — which
+		is the one that actually needs 270 s.
+
+		base 90 s + expected_output/40 tok-s + 1 s per 10k uncached input tokens,
+		floored at 120 s. Expected output = the larger of the last two calls'
+		output, so one big write widens the next step's budget and a run of small
+		steps narrows it back; capped at this session's own output ceiling, so the
+		budget can never exceed what the provider is allowed to emit.
+		"""
+		recent = [t for t in (getattr(self, "_recent_output_tokens", []) or []) if t]
+		expected = max(recent) if recent else 1024
+		try:
+			from modules.llm.output_budget import output_token_cap
+			ceiling = output_token_cap(getattr(self.llm, "_client", None) or self.llm, 16384)
+		except Exception:
+			ceiling = 16384
+		expected = min(expected, max(1, ceiling))
+		uncached = int(getattr(self, "_last_uncached_input", 0) or 0)
+		timeout = 90.0 + (expected / 40.0) + (uncached / 10000.0)
+		if use_vision:
+			timeout += 20.0
+		timeout = max(timeout, 120.0)
+		self.logger.info(
+			f"Timeout by output: expected_out={expected:,} (cap {ceiling:,}), "
+			f"uncached_in={uncached:,} -> {timeout:.0f}s")
+		return timeout
+
 	def calculate_llm_timeout(self, tool_count: int = 0, use_vision: bool = False) -> float:
-		"""Calculate dynamic timeout based on CURRENT token count and complexity.
+		"""Calculate the per-call LLM timeout.
+
+		Two formulas. Under ``LLM_TIMEOUT_BY_OUTPUT`` (057 WS-B) the budget
+		scales on EXPECTED OUTPUT — see :meth:`_timeout_by_output`. Default OFF
+		keeps the legacy input-token ladder below, byte-identical.
 
 		Args:
 			tool_count: Number of tools available to the LLM
@@ -374,6 +433,18 @@ class MessageRetrievalMixin:
 			Timeout in seconds, scaled based on complexity
 		"""
 		import os
+
+		from core.env import bool_env as _bool_env
+		if _bool_env("LLM_TIMEOUT_BY_OUTPUT", False):
+			timeout = self._timeout_by_output(use_vision)
+			env_timeout = os.getenv('AUTOV2_LLM_TIMEOUT_OVERRIDE')
+			if env_timeout:
+				try:
+					timeout = float(env_timeout)
+					self.logger.info(f"Using environment timeout override: {timeout:.0f}s")
+				except ValueError:
+					self.logger.warning(f"Invalid timeout override value: {env_timeout}")
+			return timeout
 
 		# Use current token count (no parameter needed!)
 		estimated_tokens = self.history.total_tokens + self._system_message_tokens + self._initial_task_tokens

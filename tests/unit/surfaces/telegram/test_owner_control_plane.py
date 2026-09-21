@@ -220,12 +220,15 @@ def test_every_routable_verb_is_discoverable():
     """030 WS-C6: the OTHER direction of the three-lists contract. The original
     guard only pinned handled ⊆ routable; a verb routable but absent from the
     _HELP_BODY SSOT would work yet be invisible in /help AND the setMyCommands
-    menu. /journey now has its own help line (A15); /start is a deliberate
-    exception (first-contact welcome, not owner-gated)."""
+    menu.
+
+    D34/D42: the body is now RENDERED from ``core.verbs``, so `/start` has a
+    row too and there is no exception left to pin — every routable verb is
+    documented, by construction."""
     from core.surfaces.dispatcher import _COMMANDS
     menu = {f"/{name}" for name, _ in help_commands()}
     hidden = set(_COMMANDS) - menu
-    assert hidden == {"/start"}, (
+    assert hidden == set(), (
         f"routable verbs missing from the /help SSOT (add a _HELP_BODY line, "
         f"or pin a deliberate exception here): {sorted(hidden)}")
 

@@ -29,7 +29,7 @@ window over it evicts the newest low-priority rows, which is how the agent's own
 from __future__ import annotations
 
 import logging
-from typing import Any, List, Optional
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -44,33 +44,64 @@ def _title(goal: Any) -> str:
     return (getattr(goal, "title", None) or "(untitled)").strip()
 
 
-def _blocking(board: Any, goal: Any) -> List[Any]:
-    """Prerequisites of ``goal`` that are not done yet. Never raises — a board
-    view without edges beats a board view that 500s."""
+#: D8: what ``_blocking`` returns when it could not READ the edges. An empty
+#: list means "no unfinished prerequisite", which the renderer reports as
+#: STRANDED — a specific, actionable diagnosis. A read fault is not that
+#: diagnosis, and rendering it as one told the owner a goal needed a janitor
+#: sweep when in fact nothing had been read at all.
+class _Unreadable:
+    """Sentinel: the dependency edges could not be read. Carries the reason."""
+
+    __slots__ = ("reason",)
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+
+    def __bool__(self) -> bool:      # an unreadable answer is not "no blockers"
+        return False
+
+
+def _blocking(board: Any, goal: Any):
+    """Prerequisites of ``goal`` that are not done yet.
+
+    Returns a list, or :class:`_Unreadable` when the edge read itself failed.
+    Never raises — a board view without edges beats a board view that 500s, but
+    it must SAY it has no edges rather than imply there are none.
+    """
     try:
         dep_ids = board.dependencies(getattr(goal, "id", "")) or []
-    except Exception:
+    except Exception as exc:
         logger.debug("dependency read failed; rendering without edges",
                      exc_info=True)
-        return []
+        return _Unreadable(f"{type(exc).__name__}: {str(exc)[:80]}")
     out = []
+    unreadable = 0
     for dep_id in dep_ids:
         try:
             dep = board.get(dep_id)
         except Exception:
-            dep = None
+            unreadable += 1
+            continue
         if dep is not None and getattr(dep, "status", None) != "done":
             out.append(dep)
+    if unreadable and not out:
+        # Every prerequisite we could name failed to load. "No unfinished
+        # prerequisite" would be a confident lie about rows nobody read.
+        return _Unreadable(f"{unreadable} prerequisite row(s) unreadable")
     return out
 
 
 def render_board(board: Any, *, user_id: Optional[str] = None) -> str:
     """One owner-readable board summary. Names no action the owner cannot take."""
+    # D7: an unreadable board is not an EMPTY board. This used to swallow the
+    # read fault into `counts = {}` and answer "No goals yet." — the most
+    # reassuring sentence available, over a store nobody could open.
     try:
         counts = board.status_counts(user_id=user_id) or {}
-    except Exception:
-        logger.debug("status_counts failed", exc_info=True)
-        counts = {}
+    except Exception as exc:
+        logger.warning("goal board status_counts failed", exc_info=True)
+        return (f"Goal board: unavailable ({type(exc).__name__}: "
+                f"{str(exc)[:120]}) — this is UNKNOWN, not an empty board.")
     total = sum(counts.values())
     if not total:
         return "No goals yet."
@@ -81,9 +112,11 @@ def render_board(board: Any, *, user_id: Optional[str] = None) -> str:
     try:
         rows = board.list_recent(user_id=user_id, statuses=_LEAD_ORDER,
                                  limit=_MAX_SHOWN * 2) or []
-    except Exception:
-        logger.debug("list_recent failed", exc_info=True)
-        rows = []
+    except Exception as exc:
+        logger.warning("goal board list_recent failed", exc_info=True)
+        lines.append(f"The open rows are unavailable ({type(exc).__name__}: "
+                     f"{str(exc)[:80]}) — the counts above are still true.")
+        return "\n".join(lines)
     if not rows:
         return "\n".join(lines)
 
@@ -97,6 +130,11 @@ def render_board(board: Any, *, user_id: Optional[str] = None) -> str:
         lines.append(f"• {gid} [{status}] {_title(goal)}")
         if status == "waiting":
             blockers = _blocking(board, goal)
+            if isinstance(blockers, _Unreadable):
+                lines.append("    ↳ waiting — its prerequisites are "
+                             f"unavailable ({blockers.reason}); I cannot tell "
+                             "whether it is queued or stranded")
+                continue
             for dep in blockers:
                 dep_id = (getattr(dep, "id", "") or "")[:8]
                 lines.append(f"    ↳ waiting on {dep_id} "

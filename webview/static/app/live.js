@@ -78,6 +78,11 @@ async function connect() {
   const socket = io({ path: '/socket.io', transports: ['polling', 'websocket'], reconnection: true });
   socket.on('connect', () => socket.emit('join_activity', {}));
   socket.on('activity_event', (ev) => dispatch('polyrob:activity', ev));
+  // A32: `join_activity` is owner/admin-gated and the server answers a refusal
+  // on the `error` event. Nothing listened for it, so a seat that may not join
+  // the cross-tenant stream simply saw a console that never updated again —
+  // indistinguishable from a quiet agent. pause.js renders the sentence.
+  socket.on('error', (body) => dispatch('polyrob:live-refused', body));
 }
 
 function bind() {

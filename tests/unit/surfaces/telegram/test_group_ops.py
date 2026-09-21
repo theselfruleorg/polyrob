@@ -187,10 +187,15 @@ def test_admin_service_is_refused(env):
 
 
 def test_admin_tail_succeeds_when_empty(env):
+    """D58: a READ never CREATES the store. With no ``surfaces.db`` on the box
+    the answer says the room log does not exist yet — never "no ledger rows",
+    which is a claim about a store nobody opened."""
+    import os as _os
     agent = _Agent(str(env))
     result = _result("/groups tail here", chat_role="admin")
     out = groups_reply(agent, result, _args(result.inbound.text))
-    assert "no ledger rows" in out.lower()
+    assert "no room log on this box yet" in out.lower()
+    assert not _os.path.exists(_os.path.join(str(env), "surfaces.db"))
 
 
 def test_unknown_verb_names_the_vocabulary(env):

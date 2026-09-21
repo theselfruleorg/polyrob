@@ -18,7 +18,7 @@ from agents.task.agent.message_manager.views import (
 
 class _EmptyLLM:
     """Returns an empty-content response (no exception)."""
-    async def ainvoke(self, messages):
+    async def ainvoke(self, messages, **kwargs):
         return AIMessage(content="")
 
 

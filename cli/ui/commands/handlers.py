@@ -24,6 +24,9 @@ from cli.ui.commands.registry import (
 # 030 extraction: /autonomy lives in h_autonomy.py; re-exported here for the
 # registry wiring and the legacy test import path.
 from cli.ui.commands.h_autonomy import _autonomy_snapshot, _h_autonomy  # noqa: E402,F401
+# C42/C44: the two honest-cell helpers live beside each other in h_view_cells
+# (this file is at its size ratchet: extract, don't grow).
+from cli.ui.commands.h_view_cells import _context_row, _telemetry_row  # noqa: E402,F401
 
 
 def _print_scrubbed(out, renderable) -> None:
@@ -66,7 +69,13 @@ def _h_exit(ctx: CommandContext) -> None:
 
 
 def _h_status(ctx: CommandContext) -> None:
-    """Live session status: model, tokens, cost estimate, ctx %, steps, compactions."""
+    """The live TURN meter: model, tokens, cost estimate, ctx %, compactions.
+
+    E16: registered as ``/meter``. ``/status`` names the agent-wide snapshot on
+    every other seat (Telegram, the console, ``polyrob doctor``), and pointing
+    it at a per-turn token counter here meant one word described two different
+    objects depending on where the owner was standing.
+    """
     from cli.ui import candy
     from cli.ui.theme import style
 
@@ -88,7 +97,7 @@ def _h_status(ctx: CommandContext) -> None:
                       show_edge=False, show_header=False)
         table.add_column("k", style=style("label"))
         table.add_column("v", style=style("value"))
-        table.add_row("session", ctx.session_id[:16] or "—")
+        table.add_row("session", ctx.session_id or "—")
         table.add_row("model", f"{state.model or '—'} ({state.provider or '—'})")
         table.add_row("status", state.status or "—")
         table.add_row("step", str(state.step))
@@ -97,11 +106,9 @@ def _h_status(ctx: CommandContext) -> None:
             f"{state.tokens_in} in · {state.tokens_out} out · {state.tokens_total} total",
         )
         table.add_row("cost (est)", f"${state.cost_estimate_total:.4f}")
-        if state.ctx_percent:
-            table.add_row(
-                "context",
-                f"{state.ctx_percent:.0f}% ({state.ctx_tokens}/{state.ctx_max})",
-            )
+        _ctx_row = _context_row(state)
+        if _ctx_row is not None:
+            table.add_row(*_ctx_row)
         table.add_row("compactions", str(state.compactions))
         table.add_row("elapsed", f"{state.elapsed():.1f}s")
         _print_scrubbed(console, table)
@@ -109,23 +116,26 @@ def _h_status(ctx: CommandContext) -> None:
 
     # Plain fallback.
     if state is None:
-        ctx.emit("(no session state)")
+        ctx.emit(candy.empty("meter for this turn",
+                             "the session state is not attached yet", yet=False),
+                 title="meter")
         return
     rows = [
-        ("session", ctx.session_id[:16] or "—"),
+        ("session", ctx.session_id or "—"),
         ("model", f"{state.model or '—'} ({state.provider or '—'})"),
         ("status", state.status or "—"),
         ("step", str(state.step)),
         ("tokens", f"{state.tokens_in} in · {state.tokens_out} out · {state.tokens_total} total"),
         ("cost (est)", f"${state.cost_estimate_total:.4f}"),
     ]
-    if state.ctx_percent:
-        rows.append(("context", f"{state.ctx_percent:.0f}% ({state.ctx_tokens}/{state.ctx_max})"))
+    _ctx_row = _context_row(state)
+    if _ctx_row is not None:
+        rows.append(_ctx_row)
     rows += [
         ("compactions", str(state.compactions)),
         ("elapsed", f"{state.elapsed():.1f}s"),
     ]
-    ctx.emit(candy.kv_lines(rows), title="status")
+    ctx.emit(candy.kv_lines(rows), title="meter")
 
 
 async def _h_usage(ctx: CommandContext) -> None:
@@ -303,14 +313,17 @@ def _registry_actions(ctx: CommandContext) -> Dict[str, Any]:
 
 
 def _resolve_prefs_home_dir(ctx: CommandContext) -> Any:
-    """Resolve the POLYROB home dir the SAME way /self, /config, /approve do.
+    """The IDENTITY home: ``core.runtime_paths.prefs_home_dir()`` (C2).
 
-    The container config's ``data_dir`` (fallback ``"data"``) — the tree
-    ``preferences.toml`` and other identity-tier state actually lives under.
+    ``preferences.toml``, SOUL/SELF and the chat overlays live under the
+    resolved data home. Reading them from ``config.data_dir`` was the shadow
+    home: ``BotConfig.data_dir`` defaults to ``"data"``, so on a deployed box
+    it is ``/var/lib/polyrob/data`` while every preference WRITER resolves
+    ``/var/lib/polyrob`` — the owner's own remedy changed nothing.
     """
     try:
-        cfg = getattr(ctx.container, "config", None) if ctx.container else None
-        return data_dir_or_home(getattr(cfg, "data_dir", None))
+        from core.runtime_paths import prefs_home_dir
+        return prefs_home_dir()
     except Exception:
         return data_dir_or_home(None)
 
@@ -442,12 +455,16 @@ def _h_sessions(ctx: CommandContext) -> None:
         ctx.emit(candy.empty("sessions"), title="sessions")
         return
 
+    # C45: the FULL id — a 16-char prefix is not a handle any other verb takes
+    # (/replay, polyrob session … all want the whole thing). C43: an unknown
+    # model renders an em dash with the rest of the row intact, never a blank
+    # cell the reader has to interpret.
     rows = [
         [
-            str(s.get("id", ""))[:16],
-            str(s.get("status", "")),
-            str(s.get("created_at", ""))[:19],
-            _session_model(s),
+            str(s.get("id", "")) or "—",
+            str(s.get("status", "")) or "—",
+            str(s.get("created_at", ""))[:19] or "—",
+            _session_model(s) or "—",
         ]
         for s in sessions
     ]
@@ -817,8 +834,9 @@ def _h_session(ctx: CommandContext) -> None:
     """Full session identity snapshot: polyrob framework / instance, owner, user,
     session id, model, memory backend, autonomy, workspace.
 
-    Distinct from ``/status`` (live token/cost metrics) — this is the static
-    identity card. Fail-open per field.
+    Distinct from ``/meter`` (this turn's live token/cost counter) and from
+    ``/status`` (the agent-wide snapshot, E16) — this is the static identity
+    card. Fail-open per field.
     """
     from cli.ui import candy
     from cli.ui.theme import style
@@ -911,7 +929,7 @@ def _h_resume(ctx: CommandContext) -> None:
     """
     args = ctx.args
     if not args:
-        ctx.emit("Usage: /resume <session-id>")
+        ctx.emit("Usage: /replay <session-id>")
         return
     target = args[0]
 
@@ -923,7 +941,10 @@ def _h_resume(ctx: CommandContext) -> None:
 
     files = sorted(feed_dir.glob("[0-9]*_*.json"))
     if not files:
-        ctx.emit(f"Feed dir for {target} is empty (nothing to replay).")
+        from cli.ui import candy as _candy
+        ctx.emit(_candy.empty(f"feed events for session {target}",
+                              "nothing was recorded, so there is nothing to replay",
+                              yet=False), title="replay")
         return
 
     ctx.emit(
@@ -1007,53 +1028,31 @@ def _resolve_feed_dir(ctx: CommandContext, session_id: str) -> Optional[Path]:
 
 
 def _h_apps(ctx: CommandContext) -> None:
-    """Show the durable app service rows (032) — the same lines every owner seat renders."""
+    """``/apps [list|show|approve|reject|kill|logs <slug>]`` (E5).
+
+    Thin over ``surfaces.telegram.apps_ops.apps_reply`` — the SAME helper the
+    phone renders, exactly as ``/goal`` consumes ``owner_ops.goal_reply``. The
+    REPL used to be list-only, so an app waiting on an owner address could be
+    SEEN here and only approved somewhere else.
+    """
+    from cli._admin_home import admin_data_dir
+    from surfaces.telegram.apps_ops import apps_reply
+    args = list(ctx.args or [])
+    # `via` IS the audit field that records WHERE the decision was made, and
+    # approve/reject/kill MUTATE the shared home (057 WS-G euid rule).
+    # Everything else here (list/show/logs, and the bare verb) is a READ.
+    writes = bool(args) and args[0].lower() in ("approve", "reject", "kill")
     try:
-        from core.app_service.owner_ops import list_lines
-        from core.app_service.registry import AppServiceRegistry, default_app_services_db
-        lines = list_lines(AppServiceRegistry(default_app_services_db()), ctx.user_id or "local")
-        ctx.emit("\n".join(lines), title="apps")
+        ctx.emit(apps_reply(ctx.user_id or "local", admin_data_dir(write=writes),
+                            args, via="repl"), title="apps")
     except Exception as e:
         ctx.emit(f"Apps: {e}", title="apps")
 
 
 def _h_goals(ctx: CommandContext) -> None:
-    """Show goals board summary."""
-    from cli.ui import candy
-
-    try:
-        from agents.task.goals.board import GoalBoard
-        from core.runtime_config import get_data_root
-        from core.runtime_paths import goals_db_path
-        from pathlib import Path
-
-        db_path = Path(goals_db_path(get_data_root()))
-
-        if not db_path.exists():
-            ctx.emit(
-                candy.empty("goals", "GOALS_ENABLED=off or none created", yet=False),
-                title="goals",
-            )
-            return
-
-        board = GoalBoard(str(db_path))
-        # Scope to THIS user (matches /autonomy at handlers.py _autonomy_snapshot);
-        # user_id=None returned every tenant's goals — wrong slice under multi-tenant
-        # and inconsistent with the autonomy view. Local runs are user_id="local".
-        goals = board.list(user_id=ctx.user_id or "local", limit=10)
-
-        if not goals:
-            ctx.emit(candy.empty("goals", "/autonomy shows loop state"), title="goals")
-            return
-
-        lines = [candy.status_line(g.status, f"{g.id[:8]}: {g.title[:40]}") for g in goals[:10]]
-
-        if len(goals) >= 10:
-            lines.append(f"{candy.GUTTER}… (run `polyrob goals list` for all)")
-
-        ctx.emit("\n".join(lines), title="goals")
-    except Exception as e:
-        ctx.emit(f"Goals: {e}", title="goals")
+    """Show goals board summary (rendered by ``h_goals_view``)."""
+    from cli.ui.commands.h_goals_view import goals_view
+    ctx.emit(goals_view(ctx.user_id or "local"), title="goals")
 
 
 def _h_subagents(ctx: CommandContext) -> None:
@@ -1313,11 +1312,7 @@ def _h_telemetry(ctx: CommandContext) -> None:
             rt.add_column("outcome/detail")
             rt.add_column("session", style=style("label"))
             for r in recent:
-                a = r.get("attrs", {})
-                # memory_* events carry a scrubbed preview instead of an outcome (T4-02)
-                detail = (a.get("outcome") or a.get("action") or a.get("reason")
-                          or a.get("preview") or "")
-                rt.add_row(r["kind"], str(detail), (r.get("session_id") or "")[:12])
+                rt.add_row(*_telemetry_row(r))
             _print_scrubbed(console, "recent events")
             _print_scrubbed(console, rt)
         return
@@ -1331,10 +1326,7 @@ def _h_telemetry(ctx: CommandContext) -> None:
     if recent:
         recent_rows = []
         for r in recent:
-            a = r.get("attrs", {})
-            detail = (a.get("outcome") or a.get("action") or a.get("reason")
-                      or a.get("preview") or "")
-            recent_rows.append([r["kind"], str(detail), (r.get("session_id") or "")[:12]])
+            recent_rows.append(list(_telemetry_row(r)))
         lines += [
             "",
             candy.section("recent events"),
@@ -1376,7 +1368,9 @@ def build_default_registry() -> CommandRegistry:
     from cli.ui.commands.h_help import help_kwargs
     reg.register(Command("help", _h_help, "Show this help", aliases=("h", "?"), group="leave"))
     reg.register(Command("exit", _h_exit, "Leave the REPL", aliases=("quit", "q"), group="leave"))
-    reg.register(Command("status", _h_status, "Live session status (tokens, cost, ctx)", group="look", **help_kwargs("status")))
+    reg.register(Command("meter", _h_status,
+                         "This turn's meter: tokens, cost, context, compactions",
+                         aliases=("tokens",), group="look", **help_kwargs("meter")))
     reg.register(
         Command("usage", _h_usage, "Authoritative usage breakdown (DB / estimate)", aliases=("cost",), group="money")
     )
@@ -1411,6 +1405,11 @@ def build_default_registry() -> CommandRegistry:
     from cli.ui.commands.h_diag import h_auth, h_doctor
     reg.register(Command("auth", h_auth, "Show provider credentials + how to connect one", group="set up"))
     reg.register(Command("doctor", h_doctor, "Run the polyrob doctor health report", group="look", **help_kwargs("doctor")))
+    # E16: ONE meaning per name. /status is the agent-wide snapshot on every
+    # seat; the per-turn token meter is /meter.
+    reg.register(Command("status", h_doctor,
+                         "Health first, then session, goals, loops, and wallet",
+                         group="look", **help_kwargs("status")))
     reg.register(Command(
         "toolset",
         _h_toolset,
@@ -1448,7 +1447,7 @@ def build_default_registry() -> CommandRegistry:
             group="set up", **help_kwargs("model"),
         )
     )
-    reg.register(Command("cwd", _h_cwd, "Show the session workspace directory", group="leave"))
+    reg.register(Command("cwd", _h_cwd, "Show the session workspace directory", group="look"))
     reg.register(Command(
         "session", _h_session,
         "Session identity: polyrob/instance, owner, user, model, memory, workspace",
@@ -1458,7 +1457,7 @@ def build_default_registry() -> CommandRegistry:
     reg.register(Command(
         "self", h_self,
         "Show the instance identity (SOUL + SELF docs, read-only)",
-        aliases=("identity", "soul"), group="remember",
+        aliases=("soul",), group="remember",  # "identity" = the ERC-8004 verb on every seat (2026-09-21)
     ))
     reg.register(Command(
         "memory", _h_memory,
@@ -1480,7 +1479,10 @@ def build_default_registry() -> CommandRegistry:
         group="control",
     ))
     reg.register(Command("goals", _h_goals, "Show goals board summary", group="work", **help_kwargs("goals")))
-    reg.register(Command("apps", _h_apps, "Show deployed apps (032)", group="work"))
+    reg.register(Command("apps", _h_apps,
+                         "Deployed apps: approve an address, check health, or kill one",
+                         usage="[list|show|approve|reject|kill|logs <slug>]",
+                         group="work"))
     reg.register(Command("subagents", _h_subagents, "Show delegation capability info", group="work"))
     reg.register(Command("todos", _h_todos, "Show workspace todos from todo.md", group="work"))
     reg.register(Command("logs", _h_logs, "Show recent log entries for this session", group="look"))
@@ -1506,10 +1508,13 @@ def build_default_registry() -> CommandRegistry:
         usage="[query | list | info <id> | install <spec> | approve <id> | remove <id>]",
         group="work",
     ))
+    from cli.ui.commands.h_cron import HELP_CRON
     reg.register(Command(
         "cron", h_cron,
-        "List scheduled cron jobs (read-only)",
-        aliases=("crons",), usage="[list]", group="work", **help_kwargs("cron"),
+        "Durable scheduled runs: list, add, or cancel",
+        aliases=("crons",),
+        usage="[list] | add <schedule> <task…> | cancel <id>", group="work",
+        help_long=HELP_CRON[0], elsewhere=HELP_CRON[1],
     ))
     reg.register(Command("mcp", h_mcp, "MCP servers: list, add, remove, test", usage="[list|add <id> <https-url> [key]|remove <id>|test <id>]", group="set up"))
     reg.register(Command(
@@ -1579,7 +1584,7 @@ def build_default_registry() -> CommandRegistry:
     reg.register(Command(
         "missed", h_missed,
         "Owner notices the delivery rail could not send live (capped/paused/undelivered)",
-        usage="[n]", group="leave", **help_kwargs("missed"),
+        usage="[n]", group="needs you", **help_kwargs("missed"),
     ))
     reg.register(Command(
         "allow", h_allow,
@@ -1599,7 +1604,7 @@ def build_default_registry() -> CommandRegistry:
     reg.register(Command(
         "invoices", h_invoices,
         "List agent invoices (x402 receivables)",
-        usage="[pending|completed|expired]", group="money", **help_kwargs("invoices"),
+        usage="[<status>]", group="money", **help_kwargs("invoices"),
     ))
     reg.register(Command(
         "settle", h_settle,
@@ -1610,11 +1615,9 @@ def build_default_registry() -> CommandRegistry:
     from cli.ui.commands.h_config import ConfigCtx, cmd_config
 
     async def _h_config(ctx: CommandContext) -> None:
-        # Same home_dir resolution as /self and /pending: the container
-        # config's data_dir (fallback "data") — the tree preferences.toml
-        # and other identity-tier state actually lives under.
-        cfg = getattr(ctx.container, "config", None) if ctx.container else None
-        home_dir = data_dir_or_home(getattr(cfg, "data_dir", None))
+        # C2: the ONE identity home (prefs_home_dir) every preference WRITER
+        # resolves — not config.data_dir, which is the shadow tree.
+        home_dir = _resolve_prefs_home_dir(ctx)
         config_ctx = ConfigCtx(user_id=ctx.user_id or "local", home_dir=home_dir)
         args = list(ctx.args or [])
         # 018 P2b: bare /config in the persistent app opens the settings picker
@@ -1669,20 +1672,8 @@ def build_default_registry() -> CommandRegistry:
 
     from cli.ui.commands.h_approve import ApproveCtx, cmd_approve
 
-    def _h_approve(ctx: CommandContext) -> None:
-        # Same home_dir resolution as /config/self/pending: the container
-        # config's data_dir (fallback "data").
-        cfg = getattr(ctx.container, "config", None) if ctx.container else None
-        home_dir = data_dir_or_home(getattr(cfg, "data_dir", None))
-        approve_ctx = ApproveCtx(user_id=ctx.user_id or "local", home_dir=home_dir)
-        out = cmd_approve(approve_ctx, list(ctx.args or []))
-        ctx.emit(out, title="approve")
-
-    reg.register(Command(
-        "approve", _h_approve,
-        "Manage approval gates (list|add|remove)",
-        usage="list | add <action> | remove <action>", group="control",
-    ))
+    from cli.ui.commands.h_gates import register as _register_gates
+    _register_gates(reg, Command, _resolve_prefs_home_dir)
     reg.register(Command(
         "context", _h_context,
         "Context-assembly breakdown: per-slot token counts + % of context",

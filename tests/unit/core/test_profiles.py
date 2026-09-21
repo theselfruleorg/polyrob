@@ -263,3 +263,25 @@ def test_list_profiles_reads_metadata_fail_open(_isolated):
     assert [i.name for i in infos] == ["alpha", "beta"]
     assert infos[0].description == "A test bot"
     assert infos[1].description == ""
+
+
+def test_project_pin_walk_survives_an_unreadable_git_probe(monkeypatch, tmp_path):
+    """A weak ambient signal must never crash the CLI: `polyrob owner asks` run
+    as the service user from inside another user's 0700 clone died with
+    PermissionError on that clone's `.git` (2026-09-20). An unreadable
+    `.git` probe reads as "not a git root" and the walk carries on."""
+    cwd = tmp_path / "proj" / "sub"
+    cwd.mkdir(parents=True)
+    monkeypatch.chdir(cwd)
+    real_exists = Path.exists
+
+    def boom(self, *a, **k):
+        if self.name == ".git" and self.parent == tmp_path / "proj":
+            raise PermissionError(13, "Permission denied", str(self))
+        return real_exists(self, *a, **k)
+
+    monkeypatch.setattr(Path, "exists", boom)
+    assert profiles._find_project_pin() is None          # no crash, no pin
+    (cwd / ".polyrob").mkdir()
+    (cwd / ".polyrob" / "profile").write_text("alpha\n")
+    assert profiles._find_project_pin() == "alpha"       # the cwd pin still resolves

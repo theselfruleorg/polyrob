@@ -113,11 +113,14 @@ def test_steer_requires_text():
 # Light read-only verbs render an honest string on an empty tmp home
 # ---------------------------------------------------------------------------
 
-def test_reject_nothing_pending(tmp_path):
+def test_reject_nothing_pending(tmp_path, monkeypatch):
+    """C47: the ONE empty grammar (``candy.empty``) — the same sentence
+    ``/approve`` renders over the same union."""
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
     reg = build_default_registry()
     ctx, buf = _ctx(registry=reg, container=_fake_container(tmp_path), user_id="local")
     asyncio.run(reg.dispatch("/reject", ctx))
-    assert "Nothing pending" in buf.getvalue()
+    assert "no items waiting on you" in buf.getvalue()
 
 
 def test_goal_bare_shows_usage(tmp_path):

@@ -78,83 +78,153 @@ def _agent_name() -> str:
         return "the agent"
 
 
-# SSOT for /help AND the setMyCommands menu (help_commands() parses the "/"
-# lines; section headers are plain lines and are skipped). 030 WS-C4: grouped —
-# a flat wall of verbs hid the kill-switch between /fulfill and /resume.
-_HELP_BODY = (
-    "— Tasks —\n"
-    "/task <goal> — start a new task\n"
-    "/cancel — stop the current task\n"
-    "/new — start a fresh conversation\n"
-    "— Control —\n"
-    "/pause [word…] [for 6h] — stop autonomous work now (everything, or: "
-    "trading, background, messages, deploying — or a scope)\n"
-    "/resume [word…] — lift the pause\n"
-    "/halt — alias of /pause (everything)\n"
-    "/status — health first, then session, goals, loops, delivery, posture, made, wallet, money\n"
-    "/mode — effective autonomy posture (all axes) and how to change it\n"
-    "/avatar — this instance's face, traits and voice signature (read-only)\n"
-    "/missed [n] — owner messages the daily cap suppressed (default 5)\n"
-    "— Approvals & asks —\n"
-    "/inbox [n] — everything waiting on a decision from you, blocking first\n"
-    "/pending — proposals I've learned, awaiting your approval (each one tappable)\n"
-    "/approve — activate what's waiting; tap the token in /pending for a specific one\n"
-    "/reject — discard it; /approve_all and /reject_all decide the whole queue\n"
-    "/asks — what I need from you to unblock work\n"
-    "/fulfill <id> — mark an ask fulfilled (unblocks its goals)\n"
-    "— Autonomy —\n"
-    "/cron [list|show|add|cancel] — durable scheduled runs\n"
-    "/goal <show|ready|pause|resume|retry|cancel> <id> — steer one goal\n"
-    "/goal objective <list|pause|activate|drop> [id] — steer a whole stream\n"
-    "/goals — goal board summary\n"
-    "/apps [list|show|approve|reject|kill|logs <slug>] — durable apps: approve an address, health, kill\n"
-    "/mcp [add <id> <url>|remove <id>|test <id>] — MCP servers I can use "
-    "(https only; loads in every new session)\n"
-    "/recap [window] — what I've done (default 24h, e.g. 30m/24h/7d; alias /journey)\n"
-    "/journey [window] — alias of /recap\n"
-    "— Money —\n"
-    "/book — my ledger against every money chain: one verdict, then what disagrees\n"
-    "/wallet [balances] — addresses, network and spend caps\n"
-    "/invoices [status] — what I've billed and who owes me\n"
-    "/settle <id> [tx] — mark an invoice paid\n"
-    "/trade <what to do> — launch a run that carries the money verb\n"
-    "/bridge <from> <to> <amount> [go] — moves native value across chains "
-    "within your caps; above the line it asks you first (quote only without 'go')\n"
-    "/lp positions|pool|quote|add|remove|collect — liquidity (dry-run by default)\n"
-    "/launch <SYMBOL> <name…> [logo <url>] [desc <text>] [buy <amount>] [go] — "
-    "launch a token on the Pons launchpad (quote only without 'go')\n"
-    "/deploy <SYMBOL> <supply> <name…> [on <chain>|solana] [vanity <hex>] "
-    "[uri <url>] [go] — deploy a fixed-supply token (no mint function, no owner)\n"
-    "/wallet autonomous <usd> — how much runs without asking you\n"
-    "— Access —\n"
-    "/allow <surface> <target> — allow me to message that target\n"
-    "/deny <surface> <target> — revoke that permission\n"
-    "/allowlist — show who I'm allowed to message\n"
-    "— Rooms —\n"
-    "/groups <allow|deny|list|mode|set|role|tail|service|admins> here|<surface> "
-    "<chat_id> [...] — manage this instance's group-chat presence\n"
-    "/mute here|<surface> <chat_id> <duration> — silence a room for a while "
-    "(e.g. 2h); owner or that room's admin\n"
-    "/mute <duration> IN REPLY to a message — mute that MEMBER; free for you "
-    "and room admins, a paid action for a member (046)\n"
-    "/ban <duration> IN REPLY to a message — ban that MEMBER for a while; free "
-    "for you and room admins, a paid action for a member (046)\n"
-    "/unmute IN REPLY to a message — end that member's mute early; the muted "
-    "member may COUNTER-PAY their own\n"
-    "/unban IN REPLY to a message — lift that member's ban; the banned member "
-    "may COUNTER-PAY their own\n"
-    "/paid <status|enable|disable|price <verb> <usd>|asset <id>|offers|"
-    "cancel <id>> — configure this room's paid actions; owner or room admin\n"
-    "— Settings & files —\n"
-    "/prefs [all] — the preferences you have set (add 'all' for every key)\n"
-    "/config — read or set preferences (safe keys write immediately; "
-    "guarded keys queue for /pending review)\n"
-    "/kb <query> — search my knowledge base\n"
-    "/files [n] — recent files I produced (default 10)\n"
-    "/dev [message] — message the dev/ops loop (Claude) directly; bare /dev = rail status\n"
-    "/help [verb] — this help, or one verb's detail\n"
-    "Or just send a message to talk to {name}."
-)
+# ---------------------------------------------------------------------------
+# /help — RENDERED FROM THE ONE VERB TABLE (D34)
+#
+# ⚠️ This used to be a hand-written wall of text: a SECOND grouping of the same
+# verbs, with its own section names and its own sentences, beside
+# ``core/verbs.py``. Nothing pinned the two together, so `/missed` said one
+# thing here and another in the palette, `/start` had no line at all (and
+# `/help start` therefore answered "unknown command"), and `/groups use`
+# existed for weeks with no documentation anywhere.
+#
+# The table owns WHAT a verb is (``Verb.help``) and its SECTION (``Verb.group``,
+# rendered in ``GROUP_ORDER``). This module owns only the two things a core-tier
+# table may not carry: the ARGUMENT GRAMMAR (``_USAGE``) and this seat's own
+# elaborations (``_DETAIL`` continuation lines and ``_SUBVERBS``). A contract
+# test (tests/unit/surfaces/telegram/test_help_is_verb_table.py) pins every
+# command line's description against ``VERB_TABLE``.
+# ---------------------------------------------------------------------------
+
+#: verb -> the argument grammar rendered after the name. A verb absent here
+#: takes no arguments.
+_USAGE = {
+    "/pause": "[word…] [for 6h]",
+    "/resume": "[word…]",
+    "/missed": "[n]",
+    "/inbox": "[n]",
+    "/fulfill": "<id> [what you want to tell the run]",
+    "/cron": "[list|show|add|cancel]",
+    "/goal": "<show|ready|pause|resume|retry|cancel> <id>",
+    "/apps": "[list|show|approve|reject|kill|logs <slug>]",
+    "/mcp": "[add <id> <url>|remove <id>|test <id>]",
+    "/recap": "[window]",
+    "/journey": "[window]",
+    "/wallet": "[balances]",
+    "/invoices": "[status]",
+    "/settle": "<id> [tx]",
+    "/trade": "<what to do>",
+    "/bridge": "<from> <to> <amount> [as <asset>] [go]",
+    "/lp": "positions|pool|quote|add|remove|collect",
+    "/launch": "<SYMBOL> <name…> [logo <url>] [desc <text>] [buy <amount>] [go]",
+    "/deploy": "<SYMBOL> <supply> <name…> [on <chain>] [decimals <n>] "
+               "[vanity <hex>] [salt <hex>] [go]",
+    "/claim": "<token> [go]",
+    "/nft": "list|info <contract> <id>|transfer <contract> <id> <to> [go]|"
+            "revoke <contract> <operator> [go]",
+    "/dapp": "list|revoke <id>",
+    "/contacts": "[<surface> <address>]",
+    "/identity": "register|set-uri [go]",
+    "/allow": "<surface> <target>",
+    "/deny": "<surface> <target>",
+    "/groups": "<allow|deny|list|use|mode|set|role|tail|service|admins> "
+               "here|<surface> <chat_id> [...]",
+    "/mute": "here|<surface> <chat_id> <duration>",
+    "/ban": "<duration> IN REPLY to a message",
+    "/unmute": "IN REPLY to a message",
+    "/unban": "IN REPLY to a message",
+    "/paid": "<status|enable|disable|price <verb> <usd>|asset <id>|offers|"
+             "cancel <id>>",
+    "/prefs": "[all]",
+    "/kb": "<query>",
+    "/files": "[n]",
+    "/dev": "[message]",
+    "/help": "[verb]",
+}
+
+#: verb -> extra INDENTED lines under its command line. They never start with
+#: "/" so ``help_commands`` skips them, and ``_help_for`` returns them with the
+#: verb they belong to.
+_DETAIL = {
+    "/pause": ("   everything, or: trading, background, messages, deploying "
+               "— or a scope",),
+    "/halt": ("   the same as /pause with no words",),
+    "/mute": ("   with a duration IN REPLY to a message it mutes that MEMBER "
+              "— free for you and room admins, a paid action for a member",),
+    "/unmute": ("   the muted member may COUNTER-PAY their own",),
+    "/unban": ("   the banned member may COUNTER-PAY their own",),
+    "/config": ("   safe keys write immediately; guarded keys queue for "
+                "/pending review",),
+    "/mcp": ("   https only; loads in every new session",),
+    "/recap": ("   default 24h, e.g. 30m/24h/7d",),
+    "/bridge": ("   within your caps it runs and reports; above the line it "
+                "asks you first (quote only without `go`)",),
+    "/launch": ("   quote only without `go`; a launch with no logo and no "
+                "description looks abandoned",),
+    "/deploy": ("   quote only without `go`; no mint function, no owner",),
+    "/claim": ("   collects creator fees the launchpad escrow already owes me",),
+    "/identity": ("   mints THIS instance's ERC-8004 identity from my own "
+                  "wallet; refuses if one already exists",),
+    "/dev": ("   bare /dev = rail status",),
+}
+
+#: verb -> extra full command lines for its SUBVERBS. A subverb is not a
+#: ``_COMMANDS`` row, so it has no table entry and its words live here.
+_SUBVERBS = {
+    "/goal": ("/goal objective <list|pause|activate|drop> [id] — steer a whole stream",),
+    "/wallet": ("/wallet autonomous <usd> — how much runs without asking you",),
+}
+
+#: The two verbs DELIBERATELY absent from the table (``core.verbs.
+#: PALETTE_EXCLUDED`` — the console drops them from /help). Telegram still
+#: documents them, so they are rendered here with their own words, in the
+#: section they belong to.
+_LOCAL_ROWS = {
+    "talk": (
+        ("/task", "<goal>", "Start a new task"),
+        ("/new", "", "Start a fresh conversation"),
+    ),
+}
+
+
+def _help_line(name: str, usage: str, text: str) -> str:
+    return f"{name}{(' ' + usage) if usage else ''} — {text}"
+
+
+#: This seat's id in ``core.verbs.Verb.seats``.
+_SEAT = "telegram"
+
+
+def _build_help_body() -> str:
+    """The `/help` body, rendered from :data:`core.verbs.VERB_TABLE`.
+
+    ⚠️ Filtered to the verbs THIS seat can run. A REPL-local verb (`/gates`,
+    `/meter`) never reaches a Telegram message at all, so listing it here would
+    answer "unknown command" to anyone who tried it.
+    """
+    from core.verbs import grouped
+    lines = []
+    for group, verbs in grouped(_SEAT):
+        rows = []
+        for verb in verbs:
+            rows.append(_help_line(verb.name, _USAGE.get(verb.name, ""),
+                                   verb.help))
+            rows.extend(_DETAIL.get(verb.name, ()))
+            rows.extend(_SUBVERBS.get(verb.name, ()))
+        for name, usage, text in _LOCAL_ROWS.get(group, ()):
+            rows.append(_help_line(name, usage, text))
+            rows.extend(_DETAIL.get(name, ()))
+        if not rows:
+            continue
+        lines.append(f"— {group[:1].upper()}{group[1:]} —")
+        lines.extend(rows)
+    lines.append("Or just send a message to talk to {name}.")
+    return "\n".join(lines)
+
+
+#: SSOT for /help AND the setMyCommands menu (help_commands() parses the "/"
+#: lines; section headers and indented detail lines are skipped).
+_HELP_BODY = _build_help_body()
 
 #: G11: the slash list is not the whole control surface — the agent can act
 #: through its own tools when asked in prose ("schedule a check every morning at
@@ -174,15 +244,43 @@ def _help_text() -> str:
 
 
 def _help_for(verb: str) -> str:
-    """`/help <verb>` (030 WS-C4): the verb's line(s) from the SSOT — including
-    subverb lines like `/goal objective …` — without triggering the verb."""
-    v = "/" + verb.strip().lstrip("/").lower()
-    lines = [ln for ln in _HELP_BODY.splitlines()
-             if ln.startswith(v + " ") or ln.startswith(v + "\n") or
-             ln.split(" ")[0] == v]
-    if not lines:
+    """`/help <verb>` (030 WS-C4): the verb's line(s) from the SSOT — its
+    command line, its indented detail, and its subverb lines like
+    `/goal objective …` — without triggering the verb.
+
+    ⚠️ D42: an ALIAS resolves through the table too, so `/help h` answers for
+    `/help`. And `/start` now has a row, so `/help start` is no longer the
+    "unknown command" reply for a verb the bot itself sends on first contact.
+
+    ⚠️ A SEAT-LOCAL verb (`/gates`, `/meter` — `core.verbs.Verb.seats`) is
+    deliberately absent from this seat's body, so it found no line and fell
+    through to "Unknown command". That is a confident lie about a verb that
+    exists: the honest answer names the seat it runs on. Asking about
+    something real must never be answered as if it were a typo.
+    """
+    from core.verbs import verb_for
+    raw = "/" + verb.strip().lstrip("/").lower()
+    canonical = verb_for(raw)
+    v = canonical.name if canonical is not None else raw
+    if canonical is not None and not canonical.runs_on(_SEAT):
+        seats = " or ".join(canonical.seats)
+        return (f"{v} — {canonical.help}.\nIt runs on the {seats}, not here. "
+                f"Send /help for the verbs this chat has.")
+    out: list = []
+    collecting = False
+    for ln in _HELP_BODY.splitlines():
+        if ln.startswith("/"):
+            collecting = (ln.split(" ")[0] == v)
+            if collecting:
+                out.append(ln)
+            continue
+        if collecting and ln.startswith(" "):
+            out.append(ln)
+            continue
+        collecting = False
+    if not out:
         return _unknown_command_text(v)
-    return "\n".join(lines)
+    return "\n".join(out)
 
 
 def _welcome_text() -> str:
@@ -216,8 +314,9 @@ _OWNER_ADMIN_COMMANDS = ("/inbox", "/book",
                          "/halt", "/resume", "/pause",
                          "/cron", "/goal", "/wallet", "/invoices", "/settle",
                          "/trade", "/bridge", "/launch", "/deploy", "/lp",
+                         "/claim", "/nft", "/dapp", "/identity", "/contacts",
                          "/status", "/mode", "/recap", "/journey", "/goals", "/prefs", "/config",
-                         "/avatar",
+                         "/avatar", "/cwd",
                          "/missed", "/apps", "/mcp",
                          "/kb", "/files", "/dev")
 
@@ -238,11 +337,25 @@ _OWNER_ADMIN_COMMANDS = ("/inbox", "/book",
 #: else, its writes are the room's own overlay, and it names no money the agent
 #: can move. Refusing it from the room would send an admin to a DM to configure
 #: the room he is standing in.
+#: D43: `/cron`, `/goal` and `/fulfill` were MISSING. Each of them MUTATES
+#: durable autonomous work — scheduling a recurring run, cancelling a goal,
+#: declaring an owner ask satisfied — from inside a room where a member can
+#: read the ids off the screen and talk the owner into typing one. The
+#: ratchet test (test_room_refusal_covers_every_mutating_verb) now derives the
+#: requirement instead of trusting this list to be remembered.
+#:
+#: `/contacts` is here too: a transcript with a third party is private
+#: correspondence, and the room is the one place a shoulder-surfer is
+#: guaranteed. The new money verbs (`/claim`, `/nft`, `/dapp`, `/identity`)
+#: join `/trade` and the rest for the same reason they did.
 _ROOM_REFUSED_COMMANDS = frozenset({
     "/trade", "/wallet", "/deploy", "/lp", "/launch", "/bridge", "/dev",
+    "/claim", "/nft", "/dapp", "/identity",
     "/pause", "/halt", "/resume", "/approve", "/reject",
     "/allow", "/deny", "/config", "/prefs", "/mcp", "/apps",
     "/invoices", "/settle",
+    "/cron", "/goal", "/fulfill",
+    "/contacts",
 })
 
 #: 044 T1: the owner stop gate runs ONLY on a routed turn. DENIED (a silent
@@ -596,6 +709,40 @@ async def _run_and_deliver(task_agent: Any, user_id: str, session_id: str, deliv
         logger.error("telegram reply delivery failed: %s", e, exc_info=True)
 
 
+def _correspondent_text(result: InboundResult) -> str:
+    """The turn text for a CORRESPONDENT reply, with its attachments NAMED (D53).
+
+    ⚠️ A correspondent's bytes are never absorbed: a third party's file must not
+    be written into the owner tenant's workspace. But an unnamed attachment is
+    worse than a refused one — the agent cannot answer "you didn't send it"
+    when something WAS sent, and a photo with no caption arrives as an
+    empty turn. Same shape as the email rail's own manifest
+    (``surfaces/email/inbound.py::_append_attachment_manifest``), which is the
+    module this behaviour is copied FROM rather than reinvented.
+
+    Never raises — a manifest that cannot be built costs the names, never the
+    reply.
+    """
+    text = (result.inbound.text or "")
+    try:
+        media = list(getattr(result.inbound, "media", None) or [])
+    except Exception as e:
+        logger.warning("telegram: correspondent media list unreadable (%s) — "
+                       "the reply is delivered without naming its attachments", e)
+        media = []
+    if not media:
+        return text
+    names = []
+    for m in media:
+        label = getattr(m, "filename", None) or getattr(m, "kind", None) or "file"
+        mime = getattr(m, "mime", None) or getattr(m, "kind", None) or "unknown"
+        names.append(f"- {label} ({mime})")
+    listing = "\n".join(names)
+    note = (f"[They attached {len(media)} file(s). I did NOT download them — a "
+            f"contact's bytes never enter my workspace:\n{listing}]")
+    return f"{text}\n\n{note}" if text.strip() else note
+
+
 def _room_reply_anchor(result: InboundResult) -> Optional[str]:
     """044 T10 fix round 1: the inbound message id a room turn should thread its
     reply to, or None outside a room chat. Shared by the STEER and fresh-session
@@ -769,7 +916,7 @@ def _is_admin_owner(user_id: str) -> bool:
 #: The ONE denial string for "you may not act here" — shared by the DENIED
 #: routing branch (`_act_on_inbound_locked`) and the lifecycle gate below, so
 #: the wording can never drift between the two.
-_UNAUTHORIZED_TEXT = "🔒 You're not authorized to use this bot."
+_UNAUTHORIZED_TEXT = "🔒 I'm not allowed to talk to you — my owner has not approved you."
 
 
 def _lifecycle_permitted(result: InboundResult) -> bool:
@@ -933,17 +1080,54 @@ def _missed_reply(user_id: str, data_dir: str, args: list) -> str:
     except Exception as e:
         return f"Missed messages: unavailable ({type(e).__name__}: {str(e)[:120]})"
     if not rows:
-        return "No suppressed owner messages on record."
-    import time as _time
-    lines = [f"Last {len(rows)} suppressed owner message(s) (newest first):"]
+        return "No undelivered messages on record."
+    # D36: the SHARED renderer (`core.surfaces.missed.format_notice_lines`),
+    # which WRAPS. This seat used to hard-clip every notice at 240 characters —
+    # in the one verb that exists so the owner can recover text he never
+    # received, which makes the clip a second suppression of the same message.
+    from core.surfaces.missed import format_notice_lines
+    lines = [f"Last {len(rows)} undelivered message(s), newest first:"]
     for r in rows:
-        text = str(r.get("text") or "").replace("\n", " ").strip()
-        if len(text) > 240:
-            text = text[:237] + "…"
-        stamp = _time.strftime("%m-%d %H:%M", _time.gmtime(float(r.get("ts") or 0)))
-        kind = r.get("kind") or "capped"
-        lines.append(f"• {stamp}Z — [{kind}] {text}")
+        lines.extend(format_notice_lines(
+            float(r.get("ts") or 0), str(r.get("kind") or "capped"),
+            str(r.get("text") or "").strip(), gutter="• ", width=_MISSED_WIDTH))
     lines.append("Raise the cap: /config set delivery.daily_cap N")
+    return "\n".join(lines)
+
+
+#: A chat bubble re-wraps proportional text, so the terminal's 80 columns are
+#: the wrong measure here. Narrow enough that one notice line stays one line.
+_MISSED_WIDTH = 60
+
+
+def _cwd_reply() -> str:
+    """`/cwd` (C67) — the directory I am actually working in, read-only.
+
+    ⚠️ Three different answers hide behind "where are you working": the process
+    CWD (what a shell command would touch), the data home (where my stores
+    live) and the project root (what a coding turn edits). They are routinely
+    different on a deployed box, so all three are named rather than one being
+    picked and passed off as the answer. Never raises — a path I cannot resolve
+    is rendered as unavailable with its reason, never as blank.
+    """
+    import os as _os
+    lines = ["Where I am working:"]
+    try:
+        lines.append(f"• process directory: `{_os.getcwd()}`")
+    except Exception as exc:
+        lines.append(f"• process directory: unavailable ({type(exc).__name__})")
+    try:
+        from core.runtime_paths import effective_data_home
+        lines.append(f"• data home (my stores): `{effective_data_home()}`")
+    except Exception as exc:
+        lines.append(f"• data home: unavailable ({type(exc).__name__}: "
+                     f"{str(exc)[:80]})")
+    try:
+        from core.instance import resolve_instance_id
+        lines.append(f"• instance: {resolve_instance_id()}")
+    except Exception as exc:
+        lines.append(f"• instance: unavailable ({type(exc).__name__})")
+    lines.append("Files I produced: /files · my stores' health: /status")
     return "\n".join(lines)
 
 
@@ -1004,11 +1188,34 @@ def _is_configured_source(source: str) -> bool:
     return not (s == "built-in" or s.startswith("default"))
 
 
+def _prefs_home() -> str:
+    """The ONE prefs home (D38).
+
+    ⚠️ Every other admin read here resolves ``config.data_dir`` — correct for
+    the goal board, the pending queue and the cron store, and WRONG for
+    preferences: ``core.runtime_paths.prefs_home_dir`` is where
+    ``write_preference`` and every resolver actually look. Reading a shadow
+    tree is why the owner's `/config set delivery.daily_cap` appeared to work
+    and changed nothing (2026-09-15). Fail-open to the data home, LOUDLY.
+    """
+    try:
+        from core.runtime_paths import prefs_home_dir
+        return prefs_home_dir()
+    except Exception as e:  # pragma: no cover - a path resolver fault
+        logger.warning("telegram: prefs home unresolved (%s) — falling back", e)
+        from core.runtime_paths import effective_data_home
+        return effective_data_home()
+
+
 def _prefs_reply(user_id: str, data_dir: str, instance_id: str,
                  full: bool = False) -> str:
     """owner-UX P4 T2: read-only resolved-preferences summary via the display
     SSOT (`core.prefs.display_effective`) — never the raw file, always the
     effective (pref/env/merged) value + source.
+
+    ⚠️ D38: reads ``prefs_home_dir()``, not the caller's ``data_dir``. The two
+    differ on a deployed box, and this is the screen the owner checks to
+    confirm a write landed.
 
     Bare `/prefs` shows only what is actually SET (G15): the full schema is 26
     keys across group headers, which is ~35 lines on a phone in answer to what
@@ -1016,9 +1223,10 @@ def _prefs_reply(user_id: str, data_dir: str, instance_id: str,
     complete listing.
     """
     from core.prefs import PREF_SCHEMA, display_effective
+    home = _prefs_home()
     rows = []
     for key in sorted(PREF_SCHEMA):
-        value, source = display_effective(key, user_id, data_dir, instance_id=instance_id)
+        value, source = display_effective(key, user_id, home, instance_id=instance_id)
         rows.append((key, value, source))
     if not full:
         configured = [r for r in rows if _is_configured_source(r[2])]
@@ -1052,16 +1260,19 @@ def _config_reply(user_id: str, data_dir: str, instance_id: str, args: list) -> 
     No args (or `list`) renders the SAME PREF_SCHEMA listing `/prefs` does —
     reuses :func:`_prefs_reply`, never a second PREF_SCHEMA loop.
 
-    `set <key> <value>`:
-      - unknown key -> names the valid PREF_SCHEMA groups (a closest-match hint
-        across every namespace is the CLI/REPL's job — this stays terse);
-      - SAFE key -> writes immediately via `core.prefs.write_preference` and
-        confirms;
-      - GUARDED key -> NEVER written directly from a bare Telegram message —
-        queues a `core.prefs.propose_pref_change` proposal and points at
-        /pending -> /approve (the same trust ladder the webview `confirm:true`
-        PATCH uses; mirrors `cli/ui/commands/h_config.py`'s `--confirm` gate,
-        except the confirm bypass itself — Telegram has no `--confirm` here).
+    ⚠️ D37: `set` routes through the ONE write oracle
+    (``core.config_service.set_value``, ``surface="telegram"``) instead of
+    re-deriving the rules. This seat used to own a private copy of the
+    safe-vs-guarded ladder, which meant it knew only PREFERENCES — so every
+    flag key answered "unknown preference key", and the oracle's
+    credential-surface refusal (an owner binding, a money bound, an approval
+    policy or a trust posture is never writable from a REMOTE surface) was
+    enforced at the console and not here.
+
+    ⚠️ D38: preferences are read and written under ``prefs_home_dir()``, the
+    ONE prefs home. Resolving it from ``config.data_dir`` wrote into a SHADOW
+    tree on a deployed box, which is how the owner could not raise his own
+    delivery cap from chat (2026-09-15).
     """
     if not args or args[0].lower() == "list":
         # `/config` and `/config list` keep the FULL schema listing — this is the
@@ -1076,22 +1287,27 @@ def _config_reply(user_id: str, data_dir: str, instance_id: str, args: list) -> 
         return "Usage: /config set <key> <value>"
     key = rest[0]
     value = " ".join(rest[1:]).strip()
-    from core.prefs import PREF_SCHEMA, SENSITIVITY_GUARDED, propose_pref_change, write_preference
-    spec = PREF_SCHEMA.get(key)
-    if spec is None:
-        groups = sorted({k.split(".", 1)[0] for k in PREF_SCHEMA})
-        return (f"Unknown preference key: {key!r} — valid groups: "
-                f"{', '.join(groups)}. See /config for the full key list.")
-    if spec.sensitivity == SENSITIVITY_GUARDED:
-        ok, msg = propose_pref_change(user_id, key, value, data_dir, instance_id=instance_id)
-        if not ok:
-            return f"Failed: {msg}"
+    from core.config_service import set_value
+    from core.runtime_paths import prefs_home_dir
+    try:
+        res = set_value(key, value, user_id=user_id, home_dir=prefs_home_dir(),
+                        surface="telegram")
+    except Exception as exc:                       # the oracle promises not to
+        logger.warning("telegram /config set failed", exc_info=True)
+        return (f"I could not apply that ({type(exc).__name__}: "
+                f"{str(exc)[:120]}) — nothing was written.")
+    if not res.ok:
+        from core.prefs import PREF_SCHEMA
+        hint = ""
+        if res.outcome == "refused" and key not in PREF_SCHEMA:
+            groups = sorted({k.split(".", 1)[0] for k in PREF_SCHEMA})
+            hint = f"\nPreference groups: {', '.join(groups)}. /config lists them."
+        return f"❌ {res.message}{hint}"
+    if res.outcome == "queued":
         return (f"'{key}' is guarded — queued for review (not written yet).\n"
                 "See /pending, approve with /approve <id> (or /reject <id>).")
-    ok, err = write_preference(data_dir, user_id, key, value, instance_id=instance_id)
-    if not ok:
-        return f"error: {err}"
-    return f"Set {key} = {value} (applies: {spec.applies})."
+    applies = f" (applies: {res.applies})" if res.applies else ""
+    return f"✅ Set {key} = {value}{applies}."
 
 
 async def _kb_reply(user_id: str, query: str) -> str:
@@ -1101,7 +1317,11 @@ async def _kb_reply(user_id: str, query: str) -> str:
     owner's seat (assessment 2026-07-19 §2 touchpoint 4)."""
     from agents.task.constants import AutonomyConfig
     if not AutonomyConfig.kb_enabled():
-        return "Knowledge base is disabled (KB_ENABLED=off)."
+        # D72: name what the owner can DO, not the env flag. He is on a phone;
+        # a flag name is a thing he can only act on by opening a shell.
+        return ("My knowledge base is switched off, so I have nothing to "
+                "search. Turn it on with `polyrob config set KB_ENABLED true` "
+                "(it applies on my next restart).")
     import modules.memory.registry as _reg
     try:
         result = await _reg.kb_search(query, user_id=user_id, limit=5)
@@ -1209,8 +1429,8 @@ def _mode_reply() -> str:
         lines.extend(render_posture_card(prefix="• "))
     except Exception:
         logger.debug("telegram /mode posture card failed", exc_info=True)
-        return ("Could not read the posture card — run `polyrob autonomy status` "
-                "on the box.")
+        return ("I could not read my own posture card. Ask me again in a "
+                "moment, or run `polyrob autonomy status` on my box.")
     lines.append("")
     lines.append("To change: `/config set` is prefs-only; mode/posture are env "
                  "flags — `polyrob autonomy on|off [--mode supervised|autonomous]` "
@@ -1371,7 +1591,15 @@ async def _handle_owner_admin(task_agent: Any, result: InboundResult, cmd: str) 
     if cmd == "/groups":
         _groups_args = result.inbound.text.strip().split()[1:]
         _groups_verb = _groups_args[0].lower() if _groups_args else "list"
-        if _groups_verb in ("mode", "tail"):
+        # 044 T18 + D14: `mode`/`tail` are owner-OR-admin, and so is exactly one
+        # shape of `role` — an admin granting `blocked`. Forwarding only the
+        # first two made that carve-out UNREACHABLE: an admin's
+        # `/groups role here <id> blocked` hit the owner-only gate below and
+        # was refused before `group_ops._gate` ever saw it, so the documented
+        # "an admin may block a disruptive member" did not exist on Telegram.
+        # `group_ops` re-checks the role itself and refuses every other grant,
+        # so forwarding grants ROUTING, never authority.
+        if _groups_verb in ("mode", "tail", "role"):
             from surfaces.telegram import group_ops
             return await group_ops.groups_reply(task_agent, result, _groups_args)
     elif cmd == "/mute":
@@ -1468,18 +1696,46 @@ async def _handle_owner_admin(task_agent: Any, result: InboundResult, cmd: str) 
     # G13: the owner write verbs that used to exist only on the CLI seat. Thin
     # plumbing over the same primitives, kept in owner_ops so this file (already
     # god-file sized) does not grow another five handlers.
+    # 046/E6-E9: the money verbs that shipped with no human seat at all. Each
+    # is a thin `*_reply` helper in its own module (the `token_ops` pattern) so
+    # the REPL and the CLI import the SAME parse and the SAME sentences.
+    # REACH, not policy: every gate under them is untouched.
+    if cmd == "/claim":
+        from surfaces.telegram.claim_ops import claim_reply
+        return await claim_reply(user_id, args)
+    if cmd == "/nft":
+        from surfaces.telegram.nft_ops import nft_reply
+        return await nft_reply(user_id, args)
+    if cmd == "/dapp":
+        from surfaces.telegram.dapp_ops import dapp_reply
+        return dapp_reply(user_id, args)
+    if cmd == "/identity":
+        from surfaces.telegram.identity_ops import identity_reply
+        return await identity_reply(user_id, data_dir, args)
+    if cmd == "/contacts":
+        from surfaces.telegram.contacts_ops import contacts_reply
+        return contacts_reply(user_id, data_dir, args,
+                              container=getattr(task_agent, "container", None))
+    if cmd == "/cwd":
+        return _cwd_reply()
+
     if cmd in ("/cron", "/goal", "/wallet", "/invoices", "/settle", "/trade",
                "/bridge", "/mcp", "/launch", "/deploy", "/lp"):
         from surfaces.telegram import owner_ops
+        # D12: the money-quote helpers are `async def` and AWAITED. They used to
+        # bridge a coroutine onto another loop and BLOCK — stalling the whole
+        # polling loop for the length of a quote, and handing a loop-affine
+        # object to the wrong loop (the 2026-09-15 "Future attached to a
+        # different loop" class of bug).
         if cmd == "/lp":
             from surfaces.telegram.lp_ops import lp_reply
-            return lp_reply(user_id, args)
+            return await lp_reply(user_id, args)
         if cmd in ("/launch", "/deploy"):
             # 042: token creation shipped CLI-only, which means the one person
             # allowed to run it has to SSH to the box. Same lesson as /bridge.
             from surfaces.telegram import token_ops
-            return (token_ops.launch_reply(user_id, args) if cmd == "/launch"
-                    else token_ops.deploy_reply(user_id, args))
+            return (await token_ops.launch_reply(user_id, args) if cmd == "/launch"
+                    else await token_ops.deploy_reply(user_id, args))
         if cmd == "/mcp":
             # Giving the agent a new MCP server used to be a box-side file edit,
             # which the owner (on a phone) could not do.
@@ -1487,7 +1743,7 @@ async def _handle_owner_admin(task_agent: Any, result: InboundResult, cmd: str) 
         if cmd == "/bridge":
             # 037: the bridge shipped CLI-only, so the one person allowed to run
             # it had to SSH to the box. He is usually on a phone.
-            return owner_ops.bridge_reply(user_id, data_dir, args)
+            return await owner_ops.bridge_reply(user_id, data_dir, args)
         if cmd == "/trade":
             # The owner asking IS the authorization a stream leg cannot express.
             return owner_ops.trade_reply(user_id, data_dir, args, board=board)
@@ -1569,17 +1825,28 @@ async def _handle_owner_admin(task_agent: Any, result: InboundResult, cmd: str) 
         if target.lower() == "all":
             if not pending.items:
                 return (pending.degraded_line() or "No pending proposals.")
-            msgs, ok_n, fail_n = [], 0, 0
-            for it in list(pending.items):
-                ok, msg = await _decide_pending_item(
-                    task_agent, it, approve=approve, user_id=user_id,
-                    data_dir=data_dir, instance_id=instance_id, board=board)
-                ok_n, fail_n = (ok_n + 1, fail_n) if ok else (ok_n, fail_n + 1)
-                msgs.append(f"{'✓' if ok else '✗'} {it['kind']}:{it['id']} — {msg}")
+            # D79: the SHARED whole-queue decider
+            # (`approval_queue.decide_all_pending`), not a private loop. Two
+            # implementations of "decide everything" is exactly how "all" came
+            # to mean the self-evolution THIRD of the queue on one seat and the
+            # whole union on another — and this copy also lost the one
+            # per-item exception guard the shared version has, so a single bad
+            # row abandoned every row after it.
+            from core.surfaces.correspondents import CorrespondentRegistry
+            from tools.controller.approval_queue import decide_all_pending
+            try:
+                registry = CorrespondentRegistry(
+                    os.path.join(data_dir, "correspondents.db"))
+            except Exception:
+                logger.warning("telegram: correspondent registry unavailable",
+                               exc_info=True)
+                registry = None
+            ok_n, fail_n, msgs = decide_all_pending(
+                approve=approve, user_id=user_id, home_dir=data_dir,
+                instance_id=instance_id, board=board,
+                correspondent_registry=registry, task_agent=task_agent)
             verb = "approved" if approve else "rejected"
-            msgs.append(f"{ok_n} {verb}, {fail_n} failed")
-            if pending.degraded_line():
-                msgs.append(pending.degraded_line())
+            msgs = list(msgs) + [f"{ok_n} {verb}, {fail_n} failed"]
             return "\n".join(msgs)
         if match is None:
             from tools.controller.approval_queue import resolve_pending_target
@@ -1618,16 +1885,27 @@ async def _handle_owner_admin(task_agent: Any, result: InboundResult, cmd: str) 
                          + (f" (blocks {len(blocks)} goal(s))" if blocks else ""))
             if a.body:
                 lines.append(f"   {a.body[:160]}")
-        lines.append("Fulfilled one? /fulfill <id> unblocks its goals.")
+        lines.append("Fulfilled one? /fulfill <id> unblocks its goals — add "
+                     "your answer after the id and the run is told what you said.")
         return "\n".join(lines)
 
     if cmd == "/fulfill":
         if not args:
-            return "Usage: /fulfill <ask-id> (see /asks)"
-        ok, unblocked = board.fulfill_ask(args[0], user_id=user_id)
+            return "Usage: /fulfill <ask-id> [your answer]  (see /asks)"
+        # A27/D-followup: the owner's written ANSWER rides with the decision.
+        # `GoalBoard.decide_ask(answer=)` stamps it on the ask and carries it
+        # into each unblocked goal's retry prompt, so the run is told WHAT the
+        # owner said and not only THAT it may proceed. The console has had this
+        # seat since the audit; the phone — the seat the owner actually holds —
+        # had no way to type an answer at all.
+        answer = " ".join(args[1:]).strip()
+        ok, unblocked = board.decide_ask(args[0], user_id=user_id, approved=True,
+                                         answer=answer or None)
         if not ok:
             return f"No open ask '{args[0]}' — see /asks."
-        return f"✅ Ask fulfilled — {unblocked} goal(s) unblocked."
+        return (f"✅ Ask fulfilled — {unblocked} goal(s) unblocked."
+                + (f"\nYour answer was passed to the run: {answer[:200]}"
+                   if answer else ""))
 
     from core.surfaces.outbound_allowlist import OutboundAllowlist
     allowlist = OutboundAllowlist(os.path.join(data_dir, "surfaces.db"))
@@ -1838,9 +2116,9 @@ async def _act_on_inbound_locked(
             return None
         if decision.pairing_code:
             return (
-                "🔒 You're not authorized to use this bot yet.\n"
+                "🔒 I'm not allowed to talk to you yet.\n"
                 f"Pairing code: {decision.pairing_code}\n"
-                "Ask the operator to approve it."
+                "Ask my owner to approve it."
             )
         return _UNAUTHORIZED_TEXT
 
@@ -1849,12 +2127,20 @@ async def _act_on_inbound_locked(
         # ONLY to the originating session (never a steer/command/new-session). Use the
         # sender's external address as the untrusted source label.
         src = result.inbound.identity.raw_user_id or result.inbound.identity.user_id
+        # D53: a correspondent's ATTACHMENT is NAMED on the turn and its bytes
+        # are never written into a session workspace — the same rule (and the
+        # same shape) `surfaces/email/inbound.py::_append_attachment_manifest`
+        # applies to mail. Telegram carried no manifest at all, so a
+        # correspondent's photo or document arrived as a turn that silently
+        # mentioned nothing: the agent could not know a file had been sent, and
+        # a captionless one produced an EMPTY correspondent message.
+        _text = _correspondent_text(result)
         try:
             # message_id (email: RFC Message-ID = idempotency key) feeds the durable
             # conversation log so OUR reply can set In-Reply-To (E1/A3).
             from core.surfaces.room_keys import is_group_session_key
             await task_agent.deliver_correspondent_data(
-                decision.session_id, src, result.inbound.text,
+                decision.session_id, src, _text,
                 metadata={"message_id": result.inbound.idempotency_key or ""},
                 surface=getattr(result.inbound.identity.source, "surface_id", None),
                 group=is_group_session_key(decision.session_key),
@@ -2562,10 +2848,29 @@ class TelegramHarness:
             # Owner-allowlist gate (raw Telegram id), BEFORE any side-effecting step.
             tg_id = _tg_user_id(update)
             if tg_id is None and _tg_chat_type(update) != "private" and not _is_channel_post(update):
-                # 044 T3: an anonymous-admin / sender_chat line has no principal.
-                # It is never a command; Phase 2 stores it in the ledger as a member
-                # line. Until then: drop silently, never fall through the allowlist.
-                _record_drop(update, None, "anonymous_sender")
+                # 044 T3: an anonymous-admin / sender_chat line has no principal,
+                # so it is never routed: no tier, no role, no command.
+                # D57: it IS ledgered, as an anonymous member row, before the
+                # drop. The guide has always promised that every allowed-room
+                # line reaches the room log before any gate — and this was the
+                # one line that did not, so the next room turn answered around
+                # a message every human in the room could see.
+                _ledgered = False
+                try:
+                    from core.surfaces.ledger_ingest import record_anonymous_to_ledger
+                    _ledgered = record_anonymous_to_ledger(
+                        self.container, surface="telegram", raw_update=update)
+                except Exception as e:
+                    logger.warning("telegram: anonymous room line not ledgered "
+                                   "(%s) — it will be missing from room context", e)
+                    _ledgered = False
+                # The drop record NAMES whether the line survived as context.
+                # "dropped" and "dropped AND forgotten" are different facts, and
+                # the second one is why a room turn later answers around a
+                # message every human in it can see.
+                _record_drop(update, None,
+                             "anonymous_sender" if _ledgered
+                             else "anonymous_sender_unledgered")
                 return {"ok": True}
             if tg_id is not None and raw_allowlist_applies(update):
                 gate = owner_allowed(tg_id)
@@ -2586,9 +2891,12 @@ class TelegramHarness:
                             self._bootstrap_replied.clear()
                         await self.bot.send_message(
                             chat_id,
-                            "🔓 This bot has no allowlist set, so it is locked by default.\n"
+                            "🔓 Nobody has been allowed to talk to me yet, so I "
+                            "am locked by default and I am not going to answer.\n"
                             f"Your Telegram user ID is: {tg_id}\n"
-                            f"Set ALLOWED_TELEGRAM_USER_IDS={tg_id} and restart to use it.",
+                            f"My operator can let you in with "
+                            f"`polyrob config set ALLOWED_TELEGRAM_USER_IDS {tg_id}` "
+                            f"and a restart.",
                         )
                     _record_drop(update, tg_id, "no_allowlist")
                     return {"ok": True}

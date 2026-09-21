@@ -31,6 +31,51 @@ class GoalFlagsMixin:
         return _bool_env("GOAL_YIELD_FOR_MONEY_RAIL", False)
 
     @staticmethod
+    def goal_yield_grace_sec() -> int:
+        """057 WS-C (B8): seconds a pre-empted goal run gets to stop CLEANLY.
+
+        ``0`` (default) = today's behaviour: the run is cancelled immediately at
+        whatever point the event loop unwinds it. ``N > 0`` first asks the run to
+        stop at its next STEP BOUNDARY (``orchestrator.cancel()``, the cooperative
+        flag the run loop already checks), so the step in flight finishes and its
+        state is saved; the hard cancel fires only after the grace. Prod arms 90."""
+        return _int_env("GOAL_YIELD_GRACE_SEC", 0)
+
+    @staticmethod
+    def goal_resume_same_session() -> bool:
+        """057 WS-C (B9): re-dispatch a YIELDED goal into its OWN session.
+
+        A yielded goal's history is on disk and the resume machine exists
+        (``_recreate_orchestrator`` -> ``load_from_disk``, the self-wake path) —
+        goals never used it, so every re-dispatch was a cold ``create_session``
+        that re-derived everything. Default OFF (byte-identical); prod arms it."""
+        return _bool_env("GOAL_RESUME_SAME_SESSION", False)
+
+    @staticmethod
+    def goal_preflight_enabled() -> bool:
+        """057 WS-C (B10) / 056 WS5 (2b): refuse to CLAIM a goal whose expected
+        runtime crosses the next pre-empting rail's ``next_run_at``.
+
+        Starting a 14-step goal three minutes before the hourly money rail buys a
+        guaranteed yield. Default OFF (byte-identical)."""
+        return _bool_env("GOAL_PREFLIGHT_ENABLED", False)
+
+    @staticmethod
+    def goal_preflight_step_sec() -> int:
+        """Fallback seconds-per-step for the pre-flight when this goal has no
+        measured history (057 WS-C B10). The measured p95 always wins."""
+        return _int_env("GOAL_PREFLIGHT_STEP_SEC", 45)
+
+    @staticmethod
+    def goal_yield_ageing() -> int:
+        """057 WS-C (B11): priority points a goal gains per RECORDED yield.
+
+        A repeatedly pre-empted goal would otherwise queue behind fresh work
+        forever (prod 2026-09-19: one goal yielded 6 times in a night). ``0``
+        (default) = off, byte-identical dispatch order."""
+        return _int_env("GOAL_YIELD_AGEING", 0)
+
+    @staticmethod
     def goal_default_max_steps() -> int:
         """056 WS5: the step budget a goal gets when its payload sets none. Was a
         literal 20 in the dispatcher; agent-created goals (which could not even set

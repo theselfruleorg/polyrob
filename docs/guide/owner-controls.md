@@ -171,7 +171,9 @@ Each entry says which bound held it:
 Two things deliberately do NOT appear there. A `deduped` message is text you
 already received, so there is nothing to recover. And framework run pings
 (`▶ goal started`) are ephemeral status, not content — they would otherwise be
-most of what this list shows. Both are still in `polyrob telemetry`.
+most of what this list shows. Both are still recorded in the telemetry
+event log (`<data home>/telemetry_events.db`), which `polyrob doctor --full`
+and `polyrob journey` read.
 
 ### If you are missing too much
 
@@ -254,6 +256,23 @@ On the command line the same queue is `polyrob owner pending`, and
 `polyrob owner promote|reject <kind> <id>` (or `… promote all`) decides it.
 In the REPL it is `/pending` and `/pending approve <kind> <id>`.
 
+### Answering an ask in words
+
+An **ask** is different from an approval: the agent is not proposing something,
+it is stuck and needs a fact from you. `/asks` lists them.
+
+```
+/asks
+/fulfill <id>                                   # unblock the goals behind it
+/fulfill <id> use the treasury account, not the hot wallet
+```
+
+Everything you type after the id is passed to the run itself, and appears in
+the retry prompt as *the owner answered: …*. Without it the run learns only
+that it may proceed, not what you decided — which is how the same ask comes
+back a second time. The answer is kept on the ask too, so you can see later
+what you said.
+
 ## Apps
 
 A new app address is an owner decision; the agent's deploy records it as
@@ -278,6 +297,39 @@ The supervisor process that actually runs the containers is owner-owned
 (`polyrob apps supervise`, or the unit that calls it) and holds the Docker,
 nginx and firewall privilege the agent never has. Standing it up, including the
 vhost and certificate: [deployment-postures.md](deployment-postures.md).
+
+## The money verbs you can reach from chat
+
+Four rails shipped as AGENT actions with no human seat at all: the owner could
+watch them and could not run them. Each now has the same shape as `/bridge` —
+a **quote by default**, and an explicit `go` to execute. Typing `go` is a
+deliberate second act, never the approval: every cap, the durable owner queue
+and the pause record still apply underneath, unchanged.
+
+```
+/claim <token> [go]                 # collect the creator fees a launchpad owes me
+/nft list|info|transfer|revoke      # what I hold, send one, retire an approval
+/dapp list|revoke <id>              # web pages my wallet is armed for
+/identity register|set-uri [go]     # my own ERC-8004 registration
+/contacts [<surface> <address>]     # who I have written to, and one transcript
+```
+
+Three things worth knowing before you use them:
+
+- **`/nft transfer` always comes to you for approval.** A collectible has no
+  reliable price, so the spend caps cannot bound it and nothing exempts it.
+  There is deliberately no verb that GRANTS an approval over a collection —
+  only one that retires it.
+- **`/identity register` is permanent and happens once.** A second registration
+  would mint a second token and leave two identities with no authority between
+  them, so the verb refuses when a registration already exists, and refuses
+  just as firmly when it cannot READ whether one exists.
+- **`/dapp revoke` binds my durable record immediately**, and a bridge already
+  armed inside a running session holds its own copy of the authorization. To be
+  certain right now, `/pause everything`.
+
+Every one of these is refused from inside a group chat and answered in your
+private chat, like the rest of the money and control verbs.
 
 ## See also
 

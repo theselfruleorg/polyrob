@@ -158,6 +158,14 @@ class AutonomyConfig(GoalFlagsMixin):
     def cron_delivery_enabled() -> bool:
         return _bool_env("CRON_DELIVERY_ENABLED", False)
 
+    @staticmethod
+    def cron_default_max_duration_sec() -> int:
+        """057 WS-C (B12): the per-run hard cap a cron job gets when its creator
+        sets none. It was a dataclass default with no env row, so the only way to
+        change it fleet-wide was to edit two literals — while prod cut 11 of 92
+        runs at the cap in 24 h. Per-job ``--max-duration`` still wins."""
+        return _int_env("CRON_DEFAULT_MAX_DURATION_SEC", 600)
+
     # Owner daily digest: a cron job carrying payload.digest is composed
     # deterministically ($0, no model turn) from the ledger + event log + open
     # asks and pushed via the cron delivery rail. Default OFF.

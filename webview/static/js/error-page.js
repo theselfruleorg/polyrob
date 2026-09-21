@@ -6,35 +6,14 @@
  * module loaded with `src=` instead of an inline `<script>`. Behaviour is
  * preserved byte-for-byte; the session id crosses on the button's
  * `data-session-id` attribute, the copy-layer pattern the shell uses.
+ *
+ * ⚠️ A30 (2026-09-21): the "Force Refresh All Sessions" button is GONE with
+ * its route (`GET /api/refresh`). It walked ~1,790 session directories on the
+ * event loop to rebuild a catalog no surviving screen reads, and a button that
+ * calls a deleted route is worse than no button — it reports a failure the
+ * operator then tries to troubleshoot.
  */
 function bind() {
-  const refresh = document.getElementById("refresh-all-sessions");
-  if (refresh) {
-    refresh.addEventListener("click", function () {
-      this.disabled = true;
-      this.innerHTML = '<span class="action-prefix">></span> Refreshing...';
-
-      fetch("/api/refresh")
-        .then((response) => response.json())
-        .then((data) => {
-          if (data.status === "ok") {
-            this.innerHTML = '<span class="action-prefix">></span> Success! Sessions Refreshed';
-            setTimeout(() => {
-              window.location.href = "/";
-            }, 1000);
-          } else {
-            this.innerHTML = '<span class="action-prefix">></span> Error: ' + data.message;
-            this.disabled = false;
-          }
-        })
-        .catch((error) => {
-          console.error("Error refreshing sessions:", error);
-          this.innerHTML = '<span class="action-prefix">></span> Error Refreshing';
-          this.disabled = false;
-        });
-    });
-  }
-
   const repairBtn = document.getElementById("repair-session");
   if (repairBtn) {
     repairBtn.addEventListener("click", function () {

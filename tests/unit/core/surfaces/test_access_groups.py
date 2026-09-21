@@ -220,9 +220,16 @@ def test_roles_key_on_the_raw_platform_id(workdir):
     assert ident.chat_role == "admin"
 
 
-def test_a_role_store_fault_reads_as_member_never_as_admin(workdir, monkeypatch):
-    """Fail-closed toward the LEAST privilege: an unreadable role store makes
-    everyone a member (data), never an admin (a steer)."""
+def test_a_role_store_fault_reads_as_blocked_never_as_member(workdir, monkeypatch):
+    """D3: fail-CLOSED to ``blocked``, not to ``member``.
+
+    Answering ``member`` was called "least privilege" and is not: ``blocked``
+    is the room's ONLY per-member deny and it lives in the very store this read
+    consults, so an unreadable store un-blocked everyone an owner had blocked.
+    The owner principal is resolved before any row is read, so this can never
+    lock the owner out of his own room.
+    """
+    import core.surfaces.access as access
     _allow(workdir)
     _roles(workdir).grant("discord", "chan-1", "u_admin", "admin", granted_by="rob")
 
@@ -232,11 +239,31 @@ def test_a_role_store_fault_reads_as_member_never_as_admin(workdir, monkeypatch)
         raise RuntimeError("role store unreadable")
 
     monkeypatch.setattr(gr.GroupRoles, "role", _boom)
+    access._ROLE_FAULT_WARNED.clear()
     c = _Container(workdir)
     env = {"GROUP_CHAT_ENABLED": "true", "POLYROB_OWNER_USER_ID": "u_owner"}
     ident = _identity("u_admin")
-    assert resolve_access_tier(c, ident, env=env) == AccessTier.GROUP_MEMBER
-    assert ident.chat_role == "member"
+    assert resolve_access_tier(c, ident, env=env) == AccessTier.DENIED
+    assert ident.chat_role == "blocked"
+
+
+def test_a_role_store_fault_never_locks_the_owner_out(workdir, monkeypatch):
+    """The other half of D3: the owner is resolved from the PRINCIPAL, before
+    any row is read, so the fail-closed role read cannot reach him."""
+    import core.surfaces.access as access
+    import core.surfaces.group_roles as gr
+    _allow(workdir)
+
+    def _boom(*a, **kw):
+        raise RuntimeError("role store unreadable")
+
+    monkeypatch.setattr(gr.GroupRoles, "role", _boom)
+    access._ROLE_FAULT_WARNED.clear()
+    c = _Container(workdir)
+    env = {"GROUP_CHAT_ENABLED": "true", "POLYROB_OWNER_USER_ID": "u_owner"}
+    ident = _identity("u_owner")
+    assert resolve_access_tier(c, ident, env=env) == AccessTier.OWNER
+    assert ident.chat_role == "owner"
 
 
 def test_a_paired_user_is_a_room_MEMBER_not_the_room_owner(workdir):

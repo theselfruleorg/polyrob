@@ -85,15 +85,27 @@ def _cron_service(data_dir: str):
 
 
 def _cron_off_note() -> str:
-    """A stored job only runs if the ticker is on — never mislead the owner."""
+    """A stored job only runs if the ticker is on — never mislead the owner.
+
+    ⚠️ D41: a PROBE FAULT used to return ``""``, i.e. the same answer as "the
+    ticker is on" — so the one case where we know least produced the most
+    reassuring reply. An unreadable probe now says it is unreadable.
+
+    ⚠️ D72: names the VERB the owner can run, not the env flag. The flag is not
+    something he can reach from a phone; `polyrob autonomy status` is.
+    """
     try:
         from tools.cronjob_tools import cron_enabled
         if cron_enabled():
             return ""
-    except Exception:
-        logger.debug("cron enablement probe failed", exc_info=True)
-        return ""
-    return ("\n⚠️ CRON_ENABLED is off — the job is stored but no ticker will run it.")
+    except Exception as exc:
+        logger.warning("cron enablement probe failed", exc_info=True)
+        return (f"\n⚠️ I could not check whether my scheduler is running "
+                f"({type(exc).__name__}) — the job is stored, but I cannot "
+                f"promise anything will run it. Check with "
+                f"`polyrob autonomy status`.")
+    return ("\n⚠️ My scheduler is switched off — the job is stored but nothing "
+            "will run it. Turn it on with `polyrob autonomy on`.")
 
 
 def _fmt_job(job) -> str:
@@ -186,11 +198,17 @@ def trade_reply(user_id: Optional[str], data_dir: str, args: List[str],
                 board: Optional[Any] = None) -> str:
     """``/trade <what to do>`` — seed a run that actually carries the money verb.
 
-    A money verb reaches a run only through a stream leg in
-    ``data/streams/streams.yaml``, which seeds on a timer. Everything the agent
-    writes for ITSELF has money stripped by ``goal_create`` — correctly, since
-    an injected goal must never trade — so "bridge my SOL" produced a goal that
-    looked fine and could never execute, roughly fifty times over.
+    Everything the agent writes for ITSELF has money stripped by ``goal_create``
+    — correctly, since an injected goal must never trade — so "bridge my SOL"
+    produced a goal that looked fine and could never execute, roughly fifty
+    times over.
+
+    ⚠️ D71: this used to say a money verb "reaches a run only through a stream
+    leg in ``data/streams/streams.yaml``". That file does not exist: the shipped
+    manifest, its seeder and its timer were DELETED on 2026-09-11 (the harness
+    ships no work). A run carries a money verb because an OWNER put one in
+    ``payload.tools`` from an authenticated seat — this verb, ``polyrob goals
+    create --tools``, or the console. That is the whole list.
 
     The signal the system was throwing away is that the OWNER asking, from an
     authenticated seat, IS the authorization. This verb carries it into the
@@ -258,6 +276,51 @@ _GOAL_TRANSITIONS = {
 
 _OBJECTIVE_STATUS_VERBS = {"pause": "paused", "activate": "active", "drop": "dropped"}
 
+#: How many recent rows a short-id prefix is resolved against (D11/E21).
+#: ``list_recent`` is newest-first, so this window holds what an owner is
+#: plausibly looking at; a FULL id still resolves through ``board.get``
+#: whatever its age.
+_ID_WINDOW = 200
+
+
+def _resolve_goal(board: Any, user_id: str, ref: str):
+    """``(goal, None)`` or ``(None, refusal_text)`` for a goal id or prefix.
+
+    ⚠️ D11/E21: this used ``board.list(user_id=…, limit=1000)``, which is the
+    DISPATCHER's order (``priority DESC, created_at ASC``). Used as a lookup
+    window it evicts the newest low-priority rows first — exactly the eviction
+    that made the agent's own ``goal_list`` show the oldest 100 rows and zero
+    stream legs on 2026-08-29 — so the owner could be told "no match" for a
+    goal he was reading about one message earlier.
+
+    Order of attempts: the FULL id through ``board.get`` (tenant-scoped, any
+    age, no window at all), then a prefix over ``list_recent`` (newest-first).
+    """
+    ref = (ref or "").strip()
+    if not ref:
+        return None, "Usage: /goal <verb> <id> (see /goals)"
+    try:
+        exact = board.get(ref, user_id=user_id)
+    except Exception as exc:
+        logger.warning("goal lookup failed for %r", ref, exc_info=True)
+        return None, (f"I could not read the goal board ({type(exc).__name__}: "
+                      f"{str(exc)[:100]}) — that is UNKNOWN, not 'no such goal'.")
+    from agents.task.goals.board import KIND_GOAL
+    if exact is not None and exact.kind == KIND_GOAL:
+        return exact, None
+    try:
+        recent = [g for g in board.list_recent(user_id=user_id, limit=_ID_WINDOW)
+                  if g.kind == KIND_GOAL]
+    except Exception as exc:
+        logger.warning("goal board list_recent failed", exc_info=True)
+        return None, (f"I could not read the goal board ({type(exc).__name__}: "
+                      f"{str(exc)[:100]}) — that is UNKNOWN, not 'no such goal'.")
+    goal_id, err = resolve_prefix(ref, [g.id for g in recent])
+    if err:
+        return None, (f"{err} among my {len(recent)} most recent goals — "
+                      f"see /goals, or give the full id.")
+    return next(g for g in recent if g.id == goal_id), None
+
 
 def _objective_reply(user_id: str, board: Any, rest: List[str]) -> str:
     """`/goal objective <list|pause|activate|drop> [id]` — steer a whole stream.
@@ -277,10 +340,15 @@ def _objective_reply(user_id: str, board: Any, rest: List[str]) -> str:
                     "polyrob goals objective add \"<title>\"")
         lines = [f"{len(objs)} objective(s):"]
         for o in objs:
+            # D39: an unreadable child list is NOT zero children. Rendering "0
+            # live" over a read fault told the owner his objective had gone
+            # quiet when in fact nothing had been read.
             try:
-                live = len(board.children_of(user_id, o.id))
+                live = str(len(board.children_of(user_id, o.id)))
             except Exception:
-                live = 0
+                logger.warning("objective children unreadable for %s", o.id,
+                               exc_info=True)
+                live = "?"
             lines.append(f"• {_code(o.id[:8])} [{o.status}] {o.title} — {live} live")
         lines.append("Steer with /goal objective <pause|activate|drop> <id>.")
         return "\n".join(lines)
@@ -310,7 +378,7 @@ def goal_reply(user_id: str, data_dir: str, args: List[str],
     ``board`` lets the caller share an already-open GoalBoard (the harness opens
     one per request) instead of opening a second connection to the same file.
     """
-    from agents.task.goals.board import KIND_GOAL, GoalBoard
+    from agents.task.goals.board import GoalBoard
     if board is None:
         from core.runtime_paths import goals_db_path
         board = GoalBoard(goals_db_path(data_dir))
@@ -325,11 +393,10 @@ def goal_reply(user_id: str, data_dir: str, args: List[str],
     if not rest:
         return f"Usage: /goal {verb} <id> (see /goals)"
 
-    mine = [g for g in board.list(user_id=user_id, limit=1000) if g.kind == KIND_GOAL]
-    goal_id, err = resolve_prefix(rest[0], [g.id for g in mine])
+    goal, err = _resolve_goal(board, user_id, rest[0])
     if err:
-        return f"{err} — see /goals."
-    goal = next(g for g in mine if g.id == goal_id)
+        return err
+    goal_id = goal.id
 
     if verb == "show":
         out = [f"{_code(goal.id[:8])} [{goal.status}] {goal.title}"]
@@ -384,13 +451,22 @@ def goal_reply(user_id: str, data_dir: str, args: List[str],
 # /wallet  (read-only by design)
 # ---------------------------------------------------------------------------
 
-#: Why the cap-raising path is deliberately absent from chat.
+#: How the owner changes a cap FROM CHAT (D17).
+#:
+#: ⚠️ This used to send him to SSH: "caps are env-authoritative … plus a
+#: restart". That stopped being true on 2026-09-18, when the per-transaction
+#: ceiling became an owner-approved preference that RAISES the env value,
+#: clamped by the daily cap. He approved a raise twice while this note told him
+#: it could not work, and the agent then asked him to edit an env file.
 _CAP_NOTE = (
-    "Caps are env-authoritative and a raise needs the env file the running "
-    "process reads (a systemd deploy reads its own, e.g. "
-    "`/etc/polyrob/polyrob.env`) plus a restart — which chat must never write.\n"
-    "To TIGHTEN one from here: /config set budget.wallet_daily_usd <usd> "
-    "(guarded → /pending → /approve, applies live, can only lower)."
+    "Change the per-transaction ceiling from here: /config set "
+    "budget.wallet_per_tx_usd <usd> (guarded → /pending → /approve, applies "
+    "live). It is clamped to the daily cap, so the most a single move can "
+    "lose is never more than a whole day may.\n"
+    "Tighten the daily cap the same way: /config set budget.wallet_daily_usd "
+    "<usd> — that one can only ever LOWER what the operator set, so no chat "
+    "message can widen the maximum daily loss.\n"
+    "Change how much runs without asking you: /wallet autonomous <usd>."
 )
 
 
@@ -473,7 +549,12 @@ def wallet_reply(args: List[str], user_id: Optional[str] = None,
         logger.debug("wallet read failed", exc_info=True)
         return f"Wallet unavailable: {e}"
     if w is None:
-        return "Agent wallet is not enabled (AGENT_WALLET_ENABLED)."
+        # D72: name what the owner can DO. A flag name on a phone screen is
+        # something he can only act on by opening a shell.
+        return ("I have no wallet — one has not been enabled for me, so I "
+                "hold no funds and can move none. Arm it with "
+                "`polyrob config set AGENT_WALLET_ENABLED true` (it applies on "
+                "my next restart).")
 
     cfg = w.config
     try:
@@ -485,10 +566,19 @@ def wallet_reply(args: List[str], user_id: Optional[str] = None,
     # The Solana identity off the same seed (2026-08-27): the owner must see —
     # and be able to fund — this address from the same glance, or it stays
     # invisible until a Solana trade fails on an empty fee balance.
+    #
+    # ⚠️ D40: a derivation FAULT used to hide the line entirely, which reads
+    # exactly like "this wallet has no Solana identity" — and the owner then
+    # funds nothing and a Solana trade fails later on an empty fee balance. An
+    # address we could not derive is named as unavailable, with the reason.
     try:
         sol_addr = w.solana_address
-    except Exception:
+    except Exception as exc:
+        logger.warning("solana address derivation failed", exc_info=True)
         sol_addr = None
+        lines.append(f"Solana: unavailable ({type(exc).__name__}: "
+                     f"{str(exc)[:80]}) — I could not derive it, which is not "
+                     f"the same as not having one.")
     if sol_addr:
         lines.append(f"Solana: {_code(sol_addr)}")
     if want_balances:
@@ -497,16 +587,45 @@ def wallet_reply(args: List[str], user_id: Optional[str] = None,
                          f"{cfg.network})")
         else:
             lines.extend(_wallet_balance_lines(w))
-    daily = (f"${cfg.daily_cap_usd:.2f}" if cfg.daily_cap_usd is not None
-             else "UNLIMITED")
-    lines.append(f"Caps: ${cfg.max_per_tx_usd:.2f}/tx · daily {daily}")
-    if cfg.daily_cap_usd is None:
-        lines.append("⚠️ The per-tx cap is a catastrophic-loss ceiling, not a "
-                     "budget, and the daily cap is unlimited.")
+    lines.extend(_cap_lines(user_id, cfg))
     if not want_balances:
         lines.append("/wallet balances reads the on-chain amounts.")
     lines.append(_CAP_NOTE)
     return "\n".join(lines)
+
+
+def _cap_lines(user_id: Optional[str], cfg: Any) -> List[str]:
+    """The caps the GATE will actually apply, not the ones it was BUILT with.
+
+    ⚠️ D16: ``cfg`` is the ``WalletConfig`` frozen when the process-wide wallet
+    singleton was constructed. Since 2026-09-18 the live gate re-resolves both
+    caps per spend (``PolicyGate._refresh_caps`` → ``effective_max_per_tx_usd``
+    / ``effective_daily_cap_usd``), so an owner-approved raise applied
+    immediately to SPENDING and never to this readout — the one screen he
+    checks to confirm the raise landed. Read the same resolvers the gate does.
+
+    Fail-open to the constructed values, LABELLED: a cap we could not re-resolve
+    must not be printed as though it were the live one.
+    """
+    from core.runtime_paths import prefs_home_dir
+    try:
+        from core.wallet.config import (effective_daily_cap_usd,
+                                        effective_max_per_tx_usd)
+        home = prefs_home_dir()
+        per_tx = effective_max_per_tx_usd(user_id, home)
+        daily_value = effective_daily_cap_usd(user_id, home)
+        stale = ""
+    except Exception as exc:
+        logger.warning("effective wallet caps unreadable", exc_info=True)
+        per_tx, daily_value = cfg.max_per_tx_usd, cfg.daily_cap_usd
+        stale = (f" ⚠️ these are the values I started with — I could not "
+                 f"re-read the live ones ({type(exc).__name__})")
+    daily = f"${daily_value:.2f}" if daily_value is not None else "UNLIMITED"
+    out = [f"Caps: ${per_tx:.2f}/tx · daily {daily}{stale}"]
+    if daily_value is None:
+        out.append("⚠️ The per-tx cap is a catastrophic-loss ceiling, not a "
+                   "budget, and the daily cap is unlimited.")
+    return out
 
 
 #: Venues that hold a same-chain float at their DERIVED address. hyperliquid
@@ -568,15 +687,24 @@ def _invoicing_off_note() -> str:
 
 
 async def invoices_reply(user_id: str, args: List[str]) -> str:
-    """`/invoices [pending|completed|expired]` — the agent's receivables."""
+    """`/invoices [<status>]` — the agent's receivables.
+
+    ⚠️ The filter vocabulary is ``modules.x402.invoicing.INVOICE_STATUSES``,
+    imported and never re-listed. This seat carried its own
+    ``pending|completed|expired`` triple, so the two states that matter most
+    were unaskable: ``settling`` (claimed, facilitator in flight) and
+    ``refund_due`` — money the agent TOOK and owes back. A row in either state
+    simply disappeared from this seat the moment it was written.
+    """
+    from modules.x402.invoicing import INVOICE_STATUSES, list_payment_requests
+    _usage = f"Usage: /invoices [{'|'.join(INVOICE_STATUSES)}]"
     status = None
     if args:
         candidate = args[0].lower()
-        if candidate in ("pending", "completed", "expired"):
+        if candidate in INVOICE_STATUSES:
             status = candidate
         else:
-            return ("Usage: /invoices [pending|completed|expired]")
-    from modules.x402.invoicing import list_payment_requests
+            return _usage
     try:
         rows = await list_payment_requests(user_id=user_id, status=status, limit=50)
     except Exception as e:
@@ -598,6 +726,14 @@ async def invoices_reply(user_id: str, args: List[str]) -> str:
     if more:
         lines.append(more)
     lines.append("Mark one paid: /settle <id> [tx-hash]")
+    # A `refund_due` row is money the agent TOOK and owes back, so it must not
+    # sit in the list under the same one-line remedy as a pending receivable.
+    _owed = [r for r in rows if str(r.get("status")) == "refund_due"]
+    if _owed:
+        _owed_usd = sum(float(r.get("amount_usd") or 0) for r in _owed)
+        lines.append(f"⚠️ {len(_owed)} of these are REFUNDS I owe "
+                     f"(${_owed_usd:.2f}) — paid for work that then failed. "
+                     f"`/invoices refund_due` lists only those.")
     note = _invoicing_off_note()
     if note:
         lines.append(note.strip())
@@ -641,8 +777,27 @@ async def settle_reply(user_id: str, args: List[str]) -> str:
 # /bridge (037)
 # ---------------------------------------------------------------------------
 
-def bridge_reply(user_id: Optional[str], data_dir: str, args: List[str]) -> str:
-    """`/bridge <from> <to> <amount> [go]` — move NATIVE value between chains.
+def bridge_chain_names() -> str:
+    """The destination chains this build actually knows, from the ONE registry.
+
+    ⚠️ C62: this was a hand-typed list ("solana, base, robinhood, ethereum,
+    arbitrum, polygon") that could only ever drift from
+    ``core.wallet.chains``. Fail-open to naming the remedy rather than a stale
+    list — a wrong list of money chains is worse than no list.
+    """
+    try:
+        from core.wallet import chains as _chains
+        names = sorted(set(_chains.names()) | {"solana"})
+        return ", ".join(names)
+    except Exception:
+        logger.warning("chain registry unreadable for /bridge usage",
+                       exc_info=True)
+        return "(I could not read my chain registry — try `/book`)"
+
+
+async def bridge_reply(user_id: Optional[str], data_dir: str,
+                       args: List[str]) -> str:
+    """`/bridge <from> <to> <amount> [as <asset>] [go]` — move value across chains.
 
     Why this exists: the bridge shipped CLI-only, which meant the one person
     allowed to run it had to SSH to the box. The owner's standing directive is
@@ -653,20 +808,48 @@ def bridge_reply(user_id: Optional[str], data_dir: str, args: List[str]) -> str:
     `go` executes: within the autonomous ceiling it runs and reports; above it,
     the durable owner-approval queue holds it — typing `go` is a deliberate
     second act, not the approval itself.
+
+    ⚠️ D12: ``async`` and awaited. This used to call ``asyncio.run`` on the
+    polling loop's own thread, catch the resulting ``RuntimeError`` and hand the
+    coroutine to a thread pool, then BLOCK on ``.result()`` — so every inbound
+    Telegram update stalled for the whole quote (a bridge quote is seconds of
+    network), and any loop-affine object the verb touched belonged to the wrong
+    loop. The rail underneath is async; this seat is async.
+
+    ⚠️ C63: ``as <asset>`` names the DESTINATION asset (``BridgeParams.
+    token_out``) — ``native`` by default, or a token PINNED in the destination
+    chain's registry row. An arbitrary address is refused by the rail, not here.
     """
     if not user_id:
         return "Only the owner can bridge."
     if len(args) < 3:
-        return ("Usage: /bridge <from> <to> <amount> [go]\n"
-                "e.g. /bridge solana robinhood 0.9      — quote only\n"
-                "     /bridge solana robinhood 0.9 go   — execute\n\n"
-                "Chains: solana, base, robinhood, ethereum, arbitrum, polygon.\n"
-                "NATIVE asset only (SOL on solana, ETH on an EVM chain).\n"
+        return ("Usage: /bridge <from> <to> <amount> [as <asset>] [go]\n"
+                "e.g. /bridge solana robinhood 0.9          — quote only\n"
+                "     /bridge solana robinhood 0.9 go       — execute\n"
+                "     /bridge solana base 0.9 as usdc go    — arrive in USDC\n\n"
+                f"Chains: {bridge_chain_names()}.\n"
+                "Origin asset is NATIVE only (SOL on solana, ETH on an EVM "
+                "chain). `as` picks what ARRIVES: native (default), or a token "
+                "pinned for that chain.\n"
                 "Under your autonomous ceiling it runs and reports; above it, "
                 "it waits for you in /pending.")
 
-    from_chain, to_chain, amount_raw = args[0], args[1], args[2]
-    execute = len(args) > 3 and args[3].lower() in ("go", "execute", "confirm")
+    tokens = list(args)
+    execute = False
+    if tokens and tokens[-1].lower() in ("go", "execute", "confirm"):
+        execute = True
+        tokens.pop()
+
+    token_out = "native"
+    for i, word in enumerate(tokens):
+        if word.lower() in ("as", "into", "to_asset") and i + 1 < len(tokens):
+            token_out = tokens[i + 1]
+            tokens = tokens[:i] + tokens[i + 2:]
+            break
+
+    if len(tokens) < 3:
+        return "Usage: /bridge <from> <to> <amount> [as <asset>] [go]"
+    from_chain, to_chain, amount_raw = tokens[0], tokens[1], tokens[2]
     try:
         amount = float(amount_raw)
         if amount <= 0:
@@ -674,7 +857,6 @@ def bridge_reply(user_id: Optional[str], data_dir: str, args: List[str]) -> str:
     except ValueError:
         return f"Amount must be a positive number, got {amount_raw!r}."
 
-    import asyncio
     from types import SimpleNamespace
 
     try:
@@ -684,18 +866,13 @@ def bridge_reply(user_id: Optional[str], data_dir: str, args: List[str]) -> str:
         return f"The bridge rail is unavailable: {exc}"
 
     params = BridgeParams(from_chain=from_chain, to_chain=to_chain,
-                          amount=amount, dry_run=not execute)
+                          amount=amount, token_out=token_out,
+                          dry_run=not execute)
     # A genuine owner chat turn. Not forged, not a sub-agent — the same seat the
     # CLI is, reached from the phone instead of a shell.
     ctx = SimpleNamespace(user_id=user_id, role="owner", is_sub_agent=False)
     try:
-        result = asyncio.run(perform_bridge(DefiTradeTool(), params, ctx))
-    except RuntimeError:
-        # Already inside a loop (the surface runs async) — hand it to a thread.
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            result = pool.submit(
-                asyncio.run, perform_bridge(DefiTradeTool(), params, ctx)).result()
+        result = await perform_bridge(DefiTradeTool(), params, ctx)
     except Exception as exc:
         logger.warning("bridge verb failed", exc_info=True)
         return f"The bridge did not run: {exc}"
@@ -708,8 +885,9 @@ def bridge_reply(user_id: Optional[str], data_dir: str, args: List[str]) -> str:
                 "bug — do NOT retry until it is understood; assume nothing "
                 "about what happened to the funds.")
     if not execute:
+        _as = f" as {token_out}" if token_out != "native" else ""
         body += ("\n\nAdd `go` to execute: "
-                 f"/bridge {from_chain} {to_chain} {amount_raw} go")
+                 f"/bridge {from_chain} {to_chain} {amount_raw}{_as} go")
     return body
 
 

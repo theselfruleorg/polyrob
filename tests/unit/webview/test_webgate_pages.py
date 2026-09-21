@@ -322,16 +322,25 @@ def test_doctor_endpoint_matches_real_report():
     client, _pages = _router_client()
     r = client.get("/api/webgate/doctor")
     assert r.status_code == 200
-    assert r.json()["checks"] == doctor_report(dict(os.environ), local_absent_means_on=False)
+    body = r.json()
+    # A failed build is NAMED (checks=None + checks_error), never a silent [].
+    assert body["checks"] is not None, f"doctor_report failed in the endpoint: {body.get('checks_error')}"
+    direct = doctor_report(dict(os.environ), local_absent_means_on=False)
+    if body["checks"] != direct:  # pytest truncates the repr; keep the whole diff
+        import json as _json
+        with open("/tmp/iface-audit/doctor_diff.json", "w") as fh:
+            _json.dump({"endpoint": body["checks"], "direct": direct}, fh, indent=1)
+    assert body["checks"] == direct
 
 
 # --------------------------------------------------------------------------- #
 # Pages render 200 in single-user mode (via the real server, P1 reload pattern)
 # --------------------------------------------------------------------------- #
 
-# 043 §9 phase 4: /memory, /identity, /system pages deleted; /pending is the
-# surviving legacy webgate page that renders on the real server.
-@pytest.mark.parametrize("path", ["/pending"])
+# 043 §9 phase 4 deleted /memory, /identity and /system; A21 (2026-09-21)
+# deleted /pending, the last legacy webgate PAGE. The five-destination shell is
+# the console now, so that is what must render on the real server.
+@pytest.mark.parametrize("path", ["/", "/inbox", "/work", "/money", "/agent"])
 def test_pages_render_200_single_user(monkeypatch, path):
     server = _reload_server(monkeypatch, multitenant=False)
     client = TestClient(server._fastapi)
@@ -351,8 +360,7 @@ def test_api_endpoints_mounted_on_server(monkeypatch):
     server = _reload_server(monkeypatch, multitenant=False)
     client = TestClient(server._fastapi)
     for p in ("/api/webgate/memory", "/api/webgate/goals", "/api/webgate/cron",
-              "/api/webgate/identity", "/api/webgate/doctor",
-              "/pending"):
+              "/api/webgate/identity", "/api/webgate/doctor"):
         assert client.get(p).status_code != 404, f"{p} not mounted on _fastapi"
 
 

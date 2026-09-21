@@ -55,6 +55,24 @@ REPL_REMEDIES: Dict[str, Sequence[Tuple[str, str]]] = {
          ("no", "/pending reject {kind} {id}")),
 }
 
+#: The `polyrob` CLI. Its verbs are `polyrob owner …`, not slash commands —
+#: `polyrob owner inbox` used to render :data:`REPL_REMEDIES`, so every card
+#: under it told the operator to type `/pending approve …` at a shell prompt,
+#: which is not a command on any seat they were looking at (C21).
+CLI_REMEDIES: Dict[str, Sequence[Tuple[str, str]]] = {
+    "app": (("yes", "polyrob apps approve {id}"),
+            ("no", "polyrob apps reject {id}")),
+    "ask": (("mark it done", "polyrob owner fulfill {id}"),),
+    "tool_approval": (("yes", "polyrob owner promote tool_approval {id}"),
+                      ("no", "polyrob owner reject tool_approval {id}")),
+    "correspondent": (("yes", "polyrob owner promote correspondent {id}"),
+                      ("no", "polyrob owner reject correspondent {id}")),
+    KIND_UNREADABLE: (("look", "polyrob owner inbox"),
+                      ("why", "polyrob doctor --full")),
+    "": (("yes", "polyrob owner promote {kind} {id}"),
+         ("no", "polyrob owner reject {kind} {id}")),
+}
+
 #: Telegram. Its ``/approve`` IS the decider.
 #:
 #: 2026-09-15: the default row was ``/approve {id}``, and a chat client links

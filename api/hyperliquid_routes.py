@@ -31,27 +31,22 @@ logger = get_component_logger("HyperliquidAPI")
 
 
 def get_hyperliquid_tool(request: Request) -> HyperliquidTool:
-    """Get HyperliquidTool from container"""
-    container = getattr(request.app.state, "container", None)
-    if not container:
-        raise HTTPException(status_code=503, detail="Service container not available")
+    """Get HyperliquidTool from the container.
 
-    tool = container.get_service("hyperliquid")
-    if not tool:
-        raise HTTPException(status_code=503, detail="Hyperliquid service not available")
-    return tool
+    B31: reads the container through the shared ``require_service`` seam (the
+    ONE container-fetch + 503 four-liner). The hand-rolled version read
+    ``request.app.state.container``, which ``api/app.py`` never sets — so every
+    route on this router answered 503 "Service container not available"
+    regardless of whether the service was registered.
+    """
+    from api.dependencies import require_service
+    return require_service("hyperliquid", missing="Hyperliquid service not available")
 
 
 def get_hyperliquid_db(request: Request) -> HyperliquidDBHandler:
-    """Get HyperliquidDBHandler from container"""
-    container = getattr(request.app.state, "container", None)
-    if not container:
-        raise HTTPException(status_code=503, detail="Service container not available")
-
-    db = container.get_service("hyperliquid_db")
-    if not db:
-        raise HTTPException(status_code=503, detail="Hyperliquid database not available")
-    return db
+    """Get HyperliquidDBHandler from the container (see get_hyperliquid_tool)."""
+    from api.dependencies import require_service
+    return require_service("hyperliquid_db", missing="Hyperliquid database not available")
 
 
 # =============================================================================

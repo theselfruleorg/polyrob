@@ -22,7 +22,16 @@ logger = logging.getLogger(__name__)
 # Generous cap — emails are long-form; the base split_message will still chunk if a
 # single body somehow exceeds this (one email per chunk).
 _EMAIL_MAX = 1_000_000
+#: Subject for a reply into an existing thread. D70: this used to be the ONLY
+#: subject, so a proactive notice ("your scheduled run finished") also arrived
+#: as "Re: your message" — a reply header on something that answers nothing,
+#: which every mail client threads under an unrelated conversation. A producer
+#: that knows what the message IS passes a subject through the router
+#: (`core.surfaces.user_delivery.notice_subject`); only a genuine reply, into a
+#: thread we have an inbound Message-ID for, falls back to this.
 _DEFAULT_SUBJECT = "Re: your message"
+#: Subject when there is no thread to reply to and no producer subject.
+_UNTHREADED_SUBJECT = "[POLYROB] message from your agent"
 
 
 def address_from_session_key(session_key: str) -> str:
@@ -65,8 +74,6 @@ class EmailSurface(Surface):
         if await self._finalize_live_on_send(msg):
             return SendResult(success=True)
         addr = address_from_session_key(msg.session_key)
-        subject = (msg.media[0].get("subject") if msg.media and isinstance(msg.media[0], dict)
-                   else None) or self._default_subject
         # Path-bearing entries become attachments; the legacy {"subject": ...}-only
         # entry above stays subject metadata, never an attachment (no "path" key).
         attachments = [m.get("path") for m in (msg.media or [])
@@ -85,14 +92,25 @@ class EmailSurface(Surface):
                        "email not sent (raise CORRESPONDENT_MAX_NEW_PER_DAY or approve "
                        "pending correspondents)"))
         try:
-            chat_row = self._chat_row(msg.session_key)
+            # D31: a PROACTIVE email rides a synthetic `direct:email:<addr>`
+            # key that no session_chat_registry row answers, so chat_row was
+            # None and BOTH the conversation record and the thread anchor were
+            # skipped — the recipient's reply had no Message-ID to resolve on
+            # and no transcript to read. Fall back to the correspondent binding
+            # for this address, which is the same tenant/session the seed above
+            # just wrote.
+            chat_row = self._chat_row(msg.session_key) or self._binding_row(addr)
+            irt = self._last_inbound_mid(chat_row, addr)
+            subject = (
+                (msg.media[0].get("subject")
+                 if msg.media and isinstance(msg.media[0], dict) else None)
+                or (self._default_subject if irt else _UNTHREADED_SUBJECT))
             # A3: prefer the Message-ID-returning sender so the outbound can be
             # bound to a thread anchor (reply In-Reply-To -> exact resolve), and
             # thread OUR reply into the correspondent's mailbox via In-Reply-To
             # (last inbound Message-ID from the conversation store).
             sender_ex = getattr(self._sender, "send_email_ex", None)
             if callable(sender_ex):
-                irt = self._last_inbound_mid(chat_row, addr)
                 mid = await sender_ex(addr, subject, msg.text or "",
                                       attachments=attachments, in_reply_to=irt)
                 ok = bool(mid)
@@ -102,7 +120,8 @@ class EmailSurface(Surface):
                                                    attachments=attachments)
             if ok:
                 if mid:
-                    self._maybe_seed_thread_anchor(msg.session_key, addr, str(mid))
+                    self._maybe_seed_thread_anchor(msg.session_key, addr, str(mid),
+                                                   row=chat_row)
                 self._record_outbound_conversation(chat_row, addr, msg.text or "",
                                                    mid, subject)
             return SendResult(success=bool(ok))
@@ -131,7 +150,9 @@ class EmailSurface(Surface):
                 thread_id=None, provenance="owner",
             )
         except Exception as e:
-            logger.debug("EmailSurface correspondent seed skipped: %s", e)
+            logger.warning("EmailSurface correspondent seed skipped for %s: %s — "
+                           "a reply from this address may not route back",
+                           addr, e, exc_info=True)
             return None
 
     def _chat_row(self, session_key: str) -> Any:
@@ -142,14 +163,39 @@ class EmailSurface(Surface):
         try:
             chat_reg = container.get_service("session_chat_registry")
             return chat_reg.resolve(session_key) if chat_reg else None
-        except Exception:
+        except Exception as e:
+            logger.warning("EmailSurface chat-row lookup failed for %s: %s",
+                           session_key, e, exc_info=True)
             return None
+
+    def _binding_row(self, addr: str):
+        """The correspondent binding for *addr* as a chat-row-shaped dict (D31).
+
+        ``{'session_id', 'user_id'}`` is all the two recorders need. None when
+        there is no binding (nothing to record against) or the lookup faults.
+        """
+        container = self._container
+        if container is None:
+            return None
+        try:
+            registry = container.get_service("correspondent_registry")
+            row = (registry.resolve(surface="email", address=addr)
+                   if registry is not None else None)
+        except Exception as e:
+            logger.warning("EmailSurface binding lookup failed for %s: %s",
+                           addr, e, exc_info=True)
+            return None
+        if not row:
+            return None
+        return {"session_id": row.get("session_id"), "user_id": row.get("user_id")}
 
     def _conversation_store(self):
         try:
             return (self._container.get_service("conversation_store")
                     if self._container else None)
-        except Exception:
+        except Exception as e:
+            logger.warning("EmailSurface conversation store unavailable: %s", e,
+                           exc_info=True)
             return None
 
     def _last_inbound_mid(self, chat_row: Any, addr: str) -> Any:
@@ -162,7 +208,9 @@ class EmailSurface(Surface):
         try:
             conv = store.get(chat_row.get("user_id") or "", "email", addr)
             return (conv or {}).get("last_inbound_mid") or None
-        except Exception:
+        except Exception as e:
+            logger.warning("EmailSurface thread-anchor read failed for %s: %s — "
+                           "this reply will not be threaded", addr, e, exc_info=True)
             return None
 
     def _record_outbound_conversation(self, chat_row: Any, addr: str, body: str,
@@ -178,25 +226,41 @@ class EmailSurface(Surface):
                                   mid=(str(mid) if mid else None), subject=subject,
                                   session_id=chat_row.get("session_id"))
         except Exception as e:
-            logger.debug("EmailSurface conversation record skipped: %s", e)
+            logger.warning("EmailSurface conversation record skipped for %s: %s — "
+                           "this outbound is missing from the transcript",
+                           addr, e, exc_info=True)
 
-    def _maybe_seed_thread_anchor(self, session_key: str, addr: str, mid: str) -> None:
+    def _maybe_seed_thread_anchor(self, session_key: str, addr: str, mid: str,
+                                  *, row=None) -> None:
         """Bind the outbound Message-ID to the sending session (A3) so the reply's
-        In-Reply-To exact-matches in the registry. Fully fail-soft."""
+        In-Reply-To exact-matches in the registry. Fully fail-soft.
+
+        ``row`` is the already-resolved binding (D31): a proactive send has no
+        session_chat_registry row, and re-resolving here would skip the anchor
+        exactly where it matters most — a first-contact email whose reply has
+        nothing else to resolve on.
+        """
         container = self._container
         if container is None:
             return
         try:
-            chat_reg = container.get_service("session_chat_registry")
-            row = chat_reg.resolve(session_key) if chat_reg else None
+            if row is None:
+                chat_reg = container.get_service("session_chat_registry")
+                row = chat_reg.resolve(session_key) if chat_reg else None
             registry = container.get_service("correspondent_registry")
             if not row or registry is None or not hasattr(registry, "seed_thread_anchor"):
+                if not row:
+                    logger.warning(
+                        "EmailSurface: no binding for %s — the outbound Message-ID "
+                        "%s is not anchored and a reply may not route back",
+                        addr, mid)
                 return
             registry.seed_thread_anchor(
                 surface="email", address=addr, thread_id=mid,
                 session_id=row.get("session_id"), user_id=row.get("user_id"))
         except Exception as e:
-            logger.debug("EmailSurface thread-anchor seed skipped: %s", e)
+            logger.warning("EmailSurface thread-anchor seed skipped for %s: %s — "
+                           "a reply may not route back", addr, e, exc_info=True)
 
     async def start(self, container) -> None:
         self._container = container

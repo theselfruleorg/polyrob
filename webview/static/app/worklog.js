@@ -198,12 +198,41 @@ export function render(root, data, state, copy, opts = {}) {
   rows.forEach((e) => tbody.appendChild(entryRow(e, copy, opts.nowMs)));
   table.appendChild(tbody);
   root.appendChild(table);
+  // A11/A13: rows the tenant filter removed are NAMED. A log that quietly
+  // drops what it read is a log that cannot be reasoned from.
+  const filtered = Number(data && data.filtered_out);
+  if (Number.isFinite(filtered) && filtered > 0) {
+    root.appendChild(el("p", "entry-meta",
+      fill(copy && copy.filtered_out, filtered)));
+  }
   return "rows";
 }
 
-async function load(fetcher) {
+/**
+ * Read the log for the switches as they are NOW.
+ *
+ * ⚠️ A13 (2026-09-21 audit): this used to ask for `?raw=1&diagnostics=1`
+ * unconditionally and hide the surplus in the browser. The switch therefore
+ * changed nothing about what crossed the wire: every diagnostic line and every
+ * raw payload was fetched for a reader who had asked for neither, and the
+ * "off" position was a filter, not a refusal. Both flags now ride the request,
+ * and both default OFF.
+ *
+ * ⚠️ So does the CLASS chip, since the 2026-09-21 revalidation. It was the half
+ * of A13 that stayed client-side, and it made the server's own `filtered_out`
+ * a lie by omission: the reader saw a short list and a count that explained a
+ * different, smaller subtraction. `GET /api/webgate/log` has always accepted
+ * `?class=`, so the chip now asks for what it shows and the count covers every
+ * row removed.
+ */
+export async function load(opts = {}, fetcher) {
   const call = fetcher || fetch;
-  const resp = await call("/api/webgate/log?raw=1&diagnostics=1", {
+  const params = new URLSearchParams();
+  if (opts.raw) params.set("raw", "1");
+  if (opts.diagnostics) params.set("diagnostics", "1");
+  if (opts.cls) params.set("class", opts.cls);
+  const query = params.toString();
+  const resp = await call(`/api/webgate/log${query ? `?${query}` : ""}`, {
     credentials: "include",
   });
   if (!resp.ok) throw new Error(String(resp.status));
@@ -211,6 +240,8 @@ async function load(fetcher) {
   return {
     entries: Array.isArray(data.entries) ? data.entries : [],
     unreadable: data.unreadable || null,
+    filtered_out: Number.isFinite(Number(data.filtered_out))
+      ? Number(data.filtered_out) : null,
   };
 }
 
@@ -222,9 +253,13 @@ function bind() {
   const copyNode = document.getElementById("worklog-copy");
   if (!stream || !copyNode) return;
 
+  const rawSwitch = document.getElementById("worklog-raw");
   const copy = copyFrom(copyNode);
   const classes = classesFrom(copyNode);
-  const state = { data: { entries: [], unreadable: null }, cls: "", diagnostics: false };
+  const state = {
+    data: { entries: [], unreadable: null, filtered_out: null },
+    cls: "", diagnostics: false, raw: false,
+  };
 
   function draw() {
     if (chipsRoot) {
@@ -232,22 +267,23 @@ function bind() {
       chipNodes(classes, copy, state.cls, (id) => {
         state.cls = id;
         draw();
+        // A chip is a REQUEST, like the two switches beside it: the server
+        // filters and COUNTS what it removed, so `filtered_out` keeps
+        // describing the list actually on screen.
+        reload();
       }).forEach((c) => chipsRoot.appendChild(c));
     }
     if (switchNode) {
       switchNode.classList.toggle("is-on", state.diagnostics);
       switchNode.setAttribute("aria-checked", String(state.diagnostics));
     }
+    if (rawSwitch) {
+      rawSwitch.classList.toggle("is-on", state.raw);
+      rawSwitch.setAttribute("aria-checked", String(state.raw));
+    }
     render(stream, state.data, stateNode, copy, {
       cls: state.cls,
       showDiagnostics: state.diagnostics,
-    });
-  }
-
-  if (switchNode) {
-    switchNode.addEventListener("click", () => {
-      state.diagnostics = !state.diagnostics;
-      draw();
     });
   }
 
@@ -256,7 +292,8 @@ function bind() {
     stateNode.hidden = false;
   }
   draw();
-  const reload = () => load()
+  const reload = () => load({ raw: state.raw, diagnostics: state.diagnostics,
+                             cls: state.cls })
     .then((data) => {
       state.data = data;
       draw();
@@ -269,6 +306,25 @@ function bind() {
       state.data = { entries: [], unreadable: (err && String(err.message)) || "error" };
       draw();
     });
+
+  // A13: a switch changes what is ASKED FOR, so flipping one refetches. Drawing
+  // from a payload fetched under the other setting would show a stale answer
+  // under a new label.
+  if (switchNode) {
+    switchNode.addEventListener("click", () => {
+      state.diagnostics = !state.diagnostics;
+      draw();
+      reload();
+    });
+  }
+  if (rawSwitch) {
+    rawSwitch.addEventListener("click", () => {
+      state.raw = !state.raw;
+      draw();
+      reload();
+    });
+  }
+
   reload();
 
   // Live: the stream re-reads itself when live.js relays an activity event

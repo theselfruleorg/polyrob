@@ -3,7 +3,15 @@
 Real sessions are tagged with OTHER user_ids than the owner-login identity
 (CLI sessions are user_id="local", telegram principals are "u_<hash>", …).
 _check_session_ownership already grants the own_ops owner every session; the
-CATALOG (/api/sessions, /sessions) listed only the login identity's own dir.
+CATALOG listed only the login identity's own dir.
+
+⚠️ 043 A12 moved the catalog. ``GET /api/sessions`` and its four readers
+(``_collect_sessions_in_dir`` / ``_finalize_session_rows`` /
+``_get_user_sessions`` / ``_get_all_sessions``) are DELETED — that route walked
+every session directory on the event loop for a page that no longer exists. The
+live catalog is ``GET /api/webgate/chats``, which pairs the SAME security rule
+(``server._catalog_scope``) with ``webview/session_catalog.py::session_page``,
+one hydrated page at a time. So these tests pin the rule where it now runs.
 
 Scope rules pinned here:
   - local:      the loopback operator IS the owner → all user dirs.
@@ -31,11 +39,13 @@ class _FakeRequest:
         self.state.authenticated = authenticated
 
 
-def _seed_session(root, user_id, session_id, task="do a thing"):
+def _seed_session(root, user_id, session_id, task="do a thing", creator=None):
     sess = root / user_id / session_id
     (sess / "feed").mkdir(parents=True)
-    (sess / "task.json").write_text(json.dumps(
-        {"task": task, "model": "m1", "provider": "p1"}))
+    payload = {"task": task, "model": "m1", "provider": "p1"}
+    if creator is not None:
+        payload["creator"] = creator
+    (sess / "task.json").write_text(json.dumps(payload))
     # get_session_user discovery requires valid metadata (path.py PRIORITY 1)
     (sess / "metadata.json").write_text(json.dumps(
         {"user_id": user_id, "task": task}))
@@ -63,8 +73,16 @@ def _posture_env(monkeypatch):
 
 
 def _api_sessions(server, request):
-    resp = asyncio.run(server.api_sessions(request))
-    return json.loads(resp.body)["sessions"]
+    """The catalog rows a request may see — the live ``/api/webgate/chats`` path.
+
+    ``_catalog_scope`` (the security rule) + ``session_page`` (the reader) +
+    ``_annotate_runtime`` (where a live session runs), exactly as
+    ``pages_new.api_chats`` composes them.
+    """
+    from webview.session_catalog import session_page
+    scope, user_id = server._catalog_scope(request)
+    body = session_page(server.pm().data_root, scope, user_id)
+    return server._annotate_runtime(body["sessions"])
 
 
 def test_local_owner_sees_all_user_dirs(monkeypatch, catalog_tree):
@@ -180,26 +198,37 @@ def test_own_ops_owner_reads_status_of_cli_owned_session(monkeypatch, catalog_tr
     assert body["status"] == "completed"
 
 
-def test_get_user_sessions_shape_unchanged(monkeypatch, catalog_tree):
-    """The per-user helper keeps its contract (used by multitenant): only the
-    given user's rows, no created_timestamp leak, and now a `user` label."""
+def test_per_tenant_scope_reads_only_that_tenants_dir(monkeypatch, catalog_tree):
+    """The multitenant contract: only the named user's rows, and an UNKNOWN
+    status stays unknown rather than being invented."""
+    from webview.session_catalog import session_page
     import webview.server as server
-    rows = server._get_user_sessions(user_id="local")
-    assert [r["id"] for r in rows] == ["s-cli-1"]
-    assert rows[0]["user"] == "local"
-    assert "created_timestamp" not in rows[0]
-    # A17: no `creator` in metadata.json -> an honest default, never a KeyError.
-    assert rows[0]["creator"] == "api"
+    body = session_page(server.pm().data_root, "user", "local")
+    assert [r["id"] for r in body["sessions"]] == ["s-cli-1"]
+    assert body["sessions"][0]["user"] == "local"
+    assert body["sessions"][0]["status"] is None  # no status.json written
 
 
-def test_get_user_sessions_carries_creator_label(monkeypatch, catalog_tree):
-    """A17: `creator` recorded in the session's metadata.json at creation
-    survives into the console catalog row (and therefore GET /api/sessions)."""
+def test_catalog_row_carries_the_creator_label(monkeypatch, catalog_tree):
+    """A17: the `creator` recorded at session creation survives into the row —
+    so the catalog can say a run came from cron rather than from a person."""
+    from webview.session_catalog import session_page
     import webview.server as server
-    meta_file = catalog_tree / "local" / "s-cli-1" / "metadata.json"
-    meta = json.loads(meta_file.read_text())
-    meta["creator"] = "cron"
-    meta_file.write_text(json.dumps(meta))
+    task_file = catalog_tree / "local" / "s-cli-1" / "task.json"
+    payload = json.loads(task_file.read_text())
+    payload["creator"] = "cron"
+    task_file.write_text(json.dumps(payload))
 
-    rows = server._get_user_sessions(user_id="local")
-    assert rows[0]["creator"] == "cron"
+    body = session_page(server.pm().data_root, "user", "local")
+    assert body["sessions"][0]["creator"] == "cron"
+
+
+def test_the_deleted_catalog_route_and_readers_are_gone():
+    """043 A12: the loop-blocking full-tree catalog must not come back."""
+    import webview.server as server
+    for name in ("api_sessions", "_sessions_for_request", "_get_all_sessions",
+                 "_get_user_sessions", "_collect_sessions_in_dir",
+                 "_finalize_session_rows"):
+        assert not hasattr(server, name), f"{name} is back on webview.server"
+    paths = {getattr(r, "path", "") for r in server._fastapi.router.routes}
+    assert "/api/sessions" not in paths

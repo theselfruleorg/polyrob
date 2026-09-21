@@ -140,3 +140,62 @@ def test_a_surface_with_no_message_id_warns_once_naming_itself(tmp_path, caplog)
     assert len(warnings) == 1, "the warning must fire ONCE per surface, not per line"
     assert "discord" in warnings[0].getMessage()
     ledger_ingest._NO_MESSAGE_ID_WARNED.clear()
+
+
+# ---------------------------------------------------------------------------
+# D59 — a probe fault is fail-CLOSED and SAID
+# ---------------------------------------------------------------------------
+
+def test_an_unreadable_allowlist_warns_once_per_room(monkeypatch, caplog):
+    """The line is NOT written to the room log, so the next room turn answers
+    from a record that is silently missing messages — the one failure whose
+    symptom ("the agent ignored what we said") reads as a model problem.
+
+    Refusing quietly at DEBUG made it undiagnosable; one WARN per room per
+    process names it without flooding.
+    """
+    import logging
+
+    from core.surfaces import ledger_ingest
+
+    def _boom(*a, **kw):
+        raise RuntimeError("group_allowlist.db is locked")
+
+    monkeypatch.setattr("core.surfaces.group_allowlist.GroupAllowlist", _boom)
+    ledger_ingest._ALLOWLIST_FAULT_WARNED.clear()
+
+    class _Container:
+        config = None
+
+        def get_service(self, name):
+            return None
+
+    with caplog.at_level(logging.WARNING, logger="core.surfaces.ledger_ingest"):
+        assert ledger_ingest._allowed(_Container(), "telegram", "-100") is False
+        assert ledger_ingest._allowed(_Container(), "telegram", "-100") is False
+    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert len(warnings) == 1, "one WARN per room per process, not per message"
+    assert "incomplete record" in warnings[0].getMessage()
+
+
+def test_a_second_room_gets_its_own_warning(monkeypatch, caplog):
+    import logging
+
+    from core.surfaces import ledger_ingest
+
+    def _boom(*a, **kw):
+        raise RuntimeError("locked")
+
+    monkeypatch.setattr("core.surfaces.group_allowlist.GroupAllowlist", _boom)
+    ledger_ingest._ALLOWLIST_FAULT_WARNED.clear()
+
+    class _Container:
+        config = None
+
+        def get_service(self, name):
+            return None
+
+    with caplog.at_level(logging.WARNING, logger="core.surfaces.ledger_ingest"):
+        ledger_ingest._allowed(_Container(), "telegram", "-100")
+        ledger_ingest._allowed(_Container(), "telegram", "-200")
+    assert len([r for r in caplog.records if r.levelno >= logging.WARNING]) == 2

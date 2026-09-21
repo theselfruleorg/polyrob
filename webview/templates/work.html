@@ -31,9 +31,20 @@
         {% if not read_only %}
         <details class="section">
           <summary>{{ t('work.create.goal_label') }}</summary>
+          {# A44: the goal writer has always accepted a body, a priority, a tool
+             grant and a step budget; this form submitted a title and nothing
+             else, so `max_steps` — the field the agent uses to size its own
+             work — was unreachable from the console entirely. Every field is
+             optional but the title; an empty one is simply not sent. #}
           <form class="setting-control" data-create="goals" data-unreachable="{{ t('work.create.unreachable') }}">
             <label>{{ t('work.create.title_label') }}<textarea name="title" required></textarea></label>
-
+            <label>{{ t('work.create.body_label') }}<textarea name="body"></textarea></label>
+            <label>{{ t('work.create.priority_label') }}<input name="priority" type="number" step="1"></label>
+            <p class="why">{{ t('work.create.priority_hint') }}</p>
+            <label>{{ t('work.create.tools_label') }}<textarea name="tools"></textarea></label>
+            <p class="why">{{ t('work.create.tools_hint') }}</p>
+            <label>{{ t('work.create.max_steps_label') }}<input name="max_steps" type="number" step="1" min="6" max="60"></label>
+            <p class="why">{{ t('work.create.max_steps_hint') }}</p>
             <button class="btn" type="submit">{{ t('work.create.submit') }}</button>
             <p class="why" role="status"></p>
           </form>
@@ -62,10 +73,25 @@
         {% if not read_only %}
         <details class="section">
           <summary>{{ t('work.create.cron_label') }}</summary>
+          {# A44: a scheduled run that delivers nowhere is a run nobody sees.
+             `deliver` / `deliver_target` / `wake_agent` are typed fields the
+             cron writer already accepts, and the console offered none of them.
+             The delivery list is the allowlist the runner enforces; an empty
+             choice means the result stays with the agent. #}
           <form class="setting-control" data-create="cron" data-unreachable="{{ t('work.create.unreachable') }}">
             <label>{{ t('work.create.title_label') }}<textarea name="task" required></textarea></label>
             <label>{{ t('work.create.schedule_label') }}<input name="schedule" required></label>
             <p class="why">{{ t('work.create.schedule_hint') }}</p>
+            <label>{{ t('work.create.deliver_label') }}
+              <select name="deliver">
+                <option value="">{{ t('work.create.deliver_none') }}</option>
+                <option value="telegram">{{ t('work.create.deliver_telegram') }}</option>
+                <option value="email">{{ t('work.create.deliver_email') }}</option>
+                <option value="twitter">{{ t('work.create.deliver_twitter') }}</option>
+              </select></label>
+            <label>{{ t('work.create.deliver_target_label') }}<input name="deliver_target"></label>
+            <p class="why">{{ t('work.create.deliver_target_hint') }}</p>
+            <label><input name="wake_agent" type="checkbox" value="true" checked> {{ t('work.create.wake_agent_label') }}</label>
             <button class="btn" type="submit">{{ t('work.create.submit') }}</button>
             <p class="why" role="status"></p>
           </form>
@@ -107,6 +133,17 @@
                   role="switch" aria-checked="false"
                   aria-label="{{ t('work.log.diagnostics') }}"></button></td>
             </tr>
+            {# A13: both switches are REQUEST state now. The stream used to ask
+               for every diagnostic line and every raw payload regardless and
+               hide the surplus in the browser, so "off" was a filter rather
+               than a refusal. #}
+            <tr>
+              <td class="what">{{ t('work.log.raw_switch') }}
+                <span class="why">{{ t('work.log.raw_switch_why') }}</span></td>
+              <td class="num"><button type="button" class="switch" id="worklog-raw"
+                  role="switch" aria-checked="false"
+                  aria-label="{{ t('work.log.raw_switch') }}"></button></td>
+            </tr>
           </tbody></table>
         </div>
       </div>
@@ -134,6 +171,7 @@
          data-empty="{{ t('work.log.empty') }}"
          data-unreadable="{{ t('work.log.unreadable') }}"
          data-unreadable_why="{{ t('work.log.unreadable_why') }}"
+         data-filtered_out="{{ t('work.log.filtered_out') }}"
          data-when_now="{{ t('work.log.when_now') }}"
          data-when_min="{{ t('work.log.when_min') }}"
          data-when_hour="{{ t('work.log.when_hour') }}"
@@ -156,6 +194,7 @@
          data-unreadable="{{ t('work.now.unreadable') }}"
          data-unreadable_why="{{ t('work.now.unreadable_why') }}"
          data-running_count="{{ t('work.now.running_count') }}"
+         data-running_count_partial="{{ t('work.now.running_count_partial') }}"
          data-next_queued="{{ t('work.now.next_queued') }}"
          data-elapsed_started="{{ t('work.now.elapsed_started') }}"
          data-stop="{{ t('work.now.stop') }}"
@@ -187,6 +226,17 @@
     {# The words work-apps.js renders (WS-P2). Its own copy node, since it is its
        own module; the tab switch is still work-now.js's (one Work subnav). #}
     <div id="work-apps-copy" hidden
+         data-read_only="{{ 1 if read_only else 0 }}"
+         {# ⚠️ `apps_routes._decide` refuses every multitenant caller (an app
+            decision is instance-wide), so Stop is DRAWN on the same predicate
+            it is refused on — see shell.html's `owner_console`. #}
+         data-owner_console="{{ 1 if owner_console else 0 }}"
+         data-kill="{{ t('work.apps.kill') }}"
+         data-logs="{{ t('work.apps.logs') }}"
+         data-logs_hide="{{ t('work.apps.logs_hide') }}"
+         data-logs_empty="{{ t('work.apps.logs_empty') }}"
+         data-logs_unreadable="{{ t('work.apps.logs_unreadable') }}"
+         data-unreachable="{{ t('work.apps.unreachable') }}"
          data-loading="{{ t('work.apps.loading') }}"
          data-online_title="{{ t('work.apps.online_title') }}"
          data-online_aside="{{ t('work.apps.online_aside') }}"

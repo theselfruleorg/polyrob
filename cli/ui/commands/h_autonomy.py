@@ -115,8 +115,8 @@ def _h_autonomy(ctx: CommandContext) -> None:
     if ctx.args:
         ctx.emit(
             f"/autonomy takes no arguments yet (got: {' '.join(ctx.args)}).\n"
-            "It is read-only today — to turn autonomy on/off use:\n"
-            "  /config set AUTONOMY_ENABLED true   (restart applies)\n"
+            "It is read-only here — turn autonomy on or off with "
+            "`polyrob autonomy on` / `polyrob autonomy off` (restart applies).\n"
             "For an immediate freeze/unfreeze of all loops use /pause "
             "[everything|trading|background|messages|deploying] [for 6h] "
             "and /resume (live, no restart).",
@@ -124,12 +124,13 @@ def _h_autonomy(ctx: CommandContext) -> None:
         )
         return
 
-    data_dir = "data"
+    # C2: the ONE owner/admin home seam — the same home the daemon's loops
+    # write their goals/cron rows into. Read-only (never refuses as root).
     try:
-        cfg = getattr(ctx.container, "config", None)
-        data_dir = data_dir_or_home(getattr(cfg, "data_dir", None))
+        from cli._admin_home import admin_data_dir
+        data_dir = admin_data_dir(write=False)
     except Exception:
-        pass
+        data_dir = data_dir_or_home(None)
 
     snap = _autonomy_snapshot(ctx.user_id or "local", data_dir)
 
@@ -162,7 +163,8 @@ def _h_autonomy(ctx: CommandContext) -> None:
         lines.append(f"{candy.GUTTER}/goals lists them")
 
     lines.append("")
-    lines.append(f"{candy.GUTTER}enable/disable: /config set AUTONOMY_ENABLED true|false "
-                 "(restart applies)")
+    # E18: the ONE remedy, spoken as the verb — never the flag name.
+    lines.append(f"{candy.GUTTER}turn it on/off: `polyrob autonomy on` / "
+                 "`polyrob autonomy off` (restart applies)")
 
     ctx.emit("\n".join(lines), title="autonomy")

@@ -156,15 +156,90 @@ class SelfContextWriter:
             return SelfContextWriteResult(False, errors=["content failed identity safety scan"])
         return None
 
+    # --- provenance (057 WS-D) ----------------------------------------------
+
+    def _provenance_baseline(self, uid: str, *, quarantine: bool) -> str:
+        """The body a write is being diffed AGAINST.
+
+        A quarantined write refines the pending draft when one exists, else the
+        active doc; an immediate write replaces the active doc. Matching
+        :meth:`patch`'s own source selection keeps "changed line" meaning the same
+        thing on both write paths. Never raises — an unreadable baseline reads as
+        empty, which stamps more lines rather than fewer (fail toward provenance).
+        """
+        try:
+            if quarantine:
+                pf = self._pending_file(uid)
+                if pf.is_file():
+                    return pf.read_text(encoding="utf-8")
+            af = self._active_file(uid)
+            return af.read_text(encoding="utf-8") if af.is_file() else ""
+        except Exception:
+            return ""
+
+    def _apply_provenance(self, uid: str, body: str, *, pending: Optional[bool],
+                          created_by: str, source: Optional[str],
+                          observed_at: Optional[str]):
+        """Run the claim guard, then stamp. Returns the new body, or a rejection
+        ``SelfContextWriteResult`` when the guard trips. Fail-open on an internal
+        fault: provenance is metadata, and a broken stamper must never be able to
+        block a legitimate identity write."""
+        try:
+            from core.doc_claims import (claim_provenance_required,
+                                         find_unsourced_claims,
+                                         stamp_changed_lines,
+                                         unsourced_claim_error)
+        except Exception:
+            return body
+        try:
+            if not (source or "").strip() and not claim_provenance_required():
+                return body
+            quarantine = self._resolve_pending(created_by, pending)
+            old = self._provenance_baseline(uid, quarantine=quarantine)
+            if claim_provenance_required():
+                unsourced = find_unsourced_claims(old, body, source)
+                if unsourced:
+                    logger.info("%s write refused (unsourced claim): %s",
+                                self._LOG_LABEL, uid)
+                    return SelfContextWriteResult(
+                        False, errors=[unsourced_claim_error(unsourced)])
+            if not (source or "").strip():
+                return body
+            return stamp_changed_lines(old, body, source, observed_at)
+        except Exception as e:
+            logger.debug("%s provenance skipped (fail-open): %s", self._LOG_LABEL, e)
+            return body
+
     def propose(self, content: str, *, user_id: str,
                 created_by: str = PROVENANCE_AGENT,
-                pending: Optional[bool] = None) -> SelfContextWriteResult:
-        """Author/replace the doc (validated, scanned, atomically written)."""
+                pending: Optional[bool] = None,
+                source: Optional[str] = None,
+                observed_at: Optional[str] = None) -> SelfContextWriteResult:
+        """Author/replace the doc (validated, scanned, atomically written).
+
+        057 WS-D: ``source``/``observed_at`` attach PROVENANCE. When ``source`` is
+        given, every NEW or CHANGED line is rendered with a trailing
+        ``[from: <source> <date>]``; unchanged lines are left exactly as they
+        were, so revising one sentence never re-dates the document. The stamp is
+        part of the body and therefore counts toward the char cap — the cap check
+        below runs on the STAMPED text, so an over-cap refusal is honest about
+        what will actually be written.
+
+        The claim guard (``DOC_CLAIM_PROVENANCE_REQUIRED``, default OFF) refuses a
+        new/changed line that makes a durable claim with no ``source``. It is a
+        FORMAT check, not a truth check.
+        """
         uid = self._require_user(user_id)
         if uid is None:
             return SelfContextWriteResult(False, errors=["empty user_id refused (tenant scope)"])
 
         body = content or ""
+        prov = self._apply_provenance(uid, body, pending=pending,
+                                      created_by=created_by, source=source,
+                                      observed_at=observed_at)
+        if isinstance(prov, SelfContextWriteResult):
+            return prov
+        body = prov
         # Over-cap ERRORS — never silently truncate an identity doc.
         if len(body) > self._MAX_CHARS:
             return SelfContextWriteResult(False, errors=[
@@ -191,7 +266,9 @@ class SelfContextWriter:
 
     def patch(self, *, user_id: str, old_string: str, new_string: str,
               replace_all: bool = False, created_by: str = PROVENANCE_AGENT,
-              pending: Optional[bool] = None) -> SelfContextWriteResult:
+              pending: Optional[bool] = None,
+              source: Optional[str] = None,
+              observed_at: Optional[str] = None) -> SelfContextWriteResult:
         """Exact-match edit of an existing SELF doc, re-validated + re-scanned."""
         uid = self._require_user(user_id)
         if uid is None:
@@ -226,8 +303,12 @@ class SelfContextWriter:
                    else current.replace(old_string, new_string, 1))
 
         # Re-run the full gate; preserve the doc's pending/active state.
+        # 057 WS-D: provenance rides through, and the baseline propose diffs
+        # against is the SAME `src` we just read — so only the patched line is
+        # new/changed, which is exactly the line that gets stamped.
         return self.propose(updated, user_id=uid, created_by=created_by,
-                            pending=pending if pending is not None else target_is_pending)
+                            pending=pending if pending is not None else target_is_pending,
+                            source=source, observed_at=observed_at)
 
     def list_pending(self, user_id: str) -> Optional[dict]:
         """Return a summary of the tenant's pending self-doc draft, or None.
@@ -291,7 +372,9 @@ class SelfContextWriter:
             return False
 
     def apply_now(self, content: str, *, user_id: str,
-                  created_by: str = PROVENANCE_AGENT) -> SelfContextWriteResult:
+                  created_by: str = PROVENANCE_AGENT,
+                  source: Optional[str] = None,
+                  observed_at: Optional[str] = None) -> SelfContextWriteResult:
         """Write the ACTIVE doc and retire any draft it supersedes (035 P1-6).
 
         Routes through :meth:`propose` with ``pending=False``, so the full gate
@@ -308,7 +391,8 @@ class SelfContextWriter:
         uid = self._require_user(user_id)
         if uid is None:
             return SelfContextWriteResult(False, errors=["empty user_id refused"])
-        res = self.propose(content, user_id=uid, created_by=created_by, pending=False)
+        res = self.propose(content, user_id=uid, created_by=created_by, pending=False,
+                           source=source, observed_at=observed_at)
         if res.ok and not res.pending:
             self.retire_pending(user_id=uid)
         return res
@@ -349,8 +433,12 @@ class SelfContextWriter:
             content = pending_f.read_text(encoding="utf-8")
         except Exception as e:
             return SelfContextWriteResult(False, errors=[f"read failed: {e}"])
-        # Promotion is owner-initiated → user provenance, not pending.
-        res = self.propose(content, user_id=uid, created_by=PROVENANCE_USER, pending=False)
+        # Promotion is owner-initiated → user provenance, not pending. The
+        # owner's approval IS the provenance for any line the draft left bare
+        # (stamped lines keep their own stamp) — without a source= here the 057
+        # claim guard refused every sourced draft on promote (2026-09-20 07:23Z).
+        res = self.propose(content, user_id=uid, created_by=PROVENANCE_USER, pending=False,
+                           source="owner approved")
         if res.ok and not res.pending:
             try:
                 os.remove(str(pending_f))

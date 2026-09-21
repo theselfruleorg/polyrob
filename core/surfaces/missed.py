@@ -75,25 +75,63 @@ def missed_notices(user_id: str, data_dir: str, n: int = 5) -> List[Dict]:
     # added to the rail without a matching clause here is a notice this query
     # silently cannot see.
     like_clause = " OR ".join(["attrs LIKE ?"] * len(NOTICE_MARKERS))
+    # D50: over-read, then drop the entries a LATER `sent` row covers, then trim
+    # back to n. `/missed` answers "what did I miss" — a body the rail retried
+    # and delivered minutes later was NOT missed, and showing it pushes a
+    # genuinely lost entry off the five-row view.
+    limit = max(int(n), 1)
     rows = execute_retry(
         path,
         "SELECT ts, attrs FROM telemetry_events WHERE kind='owner_notice' "
         f"AND user_id=? AND ({like_clause}) "
         "ORDER BY ts DESC, id DESC LIMIT ?",
-        (user_id, *[f"%{m}%" for m in NOTICE_MARKERS], int(n)),
+        (user_id, *[f"%{m}%" for m in NOTICE_MARKERS], limit * 4),
         fetch="all") or []
     out: List[Dict] = []
     for r in rows:
         try:
-            text = str((json.loads(r["attrs"]) or {}).get("text") or "")
+            attrs = json.loads(r["attrs"]) or {}
         except Exception:
-            text = ""
+            attrs = {}
+        text = str(attrs.get("text") or "")
         kind = _kind_for(text)
         # Strip the rail's marker prefix "[<marker>; source=x] ".
         if text.startswith("[") and "] " in text:
             text = text.split("] ", 1)[1]
-        out.append({"ts": float(r["ts"]), "text": text.strip(), "kind": kind})
+        text = text.strip()
+        if _delivered_later(path, user_id, attrs.get("content_hash"),
+                            float(r["ts"])):
+            continue
+        out.append({"ts": float(r["ts"]), "text": text, "kind": kind})
+        if len(out) >= limit:
+            break
     return out
+
+
+def _delivered_later(path: str, user_id: str, content_hash, ts: float) -> bool:
+    """True when this notice's body was later DELIVERED to the same tenant.
+
+    Keys on the ``content_hash`` the rail stamps on the notice row
+    (``user_delivery._record_notice``). A legacy notice written before that
+    stamp existed carries no hash — it is KEPT, because "I cannot tell whether
+    you got this" must resolve toward showing the owner the message, never
+    toward hiding it.
+
+    A read fault is the same: keep the entry.
+    """
+    if not content_hash:
+        return False
+    try:
+        row = execute_retry(
+            path,
+            "SELECT 1 FROM telemetry_events WHERE kind='user_delivery' "
+            "AND user_id=? AND ts > ? "
+            "AND json_extract(attrs, '$.outcome')='sent' "
+            "AND json_extract(attrs, '$.content_hash')=? LIMIT 1",
+            (user_id, ts, str(content_hash)), fetch="one")
+    except Exception:
+        return False
+    return row is not None
 
 
 def format_notice_lines(ts: float, kind: str, text: str, *, gutter: str = "",
@@ -110,8 +148,10 @@ def format_notice_lines(ts: float, kind: str, text: str, *, gutter: str = "",
 
     ``gutter`` is a leading indent (e.g. two spaces, or ``candy.GUTTER``)
     shared by the CLI and REPL renderers, which both call this. Telegram's
-    ``_missed_reply`` keeps its own 240-char clip (its transport wraps) and
-    does not use this helper.
+    ``_missed_reply`` calls it too (``width=60``, its transport re-wraps) —
+    it used to keep its own 240-char CLIP, which hid exactly the content
+    ``/missed`` exists to recover. Every seat now renders through this ONE
+    helper, so none of them can quietly truncate a recovered message again.
     """
     stamp = time.strftime("%m-%d %H:%M", time.gmtime(float(ts or 0)))
     prefix = f"{gutter}{stamp}Z — [{kind}] "

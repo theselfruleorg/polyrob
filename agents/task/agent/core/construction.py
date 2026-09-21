@@ -1167,8 +1167,8 @@ class AgentConstructionMixin:
 		# controller (tools tier) — no tools import here (layering ratchet).
 		# Fail-open: a render error never blocks construction.
 		try:
-			from core.config_policy import tool_progressive_disclosure
-			if (tool_progressive_disclosure()
+			from agents.task.session_class import tool_disclosure_enabled
+			if (tool_disclosure_enabled(self.session_id)
 					and hasattr(self.controller, 'render_tool_catalog')):
 				self.message_manager.set_tool_catalog_message(
 					self.controller.render_tool_catalog(is_leaf=(self._role == "leaf")))
@@ -1201,8 +1201,22 @@ class AgentConstructionMixin:
 			# facts/preferences about the OWNER, injected after SOUL and before the
 			# evolving SELF doc. Load-side [BLOCKED] guard applies; empty => omitted.
 			_owner_doc = "" if _public else load_owner_doc(_data_dir, _uid, resolve_instance_id())
+			from core.doc_age import measure_doc_age as _doc_age, render_age_header as _age_hdr
 			if _owner_doc:
-				_owner_doc = "## Owner facts\n\n" + _owner_doc
+				# 057 WS-D: once the doc carries `[from: … <date>]` stamps, the
+				# heading states its AGE — `## Owner facts (last write 2026-09-19;
+				# 3 line(s) older than 30 days; 2 line(s) undated)`. A line with no
+				# stamp is reported as UNDATED, never as fresh. A doc with no stamps
+				# at all (every doc before this flag is armed) keeps the bare
+				# heading, so the injected block is byte-identical to pre-057.
+				_owner_doc = (
+					(_age_hdr("Owner facts", _owner_doc)
+					 if _doc_age(_owner_doc).dated else "## Owner facts")
+					+ "\n\n" + _owner_doc)
+			if _self_doc and _doc_age(_self_doc).dated:
+				# The evolving SELF doc has never had a heading, so it gets one ONLY
+				# once it is stamped; unstamped it is injected exactly as before.
+				_self_doc = _age_hdr("Self notes", _self_doc) + "\n\n" + _self_doc
 			# Owner-UX Phase 2: the owner-authored operating-contract doc
 			# (contract.md, owner-review-gated via ContractWriter) + a deterministic
 			# one-line style summary from typed prefs, both injected after owner

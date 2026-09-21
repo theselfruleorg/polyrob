@@ -9,19 +9,21 @@ unconfigured deploy shipped three dead links on every page. The fix: an unset
 env var renders as an empty string, and ``layout.html`` only emits a footer
 link when its URL is non-empty.
 """
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
+#: A surviving ``layout.html`` page. ⚠️ A21 (2026-09-21) deleted ``/pending``,
+#: the last layout.html page with an HTTP route in the single-user posture, so
+#: the footer rule — which lives in ``layout.html`` — is exercised by rendering
+#: one of its pages through the console's OWN template engine (the same move
+#: ``test_render_smoke`` makes). The subject is the SHELL, not a page.
+_LAYOUT_TEMPLATE = "status.html"
 
 
-def _client(monkeypatch, tmp_path, user_id="u1"):
+def _layout_html(monkeypatch) -> str:
+    import importlib
+
     import webview.pages as pages
-    monkeypatch.setattr(pages, "_effective_user_id", lambda req: user_id, raising=False)
-    app = FastAPI()
-    app.include_router(pages.router)
-    # 043 phase 5: /pending is a normal route on pages.router now (the WEBVIEW_UI
-    # legacy switch and webview.legacy were removed), so including the router is
-    # all it takes to render it.
-    return TestClient(app)
+    importlib.reload(pages)  # branding globals are read at register time
+    return pages._TEMPLATES.get_template(_LAYOUT_TEMPLATE).render(
+        request=None, instance_id="polyrob", version="0.0.0-test")
 
 
 def _clear_branding_env(monkeypatch):
@@ -47,25 +49,19 @@ def test_branding_config_returns_empty_strings_when_unset(monkeypatch):
     assert cfg["support_url"] == "https://t.me/tmachinrobot"
 
 
-def test_footer_hides_unset_links(monkeypatch, tmp_path):
+def test_footer_hides_unset_links(monkeypatch):
     _clear_branding_env(monkeypatch)
-    client = _client(monkeypatch, tmp_path)
-
-    resp = client.get("/pending")
-    assert resp.status_code == 200
-    body = resp.text
+    body = _layout_html(monkeypatch)
+    assert body.strip(), "the layout rendered nothing"
     assert "your-polyrob-host.example" not in body
     assert "theselfrule.org" not in body
     # No terms/privacy footer-link anchors at all when both are unset.
     assert 'href="">' not in body
 
 
-def test_footer_shows_terms_link_when_set(monkeypatch, tmp_path):
+def test_footer_shows_terms_link_when_set(monkeypatch):
     _clear_branding_env(monkeypatch)
     monkeypatch.setenv("POLYROB_TERMS_URL", "https://example.com/terms")
-    client = _client(monkeypatch, tmp_path)
-
-    resp = client.get("/pending")
-    assert resp.status_code == 200
-    assert "https://example.com/terms" in resp.text
-    assert "Terms of Use" in resp.text
+    body = _layout_html(monkeypatch)
+    assert "https://example.com/terms" in body
+    assert "Terms of Use" in body

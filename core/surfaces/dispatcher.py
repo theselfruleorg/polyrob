@@ -23,6 +23,9 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Awaitable, Callable, Optional, Union
 
+from core.surfaces.access import (
+    FORGEABLE_NETWORK_SURFACES as _ACCESS_FORGEABLE,
+)
 from core.surfaces.access_log import record_route
 from core.surfaces.envelopes import InboundMessage
 from core.surfaces.session_chat_registry import build_session_key
@@ -53,7 +56,13 @@ _COMMANDS = ("/task", "/cancel", "/new", "/help",
              "/trade",  # owner-launched money-granted run (2026-09-09)
              "/bridge",  # 037 cross-chain move; owner-only, approval-gated
              "/launch", "/deploy", "/lp",  # token/liquidity writes; owner-only, capped
+             "/claim",   # 046/E6: the launchpad creator-fee claim, from the phone
+             "/nft",      # E7: hold / look / send / revoke, owner seat
+             "/dapp",     # E9: the wallet sessions a page holds, and cutting one off
+             "/identity",  # E8: this instance's own ERC-8004 registration
+             "/contacts",  # E10: who replied, and the transcript with one of them
              "/status", "/avatar", "/mode", "/recap", "/journey", "/goals", "/prefs", "/config",
+             "/cwd",   # C67: where I am working right now (read-only)
              "/missed",
              "/apps",  # 032 durable app service (approve an address, health, kill, logs)
              "/mcp",   # per-tenant MCP servers; owner-only (core/mcp_admin.py)
@@ -122,9 +131,13 @@ ChitchatPredicate = Callable[[InboundMessage], Union[bool, Awaitable[bool]]]
 # P1-6: forgeable-sender network surfaces whose senders can NEVER be the bound owner
 # in v1 (the From:/address is trivially spoofable). Such a surface must never fall
 # through to the legacy obey-path when the correspondent tier model is off — it is
-# correspondent-or-denied by construction. Kept separate from access._LOCAL_OWNER_
-# SURFACES (its inverse): local surfaces get the owner bypass, these are refused it.
-_FORGEABLE_NETWORK_SURFACES = {"email"}
+# correspondent-or-denied by construction.
+#
+# D1: the SSOT is `core.surfaces.access.FORGEABLE_NETWORK_SURFACES`, imported
+# here rather than re-declared. The two copies guarded different halves of one
+# rule — this one the model-OFF path, while the model-ON path's pairing branch
+# had no surface filter at all, so a paired email address became OWNER.
+_FORGEABLE_NETWORK_SURFACES = _ACCESS_FORGEABLE
 
 
 class RouteKind(str, Enum):
@@ -464,9 +477,23 @@ async def _route_inbound_impl(
                                   _owner or user_id, _surf, _chat)
             role = (inbound.identity.chat_role
                     or ("owner" if tier == AccessTier.OWNER else "member"))
+            # 046 + D13: a plain member's slash line is "addressed" only when
+            # THIS room granted that verb to members. Resolved from the policy
+            # already loaded (never a second read) and intersected with the
+            # CLOSED grantable set, so a typo in `chat.member_verbs` can never
+            # make an arbitrary verb wake the agent. Without it the grant was
+            # reachable only in an `active` room: the mode gate refused the
+            # line before the grant was ever consulted.
+            _granted_command = False
+            if role == "member" and text.startswith("/"):
+                _tok = text.split()[0].lower().split("@", 1)[0]
+                _granted_command = (
+                    _tok in _MEMBER_GRANTABLE_COMMANDS
+                    and _tok.lstrip("/") in (policy.member_verbs or ()))
             if not mode_allows_trigger(policy, mentioned=mentioned, role=role,
                                        wake_hit=wake_word_hit(policy, text),
-                                       is_command=text.startswith("/")):
+                                       is_command=text.startswith("/"),
+                                       granted_command=_granted_command):
                 return RouteDecision(RouteKind.DENIED, session_key, silent=True,
                                      reason="no_mention", tier=tier.value)
             if tier == AccessTier.GROUP_MEMBER:

@@ -304,9 +304,16 @@ class TaskAgentChatMixin:
         chat_id: Optional[str] = None,
         provider: Optional[str] = None,
         model: Optional[str] = None,
+        temperature: Optional[float] = None,
     ) -> str:
         """Run ONE synchronous chat turn on the unified task agent and return the
         assistant's reply text.
+
+        ``temperature`` (2026-09-21, interface audit B18) is an optional
+        per-request sampling override from the OpenAI-compat surface: baked into
+        the SessionRequest for a brand-new session, and applied to the live
+        adapter's default for a reused one (``_apply_temperature``). ``None`` =
+        the agent's configured default, byte-identical to before.
 
         This is the synchronous counterpart to the fire-and-forget
         process_user_message: it awaits run_session and returns the real reply
@@ -341,6 +348,7 @@ class TaskAgentChatMixin:
             async with lock:
                 result = await self._chat_once_locked(
                     user_id, text, key, provider=provider, model=model,
+                    temperature=temperature,
                 )
         finally:
             # Evict the lock only if this turn left no active session mapping
@@ -401,6 +409,25 @@ class TaskAgentChatMixin:
                 f"per-request model swap failed: {res.get('error')} — "
                 f"turn continues on {getattr(agent, 'model_name', '?')}"
             )
+    @staticmethod
+    def _apply_temperature(orch, temperature: Optional[float]) -> None:
+        """Set the live adapter's default temperature for a REUSED chat session.
+
+        The native adapters capture their default at construction
+        (``modules/llm/adapters.py::_default_temperature``) and read it on every
+        call, so writing it is the whole override — no LLM rebuild. A missing
+        attribute (a non-native client) is a documented no-op, never an error.
+        """
+        if temperature is None:
+            return
+        agent = next(iter(orch.agents.values()), None) if getattr(orch, "agents", None) else None
+        llm = getattr(agent, "llm", None)
+        if llm is not None and hasattr(llm, "_default_temperature"):
+            try:
+                llm._default_temperature = float(temperature)
+            except (TypeError, ValueError):
+                logger.warning("per-request temperature %r ignored (not a number)", temperature)
+
     async def _chat_once_locked(
         self,
         user_id: str,
@@ -408,6 +435,7 @@ class TaskAgentChatMixin:
         key: str,
         provider: Optional[str] = None,
         model: Optional[str] = None,
+        temperature: Optional[float] = None,
     ) -> str:
         """The body of chat_once, run under the per-chat-key lock (see chat_once)."""
         session_id = self._chat_sessions.get(key)
@@ -448,6 +476,7 @@ class TaskAgentChatMixin:
                     orch._persona_block = persona
                 if model:
                     await self._maybe_swap_chat_model(orch, provider, model)
+                self._apply_temperature(orch, temperature)
                 try:
                     await orch.submit_user_message(
                         agent_id=None, text=text, kind="continuation",
@@ -473,7 +502,7 @@ class TaskAgentChatMixin:
             if model:
                 _model = model
                 _provider = provider or _provider
-            req = SessionRequest(
+            req_kwargs = dict(
                 task=text,
                 tools=self._chat_tool_ids(),
                 max_steps=CHAT_MAX_STEPS,
@@ -481,6 +510,9 @@ class TaskAgentChatMixin:
                 provider=_provider,
                 model=_model,
             )
+            if temperature is not None:
+                req_kwargs["temperature"] = float(temperature)
+            req = SessionRequest(**req_kwargs)
             from agents.task.constants import CHAT_SKIP_CREDIT_CHECK
             info = await self.create_session(
                 user_id, req, chat_session_key=key,

@@ -199,7 +199,15 @@ def load_env(env: Optional[str] = None, config_dir: str = "config",
         # keeps it, so the helper's order IS the precedence order (and an explicit
         # process env var always wins).
         for cand in env_file_candidates(resolved, local_mode=True, config_dir=config_dir):
-            if cand.path.exists():
+            # The project rung probes ``./.polyrob/.env`` in the cwd; run as
+            # the service user inside root's 0700 clone (prod 2026-09-20) the
+            # stat itself raised PermissionError. A candidate this process
+            # cannot even stat is somebody else's file — skip it, keep loading.
+            try:
+                present = cand.path.exists()
+            except OSError:
+                present = False
+            if present:
                 load_dotenv(str(cand.path), override=False)
     else:
         # Server: lowest first with override=True — later loads win, so the

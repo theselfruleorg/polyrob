@@ -179,7 +179,15 @@ def test_proxy_forwards_console_cookie_as_bearer(monkeypatch):
     assert seen["headers"] == {"Authorization": "Bearer owner.jwt.value"}
 
 
-def test_proxy_uses_api_key_when_console_has_no_session_token(monkeypatch):
+def test_proxy_uses_the_service_token_header_with_no_session_token(monkeypatch):
+    """⚠️ This asserted ``X-API-KEY``. The 2026-09-21 API work made that the
+    per-user ``rob_xxx`` validator's header and moved the OPERATOR credential
+    to ``X-Service-Token`` (role ``service``), accepting the old spelling for
+    one more release with a deprecation WARN — so the console was one release
+    away from 401-ing every proxied message, and this test would have gone
+    green through the whole deprecation window and then broken in production.
+    The header is read from ``api.auth_constants``, not spelled here."""
+    from api.auth_constants import SERVICE_TOKEN_HEADER
     srv, client = _local_client(monkeypatch)
     _install_fake_agent(monkeypatch, None)
     monkeypatch.setenv("API_AUTH_TOKEN", "service-secret")
@@ -199,7 +207,8 @@ def test_proxy_uses_api_key_when_console_has_no_session_token(monkeypatch):
     import httpx
     monkeypatch.setattr(httpx, "AsyncClient", lambda *a, **k: _FakeClient())
     assert client.post("/api/session/sess-abc/messages", json={"text": "hi"}).status_code == 200
-    assert seen["headers"] == {"X-API-KEY": "service-secret"}
+    assert seen["headers"] == {SERVICE_TOKEN_HEADER: "service-secret"}
+    assert "X-API-KEY" not in seen["headers"]
 
 
 def test_proxy_returns_upstream_error_without_raw_json(monkeypatch):

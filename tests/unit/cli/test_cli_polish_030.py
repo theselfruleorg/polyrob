@@ -264,7 +264,10 @@ def test_approvals_list_json(tmp_path):
     res = _run(approvals, ["list", "--home", str(tmp_path), "--json"])
     assert res.exit_code == 0, res.output
     payload = json.loads(res.stdout)
-    assert set(payload) == {"gates", "provider"}
+    # C23: the payload now names the TENANT it resolved, because the verb used
+    # to default to the literal "local" while the gate is enforced under the
+    # bound owner's tenant.
+    assert set(payload) == {"gates", "provider", "user_id"}
     assert isinstance(payload["gates"], dict)
 
 

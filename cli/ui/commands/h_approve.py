@@ -1,4 +1,10 @@
-"""h_approve.py — the ``/approve`` REPL slash-command handler (owner-UX P2 T4).
+"""h_approve.py — the approval-GATE manager behind ``/gates`` (owner-UX P2 T4).
+
+⚠️ The verb is ``/gates``, not ``/approve`` (C5, 2026-09-21): ``/approve``
+now DECIDES a pending item on every seat, and ``/approve list|add|remove``
+survives only as a deprecated alias routed here by ``h_gates.py``. Every
+usage/error line this module emits therefore names ``/gates`` — a remedy
+that names the retired grammar is the defect C5 existed to remove.
 
 Manage the EFFECTIVE approval-gated action set — the same composition
 ``Controller.__init__`` enforces via
@@ -57,7 +63,7 @@ class ApproveCtx:
 
 
 def cmd_approve(ctx: ApproveCtx, args: List[str]) -> str:
-    """Handle ``/approve list|add|remove`` and return the rendered reply.
+    """Handle ``/gates list|add|remove`` and return the rendered reply.
 
     Empty *args* defaults to ``list`` (mirrors ``/config``'s bare-invocation
     default). Never raises — every branch degrades to a friendly string.
@@ -72,10 +78,10 @@ def cmd_approve(ctx: ApproveCtx, args: List[str]) -> str:
         if sub == "remove":
             return _cmd_remove(ctx, rest)
     except Exception as exc:  # fail-open: never crash the REPL dispatcher
-        return f"/approve {sub} failed: {exc}"
+        return f"/gates {sub} failed: {exc}"
     return (
-        f"unknown /approve subcommand: {sub!r}\n"
-        "usage: /approve list | add <action> | remove <action>"
+        f"unknown /gates subcommand: {sub!r}\n"
+        "usage: /gates list | add <action> | remove <action>"
     )
 
 
@@ -126,7 +132,7 @@ def _cmd_list(ctx: ApproveCtx) -> str:
 
 def _cmd_add(ctx: ApproveCtx, rest: List[str]) -> str:
     if not rest or not rest[0].strip():
-        return "usage: /approve add <action>"
+        return "usage: /gates add <action>"
     action = rest[0].strip()
 
     from core.prefs import load_preferences, write_preference
@@ -165,7 +171,7 @@ def _operator_controlled_message(action: str, source: str) -> str:
 
 def _cmd_remove(ctx: ApproveCtx, rest: List[str]) -> str:
     if not rest or not rest[0].strip():
-        return "usage: /approve remove <action>"
+        return "usage: /gates remove <action>"
     action = rest[0].strip()
 
     from tools.controller.approval import effective_approval_state

@@ -109,10 +109,10 @@ Call `preferences(operation=..., key?, value?, text?)`:
 Guarded proposals and contract proposals land in the **same owner review
 queue** the owner drains with `/pending` (REPL) or `polyrob owner pending` —
 `list`, `show <kind> <id>`, `approve <kind> <id>`, `reject <kind> <id>`, kinds
-`skill | self_context | owner_doc | contract | pref_change`. A **separate**
-command, `/approve` (REPL) / `polyrob approvals`, manages which actions
-require approval before you may run them at all — see
-`references/money-and-safety.md`.
+`skill | self_context | owner_doc | contract | pref_change`. `/approve <id>`
+DECIDES one waiting item, on every seat. A **separate** command, `/gates`
+(REPL) / `polyrob approvals` (CLI), manages which actions require approval
+before you may run them at all — see `references/money-and-safety.md`.
 
 ## Autonomy — concept level
 

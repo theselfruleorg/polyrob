@@ -21,6 +21,19 @@ import pytest
 from agents.personality.persona_render import render_persona_block
 
 
+@pytest.fixture(autouse=True)
+def _data_home_is_tmp(tmp_path, monkeypatch):
+    """C2 (2026-09-21): the REPL's owner/identity homes resolve through the ONE
+    seam (``core.runtime_paths.prefs_home_dir`` / ``cli._admin_home``), not the
+    container's ``config.data_dir`` — which was the shadow tree the preference
+    WRITERS never used. These tests hand the handler ``tmp_path`` through the
+    container, so point the resolved data home at the SAME directory; without
+    it a write test would land in the developer's real data home.
+    """
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
+
+
+
 def _write_character(chars_dir, slug, *, name=None, bio="A test bio."):
     chars_dir.mkdir(parents=True, exist_ok=True)
     data = {
@@ -172,7 +185,10 @@ def test_persona_set_character_confirms_as_a_character(local_gate, chars_home, t
     combined = "\n".join(ctx._out)  # type: ignore
     assert "character" in combined.lower()
     assert "analyst" in combined
-    assert load_preferences(home, "local")["session.persona"] == "analyst"
+    # C2: the write lands in the RESOLVED prefs home (the one every preference
+    # writer uses), not the container's data_dir — which is the shadow tree the
+    # owner's own remedy used to disappear into.
+    assert load_preferences(tmp_path, "local")["session.persona"] == "analyst"
 
 
 def test_persona_set_free_text_still_says_literal(local_gate, chars_home, tmp_path):

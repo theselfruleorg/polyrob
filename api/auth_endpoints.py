@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 import logging
 import os
 import re
-from api.auth_constants import is_admin_wallet
+from api.auth_constants import is_admin_role, is_admin_wallet
 from core.token_denylist import OWNER_COOKIE_TTL_SECONDS
 
 logger = logging.getLogger(__name__)
@@ -97,14 +97,27 @@ async def get_nonce(request: NonceRequest):
         }
     """
 
-    from core.container import DependencyContainer
     import os
 
-    container = DependencyContainer.get_instance()
-    siwe_auth = container.get_service('siwe_authenticator')
+    from api.dependencies import optional_container
+
+    # B19 (revalidation): resolve the container through the tolerant seam —
+    # `DependencyContainer.get_instance()` RAISES on a process whose lifespan
+    # never ran, so the honest 503 below was unreachable and the caller got a
+    # 500 traceback on exactly the instance the message is written for.
+    container = optional_container()
+    siwe_auth = container.get_service('siwe_authenticator') if container else None
 
     if not siwe_auth:
-        raise HTTPException(status_code=500, detail="SIWE authenticator not initialized")
+        # B19: a wallet login on an instance with the account system OFF is a
+        # CONFIGURATION state, not a server fault — 500 told the caller to
+        # retry something that can never succeed.
+        raise HTTPException(
+            status_code=503,
+            detail=("Wallet sign-in is not enabled on this instance. "
+                    "Set ENABLE_AUTH=true (and configure a database) to turn "
+                    "on the account system, then restart."),
+        )
 
     # Get domain from environment or default to the local webview
     domain = os.environ.get("WEBVIEW_DOMAIN", "localhost:3000")
@@ -125,15 +138,25 @@ async def get_nonce(request: NonceRequest):
 async def verify_signature(request: VerifyRequest):
     """Verify wallet signature and return JWT with HTTP-only cookie."""
 
-    from core.container import DependencyContainer
-    container = DependencyContainer.get_instance()
+    from api.dependencies import optional_container
 
-    siwe_auth = container.get_service('siwe_authenticator')
-    identity_mapper = container.get_service('identity_mapper')
-    db = container.get_service('database_manager')
+    # B19 (revalidation): see /nonce — the container accessor raises on an
+    # uninitialized process, so it is resolved through the tolerant seam and
+    # the 503 below is reachable.
+    container = optional_container()
+    siwe_auth = container.get_service('siwe_authenticator') if container else None
+    identity_mapper = container.get_service('identity_mapper') if container else None
+    db = container.get_service('database_manager') if container else None
 
     if not siwe_auth or not identity_mapper or not db:
-        raise HTTPException(status_code=500, detail="Auth services unavailable")
+        # B19: the twin of /nonce — a disabled account system is 503 with the
+        # remedy, never a 500 that invites a retry.
+        raise HTTPException(
+            status_code=503,
+            detail=("Wallet sign-in is not enabled on this instance. "
+                    "Set ENABLE_AUTH=true (and configure a database) to turn "
+                    "on the account system, then restart."),
+        )
 
     # Verify signature
     is_valid = await siwe_auth.verify_signature(
@@ -216,7 +239,11 @@ async def verify_signature(request: VerifyRequest):
         "wallet_address": request.wallet_address,
         "role": role,
         "tier": tier,
-        "is_admin": is_admin_by_wallet or role == 'admin',
+        # The ONE admin predicate (core.constants.ADMIN_ROLES), not a literal.
+        # A hardcoded admin-role literal is the same H1 shape the audit
+        # removed from three other gates: it misses "owner", so an owner-login
+        # response said is_admin=false and every client hid the admin surface.
+        "is_admin": is_admin_by_wallet or is_admin_role(role),
         "expires_at": expires_at.isoformat()
     }
 
@@ -258,19 +285,28 @@ async def get_current_user(request: Request):
     Requires Authorization: Bearer <token> header.
     """
 
-    # user_id is added to request.state by middleware
-    if not hasattr(request.state, 'user_id'):
+    # B45 (revalidation): `hasattr` is True the moment ANY middleware touched
+    # the attribute — including when it set it to None or "" — so an
+    # unauthenticated caller read as authenticated. The VALUE decides.
+    user_id = getattr(request.state, 'user_id', None)
+    if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
-    from core.container import DependencyContainer
-    container = DependencyContainer.get_instance()
-    tier_manager = container.get_service('tier_manager')
+    from api.dependencies import optional_container
+
+    container = optional_container()
+    tier_manager = container.get_service('tier_manager') if container else None
 
     if tier_manager:
-        user_info = await tier_manager.get_user_info(request.state.user_id)
+        user_info = await tier_manager.get_user_info(user_id)
         return user_info
-    else:
-        return {"user_id": request.state.user_id}
+    # No account system on this instance: say who the caller is and with what
+    # role, rather than nothing. `role` is what decides admin/service access.
+    return {
+        "user_id": user_id,
+        "role": getattr(request.state, 'role', 'user'),
+        "tier": getattr(request.state, 'tier', 'free'),
+    }
 
 
 # =============================================================================
@@ -334,17 +370,30 @@ async def create_api_key(request: Request, key_request: CreateAPIKeyRequest):
     Usage:
         curl -H "X-API-KEY: rob_abc123..." https://your-polyrob-host.example/a2a/rpc
     """
-    if not hasattr(request.state, 'user_id'):
-        raise HTTPException(status_code=401, detail="Authentication required. Login with wallet first.")
+    # B45: `hasattr(request.state, 'user_id')` is True whenever ANY middleware
+    # touched the attribute — including when it set it to None or "" — so an
+    # unauthenticated caller could mint a key owned by a null user (a row no
+    # tenant can ever revoke, usable by whoever holds it). The strict policy is
+    # the one gate: it also rejects the synthetic `api_user` /
+    # `authenticated_api_user` placeholders.
+    from api.dependencies import get_user_strict
+    user_id = await get_user_strict(request)
 
-    user_id = request.state.user_id
-
-    from core.container import DependencyContainer
-    container = DependencyContainer.get_instance()
-    api_key_manager = container.get_service('api_key_manager')
+    from api.dependencies import optional_container
+    container = optional_container()
+    api_key_manager = container.get_service('api_key_manager') if container else None
 
     if not api_key_manager:
-        raise HTTPException(status_code=503, detail="API key service unavailable")
+        # B2: name the remedy. The key manager is registered only under
+        # ENABLE_AUTH (core/initialization.py::initialize_auth_services), which
+        # is OFF by default — so "unavailable" on a fresh install is a
+        # configuration fact, not a fault.
+        raise HTTPException(
+            status_code=503,
+            detail=("API key minting is not enabled on this instance. "
+                    "Set ENABLE_AUTH=true (and configure a database) to turn "
+                    "on the account + API-key system, then restart."),
+        )
 
     try:
         result = await api_key_manager.generate_api_key(
@@ -364,17 +413,22 @@ async def list_api_keys(request: Request):
 
     Note: Only shows key prefixes, not full keys.
     """
-    if not hasattr(request.state, 'user_id'):
-        raise HTTPException(status_code=401, detail="Authentication required")
+    # B45 (revalidation): the SAME strict gate `create_api_key` uses. Listing
+    # and revoking are tenant operations; a null / placeholder identity must
+    # not reach another tenant's key rows.
+    from api.dependencies import get_user_strict, optional_container
+    user_id = await get_user_strict(request)
 
-    user_id = request.state.user_id
-
-    from core.container import DependencyContainer
-    container = DependencyContainer.get_instance()
-    api_key_manager = container.get_service('api_key_manager')
+    container = optional_container()
+    api_key_manager = container.get_service('api_key_manager') if container else None
 
     if not api_key_manager:
-        raise HTTPException(status_code=503, detail="API key service unavailable")
+        raise HTTPException(
+            status_code=503,
+            detail=("API keys are not enabled on this instance. "
+                    "Set ENABLE_AUTH=true (and configure a database) to turn "
+                    "on the account + API-key system, then restart."),
+        )
 
     keys = await api_key_manager.list_user_keys(user_id)
     return [APIKeyInfo(**k) for k in keys]
@@ -388,17 +442,20 @@ async def revoke_api_key(request: Request, key_prefix: str):
     Args:
         key_prefix: The key prefix (e.g., "rob_abc123")
     """
-    if not hasattr(request.state, 'user_id'):
-        raise HTTPException(status_code=401, detail="Authentication required")
+    # B45 (revalidation): same strict gate as create/list — see above.
+    from api.dependencies import get_user_strict, optional_container
+    user_id = await get_user_strict(request)
 
-    user_id = request.state.user_id
-
-    from core.container import DependencyContainer
-    container = DependencyContainer.get_instance()
-    api_key_manager = container.get_service('api_key_manager')
+    container = optional_container()
+    api_key_manager = container.get_service('api_key_manager') if container else None
 
     if not api_key_manager:
-        raise HTTPException(status_code=503, detail="API key service unavailable")
+        raise HTTPException(
+            status_code=503,
+            detail=("API keys are not enabled on this instance. "
+                    "Set ENABLE_AUTH=true (and configure a database) to turn "
+                    "on the account + API-key system, then restart."),
+        )
 
     success = await api_key_manager.revoke_key(user_id, key_prefix)
 

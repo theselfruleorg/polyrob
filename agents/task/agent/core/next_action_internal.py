@@ -122,6 +122,17 @@ from modules.llm.aux_metering import extract_stable_request_id
 
 
 
+def _prefix_stamps(agent) -> dict:
+	"""The last call's prefix identity (`prefix_sha`/`tools_sha`, stamped by the
+	OpenRouter request path) for the usage record — {} on a provider that does
+	not stamp, never a failure (metadata must not break billing)."""
+	try:
+		from modules.llm.prefix_stamp import read_stamps
+		return read_stamps(getattr(agent, "llm", None))
+	except Exception:
+		return {}
+
+
 class NextActionInternalMixin:
 	"""Core LLM-invocation method (_get_next_action_internal) split whole out of
 	LLMRunnerMixin so llm_runner.py drops under 700L (P9). Agent composes it;
@@ -228,6 +239,15 @@ class NextActionInternalMixin:
 		# can't overwrite the source before we read it.
 		request_id = extract_stable_request_id(getattr(self, 'llm', None), response, provider)
 
+		# 057 WS-B: feed the output-scaled timeout from the SAME extraction the
+		# billing record uses — one read of the provider's usage block, not two.
+		try:
+			self.message_manager.note_call_usage(
+				output_tokens=output_tokens, input_tokens=input_tokens,
+				cached_tokens=cached_tokens)
+		except Exception:
+			pass
+
 		if self.usage_tracker and self.user_id:
 			try:
 				usage_record = await self.usage_tracker.record_llm_usage(
@@ -244,7 +264,8 @@ class NextActionInternalMixin:
 					component="agent",
 					purpose=purpose,
 					success=True,
-					request_id=request_id
+					request_id=request_id,
+					metadata=_prefix_stamps(self)
 				)
 				self.logger.info(
 					f"✓ Step {getattr(getattr(self, 'state', None), 'n_steps', '?')}: "
@@ -763,8 +784,15 @@ Then emit your function calls."""
 								tool_str = json.dumps(tool, indent=2) if isinstance(tool, dict) else str(tool)
 								self.logger.debug(f"  Tool schema {i}: {tool_str[:300]}...")
 
-						# NO LIMITS: Pass all tools to the LLM - modern models can handle it
-						# Note: "tools" = LLM function calling schemas, "actions" = our internal Registry actions
+						# The RIG is the limit (057 WS-A). Every registered action is
+						# emitted here — there is deliberately no second filter at this
+						# seam, because a filter here would disagree with the catalog the
+						# agent was shown and with what `load_tool` can materialize.
+						# Narrowing belongs where the session is BUILT:
+						# `core/config_policy/rigs.py` picks the tool_ids a cron/goal run
+						# loads, and progressive disclosure lets that run widen itself.
+						# ("tools" = LLM function-calling schemas; "actions" = internal
+						# Registry actions.)
 						self.logger.info(f"Using all {len(tools) if tools else 0} tools for native function calling")
 
 						if tools and len(tools) > 0:
@@ -849,6 +877,16 @@ Then emit your function calls."""
 										f"Extracted tokens: {input_tokens} input + {output_tokens} output "
 										f"(cached: {cached_tokens})"
 									)
+									# 057 WS-B: the NATIVE-tools path is the one prod runs (purpose
+									# "next_action"); it billed but never fed the output-scaled timeout,
+									# so every call read the 1,024-token default (prod 2026-09-20 04:50Z,
+									# six steps flat at 136 s). Same extraction, one read.
+									try:
+										self.message_manager.note_call_usage(
+											output_tokens=output_tokens, input_tokens=input_tokens,
+											cached_tokens=cached_tokens)
+									except Exception:
+										pass
 
 									# G-26 reachability fix: extract the provider's own response id
 									# (when available) as the STABLE dedup key for this completion.
@@ -876,7 +914,8 @@ Then emit your function calls."""
 												component="agent",
 												purpose="next_action",
 												success=True,
-												request_id=request_id
+												request_id=request_id,
+												metadata=_prefix_stamps(self)
 											)
 
 											# Log what user was charged (transparent billing)

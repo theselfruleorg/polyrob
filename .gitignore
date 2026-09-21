@@ -269,3 +269,13 @@ config/.env.production.*
 # Portal docs are staged at deploy time by scripts/sync_portal_docs.sh — a build
 # artifact, regenerated every deploy. The source of truth is docs/.
 web/portal/docs/
+
+# Fly config lives in deployment/fly/fly.toml.template; the root copy is a local artefact.
+fly.toml
+
+# Brand renders produced ad hoc at the repo root by web/portal/brand/*.py — local
+# design artefacts, never repo content. The committed sources live in web/portal/brand/.
+/polyrob-icon-*.png
+/polyrob-header-*.png
+/mindprint-wall-*.png
+/polyrob-logo-render.py

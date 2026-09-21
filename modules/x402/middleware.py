@@ -270,7 +270,12 @@ class X402PaymentMiddleware(BaseHTTPMiddleware):
         )
 
         if payment_header:
-            if self._facilitator_client:
+            # B3: settle ONLY on a route that actually charges. Without this
+            # gate any path carrying an X-PAYMENT header was verified AND
+            # SETTLED — money taken for a request the endpoint layer never
+            # bills, including a free read or a caller's stray header.
+            if self._facilitator_client and self._is_x402_gated(
+                    request.url.path, request.method):
                 return await self._handle_x402_payment(request, call_next, payment_header)
 
             # G-17: a real payment attempt landed on a gated path but the facilitator

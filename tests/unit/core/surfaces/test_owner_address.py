@@ -140,6 +140,8 @@ def test_no_reachable_surface_still_falls_back_durably(monkeypatch):
     router, ev = _Router(), _EvLog()
     c = _Container({"message_router": router})
     out = _deliver(c, "u-nondigit", "hello", event_log=ev)
-    assert out == "fallback"
+    # D21: no address resolved => no sink was even tried. Distinct from a sink
+    # that WAS there and refused; the durable notice is written either way.
+    assert out == "no_sink"
     assert router.sent == []
     assert any(e["kind"] == "owner_notice" for e in ev.events)

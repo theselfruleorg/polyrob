@@ -34,8 +34,11 @@ async def api_apps(request: Request):
 
 async def _decide(request: Request, slug: str, verb: str):
     from core.app_service import owner_ops
+    from webview.copy import t
     pages = _p()
-    pages._owner_console_required()
+    # 043 A34: name THIS control. The default label is "the pause controls",
+    # which is a refusal that points at the wrong screen.
+    pages._owner_console_required(t("inbox.owner_console"))
     user_id = pages._effective_user_id(request)
     fn = {"approve": owner_ops.approve, "reject": owner_ops.reject, "kill": owner_ops.kill}[verb]
     ok, msg = fn(_registry(), slug, user_id, via="webview")

@@ -130,7 +130,7 @@ class ReflectionService:
             )
             _t0 = time.perf_counter()
             resp = run_coroutine_sync(
-                self._llm.ainvoke([HumanMessage(content=prompt)]),
+                self._llm.ainvoke([HumanMessage(content=prompt)], tools=None),
                 timeout=30.0,
             )
             _duration = time.perf_counter() - _t0

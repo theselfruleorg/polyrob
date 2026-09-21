@@ -332,3 +332,74 @@ async def test_digest_no_link_without_public_url(monkeypatch):
     from cron import digest
     text = await digest.compose_digest("u1", days=1)
     assert "https://" not in text
+
+
+def _quiet(monkeypatch):
+    monkeypatch.setattr(digest, "_ledger", lambda uid, days: {})
+    monkeypatch.setattr(digest, "_event_aggregate", lambda uid, since: {})
+    monkeypatch.setattr(digest, "_open_asks", lambda uid, data_dir: [])
+    monkeypatch.setattr(digest, "_episodes", lambda uid, since: [])
+
+
+@pytest.mark.asyncio
+async def test_digest_rolls_up_missed_owner_messages(monkeypatch):
+    """`user_delivery.py` suppresses a capped/paused owner message on the
+    promise that it is rolled into the digest; until now NEITHER digest path
+    read `missed_notices` (inbox 2026-09-20 04:37Z). The composed digest now
+    carries a 'Missed owner messages' section: window-bounded, kind-grouped,
+    marker-stripped, capped, oldest first."""
+    _quiet(monkeypatch)
+    import time
+    now = time.time()
+    notes = [
+        {"ts": now - 3600, "text": "self_evolution: skill draft X pending", "kind": "capped"},
+        {"ts": now - 1800, "text": "goal 1234 done — posted the thread", "kind": "capped"},
+        {"ts": now - 600, "text": "settlement watcher held while paused", "kind": "paused"},
+        {"ts": now - 3 * 86400, "text": "ancient, outside the window", "kind": "capped"},
+    ]
+    monkeypatch.setattr(digest, "_missed", lambda uid, data_dir, n: list(notes))
+    text = await digest.compose_digest("u1", days=1)
+    assert "Missed owner messages (3)" in text
+    assert "[capped] self_evolution: skill draft X pending" in text
+    assert "[paused] settlement watcher held while paused" in text
+    import re
+    assert re.search(r"   - \d\d-\d\d \d\d:\d\dZ \[capped\]", text)   # day-stamped: the window spans midnight
+    assert "ancient" not in text                       # outside the 1-day window
+    body = text.split("Missed owner messages")[1]
+    assert body.index("skill draft X") < body.index("goal 1234")   # oldest first
+
+
+@pytest.mark.asyncio
+async def test_digest_missed_section_caps_and_counts_the_rest(monkeypatch):
+    _quiet(monkeypatch)
+    import time
+    now = time.time()
+    notes = [{"ts": now - i * 60, "text": f"notice {i}", "kind": "capped"} for i in range(12)]
+    monkeypatch.setattr(digest, "_missed", lambda uid, data_dir, n: list(notes))
+    text = await digest.compose_digest("u1", days=1)
+    assert "Missed owner messages (12)" in text
+    assert text.count("   - ") >= digest.MISSED_MAX_LINES
+    assert f"… and {12 - digest.MISSED_MAX_LINES} more" in text
+
+
+@pytest.mark.asyncio
+async def test_digest_missed_unreadable_is_named_never_silent(monkeypatch):
+    """`missed_notices` RAISES on an unreadable store (never returns [] for
+    'could not read'); the digest renders the reason instead of an empty
+    section or nothing — 'nothing missed' must not come to mean 'could not tell'."""
+    _quiet(monkeypatch)
+
+    def boom(uid, data_dir, n):
+        raise FileNotFoundError("telemetry log not found at /x/telemetry_events.db")
+    monkeypatch.setattr(digest, "_missed", boom)
+    text = await digest.compose_digest("u1", days=1)
+    assert "Missed owner messages: unreadable" in text
+    assert "telemetry log not found" in text
+
+
+@pytest.mark.asyncio
+async def test_digest_no_missed_messages_says_so(monkeypatch):
+    _quiet(monkeypatch)
+    monkeypatch.setattr(digest, "_missed", lambda uid, data_dir, n: [])
+    text = await digest.compose_digest("u1", days=1)
+    assert "Missed owner messages: none" in text

@@ -136,9 +136,16 @@ def describe_route_outcome(route_outcome: Optional[str]) -> Optional[str]:
 	"""
 	if route_outcome in (None, "sent"):
 		return None
+	# D21/D49 (2026-09-21): three outcomes that USED to share one word.
+	if route_outcome == "no_sink":
+		return ("no live delivery channel — kept as a durable owner notice "
+				"(not an instant push; the owner sees it on their next contact)")
+	if route_outcome == "queued":
+		return ("handed to the durable cross-process outbound queue — delivery "
+				"is still owed, not yet done (the surface process sends it)")
 	if route_outcome == "fallback":
-		return ("no live delivery channel — queued as a durable owner notice "
-				"(not an instant push; check `polyrob owner` on the next contact)")
+		return ("NOT delivered to the user — a live delivery channel existed "
+				"and the send FAILED; the text is kept as a durable owner notice")
 	reason = ROUTE_OUTCOME_NOT_DELIVERED.get(
 		route_outcome, f"outcome={route_outcome}")
 	return f"NOT delivered to the user — {reason}"

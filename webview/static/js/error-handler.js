@@ -293,8 +293,8 @@ document.head.appendChild(errorStyles);
 // Initialize error handler
 const errorHandler = new ErrorHandler();
 
-// Bridge for CLASSIC (non-module) scripts — profile.js / activity.js load
-// without type="module" and cannot import this file. They
+// Bridge for CLASSIC (non-module) scripts — admin/activity.js loads
+// without type="module" and cannot import this file. It
 // use `window.errorHandler?.notify(...)` (guarded: module scripts execute
 // after classic ones, so the global may not exist at their top-level run).
 window.errorHandler = errorHandler;

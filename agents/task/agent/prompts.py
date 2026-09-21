@@ -775,9 +775,17 @@ Task Completion:
 			if how:
 				# 2026-09-13: naming the verb was not enough — artifacts were
 				# "delivered" as a workspace path in prose, which the reader
-				# cannot open. Send each file explicitly; `done()` is suppressed
-				# on text surfaces to avoid duplicate bubbles, so it is NOT a
-				# delivery channel for media.
+				# cannot open. Send each file explicitly.
+				#
+				# ⚠️ D75: this comment used to say `done()` is "suppressed on
+				# text surfaces to avoid duplicate bubbles". That suppression
+				# and its `CHAT_SINGLE_FINAL` gate were REMOVED on 2026-09-17
+				# (the mirror missed every turn that spoke through `message`
+				# and delivered a third-person recap as a second bubble).
+				# `done()` is not a delivery channel for a different and
+				# permanent reason: it writes the run log — history and feed —
+				# and never reaches a chat surface at all, in a DM or a room.
+				# Only `send_message` / `message` speak.
 				lines.append(
 					"Writing a file path into your reply is NOT a delivery — the "
 					"reader cannot open your workspace. Send every chart, report, "
@@ -1351,6 +1359,14 @@ Interactive elements from current page:
 						rendered = result.extracted_content[:RobustParseConfig.MAX_SUCCESS_LENGTH] + f"\n[...truncated {len(result.extracted_content) - RobustParseConfig.MAX_SUCCESS_LENGTH:,} chars]"
 					else:
 						rendered = result.extracted_content
+					# 057 WS-B (prod 2026-09-20 14:04Z): the ToolMessage is capped at
+					# TOOL_RESULT_MAX_TOKENS but this render printed the SAME bytes
+					# again under the 100k-CHAR limit above — five anysite JSON answers
+					# in one step put ~110k uncached tokens into the next call (210k in,
+					# a 221 s timeout) with the cap "armed". Same cap, same honest tail,
+					# here too. Cap off (0) ⇒ the legacy limit alone, byte-identical.
+					from agents.task.agent.core.result_budget import truncate_tool_result
+					rendered = truncate_tool_result(rendered)
 					rendered = maybe_wrap_result_content(result, rendered)
 					state_description += f'\nAction result {i + 1}/{len(self.result)}: {rendered}'
 				if result.error:

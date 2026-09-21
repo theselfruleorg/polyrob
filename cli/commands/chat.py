@@ -349,6 +349,14 @@ async def _run_persistent_app(
         control_factory=_factory,
         rejected=renderer.print_block,
     )
+    # C18: publish the controller so `/cancel` (a LIVE command, so it reaches
+    # the dispatcher mid-turn) can stop the running turn. Without this the verb
+    # core.verbs promises on every seat had nothing to act on in the terminal.
+    try:
+        from cli.ui.commands.h_rooms import set_turn_controller
+        set_turn_controller(holder["ctrl"])
+    except Exception:
+        pass
 
     if background_poll is not None:
         import asyncio

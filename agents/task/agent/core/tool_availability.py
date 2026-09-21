@@ -52,6 +52,58 @@ def _hint_enabled() -> bool:
     return _bool_env("TOOL_AVAILABILITY_HINT", True)
 
 
+#: The compute tools whose gate has TWO limbs (a flag AND the posture). Their
+#: registry row is a static fallback; the live line comes from ``compute_gate``.
+_COMPUTE_TOOLS = {
+    "code_execution": ("CODE_EXEC_ENABLED", "code_exec_enabled"),
+    "shell": ("SHELL_TOOLS_ENABLED", "shell_tools_enabled"),
+}
+
+_COMPUTE_SESSION_REMEDY = (
+    "not in this session's toolset — goal/cron runs carry the compute tools only "
+    "at posture>=1 with the flag on; otherwise run it in an interactive (owner) "
+    "session or raise ONE ask")
+
+
+def _compute_limbs() -> dict:
+    """Live state of every compute-gate limb (frozen-at-import posture + flags)."""
+    from core.config_policy import capability_toggles as ct
+    from core.config_policy.compute_posture import compute_posture
+    return {
+        "posture": compute_posture(),
+        "code_exec_enabled": ct.code_exec_enabled(),
+        "shell_tools_enabled": ct.shell_tools_enabled(),
+    }
+
+
+def compute_gate(tool: str) -> tuple:
+    """(gate, tier, remedy) for a compute tool, naming the limb that is ACTUALLY unmet.
+
+    Rob's self-review 2026-09-19 #2: prod ran ``AGENT_COMPUTE_POSTURE=1`` with
+    ``CODE_EXEC_ENABLED=false`` and the note still said "owner raises
+    AGENT_COMPUTE_POSTURE" — a remedy the deploy already satisfied, so the owner could
+    not act on it. A disabled tool whose named remedy is already met must name the
+    real blocker. Fail-open to the static registry row on any error.
+    """
+    static = GATED_TOOL_REGISTRY[tool]
+    try:
+        flag_name, limb = _COMPUTE_TOOLS[tool]
+        limbs = _compute_limbs()
+        posture = limbs["posture"]
+        if posture < 1:
+            return (f"AGENT_COMPUTE_POSTURE={posture} (needs AGENT_COMPUTE_POSTURE>=1)",
+                    "disabled",
+                    "owner raises AGENT_COMPUTE_POSTURE (host axis; not part of AUTONOMY_MODE)")
+        if not limbs[limb]:
+            return (f"{flag_name}=false (posture {posture} already met)",
+                    "disabled",
+                    f"owner sets {flag_name}=true — raising the posture changes nothing here")
+        return (f"{flag_name}=true, posture {posture}", "loadable", _COMPUTE_SESSION_REMEDY)
+    except Exception:
+        logger.debug("compute gate for %s failed (fail-open to registry)", tool, exc_info=True)
+        return static
+
+
 def grantable_autonomous_tools() -> list:
     """Tools a queued goal may be granted right now (planner grounding).
 
@@ -79,6 +131,8 @@ def build_tool_availability_note(loaded_tool_ids) -> str:
         for tool, (gate, tier, remedy) in sorted(GATED_TOOL_REGISTRY.items()):
             if tool in loaded:
                 continue
+            if tool in _COMPUTE_TOOLS:
+                gate, tier, remedy = compute_gate(tool)
             lines.append(f"- {tool} [{tier}] gate: {gate} → {remedy}")
         lines.append("Reserved tools are owner-only by design; their absence never blocks "
                      "other work. Goals you create carry their OWN tools: "

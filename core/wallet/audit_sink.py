@@ -51,11 +51,23 @@ class JsonlAuditSink(list):
         #: both `_load` and `append`, so `refresh()` reads only what ANOTHER writer
         #: added and can never double-count this process's own entries.
         self._offset = 0
-        parent = os.path.dirname(path)
+        # A READ never creates the store (2026-09-21). Constructing the sink used
+        # to mkdir `<home>/wallet/` and mint an `audit.jsonl.lock` before reading
+        # a byte, so every read-only caller that reaches `get_policy_gate()` —
+        # `polyrob doctor`'s money section, the unified ledger's caps block —
+        # planted a wallet directory in whatever home it resolved (in a bare CWD,
+        # `./.polyrob/wallet/`). With neither the ledger nor its high-water mark
+        # on disk there is nothing to load and nothing to serialise against, so
+        # the directory and the lock are deferred to the first real write.
+        if os.path.exists(path) or os.path.exists(self._hwm_path):
+            self._ensure_parent()
+            with self._write_lock():
+                self._load()
+
+    def _ensure_parent(self) -> None:
+        parent = os.path.dirname(self._path)
         if parent:
             os.makedirs(parent, exist_ok=True)
-        with self._write_lock():
-            self._load()
 
     @asynccontextmanager
     async def reserve(self):
@@ -66,6 +78,7 @@ class JsonlAuditSink(list):
         refuse instead of silently weakening the cap.
         """
         import fcntl
+        self._ensure_parent()
         fd = os.open(self._path + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
         try:
             while True:
@@ -95,6 +108,7 @@ class JsonlAuditSink(list):
             yield
             return
         import fcntl
+        self._ensure_parent()
         fd = os.open(self._path + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX)

@@ -11,6 +11,7 @@ import json
 import logging
 from typing import Any, Dict, List, Optional
 
+from agents.task.agent.core.result_budget import truncate_tool_result
 from agents.task.agent.core.untrusted_render import stamp_result_source
 from agents.task.agent.views import ActionResult, AgentBrain
 from core.security.untrusted_wrap import maybe_wrap
@@ -51,7 +52,9 @@ def _pair_results_to_calls(result, tool_calls_to_pass, source_for=None,
 			# UP-06: an untrusted tool can control its own error string, so the error
 			# branch must go through the same wrap as extracted_content — otherwise
 			# injected instructions in a tool's error reach the model unframed.
-			content = f"Error: {ar.error}"
+			# An untrusted tool controls its own error string too (UP-06), so it
+			# gets the same cap — and before the wrap, for the same reason.
+			content = truncate_tool_result(f"Error: {ar.error}")
 			if source_for is not None and tc_id is not None:
 				action_name, tool = source_for(tc_id)
 				stamp_result_source(ar, action_name, tool)
@@ -59,6 +62,11 @@ def _pair_results_to_calls(result, tool_calls_to_pass, source_for=None,
 			return (content, True)
 		if ar.extracted_content:
 			content = str(ar.extracted_content)
+			# 057 WS-B: cap ONE result's size on the wire. Before the untrusted
+			# wrap (so the closing delimiter is never what gets cut) and on the
+			# returned string only — ar.extracted_content is never mutated, so
+			# memory previews / telemetry keep the full content (UP-06 pattern).
+			content = truncate_tool_result(content)
 			if source_for is not None and tc_id is not None:
 				action_name, tool = source_for(tc_id)
 				stamp_result_source(ar, action_name, tool)

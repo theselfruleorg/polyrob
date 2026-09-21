@@ -976,6 +976,18 @@ class Registry:
 			self.logger.debug(f"No actions available for provider {provider}")
 			return []
 
+		# 057 WS-A (stable tool bytes): emit in a deterministic order. The schema
+		# list is part of the prompt's cached prefix, and its order here is dict
+		# INSERTION order — i.e. the order tools happened to register in, which
+		# differs between a cron session, a goal session and a chat session that
+		# hold the SAME tools. A different prefix is a cold cache at 50x the
+		# cached input price. Sorting by action name makes two registries with
+		# the same ids emit identical bytes. Gated TOOL_SCHEMA_STABLE_ORDER
+		# (default OFF => pre-057 order, byte-identical).
+		from core.env import bool_env as _bool_env
+		if _bool_env("TOOL_SCHEMA_STABLE_ORDER", False):
+			all_actions.sort(key=lambda a: getattr(a, "name", "") or "")
+
 		# Get the appropriate schema generator
 		generator = get_schema_generator(provider)
 

@@ -35,6 +35,12 @@ INBOUND_DIR = "inbound"
 #: ``api.task_http_api.inject_file_content_to_message``'s original set.
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 
+#: Image formats the console upload allowlist accepts but no provider decodes as
+#: a vision block. D55: these fell through to the generic "Attached file" branch,
+#: which told the agent it was a document — so it neither saw the picture nor
+#: knew that it was one. Named honestly instead.
+UNDECODABLE_IMAGE_EXTENSIONS = {".bmp", ".heic", ".heif", ".tif", ".tiff"}
+
 #: Text-ish extensions whose whole body is inlined when small enough.
 INLINE_TEXT_EXTENSIONS = {
     ".txt", ".md", ".csv", ".json", ".xml", ".yaml", ".yml", ".log",
@@ -215,6 +221,15 @@ def inject_file_content(
         return text, [{"type": "image_url",
                        "image_url": {"url": f"data:{mime};base64,{encoded}"}}]
 
+    if ext in UNDECODABLE_IMAGE_EXTENSIONS:
+        # D55: it IS an image, and it cannot be shown to the model. Both halves
+        # matter — "attached file, type .heic" invited the agent to describe a
+        # photo it had never seen.
+        return (f"{message_text}\n\n[Attached image: {name} ({_human_size(size)}) "
+                f"is a {ext} file, a format that cannot be decoded as an image "
+                f"here. You CANNOT see it — say so rather than guessing its "
+                f"content. It IS saved at {rel_path}.]"), None
+
     if size < INLINE_SIZE_THRESHOLD and ext in INLINE_TEXT_EXTENSIONS:
         try:
             with open(full_path, "r", encoding="utf-8") as fh:
@@ -263,13 +278,25 @@ async def absorb_inbound_media(
     are still absorbed. The caller's turn always proceeds.
     """
     text = base_text or ""
-    if not media or not inbound_media_enabled():
+    if not media:
         return text, None
 
     candidates = [m for m in media
                   if getattr(m, "kind", None) not in _TRANSCRIBED_KINDS]
     if not candidates:
         return text, None
+
+    if not inbound_media_enabled():
+        # D51: the turn carried files and the rail is off. Saying nothing let
+        # the agent answer as though the sender had attached nothing — the
+        # exact silent drop this module exists to end. Name them and the reason.
+        names = ", ".join(
+            str(getattr(m, "filename", None) or getattr(m, "kind", None) or "file")
+            for m in candidates)
+        return (f"{text}\n\n[This message carried {len(candidates)} attachment(s) "
+                f"({names}) that were NOT read: inbound media handling is turned "
+                f"off on this deployment. Say so rather than guessing their "
+                f"content; the owner can turn it back on.]"), None
 
     cap = inbound_media_max_files() if max_files is None else max_files
     overflow = max(0, len(candidates) - cap)
@@ -304,8 +331,14 @@ async def absorb_inbound_media(
             images.extend(imgs)
 
     if overflow:
+        # D54: NAME them. A bare count left the agent unable to say which file
+        # it had not read, so it could neither ask for it nor admit to the gap.
+        skipped = ", ".join(
+            str(getattr(m, "filename", None) or getattr(m, "kind", None) or "file")
+            for m in candidates[cap:])
         text = (f"{text}\n\n[{overflow} more attachment(s) on this message were not "
-                f"read — the per-message cap is {cap}. Ask for them one at a time.]")
+                f"read — the per-message cap is {cap}. Not read: {skipped}. "
+                f"Ask for them one at a time.]")
 
     return text, (images or None)
 

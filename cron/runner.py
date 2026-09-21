@@ -33,6 +33,15 @@ def default_cron_tools() -> list:
         return list(BASE_DEFAULT_TOOLS)
 
 
+def resolve_cron_tools(payload: Optional[dict]) -> list:
+    """057 WS-A: the job's toolset — ``payload.tools`` (verbatim, the existing
+    owner-grant contract) > ``payload.rig`` > ``AUTONOMOUS_RIG_DEFAULT`` >
+    :func:`default_cron_tools`. Byte-identical while the env is unset, which is
+    the shipped default (``full``)."""
+    from core.config_policy.rigs import resolve_rig_tools
+    return resolve_rig_tools(payload, default_cron_tools())
+
+
 def resolve_job_provider(payload: Optional[dict]) -> tuple:
     """(provider_to_use, skip) for a durable job's stored provider pin.
 
@@ -66,6 +75,22 @@ def resolve_job_provider(payload: Optional[dict]) -> tuple:
     return (preferred, False)
 
 
+def _delivery_ev(job, outcome: str, target: str) -> None:
+    """Emit a `cron_delivery` event (fail-open) so the out-of-band delivery's
+    outcome — sent / deferred / suppressed / already_told / failed — is in the
+    durable ledger, not only the journal line. Tell once (2026-09-21): a skipped
+    echo is a decision every seat can show, never a silent no-op."""
+    try:
+        from core.event_log import get_event_log, event_log_enabled
+        if event_log_enabled():
+            get_event_log().record(
+                "cron_delivery", user_id=getattr(job, "user_id", ""),
+                source="cron", job_id=getattr(job, "id", None),
+                outcome=outcome, target=target)
+    except Exception:
+        pass
+
+
 def _cron_ev(job, outcome: str, reason: Optional[str] = None, **extra) -> None:
     """Emit a cron_run event to the durable event log (fail-open). Makes cron
     lifecycle queryable in the uniform autonomy/governance stream, not just the
@@ -95,7 +120,11 @@ def _cron_tick_is_active(result: Any) -> bool:
     contention, REPL busy) or found nothing due counts as idle. Named + module-level
     so it's directly unit-testable without going through the async ticker loop.
     """
-    return bool(getattr(result, "ran", None)) or bool(getattr(result, "failed", None))
+    # 057 WS-C (A3): a tick that YIELDED a goal for a due rail did real work (it
+    # moved the board), so it must not read as an idle tick and back the ticker off.
+    return (bool(getattr(result, "ran", None))
+            or bool(getattr(result, "failed", None))
+            or bool(getattr(result, "yielded", None)))
 
 
 class CronTicker:
@@ -323,7 +352,7 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
             "task": job.task,
             "provider": provider,
             "model": model,
-            "tools": payload.get("tools", default_cron_tools()),
+            "tools": resolve_cron_tools(payload),
             "max_steps": payload.get("max_steps", 20),
             "temperature": 0.0,
             "cron": True,
@@ -462,8 +491,11 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
             deliver = payload.get("deliver")
             if AutonomyConfig.cron_delivery_enabled() and deliver and final:
                 try:
-                    from cron.delivery import deliver_result, delivery_outcome
-                    ok = await deliver_result(
+                    from cron.delivery import deliver_result_ex, delivery_outcome
+                    # D45 (2026-09-21): the typed result — a quiet-hours hold, a
+                    # dedup, a cap or a pause is `deferred` (recorded, not lost),
+                    # never logged as a send FAILURE.
+                    state = await deliver_result_ex(
                         task_agent, job, final,
                         target=deliver, deliver_target=payload.get("deliver_target"),
                         session_id=session_id,
@@ -472,7 +504,8 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
                     # outcome distinguishes a [SILENT] opt-out (suppressed) from a real
                     # send failure (failed) — they used to both log as ok=False.
                     logger.info("cron job %s out-of-band delivery target=%s outcome=%s",
-                                job.id, deliver, delivery_outcome(final, ok))
+                                job.id, deliver, delivery_outcome(final, state))
+                    _delivery_ev(job, delivery_outcome(final, state), str(deliver))
                 except Exception as e:  # belt-and-suspenders; delivery is best-effort
                     logger.error("cron job %s delivery error: %s", job.id, e, exc_info=True)
 

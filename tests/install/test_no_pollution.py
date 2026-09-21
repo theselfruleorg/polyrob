@@ -44,6 +44,42 @@ def test_doctor_creates_nothing_in_cwd(tmp_path):
     )
 
 
+def test_doctor_creates_nothing_in_cwd_without_the_crypto_extra(tmp_path):
+    """The BASE install has no `eth_account`, and that path is not what the dev
+    tree exercises.
+
+    1.1.0 regression: `polyrob doctor` grew a money section that builds the
+    unified ledger, whose caps block asks for the wallet policy gate. On a dev
+    machine the gate is importable and answers quietly; on a base wheel the
+    import raises, the seam WARNED, and that one warning was enough to make the
+    rotating file handler mint `<cwd>/.polyrob/logs/bot.log` in a directory the
+    agent had never run in. The sibling test above cannot see it, because the
+    tree it runs from has the extra installed.
+    """
+    cwd = tmp_path / "empty"
+    home = tmp_path / "home"
+    stub = tmp_path / "stub"
+    cwd.mkdir()
+    home.mkdir()
+    (stub / "eth_account").mkdir(parents=True)
+    (stub / "eth_account" / "__init__.py").write_text(
+        "raise ImportError(\"No module named 'eth_account'\")\n"
+    )
+    env = _clean_env(home)
+    env["PYTHONPATH"] = f"{stub}{os.pathsep}{REPO_ROOT}"
+    proc = subprocess.run(
+        [sys.executable, "-c",
+         "import sys; sys.argv=['polyrob','doctor']; "
+         "from cli.polyrob import main; main()"],
+        cwd=cwd, env=env, capture_output=True, text=True, timeout=180,
+    )
+    assert proc.returncode == 0, proc.stderr[-1500:]
+    leftovers = sorted(p.name for p in cwd.iterdir())
+    assert leftovers == [], (
+        f"read-only doctor must not write into the CWD; created: {leftovers}"
+    )
+
+
 def test_declined_zero_key_repl_leaves_cwd_empty(tmp_path):
     cwd = tmp_path / "empty"
     home = tmp_path / "home"

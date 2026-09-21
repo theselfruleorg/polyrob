@@ -80,10 +80,18 @@ def test_the_legacy_dashboard_is_gone(monkeypatch):
     assert client.get("/sessions").status_code == 404
 
 
-def test_pending_survives_as_a_normal_route(monkeypatch):
-    """/pending is the one surviving webgate page (043 phase 5)."""
+def test_the_pending_page_is_gone(monkeypatch):
+    """A21 (2026-09-21 audit): ``/pending`` is DELETED.
+
+    It was the last page outside the five-destination information
+    architecture — no nav entry led to it, its reader was weaker than the
+    Inbox's (it swallowed a failed collector into an empty list) and its
+    English was inline rather than in the copy layer. The Inbox IS the review
+    queue; two review surfaces with different readings of the same store is
+    the class of defect the one-snapshot rule exists to prevent.
+    """
     client, _srv = _client(monkeypatch)
-    assert client.get("/pending").status_code == 200
+    assert client.get("/pending").status_code == 404
 
 
 def test_the_json_endpoints_are_registered(monkeypatch):
@@ -91,9 +99,22 @@ def test_the_json_endpoints_are_registered(monkeypatch):
     client, _srv = _client(monkeypatch)
     for path in ("/api/webgate/doctor", "/api/webgate/goals",
                  "/api/webgate/cron", "/api/webgate/pause",
-                 "/api/activity/backfill", "/api/webgate/apps",
+                 "/api/webgate/log", "/api/webgate/apps",
                  "/api/webgate/inbox"):
         assert client.get(path).status_code != 404, path
+
+
+def test_the_dead_readers_stay_deleted(monkeypatch):
+    """043 A12/A30: routes whose last caller was a deleted page or a dead
+    script. Each one is either loop-blocking, cross-tenant, or a credential
+    minted for nobody — a route with no consumer is a surface with no owner."""
+    client, _srv = _client(monkeypatch)
+    for path in ("/api/sessions",                       # A12: walked ~1,790 dirs
+                 "/api/refresh",                        # A30: refreshed nothing
+                 "/api/activity/backfill",              # A30: cross-tenant read
+                 "/api/session/s1/stats",               # A30: stats.js is dead
+                 "/api/session/s1/workspace/serve-token"):  # A30: no minter
+        assert client.get(path).status_code == 404, path
 
 
 def test_the_inbox_decision_routes_are_registered(monkeypatch):

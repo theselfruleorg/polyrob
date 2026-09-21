@@ -25,14 +25,23 @@ STARTERS = [
     "core/app_service/supervisor.py",               # 032: app_serve (the supervisor tick)
     "tools/twitter_tool.py",                        # 033: social_post, on EVERY write verb
     "tools/controller/message_send.py",             # the `message` tool's send path
+    "tools/email_tool.py",                          # D9: the email_send escape hatch
     "core/surfaces/outbound_dispatcher.py",         # the durable outbound drain (hold)
 ]
 
 # `allows(` or the aliased `_allows(` — both must come from core.autonomy_control.
 # (The module-qualified form `autonomy_control.allows(` is deliberately NOT accepted:
 # every starter imports the predicate by name so the grep stays one shape.)
-_CALL = re.compile(r"(?<![\w.])_?allows\(")
-_IMPORT = re.compile(r"from core\.autonomy_control import")
+#
+# `message_pause_refusal(` is the ONE documented wrapper (it is itself a direct
+# `allows(kind)` call — see its docstring), the way `_KIND_CALL` below already
+# accepts `pause_refusal_text`. A starter that reaches the predicate through it
+# must NOT also open-code an `allows()` call: that would be the second
+# mechanism this ratchet exists to prevent.
+_CALL = re.compile(r"(?<![\w.])(?:_?allows|message_pause_refusal)\(")
+_IMPORT = re.compile(
+    r"from core\.autonomy_control import"
+    r"|from tools\.controller\.message_send import [^\n]*message_pause_refusal")
 _LEGACY = ("AUTONOMY_HALT", "STREAM_SEEDING_PAUSE", "TREASURY_ENTRY_PAUSE")
 
 

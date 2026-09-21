@@ -23,11 +23,14 @@ logger = logging.getLogger(__name__)
 
 
 def _home(ctx: CommandContext) -> str:
-    """The data home this REPL is bound to — the container's, never the
-    process default, so a ``-P`` profile's Inbox is that profile's."""
-    from core.runtime_paths import data_dir_or_home
-    cfg = getattr(ctx.container, "config", None) if ctx.container else None
-    return data_dir_or_home(getattr(cfg, "data_dir", None))
+    """The data home this REPL's owner views read — the ONE admin seam (C2).
+
+    ``cli._admin_home.admin_data_dir`` applies the 031 deployed-home rule, so
+    on a box with a running daemon the Inbox shows the daemon's queue instead
+    of an empty ``cwd/.polyrob`` one. Read-only, so root is never refused.
+    """
+    from cli._admin_home import admin_data_dir
+    return admin_data_dir(write=False)
 
 
 def _limit(ctx: CommandContext):

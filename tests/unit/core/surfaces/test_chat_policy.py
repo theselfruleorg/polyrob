@@ -125,13 +125,33 @@ def test_a_hand_edited_mode_that_is_not_a_mode_falls_back(tmp_path, monkeypatch)
     assert load(tmp_path, "rob", "telegram", "-1", instance_id="polyrob").mode == "mention"
 
 
-def test_an_unreadable_file_reads_as_defaults(tmp_path, monkeypatch):
+def test_an_unreadable_file_fails_toward_listen(tmp_path, monkeypatch):
+    """D62: a corrupt overlay must never WIDEN the room.
+
+    Falling back to ``defaults()`` dropped ``chat.mute_until`` and ``chat.mode``
+    together, so an unparseable file un-muted the room it was muting.
+    """
     monkeypatch.delenv("GROUP_DEFAULT_MODE", raising=False)
     monkeypatch.delenv("GROUP_REQUIRE_MENTION", raising=False)
     path = chat_preferences_path(tmp_path, "rob", "telegram", "-1", "polyrob")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("this is not toml = = =", encoding="utf-8")
-    assert load(tmp_path, "rob", "telegram", "-1", instance_id="polyrob").mode == "mention"
+    assert load(tmp_path, "rob", "telegram", "-1", instance_id="polyrob").mode == "listen"
+
+
+def test_an_unreadable_file_keeps_the_last_good_policy(tmp_path, monkeypatch):
+    """D62: once this process has read a good overlay, a later corruption keeps
+    it rather than reverting to anything wider."""
+    import core.surfaces.chat_policy as cp
+    monkeypatch.delenv("GROUP_DEFAULT_MODE", raising=False)
+    monkeypatch.delenv("GROUP_REQUIRE_MENTION", raising=False)
+    cp._CACHE.clear()
+    path = chat_preferences_path(tmp_path, "rob", "telegram", "-9", "polyrob")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('[chat]\nmode = "off"\n', encoding="utf-8")
+    assert load(tmp_path, "rob", "telegram", "-9", instance_id="polyrob").mode == "off"
+    path.write_text("this is not toml = = =", encoding="utf-8")
+    assert load(tmp_path, "rob", "telegram", "-9", instance_id="polyrob").mode == "off"
 
 
 def test_env_default_mode(tmp_path, monkeypatch):

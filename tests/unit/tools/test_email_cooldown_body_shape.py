@@ -65,6 +65,9 @@ def test_the_email_tool_passes_the_body_it_records():
     import inspect
     import tools.email_tool as et
     src = inspect.getsource(et)
-    assert "text=params.body" in src, \
+    assert "text=body)" in src, \
         "the cooldown must be given the same string record_outbound stores"
-    assert 'store.record_outbound(user_id, "email", params.to, params.body' in src
+    assert 'store.record_outbound(user_id, "email", params.to, body' in src
+    # D66: and that ONE string is the SCRUBBED body — scrubbed above the gate,
+    # so the gate, the transcript and SMTP all see the same bytes.
+    assert "body = scrub_secret_shapes(params.body" in src

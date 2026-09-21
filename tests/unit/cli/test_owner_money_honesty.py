@@ -43,8 +43,9 @@ def _insert_invoice(db, *, rid, status, created_at, amount_usd=5.0, user_id="rob
 
 
 def test_invoices_prints_scope_all_tenants(tmp_path, monkeypatch):
-    """M16: no --user prints the ALL-tenants scope so the owner isn't confused
-    about which bucket the listing covers."""
+    """M16 + E22: the ALL-tenants listing is now an EXPLICIT `--all-tenants`
+    (the no-flag default was every tenant on the box, i.e. somebody else's
+    receivables under the owner's own verb), and it still prints its scope."""
     db_path = tmp_path / "bot.db"
 
     async def setup():
@@ -57,7 +58,7 @@ def test_invoices_prints_scope_all_tenants(tmp_path, monkeypatch):
 
     asyncio.run(setup())
     monkeypatch.setenv("DB_PATH", str(db_path))
-    res = CliRunner().invoke(owner, ["invoices"])
+    res = CliRunner().invoke(owner, ["invoices", "--all-tenants"])
     assert res.exit_code == 0, res.output
     assert "scope:" in res.output.lower()
     assert "all tenants" in res.output.lower()
@@ -102,7 +103,8 @@ def test_invoices_status_filter_before_limit(tmp_path, monkeypatch):
 
     asyncio.run(setup())
     monkeypatch.setenv("DB_PATH", str(db_path))
-    res = CliRunner().invoke(owner, ["invoices", "--status", "pending"])
+    res = CliRunner().invoke(owner, ["invoices", "--all-tenants",
+                                     "--status", "pending"])
     assert res.exit_code == 0, res.output
     assert "old_pending" in res.output           # filtered in SQL, survives LIMIT
     assert "c00" not in res.output               # completed rows excluded

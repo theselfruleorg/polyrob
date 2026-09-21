@@ -298,9 +298,13 @@ def _message_action_result(res: dict, surface: str, target: str, text: str) -> "
 		preview = (text or "")[:_MESSAGE_TEXT_PREVIEW_CHARS]
 		if len(text or "") > _MESSAGE_TEXT_PREVIEW_CHARS:
 			preview += "…"
+		# 057 WS-E: the per-rail proof rule, rendered from core/rails/verification.py
+		# and carried BY the result — so "did that land?" is answered here instead
+		# of costing a turn to look up (and get wrong).
+		proof = f"\n{res['verification']}" if res.get('verification') else ""
 		return ActionResult(
 			extracted_content=(
-				f"message[{res['tier']}] -> {surface}:{target} OK{attached}{note} | text: {preview!r}"),
+				f"message[{res['tier']}] -> {surface}:{target} OK{attached}{note} | text: {preview!r}{proof}"),
 			include_in_memory=True)
 	return ActionResult(
 		extracted_content=(

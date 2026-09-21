@@ -51,7 +51,25 @@
 {%- if item.meta %}
           <p class="entry-meta">{{ item.meta }}</p>
 {%- endif %}
+{%- if item.decide_elsewhere and not read_only %}
+          {# An app decision is instance-wide; a multitenant seat may not take
+             it, so the card SHOWS what is waiting and names the seat that can
+             decide instead of drawing two buttons that answer 403. #}
+          <p class="entry-meta">{{ item.decide_elsewhere }}</p>
+{%- endif %}
 {%- if item.rendered_actions and not read_only %}
+{%- if item.kind == 'ask' %}
+          {# A27: an ask is a QUESTION. Until this box existed the only thing
+             the owner could say back was yes or no, so "which key should I
+             use?" was answerable with "approved" — and the run waiting on the
+             answer was unblocked without it. The text rides with the decision
+             on the same POST; inbox.js sends it. #}
+          <label class="entry-meta" for="answer-{{ item.id }}">{{ t('inbox.answer_label') }}</label>
+          <input class="search-input" type="text" id="answer-{{ item.id }}"
+                 data-answer="{{ item.id }}"
+                 placeholder="{{ t('inbox.answer_placeholder') }}"
+                 aria-label="{{ t('inbox.answer_label') }}">
+{%- endif %}
           <div class="entry-actions">
 {%- for action in item.rendered_actions %}
 {%- if action.verb %}

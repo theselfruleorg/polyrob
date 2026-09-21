@@ -1,15 +1,17 @@
 """The account + admin page surfaces, registered BY POSTURE (043 W13).
 
-`/signin`, `/profile`, `/settings` and the four `/admin*` pages were seven
-hand-registered routes in `server.py`, and they disagreed with each other about
-what "you may not see this" looks like:
+`/signin` and the four `/admin*` pages were hand-registered routes in
+`server.py` (alongside `/profile` and a `/settings` page that no longer exist),
+and they disagreed with each other about what "you may not see this" looks
+like:
 
 - `/admin` answered a non-admin with **403 and an inline-`<script>alert()` page**
   while its three siblings answered a real `303` redirect — two denials, two
   shapes, one of them a CSP liability the console is trying to shed;
-- `/settings` was registered with a bare `@_fastapi.get`, outside the posture
-  model its neighbours live in, so "which postures is this page part of?" had no
-  answer to read.
+- the settings page was registered with a bare `@_fastapi.get`, outside the
+  posture model its neighbours live in, so "which postures is this page part
+  of?" had no answer to read. (That page was deleted in 043 phase 4; Agent ›
+  Settings is the seat now.)
 
 This module is that answer: ONE table (:data:`PAGES`) of
 ``path -> (template, postures, admin_only)``, mounted through one registrar. The
@@ -19,7 +21,15 @@ REGISTRATION**, so a page that is not part of a posture is absent (404), never
 is redirected home exactly like every sibling.
 
 `server.py` keeps the routes whose bodies are real logic (`/`, `/owner-login`,
-`/logout`) — these four are template renders with an auth-state context.
+`/logout`) — the rows below are template renders with an auth-state context.
+
+⚠️ **A page belongs here only while its data exists.** `/profile` was removed
+(043 A20): `profile.html` drives `static/js/profile.js`, which fetches
+`/api/payments/*`, and the payments router is not mounted in this app at all
+(`server.py` sets `PAYMENT_ROUTER_MOUNTED = False` unconditionally). So every
+panel on that page answered 404 — a screen that looks like an account page and
+can state nothing about the account. Restoring it means mounting the payments
+router first, then adding the row back.
 """
 from typing import Dict, Optional, Tuple
 
@@ -32,7 +42,6 @@ from webview import webgate
 #: not a new decorator: the posture tuple IS the visibility rule.
 PAGES: Dict[str, Tuple[str, Tuple[str, ...], bool]] = {
     "/signin": ("signin.html", ("multitenant",), False),
-    "/profile": ("profile.html", ("multitenant",), False),
     "/admin": ("admin/dashboard.html", ("multitenant",), True),
     "/admin/users": ("admin/users.html", ("multitenant",), True),
     "/admin/users/{user_id}": ("admin/user_detail.html", ("multitenant",), True),
@@ -77,7 +86,11 @@ def mount(app: FastAPI, templates, posture: Optional[str] = None) -> None:
 
 def _make_handler(templates, template: str, admin_only: bool):
     async def page(request: Request) -> Response:
-        is_admin = bool(getattr(request.state, "is_admin", False))
+        # ⚠️ The ROLE through the one predicate (webgate.request_is_admin), not
+        # the cached boolean: a request identified on any path other than this
+        # process's auth middleware carries a role and no flag, and this reader
+        # would then redirect a real admin home with nothing said.
+        is_admin = webgate.request_is_admin(request)
         if admin_only and not is_admin:
             return RedirectResponse(url=NON_ADMIN_REDIRECT, status_code=303)
         return templates.TemplateResponse(request, template,

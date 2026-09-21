@@ -126,3 +126,54 @@ def test_adoption_note_is_echoed_once(tmp_path, monkeypatch, nothing_deployed):
     assert admin_data_home(echo=seen.append) == "/var/lib/polyrob"
     assert admin_data_home(echo=seen.append) == "/var/lib/polyrob"
     assert len(seen) == 1, seen
+
+
+# --- 2026-09-20 07:32Z: an UNREADABLE deployed env file is not "nothing declared" -------
+
+def _unreadable_deploy(tmp_path, monkeypatch):
+    """The prod shape: /etc/polyrob/polyrob.env exists (secrets, root 0600) and
+    the verb runs as the service user under sudo, which cannot read it."""
+    import core.admin_data_home as adh
+    envf = _deploy(tmp_path, monkeypatch,
+                   body="POLYROB_DATA_DIR=/var/lib/x\nPOLYROB_INSTANCE_ID=rob\nPOLYROB_OWNER_USER_ID=rob\n")
+    real_open = open
+
+    def _denied(path, *a, **kw):
+        if str(path) == str(envf):
+            raise PermissionError(13, "Permission denied", str(path))
+        return real_open(path, *a, **kw)
+    monkeypatch.setattr("builtins.open", _denied)
+    monkeypatch.delenv("POLYROB_INSTANCE_ID", raising=False)
+    monkeypatch.delenv("BOT_INSTANCE_ID", raising=False)
+    monkeypatch.delenv("POLYROB_PROFILE", raising=False)
+    monkeypatch.delenv("POLYROB_OWNER_USER_ID", raising=False)
+    monkeypatch.delenv("BOT_OWNER_USER_ID", raising=False)
+    return adh
+
+
+def test_unreadable_env_file_refuses_instead_of_guessing_the_instance(tmp_path, monkeypatch):
+    """`sudo -u polyrob-agent … polyrob owner promote owner_doc rob` resolved
+    instance 'polyrob' (the default) because EACCES read as 'not declared', and
+    wrote into identity/polyrob/user_rob/ — a shadow tree nothing reads — while
+    reporting 'no pending owner-facts doc'. Unreadable is 'cannot tell': refuse
+    and name the remedy."""
+    adh = _unreadable_deploy(tmp_path, monkeypatch)
+    with pytest.raises(adh.DeployedEnvUnreadable) as ei:
+        adh.admin_instance_id()
+    msg = str(ei.value)
+    assert "POLYROB_INSTANCE_ID" in msg and "sudo -u polyrob-agent" in msg
+    with pytest.raises(adh.DeployedEnvUnreadable) as ei2:
+        adh.admin_owner_principal()
+    assert "POLYROB_OWNER_USER_ID" in str(ei2.value)
+    # an explicit shell value still wins, exactly as before
+    monkeypatch.setenv("POLYROB_INSTANCE_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    assert adh.admin_instance_id() == "rob" and adh.admin_owner_principal() == "rob"
+
+
+def test_absent_env_file_is_still_a_local_box(nothing_deployed):
+    """No deployment at all: the fallbacks stay — a dev checkout is untouched."""
+    import core.admin_data_home as adh
+    assert adh.deployed_env_value("POLYROB_INSTANCE_ID") is None
+    assert isinstance(adh.admin_instance_id(), str)
+    assert isinstance(adh.admin_owner_principal(), str)

@@ -47,6 +47,65 @@ def _spawn_session_task(coro) -> "asyncio.Task":
     return spawn_retained(coro, _BACKGROUND_SESSION_TASKS)
 
 
+def validate_push_url(url: str) -> str:
+    """Return ``url`` if it is a safe HTTPS webhook target, else raise ValueError.
+
+    B10: the A2A push-notification URL is CALLER-SUPPLIED and this server then
+    POSTs the task state to it — a textbook SSRF primitive (``http://169.254.
+    169.254/…``, ``http://127.0.0.1:9000/api/admin/…``). It goes through the
+    SAME address policy ``web_fetch`` and the MCP client use
+    (``core.security.url_policy.MCPURLValidator``), which resolves the host and
+    blocks every non-global address class, and HTTPS is required — a plaintext
+    webhook leaks the notification token on the wire.
+    """
+    if not url or not isinstance(url, str):
+        raise ValueError("push notification url is required")
+    from core.security.url_policy import MCPURLValidator
+
+    ok, error = MCPURLValidator(allow_http=False).validate(url)
+    if not ok:
+        raise ValueError(f"push notification url refused: {error}")
+    return url
+
+
+def _encrypt_push_token(token: Optional[str]) -> Optional[str]:
+    """Fernet-encrypt a webhook token for the session-metadata mirror (B10).
+
+    The token used to be written to ``metadata['a2a_push_token']`` in
+    PLAINTEXT — session metadata is read by the console, the feed and every
+    status surface. Returns a ``fernet:``-prefixed string so
+    :func:`_decrypt_push_token` can tell an encrypted value from a legacy
+    plaintext one. Fails CLOSED: if the store is unavailable the token is
+    DROPPED (the webhook still fires, unauthenticated) rather than persisted
+    in the clear.
+    """
+    if not token:
+        return None
+    try:
+        from tools.mcp.security import get_encryption
+        return "fernet:" + get_encryption().encrypt(token).decode()
+    except Exception as e:
+        logger.warning(
+            "a2a: push token not persisted (encryption unavailable: %s) — the "
+            "webhook will be called without X-A2A-Notification-Token after a "
+            "restart", e)
+        return None
+
+
+def _decrypt_push_token(stored: Optional[str]) -> Optional[str]:
+    """Inverse of :func:`_encrypt_push_token`; tolerates a legacy plaintext row."""
+    if not stored:
+        return None
+    if not stored.startswith("fernet:"):
+        return stored  # pre-B10 plaintext row — still usable, never re-written
+    try:
+        from tools.mcp.security import get_encryption
+        return get_encryption().decrypt(stored[len("fernet:"):].encode())
+    except Exception as e:
+        logger.warning("a2a: stored push token could not be decrypted: %s", e)
+        return None
+
+
 def _current_activity(session_id: str):
     """019 P4: the session's live RunActivity snapshot (or None). Fail-open."""
     try:
@@ -60,18 +119,34 @@ def _current_activity(session_id: str):
 # Status Mapping
 # =============================================================================
 
-# Map POLYROB SessionStatus to A2A TaskState
+# Map POLYROB SessionStatus to A2A TaskState.
+#
+# B9: every member of `SessionStatus` must appear here. `initializing` was
+# missing, so a session whose orchestrator was still building reported
+# A2ATaskState.UNKNOWN — which `is_terminal` counted as TERMINAL, so a client
+# saw a brand-new task as finished and `send_message` refused it. The dead
+# "error" row was dropped: there is no SessionStatus.ERROR (see
+# `agents/task/agent/session.py::get_user_status`, which dropped the same key).
+#
 # Note: "paused" was removed from SessionStatus - use cancelled for user interruption
 ROB_TO_A2A_STATE: Dict[str, A2ATaskState] = {
     "created": A2ATaskState.SUBMITTED,
+    "initializing": A2ATaskState.WORKING,
     "running": A2ATaskState.WORKING,
     "resumed": A2ATaskState.WORKING,
     "completed": A2ATaskState.COMPLETED,
     "suspended": A2ATaskState.INPUT_REQUIRED,
     "failed": A2ATaskState.FAILED,
-    "error": A2ATaskState.FAILED,
     "cancelled": A2ATaskState.CANCELED,
 }
+
+#: POLYROB session statuses that are TERMINAL — the one list the streaming
+#: poller and the handler share (they used to keep two, and the streamer's
+#: included the non-existent "error").
+TERMINAL_SESSION_STATUSES = frozenset(
+    status for status, state in ROB_TO_A2A_STATE.items()
+    if A2ATaskState.is_terminal(state)
+)
 
 # Map A2A TaskState to POLYROB SessionStatus
 A2A_TO_ROB_STATE: Dict[A2ATaskState, str] = {
@@ -108,6 +183,20 @@ class A2ATaskHandler:
     def _get_task_agent(self):
         """Get TaskAgent from container."""
         return self.container.get_agent("task_agent")
+
+    async def _fetch_session(self, agent, task_id: str) -> Optional[Dict[str, Any]]:
+        """Session metadata for ``task_id``, routed through the registry seam.
+
+        B11: EVERY session-addressed A2A operation goes through
+        ``api.session_routing.guard_remote`` first, so a session owned by
+        ANOTHER uvicorn worker raises an honest 409 (with its ``owner_pid``)
+        instead of being reported as "not found" — the false-404 Item 6 exists
+        to kill. ``guard_remote`` is a no-op for LOCAL/MISSING, so the
+        single-worker default is byte-identical.
+        """
+        from api.session_routing import guard_remote
+        guard_remote(agent, task_id)
+        return await agent.get_session_by_id(task_id)
 
     def _get_session_manager(self):
         """Get SessionManager from container or TaskAgent."""
@@ -323,14 +412,19 @@ class A2ATaskHandler:
                     "a2a_context_id": ctx_id
                 })
 
-        # Store push notification config if provided
+        # Store push notification config if provided. B10: the same SSRF +
+        # HTTPS gate as the explicit set_push_notification_config path — a
+        # webhook registered inline at task creation is no less caller-supplied.
         push_config = config.get("pushNotificationConfig")
         if push_config:
-            self._push_configs[session_id] = PushNotificationConfig(**push_config)
+            parsed = PushNotificationConfig(**push_config)
+            validate_push_url(parsed.url)
+            self._push_configs[session_id] = parsed
             sm = self._get_session_manager()
             if sm:
                 sm.update_session_metadata(session_id, {
-                    "a2a_push_url": push_config.get("url")
+                    "a2a_push_url": parsed.url,
+                    "a2a_push_token": _encrypt_push_token(parsed.token),
                 })
 
         # Queue initial message with images if present
@@ -401,7 +495,7 @@ class A2ATaskHandler:
         if not agent:
             raise RuntimeError("TaskAgent not available")
 
-        session_info = await agent.get_session_by_id(task_id)
+        session_info = await self._fetch_session(agent, task_id)
         if not session_info:
             raise ValueError(f"Task {task_id} not found")
         self._authorize_owner(session_info, task_id, user_id)
@@ -473,7 +567,7 @@ class A2ATaskHandler:
         if not agent:
             raise RuntimeError("TaskAgent not available")
 
-        session_info = await agent.get_session_by_id(task_id)
+        session_info = await self._fetch_session(agent, task_id)
         if not session_info:
             raise ValueError(f"Task {task_id} not found")
         # Ownership guard BEFORE any write/inject/resume: a non-owner must not be
@@ -537,9 +631,16 @@ class A2ATaskHandler:
         if not agent:
             raise RuntimeError("TaskAgent not available")
 
-        session_info = await agent.get_session_by_id(task_id)
+        session_info = await self._fetch_session(agent, task_id)
         if not session_info:
             raise ValueError(f"Task {task_id} not found")
+        # B12: ownership gate BEFORE the cancel. `agent.cancel_session` is
+        # called with `force=True` and the CALLER's user_id, and it authorizes
+        # against the session's own owner — so without this check any
+        # authenticated A2A caller could force-cancel another tenant's
+        # in-flight (paid) task. Mirrors get_task/send_message; raises
+        # not-found, never a distinguishable 403.
+        self._authorize_owner(session_info, task_id, user_id)
 
         # Check if already terminal
         current_state = self._session_status_to_a2a_state(
@@ -591,13 +692,17 @@ class A2ATaskHandler:
         if not sm:
             return [], None
 
-        # Get all sessions
-        all_sessions = sm._sessions
+        # B32: read the SessionManager's public accessor, not its private
+        # `_sessions` dict. The dict holds only what is resident in THIS
+        # process; `get_all_sessions()` is the seam that also recovers
+        # persisted sessions from disk, so a restart no longer makes a
+        # tenant's task list look empty.
+        all_sessions = sm.get_all_sessions() or []
 
         # Filter by user
         user_sessions = [
-            (sid, info) for sid, info in all_sessions.items()
-            if info.get("user_id") == user_id
+            (info.get("id"), info) for info in all_sessions
+            if info.get("user_id") == user_id and info.get("id")
         ]
 
         # Filter by context if specified
@@ -656,7 +761,7 @@ class A2ATaskHandler:
         agent = self._get_task_agent()
         if not agent:
             raise RuntimeError("TaskAgent not available")
-        session_info = await agent.get_session_by_id(task_id)
+        session_info = await self._fetch_session(agent, task_id)
         if not session_info:
             raise ValueError(f"Task {task_id} not found")
         self._authorize_owner(session_info, task_id, user_id)
@@ -679,13 +784,17 @@ class A2ATaskHandler:
         """
         await self._authorize_task(task_id, user_id)
 
+        # B10: validate BEFORE storing — a refused URL must never be persisted,
+        # or the next restart resurrects it from the metadata mirror.
+        validate_push_url(config.url)
+
         self._push_configs[task_id] = config
 
         sm = self._get_session_manager()
         if sm:
             sm.update_session_metadata(task_id, {
                 "a2a_push_url": config.url,
-                "a2a_push_token": config.token
+                "a2a_push_token": _encrypt_push_token(config.token),
             })
 
         return True
@@ -725,8 +834,18 @@ class A2ATaskHandler:
         try:
             meta = (session_info or {}).get("metadata") or {}
             url = meta.get("a2a_push_url")
-            if url:
-                return PushNotificationConfig(url=url, token=meta.get("a2a_push_token"))
+            if not url:
+                return None
+            # B10: re-validate on the way OUT too. A URL persisted before this
+            # gate existed (or by another writer) is still caller-supplied.
+            try:
+                validate_push_url(url)
+            except ValueError as e:
+                self.logger.warning(
+                    "a2a: stored push url for %s refused: %s", task_id, e)
+                return None
+            return PushNotificationConfig(
+                url=url, token=_decrypt_push_token(meta.get("a2a_push_token")))
         except Exception:
             pass
         return None
@@ -797,6 +916,11 @@ class A2ATaskHandler:
 
         try:
             import httpx
+
+            # B10: last gate before the socket. An in-memory config set by an
+            # older process build, or mutated after registration, is still
+            # checked here — the delivery itself is the SSRF primitive.
+            validate_push_url(config.url)
 
             payload = {
                 "taskId": task_id,

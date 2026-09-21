@@ -4,7 +4,6 @@ from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 import logging
-from api.auth_constants import ADMIN_ROLES
 from modules.credits.pricing import pricing, WELCOME_BONUS, DEN_SIGNUP_ALLOWANCE
 
 logger = logging.getLogger(__name__)
@@ -85,25 +84,18 @@ async def get_deposit_address(
 
         wallet_gen = container.get_service('wallet_generator')
         db_manager = container.get_service('database_manager')
-        
-        # Check if user is admin - admins don't need deposit addresses
-        role = getattr(request.state, 'role', 'user')
-        is_admin = role in ADMIN_ROLES
 
         if not wallet_gen or not db_manager:
-            # If services not available and user is admin, return placeholder
-            if is_admin:
-                logger.info(f"Wallet generator unavailable, returning placeholder for admin {user_id}")
-                return {
-                    "user_id": user_id,
-                    "deposit_address": "N/A - Admin account has unlimited credits",
-                    "chains": [],
-                    "qr_code_url": None,
-                    "instructions": "As an admin, you have unlimited credits and do not need to deposit funds."
-                }
+            # B15: an absent wallet generator is UNAVAILABLE for everyone,
+            # admin included. The old admin branch returned a
+            # `deposit_address` of "N/A - Admin account has unlimited credits"
+            # — a string in an address field, which a client renders as an
+            # address and a user could copy and send funds to. A missing
+            # service names itself; it never invents a value.
+            missing = "wallet generator" if not wallet_gen else "database"
             raise HTTPException(
                 status_code=503,
-                detail="Payment services temporarily unavailable"
+                detail=f"Deposit addresses unavailable: {missing} not initialized",
             )
 
         # Check if user already has deposit address
@@ -181,36 +173,35 @@ async def get_credit_balance(
         balance_mgr = container.get_service('balance_manager')
         tier_mgr = container.get_service('tier_manager')
 
-        # Check if user is admin - admins get unlimited credits
-        role = getattr(request.state, 'role', 'user')
-        is_admin = role in ADMIN_ROLES
-
         if not balance_mgr:
-            # If balance manager not available and user is admin, return unlimited balance
-            if is_admin:
-                logger.info(f"Balance manager unavailable, returning unlimited balance for admin {user_id}")
-                return {
-                    "user_id": user_id,
-                    "balance": 999999,
-                    "lifetime_earned": 999999,
-                    "lifetime_spent": 0,
-                    "tier": "admin"
-                }
+            # B15: an absent balance manager is UNAVAILABLE, for an admin too.
+            # The old admin branch fabricated `balance: 999999` — a number a
+            # client sums, charts and bills against, indistinguishable from a
+            # real balance. "I could not read it" is a different fact from
+            # "you have 999999".
             raise HTTPException(
                 status_code=503,
-                detail="Balance service temporarily unavailable"
+                detail="Balance unavailable: balance service not initialized",
             )
 
         # Get balance
         balance_info = await balance_mgr.get_balance(user_id)
 
-        # Get tier
+        # Get tier. B15: the old `except HTTPException: pass` silently
+        # downgraded an unreadable tier to the literal "free" — a real tier
+        # value that decides access. A tier lookup that FAILS is surfaced.
         tier = "free"
         if tier_mgr:
             try:
                 tier = await tier_mgr.get_user_tier(user_id)
             except HTTPException:
-                pass
+                raise
+            except Exception as e:
+                logger.error("Tier lookup failed for %s: %s", user_id, e)
+                raise HTTPException(
+                    status_code=503,
+                    detail="Balance unavailable: tier could not be read",
+                )
 
         return CreditBalanceResponse(
             user_id=user_id,
@@ -253,18 +244,14 @@ async def get_transactions(
 
         db_manager = container.get_service('database_manager')
 
-        # Check if user is admin
-        role = getattr(request.state, 'role', 'user')
-        is_admin = role in ADMIN_ROLES
-
         if not db_manager:
-            # If database not available and user is admin, return empty
-            if is_admin:
-                logger.info(f"Database unavailable, returning empty transactions for admin {user_id}")
-                if paginated:
-                    return {"transactions": [], "total": 0, "limit": limit, "offset": offset, "has_more": False}
-                return []
-            raise HTTPException(status_code=503, detail="Database temporarily unavailable")
+            # B15: an unreadable ledger is UNAVAILABLE, for an admin too. The
+            # old admin branch returned `[]` — "you have no transactions",
+            # which is a claim about the ledger, not about the reader.
+            raise HTTPException(
+                status_code=503,
+                detail="Transactions unavailable: database not initialized",
+            )
 
         # Enforce max limit to prevent abuse
         limit = min(limit, 500)
@@ -351,16 +338,13 @@ async def get_deposits(
 
         db_manager = container.get_service('database_manager')
 
-        # Check if user is admin
-        role = getattr(request.state, 'role', 'user')
-        is_admin = role in ADMIN_ROLES
-
         if not db_manager:
-            # If database not available and user is admin, return empty list
-            if is_admin:
-                logger.info(f"Database unavailable, returning empty deposits for admin {user_id}")
-                return []
-            raise HTTPException(status_code=503, detail="Database temporarily unavailable")
+            # B15: see get_transactions — an unreadable store never renders as
+            # an empty result.
+            raise HTTPException(
+                status_code=503,
+                detail="Deposits unavailable: database not initialized",
+            )
 
         # Enforce max limit
         limit = min(limit, 500)

@@ -486,8 +486,8 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 		# (money never loadable, leaf blocklist, structured refusals with remedy)
 		# lives in tools/tool_disclosure.py::perform_load_tool — the closure stays
 		# thin, mirroring the `message` action.
-		from core.config_policy import tool_progressive_disclosure
-		if tool_progressive_disclosure():
+		from agents.task.session_class import tool_disclosure_enabled
+		if tool_disclosure_enabled(getattr(self, "session_id", None)):
 			# load_tool (S2) + tool_search/tool_describe (Tier-3 item 1) share one
 			# thin registration seam, extracted to tool_search_actions.py so this
 			# god-file (size ratchet) does not grow. Logic: tool_disclosure.py /

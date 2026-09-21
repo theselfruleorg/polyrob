@@ -299,7 +299,9 @@ class LaunchpadTool(WalletHolderMixin, BaseTool):
             line += (f"               + {_fmt_native(owed.unswept_wei)} not yet "
                      f"swept from the curve into the escrow (not claimable yet)\n")
         if owed.native_wei:
-            line += "               run launchpad_claim to take it\n"
+            line += ("               claim it: `polyrob wallet claim <token>` from "
+                     "the terminal, /claim on chat, or the launchpad_claim "
+                     "action\n")
         return line
 
     @BaseTool.action(

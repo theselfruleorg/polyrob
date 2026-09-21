@@ -378,6 +378,18 @@ async def perform_message_send(*, router, allowlist, owner_targets, user_id,
     except Exception as e:  # fail-open: never crash the loop on a send fault
         logger.error("message send failed: %s", e, exc_info=True)
         return {"success": False, "tier": tier, "surface": surface, "target": target, "error": str(e)}
+    # D24 (2026-09-21 interface audit): this IS the turn's reply when it went to
+    # the owner, so record it. `send_message` has always marked the turn; the
+    # `message` tool — the verb the agent reaches for whenever a file rides
+    # along — never did, so an UNBOUND seat (raw API, `chat_once`, `/v1`) fell
+    # back to scanning history, found `done()`'s "✅ Task Complete\n\n<recap>"
+    # as the last AIMessage, and returned a third-person recap as the answer.
+    if ok and tier == "owner":
+        try:
+            from core.surfaces.turn_reply import mark_reply_published
+            mark_reply_published(getattr(controller, "orchestrator", None), text)
+        except Exception as e:
+            logger.debug("message send: reply-record skipped: %s", e)
     # E1 (2026-07-13 review): append the proactive outbound to the durable
     # conversation log (owner targets are not correspondent conversations —
     # this record is for the seed/first-contact/daily-cap machinery above,
@@ -430,6 +442,20 @@ async def perform_message_send(*, router, allowlist, owner_targets, user_id,
 
     result = {"success": bool(ok), "tier": tier, "surface": surface, "target": target,
             "error": None if ok else "send returned false"}
+    # 057 WS-E: the proof rule travels WITH the receipt. Without it the agent
+    # went looking for its own channel post to "confirm" a send Telegram will
+    # never echo back, and then reported a delivered post as unconfirmed.
+    # Rendered from the ONE table (core/rails/verification.py); an unknown rail
+    # renders nothing rather than inventing a rule.
+    if ok:
+        try:
+            from core.rails.verification import rail_for_message, verification_line
+            _rail = rail_for_message(surface, is_room=bool(room))
+            _line = verification_line(_rail) if _rail else ""
+            if _line:
+                result["verification"] = _line
+        except Exception as e:
+            logger.debug("verification line skipped: %s", e)
     if send_target != target:
         result["sent_as"] = send_target  # e.g. 't.me/x' delivered as '@x'
     # Overnight 2026-07-19 finding: an attachment-blind result ("... OK") made
@@ -464,18 +490,25 @@ def _record_owner_send_on_the_rail(user_id, session_id, surface: str,
     remain this path's own guard. Recording is what makes the rail's window
     honest, and what lets a future unification gate here without inventing a
     second budget. Fail-open and silent — an unrecordable send is still sent.
+
+    ⚠️ D20 (2026-09-21 interface audit): the row rides the ``exempt`` LANE. It
+    used to be ``normal``, so a path the daily cap cannot deny was spending the
+    cap that only OTHER producers can be denied for — the same shape C1 removed
+    for the critical lane. A lane that cannot be denied must not be able to
+    deny others. The row is still written, so the window stays honest about
+    what the owner received; it is simply not counted (``_budgeted``).
     """
     try:
         from core.event_kinds import USER_DELIVERY
         from core.event_log import event_log_enabled, get_event_log
-        from core.surfaces.user_delivery import content_hash
+        from core.surfaces.user_delivery import PRIORITY_EXEMPT, content_hash
         if not event_log_enabled():
             return
         body = (text or "").strip()
         get_event_log().record(
             USER_DELIVERY, user_id=str(user_id or ""),
             session_id=str(session_id or ""), source="message_tool",
-            attrs={"outcome": "sent", "lane": "normal", "surface": surface,
+            attrs={"outcome": "sent", "lane": PRIORITY_EXEMPT, "surface": surface,
                    "content_hash": content_hash(body), "text": body[:500]})
     except Exception:
         logger.debug("owner-send rail record skipped", exc_info=True)

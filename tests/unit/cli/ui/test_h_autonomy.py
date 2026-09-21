@@ -61,7 +61,9 @@ def test_autonomy_panel_shows_new_rows():
     assert "mode" in text and "supervised" in text
     assert "posture" in text and "silent" in text
     assert "pause" in text and "RUNNING" in text  # 031: the shared pause headline
-    assert "AUTONOMY_ENABLED" in text  # the write-path footer
+    # E18: the footer names the VERB, not the flag.
+    assert "polyrob autonomy on" in text
+    assert "AUTONOMY_ENABLED" not in text
 
 
 def test_autonomy_args_error_names_the_write_path():
@@ -69,7 +71,9 @@ def test_autonomy_args_error_names_the_write_path():
     _h_autonomy(ctx)
     (_title, text), = emit.messages
     assert "takes no arguments" in text
-    assert "AUTONOMY_ENABLED" in text
+    # E18: the ONE remedy, named as a verb.
+    assert "polyrob autonomy on" in text
+    assert "AUTONOMY_ENABLED" not in text
     assert "/pause" in text and "/resume" in text  # 031: the live pause verbs
 
 

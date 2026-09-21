@@ -1,13 +1,22 @@
 """API models for request/response validation and typing."""
 
 from typing import Optional, Dict, Any, List
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from datetime import datetime
 
 class MessageRequest(BaseModel):
     """Request model for sending messages to agents."""
     text: str = Field(..., description="The message text to process")
-    user_id: Optional[str] = Field(None, description="User identifier")
+    # B40: IGNORED by the server, on purpose. `/api/chat/message` takes the
+    # identity from the AUTHENTICATED request state only (`api/app.py`, C1) —
+    # trusting this field let any authenticated caller bill, and recall memory
+    # as, another tenant. Kept on the model so an existing client that still
+    # sends it is not rejected; it has no effect.
+    user_id: Optional[str] = Field(
+        None,
+        description=("IGNORED — identity comes from the authenticated request. "
+                     "Accepted for backward compatibility only."),
+    )
     chat_id: Optional[str] = Field(None, description="Chat/conversation identifier")
     message_id: Optional[str] = Field(None, description="Message identifier")
     platform: Optional[str] = Field("api", description="Platform origin (api, web)")
@@ -54,17 +63,12 @@ class RateLimitInfo(BaseModel):
 
 
 
-class SessionCreateRequest(BaseModel):
-    """Request model for creating AutoV2 sessions."""
-    user_id: str = Field(..., description="User identifier")
-    task: str = Field(..., description="Task to execute")
-    model: Optional[str] = Field("gpt-5", description="LLM model to use")
-    provider: Optional[str] = Field("openai", description="LLM provider")
-    tools: Optional[List[str]] = Field(default_factory=list, description="Tools to enable")
-    max_steps: Optional[int] = Field(50, description="Maximum execution steps")
-    temperature: Optional[float] = Field(0.0, description="LLM temperature")
-    use_vision: Optional[bool] = Field(True, description="Enable vision capabilities")
-    session_config: Optional[Dict[str, Any]] = Field(None, description="Additional session configuration")
+# B39: `SessionCreateRequest` was DELETED (2026-09-21). It had no endpoint —
+# `POST /api/task/sessions` reads a raw dict — and no importer, so it was a
+# schema nobody validated against, published in api/README.md, advertising
+# `model="gpt-5"` / `provider="openai"` defaults the real path stopped using
+# long ago (session creation resolves the operator's configured provider). A
+# dead model that contradicts the live default is worse than no model.
 
 
 class SessionResponse(BaseModel):
@@ -131,11 +135,80 @@ class SessionStatusResponse(BaseModel):
     agents: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Active agents (legacy)")
 
 
+#: Message kinds a REMOTE caller may declare (B36).
+#:
+#: ⚠️ This allow-list EXCLUDES `self_wake` and `delegation_result` on purpose.
+#: Those two are FORGED-turn kinds: `_drain_user_messages`
+#: (`agents/task/agent/core/user_ingress.py`) stamps
+#: `orchestrator._forged_turn_kind` from them, and that stamp is what stops a
+#: turn auto-activating a skill, patching an active one, or reaching a
+#: high-impact verb. An HTTP caller that could name its own kind could mint a
+#: turn the agent treats as machine-originated — or, the other way round,
+#: launder a forged turn into a genuine owner turn. `kind` arrives from the
+#: network; it is a claim, and this is the list of claims we accept.
+#:
+#: The exclusion is ASSERTED against the canonical seam
+#: (``core.security.forged_turns.FORGED_TURN_KINDS``) at import, so a forged
+#: kind added there can never be silently admitted here.
+ALLOWED_USER_MESSAGE_KINDS = frozenset({
+    # Swept from every producer that reaches the HITL queue
+    # (`grep submit_user_message` across webview/ surfaces/ cli/ api/ agents/):
+    # the console chat box and the REPL `/steer` both send "comment"
+    # (webview/static/app/transcript.js, webview/server.py,
+    # cli/ui/commands/h_steer.py), and a plain follow-up is "continuation" —
+    # the two taint-CLEARING kinds in agents/task/agent/core/user_ingress.py.
+    # Plus the documented API vocabulary below.
+    #
+    # NOTE: the A2A kinds ("a2a_initial"/"a2a_message") are deliberately absent.
+    # They are stamped SERVER-SIDE in api/a2a/task_handler.py and never travel
+    # through this model, so admitting them here would only let a REST caller
+    # dress a message as protocol traffic.
+    "comment",
+    "continuation",
+    "guidance",
+    "feedback",
+    "steer",
+    "user_message",
+    "correction",
+    "question",
+    "answer",
+})
+
+
+# Pinned to the ONE definition of a forged turn kind — never a second copy.
+from core.security.forged_turns import FORGED_TURN_KINDS as _FORGED_TURN_KINDS
+
+assert not (ALLOWED_USER_MESSAGE_KINDS & set(_FORGED_TURN_KINDS)), (
+    "a forged turn kind must never be declarable over HTTP"
+)
+
+
 class UserMessage(BaseModel):
     """Request model for sending messages to sessions."""
     session_id: Optional[str] = Field(None, description="Session to send message to (optional, can be in URL path)")
     text: str = Field(..., description="Message text")
-    kind: Optional[str] = Field("guidance", description="Message type (guidance, feedback)")
+    kind: Optional[str] = Field(
+        "guidance",
+        description=(
+            "Message type. One of: "
+            + ", ".join(sorted(ALLOWED_USER_MESSAGE_KINDS))
+            + ". Internal forged-turn kinds (self_wake, delegation_result) are "
+              "refused."
+        ),
+    )
+
+    @field_validator("kind")
+    @classmethod
+    def _validate_kind(cls, value: Optional[str]) -> str:
+        """Refuse any kind outside the allow-list (422). See B36 above."""
+        if value is None or value == "":
+            return "guidance"
+        if value not in ALLOWED_USER_MESSAGE_KINDS:
+            raise ValueError(
+                f"unsupported message kind {value!r}; allowed: "
+                + ", ".join(sorted(ALLOWED_USER_MESSAGE_KINDS))
+            )
+        return value
     metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata")
     attached_files: Optional[List[str]] = Field(None, description="List of file paths to attach to this message")
     image_attachments: Optional[List[Dict[str, Any]]] = Field(None, description="Base64 image data for vision (internal use)")

@@ -101,8 +101,17 @@ async def absorb_for_session(task_agent: Any, result: Any, session_id: str,
     owner their message.
     """
     media = getattr(getattr(result, "inbound", None), "media", None)
-    if not media or fetch_media is None:
+    if not media:
         return base_text, None
+    if fetch_media is None:
+        # ⚠️ D52: files arrived and this seat has no downloader wired. Saying
+        # nothing leaves the agent answering a message whose attachments it has
+        # no idea existed.
+        logger.warning("telegram media: %d attachment(s) arrived with no "
+                       "downloader wired — naming them on the turn instead",
+                       len(media))
+        return _absorb_failure_text(
+            base_text, media, RuntimeError("no downloader on this seat")), None
 
     # A session with no on-disk metadata is about to be replaced by a fresh one (the
     # STEER "gone" branch). Absorbing here would create an orphan workspace and store
@@ -125,13 +134,54 @@ async def absorb_for_session(task_agent: Any, result: Any, session_id: str,
         text, images = await absorb_inbound_media(
             media, workspace_dir, fetch_bytes=fetch_media, base_text=base_text)
     except Exception as e:
+        # ⚠️ D52: SAY SO on the turn. This swallowed the fault and returned the
+        # message exactly as it arrived, so the owner's file vanished with no
+        # trace anywhere he could see — the same silent-drop class the whole
+        # 2026-09-13 media rail was built to end ("a refused or undownloadable
+        # file is NAMED on the turn, never silently dropped"). The turn still
+        # runs: a named failure is recoverable, a silent one is not.
         logger.warning("telegram media absorb failed for %s: %s", session_id, e,
                        exc_info=True)
-        return base_text, None
+        return _absorb_failure_text(base_text, media, e), None
 
+    text = _with_captions(text, media, base_text)
     logger.info("telegram media absorbed: session=%s files=%d images=%d",
                 session_id, len(media), len(images or []))
     return text, ({"image_attachments": images} if images else None)
+
+
+def _absorb_failure_text(base_text: str, media: list, exc: Exception) -> str:
+    """The turn text when the attachments could not be stored (D52)."""
+    names = ", ".join(
+        str(getattr(m, "filename", None) or getattr(m, "kind", None) or "file")
+        for m in media) or f"{len(media)} file(s)"
+    note = (f"[{len(media)} attachment(s) were sent — {names} — and I could NOT "
+            f"store them ({type(exc).__name__}). They are not in my workspace; "
+            f"do not act as though you have read them.]")
+    return f"{base_text}\n\n{note}" if (base_text or "").strip() else note
+
+
+def _with_captions(text: str, media: list, base_text: str) -> str:
+    """Append any attachment CAPTION the turn does not already carry (D76).
+
+    ⚠️ ``Media.caption`` was written by ``extract_media`` and read by nothing.
+    On Telegram it is usually redundant — ``build_inbound_message`` already
+    promotes a caption to the message TEXT, which is this turn's ``base_text``
+    or the session's request — so it is added ONLY when the turn does not
+    already contain it. That keeps the field honest (something reads it) without
+    re-stating the owner's own sentence back to the model, which is how a
+    caption ends up in a reply twice.
+    """
+    seen = f"{base_text or ''}\n{text or ''}"
+    extra = []
+    for m in media:
+        cap = str(getattr(m, "caption", None) or "").strip()
+        if cap and cap not in seen and cap not in extra:
+            extra.append(cap)
+    if not extra:
+        return text
+    joined = "\n".join(f"[caption] {c}" for c in extra)
+    return f"{text}\n{joined}" if (text or "").strip() else joined
 
 
 async def queue_attachments_for_new_session(task_agent: Any, result: Any,

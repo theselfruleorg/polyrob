@@ -240,12 +240,9 @@ async def list_users(
         tier: Filter by tier (optional)
         role: Filter by role (optional)
     """
-    from core.container import DependencyContainer
-    container = DependencyContainer.get_instance()
-    db = container.get_service('database_manager')
-
-    if not db:
-        raise HTTPException(status_code=503, detail="Database unavailable")
+    # B31: the shared container-fetch + 503 seam, not a 16th hand-rolled copy.
+    from api.dependencies import require_service
+    db = require_service('database_manager', missing="Database unavailable")
 
     # Build query with filters
     where_clauses = []
@@ -313,12 +310,9 @@ async def search_users(
     - Email search is case-insensitive and supports partial match
     - User ID search is exact match prefix
     """
-    from core.container import DependencyContainer
-    container = DependencyContainer.get_instance()
-    db = container.get_service('database_manager')
-
-    if not db:
-        raise HTTPException(status_code=503, detail="Database unavailable")
+    # B31: the shared container-fetch + 503 seam, not a 16th hand-rolled copy.
+    from api.dependencies import require_service
+    db = require_service('database_manager', missing="Database unavailable")
 
     # Build search query based on field
     search_term = q.lower().strip()
@@ -378,12 +372,9 @@ async def search_users(
 @router.get("/users/{user_id}", dependencies=[Depends(require_admin)])
 async def get_user(request: Request, user_id: str) -> UserInfo:
     """Get user details (admin only)."""
-    from core.container import DependencyContainer
-    container = DependencyContainer.get_instance()
-    db = container.get_service('database_manager')
-
-    if not db:
-        raise HTTPException(status_code=503, detail="Database unavailable")
+    # B31: the shared container-fetch + 503 seam, not a 16th hand-rolled copy.
+    from api.dependencies import require_service
+    db = require_service('database_manager', missing="Database unavailable")
 
     user = await db.fetch_one("""
         SELECT
@@ -582,12 +573,9 @@ async def set_user_role(
     owner-login (webview/owner_auth.py::issue_owner_session_cookie) and must
     never be mintable via admin action.
     """
-    from core.container import DependencyContainer
-    container = DependencyContainer.get_instance()
-    db = container.get_service('database_manager')
-
-    if not db:
-        raise HTTPException(status_code=503, detail="Database unavailable")
+    # B31: the shared container-fetch + 503 seam, not a 16th hand-rolled copy.
+    from api.dependencies import require_service
+    db = require_service('database_manager', missing="Database unavailable")
 
     # Validate role using centralized ASSIGNMENT-boundary validation. This is
     # stricter than validate_role(): "owner" is a VALID_ROLE (read-side admin
@@ -653,12 +641,9 @@ async def set_user_tier(
 
     Use 'free_access' to grant someone access for demo/showcase purposes.
     """
-    from core.container import DependencyContainer
-    container = DependencyContainer.get_instance()
-    db = container.get_service('database_manager')
-
-    if not db:
-        raise HTTPException(status_code=503, detail="Database unavailable")
+    # B31: the shared container-fetch + 503 seam, not a 16th hand-rolled copy.
+    from api.dependencies import require_service
+    db = require_service('database_manager', missing="Database unavailable")
 
     # Validate tier using centralized validation
     try:
@@ -708,12 +693,9 @@ async def set_user_tier(
 @router.get("/stats", dependencies=[Depends(require_admin)])
 async def get_system_stats(request: Request):
     """Get system statistics (admin only)."""
-    from core.container import DependencyContainer
-    container = DependencyContainer.get_instance()
-    db = container.get_service('database_manager')
-
-    if not db:
-        raise HTTPException(status_code=503, detail="Database unavailable")
+    # B31: the shared container-fetch + 503 seam, not a 16th hand-rolled copy.
+    from api.dependencies import require_service
+    db = require_service('database_manager', missing="Database unavailable")
 
     # User stats
     total_users = await db.fetch_one("SELECT COUNT(*) as count FROM user_profiles")
@@ -778,12 +760,9 @@ async def verify_user_token(
     2. Upgrades tier to 'holder' if user has tokens and is currently 'free'
     3. Grants DEN Sign Up Allowance for any unclaimed token IDs
     """
-    from core.container import DependencyContainer
-    container = DependencyContainer.get_instance()
-    db = container.get_service('database_manager')
-
-    if not db:
-        raise HTTPException(status_code=503, detail="Database unavailable")
+    # B31: the shared container-fetch + 503 seam, not a 16th hand-rolled copy.
+    from api.dependencies import require_service
+    db = require_service('database_manager', missing="Database unavailable")
 
     # Get user info
     user = await db.fetch_one("""
@@ -938,12 +917,9 @@ async def get_user_audit_trail(
     offset: int = Query(0, ge=0)
 ) -> List[AuditEvent]:
     """Get audit trail for a specific user."""
-    from core.container import DependencyContainer
-    container = DependencyContainer.get_instance()
-    db = container.get_service('database_manager')
-
-    if not db:
-        raise HTTPException(status_code=503, detail="Database unavailable")
+    # B31: the shared container-fetch + 503 seam, not a 16th hand-rolled copy.
+    from api.dependencies import require_service
+    db = require_service('database_manager', missing="Database unavailable")
 
     # Check user exists
     user = await db.fetch_one(
@@ -988,12 +964,9 @@ async def get_user_sessions(
     limit: int = Query(50, ge=1, le=200)
 ) -> UserSessionsResponse:
     """Get user's session usage summary."""
-    from core.container import DependencyContainer
-    container = DependencyContainer.get_instance()
-    db = container.get_service('database_manager')
-
-    if not db:
-        raise HTTPException(status_code=503, detail="Database unavailable")
+    # B31: the shared container-fetch + 503 seam, not a 16th hand-rolled copy.
+    from api.dependencies import require_service
+    db = require_service('database_manager', missing="Database unavailable")
 
     # Check user exists
     user = await db.fetch_one(
@@ -1047,12 +1020,9 @@ async def block_user(
     block_request: BlockUserRequest
 ):
     """Block a user."""
-    from core.container import DependencyContainer
-    container = DependencyContainer.get_instance()
-    db = container.get_service('database_manager')
-
-    if not db:
-        raise HTTPException(status_code=503, detail="Database unavailable")
+    # B31: the shared container-fetch + 503 seam, not a 16th hand-rolled copy.
+    from api.dependencies import require_service
+    db = require_service('database_manager', missing="Database unavailable")
 
     # Check user exists
     user = await db.fetch_one(
@@ -1103,12 +1073,9 @@ async def unblock_user(
     user_id: str
 ):
     """Unblock a user."""
-    from core.container import DependencyContainer
-    container = DependencyContainer.get_instance()
-    db = container.get_service('database_manager')
-
-    if not db:
-        raise HTTPException(status_code=503, detail="Database unavailable")
+    # B31: the shared container-fetch + 503 seam, not a 16th hand-rolled copy.
+    from api.dependencies import require_service
+    db = require_service('database_manager', missing="Database unavailable")
 
     # Check user exists and is blocked
     blocked = await db.fetch_one("""
@@ -1153,12 +1120,9 @@ async def get_block_status(
     user_id: str
 ) -> BlockStatusResponse:
     """Get user's block status."""
-    from core.container import DependencyContainer
-    container = DependencyContainer.get_instance()
-    db = container.get_service('database_manager')
-
-    if not db:
-        raise HTTPException(status_code=503, detail="Database unavailable")
+    # B31: the shared container-fetch + 503 seam, not a 16th hand-rolled copy.
+    from api.dependencies import require_service
+    db = require_service('database_manager', missing="Database unavailable")
 
     # Get block status
     blocked = await db.fetch_one("""
@@ -1185,12 +1149,9 @@ async def get_block_status(
 @router.get("/stats/dashboard", dependencies=[Depends(require_admin)])
 async def get_dashboard_stats(request: Request) -> DashboardStats:
     """Get enhanced dashboard statistics with alerts."""
-    from core.container import DependencyContainer
-    container = DependencyContainer.get_instance()
-    db = container.get_service('database_manager')
-
-    if not db:
-        raise HTTPException(status_code=503, detail="Database unavailable")
+    # B31: the shared container-fetch + 503 seam, not a 16th hand-rolled copy.
+    from api.dependencies import require_service
+    db = require_service('database_manager', missing="Database unavailable")
 
     # User stats
     total_users = await db.fetch_one("SELECT COUNT(*) as count FROM user_profiles")
@@ -1375,12 +1336,9 @@ async def get_billing_failures(
     Returns list of billing failures where credits could not be deducted.
     Admins can review and resolve these issues.
     """
-    from core.container import DependencyContainer
-    container = DependencyContainer.get_instance()
-    db = container.get_service('database_manager')
-
-    if not db:
-        raise HTTPException(status_code=503, detail="Database unavailable")
+    # B31: the shared container-fetch + 503 seam, not a 16th hand-rolled copy.
+    from api.dependencies import require_service
+    db = require_service('database_manager', missing="Database unavailable")
 
     # Get failures with user info
     failures = await db.fetch_all("""
@@ -1447,12 +1405,9 @@ async def resolve_billing_failure(
     - written_off: Loss absorbed, user not charged
     - refunded: Credits returned to user (if already charged)
     """
-    from core.container import DependencyContainer
-    container = DependencyContainer.get_instance()
-    db = container.get_service('database_manager')
-
-    if not db:
-        raise HTTPException(status_code=503, detail="Database unavailable")
+    # B31: the shared container-fetch + 503 seam, not a 16th hand-rolled copy.
+    from api.dependencies import require_service
+    db = require_service('database_manager', missing="Database unavailable")
 
     # Verify failure exists and is pending
     failure = await db.fetch_one("""
@@ -1529,12 +1484,9 @@ async def resolve_billing_failure(
 @router.get("/billing-failures/summary", dependencies=[Depends(require_admin)])
 async def get_billing_failures_summary(request: Request):
     """Get summary of billing failures by status."""
-    from core.container import DependencyContainer
-    container = DependencyContainer.get_instance()
-    db = container.get_service('database_manager')
-
-    if not db:
-        raise HTTPException(status_code=503, detail="Database unavailable")
+    # B31: the shared container-fetch + 503 seam, not a 16th hand-rolled copy.
+    from api.dependencies import require_service
+    db = require_service('database_manager', missing="Database unavailable")
 
     summary = await db.fetch_all("""
         SELECT

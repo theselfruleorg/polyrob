@@ -117,11 +117,11 @@ def test_critical_sends_do_not_consume_the_hourly_rate_limit(monkeypatch):
 # --- C2: a suppressed message is never irrecoverable ------------------------
 
 def test_dedup_does_not_match_an_undelivered_fallback():
-    """The self-sealing class: a send with no sink records `fallback`, and the
+    """The self-sealing class: a send with no sink records `no_sink`, and the
     retry used to be `deduped` forever — the owner never saw either."""
     ev = _EvLog()
     assert _deliver(None, "12345", "the blocker report", source="agent_send",
-                    event_log=ev) == "fallback"
+                    event_log=ev) == "no_sink"
     sink = _Sink()
     c = _Container({"telegram_sink": sink})
     assert _deliver(c, "12345", "the blocker report", source="agent_send",

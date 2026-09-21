@@ -48,12 +48,17 @@ and never counted as zero.
 
 ### Live sessions
 
-`/session/{id}` streams a running session's transcript over Socket.IO as the agent
-works, alongside its workspace file tree, file previews and downloads, and any
-browser screenshots it captured. These session-scoped views are reachable by
-knowing the session's URL, which is what makes sharing a session link work — they
-are not scoped to whoever is logged in. Treat a session URL as the key to that
-session.
+`/c/{id}` streams a running session's transcript over Socket.IO as the agent works,
+alongside its workspace file tree, file previews and downloads, and any browser
+screenshots it captured. (`/session/{id}` is a permanent redirect to it.)
+
+⚠️ **A session URL is not a grant.** On both authenticated postures a session page,
+its feed and its workspace reads are owner-only — possessing the link gives you
+nothing. Earlier builds let anyone holding a session URL read the transcript; that
+is gone. There is one narrow bypass left in the code — an expiring preview token
+scoped to a single session's `/serve/` subtree is still accepted — but nothing
+hands one out: the endpoint that minted them was removed because no screen had
+ever called it. So today there is no way to share a session at all.
 
 ---
 
@@ -63,7 +68,16 @@ The frame above every destination states, once:
 
 - **whether autonomy is paused**, read from the one pause record every loop
   honours — including which scopes and until when. An unreadable record renders as
-  paused, because that is what the runtime then does;
+  paused, because that is what the runtime then does. The header carries the
+  **Pause/Resume** control itself, on every destination, so the sentence and the
+  control that changes it are in the same place. It is drawn only on the owner's
+  own console (`local` or `own_ops`) and never in read-only mode — pausing is
+  instance-wide, so a multitenant tenant may not do it and is not shown a button
+  that would refuse;
+- **how much is in progress** when it is running, counted from running goals,
+  running cron jobs and live sessions. If one of those stores did not answer the
+  head line reads `N+`, never a bare `N` — the number is a floor, not a
+  measurement;
 - **whether this console can act at all** (the read-only badge, below).
 
 The Inbox count rides in the nav. When a source could not be read it says "at
@@ -76,7 +90,9 @@ least N waiting, one list unreadable" rather than a confident number.
 The console is a control plane, not only a monitor. Unless it is read-only, you can:
 
 - pause and resume autonomy, by scope and with a duration;
-- approve or reject anything in the Inbox;
+- approve or reject anything in the Inbox — and **answer** an ask in writing, not
+  only agree to it, because an ask is a question ("which key should I use?") and
+  "approved" is not an answer to one;
 - act on goals and cancel cron jobs;
 - settle an invoice (an attestation, not a payment);
 - approve, reject or kill a durable app, and read its logs;
@@ -91,6 +107,11 @@ not sent to the model as prose. Roughly forty verbs work — `/pause`, `/resume`
 `/cron`, `/book`, `/wallet`, `/invoices`, `/settle`, `/trade`, `/bridge`, `/launch`,
 `/deploy`, `/apps`, `/mcp`, `/kb`, `/files`, `/groups`, `/mute`, `/prefs`,
 `/config`, `/recap`, `/missed` and more. `/help` lists them.
+
+This works from an empty chat box too, not only inside a thread you already have
+open: a leading verb typed on the front door is answered inline and starts no
+session. (It used to become a task, so `/halt` from a cold open started an agent
+run whose job was the literal text `/halt`.)
 
 `/task` and `/new` are the exception: the console has its own controls for starting
 a session, so they are excluded here and `/help task` says so. Prose and an unknown
@@ -142,10 +163,16 @@ local CLI (`polyrob config set`). The config screen marks those settings and the
 refusal names the command to use instead. Preferences and ordinary flags write
 normally; a guarded one asks for an explicit confirmation.
 
-**A page outside its posture is absent, not denied.** Account and admin pages exist
+**A page outside its posture is absent, not denied.** Admin pages and sign-in exist
 only in `multitenant`; elsewhere the route is not registered and the request 404s.
 Inside `multitenant`, a signed-in non-admin following an admin link is redirected
 home.
+
+**A reader with nothing to read refuses rather than answering zero.** The files a
+session produced are a session-scoped question, so asking for them without naming a
+session is refused with that reason instead of an empty list; a store that would
+not open is reported as unreadable with its reason. Anywhere you see a dash and a
+reason, that is the console declining to state a number it did not measure.
 
 ---
 

@@ -120,6 +120,82 @@ class TelemetryEventLog:
                         "session_id": r["session_id"], "source": r["source"], "attrs": attrs})
         return out
 
+    def count_where(self, *, kind: Optional[str] = None,
+                    user_id: Optional[str] = None,
+                    since_ts: Optional[float] = None,
+                    sources_in: Optional[Any] = None,
+                    sources_not_in: Optional[Any] = None,
+                    attrs_in: Optional[Dict[str, Any]] = None,
+                    attrs_not_in: Optional[Dict[str, Any]] = None
+                    ) -> Optional[int]:
+        """``COUNT(*)`` over the same rows :meth:`query` would return.
+
+        The companion of the reader, added because every gate that needs "how
+        many X in the last 24h" used ``query(..., limit=1000)`` and counted in
+        Python: past a thousand rows in the window the gate silently read a
+        TRUNCATED window and under-counted, i.e. it stopped gating exactly when
+        traffic was highest (D48, 2026-09-21 interface audit).
+
+        ``attrs_in`` / ``attrs_not_in`` filter on JSON attributes, e.g.
+        ``attrs_in={"outcome": ("sent", "fallback")}``. A ``NOT IN`` test is
+        NULL-tolerant on purpose: a row written before an attribute existed has
+        no opinion about it and must still be counted, where plain SQL ``NOT
+        IN`` would drop it.
+
+        Returns ``None`` when the store is unavailable or the query fails, so a
+        caller can tell "nothing matched" from "I could not look" and fail open.
+        """
+        if not self._ready:
+            return None
+        clauses: List[str] = []
+        params: List[Any] = []
+        if since_ts is not None:
+            clauses.append("ts >= ?"); params.append(float(since_ts))
+        if kind is not None:
+            clauses.append("kind = ?"); params.append(str(kind))
+        if user_id is not None:
+            clauses.append("user_id = ?"); params.append(str(user_id))
+
+        def _placeholders(values) -> str:
+            return ", ".join("?" for _ in values)
+
+        if sources_in:
+            vals = [str(v) for v in sources_in]
+            clauses.append(f"source IN ({_placeholders(vals)})"); params.extend(vals)
+        if sources_not_in:
+            vals = [str(v) for v in sources_not_in]
+            clauses.append(f"source NOT IN ({_placeholders(vals)})"); params.extend(vals)
+        for name, values in (attrs_in or {}).items():
+            vals = [str(v) for v in values]
+            if not vals:
+                continue
+            clauses.append(
+                f"json_extract(attrs, '$.{name}') IN ({_placeholders(vals)})")
+            params.extend(vals)
+        for name, values in (attrs_not_in or {}).items():
+            vals = [str(v) for v in values]
+            if not vals:
+                continue
+            clauses.append(
+                f"(json_extract(attrs, '$.{name}') IS NULL OR "
+                f"json_extract(attrs, '$.{name}') NOT IN ({_placeholders(vals)}))")
+            params.extend(vals)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        try:
+            row = execute_retry(
+                self.db_path,
+                f"SELECT COUNT(*) AS n FROM telemetry_events{where}",
+                tuple(params), fetch="one")
+        except Exception as e:
+            logger.warning("event_log count_where failed: %s", e, exc_info=True)
+            return None
+        if row is None:
+            return 0
+        try:
+            return int(row["n"])
+        except Exception:
+            return int(row[0])
+
     def prune(self, *, older_than_ts: float) -> int:
         """Delete events older than a cutoff. Returns rows removed (keeps the store
         bounded — the same retention discipline the audit demanded of feed/)."""

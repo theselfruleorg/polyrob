@@ -714,7 +714,7 @@
     "priority": 7,
     "auto_activate": true,
     "description": "Operate X account communication across API and captured-browser rails—read inboxes, post/reply, and send DMs with correct routing, approval, and completion evidence",
-    "version": "3"
+    "version": "4"
   },
   "treasury-trading": {
     "triggers": {

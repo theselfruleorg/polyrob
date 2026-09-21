@@ -198,18 +198,43 @@ export function insertVerb(input, name) {
   return input.value;
 }
 
-function selectVerb(dialog, name) {
+/**
+ * Say, inside the still-open palette, that this screen has nowhere to run a
+ * verb — and where one IS run. A18.
+ *
+ * ⚠️ The defect: with no `#chat-input` on the screen (Inbox, Work, Money,
+ * Agent — four of the five destinations) selecting a verb simply CLOSED the
+ * dialog. Nothing was filled, nothing ran, nothing was said: the palette's
+ * only visible behaviour off a chat screen was to disappear, which reads as a
+ * verb that ran and did nothing.
+ */
+export function sayReach(dialog, copy) {
+  if (!dialog) return null;
+  let note = dialog.querySelector("[data-palette-reach]");
+  if (!note) {
+    note = document.createElement("p");
+    note.className = "state-body";
+    note.dataset.paletteReach = "1";
+    note.setAttribute("role", "status");
+    const results = dialog.querySelector("#palette-results");
+    if (results && results.parentNode) results.parentNode.insertBefore(note, results);
+    else dialog.appendChild(note);
+  }
+  note.textContent = (copy && copy.reach) || "";
+  return note;
+}
+
+function selectVerb(dialog, name, copy) {
   const input = composer();
   if (input) {
     insertVerb(input, name);
     dialog.close();
     input.focus();
-  } else {
-    // No composer on this screen (Inbox, Work, Money, Agent). The palette is
-    // still a way to SEE every verb; there is just nowhere here to run one, so
-    // it closes rather than pretending it did something.
-    dialog.close();
+    return;
   }
+  // No composer on this screen. The palette stays open and states the reach —
+  // it does not pretend to have done something and it does not vanish.
+  sayReach(dialog, copy);
 }
 
 function bind() {
@@ -242,7 +267,7 @@ function bind() {
       event.preventDefault();
       const first = results.querySelector("button.entry");
       if (first) {
-        selectVerb(dialog, first.dataset.verb);
+        selectVerb(dialog, first.dataset.verb, copy);
       } else {
         // An unknown slash: hand the raw text back to the composer so pressing
         // enter there sends it to Rob as a message — the console's own rule.
@@ -255,7 +280,7 @@ function bind() {
           dialog.close();
           box.focus();
         } else {
-          dialog.close();
+          sayReach(dialog, copy);
         }
       }
     }
@@ -263,7 +288,7 @@ function bind() {
 
   results.addEventListener("click", (event) => {
     const row = event.target.closest("button.entry");
-    if (row && row.dataset.verb) selectVerb(dialog, row.dataset.verb);
+    if (row && row.dataset.verb) selectVerb(dialog, row.dataset.verb, copy);
   });
 
   const close = document.getElementById("palette-close");

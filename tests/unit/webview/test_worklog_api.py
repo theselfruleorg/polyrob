@@ -157,7 +157,10 @@ def test_an_unreadable_source_is_named_never_a_silent_empty_list(monkeypatch):
     resp = client.get("/api/webgate/log")
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["entries"] == []
+    # 043 A11: entries is NULL on a read fault — an empty list is the sentence
+    # "a quiet day", which is what this endpoint must never say by accident.
+    assert body["entries"] is None
+    assert body["filtered_out"] is None
     assert body["unreadable"] and "disk is on fire" in body["unreadable"]
 
 
@@ -172,16 +175,25 @@ def test_a_genuine_empty_stream_is_not_unreadable(monkeypatch):
 # --- tenant isolation ------------------------------------------------------- #
 
 def test_another_tenants_events_are_never_returned(monkeypatch):
+    """Another tenant's row is dropped AND counted; an UNTENANTED row is kept.
+
+    ⚠️ 043 A11: an event with an empty ``user_id`` belongs to this tenant on a
+    single-owner instance — several writers record no tenant stamp, and the
+    status snapshot's own filter is ``(user_id = ? OR user_id = '')``. Dropping
+    them made Work › Log a strictly smaller day than every other surface.
+    """
     owner = _owner()
     events = [
         _event(ek.GOAL_RUN, user_id=owner, ts=2.0),
         _event(ek.WALLET_SPEND, user_id="someone-else", ts=1.0),
-        _event(ek.CRON_RUN, user_id="", ts=1.0),  # no tenant is no one's to read
+        _event(ek.CRON_RUN, user_id="", ts=1.0),   # untenanted: this owner's
     ]
     _stub_events(monkeypatch, events)
     client = _client(monkeypatch, posture="local")
     body = client.get("/api/webgate/log").json()
-    assert {e["kind"] for e in body["entries"]} == {ek.GOAL_RUN}
+    assert {e["kind"] for e in body["entries"]} == {ek.GOAL_RUN, ek.CRON_RUN}
+    # The one row that was removed is COUNTED, so a short list is visibly short.
+    assert body["filtered_out"] == 1
 
 
 def test_unbound_own_ops_console_403s(monkeypatch):

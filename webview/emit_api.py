@@ -1,6 +1,9 @@
-"""030 endpoints extracted from server.py per the god-file ratchet:
-the telemetry fast-push (/api/internal/emit, localhost-only) and the preview
-serve-token mint. Both resolve server singletons lazily at call time."""
+"""030 endpoint extracted from server.py per the god-file ratchet: the
+telemetry fast-push (/api/internal/emit, localhost-only). It resolves server
+singletons lazily at call time.
+
+The preview serve-token mint that used to sit beside it was deleted (043 A30) —
+it had no caller. See the note at the foot of this module."""
 import logging
 
 from fastapi import APIRouter, HTTPException, Request
@@ -44,14 +47,9 @@ async def internal_emit(request: Request) -> Response:
     return JSONResponse({"status": "ok", "room": room})
 
 
-@router.get("/api/session/{session_id}/workspace/serve-token", response_class=JSONResponse)
-async def api_workspace_serve_token(request: Request, session_id: str) -> Response:
-    """Mint a short-lived, session-scoped token for the sandboxed preview iframe
-    (030 S1). Reached only through the auth middleware — an unauthenticated
-    caller never gets here. In the no-auth local posture the token is null."""
-    import webview.server as _srv
-    from webview.serve_tokens import SERVE_TOKEN_TTL_SEC, mint_serve_token
-
-    clean_id = _srv.pm().clean_session_id(session_id)
-    return JSONResponse({"token": mint_serve_token(clean_id),
-                         "ttl_sec": SERVE_TOKEN_TTL_SEC})
+# 043 A30: the serve-token MINT endpoint is DELETED — nothing in
+# `webview/static/` ever called it, so no preview iframe has ever carried a
+# `?st=` token. `webview/serve_tokens.py` and the middleware's VERIFY half stay
+# (server.py admits a valid `?st=` on a `/serve/` read), so a token handed out
+# by some future seat still works; what is gone is an endpoint that minted a
+# credential for nobody.

@@ -60,15 +60,13 @@ def test_no_placeholder_href_hash():
 def test_no_stale_hardcoded_version_string():
     # "1.0.0" must not appear as a literal brand-version string anymore — the
     # real version is rendered via get_version() everywhere it used to be
-    # hardcoded. (qrcodejs CDN URL version pins in profile.html are unrelated
-    # third-party asset versions, not this app's version — excluded by name.)
+    # hardcoded. (The qrcodejs CDN pin that needed an exclusion here lived in
+    # profile.html, deleted 2026-09-21 with its posture row — the page drove
+    # `/api/payments/*`, a router this app never mounts, so every panel on it
+    # answered 404.)
     offenders = []
     for f in _template_files():
-        if f.name == "profile.html":
-            text = f.read_text(encoding="utf-8", errors="ignore")
-            text = text.replace("qrcodejs/1.0.0/qrcode.min.js", "")
-        else:
-            text = f.read_text(encoding="utf-8", errors="ignore")
+        text = f.read_text(encoding="utf-8", errors="ignore")
         if "1.0.0" in text:
             offenders.append(str(f))
     assert not offenders, f"stale hardcoded version found in: {offenders}"

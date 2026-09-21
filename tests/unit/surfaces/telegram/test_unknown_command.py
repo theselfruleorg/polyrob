@@ -113,8 +113,13 @@ async def test_start_gets_a_welcome_not_the_help_wall(tmp_path):
 async def test_help_is_grouped(tmp_path):
     agent = _Agent(str(tmp_path))
     reply = await _handle_command(agent, _cmd("/help", "/help"), spawn=None)
-    for section in ("— Tasks —", "— Control —", "— Money —"):
-        assert section in reply
+    # D34: the sections ARE `core.verbs.GROUP_ORDER`, rendered — not a second
+    # grouping this module invented beside the table.
+    from core.verbs import GROUP_ORDER, grouped
+    rendered = {g for g, _ in grouped()}
+    for group in GROUP_ORDER:
+        if group in rendered:
+            assert f"— {group[:1].upper()}{group[1:]} —" in reply
 
 
 @pytest.mark.asyncio

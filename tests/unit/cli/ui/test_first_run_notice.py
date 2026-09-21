@@ -18,7 +18,10 @@ def test_build_notice_off_mentions_autonomy_data_config_and_enable_hint():
     assert "/home/u/.polyrob" in blob
     assert "/home/u/.polyrob/.env" in blob
     assert "Interactive tools on" in blob
-    assert "AUTONOMY_ENABLED=true" in blob  # the enable hint
+    # E18: the ONE remedy, spoken as the verb the owner runs (four surfaces
+    # used to print four different answers to the same question).
+    assert "polyrob autonomy on" in blob
+    assert "AUTONOMY_ENABLED" not in blob
 
 
 def test_build_notice_on_has_no_enable_hint():

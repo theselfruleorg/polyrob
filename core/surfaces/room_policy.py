@@ -60,7 +60,7 @@ DEFAULT_ROOM_TOOLS = ("task", "web_fetch", "defi_data")
 #: other targets, money-adjacent reads, self-modification, control.
 ROOM_DENIED_ACTIONS = frozenset({
     # deferred execution
-    "goal_create", "goal_cancel", "cronjob_schedule", "cronjob_cancel",
+    "goal_create", "goal_ask", "goal_cancel", "cronjob_schedule", "cronjob_cancel",
     "skill_manage", "self_context_manage", "preferences", "owner_doc_manage",
     "load_tool", "tool_manage_install", "mcp_install", "self_modify",
     # recall / owner state
@@ -80,21 +80,66 @@ ROOM_DENIED_ACTIONS = frozenset({
 })
 
 
+#: D60: tool ids a room session may NEVER load, named explicitly, whatever the
+#: capability table says about them today.
+#:
+#: ⚠️ The capability derivation below is necessary and was NOT sufficient. The
+#: docstring claimed the env "can narrow the room toolset, never widen it", and
+#: ``GROUP_TURN_TOOLS=filesystem`` walked straight through it: ``filesystem``
+#: carries none of ``money``/``exec``/``delegate_blocked``/``high_impact``, so a
+#: room full of strangers got read and write access to the owner tenant's
+#: workspace. These are the tools whose AUDIENCE, not whose capability bit,
+#: rules them out: the host, the owner's files, his browser session, his mail,
+#: his MCP credentials, his deployed apps.
+ROOM_FORBIDDEN_TOOL_IDS = frozenset({
+    # the host and the owner's files
+    "filesystem", "shell", "process", "coding", "code_execution", "git",
+    "self_env", "app_service",
+    # the owner's own sessions, credentials and identity on other services
+    "browser", "mcp", "email", "x_browser", "dapp_browser",
+})
+
+#: The ONLY ids a room turn may be given. A closed ALLOWLIST, because every
+#: deny-list in this file has already been found short once: a tool added to
+#: the tree next month is refused here by default and must be NAMED here to be
+#: reachable from a public room. Today that is exactly
+#: :data:`DEFAULT_ROOM_TOOLS`, so ``GROUP_TURN_TOOLS`` can only narrow it —
+#: which is what the env was always documented to do.
+ROOM_ALLOWED_TOOL_IDS = frozenset(DEFAULT_ROOM_TOOLS)
+
+
 def _forbidden_tool_ids() -> frozenset:
     """Tool ids a room session may never load, even via ``GROUP_TURN_TOOLS``: any
-    money/exec/delegate-blocked/high-impact tool_id, EXCEPT ``web_fetch`` — the
-    room's designated (already untrusted-wrapped) read tool, the same exception
-    :func:`is_room_denied_call` carves for it at the action-name level."""
-    from core.tool_capabilities import ids_with
-    forbidden = (ids_with("money") | ids_with("exec") | ids_with("delegate_blocked")
-                 | ids_with("high_impact"))
-    return forbidden - {"web_fetch"}
+    money/exec/delegate-blocked/high-impact tool_id, plus the explicit
+    :data:`ROOM_FORBIDDEN_TOOL_IDS`, EXCEPT ``web_fetch`` — the room's
+    designated (already untrusted-wrapped) read tool, the same exception
+    :func:`is_room_denied_call` carves for it at the action-name level.
+
+    Fail-CLOSED: an unreadable capability table still forbids the explicit set.
+    """
+    try:
+        from core.tool_capabilities import ids_with
+        forbidden = (ids_with("money") | ids_with("exec")
+                     | ids_with("delegate_blocked") | ids_with("high_impact"))
+    except Exception as e:  # pragma: no cover - the table is a static dict
+        logger.warning("room toolset: capability table unreadable (%s) — the "
+                       "explicit forbidden set still applies", e)
+        forbidden = frozenset()
+    return (frozenset(forbidden) | ROOM_FORBIDDEN_TOOL_IDS) - {"web_fetch"}
 
 
 def room_tool_ids() -> list:
     """The room toolset: env ``GROUP_TURN_TOOLS`` (comma list) else the default.
-    A money/exec/delegate-blocked id in the env is DROPPED with a WARN — the env
-    can narrow the room toolset, never widen it past the audience bound."""
+
+    Two gates, in this order, and the env can only ever NARROW:
+
+    1. a money/exec/delegate-blocked/high-impact id, or one of the explicitly
+       audience-forbidden :data:`ROOM_FORBIDDEN_TOOL_IDS`, is DROPPED;
+    2. anything outside the closed :data:`ROOM_ALLOWED_TOOL_IDS` is DROPPED.
+
+    Both drops are WARNed by name — an operator who narrowed a room toolset by
+    typo must be able to see which id went and why.
+    """
     raw = os.getenv("GROUP_TURN_TOOLS")
     ids = ([t.strip() for t in raw.split(",") if t.strip()] if raw is not None
            else list(DEFAULT_ROOM_TOOLS))
@@ -102,8 +147,14 @@ def room_tool_ids() -> list:
     kept = []
     for t in ids:
         if t in forbidden:
-            logger.warning("GROUP_TURN_TOOLS: dropping %r — money/exec/delegate-blocked "
-                           "tools are never room tools", t)
+            logger.warning("GROUP_TURN_TOOLS: dropping %r — money/exec/host/"
+                           "owner-state tools are never room tools", t)
+            continue
+        if t not in ROOM_ALLOWED_TOOL_IDS:
+            logger.warning("GROUP_TURN_TOOLS: dropping %r — a room turn may only "
+                           "load %s; a tool must be named room-safe to be "
+                           "reachable from a public room",
+                           t, ", ".join(sorted(ROOM_ALLOWED_TOOL_IDS)))
             continue
         kept.append(t)
     # Fix round 1 (review): an empty result is honest — NEVER floored back to

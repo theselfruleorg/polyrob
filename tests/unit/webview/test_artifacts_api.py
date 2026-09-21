@@ -90,12 +90,18 @@ def test_missing_session_is_empty_list_no_error(monkeypatch, tmp_path):
     assert resp.json() == {"artifacts": [], "error": None}
 
 
-def test_no_session_id_is_empty_list_no_error(monkeypatch, tmp_path):
+def test_no_session_id_is_a_refusal_never_an_empty_list(monkeypatch, tmp_path):
+    """043 A3: this ledger is SESSION-scoped, so a call without one is refused.
+
+    It used to answer ``{"artifacts": [], "error": None}`` — the sentence "this
+    produced nothing" — and Work › Apps, which calls it with no session id,
+    drew "Nothing built" over a tree full of real files.
+    """
     _ledger_on(tmp_path, monkeypatch)
     client = _client(monkeypatch, posture="local")
     resp = client.get("/api/webgate/artifacts")
     assert resp.status_code == 200, resp.text
-    assert resp.json() == {"artifacts": [], "error": None}
+    assert resp.json() == {"artifacts": None, "error": "session-scoped"}
 
 
 def test_router_exposes_the_artifacts_path():

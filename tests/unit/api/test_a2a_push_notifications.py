@@ -55,7 +55,12 @@ def _handler(status="running", metadata=None, owner="u1"):
     return A2ATaskHandler(_FakeContainer(agent)), agent
 
 
-def test_get_push_config_memory_then_metadata_fallback():
+def test_get_push_config_memory_then_metadata_fallback(monkeypatch):
+    # B10: the metadata fallback re-validates the stored URL (a row
+    # persisted before that gate existed is still caller-supplied). The
+    # example host does not resolve, so stub the gate here.
+    import api.a2a.task_handler as th
+    monkeypatch.setattr(th, "validate_push_url", lambda url: url)
     handler, _ = _handler()
     # memory hit
     handler._push_configs["t1"] = PushNotificationConfig(url="https://cb.example/hook")

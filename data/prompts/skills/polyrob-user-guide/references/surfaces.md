@@ -19,8 +19,11 @@ loop, several front doors — each surface adapts inbound/outbound to the SAME
   `/persona`, `/sessions`, `/replay`, `/clear`, `/compact`, `/model`, `/cwd`,
   `/session`, `/self`, `/memory`, `/verbose`, `/quiet`, `/steps`, `/autonomy`,
   `/goals`, `/subagents`, `/todos`, `/logs`, `/export`, `/skills`, `/cron`,
-  `/mcp`, `/kb`, `/pending`, `/approve`, `/learn`, `/config`. Run `/help` for
-  the live list.
+  `/mcp`, `/kb`, `/pending`, `/approve`, `/gates`, `/meter`, `/missed`,
+  `/learn`, `/config`. Run `/help` for the live list. ⚠️ `/approve <id>`
+  DECIDES one waiting item; `/gates` is the separate verb that manages WHICH
+  actions need approval. `/gates` and `/meter` are REPL-only — no other seat
+  runs them.
 - `polyrob init` — first-run setup (provider keys, default provider/model,
   toolset, template); also pairs the instance to an **owner**
   (`--owner`/`--instance-id`, both default `polyrob`). Re-runnable any time.

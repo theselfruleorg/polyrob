@@ -6,6 +6,284 @@ All notable changes to POLYROB are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-09-21
+
+### Fixed (interface deep audit — 2026-09-21)
+Five parallel audits of the console, the HTTP/A2A/OpenAI-compat API, the CLI, the
+REPL, Telegram/email and cross-surface parity found ~270 defects; all are closed in
+this pass. The behaviour-visible ones:
+- **Console** — `GET /api/webgate/pending` renders the same composer as the Inbox
+  (a locked queue is NAMED, never a shorter list); Work › Now reads `live.goals`
+  (un-windowed) and dedupes against `session_id`; an ask can be ANSWERED in writing
+  (`{"answer"}` rides through `GoalBoard.decide_ask(answer=)` into the retry prompt);
+  a Pause/Resume control in the shell header; app Kill/Logs, file links, the chat
+  file picker, Keep for the avatar; `command_reply` rendered for a slash verb (and a
+  verb typed on the cold open no longer becomes a session task); knowledge/worklog/
+  artifacts/invoices/live readers carry typed error/partial/`filtered_out`/
+  `outstanding_*` fields; the `/pending` and `/profile` pages, `/api/sessions`
+  (a 1,790-dir synchronous walk), `/api/session/{id}/stats`, the CDN script tags,
+  and 19 dead assets are gone; `docs/guide/console.md` and the README match the tree.
+- **API** — ONE public-path allow-list shared by both auth gates (`api/auth_constants.py`;
+  SIWE, the agent card, x402 challenge/pay and pricing were 401 whenever `API_SECRET`
+  was set, and a settled x402 payment then got a 401 with no refund); x402 settles
+  ONLY on the gated routes; `rob_xxx` API keys validate without `ENABLE_AUTH`;
+  `API_AUTH_TOKEN` is a `service` role on `X-Service-Token` (not admin; `X-API-KEY`
+  works one more release with a WARN) and `GET /api/test-auth` is deleted;
+  `/api/task/metrics` is admin-only; `/health` can be degraded; A2A artifacts have a
+  real tenant-scoped `GET …/workspace/{path}`, `initializing` is WORKING, push URLs
+  pass the SSRF validator, every session op routes through `guard_remote`, `cancel`
+  checks ownership; `polyrob serve --workers N>1` refuses unless
+  `API_AUTONOMY_RUNTIME=false`; `/v1/chat/completions` threads `temperature`,
+  400s (OpenAI-shaped) on unsupported params, marks `usage.estimated`; ERC-8004
+  `trustMode: onchain` needs a real agent_id + registry; docs corrected.
+- **CLI** — every owner/admin verb reads the deployed data home
+  (`admin_data_dir`) and the owner tenant (`keys`, `wallet init|book|bridges|overview`,
+  `owner invoices|settle|sub|correspondents|approve`, `approvals`, `apps`, `cron`,
+  `session`, `subagents`, `finance` were on a shell/CWD home — a confident zero over a
+  live store); `goals list|tree` read `list_recent`/`status_counts`; `surface list`
+  reads the real dead-target store; EIP-55 kept on `wallet asset add`; `doctor --json`
+  is the typed snapshot; `wallet set-cap` writes the live pref; new verbs
+  `wallet claim|nft|dapp`, `identity register|set-uri`, `owner correspondents --history`,
+  `owner paid enable|disable|price|asset|offers`, `owner groups admins`.
+- **REPL** — addresses/paths/tx hashes are no longer redacted; `/approve <id>`
+  DECIDES on every seat (`/gates` manages the gates); `/reject` reads the union;
+  `/cron list|add|cancel`; `/groups /mute /unmute /ban /unban /paid /cancel /new
+  /start /claim /nft /dapp /contacts /identity`; `/apps <verb>`; `/status` is the
+  snapshot and `/meter` the token meter; full session ids; one empty grammar.
+- **Telegram** — help is RENDERED from `core.verbs` (one SSOT, contract-tested);
+  a room admin can no longer self-grant `admin`; `blocked` fails CLOSED; a paired
+  sender on a forgeable surface (email) is never OWNER; free `/mute /ban` no longer
+  raise; `/bridge /launch /deploy /lp` no longer block the polling loop; `/goal <id>`
+  resolves without `board.list`; `/wallet balances` shows the LIVE caps and the
+  cap note names `/config set budget.wallet_per_tx_usd`; `/paid cancel` is
+  room-scoped; `/missed` is unclipped; a correspondent's attachment is named;
+  `/cron /goal /fulfill` refused from a room; room toolset is a closed allowlist.
+- **Email + delivery rails** — see the D-section of the review (BODY.PEEK, dedup
+  after dispatch, honest queue outcomes, pause gate on `email_send`, secret scrub,
+  IMAP verdicts, attachments on AgentMail, HTML-only bodies, thread anchors).
+- **Parity contract** — `tests/unit/test_surface_parity.py` scans every console
+  router, carries 27 new rows (six of them all-`None` on purpose), and gains
+  `test_repl_covers_every_telegram_owner_verb` + `test_board_view_never_calls_list`
+  + `test_repl_help_group_matches_core_verbs`.
+- **Revalidation pass (same day)** — four fresh reviewers re-read the eight commits and
+  their dependents; ~45 more defects closed. The ones that mattered: the workers>1 refusal
+  lived only in the CLI (the systemd entry `main.py` skipped it — now in `server_boot`);
+  `require_service`'s 503 was unreachable (the container accessor RAISES, so `/api/hyperliquid|
+  mcp|polymarket|admin` and SIWE answered 500); `X-Service-Token` could not pass CORS
+  preflight and the console still proxied the operator token under `X-API-KEY`; the `/v1`
+  OpenAI envelope skipped middleware-level 401/413; `/health` could 500 on a non-numeric
+  metric; the agent-callable `read_emails` still used `RFC822` (which set `\Seen` and
+  emptied the surface's inbound queue); the new outbound-queue status line looked for
+  `outbox.db` on the wrong axis; a queued cross-process delivery was journalled `failed`;
+  the AgentMail outage verdict could never clear; `/help gates` said "unknown command"; a
+  room admin's `blocked` grant and the paired-email rule re-proven; `/fulfill <id> [answer]`
+  and `/approve <id> <answer>` carry the owner's words on every seat; every CLI money ACTION
+  spent under the SHELL's tenant while every VIEW read the deployed one; a `/dapp` READ
+  created `dapp_sessions.db`; `KV_RE` never claimed `private_key`/`mnemonic`/`seed_phrase`/
+  `passphrase`/`keystore` (they survived every scrubber verbatim); `refund_due` (a settled
+  machine payment we owe back) now has one status vocabulary (`modules/x402/invoice_status.py`),
+  a ledger line, a status WARN, a critical-lane owner notice and a listing filter on every seat;
+  paid-room remedies are seat-aware; six REPL help groups matched to `core.verbs`; the
+  `GROUP_TURN_TOOLS`/`INBOUND_MEDIA_ENABLED`/`API_AUTH_TOKEN` flag rows corrected (+regen).
+
+
+### Added (057 — runtime structural upgrade, implemented 2026-09-20)
+All flag-gated and default-inert unless noted; prod arms them per the proposal's
+§4 defaults. Full flag table in `docs/CONFIGURATION.md` (24 new rows).
+- **WS-A tool rigs** — `core/config_policy/rigs.py` (the ONE table `money_rail` /
+  `social` / `research` / `ops` / `full`, fixed id order); `payload.rig` on cron jobs
+  and goals, `polyrob cron edit --rig`, `AUTONOMOUS_RIG_DEFAULT`;
+  `AUTONOMOUS_TOOL_DISCLOSURE` lets an autonomous session widen a narrow rig;
+  `STABLE_AUTONOMOUS_TOOLSET` + `TOOL_SCHEMA_STABLE_ORDER` keep the cached prompt
+  prefix byte-stable; the email tool's catalog status reads `gated:credentials-rejected`.
+- **WS-B budgets by session class** — `agents/task/session_class.py` is the ONE
+  answer to "is this session autonomous"; `AUTONOMOUS_CONTEXT_BUDGET_TOKENS` makes
+  compaction reachable; `TOOL_RESULT_MAX_TOKENS`, `AUTONOMOUS_READ_PAGE_LINES`,
+  `AUTONOMOUS_MAX_OUTPUT_TOKENS`, `LLM_OUTPUT_TRUNCATION_RETRY` (+ the
+  `llm_output_truncated` event), `LLM_TIMEOUT_BY_OUTPUT` (timeout sized by expected
+  output, not input), `LLM_TIMEOUT_REROUTE`, `AUTONOMOUS_SCREENSHOT_ON_BROWSER_ONLY`;
+  `write_file`/`append_file` results carry `size_bytes` + `sha256`.
+- **WS-C pre-empt without discarding** — `payload.preempts` (default = money) is the
+  pre-emption property; the yield is scoped to the goal holding the workspace (the
+  planner is never cancelled), attaches artefacts before the cancel unwinds, and is
+  a `goal_run yielded` event; `GOAL_YIELD_GRACE_SEC`, `GOAL_RESUME_SAME_SESSION`
+  (+ `goal_run resumed`), `GOAL_PREFLIGHT_ENABLED`/`_STEP_SEC` (056 WS5 2b),
+  `GOAL_YIELD_AGEING`, `CRON_DEFAULT_MAX_DURATION_SEC`; deferrals are `goal_run
+  deferred` events; the yield probe runs inside the TickLock; the change gate never
+  gates a money job; `polyrob cron prune`, `cron list` hides cancelled; the goal
+  dispatcher reads the cross-process turn marker.
+- **WS-D provenance** — `source=`/`observed_at=` on `owner_doc_manage` /
+  `self_context_manage` (changed lines stamped ` [from: <source> <date>]`),
+  `DOC_CLAIM_PROVENANCE_REQUIRED` (a FORMAT guard on claim-shaped lines), the
+  foundation block states the docs' age, and a room's allowlist note renders as a
+  dated LABEL, never its name (`core/surfaces/room_label.py`; `group_allowlist.updated_at`).
+- **WS-E verification** — `core/rails/verification.py` is the ONE per-rail proof table
+  (x_post / x_reply / telegram_channel / telegram_group / email / onchain), rendered
+  on the `message`, `x_post`/`x_reply` and `email_send` results, cited by
+  `room_read`, generated into `docs/guide/rails-verification.md`; the corrupted
+  bullet in the `x-engagement` skill is repaired.
+- **WS-F durable rail verdicts** — `core/credential_verdicts.py` is a store
+  (`verdicts.db`, `first_seen`/`last_seen`/`count`, shared by every unit); the email
+  surface polls IMAP without the SMTP probe; the X API 402 is a durable
+  `x_api_rejected` event; a missing key is a verdict warned once per process.
+- **WS-G identities** — `polyrob doctor --perms [--strict]` over `core/data_perms.py`;
+  the deploy's ownership pass covers the whole data home; the three ops-loop units
+  join `polyrob-data` with `UMask=0002`; a root euid refuses owner-CLI writes on a
+  deployed box (`--as-root` / `POLYROB_ALLOW_ROOT_CLI`).
+- **WS-H deploy + shutdown** — `deploy_when_idle.sh` fails closed, parses the marker
+  as JSON and carries a daily budget (`DEPLOY_DAILY_MAX`, 6); console/API turns hold
+  the turn gate (`SURFACE_OWNER_TURN`, ON); on SIGTERM the in-flight cron/goal run
+  gets an ending (`AUTONOMY_SHUTDOWN_DRAIN`, ON) and `TimeoutStopSec=90`.
+- **WS-I economics** — the status snapshot's `economics` section (calls, $/day,
+  cached share, uncached/output per call, p50/p90 latency, truncations, first-call
+  cache hits, `budget_runway` when a balance was read) from `usage_records`; the
+  loops section renders standing rail verdicts with a SINCE clock, `rail_cut_repeat`,
+  and the goals section renders `yielded ×N · resumed ×M · deferred ×K`; the security
+  section renders the data-home permission audit.
+
+### Changed
+- Corrections to the load-bearing numbers behind the 057 design, measured against
+  production `usage_records`/telemetry: prompt caching IS live (80% of input tokens
+  cached), latency is output-bound, and compaction was unreachable under
+  `TASK_MAX_INPUT_TOKENS=200000`.
+
+### Fixed (deployment)
+- `polyrob.service`, `polyrob-email.service` and `polyrob-webview.service` now run with
+  `UMask=0002`: with systemd's default 022 the WAL sidecars one unit created under the shared
+  data dir were group-read-only, so a sibling unit hit `attempt to write a readonly database`
+  (the email surface's outbound queue, twice in two days). Same fix the root helper units got
+  on 2026-09-18; ratcheted by `tests/unit/test_shared_data_units_umask.py`.
+
+### Added
+- **`goal_ask`** — a rail that hits a question only the owner can answer now raises a
+  durable board ask instead of asking once into a chat line that scrolls away. The ask is
+  dedup-refreshed, visible on every owner seat, and the goal that raised it is HELD (not
+  re-served) while it is open: on 2026-09-12 one rail re-fired seven times in 75 minutes
+  while the owner was deciding, and a buyback rail stalled for 12 hours on a question that
+  was asked once and never resurfaced.
+- `polyrob cron edit` gains `--task-file <path>` (replace a job's prose without
+  re-scheduling it), `--deliver <target|none>` and `--rig <name>`; `cron show|edit|cancel`
+  accept a unique job-id prefix, and a rig error is reported separately from a job error.
+- `OPENROUTER_REASONING_ENABLED=false` sends `reasoning.enabled=false` — measured as the one
+  lever a DeepInfra upstream honours — and `OPENROUTER_REASONING_MAX_TOKENS` bounds the
+  model's reasoning inside the output cap. A cut spent on REASONING gets its own note and
+  its own count, so "the answer was truncated" and "the thinking was truncated" stop
+  reading alike.
+- Every OpenRouter call stamps `prefix_sha`/`tools_sha` onto its usage record, which makes a
+  cache miss attributable to a changed prompt prefix rather than guessed at.
+- The composed daily digest rolls up the owner messages a cap or a pause suppressed
+  (window-bounded, oldest first, day-stamped, capped at 8); an unreadable store is named
+  rather than read as "nothing was missed".
+- `OPENROUTER_PROVIDER_SORT` (`latency`|`throughput`|`price`, default unset = byte-identical):
+  asks OpenRouter to order upstreams for the SAME model by latency instead of its price-first
+  default — an ops knob for a seat whose cheapest upstream stalls (four 290–410 s timeouts and
+  five money-rail cap cuts in one afternoon on prod).
+
+### Fixed
+- `anysite_api`: an empty answer from a `/search/` endpoint to a query longer than two words now
+  carries a hint that the endpoint silently rejects long phrasings and names the two-word retry —
+  the agent had twice recorded a live theme as "exhausted" on a query-shape artefact.
+- `scripts/deploy_when_idle.sh` also vetoes a deploy while an owner DM was routed in the last
+  `OWNER_DM_VETO_SEC` (600) seconds, read from the `inbound_routed{tier=owner}` telemetry row
+  the harness writes before any turn starts — independent of the turn marker, which failed
+  twice on 2026-09-19. An unreadable telemetry DB counts as busy. `DEPLOY_WHEN_IDLE_DRY_RUN=1`
+  exercises the decision without deploying (bash test).
+- The live-turn marker (`turn.active`) now always lives under `<POLYROB_DATA_DIR>/locks/`, the
+  location the deploy waiter, the cron tick and `polyrob doctor` read. The agent process sets
+  `POLYROB_WORKSPACE_LOCK_DIR=<project>/.polyrob`, so the marker was landing there instead and
+  two deploys (10:36Z, 18:29Z on 2026-09-19) fired in the middle of a live owner turn.
+- `room_read` no longer lets an empty room ledger read as "my posts may not have rendered":
+  Telegram never delivers a bot's OWN posts back as updates, so a channel only the bot posts
+  to stays at 0 lines by design — both the room listing and the per-room read now say so and
+  name the send receipt as the delivery confirmation (prod 2026-09-19: the agent told the
+  owner for two days that channel posts were "receipt-only, visibility unconfirmed").
+- `defi_data.swap_quote` cross-checks the route's output against the keyless indexer-implied
+  output and renders `⚠ SUSPECT QUOTE` when they disagree by more than 5× either way (the
+  `lifi:fly` cold-response constant of 2026-09-19); consistent quotes say so, and a missing
+  or zero-liquidity price renders `cross-check: unavailable` — never a verdict.
+- History dedup no longer replaces a SHORT identical tool result with a "[duplicate of …]"
+  back-reference (`DEDUP_MIN_CHARS`, 160): three identical `Edited <file>` confirmations in
+  one step were reported by the agent as "the dedup artifact" instead of three landed edits,
+  and the pointer was longer than what it replaced.
+- A screenshot of a never-navigated page (`about:blank` / new tab) is no longer attached
+  to the state message: every step of a run that never touched the browser was shipping one
+  useless image per call through the vision path of the metered seat (`agents/task/agent/
+  prompts.py::is_blank_page_url`). A navigated page's screenshot is unchanged.
+- The system prompt now states the executor's real per-step tool-call cap (5) instead of
+  the config ceiling (10), and a deferred call's notice says it did NOT run and must be
+  re-issued — a 6-call batch used to lose its 6th call from the agent's point of view.
+- The GeckoTerminal client retries once (2 s) on a 429, and a provider error that survives
+  the retry now propagates from the pool resolver: `defi_data_ohlcv` says "could not resolve a
+  pool: HTTP 429" instead of "no indexed pool found … not an outage" (five batched candle
+  reads were reported as absent pools on 2026-09-19).
+- The X API tool remembers a `402 Payment Required` (credits depleted) for 60 min and refuses
+  every further API call locally with the owner remedy instead of re-discovering it per
+  endpoint (a round burned 52 calls in 15 min); a successful call clears the verdict.
+- `defi_data_swap_quote` stamps `quoted_at` (UTC) and the pair addresses on every quote, so
+  two re-quotes that happen to agree are never byte-identical and the history compaction
+  pass no longer folds a fresh read into "[duplicate of an earlier tool result]".
+- `defi_data_ohlcv` accepts a 32-byte pool id (Robinhood Chain singleton pools) for both
+  the auto-resolved and an explicit `pool=`; the path validator treated every pool as a
+  20-byte address, so every RH candle read was refused. A token address is still an address.
+- `coding_grep` given a FILE path greps that file (it used to walk it as a directory and
+  answer "(no matches)"); a path that is neither a file nor a directory errors naming it.
+- `kb_ingest` no longer refuses the agent's own plain-text documents (`.md/.txt/.rst`)
+  under a workspace `data/` directory purely by path: they are admitted when they sit
+  outside the runtime data subtrees and a content secret-scan passes. The broad
+  `is_secret_path` classifier is unchanged for every other consumer.
+- The autonomous X post cooldown refusal now names the remaining window and the exact
+  one-shot deferral (`cronjob_schedule` at an ISO instant) so a NEW executed-transaction
+  report is deferred rather than dropped; a genuine re-fire is still told to skip.
+- Goal dispatch no longer starves behind staggered money rails: with
+  `GOAL_YIELD_FOR_MONEY_RAIL` on, a scheduled money-class cron job does not hold the
+  board back through `GOAL_DISPATCH_CRON_HEADROOM_SEC` (it pre-empts a running goal
+  instead); a job mid-run and every ops-class job still defer.
+- The autonomous context budget gauges the HISTORY only — it no longer clamps the model's
+  safety limit, which cut the first rail of a run at step 1.
+- The state message honours `TOOL_RESULT_MAX_TOKENS` too. It reprinted every tool result
+  raw under a separate 100k-character limit, so five large JSON answers put ~110k uncached
+  tokens into a single step (210k in, a 221 s timeout) with the 6k cap already armed.
+- A tool-less auxiliary LLM call no longer inherits the last step's toolset, and the
+  native-tools billing path feeds the output-scaled timeout (it was sizing the budget from
+  input alone).
+- An LLM timeout inside an AUTONOMOUS run never DMs the owner: a background rail's retry is
+  not owner news.
+- `read_file` paged past the end of a file is an honest empty answer naming the line count,
+  not a crash.
+- `coding_grep`, `kb_ingest` and the tool-availability note keep their fixes from the same
+  window; the compute gates now name the limb that is ACTUALLY unmet (production ran
+  posture 1 with `CODE_EXEC_ENABLED=false` and the note still said "raise the posture").
+- A credential verdict's re-probe hold doubles per repeat failure to a 6 h cap, and an SMTP
+  verdict is keyed on a password change-detector digest, so a corrected password clears the
+  verdict instead of waiting out a fixed TTL. A verdict READ never creates `verdicts.db`.
+- Files and SQLite stores born BETWEEN deploys are group-writable from birth (one birth
+  rule in `core/sqlite_util.py` and the session state writer). A store created 30 seconds
+  after a deploy's ownership pass was born `0644` and degraded with "attempt to write a
+  readonly database".
+- A ledger or cooldown READ never creates `telemetry_events.db`, and a `/dapp` read never
+  creates `dapp_sessions.db` — a read that plants a file makes "no data" and "never ran"
+  indistinguishable.
+- `polyrob doctor` reads the DEPLOYED owner tenant (refusing rather than guessing when the
+  env file is unreadable) and its money section reads without a DI container: an unread
+  ledger leg renders `unavailable`, never `$0.00`. `GET /api/webgate/doctor` names a failed
+  report (`checks: null` + `checks_error`) instead of a confident empty list.
+- An unreadable `./.polyrob/.env` candidate or an unreadable `.git` probe on the local
+  bootstrap ladder is skipped, not a crash — both killed `polyrob owner asks` when it ran
+  as the service user from another user's clone.
+- Promoting an owner-approved draft no longer trips the claim-provenance guard: the owner's
+  approval of a SOURCED draft is not an unsourced claim.
+- A cron job that already told the owner during its run does not send the delivery echo
+  again.
+- `polyrob doctor` in a directory the agent has never run in creates NOTHING. Its new
+  money section builds the unified ledger, whose caps block asks for the wallet policy
+  gate, and two read-creates-a-store defects followed: constructing the wallet audit sink
+  mkdir'd `<cwd>/.polyrob/wallet/` and minted an `audit.jsonl.lock` before reading a byte
+  (both are now deferred to the first real write), and on a base install without the
+  `crypto` extra the missing-dependency WARNING was enough to mint
+  `<cwd>/.polyrob/logs/bot.log` (a base install has no wallet by design — that is not a
+  warn-worthy condition). The clean-room wheel gate gained a test for the second, which
+  the dev tree structurally cannot see.
+
 ## [1.0.3] — 2026-09-19
 
 ### Added

@@ -1,6 +1,6 @@
 # CLI Package — terminal-native `polyrob`
 
-_Last reviewed: 2026-07-12. For the user-facing command reference see [../docs/guide/cli.md](../docs/guide/cli.md); for env flags see ../docs/CONFIGURATION.md._
+_Last reviewed: 2026-09-21. For the user-facing command reference see [../docs/guide/cli.md](../docs/guide/cli.md); for env flags see ../docs/CONFIGURATION.md._
 
 ## Overview
 
@@ -14,6 +14,8 @@ provides:
 - `polyrob init` / `doctor` / `config` — setup, diagnostics, and configuration.
 - Surface runners and admin: `serve`, `dashboard`, `telegram`, `email`, `owner`,
   `kb`, plus `tools`, `skills`, `model`, `session`.
+- Owner-control and money seats: `autonomy`, `approvals`, `apps`, `cron`,
+  `goals`, `keys`, `surface`, `wallet`, `identity`, `finance`, `profile`.
 
 ## Design principles
 
@@ -34,7 +36,12 @@ cli/
 ├── config_store.py       # Key-aware provider/model resolution from ~/.polyrob/.env
 │                         #   (auto-detects the provider whose API key is present)
 ├── inventory.py          # Product-facing tool catalog backing `polyrob tools`
-├── keys.py               # API-key helpers
+├── keys.py               # provider-key presence guard + onboarding preflight
+│                         #   (NOT the API-key seat — that is commands/keys.py)
+├── _admin_home.py        # admin_data_dir(write=…) + @as_root_option: the ONE
+│                         #   data home an owner/admin verb acts on (031 / 057)
+├── session_paths.py      # session_directory(): the ONE session-dir lookup —
+│                         #   it REFUSES an ambiguous id rather than guessing
 ├── gitignore.py          # ensures ./.polyrob is gitignored in a project
 ├── commands/             # One Click module per subcommand (thin entry points)
 │   ├── _bootstrap.py     #   shared container/bootstrap helpers
@@ -49,7 +56,13 @@ cli/
 │   ├── session.py        #   cancel <id> (alias: sessions)
 │   ├── tools.py skills.py kb.py
 │   ├── serve.py dashboard.py    #   local REST API + POLYROB Console
-│   └── telegram.py email.py owner.py  # chat-surface runners + owner admin
+│   ├── telegram.py email.py owner.py  # chat-surface runners + owner admin
+│   ├── approvals.py apps.py cron.py goals.py  # the autonomy control seats
+│   ├── keys.py           #   `polyrob keys` — API keys for A2A / OpenAI-compat
+│   ├── surface.py        #   per-surface circuit breakers + health
+│   ├── wallet.py wallet_lp.py   #   the money seat (caps, bridge, deploy,
+│   │                     #     launch, claim, nft, lp, asset, dapp)
+│   └── identity.py       #   SOUL / persona / avatar + ERC-8004 registration
 └── ui/                   # REPL rendering + input
     ├── app.py            #   prompt_toolkit PromptSession + bottom toolbar
     ├── persistent_loop.py#   bottom-anchored persistent-input loop
@@ -67,6 +80,21 @@ cli/
 
 ## Key invariants
 
+- **One data home per owner verb.** Every verb that reads or writes the DAEMON's
+  stores resolves through `cli/_admin_home.py::admin_data_dir(write=…)`, which
+  adopts the DEPLOYED home when the shell declares none and REFUSES when it
+  cannot read it — never a second resolver, never a `POLYROB_DATA_DIR or "data"`
+  fallback. `write=True` also arms the euid guard: a root-run mutating verb on a
+  deployed box refuses with the `sudo -u polyrob-agent` remedy (or `--as-root`).
+- **One tenant per owner verb.** The tenant is
+  `core.admin_data_home.admin_owner_principal()`, not the shell-local
+  `resolve_identity()` and never a literal `"local"` — the two differ exactly
+  where it matters, in an SSH shell on a deployed box.
+- **A read never creates a store.** Owner reads existence-guard their sqlite
+  files: opening one to answer "none" leaves behind a decoy the service never
+  writes.
+- **Honest empty states.** One grammar (`cli/ui/candy.py::empty`). An unreadable
+  source renders its reason; it never renders `0`, `$0.00` or `[]`.
 - **Provider/model auto-resolves** from whichever API key is present
   (`config_store.resolve_provider_model`); explicit `-p`/`-m` or `DEFAULT_PROVIDER`
   still win.

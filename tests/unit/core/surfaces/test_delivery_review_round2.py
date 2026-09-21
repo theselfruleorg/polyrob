@@ -118,9 +118,9 @@ def test_a_repeated_undelivered_body_writes_one_notice():
     ev = _EvLog()
     for _ in range(4):
         assert _deliver(None, "the blocker report", source="agent_send",
-                        event_log=ev) == "fallback"
+                        event_log=ev) == "no_sink"
     assert len([n for n in ev.notices() if "the blocker report" in n]) == 1
-    assert len(ev.rows("fallback")) == 4      # every attempt is still audited
+    assert len(ev.rows("no_sink")) == 4       # every attempt is still audited
 
 
 def test_a_repeated_capped_body_writes_one_notice(monkeypatch):

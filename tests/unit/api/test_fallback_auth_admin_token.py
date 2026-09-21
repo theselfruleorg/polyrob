@@ -39,7 +39,31 @@ def _app():
     return TestClient(app, raise_server_exceptions=False)
 
 
-def test_valid_api_token_gets_admin_bypass_not_402(monkeypatch):
+def test_valid_service_token_is_not_402(monkeypatch):
+    """B4: the operator SERVICE token still passes payment verification — but
+    as its OWN role, not as an admin. It used to arrive role="admin", which made
+    an undocumented env var a full admin credential for every /api/admin route."""
+    monkeypatch.setenv("API_AUTH_TOKEN", "secret-token-123")
+    from core.container import DependencyContainer
+    monkeypatch.setattr(
+        DependencyContainer, "get_instance",
+        classmethod(lambda cls, *a, **k: _FakeContainer()),
+    )
+    client = _app()
+
+    resp = client.post(
+        "/task/sessions",
+        json={"task": "hi"},
+        headers={"X-Service-Token": "secret-token-123"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["payment_method"] == "service_bypass"
+    assert resp.json()["details"]["role"] == "service"
+
+
+def test_legacy_x_api_key_spelling_still_works(monkeypatch):
+    """B4: X-API-KEY stays accepted for ONE release (deprecation WARN)."""
     monkeypatch.setenv("API_AUTH_TOKEN", "secret-token-123")
     from core.container import DependencyContainer
     monkeypatch.setattr(
@@ -55,4 +79,10 @@ def test_valid_api_token_gets_admin_bypass_not_402(monkeypatch):
     )
 
     assert resp.status_code == 200, resp.text
-    assert resp.json()["payment_method"] == "admin_bypass"
+    assert resp.json()["payment_method"] == "service_bypass"
+
+
+def test_service_token_is_not_an_admin(monkeypatch):
+    """B4: the service role must NOT satisfy the admin gate."""
+    from api.auth_constants import SERVICE_ROLE, is_admin_role
+    assert not is_admin_role(SERVICE_ROLE)

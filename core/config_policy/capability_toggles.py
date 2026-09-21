@@ -121,6 +121,23 @@ def tool_progressive_disclosure() -> bool:
                       _safe_autonomy_default("TOOL_PROGRESSIVE_DISCLOSURE"))
 
 
+def autonomous_tool_disclosure() -> bool:
+    """057 WS-A: pin the ``<tool-catalog>`` + register ``load_tool`` for an
+    AUTONOMOUS (cron/goal) session, independently of ``POLYROB_LOCAL``.
+
+    Why a second key rather than flipping ``TOOL_PROGRESSIVE_DISCLOSURE``: the
+    server never sets ``POLYROB_LOCAL``, so today disclosure is off for every
+    prod cron run — which is precisely the session a narrow tool rig applies to.
+    A narrow rig without a way back out is a tool-starved run; with disclosure
+    the job loads the one tool it turns out to need and says so.
+
+    Default OFF => byte-identical. This module only READS the flag: which
+    sessions count as autonomous is answered by
+    ``agents.task.session_class`` (core may not import agents).
+    """
+    return _bool_env("AUTONOMOUS_TOOL_DISCLOSURE", False)
+
+
 def prefs_tool_enabled() -> bool:
     """Whether the agent-callable `preferences` action (owner-UX P2 T2) is
     registered. Default OFF; ON under POLYROB_LOCAL (single-user CLI) via the

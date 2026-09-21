@@ -40,7 +40,6 @@ from fastapi.templating import Jinja2Templates
 from watchfiles import awatch, Change
 
 # Local utility that aggregates session statistics from feed files
-from webview.stats_service import compute_session_stats
 
 # Shared read-service: reconstruct the multi-agent roster from the session feed
 from agents.task.telemetry.agent_graph import build_session_agents
@@ -171,6 +170,11 @@ def _api_proxy_auth_headers(request: Request) -> Dict[str, str]:
     A validated bearer wins, then the HttpOnly console cookie. ``API_AUTH_TOKEN``
     is the machine-client fallback for a local/API-key deployment. Values are
     deliberately never logged.
+
+    ⚠️ The operator token goes out under ``webgate.service_token_header()``
+    (``X-Service-Token``). It was sent as ``X-API-KEY``, which the 2026-09-21
+    API work made the per-user ``rob_xxx`` validator's header — accepted for one
+    more release only, so this was one release from 401-ing every message.
     """
     authorization = (request.headers.get("Authorization") or "").strip()
     if authorization.lower().startswith("bearer "):
@@ -180,7 +184,7 @@ def _api_proxy_auth_headers(request: Request) -> Dict[str, str]:
         return {"Authorization": f"Bearer {cookie_token}"}
     api_token = (os.environ.get("API_AUTH_TOKEN") or "").strip()
     if api_token:
-        return {"X-API-KEY": api_token}
+        return {webgate.service_token_header(): api_token}
     return {}
 
 
@@ -730,7 +734,12 @@ if webgate.is_multitenant():
                                 dependencies=webgate.MUTATION_DEPS)
         AUTH_ROUTER_MOUNTED = True
         logger.info("✅ Auth endpoints mounted at /api/auth (nonce, verify, me)")
-    except ImportError as e:
+    # 043 A43: `Exception`, not `ImportError`. Every sibling mount below records
+    # any failure into UNMOUNTED_ROUTERS (reported by `/api/webgate/doctor` and
+    # re-raised in the `local` posture); these two caught only an import error,
+    # so a router that raised while BUILDING took wallet sign-in or session
+    # creation down and reported nothing anywhere.
+    except Exception as e:
         AUTH_ROUTER_MOUNTED = False
         logger.warning("⚠️ Wallet authentication will not work!")
         _record_unmounted("auth", e)
@@ -745,13 +754,23 @@ else:
 # guard at the mount seam. Reads stay allowed.
 try:
     from api.task_http_api import router as task_router
+    # 043 A17: a leading owner verb on COLD OPEN is a command, not a task. This
+    # router owns the same path and must be included FIRST (FastAPI takes the
+    # first match); anything that is not a known verb is handed to the real
+    # creator below, unchanged. Same try block as the task router on purpose —
+    # a console without the api tier must not mount a front door to nothing.
+    from webview.console_commands import build_console_create_router
+    _fastapi.include_router(build_console_create_router(), prefix="/api",
+                            tags=["task"], dependencies=webgate.MUTATION_DEPS)
     _fastapi.include_router(
         task_router, prefix="/api", tags=["task"],
         dependencies=webgate.MUTATION_DEPS,
     )
     TASK_ROUTER_MOUNTED = True
     logger.info("✅ Task endpoints mounted at /api/task")
-except ImportError as e:
+# 043 A43: `Exception`, like the auth mount above — `build_console_create_router()`
+# RUNS here, so a moved symbol escaped this block instead of being recorded.
+except Exception as e:
     TASK_ROUTER_MOUNTED = False
     logger.warning("⚠️ Task session creation from webview will not work!")
     _record_unmounted("task", e)
@@ -903,17 +922,19 @@ async def auth_middleware(request: Request, call_next):
 
     # Get all cookies for auth check (debug logging removed for security)
 
+    # 043 A15: DEBUG, and no details. This block logged the credential SOURCE,
+    # the token LENGTH and the full list of cookie NAMES at INFO on every
+    # request — a per-request credential-shape trace in the default log, which
+    # is the file an operator pastes into an issue. Whether a token was present
+    # is all a log needs; the refusal below is logged either way.
     if auth_header and auth_header.startswith("Bearer "):
         auth_token = auth_header[7:]
-        logger.info(f"🔐 Found token in Authorization header for {path}")
+        logger.debug("auth: bearer token present for %s", path)
     else:
         # Check cookie
         auth_token = request.cookies.get("auth_token")
-        if auth_token:
-            logger.info(f"🔐 Found token in cookie for {path} (token length: {len(auth_token)})")
-        else:
-            logger.info(f"🔐 No token found in cookie or header for {path}")
-            logger.info(f"   Cookies received: {list(request.cookies.keys())}")
+        logger.debug("auth: cookie token %s for %s",
+                     "present" if auth_token else "absent", path)
 
     if not auth_token:
         # No token - redirect to the posture-appropriate login page with a
@@ -1006,175 +1027,15 @@ async def auth_middleware(request: Request, call_next):
     return response
 
 
-def _collect_sessions_in_dir(user_path, user_label: str) -> List[Dict[str, Any]]:
-    """Collect session rows from ONE user directory.
-
-    Rows keep the raw ``created_timestamp`` so callers can sort ACROSS user
-    dirs before stripping it; each row carries ``user`` (the directory name)
-    so the catalog can label who a session belongs to.
-    """
-    sessions: List[Dict[str, Any]] = []
-    if not user_path.exists():
-        logger.debug(f"User path does not exist: {user_path}")
-        return sessions
-
-    # Sessions are stored at: {data_root}/{user_id}/{session_id}/
-    for session_path in user_path.iterdir():
-        if not session_path.is_dir():
-            continue
-
-        feed_dir = session_path / "feed"
-        if not feed_dir.exists():
-            continue
-
-        # Read task and metadata
-        task_text = "No task description"
-        model = None
-        provider = None
-        status = "completed"
-
-        # Read task.json
-        task_file = session_path / "task.json"
-        if task_file.exists():
-            try:
-                with task_file.open('r') as f:
-                    task_data = json.load(f)
-                    task_text = task_data.get('task', task_text)
-                    model = task_data.get('model')
-                    provider = task_data.get('provider')
-            except Exception as e:
-                logger.debug(f"Failed to read task.json: {e}")
-
-        # Read status.json for current status
-        status_file = session_path / "status.json"
-        if status_file.exists():
-            try:
-                with status_file.open('r') as f:
-                    status_data = json.load(f)
-                    status = status_data.get('status', 'completed')
-            except Exception as e:
-                logger.debug(f"Failed to read status.json: {e}")
-
-        # metadata.json is the ONLY place `creator` (043 A17) lives — read it
-        # unconditionally (not just as a task_text fallback) — plus task/model/
-        # provider fallbacks for whatever task.json/status.json didn't supply.
-        creator = None
-        metadata_file = session_path / "metadata.json"
-        if metadata_file.exists():
-            try:
-                with metadata_file.open('r') as f:
-                    metadata = json.load(f)
-                    creator = metadata.get('creator')
-                    if task_text == "No task description":
-                        task_text = metadata.get('task', task_text)
-                    if not model:
-                        model = metadata.get('model')
-                    if not provider:
-                        provider = metadata.get('provider')
-            except Exception as e:
-                logger.debug(f"Failed to read metadata.json: {e}")
-
-        # Get creation time
-        created_timestamp = session_path.stat().st_ctime
-        created = datetime.fromtimestamp(created_timestamp)
-
-        # Count steps
-        step_files = list(feed_dir.glob('step_*.json')) + list(feed_dir.glob('agent_step_*.json'))
-
-        sessions.append({
-            'id': session_path.name,
-            'user': user_label,
-            'task': task_text[:100],
-            'created': created.strftime('%Y-%m-%d %H:%M'),
-            'created_timestamp': created_timestamp,
-            'steps': len(step_files),
-            'status': status,
-            'model': model or 'unknown',
-            'provider': provider or 'unknown',
-            'creator': creator or 'api',
-        })
-
-    return sessions
-
-
-def _finalize_session_rows(sessions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Sort newest-first across whatever dirs the rows came from, then strip
-    the temporary sort key."""
-    sessions.sort(key=lambda s: s['created_timestamp'], reverse=True)
-    for session in sessions:
-        session.pop('created_timestamp', None)
-    return sessions
-
-
-def _get_user_sessions(user_id: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Load sessions with rich metadata for a specific user.
-
-    Args:
-        user_id: User ID to fetch sessions for. If None, uses DEFAULT_USER_ID.
-
-    Returns:
-        List of session metadata dicts
-
-    Security:
-        Only returns sessions for the specified user - multi-user isolation enforced.
-    """
-    sessions = []
-    try:
-        # Get data directory from PathManager
-        data_root = pm().data_root
-
-        logger.info(f"Loading sessions from data_root: {data_root}")
-
-        # Default to DEFAULT_USER_ID if no user_id provided
-        if not user_id:
-            from agents.task.constants import DEFAULT_USER_ID
-            user_id = DEFAULT_USER_ID
-
-        # BACKWARD COMPATIBILITY: Check both old (cleaned) and new (proper) user directories
-        # This handles sessions created before the clean_user_id() fix
-        potential_user_dirs = [user_id]
-
-        # For _anonymous_ user, also check the old "anonymous" directory (cleaned version)
-        if user_id == "_anonymous_":
-            potential_user_dirs.append("anonymous")  # Old PathManager cleaned this
-            logger.info("Checking backward compatibility path for _anonymous_ → anonymous")
-
-        # Collect sessions from all potential user directories
-        for check_user_id in potential_user_dirs:
-            sessions.extend(_collect_sessions_in_dir(data_root / check_user_id, check_user_id))
-
-        sessions = _finalize_session_rows(sessions)
-
-        logger.info(f"Found {len(sessions)} sessions for user {user_id}")
-
-    except Exception as exc:
-        logger.error(f"Failed to list sessions: {exc}", exc_info=True)
-
-    return sessions
-
-
-def _get_all_sessions() -> List[Dict[str, Any]]:
-    """Load sessions across ALL user directories under the data root.
-
-    RC-2 (2026-07-07): own_ops/local ONLY — the single owner of this instance
-    owns every session regardless of which surface/identity path tagged it
-    (CLI sessions are user_id="local", telegram principals "u_<hash>", goal/
-    cron runs the owner principal). Callers MUST gate on _catalog_scope();
-    multitenant keeps strict per-tenant listing via _get_user_sessions.
-    """
-    sessions: List[Dict[str, Any]] = []
-    try:
-        data_root = pm().data_root
-        logger.info(f"Loading ALL sessions from data_root: {data_root}")
-        for user_path in data_root.iterdir():
-            if not user_path.is_dir():
-                continue
-            sessions.extend(_collect_sessions_in_dir(user_path, user_path.name))
-        sessions = _finalize_session_rows(sessions)
-        logger.info(f"Found {len(sessions)} sessions across all users")
-    except Exception as exc:
-        logger.error(f"Failed to list all sessions: {exc}", exc_info=True)
-    return sessions
+# 043 A12: the rich session CATALOG readers (`_collect_sessions_in_dir`,
+# `_finalize_session_rows`, `_get_user_sessions`, `_get_all_sessions`,
+# `_sessions_for_request`) and their route `GET /api/sessions` are DELETED.
+# That route walked every session directory on the event loop — ~1,790 of them
+# on the prod tree — for a page that no longer exists; the Chats overlay reads
+# `GET /api/webgate/chats`, which hydrates ONE page through
+# `webview/session_catalog.py` in a threadpool. `_catalog_scope` below (the
+# security rule: WHO may list WHAT) and `_annotate_runtime` (where a live
+# session is running) survive because that endpoint uses both.
 
 
 def _catalog_scope(request: Request) -> tuple[str, Optional[str]]:
@@ -1251,16 +1112,6 @@ def _annotate_runtime(sessions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         except Exception:
             pass
     return sessions
-
-
-def _sessions_for_request(request: Request) -> List[Dict[str, Any]]:
-    """Catalog rows for this request, per _catalog_scope."""
-    scope, user_id = _catalog_scope(request)
-    if scope == "all":
-        return _annotate_runtime(_get_all_sessions())
-    if scope == "user":
-        return _annotate_runtime(_get_user_sessions(user_id=user_id))
-    return []
 
 
 @_posture_get("/logout", postures=("own_ops", "multitenant"), response_class=HTMLResponse)
@@ -1885,31 +1736,8 @@ async def api_workspace_serve(request: Request, path: str, clean_id: str = Depen
     return FileResponse(file_path, media_type=content_type, headers=headers)
 
 
-@_fastapi.get("/api/sessions", response_class=JSONResponse)
-async def api_sessions(request: Request) -> Response:
-    """Return a list of sessions with rich metadata for the authenticated user.
-
-    SECURITY: Only returns sessions for the authenticated user from JWT token.
-    Unauthenticated users get empty list (no shared DEFAULT_USER_ID sessions).
-    """
-    # SECURITY: scope comes from the posture + authenticated identity ONLY
-    # (_catalog_scope): own_ops/local owner → ALL user dirs (RC-2); multitenant
-    # stays strictly per-tenant; anyone else → empty list.
-    scope, user_id = _catalog_scope(request)
-    sessions = _sessions_for_request(request)
-    logger.info(f"📊 Catalog scope={scope} user={user_id}: {len(sessions)} sessions")
-    return JSONResponse({"sessions": sessions})
-
-
-@_fastapi.get("/api/refresh", response_class=JSONResponse)
-async def api_refresh() -> Response:
-    """Force a refresh of all session data."""
-    try:
-        # Just return success - the UI will reload the page
-        return JSONResponse({"status": "ok", "message": "Sessions refreshed"})
-    except Exception as exc:
-        logger.error("Failed to refresh sessions: %s", exc, exc_info=True)
-        return JSONResponse({"status": "error", "message": str(exc)}, status_code=500)
+# 043 A30: `GET /api/refresh` is DELETED — it answered "Sessions refreshed" and
+# refreshed nothing; its one caller went with `/api/sessions` in the same audit.
 
 
 @_fastapi.post("/api/repair/{session_id}", response_class=JSONResponse,
@@ -2144,25 +1972,9 @@ async def api_agents(clean_id: str = Depends(get_clean_session_id)) -> Response:
         )
 
 
-@_fastapi.get("/api/session/{session_id}/stats", response_class=JSONResponse)
-async def api_stats(clean_id: str = Depends(get_clean_session_id)) -> Response:
-    """Return statistics for a session."""
-    try:
-        feed_dir = pm().get_feed_dir(clean_id)
-
-        stats = compute_session_stats(feed_dir)
-
-        return JSONResponse(
-            {"status": "ok", "data": stats},
-            headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
-        )
-    except Exception as exc:
-        logger.error("Failed to get stats for %s: %s", clean_id, exc, exc_info=True)
-        return JSONResponse(
-            {"status": "error", "message": str(exc)},
-            status_code=500,
-            headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
-        )
+# 043 A30: `GET /api/session/{id}/stats` is DELETED with its only caller
+# (`static/js/stats.js`, loaded by no template). `webview/stats_service.py` is
+# reduced to the cost helper `_enrich_llm_event_with_cost` still uses.
 
 
 @_fastapi.get("/api/session/{session_id}/services", response_class=JSONResponse)
@@ -2682,16 +2494,15 @@ async def _handle_stream_chunk(session_id: str, request: Request) -> Response:
         agent_id = data.get("agent_id")
         step = data.get("step", 0)
 
-        # Broadcast to all clients watching this session
-        await _sio.emit("stream_chunk", {
-            "session_id": clean_id,
-            "agent_id": agent_id,
-            "step": step,
-            "chunk": chunk,
-            "timestamp": time.time()
-        }, room=clean_id)
-
-        return JSONResponse({"success": True})
+        # 043 A29: the `stream_chunk` broadcast is dropped — no client in
+        # `webview/static/` has ever subscribed to it. The endpoint keeps its
+        # localhost guard and its place in the read-only exempt set (it is a
+        # machine rail an agent may still be posting to), and answers honestly
+        # that the chunk reached no viewer rather than emitting into a room
+        # nobody is listening on.
+        logger.debug("stream chunk for %s: %d chars, no console consumer",
+                     clean_id, len(str(chunk or "")))
+        return JSONResponse({"success": True, "delivered": False})
 
     except Exception as e:
         logger.error(f"Error receiving stream chunk: {e}")
@@ -3278,58 +3089,15 @@ async def join_session(sid, data):
             logger.info("join_session: reconnect with after_seq=%d — skipping full replay", _after_seq)
             return
 
-        # Send initial feed data to the client
-        feed_dir = pm().get_feed_dir(clean_id)
-        logger.info("join_session: checking feed_dir=%s, exists=%s", feed_dir, feed_dir.exists())
-        if feed_dir.exists():
-            # Read all JSON files in feed dir chronologically
-            json_files = sorted(feed_dir.glob("*.json"))
-            logger.info("join_session: found %d JSON files in feed_dir", len(json_files))
-            feed_entries = []
+        # 043 A29: the full-feed replay is GONE. `join_session` used to glob
+        # the whole feed directory, JSON-parse every file and emit it as
+        # `initial_feed` (or a run of `initial_feed_chunk`s) — and NOTHING has
+        # listened for either event since the 043 console landed. `transcript.js`
+        # backfills over HTTP (`/api/session/{id}/feed`) and then subscribes to
+        # `feed_update`, which is the one server→client feed event with a
+        # consumer. So the join now does what a join is for: the room, and the
+        # watcher that fills it.
 
-            # Read each file and parse the event
-            for file_path in json_files:
-                try:
-                    with file_path.open("r") as f:
-                        entry = json.load(f)
-                        # Include only events that have valid format
-                        if entry and isinstance(entry, dict) and "type" in entry:
-                            # Enrich LLM request entries with cost estimates if missing
-                            _enrich_llm_event_with_cost(entry)
-
-                            feed_entries.append(entry)
-                except Exception as exc:
-                    logger.error("Failed to parse feed file %s: %s", file_path, exc)
-                    continue
-
-            # Send the feed entries to the client
-            # RAM optimization: Chunk large feed data to prevent memory spikes
-            if len(feed_entries) > 100:  # Increased threshold back to 100
-                chunk_size = 50  # Increased chunk size back to 50
-                for i in range(0, len(feed_entries), chunk_size):
-                    chunk = feed_entries[i:i + chunk_size]
-                    is_last_chunk = i + chunk_size >= len(feed_entries)
-
-                    await _sio.emit("initial_feed_chunk", {
-                        "chunk": chunk,
-                        "chunk_index": i // chunk_size,
-                        "total_chunks": (len(feed_entries) + chunk_size - 1) // chunk_size,
-                        "is_last": is_last_chunk
-                    }, room=sid)
-
-                    # Removed artificial delay - was causing lag
-                    
-                logger.info("Sent %d feed entries in %d chunks to client %s",
-                           len(feed_entries), (len(feed_entries) + chunk_size - 1) // chunk_size, sid)
-            else:
-                # Send small feeds normally
-                logger.info("join_session: sending initial_feed with %d entries to %s", len(feed_entries), sid)
-                await _sio.emit("initial_feed", json.dumps(feed_entries), room=sid)
-                logger.info("Sent %d initial feed entries to client %s", len(feed_entries), sid)
-        else:
-            logger.warning("Feed directory %s does not exist", feed_dir)
-            await _sio.emit("initial_feed", "[]", room=sid)
-            
         # Ensure a watcher is running for this session - use clean_id for watcher key
         if clean_id not in _watch_tasks:
             _watch_tasks[clean_id] = asyncio.create_task(_feed_watcher(clean_id))
@@ -3385,7 +3153,10 @@ async def join_activity(sid, data=None):
         _activity_clients.add(sid)
         hub = get_hub()
         hub.start(_sio)
-        await _sio.emit("activity_snapshot", hub.recent(200), room=sid)
+        # 043 A29: no `activity_snapshot` emit — `static/app/live.js` subscribes
+        # to `activity_event` only, and the cold window is read over HTTP by
+        # `GET /api/webgate/log`. Emitting a 200-row snapshot nobody handles was
+        # a ring-buffer read and a socket frame per joiner.
         logger.info("Client %s joined the activity stream (watchers=%d)",
                     sid, len(_activity_clients))
     except Exception as exc:

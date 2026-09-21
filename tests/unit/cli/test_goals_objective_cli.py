@@ -12,6 +12,11 @@ from cli.commands.goals import goals
 def board(tmp_path, monkeypatch):
     b = GoalBoard(str(tmp_path / "goals.db"))
     monkeypatch.setattr(goals_mod, "_get_board", lambda data_root=None: b)
+    # The goal verbs resolve their tenant through the ONE admin seam
+    # (`core.admin_data_home.admin_owner_principal`), not the shell-local
+    # `resolve_identity` — on a deployed box only the former sees the tenant
+    # the service actually runs under (C14).
+    monkeypatch.setattr("core.instance.resolve_owner_user_id", lambda *a, **k: "rob")
     monkeypatch.setattr("core.identity.resolve_identity", lambda: "rob")
     return b
 

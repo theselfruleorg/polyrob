@@ -45,6 +45,12 @@ _ALLOWLIST = {
     # cookie, not console/agent state) and the session-repair rail.
     "internal_emit", "receive_stream_chunk", "send_message_to_session",
     "owner_login_submit", "api_repair",
+    # 043 A17: the cold-open front door. It creates NOTHING of its own — it
+    # either hands the body to the api tier's ``create_session`` unchanged, or
+    # answers a known owner verb through the SAME dispatcher the bound-chat
+    # rail uses (``send_message_to_session``, above), and each of those verbs
+    # records its own action.
+    "console_create_session",
 }
 
 
@@ -315,5 +321,6 @@ def test_refused_pfp_keep_logs_no_completed_action_row(monkeypatch, tmp_path):
 
     monkeypatch.setattr("modules.pfp.store.keep_pfp", _no_draft)
     r = client.post("/api/pfp/keep")
-    assert r.status_code == 200 and r.json()["ok"] is False
+    # 043 A19: a refusal is a 409, not a 200 with a false flag.
+    assert r.status_code == 409 and r.json()["ok"] is False
     assert get_event_log().query(kind=CONSOLE_PFP_WRITE) == []

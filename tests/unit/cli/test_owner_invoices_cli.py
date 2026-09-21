@@ -80,7 +80,7 @@ def test_invoices_all_users_path_shows_billed_to(tmp_path, monkeypatch):
     db_path = _make_db(tmp_path, payer_contact="Bob <b@x.com>")
     monkeypatch.setenv("DB_PATH", str(db_path))
 
-    res = CliRunner().invoke(owner, ["invoices"])
+    res = CliRunner().invoke(owner, ["invoices", "--all-tenants"])
     assert res.exit_code == 0
     assert "Bob <b@x.com>" in res.output
     assert "billed to" in res.output.lower()
@@ -117,7 +117,7 @@ def test_invoices_legacy_payer_hint_metadata_shows_in_cli(tmp_path, monkeypatch)
     assert res_user.exit_code == 0
     assert "Legacy Payer" in res_user.output
 
-    res_all = CliRunner().invoke(owner, ["invoices"])
+    res_all = CliRunner().invoke(owner, ["invoices", "--all-tenants"])
     assert res_all.exit_code == 0
     assert "Legacy Payer" in res_all.output
 
@@ -132,7 +132,7 @@ def test_invoices_empty_still_works(tmp_path, monkeypatch):
     asyncio.run(setup())
     monkeypatch.setenv("DB_PATH", str(db_path))
 
-    res = CliRunner().invoke(owner, ["invoices"])
+    res = CliRunner().invoke(owner, ["invoices", "--all-tenants"])
     assert res.exit_code == 0
     assert "no invoices" in res.output
 
@@ -181,7 +181,7 @@ def test_invoices_all_users_path_survives_metadata_compaction(tmp_path, monkeypa
     asyncio.run(setup())
     monkeypatch.setenv("DB_PATH", str(db_path))
 
-    res = CliRunner().invoke(owner, ["invoices"])
+    res = CliRunner().invoke(owner, ["invoices", "--all-tenants"])
     assert res.exit_code == 0
     assert "compacted widget" in res.output
     assert "no invoices" not in res.output

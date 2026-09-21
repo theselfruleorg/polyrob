@@ -29,7 +29,9 @@ class CronJob:
     # migration. Wire or drop in a dedicated proposal. Not settable via
     # CronService.schedule — always takes this default.
     skip_memory: bool = True
-    max_duration_seconds: int = 600
+    #: 057 WS-C (B12): the fleet default is an env row (CRON_DEFAULT_MAX_DURATION_SEC)
+    #: rather than a literal in two files. A per-job cap still wins.
+    max_duration_seconds: int = field(default_factory=lambda: default_max_duration_sec())
     payload: Dict[str, Any] = field(default_factory=dict)
     enabled: bool = True
     status: str = "scheduled"  # scheduled|running|done|failed|cancelled
@@ -51,9 +53,47 @@ def _parse(s: Optional[str]) -> Optional[datetime]:
 CRON_PRIORITY_MONEY = "money"
 
 
+def default_max_duration_sec() -> int:
+    """The per-run hard cap a job gets when its creator sets none (057 WS-C B12).
+
+    ONE home: ``CRON_DEFAULT_MAX_DURATION_SEC`` via the config-policy accessor,
+    read at access time so an env change needs no code edit. Fail-open to 600 —
+    the value this was a literal for."""
+    try:
+        from core.config_policy import AutonomyConfig
+        val = int(AutonomyConfig.cron_default_max_duration_sec())
+        return val if val > 0 else 600
+    except Exception:
+        return 600
+
+
 def is_money_job(job) -> bool:
     try:
         return str((getattr(job, "payload", None) or {}).get("priority") or "").lower() == CRON_PRIORITY_MONEY
+    except Exception:
+        return False
+
+
+def job_preempts(job) -> bool:
+    """Whether this job may PRE-EMPT a running board goal (057 WS-C B7).
+
+    Priority is not pre-emption. ``payload.priority`` orders jobs within a tick;
+    ``payload.preempts`` decides whether a due job is allowed to stop work that
+    is already running. Prod's SAFETY and WATCHER rails are read-only and were
+    money-class, so they caused 5 of the 17 yields on 2026-09-19 for nothing.
+
+    Back-compat: a job that declares no ``preempts`` key answers ``is_money_job``
+    — every existing row behaves exactly as before.
+    """
+    try:
+        payload = getattr(job, "payload", None) or {}
+        if "preempts" in payload:
+            from core.env import parse_bool
+            val = payload.get("preempts")
+            if isinstance(val, bool):
+                return val
+            return bool(parse_bool(str(val), False))
+        return is_money_job(job)
     except Exception:
         return False
 
@@ -285,6 +325,69 @@ class CronJobStore:
             sql += " AND user_id=?"
             params = params + (user_id,)
         return bool(execute_retry(self.db_path, sql, params))
+
+    def set_task(self, job_id: str, task: str, *, user_id: Optional[str] = None) -> bool:
+        """Replace the job's task PROSE — nothing else (schedule, next run, cap,
+        payload all untouched). Empty text is refused: a job with no task is
+        not an edit, it is a cancel wearing an edit's name."""
+        text = (task or "").strip()
+        if not text:
+            return False
+        job = self.get(job_id)
+        if job is None or (user_id is not None and job.user_id != user_id):
+            return False
+        sql = "UPDATE cron_jobs SET task=? WHERE id=?"
+        params: tuple = (text, job_id)
+        if user_id is not None:
+            sql += " AND user_id=?"
+            params = params + (user_id,)
+        return bool(execute_retry(self.db_path, sql, params))
+
+    def set_preempts(self, job_id: str, value: bool, *,
+                     user_id: Optional[str] = None) -> bool:
+        """057 WS-C (B7): set ``payload.preempts`` — merge, never replace, the
+        payload. Tenant-scoped like ``cancel``."""
+        job = self.get(job_id)
+        if job is None or (user_id is not None and job.user_id != user_id):
+            return False
+        payload = dict(job.payload or {})
+        payload["preempts"] = bool(value)
+        sql = "UPDATE cron_jobs SET payload=? WHERE id=?"
+        params: tuple = (json.dumps(payload), job_id)
+        if user_id is not None:
+            sql += " AND user_id=?"
+            params = params + (user_id,)
+        return bool(execute_retry(self.db_path, sql, params))
+
+    def prune_cancelled(self, *, older_than_days: float,
+                        user_id: Optional[str] = None,
+                        now: Optional[datetime] = None,
+                        dry_run: bool = False) -> int:
+        """057 WS-C (B12): delete cancelled rows older than a cutoff.
+
+        The cron store was used as a config editor — prod carried ~70 cancelled
+        rows on 2026-09-20, several of them near-duplicate rails cancelled and
+        recreated the same day. Only ``status='cancelled'`` rows are touched, so
+        a live or failed job is never removed. Returns rows deleted.
+
+        ``dry_run=True`` (2026-09-21, interface audit C54) COUNTS the rows the
+        same predicate would delete and deletes nothing, so a preview and the
+        real prune can never disagree — they are one WHERE clause.
+        """
+        from datetime import timedelta
+        cutoff = (now or datetime.now()) - timedelta(days=float(older_than_days))
+        where = "WHERE status='cancelled' AND created_at < ?"
+        params: tuple = (cutoff.isoformat(),)
+        if user_id is not None:
+            where += " AND user_id=?"
+            params = params + (user_id,)
+        if dry_run:
+            row = execute_retry(self.db_path,
+                                f"SELECT COUNT(*) AS n FROM cron_jobs {where}",
+                                params, fetch="one")
+            return int((row["n"] if row is not None else 0) or 0)
+        return int(execute_retry(self.db_path,
+                                 f"DELETE FROM cron_jobs {where}", params) or 0)
 
     def cancel(self, job_id: str, *, user_id: Optional[str] = None) -> bool:
         sql = "UPDATE cron_jobs SET enabled=0, status='cancelled' WHERE id=?"

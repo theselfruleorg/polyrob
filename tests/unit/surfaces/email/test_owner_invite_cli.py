@@ -35,7 +35,9 @@ def test_invite_seeds_then_approve_activates(tmp_path, monkeypatch):
     reg = CorrespondentRegistry(os.path.join(str(tmp_path), "correspondents.db"))
     assert reg.resolve(surface="email", address="john@acme.com") is None  # pending
 
-    r2 = runner.invoke(owner, ["approve", "email", "john@acme.com"])
+    # C3 (2026-09-21): approve is tenant-scoped by default; the row was
+    # seeded under u_owner, so the owner names that tenant.
+    r2 = runner.invoke(owner, ["approve", "email", "john@acme.com", "--user", "u_owner"])
     assert r2.exit_code == 0, r2.output
     row = reg.resolve(surface="email", address="john@acme.com")
     assert row is not None and row["session_id"] == "sess1"
