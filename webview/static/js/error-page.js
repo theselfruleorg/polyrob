@@ -13,30 +13,40 @@
  * calls a deleted route is worse than no button — it reports a failure the
  * operator then tries to troubleshoot.
  */
-function bind() {
+/** Write "> {text}" into *button* as nodes — FE15: the repair answer carries
+ *  server text (`str(exc)`), which must never be parsed as HTML. Exported for
+ *  tests. */
+export function setAction(button, text) {
+  const prefix = document.createElement("span");
+  prefix.className = "action-prefix";
+  prefix.textContent = ">";
+  button.replaceChildren(prefix, document.createTextNode(` ${text}`));
+}
+
+export function bind() {
   const repairBtn = document.getElementById("repair-session");
   if (repairBtn) {
     repairBtn.addEventListener("click", function () {
       const sessionId = this.getAttribute("data-session-id");
       this.disabled = true;
-      this.innerHTML = '<span class="action-prefix">></span> Repairing...';
+      setAction(this, "Repairing...");
 
-      fetch(`/api/repair/${sessionId}`, { method: "POST" })
+      fetch(`/api/repair/${encodeURIComponent(sessionId)}`, { method: "POST" })
         .then((response) => response.json())
         .then((data) => {
           if (data.status === "ok") {
-            this.innerHTML = '<span class="action-prefix">></span> Success! Redirecting...';
+            setAction(this, "Success! Redirecting...");
             setTimeout(() => {
-              window.location.href = `/session/${sessionId}`;
+              window.location.href = `/session/${encodeURIComponent(sessionId)}`;
             }, 1000);
           } else {
-            this.innerHTML = '<span class="action-prefix">></span> Error: ' + data.message;
+            setAction(this, "Error: " + String((data && data.message) || ""));
             this.disabled = false;
           }
         })
         .catch((error) => {
           console.error("Error repairing session:", error);
-          this.innerHTML = '<span class="action-prefix">></span> Error Repairing';
+          setAction(this, "Error Repairing");
           this.disabled = false;
         });
     });

@@ -326,13 +326,25 @@ def normalize_db_event(source: str, row: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+class SourceUnreadable(Exception):
+    """A backfill source that EXISTS but could not be read — named, never an
+    empty window (audit WR3)."""
+
+
+def _missing_table(exc: BaseException) -> bool:
+    return isinstance(exc, sqlite3.OperationalError) and "no such table" in str(exc)
+
+
 class SqliteTail:
     """Id-cursor tail over an append-only SQLite table (read-only, WAL-safe).
 
     ``prime()`` sets the cursor to the current MAX(id) so a fresh webview
     never floods the stream with history; ``poll()`` returns only rows that
     arrived since. A missing DB/table is silence, never an error — the tail
-    starts delivering when the file appears.
+    starts delivering when the file appears. A DB that EXISTS but cannot be
+    read at prime time leaves the tail UNPRIMED: ``poll()`` retries the prime
+    and delivers nothing until it succeeds, so a locked store at start-up never
+    replays the whole table as live (audit WR3).
     """
 
     def __init__(self, db_path: str, table: str, id_col: str = "id",
@@ -347,6 +359,9 @@ class SqliteTail:
         self.select = select or f"SELECT * FROM {table}"
         self.where_col = where_col or id_col
         self.cursor = 0
+        # True until a prime FAILS: a tail that was never primed reads from
+        # the start (cursor 0), as it always has.
+        self.primed = True
 
     def _query(self, sql: str, params: tuple = ()) -> List[Dict[str, Any]]:
         con = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True, timeout=1.0)
@@ -356,30 +371,53 @@ class SqliteTail:
         finally:
             con.close()
 
+    def _absent(self, exc: BaseException) -> bool:
+        """The store holds nothing yet (no file / no table) — not a failure."""
+        return not os.path.exists(self.db_path) or _missing_table(exc)
+
     def prime(self) -> None:
         try:
             rows = self._query(f"SELECT MAX({self.id_col}) AS m FROM {self.table}")
             self.cursor = int(rows[0]["m"] or 0)
-        except Exception:
-            self.cursor = 0
+            self.primed = True
+        except Exception as exc:
+            if self._absent(exc):
+                # Nothing recorded yet: every row that appears later is new.
+                self.cursor = 0
+                self.primed = True
+            else:
+                self.primed = False
+                logger.debug("activity tail %s unreadable at prime: %s", self.table, exc)
 
-    def _select(self, tail_sql: str, params: tuple) -> List[Dict[str, Any]]:
+    def _select(self, tail_sql: str, params: tuple, strict: bool = False) -> List[Dict[str, Any]]:
         """Run the tail's select; when a JOINED select fails (the joined table
         is absent on this DB), fall back to the plain table so the tail still
-        delivers. A missing DB/table is an empty list, never an error."""
+        delivers. A missing DB/table is an empty list. Any other failure is an
+        empty list for the live tail (it retries next tick) and a raise when
+        ``strict`` — the cold read must never show an unreadable store as a
+        quiet one."""
         plain = f"SELECT * FROM {self.table}"
         try:
             return self._query(f"{self.select} {tail_sql}", params)
-        except Exception:
+        except Exception as exc:
             if self.select == plain:
-                return []
+                return self._quiet(exc, strict)
         try:
             return self._query(
                 f"{plain} {tail_sql.replace(self.where_col, self.id_col)}", params)
-        except Exception:
-            return []
+        except Exception as exc:
+            return self._quiet(exc, strict)
+
+    def _quiet(self, exc: BaseException, strict: bool) -> List[Dict[str, Any]]:
+        if strict and not self._absent(exc):
+            raise exc
+        return []
 
     def poll(self, limit: int = 500) -> List[Dict[str, Any]]:
+        if not self.primed:
+            self.prime()
+            if not self.primed:
+                return []
         rows = self._select(
             f"WHERE {self.where_col} > ? ORDER BY {self.where_col} ASC LIMIT ?",
             (self.cursor, limit))
@@ -389,8 +427,10 @@ class SqliteTail:
 
     def recent(self, limit: int) -> List[Dict[str, Any]]:
         """The newest *limit* rows, newest first — the cold-backfill read, over
-        the SAME select the live tail uses so both carry the same columns."""
-        return self._select(f"ORDER BY {self.where_col} DESC LIMIT ?", (limit,))
+        the SAME select the live tail uses so both carry the same columns.
+        Raises when the DB exists but cannot be read (never a quiet ``[]``)."""
+        return self._select(f"ORDER BY {self.where_col} DESC LIMIT ?", (limit,),
+                            strict=True)
 
 
 def goal_events_tail(db_path: str) -> SqliteTail:
@@ -669,7 +709,7 @@ def _recent_feed_events(per_session: int = 20, sessions: int = 3) -> List[Dict[s
     out: List[Dict[str, Any]] = []
     for _, user_id, session_id, feed in sorted(candidates, reverse=True)[:sessions]:
         try:
-            names = sorted(n for n in os.listdir(feed) if n.endswith(".json"))[-per_session:]
+            names = _newest_feed_names(feed, per_session)
         except OSError:
             continue
         for name in names:
@@ -684,11 +724,36 @@ def _recent_feed_events(per_session: int = 20, sessions: int = 3) -> List[Dict[s
     return out
 
 
+def _newest_feed_names(feed: str, count: int) -> List[str]:
+    """The *count* newest ``.json`` files in *feed*, oldest first, by MTIME.
+
+    Not by name: the two feed writers name files differently (a zero-padded
+    sequence vs a timestamp/kind name), and a name sort ranks digits before
+    letters, so it picked an old session's files over the newest ones
+    (070 W0.10; again in audit WR2)."""
+    stamped = []
+    for name in os.listdir(feed):
+        if not name.endswith(".json"):
+            continue
+        try:
+            stamped.append((os.path.getmtime(os.path.join(feed, name)), name))
+        except OSError:
+            continue
+    stamped.sort()
+    return [name for _, name in stamped[-count:]] if count > 0 else []
+
+
 def _cold_backfill(limit: int) -> List[Dict[str, Any]]:
-    """Backfill when the hub buffer is cold: recent DB rows + recent feeds."""
+    """The recent window from the stores: recent DB rows + recent feeds.
+
+    Raises :class:`SourceUnreadable` naming the source when a store exists but
+    cannot be read — the caller answers "unreadable", never a short window."""
     events: List[Dict[str, Any]] = []
     for source, tail in activity_db_sources():
-        rows = tail.recent(min(limit, 100))
+        try:
+            rows = tail.recent(min(limit, 100))
+        except Exception as exc:
+            raise SourceUnreadable(f"{source}: {type(exc).__name__}: {exc}") from exc
         events.extend(normalize_db_event(source, row) for row in reversed(rows))
     events.extend(_recent_feed_events())
     events.sort(key=lambda ev: ev.get("ts", 0.0))

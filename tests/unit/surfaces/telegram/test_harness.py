@@ -395,7 +395,7 @@ class _PollBot:
     async def send_chat_action(self, chat_id, action):
         self.actions.append((str(chat_id), action))
 
-    async def get_updates(self, offset=None, timeout=0):
+    async def get_updates(self, offset=None, timeout=0, allowed_updates=None):
         self.offsets.append(offset)
         if self.batches:
             return self.batches.pop(0)

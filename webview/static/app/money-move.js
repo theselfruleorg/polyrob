@@ -60,10 +60,18 @@ export async function mount(section, { fetcher = globalThis.fetch, postFetcher }
   const result = section.querySelector('#money-move-result');
   const copy = { ...section.dataset };
   let pickers = { chains: [], swap_chains: [], tokens: [], recipients: [] };
+  // FE7: a failed read leaves the Chain list EMPTY (it is a select, it cannot
+  // be typed), so the form says the read failed instead of going quietly blank.
+  let pickersFailed = false;
   try {
     const res = await fetcher(PICKERS_URL, { credentials: 'include' });
     if (res && res.ok) pickers = await res.json();
-  } catch (err) { /* the form still works with typed values */ }
+    else pickersFailed = true;
+  } catch (err) { pickersFailed = true; }
+  if (!pickers || typeof pickers !== 'object') {
+    pickers = { chains: [], swap_chains: [], tokens: [], recipients: [] };
+    pickersFailed = true;
+  }
 
   const verbOf = () => form.elements.verb.value;
   const refresh = () => {
@@ -80,7 +88,14 @@ export async function mount(section, { fetcher = globalThis.fetch, postFetcher }
   };
   fillList(section.querySelector('#money-move-recipients'),
     (pickers.recipients || []).map((a) => ({ value: a })));
-  if ((pickers.unreadable || []).length) {
+  if (pickersFailed) {
+    const p = document.createElement('p');
+    p.className = 'entry-meta';
+    p.dataset.pickersFailed = '1';
+    p.setAttribute('role', 'status');
+    p.textContent = copy.pickers_failed || '';
+    form.after(p);
+  } else if ((pickers.unreadable || []).length) {
     const p = document.createElement('p');
     p.className = 'entry-meta';
     p.textContent = copy.unreadable || '';
@@ -95,7 +110,8 @@ export async function mount(section, { fetcher = globalThis.fetch, postFetcher }
     if (card) {
       const onPress = async (c, act, entry) => {
         entry.querySelectorAll('button').forEach((b) => { b.disabled = true; });
-        const r = await press(c.id, act, { fetcher: postFetcher, fallback: copy.unreachable });
+        const r = await press(c.id, act, { fetcher: postFetcher, fallback: copy.unreachable,
+                                           refused: copy.refused });
         show(r.message, r.card);
       };
       result.appendChild(drawCard(card, { onPress }));

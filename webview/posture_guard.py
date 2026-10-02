@@ -281,3 +281,31 @@ def _shared_registry_problem(env: Mapping[str, str], *,
             "process: two processes stepping one session, two message "
             "histories, one workspace. Set SESSION_REGISTRY_BACKEND=sqlite on "
             "BOTH units (the console alone shares nothing).")
+
+
+def assert_login_configured(*, env: Optional[Mapping[str, str]] = None,
+                            posture: Optional[str] = None) -> None:
+    """Refuse to boot a console whose login cannot work (WS5).
+
+    ``own_ops`` signs the owner in with ``POLYROB_OWNER_USERNAME`` +
+    ``POLYROB_OWNER_PASSWORD_HASH`` and mints a ``JWT_SECRET_KEY`` cookie;
+    ``multitenant`` needs the JWT secret. Without them the console booted and
+    every login answered 500 or "wrong password". ``local`` has no login.
+    """
+    env = os.environ if env is None else env
+    if posture is None:
+        from webview import webgate
+        posture = webgate.posture()
+    if posture == "local":
+        return
+    needed = ["JWT_SECRET_KEY"]
+    if posture == "own_ops":
+        needed += ["POLYROB_OWNER_USERNAME", "POLYROB_OWNER_PASSWORD_HASH"]
+    missing = [k for k in needed if not str(env.get(k) or "").strip()]
+    if not missing:
+        return
+    message = (f"REFUSING TO START: the console posture is {posture!r} but "
+               + ", ".join(missing) + " is not set — no one could sign in. "
+               "Set it in the console's env file (/etc/polyrob/webview.env).")
+    logger.critical(message)
+    raise RuntimeError(message)

@@ -29,6 +29,8 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from core.instance import SELF_DOC_MAX_CHARS
+
 logger = logging.getLogger(__name__)
 
 _REVIEW_PROMPT = (
@@ -51,7 +53,7 @@ _REVIEW_PROMPT = (
 _SELF_CONTEXT_REVIEW_ADDENDUM = (
     "\n\nSEPARATELY: if you learned something durable about how to work with THIS user "
     "(a stable preference, convention, or fact worth remembering), you may also call "
-    "self_context_manage(action='update', content=<a consolidated self.md, ≤2200 "
+    f"self_context_manage(action='update', content=<a consolidated self.md, ≤{SELF_DOC_MAX_CHARS} "
     "chars — MERGE with what's already there via action='read' first; do not sprawl>). "
     "This proposes a refinement to your evolving SELF context; it is QUARANTINED for "
     "owner review and applies next session. Keep it about working-style/preferences, "

@@ -20,7 +20,7 @@ import urllib.request
 
 import pytest
 
-from core.wallet import abi, erc6551, tx_guard
+from core.wallet import abi, collection_registry, erc6551, tx_guard
 from core.wallet.erc8004 import _IDENTITY_MAINNET
 from core.wallet.policy import PolicyGate
 
@@ -97,6 +97,14 @@ def fork(monkeypatch, tmp_path):
         "transferFrom", [{"type": "address"}, {"type": "address"}, {"type": "uint256"}],
         [owner, TREASURY, token_id]))
     _rpc("anvil_setBalance", [account, hex(10 ** 18)])
+    # C4: the guard acts through an account only of a PINNED collection — pin the parent with its
+    # live runtime hash (what the owner's registry file would say).
+    pin = collection_registry.CollectionProfile(
+        spec=collection_registry.SPEC_V1, capabilities=(), chain_id=4663, address=parent.lower(),
+        runtime_sha256=collection_registry.runtime_sha256_of(_rpc, parent), deploy_block=0,
+        max_supply=token_id, accounts=(collection_registry.AccountVersion(
+            erc6551.REGISTRY.lower(), erc6551.ACCOUNT_V3_IMPL.lower(), erc6551.ACCOUNT_SALT),))
+    monkeypatch.setattr(collection_registry, "profiles", lambda: (pin,))
     yield {"account": account, "owner": owner, "parent": parent, "token_id": token_id,
            "rpc": lambda m, p: _rpc(m, p)}
     _rpc("evm_revert", [snap])

@@ -251,20 +251,32 @@ def _decide(request: Request, kind: str, item_id: str, *, approved: bool,
     if kind in _APP_KINDS:
         from webview.pages import _owner_console_required
         _owner_console_required(t("inbox.owner_console"))
-        ok, msg = _decide_app(item_id, user_id, approved)
-    elif kind in _ASK_KINDS:
-        board = _goal_board()
-        # A27: the owner's answer rides INTO the decision (board.decide_ask
-        # stamps payload.answer on the ask and owner_unblocked.answer on each
-        # dependent goal, so the retry prompt renders what the owner said).
-        ok, unblocked = board.decide_ask(
-            item_id, user_id=user_id, approved=approved,
-            answer=" ".join(str(answer or "").split())[:ANSWER_MAX_CHARS])
-        msg = t("inbox.ask.gone") if not ok else _unblocked_text(unblocked)
-    else:
-        kw = {"user_id": user_id, "home_dir": _data_dir(),
-              "instance_id": _instance_id()}
-        ok, msg = _decide_pending(kind, item_id, kw, approved=approved)
+    try:
+        if kind in _APP_KINDS:
+            ok, msg = _decide_app(item_id, user_id, approved)
+        elif kind in _ASK_KINDS:
+            board = _goal_board()
+            # A27: the owner's answer rides INTO the decision (board.decide_ask
+            # stamps payload.answer on the ask and owner_unblocked.answer on each
+            # dependent goal, so the retry prompt renders what the owner said).
+            ok, unblocked = board.decide_ask(
+                item_id, user_id=user_id, approved=approved,
+                answer=" ".join(str(answer or "").split())[:ANSWER_MAX_CHARS])
+            msg = t("inbox.ask.gone") if not ok else _unblocked_text(unblocked)
+        else:
+            kw = {"user_id": user_id, "home_dir": _data_dir(),
+                  "instance_id": _instance_id()}
+            ok, msg = _decide_pending(kind, item_id, kw, approved=approved)
+    except Exception as exc:
+        # Audit WR9: a store that refused (a locked goals.db) is "nothing was
+        # decided", said in words — never a bare 500 the page cannot read.
+        logger.warning("inbox decide %s/%s failed", kind, item_id, exc_info=True)
+        from webview.pages import _safe_reason
+        console_write(CONSOLE_INBOX_DECIDE, user_id=user_id,
+                      attrs={"kind": kind, "item_id": item_id,
+                             "approved": approved, "ok": False})
+        return {"ok": False, "message": t("inbox.unreachable"),
+                "error": _safe_reason(exc)}
     # W4: name the actor + `via=webview`. The app-kind path ALSO records its
     # own domain event downstream (owner_ops APP_APPROVED/REJECTED); this is the
     # distinct "who used the console inbox" audit row, not a duplicate of it.

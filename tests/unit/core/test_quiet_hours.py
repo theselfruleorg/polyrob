@@ -168,3 +168,169 @@ def test_no_event_log_fails_open_to_send(rail, monkeypatch):
                                     source="agent", event_log=None))
     assert out == "sent"
     assert [t for _, t in sink.sent] == ["no log around"]
+
+
+# ---------------------------------------------------------------------------
+# 2026-10-03 audit: OB4 / OB9 / OB10 / OB11
+# ---------------------------------------------------------------------------
+
+class _MediaSink:
+    def __init__(self):
+        self.sent = []
+
+    def send_message(self, chat_id, text, media=None, actions=None):
+        self.sent.append({"chat_id": chat_id, "text": text, "media": media})
+        return True
+
+
+def test_release_replays_the_full_delivery(rail, monkeypatch, tmp_path):
+    """OB4: a hold kept text[:4000] only and the release went to the owner's
+    default surface — a room's cron report landed in the owner DM, without its
+    attachments."""
+    from core.surfaces.user_delivery import deliver_user_message, release_quiet_held
+    _, log, container, qh = rail
+    sink = _MediaSink()
+    container._sink = sink
+    monkeypatch.setattr("core.surfaces.spill.maybe_spill", lambda *a, **k: None)
+    doc = tmp_path / "report.pdf"
+    doc.write_bytes(b"%PDF")
+    att = [{"kind": "document", "path": str(doc), "caption": None}]
+    long_body = "R" * 6000
+    monkeypatch.setattr(qh, "_now_hour_local", lambda: 23)
+    out = _run(deliver_user_message(container, "u1", long_body, source="cron",
+                                    recipient_override="-100777",
+                                    attachments=att, event_log=log))
+    assert out == "quiet_held"
+    held = [e for e in log.events if e["attrs"].get("outcome") == "quiet_held"][0]
+    assert len(held["attrs"]["held_text"]) == 6000
+    monkeypatch.setattr(qh, "_now_hour_local", lambda: 9)
+    assert _run(release_quiet_held(container, event_log=log)) == 1
+    assert len(sink.sent) == 1
+    assert sink.sent[0]["chat_id"] == "-100777"          # the room, not the owner
+    assert sink.sent[0]["text"] == long_body
+    assert sink.sent[0]["media"] == att
+
+
+def test_a_failed_hold_write_sends_instead_of_losing(rail, monkeypatch):
+    """OB9: a hold that could not be written still returned quiet_held."""
+    from core.surfaces.user_delivery import deliver_user_message
+    sink, log, container, qh = rail
+    monkeypatch.setattr(qh, "_now_hour_local", lambda: 23)
+    real = log.record
+
+    def _record(kind, **kw):
+        if (kw.get("attrs") or {}).get("outcome") == "quiet_held":
+            raise RuntimeError("disk full")
+        return real(kind, **kw)
+
+    log.record = _record
+    out = _run(deliver_user_message(container, "u1", "must not vanish",
+                                    source="cron", event_log=log))
+    assert out == "sent"
+    assert [t for _, t in sink.sent] == ["must not vanish"]
+
+
+def test_a_no_sink_release_ends_the_hold(rail, monkeypatch):
+    """OB10: deduped/no_sink were not terminal, so the hold re-sent every tick
+    for 48 h."""
+    from core.surfaces.user_delivery import deliver_user_message, release_quiet_held
+    sink, log, container, qh = rail
+    monkeypatch.setattr(qh, "_now_hour_local", lambda: 23)
+    assert _run(deliver_user_message(container, "u1", "held body", source="cron",
+                                     event_log=log)) == "quiet_held"
+    container._sink = None                     # no live sink at release time
+    monkeypatch.setattr(qh, "_now_hour_local", lambda: 9)
+    _run(release_quiet_held(container, event_log=log))
+    n_rows = len(log.events)
+    _run(release_quiet_held(container, event_log=log))
+    _run(release_quiet_held(container, event_log=log))
+    assert len(log.events) == n_rows           # no new attempt per tick
+
+
+def test_release_reads_past_the_newest_thousand_rows(rail, monkeypatch):
+    """OB10 (D48 class): an older hold behind 1000 newer rows was never seen."""
+    from core.surfaces.user_delivery import (
+        DELIVERY_EVENT_KIND, deliver_user_message, release_quiet_held)
+    sink, log, container, qh = rail
+    monkeypatch.setattr(qh, "_now_hour_local", lambda: 23)
+    assert _run(deliver_user_message(container, "u1", "old held", source="cron",
+                                     event_log=log)) == "quiet_held"
+    t0 = time.time()
+    for i in range(1100):
+        log.record(DELIVERY_EVENT_KIND, user_id="u9", source="agent", ts=t0 + 1 + i,
+                   attrs={"outcome": "deduped", "content_hash": f"x{i}"})
+    def _count_where(**kw):
+        if set(kw) - {"kind", "since_ts"}:
+            raise NotImplementedError   # the rail's filtered counts: in memory
+        return len([e for e in log.events
+                    if e["kind"] == kw.get("kind") and e["ts"] >= (kw.get("since_ts") or 0)])
+
+    log.count_where = _count_where
+    monkeypatch.setattr(qh, "_now_hour_local", lambda: 9)
+    assert _run(release_quiet_held(container, event_log=log, now=t0 + 2000)) == 1
+    assert [t for _, t in sink.sent] == ["old held"]
+
+
+def test_a_room_delivery_does_not_dedup_the_owner_copy(rail, monkeypatch):
+    """OB11: content dedup ignored the recipient, so a room delivery blocked the
+    same text to the owner for 24 h."""
+    from core.surfaces.user_delivery import deliver_user_message
+    sink, log, container, qh = rail
+    monkeypatch.setattr(qh, "_now_hour_local", lambda: 12)
+    assert _run(deliver_user_message(container, "u1", "daily report", source="cron",
+                                     recipient_override="-100777",
+                                     event_log=log)) == "sent"
+    assert _run(deliver_user_message(container, "u1", "daily report", source="cron",
+                                     event_log=log)) == "sent"
+    assert _run(deliver_user_message(container, "u1", "daily report", source="cron",
+                                     event_log=log)) == "deduped"
+    assert [c for c, _ in sink.sent] == ["-100777", "42"]
+
+
+def test_quiet_window_reads_the_owner_timezone(tmp_path, monkeypatch):
+    """OB8: the window used the server clock (UTC on prod). With the owner's
+    IANA zone set, the window is read in that zone."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from core.surfaces import quiet_hours
+    write_preference(tmp_path, "u1", "digest.quiet_hours", "22-06")
+    monkeypatch.setattr(quiet_hours, "_now_hour_local", lambda: 12)   # server noon
+    monkeypatch.setattr(quiet_hours, "effective_timezone",
+                        lambda uid, home: "Pacific/Kiritimati")
+    hour = datetime.now(ZoneInfo("Pacific/Kiritimati")).hour
+    expect = hour >= 22 or hour < 6
+    assert quiet_hours.quiet_window_active("u1", tmp_path) is expect
+    monkeypatch.setattr(quiet_hours, "_now_hour_in", lambda tz: 23)
+    assert quiet_hours.quiet_window_active("u1", tmp_path) is True
+
+
+def test_unknown_or_unset_timezone_keeps_the_server_clock(tmp_path, monkeypatch):
+    from core.surfaces import quiet_hours
+    write_preference(tmp_path, "u1", "digest.quiet_hours", "22-06")
+    monkeypatch.setattr(quiet_hours, "_now_hour_local", lambda: 23)
+    assert quiet_hours.quiet_window_active("u1", tmp_path) is True        # unset
+    monkeypatch.setattr(quiet_hours, "effective_timezone", lambda uid, home: "Mars/Olympus")
+    assert quiet_hours.quiet_window_active("u1", tmp_path) is True        # unknown
+    assert quiet_hours._now_hour_in("Mars/Olympus") is None
+    assert quiet_hours._now_hour_in("UTC") in range(24)
+
+
+def test_digest_timezone_is_a_registered_owner_pref(tmp_path):
+    """OB8 finish: `/prefs` can set and show digest.timezone — the pref is in
+    the schema, owner-safe, and validated with zoneinfo."""
+    from core.prefs import PREF_SCHEMA, SENSITIVITY_SAFE, validate_pref
+    from core.surfaces import quiet_hours
+    spec = PREF_SCHEMA["digest.timezone"]
+    assert spec.type == "str" and spec.sensitivity == SENSITIVITY_SAFE
+    assert validate_pref("digest.timezone", " Europe/Berlin ") == (True, "Europe/Berlin", "")
+    ok, _, err = validate_pref("digest.timezone", "Mars/Olympus")
+    assert not ok and "Mars/Olympus" in err and "IANA" in err
+    ok, _, err = validate_pref("digest.timezone", "../../etc/passwd")
+    assert not ok
+    assert validate_pref("digest.timezone", "") == (True, "", "")     # server clock
+    ok, err = write_preference(tmp_path, "u1", "digest.timezone", "Asia/Bangkok")
+    assert ok, err
+    assert quiet_hours.effective_timezone("u1", tmp_path) == "Asia/Bangkok"
+    ok, err = write_preference(tmp_path, "u1", "digest.timezone", "Nowhere/Land")
+    assert not ok
+    assert quiet_hours.effective_timezone("u1", tmp_path) == "Asia/Bangkok"

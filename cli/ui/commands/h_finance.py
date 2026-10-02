@@ -270,5 +270,6 @@ def render_finance(*, user_id: str, days: int = 7, db_path: str = None,
 def h_finance(ctx) -> None:
     """REPL handler: /finance [days]  e.g. /finance 30, /finance 7d."""
     days = _days_from_arg(ctx.args[0] if getattr(ctx, "args", None) else "")
-    uid = (getattr(ctx, "user_id", "") or "").strip() or "local"
+    from cli._admin_home import admin_owner_tenant
+    uid = admin_owner_tenant(getattr(ctx, "user_id", None))
     ctx.emit(render_finance(user_id=uid, days=days), title="finance")

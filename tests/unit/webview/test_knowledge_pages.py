@@ -68,7 +68,7 @@ class _NotesProvider:
 def seam(monkeypatch):
     client, knowledge = _client()
     prov = _NotesProvider()
-    monkeypatch.setattr(knowledge, "_memory_provider", lambda: prov)
+    monkeypatch.setattr(knowledge, "_memory_provider_status", lambda: (prov, None))
     monkeypatch.setattr(knowledge, "_effective_user_id", lambda request: "owner-1")
     return client, knowledge, prov
 
@@ -115,7 +115,7 @@ def test_kb_endpoint_reuses_list_sources(seam):
 
 def test_no_provider_degrades_to_empty(monkeypatch):
     client, knowledge = _client()
-    monkeypatch.setattr(knowledge, "_memory_provider", lambda: None)
+    monkeypatch.setattr(knowledge, "_memory_provider_status", lambda: (None, None))
     monkeypatch.setattr(knowledge, "_effective_user_id", lambda request: "owner-1")
     for url in ("/api/webgate/knowledge/notes", "/api/webgate/knowledge/episodes",
                 "/api/webgate/knowledge/kb"):
@@ -214,7 +214,7 @@ def test_no_provider_is_an_empty_answer_with_a_reason_not_an_error(monkeypatch,
     puts the raw token on screen. An instance with no memory backend was told
     the console could not read its knowledge base, in a machine name."""
     client, knowledge = _client()
-    monkeypatch.setattr(knowledge, "_memory_provider", lambda: None)
+    monkeypatch.setattr(knowledge, "_memory_provider_status", lambda: (None, None))
     monkeypatch.setattr(knowledge, "_effective_user_id", lambda request: "alice")
 
     body = client.get(path).json()
@@ -233,7 +233,7 @@ def test_a_provider_that_raises_is_still_an_error_with_null_items(monkeypatch):
         async def kb_list_sources(self, *, user_id=None, collection=None):
             raise OSError("memory.db is locked")
 
-    monkeypatch.setattr(knowledge, "_memory_provider", lambda: _Boom())
+    monkeypatch.setattr(knowledge, "_memory_provider_status", lambda: (_Boom(), None))
     monkeypatch.setattr(knowledge, "_effective_user_id", lambda request: "alice")
 
     body = client.get("/api/webgate/knowledge/kb").json()

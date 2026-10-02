@@ -23,9 +23,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Awaitable, Callable, Optional, Union
 
-from core.surfaces.access import (
-    FORGEABLE_NETWORK_SURFACES as _ACCESS_FORGEABLE,
-)
+from core.surfaces.access import is_forgeable_surface
 from core.surfaces.access_log import record_route
 from core.surfaces.envelopes import InboundMessage
 from core.surfaces.session_chat_registry import build_session_key
@@ -96,6 +94,31 @@ def command_names() -> frozenset:
 # "unknown command -> help" branch was unreachable from a real inbound.
 _COMMAND_SHAPE_RE = re.compile(r"^/[a-z][a-z0-9_]{0,31}$")
 
+
+def _command_token(text: str) -> str:
+    """The leading token of a slash line as a routable verb: lower-cased, the
+    ``@botname`` suffix dropped, and an ALIAS from ``core.verbs`` resolved to
+    its canonical name (TG8 — ``/h`` and ``/?`` are ``/help``; ``/?`` is not
+    even command-shaped, so it used to become a paid agent turn)."""
+    token = (text or "").split()[0].lower().split("@", 1)[0] if (text or "").split() else ""
+    try:
+        from core.verbs import verb_for
+        verb = verb_for(token)
+    except Exception:
+        verb = None
+    if verb is not None and verb.name != token and verb.name in command_names():
+        return verb.name
+    return token
+
+
+def _addressed_to_another_bot(text: str, inbound: "InboundMessage") -> bool:
+    """TG6: ``/verb@name`` where the surface KNOWS the line did not address
+    this bot (``mentions_bot is False``). The suffix used to be stripped
+    unchecked, so ``/cancel@OtherBot`` in a shared room cancelled our task.
+    Unknown identity (``None``) keeps the old strip — it cannot tell."""
+    first = (text or "").split()[0] if (text or "").split() else ""
+    return "@" in first and getattr(inbound, "mentions_bot", None) is False
+
 # 044 T18 fix round 1 (Critical 1a): the verbs a ROOM ADMIN (not just the
 # owner) may reach as a COMMAND from inside the room he administers. Without
 # this the GROUP_MEMBER branch below never inspects the text at all, so
@@ -151,11 +174,12 @@ ChitchatPredicate = Callable[[InboundMessage], Union[bool, Awaitable[bool]]]
 # through to the legacy obey-path when the correspondent tier model is off — it is
 # correspondent-or-denied by construction.
 #
-# D1: the SSOT is `core.surfaces.access.FORGEABLE_NETWORK_SURFACES`, imported
-# here rather than re-declared. The two copies guarded different halves of one
-# rule — this one the model-OFF path, while the model-ON path's pairing branch
-# had no surface filter at all, so a paired email address became OWNER.
-_FORGEABLE_NETWORK_SURFACES = _ACCESS_FORGEABLE
+# D1: the SSOT is `core.surfaces.access`, never re-declared here. The two copies
+# guarded different halves of one rule — this one the model-OFF path, while the
+# model-ON path's pairing branch had no surface filter at all, so a paired email
+# address became OWNER.
+# AC6: read LIVE through `access.is_forgeable_surface` — an import-time snapshot
+# missed a pack surface with `forgeable=true` that loaded later.
 
 
 class RouteKind(str, Enum):
@@ -291,7 +315,7 @@ def _revive_dead_target(container: Any, inbound: InboundMessage) -> None:
     """
     try:
         _surface_id = getattr(inbound.identity.source, "surface_id", None)
-        if not _surface_id or _surface_id in _FORGEABLE_NETWORK_SURFACES:
+        if not _surface_id or is_forgeable_surface(_surface_id):
             return
         from core.config_policy import dead_target_registry_enabled
         if not dead_target_registry_enabled():
@@ -407,6 +431,9 @@ async def _route_inbound_impl(
     #: slash line" read below, so no branch can classify a forward as a verb.
     _forwarded = bool(getattr(inbound, "forwarded", False))
     _slash = text.startswith("/") and not _forwarded
+    if _slash and _addressed_to_another_bot(text, inbound):
+        return RouteDecision(RouteKind.DENIED, session_key, silent=True,
+                             reason="other_bot_command")
 
     # 0) ACCESS GATE (polyrob D3) — when POLYROB_REQUIRE_PAIRING is on, an unpaired
     #    non-owner is denied (and issued a pairing code). Fail-open + default-off, so
@@ -548,7 +575,7 @@ async def _route_inbound_impl(
             # line before the grant was ever consulted.
             _granted_command = False
             if role == "member" and _slash:
-                _tok = text.split()[0].lower().split("@", 1)[0]
+                _tok = _command_token(text)
                 _granted_command = (
                     _tok in _MEMBER_GRANTABLE_COMMANDS
                     and _tok.lstrip("/") in (policy.member_verbs or ()))
@@ -583,7 +610,7 @@ async def _route_inbound_impl(
                 # still a room turn — member verbs are a later, separate
                 # schema row).
                 if role == "admin" and _slash:
-                    admin_token = text.split()[0].lower().split("@", 1)[0]
+                    admin_token = _command_token(text)
                     if admin_token in _GROUP_ADMIN_COMMANDS:
                         return RouteDecision(RouteKind.COMMAND, session_key,
                                              command=admin_token, session_id=sid)
@@ -597,7 +624,7 @@ async def _route_inbound_impl(
                 # The handler still does its OWN role check, so admitting the
                 # line here grants routing, never authority.
                 if role == "member" and _slash:
-                    member_token = text.split()[0].lower().split("@", 1)[0]
+                    member_token = _command_token(text)
                     if (member_token in _MEMBER_GRANTABLE_COMMANDS
                             and _member_verb_granted(container, _surf, _chat,
                                                      member_token)):
@@ -711,7 +738,7 @@ async def _route_inbound_impl(
         # programmatic EmailHarness or an explicit CORRESPONDENT_ACCESS_ENABLED=false
         # cannot open the obey-path (the CLI `os.environ.setdefault` was only a default).
         surface_id = getattr(getattr(inbound.identity, "source", None), "surface_id", "") or ""
-        if surface_id in _FORGEABLE_NETWORK_SURFACES:
+        if is_forgeable_surface(surface_id):
             logger.info(
                 "route_inbound: %s sender denied — correspondent model off and "
                 "owner-by-%s is forgeable (v1 correspondent-or-denied invariant)",
@@ -736,7 +763,7 @@ async def _route_inbound_impl(
     if _slash:
         # Telegram group syntax sends "/help@MyBot" — strip the @bot suffix so
         # known commands still match (030 L9).
-        token = text.split()[0].lower().split("@", 1)[0]
+        token = _command_token(text)
         if token in command_names() or _COMMAND_SHAPE_RE.fullmatch(token):
             return RouteDecision(
                 RouteKind.COMMAND, session_key, command=token,

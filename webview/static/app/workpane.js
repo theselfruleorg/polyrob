@@ -218,6 +218,8 @@ function fileRow(name, why, verdict, href, path) {
  */
 export function renderFiles(root, state, data, copy) {
   root.replaceChildren();
+  // FE17: what the person opened survives the redraw (every ~5 s on activity).
+  const view = viewOf(data);
   const artifacts = data && data.artifacts;
   const sessionId = (data && data.sessionId) || '';
   const hrefFor = (path) => fileHref(sessionId, path);
@@ -235,14 +237,16 @@ export function renderFiles(root, state, data, copy) {
     head.appendChild(headCell);
     head.appendChild(el('td'));
     tbody.appendChild(head);
-    const shown = cap ? items.slice(0, cap) : items;
+    const capped = cap && !view.showAll.has(labelKey);
+    const shown = capped ? items.slice(0, cap) : items;
     shown.forEach((it) => tbody.appendChild(rowFor(it)));
-    if (cap && items.length > cap) {
+    if (capped && items.length > cap) {
       const more = el('tr');
       const cell = el('td', 'what');
       const btn = el('button', 'btn btn-quiet', format(copy && copy.show_all, { count: items.length }));
       btn.type = 'button';
       btn.addEventListener('click', () => {
+        view.showAll.add(labelKey);
         items.slice(cap).forEach((it) => tbody.insertBefore(rowFor(it), more));
         more.remove();
       });
@@ -298,6 +302,20 @@ export function renderFiles(root, state, data, copy) {
   return answer;
 }
 
+/** The open/closed state a redraw must keep (FE17). `data.view` is the
+ *  mount's long-lived object; a call without one gets a throwaway. */
+function viewOf(data) {
+  if (data && data.view) {
+    const v = data.view;
+    if (!(v.openDirs instanceof Set)) v.openDirs = new Set();
+    if (!(v.showAll instanceof Set)) v.showAll = new Set();
+    return v;
+  }
+  const v = { folderOpen: false, openDirs: new Set(), showAll: new Set() };
+  if (data && typeof data === 'object') data.view = v;
+  return v;
+}
+
 /** The ONE link to the folder behind this chat (the shared project folder on a
  *  server). A click lists it, capped, newest first; a folder opens on click. */
 function folderLink(root, data, copy) {
@@ -311,18 +329,22 @@ function folderLink(root, data, copy) {
   btn.setAttribute('aria-expanded', 'false');
   const list = el('div', 'folder-list');
   list.hidden = true;
-  btn.addEventListener('click', async () => {
-    const open = list.hidden;
+  const view = viewOf(data);
+  const setOpen = (open) => {
     list.hidden = !open;
+    view.folderOpen = open;
     btn.setAttribute('aria-expanded', open ? 'true' : 'false');
     if (open && !list.dataset.loaded) {
       list.dataset.loaded = '1';
-      await drawFolder(list, '', data, copy, folder.shared);
+      return drawFolder(list, '', data, copy, folder.shared);
     }
-  });
+    return null;
+  };
+  btn.addEventListener('click', async () => { await setOpen(list.hidden); });
   wrap.appendChild(btn);
   wrap.appendChild(list);
   root.appendChild(wrap);
+  if (view.folderOpen) setOpen(true);
 }
 
 /** List one folder level into *list*, capped at {@link SHOW_FIRST}. */
@@ -352,11 +374,21 @@ export async function drawFolder(list, path, data, copy, shared) {
     open.type = 'button';
     open.title = rel;
     const inner = el('div', 'folder-list');
-    open.addEventListener('click', () => {
-      if (inner.dataset.loaded) { inner.hidden = !inner.hidden; return; }
+    const view = viewOf(data);
+    const expand = () => {
       inner.dataset.loaded = '1';
-      drawFolder(inner, rel, data, copy, shared);
+      view.openDirs.add(rel);
+      return drawFolder(inner, rel, data, copy, shared);
+    };
+    open.addEventListener('click', () => {
+      if (inner.dataset.loaded) {
+        inner.hidden = !inner.hidden;
+        if (inner.hidden) view.openDirs.delete(rel); else view.openDirs.add(rel);
+        return;
+      }
+      expand();
     });
+    if (view.openDirs.has(rel)) expand();
     cell.appendChild(open);
     cell.appendChild(inner);
     row.appendChild(cell);
@@ -364,13 +396,17 @@ export async function drawFolder(list, path, data, copy, shared) {
     return row;
   };
   const items = tree.children;
-  items.slice(0, SHOW_FIRST).forEach((c) => tbody.appendChild(rowFor(c)));
-  if (items.length > SHOW_FIRST) {
+  const allKey = `dir:${path}`;
+  const dirView = viewOf(data);
+  const capped = !dirView.showAll.has(allKey);
+  (capped ? items.slice(0, SHOW_FIRST) : items).forEach((c) => tbody.appendChild(rowFor(c)));
+  if (capped && items.length > SHOW_FIRST) {
     const more = el('tr');
     const cell = el('td', 'what');
     const btn = el('button', 'btn btn-quiet', format(copy && copy.show_all, { count: items.length }));
     btn.type = 'button';
     btn.addEventListener('click', () => {
+      dirView.showAll.add(allKey);
       items.slice(SHOW_FIRST).forEach((c) => tbody.insertBefore(rowFor(c), more));
       more.remove();
     });
@@ -435,7 +471,7 @@ async function getJson(url) {
   }
 }
 
-async function loadFiles(sessionId, filesRoot, stateNode, copy) {
+async function loadFiles(sessionId, filesRoot, stateNode, copy, view) {
   const id = encodeURIComponent(sessionId);
   const tree = (path, depth = 1) => getJson(
     `/api/session/${id}/workspace/tree?depth=${depth}${path ? `&path=${encodeURIComponent(path)}` : ''}`);
@@ -454,6 +490,7 @@ async function loadFiles(sessionId, filesRoot, stateNode, copy) {
     folder,
     sessionId,
     fetchTree: (path) => tree(path),
+    view,
   }, copy);
 }
 
@@ -501,13 +538,15 @@ export function mount() {
     ...copyFrom(document.getElementById('workpane-copy')),
   };
 
+  // FE17: one view state for the page's life, so a refresh keeps open folders.
+  const filesView = { folderOpen: false, openDirs: new Set(), showAll: new Set() };
   let pending = false;
   async function refresh() {
     if (pending) return;
     pending = true;
     try {
       await Promise.all([
-        filesRoot && loadFiles(sessionId, filesRoot, document.getElementById('workpane-files-state'), copy),
+        filesRoot && loadFiles(sessionId, filesRoot, document.getElementById('workpane-files-state'), copy, filesView),
         tlRoot && loadTimeline(sessionId, tlRoot, document.getElementById('workpane-timeline-state'), document.getElementById('workpane-timeline-aside'), copy),
       ]);
     } finally { pending = false; }

@@ -770,7 +770,8 @@ class A2ATaskHandler:
     # Push Notifications
     # =========================================================================
 
-    async def _authorize_task(self, task_id: str, user_id: Optional[str]) -> None:
+    async def _authorize_task(self, task_id: str,
+                              user_id: Optional[str]) -> Optional[Dict[str, Any]]:
         """Ownership gate for push-config ops: the caller must own ``task_id``.
 
         Mirrors ``_authorize_owner`` (raises not-found, never a distinguishable 403,
@@ -778,7 +779,7 @@ class A2ATaskHandler:
         the caller already authorized (internal use) — no check.
         """
         if user_id is None:
-            return
+            return None
         agent = self._get_task_agent()
         if not agent:
             raise RuntimeError("TaskAgent not available")
@@ -786,6 +787,18 @@ class A2ATaskHandler:
         if not session_info:
             raise ValueError(f"Task {task_id} not found")
         self._authorize_owner(session_info, task_id, user_id)
+        return session_info
+
+    async def _session_info_for(self, task_id: str,
+                                known: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """``known`` or a fresh read; None when the session cannot be read."""
+        if known is not None:
+            return known
+        try:
+            agent = self._get_task_agent()
+            return await self._fetch_session(agent, task_id) if agent else None
+        except Exception:
+            return None
 
     async def set_push_notification_config(
         self,
@@ -825,21 +838,57 @@ class A2ATaskHandler:
         task_id: str,
         user_id: Optional[str] = None
     ) -> Optional[PushNotificationConfig]:
-        """Get push notification config for a task (caller must own the task)."""
-        await self._authorize_task(task_id, user_id)
-        return self._push_configs.get(task_id)
+        """Get push notification config for a task (caller must own the task).
+
+        API8: ``get_task_handler`` builds a NEW handler per request, so the
+        in-memory dict is always empty here; read the session-metadata mirror.
+        """
+        info = await self._authorize_task(task_id, user_id)
+        if task_id in self._push_configs:
+            return self._push_configs[task_id]
+        return self._get_push_config(
+            task_id, await self._session_info_for(task_id, info))
 
     async def delete_push_notification_config(
         self,
         task_id: str,
         user_id: Optional[str] = None
     ) -> bool:
-        """Delete push notification config for a task (caller must own the task)."""
-        await self._authorize_task(task_id, user_id)
-        if task_id in self._push_configs:
-            del self._push_configs[task_id]
-            return True
-        return False
+        """Delete push notification config for a task (caller must own the task).
+
+        API8: delete from the session-metadata mirror too — the handler is
+        per request, and the run-settle push reads the mirror, so a webhook
+        deleted only from memory kept firing.
+        """
+        info = await self._session_info_for(
+            task_id, await self._authorize_task(task_id, user_id))
+        existed = self._push_configs.pop(task_id, None) is not None
+        url, _token = self._stored_push(info)
+        if url:
+            existed = True
+        sm = self._get_session_manager()
+        if sm and info is not None:
+            update: Dict[str, Any] = {"a2a_push_url": None, "a2a_push_token": None}
+            nested = info.get("metadata")
+            if isinstance(nested, dict) and (
+                    "a2a_push_url" in nested or "a2a_push_token" in nested):
+                update["metadata"] = {k: v for k, v in nested.items()
+                                      if k not in ("a2a_push_url", "a2a_push_token")}
+            sm.update_session_metadata(task_id, update)
+        return existed
+
+    @staticmethod
+    def _stored_push(session_info: Optional[Dict[str, Any]]):
+        """``(url, token)`` from the mirror: ``update_session_metadata`` writes
+        the keys at the TOP level of the session info; an older row may carry
+        them under ``metadata``."""
+        info = session_info or {}
+        if info.get("a2a_push_url"):
+            return info.get("a2a_push_url"), info.get("a2a_push_token")
+        meta = info.get("metadata") or {}
+        if isinstance(meta, dict) and meta.get("a2a_push_url"):
+            return meta.get("a2a_push_url"), meta.get("a2a_push_token")
+        return None, None
 
     def _get_push_config(
         self,
@@ -853,8 +902,7 @@ class A2ATaskHandler:
         if config:
             return config
         try:
-            meta = (session_info or {}).get("metadata") or {}
-            url = meta.get("a2a_push_url")
+            url, stored_token = self._stored_push(session_info)
             if not url:
                 return None
             # B10: re-validate on the way OUT too. A URL persisted before this
@@ -866,7 +914,7 @@ class A2ATaskHandler:
                     "a2a: stored push url for %s refused: %s", task_id, e)
                 return None
             return PushNotificationConfig(
-                url=url, token=_decrypt_push_token(meta.get("a2a_push_token")))
+                url=url, token=_decrypt_push_token(stored_token))
         except Exception:
             pass
         return None

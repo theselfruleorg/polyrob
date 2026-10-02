@@ -64,9 +64,38 @@ async def test_verb_refused_for_non_owner(env, verb):
 
 
 @pytest.mark.asyncio
-async def test_kb_requires_query(env):
+async def test_bare_kb_lists_like_the_repl(env, monkeypatch):
+    """CLI7: one grammar (core.kb_grammar) — a bare `/kb` lists the sources on
+    every seat; it used to be a usage error here and a list in the REPL."""
+    monkeypatch.setenv("KB_ENABLED", "true")
+    import modules.memory.registry as reg
+    seen = {}
+
+    async def _fake_list(*, user_id=None, collection=None):
+        seen.update(user_id=user_id, collection=collection)
+        return ["docs/a.md"]
+
+    monkeypatch.setattr(reg, "kb_list_sources", _fake_list)
     out = await act_on_inbound(_Agent(str(env)), _cmd("/kb", "/kb"))
-    assert "usage" in out.lower()
+    assert "docs/a.md" in out
+    assert seen == {"user_id": "alice", "collection": None}
+    out = await act_on_inbound(_Agent(str(env)), _cmd("/kb", "/kb list notes"))
+    assert seen["collection"] == "notes"
+
+
+@pytest.mark.asyncio
+async def test_kb_search_subverb_searches(env, monkeypatch):
+    monkeypatch.setenv("KB_ENABLED", "true")
+    import modules.memory.registry as reg
+    seen = {}
+
+    async def _fake_search(query, **kw):
+        seen["q"] = query
+        return "hit"
+
+    monkeypatch.setattr(reg, "kb_search", _fake_search)
+    await act_on_inbound(_Agent(str(env)), _cmd("/kb", "/kb search how to deploy"))
+    assert seen["q"] == "how to deploy"
 
 
 @pytest.mark.asyncio

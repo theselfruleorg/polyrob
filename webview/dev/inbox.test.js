@@ -154,3 +154,17 @@ describe("the card", () => {
     expect(node.querySelector("img")).toBe(null);
   });
 });
+
+describe("FE19 — a decision refusal is never a bare status", () => {
+  it("a 422 array detail reads as words", async () => {
+    const fetcher = async () => ({ ok: false, status: 422, json: async () => ({ detail: [{ msg: "answer too long" }] }) });
+    const r = await decide("ask", "a1", "approve", { fetcher, fallback: "down", refused: "refused" });
+    expect(r).toEqual({ ok: false, message: "answer too long" });
+  });
+
+  it("a 403 with no detail reads the refusal sentence, not '403'", async () => {
+    const fetcher = async () => ({ ok: false, status: 403, json: async () => ({}) });
+    const r = await decide("ask", "a1", "approve", { fetcher, fallback: "down", refused: "refused" });
+    expect(r.message).toBe("refused");
+  });
+});

@@ -199,3 +199,38 @@ def test_a_second_room_gets_its_own_warning(monkeypatch, caplog):
         ledger_ingest._allowed(_Container(), "telegram", "-100")
         ledger_ingest._allowed(_Container(), "telegram", "-200")
     assert len([r for r in caplog.records if r.levelno >= logging.WARNING]) == 2
+
+
+def test_outbound_row_is_one_row_per_message_key(tmp_path):
+    """OB18: the id held ts + a salted hash(), so a retry of the same message
+    (later ts, or another process) wrote a duplicate room-log row."""
+    import os
+    from core.surfaces.group_ledger import GroupLedger
+    from core.surfaces.ledger_ingest import record_outbound_to_ledger
+    led = GroupLedger(os.path.join(str(tmp_path), "surfaces.db"))
+    import time
+    t0 = time.time()
+    for ts in (t0, t0 + 1.5):
+        assert record_outbound_to_ledger(led, surface="telegram", chat_id="-1",
+                                         thread_id=None, text="hello room", ts=ts,
+                                         message_key="sk#abc#123")
+    import sqlite3
+    c = sqlite3.connect(led.db_path)
+    n = c.execute("SELECT COUNT(*) FROM group_ledger WHERE sender_id='agent'").fetchone()[0]
+    c.close()
+    assert n == 1
+
+
+def test_outbound_row_id_without_a_key_is_process_stable():
+    import hashlib
+    from core.surfaces.ledger_ingest import record_outbound_to_ledger
+
+    class _L:
+        def __init__(self): self.rows = []
+        def append(self, row): self.rows.append(row)
+
+    led = _L()
+    record_outbound_to_ledger(led, surface="t", chat_id="1", thread_id=None,
+                              text="x", ts=5.0)
+    seed = "5.000\x00x"
+    assert led.rows[0].message_id == "out:" + hashlib.sha256(seed.encode()).hexdigest()[:24]

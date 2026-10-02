@@ -230,12 +230,25 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         if is_public_path(request.url.path):
             return await call_next(request)
 
+        # API4: the x402 middleware runs OUTSIDE this one and has already
+        # verified and SETTLED the payment; that payer carries no other
+        # credential, so a 401 here took the money and refused the request.
+        if (getattr(request.state, "authenticated", False)
+                and getattr(request.state, "payment_method", None) == "x402"):
+            return await call_next(request)
+
         # Get authentication credentials
         auth_header = request.headers.get("Authorization", "")
         api_key = request.headers.get("X-API-Key", "")
 
-        # Validate authentication
-        user_info = await self._validate_auth(auth_header, api_key)
+        # Validate authentication. API5: the operator service token (the
+        # canonical X-Service-Token header, or the deprecated X-API-KEY
+        # spelling) was never read here, so with API_SECRET set every
+        # operator call 401'd before the fallback gate could accept it.
+        user_info = self._validate_service_token(
+            request.headers.get("X-Service-Token", ""), api_key)
+        if user_info is None:
+            user_info = await self._validate_auth(auth_header, api_key)
 
         if not user_info:
             self.logger.warning(f"Unauthorized access attempt to {request.url.path}")
@@ -263,6 +276,12 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         # (api/app.py's fallback skip-check, now migrated to `authenticated` in
         # this same task) — kept here in case an external consumer still reads it.
         request.state.user = user_info
+        # API1: name the credential kind, as APIKeyAuthMiddleware does — key
+        # management refuses an API-key identity (api/auth_endpoints.py).
+        request.state.auth_method = user_info.get("auth_method", "jwt")
+        if user_info.get("auth_method") == "service_token":
+            # B4: the service token is an operator credential, never admin.
+            request.state.is_admin = False
 
         # Check permissions for specific endpoints
         if not await self._check_permissions(request, user_info):
@@ -277,6 +296,36 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
 
         # Process request
         return await call_next(request)
+
+    @staticmethod
+    def _validate_service_token(service_token: str,
+                                api_key: str) -> Optional[Dict[str, Any]]:
+        """The operator SERVICE token (``API_AUTH_TOKEN``), constant-time.
+
+        Same identity the fallback gate (``api/app.py``) gives it: the
+        ``authenticated_api_user`` placeholder, ``tier="admin"`` and the
+        ``service`` role — never admin (B4).
+        """
+        import hmac
+        import os
+
+        from api.auth_constants import SERVICE_ROLE
+
+        expected = (os.environ.get("API_AUTH_TOKEN") or "").strip()
+        if not expected:
+            return None
+        for presented in (service_token, api_key):
+            if presented and hmac.compare_digest(
+                    presented.encode("utf-8"), expected.encode("utf-8")):
+                return {
+                    "user_id": "authenticated_api_user",
+                    "authenticated": True,
+                    "permissions": ["read", "write"],
+                    "role": SERVICE_ROLE,
+                    "tier": "admin",
+                    "auth_method": "service_token",
+                }
+        return None
 
     async def _validate_auth(
         self,
@@ -311,7 +360,11 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                     if jti_is_revoked(decoded):
                         return None
                     user_info = {
-                        "user_id": decoded.get("sub", decoded.get("user_id", "unknown")),
+                        # API3: `sub` is the WALLET; the account id is `user_id`
+                        # (the claim JWTAuthMiddleware reads). Preferring `sub`
+                        # re-keyed every task and credit read to `0xWALLET`.
+                        "user_id": (decoded.get("user_id") or decoded.get("sub")
+                                    or "unknown"),
                         "authenticated": True,
                         "permissions": ["read", "write"],
                         "role": decoded.get("role", "user"),
@@ -345,62 +398,27 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
     async def _validate_api_key(self, api_key: str) -> Optional[Dict[str, Any]]:
         """Validate API key against database.
 
-        SECURITY: Proper API key validation using hashed comparison.
+        SECURITY: hashed lookup through the ONE key validator
+        (``api.api_key_auth.validate_api_key``). API2: the cache used to keep
+        a validated key FOREVER (no TTL, no revocation check), so a revoked
+        key kept working until a restart; it now shares the TTL + revocation
+        rule of ``APIKeyAuthMiddleware``.
         """
-        import hashlib
-
         # Basic format validation
         if not api_key or len(api_key) < 32:
             return None
 
-        # Check cache first
-        cache_key = f"apikey_{hashlib.sha256(api_key.encode()).hexdigest()[:16]}"
-        if cache_key in self.token_cache:
-            return self.token_cache[cache_key]
-
-        try:
-            # Hash the API key for database lookup
-            key_hash = hashlib.sha256(api_key.encode()).hexdigest()
-
-            # Try to get database and validate
-            from core.container import DependencyContainer
-            container = DependencyContainer.get_instance()
-            db = container.get_service('database_manager')
-
-            if db:
-                # Look up API key by hash
-                result = await db.fetch_one("""
-                    SELECT user_id, scopes, is_active, expires_at
-                    FROM api_keys
-                    WHERE key_hash = ? AND is_active = 1
-                    AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
-                """, (key_hash,))
-
-                if result:
-                    # Update last_used timestamp
-                    await db.execute("""
-                        UPDATE api_keys SET last_used = CURRENT_TIMESTAMP
-                        WHERE key_hash = ?
-                    """, (key_hash,))
-
-                    user_info = {
-                        "user_id": result['user_id'],
-                        "authenticated": True,
-                        "permissions": ["read", "write"],
-                        "auth_method": "api_key"
-                    }
-
-                    # Cache the validated key
-                    self.token_cache[cache_key] = user_info
-                    return user_info
-
-            # If database not available or key not found, reject
-            self.logger.warning(f"API key validation failed: key not found in database")
+        from api.api_key_auth import validate_api_key_cached
+        info = await validate_api_key_cached(self.token_cache, api_key)
+        if info is None:
+            self.logger.warning("API key validation failed: key not found in database")
             return None
-
-        except Exception as e:
-            self.logger.error(f"API key database validation error: {e}")
-            return None
+        return {
+            "user_id": info["user_id"],
+            "authenticated": True,
+            "permissions": ["read", "write"],
+            "auth_method": "api_key",
+        }
 
     async def _check_permissions(
         self,

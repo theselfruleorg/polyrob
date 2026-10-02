@@ -94,7 +94,8 @@ class XDMClient:
         # Otherwise the OAuth2 token comes from the managed resolver
         # (polyrob_x/x_oauth2.py): encrypted store → auto-refresh → env override.
         self._oauth2_static = creds.get("oauth2_access_token") or ""
-        self._oauth2_access_token = self._oauth2_static or self._resolve_oauth2()
+        # Building never refreshes: only a call spends the rotating refresh token.
+        self._oauth2_access_token = self._oauth2_static or self._resolve_oauth2(refresh=False)
         self._client = None  # lazy tweepy.Client
         # 401 back-off state + the OAuth2 token parked after a 401 fell back to
         # OAuth1 (un-parked when the store yields a DIFFERENT token: a re-login).
@@ -103,10 +104,10 @@ class XDMClient:
         self._oauth2_parked = ""
 
     @staticmethod
-    def _resolve_oauth2(force_refresh: bool = False) -> str:
+    def _resolve_oauth2(force_refresh: bool = False, refresh: bool = True) -> str:
         try:
             from polyrob_x.x_oauth2 import resolve_access_token
-            return resolve_access_token(force_refresh=force_refresh) or ""
+            return resolve_access_token(force_refresh=force_refresh, refresh=refresh) or ""
         except Exception as e:  # never let the resolver take the surface down
             logger.warning("x oauth2 resolver failed (%s); falling back to env", e)
             return os.getenv("TWITTER_OAUTH2_ACCESS_TOKEN", "")

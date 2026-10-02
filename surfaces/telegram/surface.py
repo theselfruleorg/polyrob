@@ -23,7 +23,7 @@ from typing import Any, Optional
 
 from core.surfaces.surface import Surface
 from core.surfaces.envelopes import OutboundMessage, SendResult, SurfaceCapabilities
-from core.surfaces.rendering import render_for_flavor, split_text
+from core.surfaces.rendering import render_for_flavor, split_for_flavor
 
 logger = logging.getLogger(__name__)
 
@@ -143,11 +143,15 @@ class TelegramSurface(Surface):
         only — never inferred from the text; ``core/surfaces/actions.py``).
         """
         limit = self.capabilities.max_message_bytes
-        rendered = render_for_flavor(text or "", self.capabilities.markdown_flavor, limit)
-        # Same splitter, same args -> same chunk count; if that ever stops holding, the
-        # plain-text retry falls back to the rendered chunk rather than dropping a message.
-        sources = split_text(text or "", limit)
-        if len(sources) != len(rendered):
+        flavor = self.capabilities.markdown_flavor
+        rendered = render_for_flavor(text or "", flavor, limit)
+        # OB19: the plain-text retry for chunk i is source chunk i from the SAME
+        # splitter the rendered chunks came from. `split_text` cut elsewhere, so
+        # a fallback chunk duplicated or dropped text. Pinned equal length; the
+        # guard below only protects against a future divergence.
+        sources = split_for_flavor(text or "", flavor, limit)
+        exact_sources = len(sources) == len(rendered)
+        if not exact_sources:
             sources = rendered
         parse_mode = self._parse_mode()
         extra: dict = {}
@@ -169,14 +173,25 @@ class TelegramSurface(Surface):
             if i == final and markup is not None:
                 extra["reply_markup"] = markup
             try:
-                sent = await self._send_chunk(chat_id, body, parse_mode, extra)
+                try:
+                    sent = await self._send_chunk(chat_id, body, parse_mode, extra)
+                except Exception as e:
+                    # A flood error is NOT a markup error — after bounded retries it
+                    # propagates; a plain-text resend would just 429 again (030 L1).
+                    if not parse_mode or _retry_after_seconds(e) is not None:
+                        raise
+                    logger.warning("TelegramSurface: %s rejected, resending as plain text: %s", parse_mode, e)
+                    sent = await self._send_chunk(chat_id, source, None, extra)
             except Exception as e:
-                # A flood error is NOT a markup error — after bounded retries it
-                # propagates; a plain-text resend would just 429 again (030 L1).
-                if not parse_mode or _retry_after_seconds(e) is not None:
-                    raise
-                logger.warning("TelegramSurface: %s rejected, resending as plain text: %s", parse_mode, e)
-                sent = await self._send_chunk(chat_id, source, None, extra)
+                # OB7: chunks 0..i-1 already landed. Say which text did NOT go,
+                # so a retry resumes here instead of re-sending chunk 1. Only
+                # when the source chunks are exact (else progress is unknown).
+                if i > 0 and exact_sources:
+                    try:
+                        e.remaining_text = "\n".join(sources[i:])
+                    except Exception:
+                        pass
+                raise
             last_id = getattr(sent, "message_id", None)
         return last_id
 
@@ -206,11 +221,21 @@ class TelegramSurface(Surface):
         if await self._finalize_live_on_send(msg):
             return SendResult(success=True)
         chat_id = chat_id_from_session_key(msg.session_key)
+        last_id = None
         try:
             last_id = await self.send_text(
                 chat_id, msg.text or "", reply_to=msg.reply_to,
                 thread_id=thread_id_from_session_key(msg.session_key),
                 actions=getattr(msg, "actions", None) or None)
+        except Exception as e:  # fail-open: never raise into the loop
+            logger.error("TelegramSurface.send to %s failed: %s", chat_id, e, exc_info=True)
+            remaining = getattr(e, "remaining_text", None)
+            return SendResult(success=False, error=str(e),
+                              remaining_text=remaining if isinstance(remaining, str) else None)
+        # OB7: every word of the text has landed. What follows is best effort ON
+        # TOP of it; a failure here must not fail the message (a retry would
+        # re-send the whole text).
+        try:
             # Media is best-effort ON TOP of the text: a media send failure (missing
             # file, bot rejection, ...) never takes the text down with it — the text
             # above has already landed. See _send_media.
@@ -230,10 +255,10 @@ class TelegramSurface(Surface):
                         f"you need is in the message above.)")
             if self._voice_reply_wanted(msg, chat_id):
                 await self.send_voice(chat_id, msg.text or "")
-            return SendResult(success=True, surface_message_id=str(last_id) if last_id is not None else None)
-        except Exception as e:  # fail-open: never raise into the loop
-            logger.error("TelegramSurface.send to %s failed: %s", chat_id, e, exc_info=True)
-            return SendResult(success=False, error=str(e))
+        except Exception as e:
+            logger.warning("TelegramSurface.send to %s: the text landed, a follow-up "
+                           "failed: %s", chat_id, e)
+        return SendResult(success=True, surface_message_id=str(last_id) if last_id is not None else None)
 
     def _voice_reply_wanted(self, msg: OutboundMessage, chat_id) -> bool:
         """064 F5: speak a committed agent reply in the OWNER's DM when the owner

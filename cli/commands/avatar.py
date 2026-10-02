@@ -128,9 +128,11 @@ def _record_pushed(home: str, instance_id: str, surface: str, digest: str) -> No
 
 @avatar.command("push")
 @click.option("--twitter", "do_twitter", is_flag=True, help="Push to X/Twitter (needs PFP_PUSH_TWITTER=true).")
-@click.option("--telegram", "do_telegram", is_flag=True, help="Print Telegram BotFather steps (needs PFP_PUSH_TELEGRAM=true).")
+@click.option("--telegram", "do_telegram", is_flag=True, help="Set the Telegram bot photo (needs PFP_PUSH_TELEGRAM=true).")
+@click.option("--telegram-chat", "tg_chats", multiple=True, metavar="CHAT_ID",
+              help="Also set this Telegram group's or channel's photo (the bot must be an admin); repeatable.")
 @click.option("--discord", "do_discord", is_flag=True, help="Set the Discord bot avatar (needs PFP_PUSH_DISCORD=true).")
-def push_cmd(do_twitter, do_telegram, do_discord):
+def push_cmd(do_twitter, do_telegram, tg_chats, do_discord):
     """Push the avatar to the agent's surfaces (flag-gated, idempotent)."""
     from core.avatar import load_avatar
     from core.env import bool_env
@@ -149,6 +151,8 @@ def push_cmd(do_twitter, do_telegram, do_discord):
             "the avatar is an SVG image; X, Discord and Telegram take only a raster "
             "image (PNG/JPEG/GIF/WebP) — set one with `polyrob avatar set <png>`")
 
+    if tg_chats:
+        do_telegram = True
     if not (do_twitter or do_telegram or do_discord):
         do_twitter = do_telegram = do_discord = True  # default: attempt all surfaces (still gated)
 
@@ -191,4 +195,27 @@ def push_cmd(do_twitter, do_telegram, do_discord):
         if not bool_env("PFP_PUSH_TELEGRAM", False):
             click.echo(f"telegram: disabled — {flag_remedy('PFP_PUSH_TELEGRAM')}")
         else:
-            click.echo(pushmod.telegram_instructions(img))
+            targets = [("telegram", None, "bot photo")] + [
+                (f"telegram:{c}", c, f"chat {c} photo") for c in tg_chats]
+            for key, chat_id, label in targets:
+                try:
+                    h = pushmod.sha256_file(img)
+                    if _load_pushed(home, instance_id).get(key, {}).get("hash") == h:
+                        click.echo(f"telegram: {label} unchanged, skipped")
+                        continue
+                    if chat_id is None:
+                        pushmod.push_telegram_bot(img)
+                    else:
+                        pushmod.push_telegram_chat(img, chat_id)
+                    _record_pushed(home, instance_id, key, h)
+                    click.echo(f"telegram: {label} updated ✓")
+                except pushmod.TelegramCredsMissing as e:
+                    click.echo(f"telegram: {e}")
+                    break
+                except Exception as e:  # fail-open: never crash, always give the manual path
+                    click.echo(f"telegram: could not set the {label} ({e})")
+                    if chat_id is None:
+                        click.echo(pushmod.telegram_instructions(img))
+                    else:
+                        click.echo(f"  make the bot an admin with 'Change group info', or set "
+                                   f"it in the group settings; image: {img}")

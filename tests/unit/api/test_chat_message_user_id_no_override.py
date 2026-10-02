@@ -35,6 +35,12 @@ def test_body_user_id_cannot_override_authenticated_identity(monkeypatch):
 
     monkeypatch.setattr("api.chat_via_task.handle_chat_via_task_agent", fake_handle)
 
+    async def _paid(request, cost_credits=1):  # API12: the payment gate
+        return "credits", {}
+
+    monkeypatch.setattr("api.payment_verification.verify_payment_for_request",
+                        _paid)
+
     # Authenticated identity is tenant-a; attacker supplies tenant-b in the body.
     req = SimpleNamespace(state=SimpleNamespace(user_id="tenant-a"))
     body = MessageRequest(text="hi", user_id="tenant-b", chat_id=None)

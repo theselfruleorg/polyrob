@@ -126,6 +126,31 @@ def _append_attachment_manifest(text: str, media: list) -> str:
             f"[This email carried {len(media)} attachment(s) and no message text:\n{listing}]")
 
 
+_AUTO_PRECEDENCE = frozenset({"bulk", "junk", "list", "auto_reply"})
+_AUTO_SENDERS = frozenset({"mailer-daemon", "postmaster"})
+
+
+def is_auto_generated(msg: dict) -> bool:
+    """True for a machine-sent mail the agent must never answer (OS5).
+
+    RFC 3834: an ``Auto-Submitted`` value other than ``no``; the de-facto
+    ``Precedence: bulk|junk|list|auto_reply``, ``X-Autoreply`` and
+    ``X-Autorespond``; and a bounce from ``MAILER-DAEMON``/``postmaster``.
+    Answering one starts an agent <-> auto-responder loop.
+    """
+    headers = {str(k).lower(): str(v or "").strip().lower()
+               for k, v in (msg.get("headers") or {}).items()}
+    auto = headers.get("auto-submitted", "")
+    if auto and auto != "no":
+        return True
+    if headers.get("precedence", "") in _AUTO_PRECEDENCE:
+        return True
+    if headers.get("x-autoreply") or headers.get("x-autorespond"):
+        return True
+    addr = parse_from_address(msg.get("from", "")) or ""
+    return addr.split("@", 1)[0].lower() in _AUTO_SENDERS
+
+
 def dedup_key(msg: dict) -> str:
     """Stable dedup key for a message. Uses Message-ID when present; otherwise a
     surrogate hash of from|subject|body — NEVER the empty string (an empty key would
@@ -220,6 +245,10 @@ async def process_email(
             logger.warning("email dedup check failed (processing anyway): %s", e,
                            exc_info=True)
 
+    if is_auto_generated(msg):
+        logger.info("email inbound: ignored an auto-generated mail from %s (%s)",
+                    msg.get("from", ""), key)
+        return None
     inbound = build_inbound_message(msg, user_directory)
     if inbound is None:
         return None

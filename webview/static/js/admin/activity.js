@@ -7,7 +7,7 @@
     'use strict';
 
     // Use shared utilities
-    const { apiCall, formatDateTime, truncateText, formatId } = AdminUtils;
+    const { apiCall, formatDateTime, truncateText, formatId, h, messageRow } = AdminUtils;
 
     // State
     let currentPage = 0;
@@ -53,33 +53,28 @@
                 return;
             }
 
-            let html = '';
-            for (const event of events) {
+            // FE16: server fields are written as text, never parsed as HTML.
+            const rows = events.map((event) => {
                 const successClass = event.success ? 'success' : 'failure';
-                html += `
-                    <tr>
-                        <td class="timestamp">${formatTimestamp(event.timestamp)}</td>
-                        <td>
-                            <span class="event-type ${event.event_type}">${event.event_type.replace('_', ' ')}</span>
-                        </td>
-                        <td class="actor" title="${event.actor_id || ''}">${formatId(event.actor_id)}</td>
-                        <td class="target" title="${event.target_id || ''}">${formatId(event.target_id)}</td>
-                        <td class="action" title="${event.action || ''}">${truncate(event.action, 40)}</td>
-                        <td class="ip">${event.actor_ip || '-'}</td>
-                        <td>
-                            <span class="success-indicator ${successClass}" title="${event.success ? 'Success' : 'Failed'}"></span>
-                        </td>
-                    </tr>
-                `;
-            }
-            tbody.innerHTML = html;
+                const type = String(event.event_type || '');
+                return h('tr', null,
+                    h('td', { class: 'timestamp', text: formatTimestamp(event.timestamp) }),
+                    h('td', null, h('span', { class: `event-type ${type}`, text: type.replace('_', ' ') })),
+                    h('td', { class: 'actor', title: event.actor_id || '', text: formatId(event.actor_id) }),
+                    h('td', { class: 'target', title: event.target_id || '', text: formatId(event.target_id) }),
+                    h('td', { class: 'action', title: event.action || '', text: truncate(event.action, 40) }),
+                    h('td', { class: 'ip', text: event.actor_ip || '-' }),
+                    h('td', null, h('span', { class: `success-indicator ${successClass}`,
+                                              title: event.success ? 'Success' : 'Failed' })));
+            });
+            tbody.replaceChildren(...rows);
 
             updatePagination(events.length);
             updateStats(events);
 
         } catch (error) {
             console.error('Failed to load activity:', error);
-            tbody.innerHTML = `<tr><td colspan="7" class="empty-state">Error: ${error.message}</td></tr>`;
+            messageRow(tbody, 7, 'empty-state', `Error: ${error.message}`);
         }
     }
 

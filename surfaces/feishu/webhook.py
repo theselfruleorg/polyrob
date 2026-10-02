@@ -79,7 +79,11 @@ def encrypt(encrypt_key: str, event: dict, iv: bytes) -> str:
 #: timestamp, so outside this window a captured signed event is refused; inside
 #: it the message-id dedup (``DEDUP_WINDOW_S``, wider) absorbs a replay.
 REPLAY_WINDOW_S = 300
-DEDUP_WINDOW_S = 2 * REPLAY_WINDOW_S
+#: OS6: the message-id dedup must also outlive Feishu's own RETRIES (15 s,
+#: 5 min, 1 h, 6 h). A retry is re-signed with a fresh timestamp, so the
+#: replay window does not stop it; a 600 s dedup let the 1 h / 6 h retry run
+#: the turn again.
+DEDUP_WINDOW_S = 24 * 3600
 
 
 def fresh_timestamp(raw: str, *, now: Optional[float] = None) -> bool:
@@ -115,6 +119,10 @@ def signature(timestamp: str, nonce: str, encrypt_key: str, body: bytes) -> str:
 
 
 class FeishuWebhook(WebhookSurface):
+    #: OS6: journal the verified event, ack at once, run the turn in the
+    #: background. An inline turn outlasted Feishu's ack budget and drew retries.
+    ack_before_turn = True
+
     def __init__(self, idempotency, *, encrypt_key: str = "",
                  verification_token: str = "", bot_open_id: str = "",
                  user_directory: Any = None,

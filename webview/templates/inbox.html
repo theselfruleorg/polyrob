@@ -114,7 +114,7 @@
          /api/webgate/cards; hidden until there is one. #}
       <div class="section" id="inbox-cards" hidden
            data-read-only="{{ 'true' if read_only else 'false' }}"
-           data-unreachable="{{ t('inbox.unreachable') }}"
+           data-unreachable="{{ t('inbox.unreachable') }}" data-refused="{{ t('inbox.refused') }}"
            data-unreadable="{{ t('inbox.cards.unreadable') }}">
         <div class="section-head">
           <h2 class="section-title">{{ t('inbox.cards.title') }}</h2>
@@ -157,7 +157,7 @@
     {# The buttons above carry only data; this is what makes them decide. No
        inline script on any 043 template, so the one sentence the script may
        need that the server never rendered rides on a data attribute. #}
-    <div id="inbox-copy" hidden data-unreachable="{{ t('inbox.unreachable') }}"></div>
+    <div id="inbox-copy" hidden data-unreachable="{{ t('inbox.unreachable') }}" data-refused="{{ t('inbox.refused') }}"></div>
     <script src="/static/app/inbox.js" type="module"></script>
 {%- endif %}
 {% endblock %}

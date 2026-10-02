@@ -73,3 +73,23 @@ describe("inbox cards", () => {
     expect(r).toEqual({ ok: false, message: "unreachable", card: null });
   });
 });
+
+describe("FE19 — a refusal with only a detail is named", () => {
+  it("a 403 with a detail reads the detail, not 'could not reach'", async () => {
+    const fetcher = async () => ({ ok: false, status: 403, json: async () => ({ detail: "Not your card." }) });
+    const r = await press("c1", "ok", { fetcher, fallback: "could not reach", refused: "refused" });
+    expect(r).toEqual({ ok: false, message: "Not your card.", card: null });
+  });
+
+  it("a refusal with no words reads the refusal sentence", async () => {
+    const fetcher = async () => ({ ok: false, status: 500, json: async () => { throw new Error("no json"); } });
+    const r = await press("c1", "ok", { fetcher, fallback: "could not reach", refused: "refused" });
+    expect(r.message).toBe("refused");
+  });
+
+  it("a transport failure still reads 'could not reach'", async () => {
+    const fetcher = async () => { throw new Error("offline"); };
+    const r = await press("c1", "ok", { fetcher, fallback: "could not reach", refused: "refused" });
+    expect(r.message).toBe("could not reach");
+  });
+});

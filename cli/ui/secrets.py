@@ -81,6 +81,14 @@ _B64_RE = re.compile(r"\b[A-Za-z0-9+]{40,}={0,2}\b")
 #: what it said. Anchored, so a longer hex run never matches.
 _TX_HASH_RE = re.compile(r"^0x[0-9a-fA-F]{64}$")
 
+#: CLI15 (2026-10-03): an EVM private key is ``0x`` + 64 hex — a tx hash by shape —
+#: so the exemption below lets a bare one through. A LABELLED one is not ambiguous:
+#: "private key", "privkey", "pk", "seed" or "secret" just before the run names it a
+#: key, and the run is redacted whatever the shape says.
+_LABELLED_KEY_RE = re.compile(
+    r"(?i)(\b(?:private[\s_-]*key|priv[\s_-]*key|pk|seed|secret|signing[\s_-]*key)"
+    r"\b[\s:=\"'`]{0,4})(?:0x)?[0-9a-f]{64}(?![0-9a-f])")
+
 #: A canonical UUID (``8-4-4-4-12``) or its undashed 32-hex form — tool-call
 #: ids, session ids, request ids. An identifier, never a credential.
 _UUID_RE = re.compile(
@@ -158,6 +166,7 @@ def scrub_secrets(text: Optional[str]) -> str:
     # can't drift. Display-only extras + catch-alls layer AFTER it (JWT before
     # hex/base64 so a three-segment token redacts as one unit).
     out = apply_ssot_shapes(text, REDACTED)
+    out = _LABELLED_KEY_RE.sub(lambda m: m.group(1) + REDACTED, out)
     out = _GOOGLE_RE.sub(REDACTED, out)
     out = _SLACK_RE.sub(REDACTED, out)
     out = _GITHUB_RE.sub(REDACTED, out)

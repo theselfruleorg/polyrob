@@ -35,3 +35,26 @@ def test_reply_cap(tmp_path, monkeypatch):
     assert not ok and "cap" in why
     ok, _ = c.may_reply("telegram", "-1", now=12.0 + 3601)
     assert ok
+
+
+def test_prune_drops_old_room_events_only(tmp_path):
+    """AC5: room_events grew one row per trigger/reply forever."""
+    import sqlite3
+    caps = RoomCaps(str(tmp_path / "surfaces.db"))
+    now = 100 * 86400.0
+    caps.record_reply("telegram", "-1", now=now - 30 * 86400)
+    caps.record_reply("telegram", "-1", now=now - 60)
+    removed = caps.prune(max_age_secs=7 * 86400, now=now)
+    assert removed == 1
+    n = sqlite3.connect(str(tmp_path / "surfaces.db")).execute(
+        "SELECT COUNT(*) FROM room_events").fetchone()[0]
+    assert n == 1
+
+
+def test_prune_never_cuts_inside_a_read_window(tmp_path, monkeypatch):
+    """A horizon shorter than a window a cap reads would reset the cap."""
+    caps = RoomCaps(str(tmp_path / "surfaces.db"))
+    now = 100 * 86400.0
+    caps.record_reply("telegram", "-1", now=now - 3000)
+    assert caps.prune(max_age_secs=10, now=now) == 0
+    assert caps.replies_since("telegram", "-1", now - 86400) == 1

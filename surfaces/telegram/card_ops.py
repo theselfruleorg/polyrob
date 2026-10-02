@@ -178,8 +178,15 @@ def install_editor(bot: Any) -> None:
         return
 
     async def _edit(card: cards.Card) -> None:
+        from core.surfaces.rendering import render_for_flavor, split_for_flavor
         from surfaces.telegram.actions import reply_markup_for
-        text = cards.render_text(card)
+        source = cards.render_text(card)
+        # TG10: the first send renders markdown as Telegram HTML; the edit sent
+        # the raw markdown with no parse_mode, so the owner saw backticks and
+        # asterisks. One message, so only the first chunk; the plain retry
+        # uses the SAME splitter's source chunk (a markup rejection).
+        html = render_for_flavor(source, "html", 4000)[0]
+        plain = split_for_flavor(source, "html", 4000)[0]
         markup = reply_markup_for(cards.card_actions(card))
         try:
             refs = cards.store().refs(card.card_id)
@@ -188,13 +195,22 @@ def install_editor(bot: Any) -> None:
         for surface, chat_id, message_id in refs:
             if surface != "telegram":
                 continue
+            cid = int(chat_id) if str(chat_id).lstrip("-").isdigit() else chat_id
             try:
-                cid = int(chat_id) if str(chat_id).lstrip("-").isdigit() else chat_id
-                await bot.edit_message_text(text=text[:4000], chat_id=cid,
+                await bot.edit_message_text(text=html, chat_id=cid,
                                             message_id=int(message_id),
-                                            reply_markup=markup)
+                                            reply_markup=markup, parse_mode="HTML")
             except Exception as e:  # "message is not modified", a deleted message
-                logger.debug("telegram: card %s edit skipped: %s", card.card_id, e)
+                if "parse entities" not in str(e).lower():
+                    logger.debug("telegram: card %s edit skipped: %s", card.card_id, e)
+                    continue
+                try:
+                    await bot.edit_message_text(text=plain, chat_id=cid,
+                                                message_id=int(message_id),
+                                                reply_markup=markup)
+                except Exception as e2:
+                    logger.debug("telegram: card %s plain edit skipped: %s",
+                                 card.card_id, e2)
 
     # One editor per process: a restarted harness replaces the old bot.
     for fn in list(cards._LISTENERS):

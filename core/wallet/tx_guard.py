@@ -247,6 +247,11 @@ class TxIntent:
     #: ``is_nft_op``. Held to the simulation: ``Approval(holder, 0x0, id)`` from that
     #: contract must be emitted, or the call refuses.
     nft_approval_revokes: Sequence[Tuple[str, int]] = ()
+    #: C17 — ERC-6909 per-id allowances this call REVOKES: ``(contract, spender, id)``, the
+    #: ``approve(spender, id, 0)`` shape (``erc6551.encode_erc6909_revoke``). Only with
+    #: ``is_nft_op``. Held to the simulation: ``Approval(holder, spender, id, 0)`` from that
+    #: contract must be emitted. (An ERC-6909 operator revoke is ``nft_operator_ops`` with False.)
+    erc6909_revokes: Sequence[Tuple[str, str, int]] = ()
     #: W3 — Permit2 allowances this call REVOKES: ``(token, spender)``, via Permit2
     #: ``approve(token, spender, 0, 0)`` or ``lockdown``. Only with ``is_allowance_op`` (no
     #: grants), ``to`` = the pinned Permit2 and ``token`` = one of the revoked tokens. Held to
@@ -260,6 +265,18 @@ class TxIntent:
     #: and the simulation must show ``allowance(account, S) == 0`` AFTER — no claim survives
     #: the transaction. Any other ``executeBatch`` stays an account-admin call and refuses.
     via_account_batch: bool = False
+    #: J1 — the account's journal entry rides the SAME ``executeBatch`` as the action: the LAST
+    #: leg is ``JournalLog.log(entry)`` (requires ``via_account``). The guard allows exactly this
+    #: leg — target = the ``journal_log`` pinned for the account's collection, selector
+    #: ``log(bytes)``, value 0, operation 0, and the bytes one canonical signed journal entry of
+    #: THIS account and chain, signed by the signing treasury — then judges the remaining legs as
+    #: if the batch were the plain ``execute`` (or the W8 three-leg batch) without it.
+    via_account_journal: bool = False
+    #: J1 — a journal entry with NO action: the account's single call is ``JournalLog.log(entry)``
+    #: (``to`` = the pinned ``journal_log`` of the account's collection, value 0, ``amount_raw``
+    #: 0, ``token`` None; requires ``via_account``). The same entry checks as the batch leg, and
+    #: the simulation must show nothing of the account move and the ``Entry`` event emitted.
+    is_journal_entry: bool = False
     #: The collection reveal (069 v4; a pinned collection profile with the ``reveal``
     #: capability): ``reveal(uint256[] ids)`` on a pinned collection, signed by the
     #: treasury, value 0. The
@@ -525,7 +542,8 @@ def _grant_is_exit_bounded(intent: TxIntent, g_token: str, g_spender: str,
 def _is_nft_revoke_only(intent: TxIntent) -> bool:
     """An NFT op that only RETIRES approvals (ApprovalForAll false, single-token clears)."""
     return bool(intent.is_nft_op and not intent.nft_out and not intent.expected_nft_in
-                and (intent.nft_operator_ops or intent.nft_approval_revokes)
+                and (intent.nft_operator_ops or intent.nft_approval_revokes
+                     or intent.erc6909_revokes)
                 and not any(bool(a) for (_c, _o, a) in intent.nft_operator_ops))
 
 
@@ -708,6 +726,8 @@ def _authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
                liquidity_rpc: Optional[Callable] = None,
                account_rpc: Optional[Callable] = None) -> Decision:
     """The guard itself (see :func:`authorize`)."""
+    # getattr: the pause refusal (step 1) must not depend on the intent's shape.
+    price_fn = _valueless_price_fn(getattr(intent, "chain", None), price_fn)
     simulate_fn = simulate_fn or (lambda **kw: simulation.simulate(**kw))
     rpc_is_pinned_fn = rpc_is_pinned_fn or rpc_is_pinned
     halted_fn = halted_fn or _halted
@@ -834,8 +854,23 @@ def _authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
     # pays the fee. `holder` becomes the account; `sender` is the signer.
     outer_tx = tx
     sender = None
+    journal_to = None
+    if intent.is_journal_entry and not intent.via_account:
+        return Decision(False, ("refused: a journal entry is written THROUGH a token-bound "
+                                "account — declare `via_account`"))
+    if intent.via_account_journal and not intent.via_account:
+        return Decision(False, ("refused: a journal leg rides a token-bound account call — "
+                                "declare `via_account`"))
     if intent.via_account:
+        if intent.via_account_journal:
+            tx, journal_to, via_error = _strip_journal_leg(intent, tx, signer=holder)
+            if via_error:
+                _record_money_refusal("money_gate", tool_self, execution_context,
+                                      detail=f"account: {via_error}")
+                return Decision(False, f"refused: {via_error}")
         inner, via_error = _via_account_inner(intent, tx)
+        if not via_error and intent.is_journal_entry:
+            journal_to, via_error = _journal_only_refusal(intent, inner, signer=holder)
         if via_error:
             _record_money_refusal("money_gate", tool_self, execution_context, detail=f"account: {via_error}")
             return Decision(False, f"refused: {via_error}")
@@ -855,7 +890,7 @@ def _authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
     if intent.amount_raw == 0 and not (intent.is_allowance_op or intent.is_deploy
                                        or intent.is_claim or intent.is_nft_op
                                        or intent.is_registration or intent.is_liquidity_op
-                                       or intent.is_collection_reveal):
+                                       or intent.is_collection_reveal or intent.is_journal_entry):
         # A zero-value transfer is meaningless. An allowance op legitimately
         # moves nothing and must say so explicitly — it is never inferred. A
         # deployment commonly endows the constructor with nothing at all, and
@@ -942,7 +977,8 @@ def _authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
                 "DEPLOYMENT or a CLAIM — they assert different things about "
                 "what moves"))
         if not (intent.nft_out or intent.expected_nft_in
-                or intent.nft_operator_ops or intent.nft_approval_revokes):
+                or intent.nft_operator_ops or intent.nft_approval_revokes
+                or intent.erc6909_revokes):
             return Decision(False, (
                 "refused: an NFT operation must declare what leaves "
                 "(`nft_out`), what must arrive (`expected_nft_in`), or the "
@@ -957,6 +993,9 @@ def _authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
                     f"and future, and no simulation can bound what it later "
                     f"enables. Only a revoke (approved=False) may be declared"))
 
+    if intent.erc6909_revokes and not intent.is_nft_op:
+        return Decision(False, (
+            "refused: an ERC-6909 revoke is an NFT operation — declare is_nft_op=True with it"))
     if intent.nft_approval_revokes and not intent.is_nft_op:
         return Decision(False, (
             "refused: a single-token ERC-721 revoke is an NFT operation — declare "
@@ -1081,7 +1120,7 @@ def _authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
     if intent.via_account:
         preflight = _via_account_preflight(
             intent, sender, account_rpc or simulation._default_rpc_for(intent.chain),
-            inner_to=tx.get("to"))
+            inner_to=tx.get("to"), journal_to=journal_to)
         if preflight:
             _record_money_refusal("money_gate", tool_self, execution_context, detail=f"account: {preflight}")
             return Decision(False, f"refused: {preflight}")
@@ -1118,6 +1157,26 @@ def _authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
         return Decision(False, f"refused: simulation raised ({exc})")
     if not deltas.ok:
         return Decision(False, f"refused: simulation not trustworthy — {deltas.error}")
+
+    if intent.is_journal_entry:
+        from core.wallet import journal_log as _jl
+        _moved = (deltas.native_delta or any(deltas.token_deltas.values())
+                  or deltas.holder_transfers or deltas.holder_approvals or deltas.holder_nft_out
+                  or deltas.holder_nft_in or deltas.holder_operator_grants
+                  or deltas.holder_nft_approvals or deltas.holder_permit2_grants
+                  or getattr(deltas, "holder_6909_approvals", ()))
+        if _moved:
+            return Decision(False, "refused: a journal entry moved something of the account")
+        if (str(journal_to), _jl.TOPIC_ENTRY) not in set(deltas.event_topics or ()):
+            return Decision(False, ("refused: the simulation does not show the JournalLog emit the "
+                                    "entry"))
+
+    if intent.via_account and sender:
+        _treasury_why = _treasury_side_refusal(intent, deltas, holder=holder, sender=sender)
+        if _treasury_why:
+            _record_money_refusal("money_gate", tool_self, execution_context,
+                                  detail=f"account: {_treasury_why}")
+            return Decision(False, f"refused: {_treasury_why}")
 
     # 068 N1: a run bound to a target acquires only the target — checked on what
     # the simulation shows ARRIVING, so a generic call or a dapp transaction that
@@ -1265,7 +1324,8 @@ def _authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
             _record_money_refusal("money_gate", tool_self, execution_context,
                                   detail=f"collection_reveal: {_reveal_err}")
             return Decision(False, f"refused: {_reveal_err}")
-    elif intent.is_registration:
+    elif intent.is_registration or intent.is_journal_entry:
+        # (A journal entry, J1, moves nothing either — its own assertions run above.)
         # Registering sends NO value, so the native branch below cannot serve --
         # it refuses a zero outflow as a measurement failure, and moving nothing
         # is this shape's normal case (same reasoning as is_deploy/is_nft_op).
@@ -1486,6 +1546,14 @@ def _authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
                 f"refused: the intent declares it clears the approval of {c} #{i}, but "
                 f"the simulation emits no Approval(holder, 0x0, {i}) from it — the "
                 f"transaction does not do what the intent says"))
+    _zeroed_6909 = {(str(c).lower(), str(sp).lower(), int(i))
+                    for (c, sp, i, amt) in (getattr(deltas, "holder_6909_approvals", None) or ())
+                    if int(amt) == 0}
+    for (c, sp, i) in intent.erc6909_revokes:
+        if (str(c).lower(), str(sp).lower(), int(i)) not in _zeroed_6909:
+            return Decision(False, (
+                f"refused: the intent declares it revokes the ERC-6909 allowance of {c} #{i} to "
+                f"{sp}, but the simulation emits no Approval(holder, {sp}, {i}, 0) from it"))
     if intent.permit2_revokes:
         from core.wallet import erc6551 as _erc6551
         _p2_zeroed = {(str(t).lower(), str(sp).lower())
@@ -1508,6 +1576,12 @@ def _authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
                 f"{l_c} — a blanket operator approval over the whole collection, "
                 f"present and future holdings alike. The drain happens in a "
                 f"later transaction no cap here can see"))
+    for (l_c, l_sp, l_id, l_amt) in (getattr(deltas, "holder_6909_approvals", None) or ()):
+        if int(l_amt) > 0:
+            return Decision(False, (
+                f"refused: the transaction emits an ERC-6909 Approval of {l_c} #{l_id} to "
+                f"{l_sp} for {l_amt} — a standing claim no cap here can see; a grant can never "
+                f"be declared"))
     _declared_nft_approvals = {(c.lower(), str(o).lower())
                                for (c, o, _v) in intent.nft_operator_ops}
     for (l_c, l_to, l_id) in deltas.holder_nft_approvals:
@@ -1540,6 +1614,14 @@ def _authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
     if _nest:
         _record_money_refusal("money_gate", tool_self, execution_context, detail=f"account: {_nest}")
         return Decision(False, f"refused: {_nest}")
+
+    # -- 6g''. C5: no asset of ANY kind into the account of a token not minted yet. Whoever mints
+    # k later owns what sits in accountOf(k) — ETH, ERC-20 or NFT alike.
+    _future = _future_account_refusal(
+        intent, tx, deltas, holder, account_rpc or simulation._default_rpc_for(intent.chain))
+    if _future:
+        _record_money_refusal("money_gate", tool_self, execution_context, detail=f"account: {_future}")
+        return Decision(False, f"refused: {_future}")
 
     # -- 6g'. A pinned collection's token leaves only with its code pinned and its account
     # carrying NO open approval (069 v4 §5 rules 3 and 5). Approvals survive a transfer of the
@@ -1658,6 +1740,7 @@ def _authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
         _decimals = int(getattr(_row, "native_decimals", 18) or 18)
         amount_usd = ((outflow_raw + _worst_fee_wei) / (10 ** _decimals)) * unit_price
     elif (intent.is_claim or intent.is_nft_op or intent.is_registration or intent.is_collection_reveal
+            or intent.is_journal_entry
             or (intent.is_liquidity_op and not intent.lp_outflows)):
         # The cost of a claim is its FEE. Nothing leaves, so pricing an outflow
         # would book it at $0.00 — the confident-zero class that let 114
@@ -2086,7 +2169,8 @@ def _account_call_refusal(tx: dict, *, deep: bool = True) -> Optional[str]:
 
 
 def _via_account_preflight(intent: TxIntent, sender: str, rpc, *,
-                           inner_to: Optional[str] = None) -> Optional[str]:
+                           inner_to: Optional[str] = None,
+                           journal_to: Optional[str] = None) -> Optional[str]:
     """Rule 5: reads BEFORE simulation. Any failed read refuses (fail closed).
 
     069 v4 (the simple model): the SIGNER must be the NFT's current owner — the only way this
@@ -2100,6 +2184,9 @@ def _via_account_preflight(intent: TxIntent, sender: str, rpc, *,
         if impl.lower() != erc6551.ACCOUNT_V3_IMPL.lower():
             return (f"the token-bound account clones {impl}, not the pinned AccountV3 "
                     f"{erc6551.ACCOUNT_V3_IMPL}")
+        _coll_why = _account_collection_refusal(intent.chain, acct, rpc, journal_to=journal_to)
+        if _coll_why:
+            return _coll_why
         if erc6551.read_is_locked(rpc, acct):
             return "the token-bound account is LOCKED by its owner — nothing moves until the lock ends"
         owner = erc6551.read_owner(rpc, acct)
@@ -2117,6 +2204,175 @@ def _via_account_preflight(intent: TxIntent, sender: str, rpc, *,
     except Exception as exc:  # noqa: BLE001
         return f"Account pre-flight could not be verified ({exc}); failing closed"
     return None
+
+
+def _treasury_side_refusal(intent: TxIntent, deltas, *, holder: str, sender: str) -> Optional[str]:
+    """C6: an account call moves the ACCOUNT's assets — the guard measures the account, so a
+    movement on the treasury (signer) side would pass every cap unseen. Refuse any of it, with ONE
+    exception: the account paying its owner, i.e. the declared destination IS the treasury and
+    the only treasury-side events are fungible/NFT ``Transfer(account → treasury)``. A treasury
+    log the guard cannot attribute (no raw logs measured) refuses."""
+    from core.wallet import simulation
+    paid_owner = str(intent.to or "").lower() == str(sender).lower()
+    if deltas.sender_native_delta < 0 or (deltas.sender_native_delta > 0 and not paid_owner):
+        return (f"the account call changes the treasury's native balance by "
+                f"{deltas.sender_native_delta} wei — an account call moves only the account's "
+                f"assets")
+    if not deltas.sender_moved:
+        return None
+    word = "0x" + "0" * 24 + str(sender).lower().removeprefix("0x")
+    acct = "0x" + "0" * 24 + str(holder).lower().removeprefix("0x")
+    seen = False
+    for log in deltas.logs or ():
+        topics = [str(t).lower() for t in (log.get("topics") or [])]
+        if word not in topics[1:]:
+            continue
+        seen = True
+        if not (paid_owner and len(topics) >= 3 and topics[0] == simulation._TOPIC_TRANSFER
+                and topics[1] == acct and topics[2] == word and word not in topics[3:]):
+            return (f"the account call moves something on the treasury side "
+                    f"({log.get('address')} {topics[0][:10]}) — an account call may only pay "
+                    f"its owner, as the declared destination")
+    if not seen:
+        return (f"the account call touches the treasury ({', '.join(deltas.sender_moved)}) and "
+                f"the guard cannot tell in which direction; failing closed")
+    return None
+
+
+def _valueless_price_fn(chain: Optional[str], price_fn: Optional[Callable]) -> Optional[Callable]:
+    """C13: on a ``valueless`` chain row (a testnet) the native coin and its wrapped form are worth
+    exactly $0 — no source prices them, and an unpriced spend refuses. Any other token keeps the
+    caller's price (none, on a testnet, so it refuses as unpriceable)."""
+    if not chain:
+        return price_fn
+    from core.wallet import chains
+    row = chains.get(chain)
+    if row is None or not row.valueless:
+        return price_fn
+    native = {str(row.wrapped_native or "").lower(), ""}
+
+    def priced(c, addr):
+        if str(addr or "").lower() in native:
+            return 0.0
+        return price_fn(c, addr) if price_fn else None
+    return priced
+
+
+def _account_collection_refusal(chain: str, account: str, rpc, *,
+                                journal_to: Optional[str] = None) -> Optional[str]:
+    """C4: the account's own ``token()`` must name a PINNED collection on this chain whose live
+    code still hashes to its pin, and the account must be that token's canonical account (one
+    of the profile's account versions, pure CREATE2). The signer re-runs this guard, so an
+    AccountV3 clone of an unpinned or changed collection refuses there too. Fail closed."""
+    from core.wallet import collection_registry, erc6551
+    chain_id, collection, token_id = erc6551.read_token(rpc, account)
+    want = collection_registry.chain_id_of(chain)
+    if int(chain_id) != int(want):
+        return (f"the token-bound account {account} is bound to a token on chain {chain_id}, "
+                f"not {chain} ({want})")
+    why = _collection_runtime_refusal(chain, collection, rpc)
+    if why:
+        return f"the token-bound account {account} belongs to {collection} #{token_id}: {why}"
+    profile = collection_registry.profile_for(want, collection)
+    canonical = {erc6551.account_address(want, profile.address, int(token_id), salt=v.salt,
+                                         implementation=v.implementation).lower()
+                 for v in profile.accounts}
+    if str(account).lower() not in canonical:
+        return (f"{account} is not the pinned ERC-6551 account of {collection} #{token_id} — "
+                f"an account outside the profile's account versions")
+    if journal_to is not None and str(journal_to).lower() != str(profile.journal_log or ""):
+        return (f"the journal leg calls {journal_to}, not the JournalLog pinned for {collection} "
+                f"({profile.journal_log or 'none'})")
+    return None
+
+
+def _journal_entry_refusal(intent: TxIntent, data: str, *, signer: str, chain_id: int,
+                           prefixes) -> Optional[str]:
+    """Why ``log(entry)`` calldata *data* is NOT one canonical journal entry of this account and
+    chain signed by *signer* under one of *prefixes* — or None."""
+    from core.wallet import journal_log
+    from core.wallet.nft_account import recover_owner
+    try:
+        entry = journal_log.parse_entry(journal_log.decode_log(data))
+    except journal_log.JournalLogError as exc:
+        return f"the journal leg is not one canonical journal entry ({exc})"
+    if (str(entry["account"]).lower() != str(intent.via_account).lower()
+            or entry["chain_id"] != chain_id
+            or str(entry["owner"]).lower() != str(signer).lower()):
+        return ("the journal entry names another account, chain or owner than this account call "
+                "and its signer")
+    if not any(recover_owner(entry, pfx) == str(signer).lower() for pfx in prefixes):
+        return "the journal entry's signature does not recover to the signing treasury"
+    return None
+
+
+def _journal_only_refusal(intent: TxIntent, inner: dict, *, signer: str
+                          ) -> Tuple[Optional[str], Optional[str]]:
+    """``(journal target, None)`` for a well-formed journal-only account call, else
+    ``(None, reason)`` (``TxIntent.is_journal_entry``)."""
+    from core.wallet import collection_registry
+    if (intent.via_account_batch or intent.via_account_journal or intent.token is not None
+            or intent.amount_raw != 0 or intent.is_nft_op or intent.is_allowance_op
+            or intent.is_claim or intent.is_registration or intent.expected_allowance_grants
+            or intent.inflow_token or intent.min_native_inflow_wei):
+        return None, ("a journal entry moves nothing: declare token=None, amount_raw=0 and no "
+                      "other shape")
+    to = str(inner.get("to") or "").lower()
+    if to != str(intent.to or "").lower() or int(inner.get("value") or 0) != 0:
+        return None, "the journal entry's call must go to the declared JournalLog with no value"
+    try:
+        chain_id = collection_registry.chain_id_of(intent.chain)
+        prefixes = {p.journal_prefix for p in collection_registry.profiles_on(chain_id)
+                    if p.journal_log == to}
+    except Exception as exc:  # noqa: BLE001
+        return None, f"the owner's collection registry cannot be trusted ({exc}); failing closed"
+    if not prefixes:
+        return None, f"{inner.get('to')} is no pinned JournalLog on {intent.chain}"
+    why = _journal_entry_refusal(intent, inner.get("data") or "", signer=signer,
+                                 chain_id=chain_id, prefixes=prefixes)
+    return (None, why) if why else (to, None)
+
+
+def _strip_journal_leg(intent: TxIntent, tx: dict, *, signer: str
+                       ) -> Tuple[Optional[dict], Optional[str], Optional[str]]:
+    """J1: check the LAST leg of the account's ``executeBatch`` is exactly one journal entry and
+    return ``(tx without it, journal target, None)`` — re-encoded as the plain ``execute`` (or the
+    W8 three-leg batch) the rest of the guard judges — or ``(None, None, reason)``. Structural
+    plus the entry's signature; the pre-flight checks the target is the ``journal_log`` of the
+    account's own collection."""
+    from core.wallet import collection_registry, erc6551
+    data = str((tx or {}).get("data") or "")
+    if data[:10].lower() != erc6551.EXECUTE_BATCH_SELECTOR:
+        return None, None, "a journaled account call is executeBatch(…, JournalLog.log(entry))"
+    try:
+        legs = erc6551.decode_execute_batch(data)
+    except Exception as exc:  # noqa: BLE001
+        return None, None, f"the account batch does not decode ({exc})"
+    want = 4 if intent.via_account_batch else 2
+    if len(legs) != want:
+        return None, None, (f"a journaled account call has exactly {want} legs (the action, then "
+                            f"the journal entry), not {len(legs)}")
+    j_to, j_value, j_data, j_op = legs[-1]
+    if j_op != 0 or j_value != 0:
+        return None, None, "the journal leg must be operation 0 with no value"
+    try:
+        chain_id = collection_registry.chain_id_of(intent.chain)
+        logs = {p.journal_log: p.journal_prefix for p in collection_registry.profiles_on(chain_id)
+                if p.journal_log}
+    except Exception as exc:  # noqa: BLE001
+        return None, None, f"the owner's collection registry cannot be trusted ({exc}); failing closed"
+    if str(j_to).lower() not in logs:
+        return None, None, f"the journal leg calls {j_to}, which is no pinned JournalLog on {intent.chain}"
+    why = _journal_entry_refusal(intent, j_data, signer=signer, chain_id=chain_id,
+                                 prefixes={pfx for addr, pfx in logs.items()
+                                           if addr == str(j_to).lower()})
+    if why:
+        return None, None, why
+    rest = legs[:-1]
+    stripped = dict(tx)
+    stripped["data"] = (erc6551.encode_execute_batch(rest) if intent.via_account_batch
+                        else erc6551.encode_execute(*rest[0]))
+    return stripped, str(j_to).lower(), None
 
 
 def _pinned_collection_accounts(chain: str):
@@ -2169,6 +2425,56 @@ def _collection_account_destination_refusal(chain: str, tx: dict, nft_out) -> Op
             word = body[i:i + 64]
             if word[:24] == "0" * 24 and ("0x" + word[24:]) in accounts:
                 return why.format(what=f"a call to the pinned collection {to}", dest="0x" + word[24:])
+    return None
+
+
+def _future_account_refusal(intent: TxIntent, tx: dict, deltas, holder: str, rpc) -> Optional[str]:
+    """C5: refuse any asset sent to ``accountOf(k)`` of a pinned collection when token ``k`` is
+    NOT MINTED — native value, ERC-20, NFT, any shape. The candidates are every address the
+    transaction names: the declared destination, the called contract, each measured transfer's
+    counterparty, each measured NFT move, and every ABI word of the calldata (a router's
+    ``recipient``, an ERC-20 ``transfer(to, …)``). A candidate inside a profile's offline account
+    set (pure CREATE2) is checked with ``ownerOf(k)`` on the collection; a failed read refuses
+    (fail closed). An untrusted registry stops only what it guards (owner decision 2026-10-01:
+    the NFT-move rule above already refuses then)."""
+    from core.wallet import abi, collection_registry, erc6551
+    try:
+        chain_id = collection_registry.chain_id_of(intent.chain)
+        profiles = collection_registry.profiles_on(chain_id)
+    except Exception:  # noqa: BLE001
+        return None
+    if not profiles:
+        return None
+    cands = {str(intent.to or ""), str((tx or {}).get("to") or "")}
+    cands.update(str(dest) for (_t, dest, _a) in deltas.holder_transfers or ())
+    cands.update(str(dest) for (_c, _s, dest, _i, _a) in deltas.holder_nft_out or ())
+    data = str((tx or {}).get("data") or "").lower().removeprefix("0x")
+    body = data[8:] if len(data) >= 8 else ""
+    for i in range(0, len(body) - 63, 64):
+        word = body[i:i + 64]
+        if word[:24] == "0" * 24:
+            cands.add("0x" + word[24:])
+    cands = {c.lower() for c in cands if c} - {str(holder).lower(), _ZERO_ADDRESS.lower()}
+    for addr in sorted(cands):
+        for p in profiles:
+            for v in p.accounts:
+                k = erc6551.collection_account_token_id(chain_id, p.address, p.max_supply, addr,
+                                                        implementation=v.implementation, salt=v.salt)
+                if k is None:
+                    continue
+                try:
+                    raw = rpc("eth_call", [{"to": p.address, "data": abi.encode_call(
+                        "ownerOf", [{"type": "uint256"}], [k])}, "latest"])
+                    owner = abi.decode([{"type": "address"}], raw)[0]
+                    minted = str(owner).lower() != _ZERO_ADDRESS.lower()
+                except Exception as exc:  # noqa: BLE001 — a revert IS "not minted"; so is a failure
+                    minted, why = False, f" (ownerOf({k}) failed: {exc})"
+                else:
+                    why = ""
+                if not minted:
+                    return (f"the transaction names {addr}, the ERC-6551 account of {p.address} "
+                            f"#{k}, a token not minted yet{why} — whoever mints #{k} later owns "
+                            f"every asset sent there; failing closed")
     return None
 
 

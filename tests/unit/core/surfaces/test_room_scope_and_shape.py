@@ -40,6 +40,11 @@ class _Store:
     def set_status(self, offer_id, status, reason=""):
         self.set_calls.append((offer_id, status, reason))
 
+    def withdraw_pending(self, offer_id, reason):
+        # RA1: cancel withdraws with a CAS on status='pending'.
+        self.set_calls.append((offer_id, "refused", reason))
+        return True
+
 
 @pytest.fixture()
 def admin_ops(monkeypatch):

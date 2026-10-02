@@ -63,10 +63,12 @@ def _admin_data_dir(ctx=None, *, write: "bool | None" = None) -> str:
 
 
 def _tenant(ctx) -> str:
-    """The REPL session's tenant — the SAME user_id the runtime writes rows
-    under (the live session's identity; "local" when unbound), matching the
-    CLI's ``_allowlist_tenant``/``_money_tenant`` resolution."""
-    return (getattr(ctx, "user_id", "") or "").strip() or "local"
+    """The owner tenant this REPL owner verb acts on — the SAME tenant the
+    DEPLOYED service writes rows under (CLI2): ``cli._admin_home.admin_owner_tenant``,
+    the tenant axis of the seam ``_admin_data_dir`` already uses. On a box with
+    nothing deployed it is the session's own tenant ("local" when unbound)."""
+    from cli._admin_home import admin_owner_tenant
+    return admin_owner_tenant(getattr(ctx, "user_id", None))
 
 
 def _goal_board(*, write: "bool | None" = None):

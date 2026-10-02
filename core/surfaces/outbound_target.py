@@ -121,6 +121,27 @@ def is_owner_target(surface: str, target, owner_targets: dict) -> bool:
     return canonical_owner_addr(surface, target) == canonical_owner_addr(surface, owner_addr)
 
 
+def _single_address_domain(target: str):
+    """The domain of *target* when it names EXACTLY ONE mailbox, else None (OB3).
+
+    ``rsplit("@")`` on the whole string read ``victim@gmail.com, x@corp.io`` as a
+    corp.io address, and SMTP then delivered to both."""
+    from email.utils import getaddresses
+    t = (target or "").strip()
+    if not t or any(c in t for c in ",;\r\n"):
+        return None
+    parsed = getaddresses([t])
+    if len(parsed) != 1:
+        return None
+    addr = (parsed[0][1] or "").strip()
+    if addr.count("@") != 1 or any(c.isspace() for c in addr):
+        return None
+    local, dom = addr.split("@", 1)
+    if not local or not dom:
+        return None
+    return dom.lower()
+
+
 def resolve_target_tier(*, surface: str, target: str, user_id: str, allowlist,
                         owner_targets: dict, policy: str = "allowlist",
                         domains: tuple = ()) -> str:
@@ -133,7 +154,9 @@ def resolve_target_tier(*, surface: str, target: str, user_id: str, allowlist,
     if policy == "open":
         return "open"
     if policy == "domains" and "@" in str(target):
-        dom = str(target).rsplit("@", 1)[1].strip().lower()
+        dom = _single_address_domain(str(target))
+        if dom is None:
+            return "denied"
         # domains entries are compared case-insensitively: the target's domain
         # is already lowercased above, but a pref-authored entry (e.g. hand-set
         # via /config, not the always-lowercased OUTBOUND_DOMAINS env parser)

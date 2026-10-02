@@ -160,3 +160,40 @@ def test_name_is_basename(monkeypatch, tmp_path):
     rows = _record_in(tmp_path, monkeypatch, ["a/b/c/deep.csv"])
     assert set(rows) == {"deep.csv"}
     assert rows["deep.csv"]["path"] == "a/b/c/deep.csv"
+
+
+def test_get_never_writes_verified_at(monkeypatch, tmp_path):
+    """Audit WR1: the console's GET is a READ — no ``verified_at`` write."""
+    artmod = _ledger_on(tmp_path, monkeypatch)
+    import webview.webgate as webgate
+    import agents.task.path as pth
+    owner = webgate.local_owner_id()
+    clean = pth.pm().clean_session_id("sess-ro")
+    ledger = artmod.get_artifact_ledger()
+    f = tmp_path / "r.md"
+    f.write_text("hello")
+    art = ledger.record(owner, str(f), session_id=clean, kind="report")
+    before = ledger.get(art.id, owner).verified_at
+    f.write_text("hallo")  # same size, touched since: forces a re-hash
+    client = _client(monkeypatch, posture="local")
+    body = client.get("/api/webgate/artifacts?session_id=sess-ro").json()
+    assert [a["verdict"] for a in body["artifacts"]] == ["changed"]
+    f.write_text("hello")
+    body = client.get("/api/webgate/artifacts?session_id=sess-ro").json()
+    assert [a["verdict"] for a in body["artifacts"]] == ["ok"]
+    assert ledger.get(art.id, owner).verified_at == before
+
+
+def test_verdict_short_circuits_on_size_and_old_mtime(monkeypatch, tmp_path):
+    import os
+    artmod = _ledger_on(tmp_path, monkeypatch)
+    ledger = artmod.get_artifact_ledger()
+    f = tmp_path / "r.md"
+    f.write_text("hello")
+    art = ledger.record("rob", str(f), session_id="s", kind="report")
+    calls = []
+    monkeypatch.setattr(artmod, "hash_file", lambda p: calls.append(p) or ("x", 5))
+    os.utime(f, (art.created_at - 60, art.created_at - 60))
+    assert ledger.verdict(art, record=False) == "ok" and calls == []  # untouched: no hash
+    f.write_text("hello, longer")
+    assert ledger.verdict(art, record=False) == "changed" and calls == []  # size differs

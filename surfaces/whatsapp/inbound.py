@@ -8,13 +8,40 @@ from typing import List, Optional
 from core.surfaces.envelopes import InboundMessage, Identity, SessionSource
 from core.surfaces.idempotency import IdempotencyStore
 from core.surfaces.inbound_webhook import WebhookSurface
-from core.surfaces.media import Media
+from core.surfaces.media import Media, kind_for_mime
 
 from surfaces._actor import ensure_registered as _ensure_actor
 
 _ensure_actor()  # registers the shared inbound actor (core.surfaces.act)
 
 logger = logging.getLogger(__name__)
+
+#: OS9: file-bearing message types → the kind used when Meta sends no MIME.
+_FILE_TYPES = {"image": "image", "document": "document", "video": "video",
+               "sticker": "image"}
+
+#: OS2 (the Feishu webhook rule): how old (seconds) a message's own
+#: ``timestamp`` may be. Meta signs only the body, so a captured delivery
+#: re-verifies forever, and Meta itself retries an unacknowledged one for up
+#: to 7 days; without this a replay outlived the dedup and re-ran an owner
+#: command. The timestamp is inside the signed body, so it cannot be removed
+#: without breaking the signature.
+REPLAY_WINDOW_S = 900
+#: The dedup must remember a message for longer than it can stay fresh.
+DEDUP_WINDOW_S = 2 * REPLAY_WINDOW_S
+
+
+def stale_message(m: dict, *, now: float = None) -> bool:
+    """True when ``m['timestamp']`` (epoch seconds) is older than
+    :data:`REPLAY_WINDOW_S`. A message without a readable timestamp is not
+    called stale (Meta always sends one; the body is signed)."""
+    import time as _t
+    try:
+        ts = int(str(m.get("timestamp")).strip())
+    except (TypeError, ValueError):
+        return False
+    now = _t.time() if now is None else now
+    return now - ts > REPLAY_WINDOW_S
 
 
 class WhatsAppInbound(WebhookSurface):
@@ -34,8 +61,11 @@ class WhatsAppInbound(WebhookSurface):
             logger.debug("whatsapp: no responder wired; immediate reply suppressed: %s", text[:80])
             return
         to = inbound.identity.raw_user_id or inbound.identity.user_id
+        from surfaces._shared import split_for_surface
         try:
-            await self._responder(to, text, reply_to=reply_to)
+            # OS1: split to the catalog limit (4,096); quote only on the first.
+            for i, chunk in enumerate(split_for_surface("whatsapp", text)):
+                await self._responder(to, chunk, reply_to=reply_to if i == 0 else None)
         except Exception as exc:
             logger.warning("whatsapp: immediate reply to %s failed: %s", to, exc)
 
@@ -107,6 +137,11 @@ class WhatsAppInbound(WebhookSurface):
         wa_from = str(m.get("from") or "")
         if not wa_from:
             return None
+        if stale_message(m):
+            logger.warning("whatsapp: dropped message %s — its timestamp is older than "
+                           "%ss (a late retry or a replayed delivery)",
+                           m.get("id"), REPLAY_WINDOW_S)
+            return None
         if self._window is not None:
             import time as _t
             try:
@@ -131,7 +166,19 @@ class WhatsAppInbound(WebhookSurface):
                            url=None, filename=(m.get(mtype) or {}).get("id"))]
             # NOTE: WhatsApp media is fetched by media-id via the Graph API in the harness
             # (client.download_media); url left None here, filled before transcription.
-        elif mtype == "image":
-            media = [Media(kind="image", caption=(m.get("image") or {}).get("caption"))]
+        elif mtype in _FILE_TYPES:
+            # OS9: an image's caption IS the message; a document, video or
+            # sticker is named (``ref`` = the Graph media id), never an empty turn.
+            body = m.get(mtype) or {}
+            mime = body.get("mime_type") or None
+            caption = body.get("caption") or None
+            text = caption or ""
+            media = [Media(kind=kind_for_mime(mime) if mime else _FILE_TYPES[mtype],
+                           mime=mime, caption=caption, ref=body.get("id") or None,
+                           filename=body.get("filename") or None)]
+        if not text and not media:
+            # A reaction, a status echo, an unsupported type: nothing to answer.
+            logger.debug("whatsapp: ignored a %r message with no text or file", mtype)
+            return None
         return InboundMessage(text=text, identity=ident,
                               idempotency_key=str(m.get("id") or ""), media=media)

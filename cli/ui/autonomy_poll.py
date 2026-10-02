@@ -60,3 +60,22 @@ def read_autonomy_snapshot(user_id: str, data_dir: str = "data") -> Optional[dic
     if goals == 0 and cron == 0 and review is False:
         return None
     return {"goals": goals, "cron": cron, "review": review}
+
+
+def poll_status_bar(user_id: Optional[str]) -> Optional[dict]:
+    """The status bar's autonomy line — over the deployed home and owner (CLI13).
+
+    It read ``config.data_dir`` (the shell's home) and the session tenant, so on
+    the box the bar showed the shell's empty board while ``/autonomy`` beside it
+    read the daemon's. Both now resolve through ``cli._admin_home`` — read-only,
+    so root is never refused. A seam that refuses (an unreadable deployed home)
+    degrades to the old local resolution rather than tear down the bar.
+    """
+    try:
+        from cli._admin_home import admin_data_dir, admin_owner_tenant
+        tenant = admin_owner_tenant(user_id)
+        data_dir = admin_data_dir(write=False)
+    except Exception:
+        from core.runtime_paths import data_dir_or_home
+        tenant, data_dir = (user_id or "local"), data_dir_or_home(None)
+    return read_autonomy_snapshot(tenant, data_dir)

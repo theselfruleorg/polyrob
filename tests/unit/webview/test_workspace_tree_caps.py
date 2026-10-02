@@ -154,3 +154,18 @@ def test_route_is_served_once(client):
             if getattr(r, "path", None) == "/api/session/{session_id}/workspace/tree"]
     assert len(hits) == 1, hits
     assert hits[0].endpoint.__module__ == "webview.workspace_routes"
+
+
+def test_walk_tree_does_not_follow_symlinks(tmp_path):
+    """Audit WR7: a symlink out of the workspace lists no foreign names."""
+    from webview.workspace_routes import walk_tree
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("x")
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "mine.txt").write_text("y")
+    (ws / "escape").symlink_to(outside)
+    (ws / "link.txt").symlink_to(outside / "secret.txt")
+    body = walk_tree(ws)
+    assert [c["name"] for c in body["children"]] == ["mine.txt"]

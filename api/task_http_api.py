@@ -15,6 +15,7 @@ from datetime import datetime
 from api.session_routing import guard_remote
 from api.upload_sniff import _sniff_upload_mime
 from api.session_preflight import no_model as _no_model
+from api.upload_store import store_upload as _store_upload
 import asyncio
 
 
@@ -524,9 +525,13 @@ async def send_user_message(
                         pass
             except Exception as e:
                 # Unknown error - log with traceback
-                logger.error(f"Auto-resume unexpected error for {session_id}: {e}", exc_info=True)
+                # API16 (B43): the response names the class + a reference,
+                # never the exception text.
+                ref = uuid.uuid4().hex[:12]
+                logger.error(f"Auto-resume unexpected error for {session_id} (ref {ref}): {e}",
+                             exc_info=True)
                 resume_status = "error"
-                resume_error = f"Unexpected error: {str(e)}"
+                resume_error = f"Unexpected error ({type(e).__name__}); reference {ref}"
                 is_retryable = True
 
                 # Emit telemetry
@@ -1338,8 +1343,8 @@ async def create_session(
             # C4: client-supplied session_id belongs to another user.
             raise HTTPException(status_code=403, detail=str(owner_error))
         except Exception as create_error:
-            logger.error(f"Session creation failed: {create_error}", exc_info=True)
-            raise HTTPException(status_code=500, detail=f"Failed to create session: {str(create_error)}")
+            # API16 (B43): never echo the exception; name a reference.
+            raise _internal_error(create_error, "Session creation")
 
         if not session_info:
             raise HTTPException(status_code=500, detail="Failed to create session - no session info returned")
@@ -1722,23 +1727,13 @@ async def upload_document(
         file_path = workspace_dir / safe_filename
         logger.info(f"[Upload] Full file path: {file_path}")
 
-        # Handle duplicate filenames
-        if file_path.exists():
-            # Add timestamp suffix
-            from datetime import datetime
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            stem = file_path.stem
-            suffix = file_path.suffix
-            safe_filename = f"{stem}_{timestamp}{suffix}"
-            file_path = workspace_dir / safe_filename
-
-        # 9. Write file to workspace
-        # Using synchronous I/O (FastAPI handles blocking ops via thread pool)
-        # Previous async implementation was hanging indefinitely
+        # 9. Write file to workspace — exclusive create, never through a
+        # symlink, off the event loop (API18). A taken name (a real file, a
+        # race, or a dangling symlink) moves to a timestamped name.
         logger.info(f"[Upload] Step 9: Writing {len(file_content)} bytes to {file_path}")
         try:
-            with open(file_path, 'wb') as f:
-                f.write(file_content)
+            file_path = await _store_upload(workspace_dir, safe_filename, file_content)
+            safe_filename = file_path.name
             logger.info(f"[Upload] File write completed successfully")
         except Exception as write_error:
             logger.error(f"[Upload] File write failed: {write_error}", exc_info=True)

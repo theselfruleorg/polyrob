@@ -1115,7 +1115,7 @@ def avatar_reply(data_dir: str, args: List[str]) -> Tuple[str, Optional[str]]:
     if st.is_set and st.set_at:
         lines.append(f"set {st.set_at}")
     if st.is_set and not st.is_raster:
-        lines.append("_an SVG: it arrives as a file, and X/Discord need a raster image_")
+        lines.append("_an SVG: it arrives as a file, and X/Telegram/Discord need a raster image_")
     return ("\n".join(lines), str(st.path) if st.is_set else None)
 
 
@@ -1143,7 +1143,9 @@ async def avatar_change(data_dir: str, args: List[str]) -> Tuple[str, Optional[s
         st = set_avatar(data_dir, instance_id, data, source=source)
     except AvatarError as e:
         return (f"The avatar was NOT changed: {e}", None)
-    return (f"*{instance_id}* — avatar {describe(st)}", str(st.path))
+    return (f"*{instance_id}* — avatar {describe(st)}\n"
+            f"_the X/Telegram account pictures keep the old image until "
+            f"`polyrob avatar push` on the server_", str(st.path))
 
 
 # --------------------------------------------------------------------------- #

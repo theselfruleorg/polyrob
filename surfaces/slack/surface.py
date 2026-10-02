@@ -26,6 +26,13 @@ def channel_id_from_session_key(session_key: str) -> str:
     return _p(session_key)
 
 
+def thread_ts_from_session_key(session_key: str):
+    """OS7: the ``thread_ts`` of a ``...:thread:<ts>`` key (the segment
+    ``build_session_key`` appends), or None for a key without a thread."""
+    _, sep, tail = (session_key or "").rpartition(":thread:")
+    return tail or None if sep else None
+
+
 class SlackSurface(Surface):
     def __init__(self, client: Any) -> None:
         super().__init__()
@@ -50,10 +57,12 @@ class SlackSurface(Surface):
         if await self._finalize_live_on_send(msg):
             return SendResult(success=True)
         channel = channel_id_from_session_key(msg.session_key)
+        thread_ts = thread_ts_from_session_key(msg.session_key)
         last_ts = None
         try:
             for chunk in split_message(msg.text or "", _SLACK_MAX):
-                sent = await self._client.send_message(channel, chunk)
+                sent = await self._client.send_message(channel, chunk,
+                                                       thread_ts=thread_ts)
                 last_ts = (sent or {}).get("ts")
             if msg.media:
                 await self._send_media(channel, msg.media)

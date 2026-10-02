@@ -34,7 +34,8 @@ def test_missing_package_is_a_refusal_with_a_remedy(monkeypatch):
             raise ImportError(name)
         return real(name, *a, **k)
     monkeypatch.setattr(builtins, "__import__", fake)
-    res = _run(AgentNftTool().agent_nft_snapshot(SnapshotParams()))
+    from tools.agent_nft.tool import MintParams
+    res = _run(AgentNftTool().agent_nft_collection_mint(MintParams(max_spend_usd=1.0)))
     assert "polyrob_drop" in _err(res)
     assert "polyrob[drop]" not in _err(res)  # no such extra until the dist publishes
     assert "theselfruleorg" not in _err(res)
@@ -48,6 +49,11 @@ def test_the_package_is_found_under_its_new_name_or_the_legacy_one(monkeypatch):
         for name in AGENT_NFT_PACKAGE_MODULES:
             monkeypatch.delitem(sys.modules, name, raising=False)
             monkeypatch.delitem(sys.modules, name + ".verbs", raising=False)
+        # Hide the OTHER name: a real package on the path must not win (None = ImportError).
+        for name in AGENT_NFT_PACKAGE_MODULES:
+            if name != present:
+                monkeypatch.setitem(sys.modules, name, None)
+                monkeypatch.setitem(sys.modules, name + ".verbs", None)
         verbs = types.ModuleType(present + ".verbs")
         pkg = types.ModuleType(present)
         pkg.verbs = verbs
@@ -59,23 +65,28 @@ def test_the_package_is_found_under_its_new_name_or_the_legacy_one(monkeypatch):
 
 
 def test_params_reach_the_package_verb(monkeypatch):
+    """mint is a package verb (C20 keeps it there)."""
+    from tools.agent_nft.tool import MintParams
     monkeypatch.setenv("AGENT_NFT_ENABLED", "true")
     seen = {}
 
-    async def journal(tool, params, ctx):
+    async def mint(tool, params, ctx):
         seen["params"] = params
         return tool._ar(content="ok")
-    tool = AgentNftTool(impl=types.SimpleNamespace(journal=journal))
-    res = _run(tool.agent_nft_journal(JournalParams(kind="note", text="hi")))
+    tool = AgentNftTool(impl=types.SimpleNamespace(mint=mint))
+    res = _run(tool.agent_nft_collection_mint(MintParams(max_spend_usd=1.0)))
     assert seen["params"].dry_run is True and not _err(res)
 
 
 def test_a_verb_exception_is_an_error_result(monkeypatch):
     monkeypatch.setenv("AGENT_NFT_ENABLED", "true")
 
-    async def snapshot(tool, params, ctx):
+    from tools.agent_nft.tool import MintParams
+
+    async def mint(tool, params, ctx):
         raise RuntimeError("rpc down")
-    res = _run(AgentNftTool(impl=types.SimpleNamespace(snapshot=snapshot)).agent_nft_snapshot(SnapshotParams()))
+    res = _run(AgentNftTool(impl=types.SimpleNamespace(mint=mint)).agent_nft_collection_mint(
+        MintParams(max_spend_usd=1.0)))
     assert "rpc down" in _err(res)
 
 
@@ -102,3 +113,32 @@ def test_descriptions_claim_only_what_ships():
     assert "8217" not in src
     assert "Revoke EVERY" not in src and "safe to sell" not in src
     assert "NOT revoked" in src
+
+
+def test_c10_snapshot_journal_and_bind_name_the_nft(monkeypatch):
+    """C10: two NFTs on one chain must be nameable on every per-NFT verb."""
+    import pytest
+    from pydantic import ValidationError
+
+    from tools.agent_nft.tool import BindParams
+    monkeypatch.setenv("AGENT_NFT_ENABLED", "true")
+    acct = "0x" + "ab" * 20
+    for model, base in ((SnapshotParams, {}), (JournalParams, {"kind": "note", "text": "hi"}),
+                        (BindParams, {})):
+        p = model(**base)
+        assert (p.chain, p.nft, p.account) == ("robinhood", None, None)
+        p = model(chain="robinhood-testnet", nft="0x" + "c0" * 20 + "#7", account=acct, **base)
+        assert (p.chain, p.nft, p.account) == ("robinhood-testnet", "0x" + "c0" * 20 + "#7", acct)
+        with pytest.raises(ValidationError):
+            model(account="not-an-address", **base)
+        with pytest.raises(ValidationError):
+            model(chain="base", **base)
+    seen = {}
+
+    async def snapshot(tool, params, ctx):
+        seen["params"] = params
+        return tool._ar(content="ok")
+    from tools.agent_nft import core_verbs
+    monkeypatch.setattr(core_verbs, "snapshot", snapshot)
+    _run(AgentNftTool().agent_nft_snapshot(SnapshotParams(nft="7")))
+    assert seen["params"].nft == "7"

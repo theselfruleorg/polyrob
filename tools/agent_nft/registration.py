@@ -22,7 +22,8 @@ def register_agent_nft_tool(force: bool = False) -> bool:
                          "token-bound account the owner controls. Verbs: agent_nft_snapshot / "
                          "agent_nft_inspect / agent_nft_journal / agent_nft_bind_identity / "
                          "agent_nft_revoke_all / agent_nft_collection_mint / "
-                         "agent_nft_withdraw_token / agent_nft_collection_reveal."),
+                         "agent_nft_withdraw_token / agent_nft_collection_reveal / "
+                         "agent_nft_adopt."),
             category=ToolCategory.INTEGRATION,
             required_config=[],
             init_priority=47,

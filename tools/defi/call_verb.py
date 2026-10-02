@@ -295,11 +295,19 @@ async def perform_call(tool, params, execution_context=None):
             usd=decision.amount_usd, tx_ref=tx_hash, lane=decision.lane,
             cap_used_usd=_used, cap_limit_usd=_limit), settled=False)
 
-        receipt = await asyncio.to_thread(rail.await_receipt, tx_hash)
-        gate.record(venue="defi", action="call",
+        _rec = dict(venue="defi", action="call",
                     amount_usd=decision.amount_usd or 0.0,
                     counterparty=to_addr, idempotency_key=idem,
                     result_ref=tx_hash, chain=params.chain)
+        # CLI1: a cancel during the wait records the broadcast first (one seam).
+        from tools.defi.receipt_wait import await_receipt_or_record
+        receipt = await await_receipt_or_record(
+            rail, tx_hash, gate=gate, record_kw=_rec, tool=tool,
+            execution_context=execution_context,
+            notice_kw=dict(verb="call", route=f"{params.chain}:{to_addr}",
+                           chain=params.chain, amount_in=data[:10],
+                           usd=decision.amount_usd))
+        gate.record(**_rec)
         tool._notify_tx(execution_context, tx_notify.TxNotice(
             verb="call", route=f"{params.chain}:{to_addr}", chain=params.chain,
             amount_in=data[:10],

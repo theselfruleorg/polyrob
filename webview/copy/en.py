@@ -157,6 +157,7 @@ STRINGS = {
         "That is not one of my commands. Press enter and I read it as a message."
     ),
     "palette.empty": "Nothing here matches that.",
+    "palette.unreadable": "The console could not read the command list. Close this and open it again.",
     "palette.plainwords": (
         "You never have to use one. Ask in plain words and I use my own tools. "
         "A command is the short way, not the only way."
@@ -217,6 +218,7 @@ STRINGS = {
     "money.move.note": ("The quote shows the value and the caps. Confirm sends exactly that "
                         "quote, at most the quote + 5%, once."),
     "money.move.unreadable": "Some choices could not be read; type the value instead.",
+    "money.move.pickers_failed": "The console could not read the networks and tokens. Reload the page to try again.",
     "money.tab.cash": "Cash",
     "money.tab.invoices": "Invoices",
     "money.tab.limits": "Limits",
@@ -240,7 +242,8 @@ STRINGS = {
     "money.book.col_amount": "Amount",
     "money.book.col_worth": "Worth now",
     "money.book.col_since": "Since entry",
-    "money.book.entry_at": "bought at {price}",
+    # FE3: `entry` is the TOTAL cost basis, not a unit price.
+    "money.book.entry_at": "cost {price}",
     "money.book.no_positions":
         "Rob has not written down a position on any chain it can read.",
     "money.book.total_label": "Positions, at today's prices",
@@ -577,9 +580,11 @@ STRINGS = {
     "agent.id_persona_title": "How Rob should behave",
     "agent.id_persona_aside": "written by you",
     "agent.id_persona_empty": "You have not written a persona yet.",
+    "agent.id_persona_unreadable": "I could not read the persona, so it is not shown.",
     "agent.id_learned_title": "What Rob has learned about itself",
     "agent.id_learned_aside": "written by Rob, approved by you",
     "agent.id_learned_empty": "Rob has not written anything about itself yet.",
+    "agent.id_learned_unreadable": "I could not read what Rob has learned, so you cannot edit it here.",
     "agent.id_edit": "Edit",
     "agent.id_edit_hint": (
         "This is a proposal. It waits in review, and it never takes effect until "
@@ -992,6 +997,7 @@ STRINGS = {
     "inbox.cards.aside": "A quote to confirm, or a question to answer. One tap, once.",
     "inbox.cards.unreadable": "The card store could not be read, so open cards are not shown.",
     "inbox.cards.bad_tap": "That is not a button on a card.",
+    "inbox.refused": "The console refused that and gave no reason, so nothing was decided. Reload the page and try again.",
     "inbox.unreachable": (
         "That did not reach me, so nothing was decided. Try again, or decide it "
         "on Telegram."

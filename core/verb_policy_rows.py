@@ -301,6 +301,12 @@ CORE_VERB_ROWS = {
             effect="money", lane="owner_always", side="spend", approval_owner="hook",
             correspondent_blocked=True,
         ),
+        # C3: adopting writes the pfp, inherited positions and a handover entry (a fee-only
+        # account call); the owner's act by design, like take.
+        "agent_nft_adopt": dict(
+            effect="money", lane="owner_always", side="spend", approval_owner="hook",
+            correspondent_blocked=True,
+        ),
         "agent_nft_bind_identity": dict(
             effect="money", lane="defi", side="spend", simulatable=True, approval_owner="hook",
             correspondent_blocked=True,

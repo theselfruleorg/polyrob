@@ -12,12 +12,28 @@ from datetime import datetime, timedelta
 import logging
 import os
 import re
+from typing import Optional
 from api.auth_constants import is_admin_role, is_admin_wallet
 from core.token_denylist import OWNER_COOKIE_TTL_SECONDS
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["authentication"])
+
+
+def _refuse_api_key_identity(request: Request) -> None:
+    """API1: key management needs a wallet session, never an API key.
+
+    An API key resolves to its owner's real user_id, so `get_user_strict`
+    passed it: a leaked key could mint fresh never-expiring keys and revoke
+    the owner's others — revoking the leaked key then ended nothing.
+    """
+    if getattr(request.state, "auth_method", None) == "api_key":
+        raise HTTPException(
+            status_code=403,
+            detail=("An API key cannot create or revoke API keys. "
+                    "Sign in with your wallet at /signin to manage keys."),
+        )
 
 _ADDR_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 
@@ -317,7 +333,7 @@ async def get_current_user(request: Request):
 class CreateAPIKeyRequest(BaseModel):
     """Request to create a new API key."""
     name: str = "Default"
-    expires_days: int = None  # None = never expires
+    expires_days: Optional[int] = None  # None = never expires
 
 
 class APIKeyResponse(BaseModel):
@@ -325,7 +341,9 @@ class APIKeyResponse(BaseModel):
     api_key: str
     name: str
     prefix: str
-    expires_at: str = None
+    # None = never expires. `str = None` refused the manager's explicit None,
+    # so a no-expiry key was written and the caller got a 403 instead of it.
+    expires_at: Optional[str] = None
     created_at: str
     warning: str
 
@@ -379,6 +397,7 @@ async def create_api_key(request: Request, key_request: CreateAPIKeyRequest):
     # `authenticated_api_user` placeholders.
     from api.dependencies import get_user_strict
     user_id = await get_user_strict(request)
+    _refuse_api_key_identity(request)
 
     from api.dependencies import optional_container
     container = optional_container()
@@ -446,6 +465,7 @@ async def revoke_api_key(request: Request, key_prefix: str):
     # B45 (revalidation): same strict gate as create/list — see above.
     from api.dependencies import get_user_strict, optional_container
     user_id = await get_user_strict(request)
+    _refuse_api_key_identity(request)
 
     container = optional_container()
     api_key_manager = container.get_service('api_key_manager') if container else None
@@ -459,6 +479,10 @@ async def revoke_api_key(request: Request, key_prefix: str):
         )
 
     success = await api_key_manager.revoke_key(user_id, key_prefix)
+    if success:
+        # API2: drop every cached validation so the key stops working now.
+        from api.api_key_auth import note_key_revoked
+        note_key_revoked()
 
     if not success:
         raise HTTPException(status_code=404, detail="API key not found")

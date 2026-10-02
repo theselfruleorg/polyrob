@@ -15,9 +15,11 @@ A pairing row proves nothing about a sender whose address anyone can write.
 from core.surfaces.access import FORGEABLE_NETWORK_SURFACES
 
 
-def test_the_dispatcher_imports_the_one_definition():
-    from core.surfaces import dispatcher
-    assert dispatcher._FORGEABLE_NETWORK_SURFACES is FORGEABLE_NETWORK_SURFACES
+def test_the_dispatcher_reads_the_one_definition_live():
+    """AC6: no import-time copy — the dispatcher asks `is_forgeable_surface`."""
+    from core.surfaces import access, dispatcher
+    assert not hasattr(dispatcher, "_FORGEABLE_NETWORK_SURFACES")
+    assert dispatcher.is_forgeable_surface is access.is_forgeable_surface
 
 
 def test_email_is_forgeable():

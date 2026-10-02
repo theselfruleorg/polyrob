@@ -270,6 +270,18 @@ def _split_utf16_safe(text: str, limit: int, splitter) -> List[str]:
     return out
 
 
+def split_for_flavor(text: str, flavor: str, limit: int) -> List[str]:
+    """The SOURCE chunks ``render_for_flavor`` renders — one per rendered chunk,
+    cut by the SAME splitter. A surface's plain-text fallback for chunk *i* must
+    be source chunk *i*; a different splitter (``split_text``) cut elsewhere and
+    the fallback duplicated or dropped text (OB19)."""
+    body = text or ""
+    limit = max(1, int(limit))
+    if flavor == "html":
+        return [c.strip("\n") for c in _split_utf16_safe(body, limit, split_markdown)]
+    return split_text(body, limit)
+
+
 def render_for_flavor(text: str, flavor: str, limit: int) -> List[str]:
     body = text or ""
     limit = max(1, int(limit))
@@ -278,8 +290,7 @@ def render_for_flavor(text: str, flavor: str, limit: int) -> List[str]:
         # neither a tag nor a markdown construct can straddle two messages.
         # Conversion only shrinks visible text (markers become markup, and
         # Telegram's cap is measured after entity parsing), so chunks still fit.
-        return [markdown_to_html(c.strip("\n"))
-                for c in _split_utf16_safe(body, limit, split_markdown)]
+        return [markdown_to_html(c) for c in split_for_flavor(body, flavor, limit)]
     if flavor == "markdown_v2":
         body = _escape_markdown_v2(body)
     return split_text(body, limit)

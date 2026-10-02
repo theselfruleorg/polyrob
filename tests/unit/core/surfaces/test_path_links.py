@@ -120,3 +120,37 @@ def test_a_nonexistent_file_inside_the_workspace_is_reported_honestly(ws):
     r = _resolve(f"See {ws/'ghost.md'}", ws, media_ok=True)
     assert r.attachments == []
     assert "server-only" in r.text
+
+
+# --- OB16 / OB17 (2026-10-03 audit) -----------------------------------------
+
+def test_a_secret_file_is_not_linked_either(ws, monkeypatch):
+    """OB16: a linked (not attached) file skipped the secret screen, so a .env
+    or a report with an inlined key became a console URL."""
+    monkeypatch.setenv("WEBVIEW_PUBLIC_URL", "https://console.example.com")
+    (ws / ".env").write_text("OPENAI_API_KEY=sk-abc\n")
+    (ws / "notes.md").write_text("key: sk-proj-" + "A" * 40 + "\n")
+    r = _resolve(f"See {ws/'.env'} and {ws/'notes.md'}", ws)
+    assert "console.example.com" not in r.text
+    assert all(how.startswith("server-only") for _, how in r.resolved)
+
+
+def test_a_file_swapped_after_validation_is_dropped(ws, tmp_path):
+    """OB17: confinement is checked at enqueue and the file opened at drain."""
+    from core.surfaces.attachments import (drop_swapped, media_entries_from_paths,
+                                           stamp_identity)
+    target = ws / "report.md"
+    entries = stamp_identity(media_entries_from_paths([str(target)]))
+    st = os.stat(target)
+    assert entries[0]["ident"] == [st.st_dev, st.st_ino]
+    kept, dropped = drop_swapped(entries)
+    assert kept == entries and dropped == []
+    secret = tmp_path / "outside.txt"
+    secret.write_text("not yours")
+    target.unlink()
+    target.symlink_to(secret)
+    kept, dropped = drop_swapped(entries)
+    assert kept == [] and dropped == [str(target)]
+    # an entry without an identity (legacy, or the email subject) passes
+    assert drop_swapped([{"subject": "s"}, {"path": "/x/y.md"}])[0] == [
+        {"subject": "s"}, {"path": "/x/y.md"}]

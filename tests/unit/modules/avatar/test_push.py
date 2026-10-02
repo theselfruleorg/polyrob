@@ -1,7 +1,7 @@
 """Surface push for the avatar (modules/avatar/push.py).
 
-Twitter/X is the only LIVE push (v1.1 update_profile_image); Telegram is
-assisted (BotFather-only, honestly stated). Live paths are mocked — no network.
+X, Discord and Telegram (bot + group photo) are live pushes. Live paths are
+mocked — no network.
 """
 import pytest
 
@@ -86,3 +86,61 @@ def test_an_svg_avatar_is_refused_before_any_push(tmp_path):
     with pytest.raises(push.NotRaster):
         push.push_discord(p, env={"DISCORD_BOT_TOKEN": "t"},
                           opener=lambda r: (_ for _ in ()).throw(AssertionError()))
+
+
+def _real_png(tmp_path, mode="RGBA"):
+    from PIL import Image
+    p = tmp_path / "pfp.png"
+    Image.new(mode, (8, 8), (10, 20, 30, 0) if mode == "RGBA" else (10, 20, 30)).save(p)
+    return p
+
+
+def test_to_jpeg_flattens_transparency(tmp_path):
+    data = push.to_jpeg(_real_png(tmp_path))
+    assert data[:3] == b"\xff\xd8\xff"
+
+
+class _Resp:
+    def __init__(self, body):
+        self._b = body
+
+    def read(self):
+        return self._b
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def test_push_telegram_raises_without_token(tmp_path):
+    with pytest.raises(push.TelegramCredsMissing):
+        push.push_telegram_bot(_real_png(tmp_path), env={})
+
+
+def test_push_telegram_bot_posts_a_static_jpeg(tmp_path):
+    seen = {}
+
+    def opener(req):
+        seen["url"], seen["body"] = req.full_url, req.data
+        return _Resp(b'{"ok": true, "result": true}')
+
+    push.push_telegram_bot(_real_png(tmp_path), env={"TELEGRAM_BOT_TOKEN": "T"}, opener=opener)
+    assert seen["url"] == "https://api.telegram.org/botT/setMyProfilePhoto"
+    assert b'"type": "static"' in seen["body"] and b"attach://avatar" in seen["body"]
+    assert b"image/jpeg" in seen["body"] and b"\xff\xd8\xff" in seen["body"]
+
+
+def test_push_telegram_chat_names_the_chat_and_surfaces_the_error(tmp_path):
+    seen = {}
+
+    def opener(req):
+        seen["url"], seen["body"] = req.full_url, req.data
+        return _Resp(b'{"ok": false, "description": "Bad Request: not enough rights"}')
+
+    with pytest.raises(RuntimeError, match="not enough rights"):
+        push.push_telegram_chat(_real_png(tmp_path, "RGB"), "-1001",
+                                env={"TELEGRAM_BOT_TOKEN": "T"}, opener=opener)
+    assert seen["url"].endswith("/setChatPhoto")
+    assert b'name="chat_id"\r\n\r\n-1001' in seen["body"]

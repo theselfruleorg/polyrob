@@ -183,15 +183,17 @@ def test_csrf_reject_rerender_recovers(own_ops_client):
     assert retry.status_code in (302, 303)
 
 
-# --- (c) multitenant logout unchanged --------------------------------------- #
+# --- (c) multitenant logout: a real redirect, no inline script (WS1) ------- #
 
 def test_multitenant_logout_still_works(multitenant_client):
-    resp = multitenant_client.get("/logout")
-    assert resp.status_code == 200
-    # Legacy behavior kept: an HTML page that clears localStorage (the
-    # wallet/SIWE JWT lives there in multitenant) and JS-redirects to /signin…
-    assert "localStorage.clear" in resp.text
-    assert "/signin" in resp.text
-    # …while the server still deletes the cookie.
+    resp = multitenant_client.get("/logout", follow_redirects=False)
+    # WS1: the old page was an inline <script> the console CSP blocks — a blank
+    # page with the JWT left in localStorage. Now a 303 to /signin, and
+    # Clear-Site-Data asks the browser to drop localStorage + cookies.
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/signin"
+    assert "<script" not in resp.text
+    clear = resp.headers.get("clear-site-data", "")
+    assert '"storage"' in clear and '"cookies"' in clear
     set_cookie = resp.headers.get("set-cookie", "")
     assert "auth_token=" in set_cookie and "Max-Age=0" in set_cookie

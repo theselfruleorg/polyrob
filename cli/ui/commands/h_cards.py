@@ -21,7 +21,8 @@ from core.surfaces import cards
 
 
 def _tenant(ctx) -> str:
-    return (getattr(ctx, "user_id", "") or "").strip() or "local"
+    from cli._admin_home import admin_owner_tenant
+    return admin_owner_tenant(getattr(ctx, "user_id", None))
 
 
 async def dispatch_token(registry: Any, line: str, ctx: Any) -> bool:

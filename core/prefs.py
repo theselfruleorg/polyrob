@@ -43,6 +43,20 @@ _LANGUAGE_RE = re.compile(r"^[A-Za-z][A-Za-z-]{0,31}$")
 #: Characters that would break a value rendered INLINE into a prompt block
 #: (the room name lands in an XML-ish attribute and in one prose sentence).
 _CTRL_CHARS = re.compile(r"[\r\n\t\x00-\x1f\x7f]+")
+_TIMEZONE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_+\-]*(?:/[A-Za-z0-9_+\-]+){0,2}$")
+
+
+def _valid_timezone(name: str) -> bool:
+    """True when *name* is an IANA zone ``zoneinfo`` can load (OB8). The shape
+    check first keeps a path-like value away from the tzdata file lookup."""
+    if len(name) > 64 or not _TIMEZONE_RE.fullmatch(name):
+        return False
+    try:
+        from zoneinfo import ZoneInfo
+        ZoneInfo(name)
+        return True
+    except Exception:
+        return False
 
 # APPROVAL_PROVIDER strictness ladder for the stricter_provider merge.
 # `auto_notify` (013 T4: allow + audit + owner notify — the act-and-report default
@@ -174,6 +188,10 @@ PREF_SCHEMA: dict[str, PrefSpec] = dict((
                       "(local time), e.g. '23-08'. Enforced on the user-delivery "
                       "rail: sends inside the window are held and released at "
                       "window-end (018 P0.3)"),
+    _spec("digest.timezone", "str", SENSITIVITY_SAFE, "override", "live",
+          default_display="server clock",
+          description="Your IANA timezone, e.g. 'Europe/Berlin': quiet hours "
+                      "are read in this zone. Empty = the server clock (OB8)"),
     _spec("delivery.rate_per_hour", "int", SENSITIVITY_SAFE, "min", "live",
           "USER_DELIVERY_RATE_PER_HOUR", min_value=1,
           description="Proactive messages/hour; the pref WINS unless the operator "
@@ -482,6 +500,10 @@ def _coerce(spec: PrefSpec, value: object) -> tuple[bool, object, str]:
         m = _QUIET_HOURS_RE.fullmatch(s)
         if not m or not (0 <= int(m.group(1)) <= 23 and 0 <= int(m.group(2)) <= 23):
             return False, None, f"{spec.key}: expected HH-HH (0-23), e.g. 23-08"
+    if spec.key == "digest.timezone" and s and not _valid_timezone(s):
+        return False, None, (f"digest.timezone: unknown timezone {s[:64]!r} — "
+                             "expected an IANA name, e.g. 'Europe/Berlin' "
+                             "(empty = the server clock)")
     if spec.key in ("style.language", "chat.language") and not _LANGUAGE_RE.fullmatch(s):
         return False, None, (f"{spec.key}: expected a language name/tag "
                              "(letters/hyphens, max 32 chars), e.g. 'en' or 'en-GB'")

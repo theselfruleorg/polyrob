@@ -52,9 +52,11 @@ SELF_CONTEXT_PER_DOC_MAX_CHARS = 8000
 SELF_CONTEXT_TOTAL_MAX_CHARS = 60000
 
 # The evolving SELF doc (agent-writable, per-(instance,user)). Capped tighter
-# (~2200c) so it stays consolidatable; over-cap is an
+# than SELF_CONTEXT_PER_DOC_MAX_CHARS so it stays consolidatable; over-cap is an
 # ERROR on write (forces consolidation), never a silent truncate.
-SELF_DOC_MAX_CHARS = 2200
+# ⚠️ 2026-10-02: was 2200; prod sat at 2149/2200 and refused the owner's
+# house-style rule ("we need to fix stupid small limits", /dev 18:50Z).
+SELF_DOC_MAX_CHARS = 6000
 
 # The bounded owner-facts doc (agent-maintained, per-(instance,user)) — durable
 # facts/preferences about the OWNER (a USER.md-equivalent). Terser than SELF so it
@@ -72,7 +74,9 @@ SELF_DOC_MAX_CHARS = 2200
 # highest-value content in the block. ⚠️ The cap is read on BOTH sides:
 # `load_owner_doc` replaces an over-cap doc with [BLOCKED…], so the whole
 # owner-facts block vanishes from the prompt rather than truncating.
-OWNER_DOC_MAX_CHARS = 4000
+# ⚠️ 2026-10-02: 4000 filled in under two weeks (prod 3928/4000) and refused the
+# owner's house-style rule — raised to the per-doc injection bound (8000).
+OWNER_DOC_MAX_CHARS = 8000
 
 # Operator-authored self-context docs, read in this order (identity first).
 _SELF_CONTEXT_DOCS = ("identity.md", "operating.md")

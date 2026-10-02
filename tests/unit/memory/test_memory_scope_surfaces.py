@@ -40,7 +40,7 @@ def _seed(home) -> SqliteMemoryProvider:
 def test_console_memory_body_is_the_shared_view(home, monkeypatch):
     p = _seed(home)
     import webview.pages as pages
-    monkeypatch.setattr(pages, "_memory_provider", lambda: p)
+    monkeypatch.setattr(pages, "_memory_provider_status", lambda: (p, None))
     from webview.pages_new import _memory_search_body
     body = asyncio.run(_memory_search_body(USER, "pricing", 10))
     text = " ".join(body["recall"]) if isinstance(body["recall"], list) else str(body["recall"])

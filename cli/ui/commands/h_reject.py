@@ -51,7 +51,8 @@ def h_reject(ctx) -> None:
         return
 
     data_dir = _admin_data_dir(write=None)
-    instance_id = _ci.resolve_instance_id()
+    from cli._admin_home import admin_instance
+    instance_id = admin_instance()
     args = list(ctx.args or [])
 
     def _union():

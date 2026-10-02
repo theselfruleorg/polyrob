@@ -34,7 +34,8 @@ async def h_workers(ctx) -> None:
 
     args = list(ctx.args or [])
     sub = args[0].lower() if args else ""
-    uid = ctx.user_id or "local"
+    from cli._admin_home import admin_owner_tenant
+    uid = admin_owner_tenant(ctx.user_id)
     try:
         if sub in ("", "list"):
             body = W.render_list(_store(write=False), uid)

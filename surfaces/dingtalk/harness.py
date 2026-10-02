@@ -13,7 +13,7 @@ from typing import Any
 
 from core.surfaces.idempotency import IdempotencyStore
 from surfaces._shared import BaseHarness, register_surface_and_sink
-from surfaces.dingtalk.client import Conversation, DingTalkClient
+from surfaces.dingtalk.client import Conversation, ConversationCache, DingTalkClient
 from surfaces.dingtalk.events import (is_group, parse_message, sender_id,
                                       webhook_expiry_s)
 from surfaces.dingtalk.stream import DingTalkStream
@@ -66,9 +66,12 @@ class DingTalkHarness(BaseHarness):
 
 def build_dingtalk_harness(container: Any, task_agent: Any, *, client_id: str,
                            client_secret: str, data_dir: str = "data") -> DingTalkHarness:
-    client = DingTalkClient(client_id, client_secret)
+    db = os.path.join(data_dir, "dingtalk_dedup.db")
+    # OS11: the conversation cache persists (its own table in the same file).
+    client = DingTalkClient(client_id, client_secret,
+                            conversations=ConversationCache(db_path=db))
     stream = DingTalkStream(client_id, client_secret)
-    dedup = IdempotencyStore(os.path.join(data_dir, "dingtalk_dedup.db"))
+    dedup = IdempotencyStore(db)
     register_surface_and_sink(container, DingTalkSurface(client), sink_name="dingtalk_sink",
                               send=client.send_text, sink_label="DingTalkSink")
     return DingTalkHarness(container, task_agent, client, stream, dedup)

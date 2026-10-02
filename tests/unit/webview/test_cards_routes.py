@@ -191,3 +191,21 @@ def test_pickers_name_what_they_could_not_read(client, monkeypatch):
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x")))
     body = client.get("/api/webgate/cards/pickers").json()
     assert "tokens" in body["unreadable"] and isinstance(body["chains"], list)
+
+
+def test_pickers_carry_trust_views_own_unreadable(client, monkeypatch):
+    """Audit WR4: a trust source trust_view names unreadable makes the token
+    list partial — the picker must say so, not offer the short list as whole."""
+    monkeypatch.setattr("core.wallet.token_trust.trust_view",
+                        lambda *a, **k: {"trusted": [], "unreadable": ["the owner token pins"]})
+    body = client.get("/api/webgate/cards/pickers").json()
+    assert "tokens" in body["unreadable"]
+
+
+def test_the_cards_get_never_sweeps(client, monkeypatch):
+    """Audit WR11: GET /cards is a read — no sweep_stuck (it writes + notifies)."""
+    def _boom(self, *a, **k):
+        raise AssertionError("GET /api/webgate/cards must not sweep")
+    monkeypatch.setattr(cards.CardStore, "sweep_stuck", _boom)
+    body = client.get("/api/webgate/cards").json()
+    assert body["readable"] is True

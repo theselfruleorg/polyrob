@@ -29,7 +29,7 @@ async def api_apps(request: Request):
         return JSONResponse({"enabled": app_service_enabled(), "apps": rows})
     except Exception as exc:  # a failed read is NOT "no apps" — name it
         return JSONResponse({"enabled": app_service_enabled(), "apps": [],
-                             "error": f"{type(exc).__name__}: {exc}"[:200]})
+                             "error": pages._safe_reason(exc)})
 
 
 async def _decide(request: Request, slug: str, verb: str):

@@ -9,7 +9,7 @@ def test_schema_has_expected_core_keys():
         "approvals.require", "approvals.provider", "approvals.deny",
         "budget.wallet_daily_usd", "budget.wallet_per_tx_usd",
         "goals.daily_quota", "goals.max_concurrent", "goals.notify_on_done",
-        "digest.enabled", "digest.channel", "digest.quiet_hours",
+        "digest.enabled", "digest.channel", "digest.quiet_hours", "digest.timezone",
         "delivery.rate_per_hour", "delivery.daily_cap",
         "style.verbosity", "style.language", "style.tone",
         "session.toolset", "session.persona",

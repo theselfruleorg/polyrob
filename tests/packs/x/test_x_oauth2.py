@@ -76,6 +76,26 @@ def test_resolve_refreshes_within_skew_and_rotates_refresh_token(store):
     assert rec["expires_at"] > time.time() + 7000
 
 
+def test_building_a_client_never_spends_the_refresh_token(store):
+    """2026-10-02: every process that BUILT a TwitterTool (a deploy import gate,
+    a CLI run) spent the rotating refresh token. refresh=False reads only."""
+    xo.import_pair("acc-old", "ref-old", expires_in=60, store=store)  # due
+    transport, calls = _token_transport([])
+    assert xo.resolve_access_token(store=store, transport=transport, refresh=False) == "acc-old"
+    assert calls == []
+    assert store.load()["refresh_token"] == "ref-old"
+
+
+def test_refresh_log_names_the_process(store, caplog):
+    xo.import_pair("acc-old", "ref-old", expires_in=60, store=store)
+    transport, _ = _token_transport([(200, {"access_token": "n", "refresh_token": "r2",
+                                            "expires_in": 7200})])
+    with caplog.at_level("INFO", logger="polyrob_x.x_oauth2"):
+        xo.resolve_access_token(store=store, transport=transport)
+    assert any("token refreshed by " in r.getMessage() and "uid=" in r.getMessage()
+               for r in caplog.records)
+
+
 def test_confidential_app_sends_basic_auth(store, monkeypatch):
     monkeypatch.setenv("TWITTER_OAUTH2_CLIENT_SECRET", "shh")
     xo.import_pair("a", "r", expires_in=10, store=store)
@@ -159,7 +179,7 @@ async def test_xdm_client_refreshes_and_retries_on_401(monkeypatch):
     # rotates the token; a plain resolve returns whatever is current.
     state = {"cur": "tok-old"}
 
-    def _resolve(force_refresh=False):
+    def _resolve(force_refresh=False, refresh=True):
         if force_refresh:
             state["cur"] = "tok-new"
         return state["cur"]
@@ -211,7 +231,7 @@ def test_twitter_tool_picks_up_a_token_imported_after_start(monkeypatch):
     t.chat_key_version = None
     t.chat_passphrase = None
     monkeypatch.setattr(TwitterTool, "_resolve_oauth2_token",
-                        staticmethod(lambda force_refresh=False: "late-token"))
+                        staticmethod(lambda force_refresh=False, refresh=True: "late-token"))
     monkeypatch.setattr("tweepy.Client", lambda **kw: MagicMock(bt=kw["bearer_token"]))
     t._ensure_oauth2_fresh()
     assert t.oauth2_access_token == "late-token"

@@ -279,7 +279,7 @@ _SPEND_VERBS = (
     "defi_trade_unwrap",
     "dapp_browser_dapp_connect",
     # 050/069: the agent_nft writes, all SPEND-side (mint/take additionally never exemptible).
-    "agent_nft_collection_mint", "agent_nft_withdraw_token", "agent_nft_bind_identity", "agent_nft_journal", "agent_nft_revoke_all", "agent_nft_collection_reveal",
+    "agent_nft_collection_mint", "agent_nft_withdraw_token", "agent_nft_adopt", "agent_nft_bind_identity", "agent_nft_journal", "agent_nft_revoke_all", "agent_nft_collection_reveal",
 )
 
 

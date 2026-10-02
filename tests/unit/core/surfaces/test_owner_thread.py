@@ -80,6 +80,36 @@ def test_identical_line_within_window_is_one_row(container):
     assert len(ot.thread_tail(container, "u1")) == 2
 
 
+def test_two_identical_owner_lines_with_their_own_mids_are_two_rows(container):
+    """AC8: the owner typed "yes" twice inside 120 s — two messages, two mids.
+    The body-window dedup dropped the second; a mid is the message identity."""
+    now = time.time()
+    ot.record_owner_in(container, "u1", "yes", via="telegram", session_id="a",
+                       mid="101", now=now)
+    ot.record_owner_in(container, "u1", "yes", via="telegram", session_id="a",
+                       mid="102", now=now + 5)
+    assert len(ot.thread_tail(container, "u1")) == 2
+
+
+def test_a_retry_of_the_same_mid_is_one_row_even_after_the_window(container):
+    now = time.time()
+    ot.record_owner_in(container, "u1", "yes", via="telegram", session_id="a",
+                       mid="101", now=now)
+    ot.record_owner_in(container, "u1", "yes", via="telegram", session_id="a",
+                       mid="101", now=now + 600)
+    assert len(ot.thread_tail(container, "u1")) == 1
+
+
+def test_a_mid_less_rail_still_dedups_against_the_mid_row(container):
+    """Two rails see one reply; only one knows the message id."""
+    now = time.time()
+    ot.record_owner_out(container, "u1", "Done.", via="telegram", session_id="a",
+                        source="agent_send", mid="900", now=now)
+    ot.record_owner_out(container, "u1", "Done.", via="telegram", session_id="a",
+                        source="reply", now=now + 3)
+    assert len(ot.thread_tail(container, "u1")) == 1
+
+
 def test_delta_excludes_own_session_and_respects_watermark(container):
     t0 = time.time() - 100
     ot.record_owner_out(container, "u1", "old line", via="telegram", session_id="other", source="cron", now=t0)

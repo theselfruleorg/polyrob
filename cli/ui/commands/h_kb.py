@@ -12,11 +12,12 @@ a ``cli.ui.commands.registry.CommandContext`` (``ctx.emit``, ``ctx.args``,
 ``ctx.user_id``). Fail-open like every other handler: a missing backend / raising
 router degrades to a friendly one-liner, never a crash out of ``dispatch``.
 
-Usage
+Usage (the ONE grammar, ``core.kb_grammar`` — Telegram parses it too)
 -----
     /kb                         list all KB sources
     /kb list [collection]       list sources (optionally one collection)
     /kb search <query>          search the KB (collection ``default``)
+    /kb <words>                 search (the bare form)
 
 All imports are function-local so unit tests can monkeypatch the routers /
 gate / bootstrap on their home modules.
@@ -48,27 +49,17 @@ async def h_kb(ctx) -> None:
         ctx.emit(f"Knowledge base is unavailable. ({exc})", title="kb")
         return
 
-    args = list(ctx.args or [])
+    from core.kb_grammar import KB_USAGE, SEARCH, USAGE, parse_kb_args
+
     user_id = ctx.user_id or "local"
-    sub = args[0].lower() if args else "list"
-
-    if sub == "search":
-        query = " ".join(args[1:]).strip()
-        if not query:
-            ctx.emit("Usage: /kb search <query>", title="kb")
-            return
-        await _do_search(ctx, query=query, user_id=user_id)
+    cmd = parse_kb_args(list(ctx.args or []))
+    if cmd.action == USAGE:
+        ctx.emit(KB_USAGE, title="kb")
         return
-
-    # Default + `list`: optional single collection filter.
-    #   /kb                  → collection=None (all)
-    #   /kb list <coll>      → collection=<coll>
-    #   /kb <coll>           → collection=<coll> (bare collection shorthand)
-    if sub == "list":
-        collection = args[1] if len(args) > 1 else None
-    else:
-        collection = args[0]
-    await _do_list(ctx, collection=collection, user_id=user_id)
+    if cmd.action == SEARCH:
+        await _do_search(ctx, query=cmd.query, user_id=user_id)
+        return
+    await _do_list(ctx, collection=cmd.collection, user_id=user_id)
 
 
 async def _ensure_backend(ctx) -> None:

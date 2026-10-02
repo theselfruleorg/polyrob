@@ -5,25 +5,13 @@ import logging
 import os
 
 from core.surfaces.idempotency import IdempotencyStore
+from surfaces._shared import register_surface_and_sink
 from surfaces.whatsapp.client import WhatsAppClient
-from surfaces.whatsapp.inbound import WhatsAppInbound
+from surfaces.whatsapp.inbound import DEDUP_WINDOW_S, WhatsAppInbound
 from surfaces.whatsapp.surface import WhatsAppSurface
 from surfaces.whatsapp.window import WindowTracker
 
 logger = logging.getLogger(__name__)
-
-
-class WhatsAppSink:
-    """cron/delivery sink: send a raw text to a wa phone (best-effort)."""
-    def __init__(self, client): self._client = client
-
-    async def send_message(self, chat_id, text) -> bool:
-        try:
-            await self._client.send_text(str(chat_id), text)
-            return True
-        except Exception:
-            logger.warning("WhatsAppSink.send_message failed for %s", chat_id, exc_info=True)
-            return False
 
 
 class WhatsAppHarness:
@@ -39,7 +27,8 @@ def build_whatsapp_harness(container, task_agent, *, data_dir: str = "data"):
     window = WindowTracker(os.path.join(data_dir, "wa_window.db"))
     user_directory = container.get_service("user_directory")
     inbound = WhatsAppInbound(
-        IdempotencyStore(os.path.join(data_dir, "wa_dedup.db")),
+        IdempotencyStore(os.path.join(data_dir, "wa_dedup.db"),
+                         window_seconds=DEDUP_WINDOW_S),
         user_directory=user_directory, window=window,
         media_fetch=client.download_media,
         responder=client.send_text,   # voice-guard / DENIED / transcript echo actually reach the user
@@ -48,16 +37,13 @@ def build_whatsapp_harness(container, task_agent, *, data_dir: str = "data"):
     surface = WhatsAppSurface(client)
     surface.attach_window(window)
 
-    # 030 WS-B2: register_surface enforces the contract, joins the surface
-    # registry (so surface_profile() reaches the prompt) AND subscribes.
-    from core.surfaces.registry import register_surface
-    register_surface(container, surface)
+    # 030 WS-B2 / OS12: the ONE seam — register_surface (contract, surface
+    # registry, router) plus the shared TextSink for cron/delivery.
+    register_surface_and_sink(container, surface, sink_name="whatsapp_sink",
+                              send=client.send_text, sink_label="WhatsAppSink")
 
     registry = container.get_service("webhook_surfaces") or {}
     registry["whatsapp"] = inbound
     container.register_service("webhook_surfaces", registry)
-
-    if container.get_service("whatsapp_sink") is None:
-        container.register_service("whatsapp_sink", WhatsAppSink(client))
 
     return WhatsAppHarness(surface, inbound)

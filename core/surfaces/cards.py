@@ -75,6 +75,11 @@ S_REPLACED = "replaced"     # a refresh (or a proposal's quote) superseded it
 QUOTE_TTL_S = 15 * 60
 #: A confirmed card with no result after this long is closed as not confirmed.
 STUCK_AFTER_S = 30 * 60
+#: AC5: a decided card (and its message refs) is kept this long, then pruned.
+#: Long enough for ``recent_recipients`` and a late result (``finish``).
+DECIDED_RETENTION_S = 90 * 24 * 3600
+#: How often (at most) one process prunes its store.
+_PRUNE_EVERY_S = 3600
 PROPOSAL_TTL_S = 24 * 3600
 CHOICE_TTL_S = 24 * 3600
 
@@ -157,6 +162,10 @@ class Card:
     #: A builder's fields so far and the hidden value of each option shown
     #: (``draft["_values"]``); the button carries only the option's number.
     draft: dict = field(default_factory=dict)
+    #: CA1: the words the OWNER typed (a quote card), apart from the bound the
+    #: seat added to the confirm line. A refresh re-runs THESE, so a new quote
+    #: computes a new bound instead of inheriting the stale one.
+    typed: List[str] = field(default_factory=list)
     created_at: float = 0.0
     expires_at: float = 0.0
     updated_at: float = 0.0
@@ -169,6 +178,14 @@ class Card:
     @property
     def confirm_line(self) -> str:
         return f"{self.line} go"
+
+    @property
+    def refresh_line(self) -> str:
+        """The line a Refresh (or a proposal's quote) runs: the typed words
+        only — never a bound the seat added to the confirm line (CA1)."""
+        if self.typed:
+            return " ".join([self.verb] + list(self.typed)).strip()
+        return self.line
 
     def expired(self, now: Optional[float] = None) -> bool:
         return self.state == S_OPEN and (now or time.time()) >= self.expires_at
@@ -284,7 +301,7 @@ CREATE TABLE IF NOT EXISTS card_refs (
 """
 
 _DOC_KEYS = ("title", "body", "verb", "args", "options", "answer", "result", "session_id",
-             "draft")
+             "draft", "typed")
 
 
 class CardStore:
@@ -312,6 +329,7 @@ class CardStore:
                     options=list(doc.get("options") or []),
                     answer=doc.get("answer"), result=doc.get("result", ""),
                     session_id=doc.get("session_id"), draft=dict(doc.get("draft") or {}),
+                    typed=list(doc.get("typed") or []),
                     created_at=r["created_at"], expires_at=r["expires_at"],
                     updated_at=r["updated_at"])
 
@@ -330,6 +348,7 @@ class CardStore:
             conn.commit()
         finally:
             conn.close()
+        self.maybe_prune()
         return card
 
     def get(self, card_id: str) -> Optional[Card]:
@@ -398,6 +417,39 @@ class CardStore:
             if c is not None:
                 out.append(c)
         return out
+
+    def prune(self, *, now: Optional[float] = None,
+              retention_s: float = DECIDED_RETENTION_S) -> int:
+        """AC5: delete decided cards (and expired open ones) older than the
+        retention, and every message ref whose card is gone. A ``confirmed``
+        card is never pruned here — ``sweep_stuck`` closes it first. Returns
+        the number of cards removed."""
+        cutoff = (now if now is not None else time.time()) - retention_s
+        conn = self._conn()
+        try:
+            cur = conn.execute(
+                "DELETE FROM cards WHERE (state NOT IN (?, ?) AND updated_at < ?) "
+                "OR (state = ? AND expires_at < ?)",
+                (S_OPEN, S_CONFIRMED, cutoff, S_OPEN, cutoff))
+            removed = cur.rowcount or 0
+            conn.execute("DELETE FROM card_refs WHERE card_id NOT IN "
+                         "(SELECT card_id FROM cards)")
+            conn.commit()
+            return removed
+        finally:
+            conn.close()
+
+    def maybe_prune(self) -> None:
+        """Prune at most once per :data:`_PRUNE_EVERY_S` per process. Fail-open:
+        a prune fault costs disk, never the caller's card."""
+        now = time.time()
+        if now - getattr(self, "_last_prune", 0.0) < _PRUNE_EVERY_S:
+            return
+        self._last_prune = now
+        try:
+            self.prune(now=now)
+        except Exception:
+            logger.warning("card store prune failed (rows kept)", exc_info=True)
 
     def add_ref(self, card_id: str, surface: str, chat_id: Any, message_id: Any) -> None:
         if message_id is None or chat_id is None:
@@ -511,13 +563,14 @@ def _valid_args(args: List[str]) -> bool:
 def _new(user_id: str, kind: str, origin: str, title: str, *, body: str = "",
          verb: str = "", args: Optional[List[str]] = None,
          options: Optional[List[str]] = None, session_id: Optional[str] = None,
+         typed: Optional[List[str]] = None,
          ttl: float, st: Optional[CardStore] = None) -> Card:
     now = time.time()
     card = Card(card_id=new_card_id(), user_id=str(user_id), kind=kind, origin=origin,
                 title=_short(title, MAX_TITLE_CHARS), body=(body or "")[:MAX_BODY_CHARS],
                 verb=verb, args=list(args or []), options=list(options or []),
-                session_id=session_id, created_at=now, expires_at=now + ttl,
-                updated_at=now)
+                session_id=session_id, typed=list(typed or []), created_at=now,
+                expires_at=now + ttl, updated_at=now)
     return (st or store()).insert(card)
 
 
@@ -586,9 +639,10 @@ def quote_card(user_id: str, verb: str, typed_args: List[str], reply: str, *,
     if args is None:
         return reply, None
     try:
+        n_typed = len([a for a in (typed_args or []) if a])
         card = _new(user_id, KIND_QUOTE, ORIGIN_SYSTEM,
                     title or f"{verb} — quote", body=_strip_go_hint(reply, verb),
-                    verb=verb, args=args, ttl=QUOTE_TTL_S, st=st)
+                    verb=verb, args=args, typed=args[:n_typed], ttl=QUOTE_TTL_S, st=st)
     except Exception:
         logger.warning("quote card could not be stored — plain quote shown", exc_info=True)
         return reply, None
@@ -728,7 +782,7 @@ def press(card_id: str, act: str, user_id: str, *,
         done = st.transition(card_id, frozenset({S_OPEN}), S_EXPIRED)
         if done:
             _notify(done)
-        hint = (f" Refresh: {card.line}" if card.kind == KIND_QUOTE else "")
+        hint = (f" Refresh: {card.refresh_line}" if card.kind == KIND_QUOTE else "")
         return Press(reply=f"⌛ That card expired. Nothing was done.{hint}", card=done)
     if act == "no":
         done = st.transition(card_id, frozenset({S_OPEN}), S_CANCELLED)
@@ -748,7 +802,7 @@ def press(card_id: str, act: str, user_id: str, *,
         if not done:
             return Press(reply="That card was decided a moment ago.", card=st.get(card_id))
         _notify(done)
-        return Press(run=done.line, card=done)
+        return Press(run=done.refresh_line, card=done)
     if card.kind == KIND_BUILDER and act.isdigit():
         i = int(act)
         if not (1 <= i <= len(card.options)):
@@ -789,9 +843,19 @@ def finish(card_id: str, result_text: str, *, st: Optional[CardStore] = None) ->
     """Record what a confirmed card's run produced (the in-place edit)."""
     st = st or store()
     text = (result_text or "").strip() or _NO_RESULT
-    done = st.transition(card_id, frozenset({S_CONFIRMED}),
-                         S_FAILED if failed_result(text) else S_DONE,
+    new_state = S_FAILED if failed_result(text) else S_DONE
+    done = st.transition(card_id, frozenset({S_CONFIRMED}), new_state,
                          result=_short_block(text, 1500))
+    if done is None and text != _NO_RESULT:
+        # AC2: ``sweep_stuck`` closes a card that reported nothing for 30 min
+        # as "no result" — but a `/bridge … go` that waited on the owner's
+        # /approve can still finish later. Its REAL result replaces the
+        # placeholder (CAS on the swept row, so only that row is touched).
+        cur = st.get(card_id)
+        if cur is not None and cur.state == S_FAILED and cur.result == _NO_RESULT:
+            done = st.transition(card_id, frozenset({S_FAILED}), new_state,
+                                 expect_updated_at=cur.updated_at,
+                                 result=_short_block(text, 1500))
     if done:
         _notify(done)
     return done

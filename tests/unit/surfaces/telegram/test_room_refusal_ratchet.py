@@ -75,3 +75,11 @@ def test_the_new_money_verbs_are_refused_in_a_room(verb):
 def test_contacts_is_refused_in_a_room():
     """A transcript with a third party is private correspondence."""
     assert "/contacts" in _ROOM_REFUSED_COMMANDS
+
+
+def test_avatar_writes_are_refused_in_a_room():
+    """TG7: `/avatar` is a room-reachable READ; its writes are not."""
+    from surfaces.telegram.harness import _room_refused_line
+    assert not _room_refused_line("/avatar", "/avatar")
+    assert _room_refused_line("/avatar", "/avatar set https://x.test/a.png")
+    assert _room_refused_line("/avatar", "/avatar CLEAR")

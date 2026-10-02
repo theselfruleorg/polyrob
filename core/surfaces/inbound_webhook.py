@@ -257,8 +257,12 @@ class WebhookSurface(ABC):
                     if hasattr(self, "hydrate_media"):
                         try:
                             await self.hydrate_media(inbound.media)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            # OB21: a media item that never hydrated reaches the
+                            # agent as an empty attachment — say so in the journal.
+                            logger.warning("inbound webhook: media hydration failed "
+                                           "for %s: %s", type(self).__name__, e,
+                                           exc_info=True)
                     # Fix 2a: transcribe voice-only turns; guard untranscribed voice (never route empty)
                     if voice_present(inbound.media) and not (inbound.text or "").strip():
                         try:

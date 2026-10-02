@@ -629,7 +629,8 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
                                priority: Optional[str] = None,
                                event_log: Any = ...,
                                ask_id: Optional[str] = None,
-                               card_id: Optional[str] = None) -> str:
+                               card_id: Optional[str] = None,
+                               _hold_id: Optional[str] = None) -> str:
     """Deliver *text* to *user_id*'s principal through the one rail.
 
     Returns an outcome string: ``sent`` | ``deduped`` | ``rate_limited`` |
@@ -694,6 +695,16 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
     # priority="critical" skipped the cap for itself and then spent a slot
     # anyway, which is the very bug C1 exists to remove.
     lane = resolve_priority(source, priority)
+    # OB11: WHO receives this is part of "the same message". A room delivery
+    # (a cron job's `deliver_target`) used to block the identical text to the
+    # owner for 24 h, because dedup keyed on the content hash alone.
+    _thread_ok = _override_is_owner(container, uid, recipient_override, recipient_surface)
+    _to = _recipient_key(recipient_override, recipient_surface, _thread_ok)
+    _rx = {"to": _to}
+    if _hold_id:
+        # OB10: the release attempt names the hold it answers, so the sweep can
+        # tell a finished hold from one still owed.
+        _rx["released_hold"] = _hold_id
 
     # 031 owner pause: a lifecycle ping / escalation is held, durably recorded as
     # an owner_notice (visible in /missed + the digest), never silently dropped.
@@ -713,7 +724,7 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
                               f"[held by owner pause; source={source}] {body}",
                               content_hash=h, now=now)
                 _record(event_log, uid, session_id, source, "paused", h, text=body,
-                        attachments=attachments, lane=lane)
+                        attachments=attachments, lane=lane, extra=_rx)
             return "paused"
 
     # --- the rail's memory (fail-open when the event log is unavailable) ----
@@ -725,12 +736,13 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
             _window = now - _dedup_hours() * 3600
             if _count(event_log, user_id=uid, since_ts=_window,
                       attrs_in={"content_hash": (h,),
-                                "outcome": _DELIVERED_OUTCOMES}):
+                                "outcome": _DELIVERED_OUTCOMES,
+                                "to": (_to,)}):
                 # The owner HAS this text, so no notice — but the attempt row
                 # carries the body (C2): 383 of 383 deduped rows in prod held a
                 # NULL text, which made "what did it try to tell me" unanswerable.
                 _record(event_log, uid, session_id, source, "deduped", h, text=body,
-                        attachments=attachments, lane=lane)
+                        attachments=attachments, lane=lane, extra=_rx)
                 return "deduped"
             _home_dir = _home_dir_for_container(container)
             # 018 P0.3 — quiet hours: DEFER, never drop (owner decision
@@ -741,18 +753,33 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
             # window-end; quiet_held is NOT a consumed outcome, so dedup
             # ignores it and the release re-entry passes.
             from core.surfaces.quiet_hours import quiet_window_active
-            if quiet_window_active(uid, _home_dir):
+            if not _hold_id and quiet_window_active(uid, _home_dir):
+                # OB4: the hold carries EVERY delivery argument and the full
+                # body, so the release replays the same delivery — before, it
+                # kept text[:4000] and sent it to the owner's default surface,
+                # so a room's cron report landed in the owner DM without its
+                # attachments or card buttons.
+                import uuid as _uuid
                 try:
                     event_log.record(DELIVERY_EVENT_KIND, user_id=uid,
                                      session_id=str(session_id or ""),
                                      source=source,
                                      attrs={"outcome": "quiet_held",
                                             "content_hash": h, "lane": lane,
-                                            "held_text": body[:4000]})
+                                            "to": _to,
+                                            "hold_id": _uuid.uuid4().hex,
+                                            "held_text": body,
+                                            "held_args": _held_args(
+                                                recipient_override, recipient_surface,
+                                                attachments, priority, ask_id, card_id)})
                 except Exception:
-                    logger.debug("user_delivery: quiet hold record failed",
-                                 exc_info=True)
-                return "quiet_held"
+                    # OB9: no durable hold = the message would be lost, so it
+                    # goes out now instead (the rail's fail-open posture).
+                    logger.warning("user_delivery: quiet hold record failed — "
+                                   "sending now rather than losing the message",
+                                   exc_info=True)
+                else:
+                    return "quiet_held"
             # C1/D20: only traffic the cap can DENY is counted against it.
             _budget = dict(_budget_count_filters())
             _budget["attrs_in"] = {"outcome": _CONSUMED_OUTCOMES}
@@ -775,7 +802,7 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
                         f"source={source}; bucket=lifecycle] {body}",
                         content_hash=h, now=now)
                     _record(event_log, uid, session_id, source, "capped", h,
-                            text=body, attachments=attachments, lane=lane)
+                            text=body, attachments=attachments, lane=lane, extra=_rx)
                     return "capped"
             if lane not in _UNBUDGETED_LANES and day >= allowance:
                 # 019 #2: a capped message must not be silently lost — unlike
@@ -790,7 +817,7 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
                     f"[suppressed by daily proactive-message cap; "
                     f"source={source}] {body}", content_hash=h, now=now)
                 _record(event_log, uid, session_id, source, "capped", h,
-                        text=body, attachments=attachments, lane=lane)
+                        text=body, attachments=attachments, lane=lane, extra=_rx)
                 return "capped"
             hour = _count(event_log, user_id=uid, since_ts=now - 3600, **_budget) or 0
             if lane not in _UNBUDGETED_LANES and \
@@ -804,7 +831,7 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
                     f"[suppressed by hourly rate limit; source={source}] {body}",
                     content_hash=h, now=now)
                 _record(event_log, uid, session_id, source, "rate_limited", h,
-                        text=body, attachments=attachments, lane=lane)
+                        text=body, attachments=attachments, lane=lane, extra=_rx)
                 return "rate_limited"
     except Exception:
         logger.debug("user_delivery: gate check failed (fail-open)", exc_info=True)
@@ -946,12 +973,11 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
     # 061 alignment: a `recipient_override` can name a NON-owner (a cron job's
     # `deliver_target` — a room, a channel, another chat). Only a line the OWNER
     # received is a thread line; anything else is recorded on telemetry alone.
-    _thread_ok = _override_is_owner(container, uid, recipient_override, recipient_surface)
     if best == "sent":
         # C7: all 527 `sent` rows in prod held a NULL text, so no surface could
         # answer "what did you actually tell me" — only failures were legible.
         _record(event_log, uid, session_id, source, "sent", h, text=body,
-                attachments=send_attachments, lane=lane)
+                attachments=send_attachments, lane=lane, extra=_rx)
         if _thread_ok:
             _record_thread(container, uid, body, via=best_via, session_id=session_id,
                            source=source, mid=sent_mid, attachments=send_attachments,
@@ -978,7 +1004,7 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
         # reads as a broken one" class D45 set out to end; nothing else in the
         # tree keys on the literal.
         _record(event_log, uid, session_id, source, "fallback", h, text=body,
-                attachments=attachments, lane=lane, extra={"queued": True})
+                attachments=attachments, lane=lane, extra={**_rx, "queued": True})
         return "queued"
     # Durable fallback — the message is never silently lost. Marker-prefixed
     # (A7 / A40) like the cap/pause notices, so `/missed` can read it too —
@@ -991,8 +1017,28 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
     # _CONSUMED_OUTCOMES) because on a local owner it is every message.
     outcome = "no_sink" if best == "no_sink" else "fallback"
     _record(event_log, uid, session_id, source, outcome, h, text=body,
-            attachments=attachments, lane=lane)
+            attachments=attachments, lane=lane, extra=_rx)
     return outcome
+
+
+def _recipient_key(recipient_override: Optional[str], recipient_surface: Optional[str],
+                   is_owner: bool) -> str:
+    """The recipient half of the dedup key (OB11): ``owner`` for the owner under
+    any spelling, else ``<surface>:<canonical address>``."""
+    if is_owner or not recipient_override:
+        return "owner"
+    from core.surfaces.outbound_target import canonical_owner_addr
+    sid = str(recipient_surface or "telegram").strip().lower()
+    return f"{sid}:{canonical_owner_addr(sid, str(recipient_override))}"
+
+
+def _held_args(recipient_override, recipient_surface, attachments, priority,
+               ask_id, card_id) -> dict:
+    """The delivery arguments a quiet-hours hold replays on release (OB4)."""
+    return {"recipient_override": recipient_override,
+            "recipient_surface": recipient_surface,
+            "attachments": list(attachments or []),
+            "priority": priority, "ask_id": ask_id, "card_id": card_id}
 
 
 def _override_is_owner(container: Any, user_id: str, recipient_override: Optional[str],
@@ -1087,31 +1133,60 @@ def record_interactive_reply(orchestrator: Any, text: str) -> None:
                      exc_info=True)
 
 
+#: Release outcomes that END a quiet-hours hold (OB10). ``deduped`` = the owner
+#: already has it; ``no_sink`` = the durable notice IS the channel. Before,
+#: only consumed outcomes ended a hold, so those two re-sent every tick for 48 h.
+#: ``capped``/``rate_limited``/``paused`` stay owed and retry on a later sweep.
+_HOLD_TERMINAL_OUTCOMES = ("sent", "fallback", "deduped", "no_sink")
+
+#: How far back the release sweep looks for a hold.
+_HOLD_LOOKBACK_SEC = 48 * 3600
+
+
 async def release_quiet_held(container: Any, *, event_log: Any = ...,
                              now: Optional[float] = None) -> int:
     """Deliver messages held by the quiet-hours gate whose tenant window has
     ended (018 P0.3). Driven by the autonomy-runtime ticker; also safe to call
     ad hoc. Idempotent by construction: a released message re-enters
-    ``deliver_user_message`` and records a CONSUMED outcome (sent/fallback)
-    under the same content hash, which both this sweep and the rail's dedup
-    skip on the next pass; a ``rate_limited``/``capped`` release attempt stays
-    unconsumed and is retried on a later sweep. Returns the delivered count.
-    Never raises."""
+    ``deliver_user_message`` carrying its hold id, and its attempt row records
+    that id (``released_hold``); a hold with a TERMINAL release row
+    (``_HOLD_TERMINAL_OUTCOMES``) is never offered again, while a
+    ``rate_limited``/``capped`` release stays owed and is retried on a later
+    sweep. The release replays the hold's FULL delivery arguments (OB4) —
+    recipient, surface, attachments, priority, ask/card ids. Returns the
+    delivered count. Never raises."""
     if event_log is ...:
         event_log = _default_event_log()
     if event_log is None:
         return 0
     from core.surfaces.quiet_hours import quiet_window_active
     ts_now = now if now is not None else time.time()
+    since = ts_now - _HOLD_LOOKBACK_SEC
+    # OB10 (D48 class): read the WHOLE window. A fixed `limit=1000` read only
+    # the newest rows, so on a busy tenant an older hold was never seen.
+    limit = 1000
+    counter = getattr(event_log, "count_where", None)
+    if callable(counter):
+        try:
+            total = counter(kind=DELIVERY_EVENT_KIND, since_ts=since)
+            if total:
+                limit = max(limit, int(total) + 10)
+        except Exception:
+            logger.warning("release_quiet_held: window count failed; reading "
+                           "the newest %d rows only", limit, exc_info=True)
     try:
-        recent = event_log.query(kind=DELIVERY_EVENT_KIND,
-                                 since_ts=ts_now - 48 * 3600, limit=1000)
+        recent = event_log.query(kind=DELIVERY_EVENT_KIND, since_ts=since, limit=limit)
     except Exception:
-        logger.debug("release_quiet_held: query failed", exc_info=True)
+        logger.warning("release_quiet_held: query failed", exc_info=True)
         return 0
+    done_holds = {(e.get("attrs") or {}).get("released_hold")
+                  for e in recent
+                  if (e.get("attrs") or {}).get("outcome") in _HOLD_TERMINAL_OUTCOMES}
+    done_holds.discard(None)
+    # A legacy hold (no hold_id) is matched the old way: same tenant + body.
     consumed = {(str(e.get("user_id") or ""), (e.get("attrs") or {}).get("content_hash"))
                 for e in recent
-                if (e.get("attrs") or {}).get("outcome") in _CONSUMED_OUTCOMES}
+                if (e.get("attrs") or {}).get("outcome") in _HOLD_TERMINAL_OUTCOMES}
     _home_dir = _home_dir_for_container(container)
     released = 0
     still_quiet: dict = {}
@@ -1120,8 +1195,11 @@ async def release_quiet_held(container: Any, *, event_log: Any = ...,
         if attrs.get("outcome") != "quiet_held":
             continue
         uid = str(e.get("user_id") or "")
+        hold_id = attrs.get("hold_id")
         key = (uid, attrs.get("content_hash"))
-        if key in consumed:
+        if hold_id and hold_id in done_holds:
+            continue
+        if not hold_id and key in consumed:
             continue
         body = attrs.get("held_text") or ""
         if not body:
@@ -1130,17 +1208,28 @@ async def release_quiet_held(container: Any, *, event_log: Any = ...,
             still_quiet[uid] = quiet_window_active(uid, _home_dir)
         if still_quiet[uid]:
             continue
+        args = attrs.get("held_args") if isinstance(attrs.get("held_args"), dict) else {}
         try:
             out = await deliver_user_message(
                 container, uid, body,
                 source=str(e.get("source") or "quiet_release"),
-                session_id=e.get("session_id") or None, event_log=event_log)
+                session_id=e.get("session_id") or None, event_log=event_log,
+                recipient_override=args.get("recipient_override"),
+                recipient_surface=args.get("recipient_surface"),
+                attachments=args.get("attachments") or None,
+                priority=args.get("priority"),
+                ask_id=args.get("ask_id"), card_id=args.get("card_id"),
+                _hold_id=hold_id or None)
         except Exception:
-            logger.debug("release_quiet_held: delivery failed", exc_info=True)
+            logger.warning("release_quiet_held: delivery failed", exc_info=True)
             continue
-        if out in _CONSUMED_OUTCOMES:
+        if out in _CONSUMED_OUTCOMES or out == "queued":
             released += 1
-            consumed.add(key)
+        if out in _HOLD_TERMINAL_OUTCOMES or out == "queued":
+            if hold_id:
+                done_holds.add(hold_id)
+            else:
+                consumed.add(key)
     return released
 
 

@@ -84,7 +84,15 @@ def status_lines(snap: Optional[dict] = None) -> List[str]:
         lines.append(f"• API login (OAuth 2.0) for DMs: unavailable ({st['unavailable']})")
     elif st.get("stored"):
         left = st.get("expires_in_sec", 0)
-        state = "EXPIRED" if st.get("expired") else f"valid for {_duration(left)}"
+        # The 2-hour access token renews itself from the refresh token; say so,
+        # or "valid for 1h 59m" reads as "log in again in 2 hours" (2026-10-03).
+        if st.get("expired"):
+            state = "access token expired, the next call renews it" \
+                if st.get("has_refresh_token") else "EXPIRED"
+        elif st.get("has_refresh_token"):
+            state = f"logged in, renews itself (access token: {_duration(left)} left)"
+        else:
+            state = f"valid for {_duration(left)}, then dead (no refresh token)"
         lines.append(f"• API login (OAuth 2.0) for DMs: {state} · refresh token "
                      f"{'yes' if st.get('has_refresh_token') else 'NO'} · scope "
                      f"[{st.get('scope') or '?'}]")

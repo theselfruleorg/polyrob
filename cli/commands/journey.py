@@ -12,7 +12,8 @@ import click
 
 
 @click.command("journey")
-@click.option("--since", default="7d", help="Trailing window, e.g. 24h | 7d | 30d (default 7d)")
+@click.option("--since", default="24h",
+              help="Trailing window, e.g. 24h | 7d | 30d (default 24h — the window Telegram and the REPL use)")
 @click.option("--user", "user", default=None, help="Tenant id (defaults to this instance's owner)")
 def journey(since: str, user: Optional[str]) -> None:
     """Timeline: what I did, learned, changed — and my income."""

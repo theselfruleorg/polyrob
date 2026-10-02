@@ -62,6 +62,10 @@ def _entries(folder: Path) -> list:
     for child in folder.iterdir():
         if child.name.startswith(".") or child.name in TREE_SKIP:
             continue
+        # Audit WR7: a symlink may point OUTSIDE the workspace; following it
+        # listed foreign names. The tree shows what the workspace holds.
+        if child.is_symlink():
+            continue
         try:
             stat = child.stat()
         except OSError:

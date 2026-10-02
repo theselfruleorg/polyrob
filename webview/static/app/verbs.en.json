@@ -160,7 +160,7 @@
     {
       "name": "/nft",
       "group": "money",
-      "help": "Collectibles I hold: look, send one, or revoke an approval",
+      "help": "Collectibles I hold: look, trust a collection, send one, or revoke an approval",
       "aliases": []
     },
     {

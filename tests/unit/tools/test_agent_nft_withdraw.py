@@ -114,7 +114,7 @@ def test_withdraw_is_a_treasury_transfer_declared_as_nft_out_and_needs_no_packag
     assert intent.is_nft_op and intent.nft_out == ((PINNED.lower(), "erc721", 3, 1),)
     assert intent.via_account is None and tx["to"].lower() == PINNED.lower()
     assert tx["data"] == abi.encode_call(
-        "transferFrom", [{"type": "address"}, {"type": "address"}, {"type": "uint256"}],
+        "safeTransferFrom", [{"type": "address"}, {"type": "address"}, {"type": "uint256"}],
         [armed.address, TO, 3])
     assert "journal: entry #0 (handover) signed" in res.extracted_content
     assert FakeRail.sent
@@ -188,3 +188,19 @@ def test_nft_send_on_the_owner_seat_runs_the_withdraw(armed, monkeypatch):
     assert got["params"].chain == "robinhood" and "Add `go`" in out
     _run(nft_ops.nft_reply("owner", ["send", "3", TO, "go"]))
     assert got["params"].dry_run is False
+
+
+def test_c17_revoke_all_revokes_erc6909_allowances_and_operators(armed, monkeypatch):
+    rows = [erc6551.OpenApproval("erc6909", PINNED, SPENDER, 7, 300, 5, True),
+            erc6551.OpenApproval("erc6909_operator", PINNED, SPENDER, None, None, 6, True)]
+    monkeypatch.setattr(erc6551, "open_approvals", lambda *a, **k: list(rows))
+    tool, seen = _tool(armed, Chain(armed.address))
+    tool._impl = lambda: None
+    res = _run(tool.agent_nft_revoke_all(RevokeAllParams(nft="3", dry_run=True)))
+    assert res.error is None, res.error
+    (i1, tx1, _), (i2, tx2, _) = seen
+    assert i1.is_nft_op and i1.erc6909_revokes == ((PINNED, SPENDER, 7),)
+    assert erc6551.decode_execute(tx1["data"])[2] == erc6551.encode_erc6909_revoke(SPENDER, 7)
+    assert i2.is_nft_op and i2.nft_operator_ops == ((PINNED, SPENDER, False),)
+    assert erc6551.decode_execute(tx2["data"])[2] == erc6551.encode_erc6909_operator_revoke(SPENDER)
+    assert "unknown kind" not in res.extracted_content

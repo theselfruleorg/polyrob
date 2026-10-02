@@ -44,12 +44,12 @@ def _owner_home(ctx) -> str:
 
 def _decide(ctx, target: str) -> str:
     """Decide ONE pending item by id, over the ONE union."""
-    import core.instance as _ci
     from tools.controller.approval_queue import all_pending, decide_pending
 
-    uid = (getattr(ctx, "user_id", "") or "").strip() or "local"
+    from cli._admin_home import admin_instance, admin_owner_tenant
+    uid = admin_owner_tenant(getattr(ctx, "user_id", None))
     home_dir = _owner_home(ctx)
-    instance_id = _ci.resolve_instance_id()
+    instance_id = admin_instance()
 
     pending_set = all_pending(user_id=uid, home_dir=home_dir,
                               instance_id=instance_id)
@@ -68,13 +68,13 @@ def _decide(ctx, target: str) -> str:
 
 
 def _decide_all(ctx) -> str:
-    import core.instance as _ci
     from tools.controller.approval_queue import decide_all_pending
 
-    uid = (getattr(ctx, "user_id", "") or "").strip() or "local"
+    from cli._admin_home import admin_instance, admin_owner_tenant
+    uid = admin_owner_tenant(getattr(ctx, "user_id", None))
     ok_n, fail_n, msgs = decide_all_pending(
         approve=True, user_id=uid, home_dir=_owner_home(ctx),
-        instance_id=_ci.resolve_instance_id())
+        instance_id=admin_instance())
     if not msgs:
         return candy.empty("pending items", "nothing is waiting on you", yet=False)
     return "\n".join(msgs + [f"{ok_n} approved, {fail_n} failed"])
@@ -82,12 +82,12 @@ def _decide_all(ctx) -> str:
 
 def _list_pending(ctx) -> str:
     """What is waiting, with the exact command that decides each one."""
-    import core.instance as _ci
     from tools.controller.approval_queue import all_pending
 
-    uid = (getattr(ctx, "user_id", "") or "").strip() or "local"
+    from cli._admin_home import admin_instance, admin_owner_tenant
+    uid = admin_owner_tenant(getattr(ctx, "user_id", None))
     pending_set = all_pending(user_id=uid, home_dir=_owner_home(ctx),
-                              instance_id=_ci.resolve_instance_id())
+                              instance_id=admin_instance())
     items = pending_set.items
     if not items:
         return (pending_set.degraded_line()

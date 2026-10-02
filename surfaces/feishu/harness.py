@@ -125,9 +125,12 @@ async def build_feishu_webhook(container: Any, task_agent: Any, *, app_id: str,
         logger.warning("feishu webhook: bot/v3/info failed (%s) — group messages "
                        "will be ignored until a restart", type(e).__name__)
     user_directory = container.get_service("user_directory") if container else None
+    from core.surfaces.idempotency import AcceptedEventJournal
     from surfaces.feishu.webhook import DEDUP_WINDOW_S
-    hook = FeishuWebhook(IdempotencyStore(os.path.join(data_dir, "feishu_dedup.db"),
-                                          window_seconds=DEDUP_WINDOW_S),
+    db = os.path.join(data_dir, "feishu_dedup.db")
+    hook = FeishuWebhook(IdempotencyStore(db, window_seconds=DEDUP_WINDOW_S),
+                         # OS6: persist-before-ack; its own table in the same file.
+                         journal=AcceptedEventJournal(db),
                          encrypt_key=encrypt_key, verification_token=verification_token,
                          bot_open_id=bot_open_id, user_directory=user_directory,
                          send=client.send_message, allow_unsigned=allow_unsigned)

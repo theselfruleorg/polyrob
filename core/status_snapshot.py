@@ -584,16 +584,31 @@ def _approvals_section(user_id: str, data_dir: str, goals_db: str) -> Section:
     if os.path.exists(corr_db):
         from core.surfaces.correspondents import CorrespondentRegistry
         from core.surfaces.owner_admin import pending_correspondent_items
-        for it in pending_correspondent_items(CorrespondentRegistry(corr_db), user_id):
-            items.append({"kind": it.get("kind"), "id": it.get("id"),
-                          "preview": (it.get("preview") or "")[:80]})
+        try:
+            for it in pending_correspondent_items(CorrespondentRegistry(corr_db),
+                                                  user_id):
+                items.append({"kind": it.get("kind"), "id": it.get("id"),
+                              "preview": (it.get("preview") or "")[:80]})
+        except Exception as e:
+            # AC1: an unreadable correspondent store is named, never read as
+            # "no pending contacts"; the other approvals still show.
+            sec.health.append(HealthItem(
+                key="pending_contacts_unreadable", severity=SEVERITY_WARN,
+                text=(f"pending contacts unreadable ({type(e).__name__}) — "
+                      f"a contact may be waiting on you"),
+                remedy="/pending"))
     sec.data["items"] = items
     # O18: the owner's open asks (owner_ask / goal asks) are decisions too; they
     # are answered on /asks, not /pending, so they are counted beside the
     # approvals rather than folded into ``items``. Same rows, no second read.
     asks_open = sum(1 for r in open_asks if not has_own_surface(_payload(r)))
     sec.data["open_asks"] = asks_open
-    line = f"{len(items)} pending approval(s)" if items else "no pending approvals"
+    if items:
+        line = f"{len(items)} pending approval(s)"
+    elif any(h.key == "pending_contacts_unreadable" for h in sec.health):
+        line = "no other pending approvals; pending contacts unreadable"
+    else:
+        line = "no pending approvals"
     if asks_open:
         line += f"; {asks_open} open ask(s) — /asks"
     sec.lines.append(line)

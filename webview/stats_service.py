@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Per-call cost estimation for the console's live feed.
 
 ⚠️ 043 A30: this module used to be 612 lines of per-session feed aggregation
@@ -15,6 +13,8 @@ calculator; these two functions are the thin, lazily-imported wrappers the
 console calls (a module-level import of ``modules.credits`` pulls in
 ``core.bot`` and closes an import cycle).
 """
+from __future__ import annotations
+
 
 import logging
 

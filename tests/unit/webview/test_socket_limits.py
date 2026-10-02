@@ -8,10 +8,14 @@ from webview import server, socket_limits as sl
 
 
 def test_one_count_per_sid():
-    assert sl.first_join("sid-a") is True
-    assert sl.first_join("sid-a") is False
+    calls = []
+    check = lambda: calls.append(1) or True  # noqa: E731
+    assert sl.join_allowed("sid-a", check) is True
+    assert sl.join_allowed("sid-a", check) is True
+    assert len(calls) == 1
     sl.forget("sid-a")
-    assert sl.first_join("sid-a") is True
+    assert sl.join_allowed("sid-a", check) is True
+    assert len(calls) == 2
     sl.forget("sid-a")
 
 
@@ -74,3 +78,34 @@ def test_rate_limited_does_not_disconnect(fake_sio):
     finally:
         for sid in sids:
             sl.forget(sid)
+
+
+def test_a_refused_socket_is_not_marked_counted():
+    """WS2: a sid refused by the limit must not be marked — its next join is
+    checked again, never free."""
+    calls = []
+
+    def refuse():
+        calls.append(1)
+        return False
+
+    try:
+        assert sl.join_allowed("ws2-sid", refuse) is False
+        assert sl.join_allowed("ws2-sid", refuse) is False
+        assert len(calls) == 2
+        assert sl.join_allowed("ws2-sid", lambda: True) is True
+        assert sl.join_allowed("ws2-sid", refuse) is True  # counted once, now free
+        assert len(calls) == 2
+    finally:
+        sl.forget("ws2-sid")
+
+
+def test_refused_sid_rejoin_is_still_limited(fake_sio, monkeypatch):
+    sent, _dropped = fake_sio
+    monkeypatch.setattr(server, "check_rate_limit", lambda key: False)
+    try:
+        asyncio.run(server.join_session("ws2-loop", {"session_id": "x"}))
+        asyncio.run(server.join_session("ws2-loop", {"session_id": "x"}))
+        assert [b["code"] for _r, _e, b in sent] == ["rate_limited", "rate_limited"]
+    finally:
+        sl.forget("ws2-loop")

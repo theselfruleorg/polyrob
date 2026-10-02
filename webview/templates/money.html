@@ -56,8 +56,9 @@
            quoted line once — drawn by money-move.js; the quote itself runs as
            the owner typing it, with every gate. #}
         <section class="section" id="money-move" aria-label="{{ t('money.move.title') }}"
-                 data-unreachable="{{ t('inbox.unreachable') }}"
+                 data-unreachable="{{ t('inbox.unreachable') }}" data-refused="{{ t('inbox.refused') }}"
                  data-unreadable="{{ t('money.move.unreadable') }}"
+                 data-pickers_failed="{{ t('money.move.pickers_failed') }}"
                  data-native="{{ t('money.move.native') }}">
           <div class="section-head">
             <h2 class="section-title">{{ t('money.move.title') }}</h2>

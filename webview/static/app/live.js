@@ -81,14 +81,26 @@ export function beat(state, fire = dispatch, refresh = refreshHead) {
   refresh();
 }
 
-/** Bind the activity socket's events to *state* and `document`. Exported for tests. */
+/** Bind the activity socket's events to *state* and `document`. Exported for tests.
+ *
+ * FE5: `connected` turns true only when the server ACKS a `join_activity` it
+ * did not refuse (a refusal arrives before the ack on the same socket). A
+ * refused join leaves the socket up but the room unjoined: `connected` stays
+ * false, so the fallback tick keeps Work › Now and the Log fresh.
+ * FE18: the head's live notice clears on that ack, never when a retried join
+ * is merely sent. */
 export function wireSocket(socket, state, fire = dispatch, later = setTimeout) {
-  socket.on('connect', () => {
-    state.connected = true;
-    // 070 W0.17: a good (re)connect clears the head's live notice.
-    fire('polyrob:live-ok');
-    socket.emit('join_activity', {});
-  });
+  let refusals = 0;
+  const join = () => {
+    const before = refusals;
+    socket.emit('join_activity', {}, () => {
+      if (refusals !== before) return;
+      state.connected = true;
+      // 070 W0.17: a good (re)join clears the head's live notice.
+      fire('polyrob:live-ok');
+    });
+  };
+  socket.on('connect', join);
   socket.on('disconnect', () => { state.connected = false; });
   socket.on('connect_error', () => { state.connected = false; });
   socket.on('activity_event', (ev) => fire('polyrob:activity', ev));
@@ -97,16 +109,40 @@ export function wireSocket(socket, state, fire = dispatch, later = setTimeout) {
   // the cross-tenant stream simply saw a console that never updated again —
   // indistinguishable from a quiet agent. pause.js renders the sentence.
   socket.on('error', (body) => {
+    refusals += 1;
+    state.connected = false;
     fire('polyrob:live-refused', body);
     // 070 W0.17: the server keeps the socket on a rate limit; join again once
-    // the window has passed, and the next good join clears the notice.
+    // the window has passed, and the next ACKED join clears the notice.
     if (body && body.code === 'rate_limited') {
       const wait = Number(body.retry_after) > 0 ? Number(body.retry_after) : 60;
-      later(() => {
-        socket.emit('join_activity', {});
-        fire('polyrob:live-ok');
-      }, wait * 1000);
+      later(join, wait * 1000);
     }
+  });
+}
+
+/**
+ * FE4: re-read a small state (the Pause button, the Apps list) whenever the
+ * console may have missed a change: the fallback tick (socket down), a
+ * debounced activity event (socket up), a good re-join, and the tab becoming
+ * visible again. The tick alone fires only while the socket is DOWN, so a
+ * healthy socket left those reads stale for the page's life. Exported for tests.
+ */
+export function onLiveChange(refresh, opts = {}) {
+  const doc = opts.doc || document;
+  const later = opts.later || setTimeout;
+  const ms = opts.ms === undefined ? HEAD_DEBOUNCE_MS : opts.ms;
+  let pending = false;
+  const soon = () => {
+    if (pending) return;
+    pending = true;
+    later(() => { pending = false; refresh(); }, ms);
+  };
+  doc.addEventListener('polyrob:tick', () => refresh());
+  doc.addEventListener('polyrob:activity', soon);
+  doc.addEventListener('polyrob:live-ok', soon);
+  doc.addEventListener('visibilitychange', () => {
+    if (doc.visibilityState === 'visible') soon();
   });
 }
 

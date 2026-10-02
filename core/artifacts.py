@@ -132,6 +132,11 @@ def hash_file(path: str) -> tuple[str, int]:
     return h.hexdigest(), n
 
 
+#: See ``ArtifactLedger.verdict``: an mtime this close to the last hash is not
+#: trusted to prove the file unchanged.
+_MTIME_MARGIN_S = 2.0
+
+
 class ArtifactLedger:
     """WAL-backed store of one row per produced file, scoped by tenant."""
 
@@ -275,19 +280,43 @@ class ArtifactLedger:
         art = self.get(artifact_id, user_id)
         if art is None:
             return VERIFY_UNKNOWN
+        return self.verdict(art)
+
+    def verdict(self, art: Artifact, *, record: bool = True) -> str:
+        """The verdict for an already-read row (no second lookup).
+
+        Cheap first: a size that differs is ``changed`` without hashing, and a
+        file whose mtime is OLDER than the last time its hash was confirmed
+        (``verified_at``, else ``created_at``) is ``ok`` without hashing. Only
+        a file touched since is re-hashed. ``record=False`` is the read-only
+        caller (the console's GET): it never writes ``verified_at``.
+        """
         try:
-            if not os.path.isfile(art.path):
-                return VERIFY_MISSING
+            st = os.stat(art.path)
+        except OSError:
+            return VERIFY_MISSING
+        import stat as _stat
+        if not _stat.S_ISREG(st.st_mode):
+            return VERIFY_MISSING
+        if int(st.st_size) != int(art.bytes or 0):
+            return VERIFY_CHANGED
+        # The margin covers a filesystem mtime clock that runs a little behind
+        # time.time(): a write right after the hash must still be re-hashed.
+        confirmed_at = max(float(art.verified_at or 0.0), float(art.created_at or 0.0))
+        if confirmed_at and st.st_mtime < confirmed_at - _MTIME_MARGIN_S:
+            return VERIFY_OK
+        try:
             sha, _size = hash_file(art.path)
         except OSError:
             return VERIFY_MISSING
         if sha != art.sha256:
             return VERIFY_CHANGED
-        execute_retry(
-            self.db_path,
-            "UPDATE artifacts SET verified_at=? WHERE id=? AND user_id=?",
-            (time.time(), artifact_id, user_id),
-        )
+        if record:
+            execute_retry(
+                self.db_path,
+                "UPDATE artifacts SET verified_at=? WHERE id=? AND user_id=?",
+                (time.time(), art.id, art.user_id),
+            )
         return VERIFY_OK
 
 

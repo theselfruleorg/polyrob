@@ -159,3 +159,26 @@ def test_registry_fault_fails_closed_to_denied_not_owner(workdir):
     env = {"POLYROB_OWNER_USER_ID": "u_owner"}
     ident = _identity("u_stranger", raw="john@acme.com")
     assert resolve_access_tier(c, ident, thread_id="t1", env=env) == AccessTier.DENIED
+
+
+def test_a_pack_surface_registered_after_import_is_forgeable(workdir, monkeypatch):
+    """AC6: FORGEABLE_NETWORK_SURFACES was frozen at import, so a pack surface
+    with ``forgeable=true`` loaded later still honoured a PAIRING row keyed on
+    its forgeable sender address. The resolver must read the catalog live."""
+    import core.surfaces.access as access
+    import core.surfaces.catalog as catalog
+    real = catalog.forgeable_ids
+    monkeypatch.setattr(catalog, "forgeable_ids",
+                        lambda: frozenset(real()) | {"packmail"})
+    assert "packmail" not in access.FORGEABLE_NETWORK_SURFACES  # the frozen copy
+    assert access.is_forgeable_surface("packmail")
+    seen = {}
+
+    def spy(container, uid, env, *, allow_local, allow_pairing=True):
+        seen["allow_pairing"] = allow_pairing
+        return False
+
+    monkeypatch.setattr(access, "_is_owner_or_paired", spy)
+    resolve_access_tier(_Container(workdir), _identity("u_x", surface="packmail"),
+                        env={})
+    assert seen["allow_pairing"] is False

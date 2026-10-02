@@ -40,12 +40,38 @@ class WhatsAppClient:
                                  "template": {"name": name, "language": {"code": lang},
                                               "components": components}})
 
-    async def download_media(self, media_id: str) -> bytes:
+    async def download_media(self, media_id: str, *, max_bytes: int = None):
+        """The bytes of one inbound media item, or None when over the cap (OS15).
+
+        The cap is ``INBOUND_MEDIA_MAX_MB`` (the one inbound-media limit). It
+        is enforced on the declared ``file_size`` AND while reading, so a lying
+        size cannot make the process buffer a huge body.
+        """
         import httpx
+        if max_bytes is None:
+            from core.surfaces.inbound_attachments import inbound_media_max_mb
+            max_bytes = int(inbound_media_max_mb() * 1024 * 1024)
         headers = {"Authorization": f"Bearer {self._token}"}
         async with httpx.AsyncClient(timeout=30) as c:
             meta = (await c.get(f"{_BASE}/{media_id}", headers=headers)).json()
             url = meta.get("url")
             if not url:
                 return b""
-            return (await c.get(url, headers=headers)).content
+            try:
+                declared = int(meta.get("file_size") or 0)
+            except (TypeError, ValueError):
+                declared = 0
+            if declared > max_bytes:
+                logger.warning("whatsapp media %s: %s bytes over the %s-byte cap",
+                               media_id, declared, max_bytes)
+                return None
+            chunks, size = [], 0
+            async with c.stream("GET", url, headers=headers) as resp:
+                async for chunk in resp.aiter_bytes():
+                    size += len(chunk)
+                    if size > max_bytes:
+                        logger.warning("whatsapp media %s: body passed the %s-byte cap",
+                                       media_id, max_bytes)
+                        return None
+                    chunks.append(chunk)
+            return b"".join(chunks)

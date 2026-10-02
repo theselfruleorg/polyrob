@@ -358,27 +358,39 @@ async def _perform(tool, p, ctx, verb):
             tx_ref=tx_hash, lane=decision.lane), settled=False)
         # Once submitted, ALWAYS book the cap, even if polling or receipt parsing
         # fails. Never describe a receipt failure as "nothing sent".
-        asset, positions, detail, state = None, [], '', tx_notify.STATE_IN_FLIGHT
-        try:
-            receipt = await asyncio.to_thread(rail.await_receipt, tx_hash)
-            detail = receipt.status
-            if receipt.status == 'success':
-                state = tx_notify.STATE_CONFIRMED
-                raw = await asyncio.to_thread(rpc, 'eth_getTransactionReceipt', [tx_hash])
-                token_id = receipt_position(plan, raw, signer.address)
-                # The token-keyed book cannot represent an LP claim separately.
-                # Adding the legs would double-count previously acquired tokens;
-                # removing them on withdrawal would erase unrelated holdings.
-                # Keep NFT/transaction telemetry until an LP-specific basis exists.
-                asset = f'erc721:{npm.lower()}:{token_id}'
-                detail += f'; position #{token_id}'
-            elif receipt.status == 'failed':
-                state = tx_notify.STATE_REVERTED
-        except Exception as exc:
-            detail = f'SUBMITTED; receipt/accounting unverified ({exc}). Do not retry blindly.'
         # v4: stamp the native sent (the declared maximum — the SWEEP refund is
         # not subtracted, so the LP caps over-count, never under-count).
         extra = {'native_raw': plan.value} if p.protocol == 'v4' else {}
+        asset, positions, detail, state = None, [], '', tx_notify.STATE_IN_FLIGHT
+        # CLI1: a cancel in the receipt wait or the position read-back records the
+        # broadcast first (no asset — nothing is measured yet) — the ONE seam.
+        from tools.defi.receipt_wait import record_on_interrupt
+        with record_on_interrupt(
+                tx_hash, gate=gate, tool=tool, execution_context=ctx,
+                record_kw=dict(venue='defi', action=verb, amount_usd=decision.amount_usd,
+                               counterparty=plan.pool,
+                               idempotency_key=plan.intent.idempotency_key,
+                               result_ref=tx_hash, chain=p.chain, asset=None,
+                               positions=[], **extra),
+                notice_kw=dict(verb=verb, route=f'{p.chain}:{p.protocol}', chain=p.chain,
+                               amount_in=plan.description, usd=decision.amount_usd)):
+            try:
+                receipt = await asyncio.to_thread(rail.await_receipt, tx_hash)
+                detail = receipt.status
+                if receipt.status == 'success':
+                    state = tx_notify.STATE_CONFIRMED
+                    raw = await asyncio.to_thread(rpc, 'eth_getTransactionReceipt', [tx_hash])
+                    token_id = receipt_position(plan, raw, signer.address)
+                    # The token-keyed book cannot represent an LP claim separately.
+                    # Adding the legs would double-count previously acquired tokens;
+                    # removing them on withdrawal would erase unrelated holdings.
+                    # Keep NFT/transaction telemetry until an LP-specific basis exists.
+                    asset = f'erc721:{npm.lower()}:{token_id}'
+                    detail += f'; position #{token_id}'
+                elif receipt.status == 'failed':
+                    state = tx_notify.STATE_REVERTED
+            except Exception as exc:
+                detail = f'SUBMITTED; receipt/accounting unverified ({exc}). Do not retry blindly.'
         gate.record(venue='defi', action=verb, amount_usd=decision.amount_usd,
             counterparty=plan.pool, idempotency_key=plan.intent.idempotency_key,
             result_ref=tx_hash, chain=p.chain, asset=asset, positions=positions, **extra)

@@ -25,7 +25,7 @@ def _window_seconds(label: str) -> Optional[float]:
     return parse_window_seconds(label)
 
 
-def render_journey(*, user_id: str, since_label: str = "7d",
+def render_journey(*, user_id: str, since_label: str = "24h",
                    data_dir: Optional[str] = None) -> str:
     """Pure renderer: group ``build_recap``'s entries into a plain-text timeline."""
     secs = _window_seconds(since_label)
@@ -93,13 +93,16 @@ def render_journey(*, user_id: str, since_label: str = "7d",
 
 
 def h_journey(ctx) -> None:
-    """REPL handler: /journey [window]  e.g. /journey 24h, /journey 7d."""
-    since_label = ctx.args[0] if getattr(ctx, "args", None) else "7d"
-    uid = (getattr(ctx, "user_id", "") or "").strip() or "local"
-    data_dir = None
-    container = getattr(ctx, "container", None)
-    if container is not None:
-        cfg = getattr(container, "config", None)
-        data_dir = getattr(cfg, "data_dir", None)
+    """REPL handler: /journey [window]  e.g. /journey 24h, /journey 7d.
+
+    CLI6 (2026-10-03): the default window is 24h — Telegram's `/recap` default, so
+    the one verb answers the same question on each seat — and the data home and
+    owner tenant are the deployed ones (``cli._admin_home``), not the shell's
+    ``config.data_dir``. Read-only, so root is never refused.
+    """
+    from cli import _admin_home
+    since_label = ctx.args[0] if getattr(ctx, "args", None) else "24h"
+    uid = _admin_home.admin_owner_tenant(getattr(ctx, "user_id", None))
+    data_dir = _admin_home.admin_data_dir(write=False)
     text = render_journey(user_id=uid, since_label=since_label, data_dir=data_dir)
     ctx.emit(text, title="journey")

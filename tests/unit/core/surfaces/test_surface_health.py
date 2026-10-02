@@ -80,3 +80,35 @@ def test_subscribed_but_unregistered_is_called_out():
 def test_no_bus_renders_honestly():
     assert render_surface_health(surface_health(_Container({}))) == [
         "no surfaces registered (chat-surface bus not installed)"]
+
+
+def test_dead_target_count_is_read_from_the_real_store(tmp_path):
+    """OB14: DeadTargetStore had no count_for_surface, so the health view's
+    dead-target count was always 0."""
+    from core.surfaces.dead_targets import DeadTargetStore
+    dt = DeadTargetStore(str(tmp_path / "dead_targets.db"))
+    dt.mark("telegram", "111", "blocked")
+    dt.mark("telegram", "222", "blocked")
+    dt.mark("email", "a@b.io", "bounced")
+    c = _Container({
+        "surface_registry": _Registry([_Surface("telegram")]),
+        "message_router": _Router(["telegram"]),
+        "dead_targets": dt,
+    })
+    rows = surface_health(c)
+    assert rows[0]["dead_targets"] == 2
+    assert "dead-targets:2" in render_surface_health(rows)[0]
+
+
+def test_unreadable_dead_target_store_is_not_zero():
+    class _Bad:
+        def count_for_surface(self, sid):
+            raise RuntimeError("corrupt")
+    c = _Container({
+        "surface_registry": _Registry([_Surface("telegram")]),
+        "message_router": _Router(["telegram"]),
+        "dead_targets": _Bad(),
+    })
+    rows = surface_health(c)
+    assert rows[0]["dead_targets"] is None
+    assert "dead-targets:?" in render_surface_health(rows)[0]

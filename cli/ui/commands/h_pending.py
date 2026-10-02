@@ -33,7 +33,8 @@ def _h_pending(ctx: CommandContext) -> None:
     from cli.ui import candy
     from core import self_evolution
 
-    uid = (ctx.user_id or "").strip() or "local"
+    from cli._admin_home import admin_owner_tenant
+    uid = admin_owner_tenant(ctx.user_id)
     # The REPL is a trusted local operator surface ({cli,local,repl}); the
     # local=True bypass is the documented owner check for it. A bound owner
     # principal always wins; an unbound local operator IS the owner here.
@@ -45,7 +46,8 @@ def _h_pending(ctx: CommandContext) -> None:
     # home `polyrob owner pending` reads. Deciding is a WRITE.
     from cli.ui.commands.h_owner import _admin_data_dir
     home_dir = _admin_data_dir(write=None)
-    instance_id = _ci.resolve_instance_id()
+    from cli._admin_home import admin_instance
+    instance_id = admin_instance()
 
     args = list(ctx.args or [])
     # 035 P1-10: `/pending approve all` / `/pending reject all`.

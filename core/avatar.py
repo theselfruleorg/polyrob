@@ -1,10 +1,11 @@
 """The agent's avatar — ONE image slot per instance. A primitive, not a generator.
 
 The instance has a face the owner (or the agent, on an owner turn) SETS from an
-image: a file, a URL, or the image of an NFT. Every surface reads it from here —
-the CLI, the console, Telegram, the profile push, the ERC-8004 registration file,
-the invoice card — and the agent reads it through ``agent_avatar``, so it knows
-it has a face and can send it.
+image: a file, a URL, or the image of an NFT. The CLI, the console, Telegram's
+``/avatar``, the ERC-8004 registration file and the invoice card read it from here,
+and the agent reads it through ``agent_avatar``, so it knows it has a face and can
+send it. The X/Telegram/Discord PROFILE photos are copies: they change only when
+``polyrob avatar push`` (``modules/avatar/push.py``) sends the slot there.
 
 Core generates nothing. The generative collection (the mosaic engine) lives in
 the ``polyrob-desk`` repo; a face it renders arrives here as an ordinary image.

@@ -37,7 +37,7 @@ from fastapi.responses import JSONResponse
 from webview.pages import (
     _data_dir,
     _effective_user_id,
-    _memory_provider,
+    _memory_provider_status,
 )
 
 router = APIRouter()
@@ -58,14 +58,23 @@ def _not_configured(**extra) -> JSONResponse:
     return JSONResponse(body)
 
 
+def _broken(error: str, **extra) -> JSONResponse:
+    """The configured memory backend could not be BUILT (audit WV4): a broken
+    ``memory.db`` is an unreadable store, never "not configured" — ``items``
+    is ``null`` and ``error`` names why."""
+    body = {"items": None, "count": None, "error": error}
+    body.update(extra)
+    return JSONResponse(body)
+
+
 def _why(exc: BaseException) -> str:
     """The short, bounded reason a store refused — one line, never a traceback.
 
     Same shape ``core.surfaces.inbox.why`` uses, so a reason rendered on the
     Inbox and one rendered on a knowledge panel read alike.
     """
-    text = f"{type(exc).__name__}: {exc}".strip()
-    return " ".join(text.split())[:200]
+    from webview.pages import _safe_reason
+    return _safe_reason(exc)
 
 
 def _fmt_day(ts) -> str:
@@ -82,8 +91,10 @@ async def api_knowledge_notes(request: Request, status: str = "active",
                               tag: str = "", limit: int = 200):
     """The tenant's notes (C1 substrate) by status, newest-updated first."""
     status = status if status in ("active", "pending", "archived") else "active"
-    provider = _memory_provider()
+    provider, mem_error = _memory_provider_status()
     user_id = _effective_user_id(request)  # 403 must not be fail-open-swallowed
+    if provider is None and mem_error:
+        return _broken(mem_error, status=status)
     if provider is None or not hasattr(provider, "note_list"):
         return _not_configured(status=status)
     try:
@@ -102,8 +113,11 @@ async def api_knowledge_notes(request: Request, status: str = "active",
 @router.get("/api/webgate/knowledge/note/{note_id}")
 async def api_knowledge_note(request: Request, note_id: int):
     """One note + its backlinks ("learned from" provenance included)."""
-    provider = _memory_provider()
+    provider, mem_error = _memory_provider_status()
     user_id = _effective_user_id(request)
+    if provider is None and mem_error:
+        return JSONResponse({"note": None, "backlinks": None, "count": None,
+                             "error": mem_error})
     if provider is None or not hasattr(provider, "note_get"):
         from webview.copy import t
         return JSONResponse({"note": None, "backlinks": [], "count": 0,
@@ -140,8 +154,10 @@ async def api_knowledge_note(request: Request, note_id: int):
 async def api_knowledge_episodes(request: Request, since_hours: int = 0,
                                  kind: str = "", limit: int = 20):
     """The episode ledger (runs browser): full rows incl. outcome/artifacts/spend."""
-    provider = _memory_provider()
+    provider, mem_error = _memory_provider_status()
     user_id = _effective_user_id(request)
+    if provider is None and mem_error:
+        return _broken(mem_error)
     if provider is None or not hasattr(provider, "recall_episodes"):
         return _not_configured()
     since_ts = None
@@ -253,8 +269,10 @@ async def api_knowledge_skill(request: Request, skill_id: str):
 @router.get("/api/webgate/knowledge/kb")
 async def api_knowledge_kb(request: Request, collection: str = ""):
     """KB sources for the tenant — reuse ``kb_list_sources``."""
-    provider = _memory_provider()
+    provider, mem_error = _memory_provider_status()
     user_id = _effective_user_id(request)
+    if provider is None and mem_error:
+        return _broken(mem_error)
     if provider is None or not hasattr(provider, "kb_list_sources"):
         return _not_configured()
     try:

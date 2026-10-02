@@ -185,3 +185,92 @@ def test_unscoped_approve_still_works_for_single_tenant(reg):
     reg.seed(surface="email", address="solo@acme.com", session_id="s1",
              user_id="only_tenant", thread_id="t", provenance="owner", require_approval=True)
     assert reg.approve(surface="email", address="solo@acme.com", thread_id="t") is True
+
+
+def test_ttl_expired_binding_can_be_reopened_by_a_new_seed(reg):
+    """AC3: a TTL-idle binding must not be a permanent tombstone — the next
+    outbound to that contact seeds it again (policy decides pending/active)."""
+    reg.seed(surface="email", address="john@acme.com", session_id="s1",
+             user_id="u_owner", provenance="owner", require_approval=False,
+             now=1000.0)
+    assert reg.purge_expired(ttl_secs=30 * 86400, now=1000.0 + 31 * 86400) == 1
+    state = reg.seed(surface="email", address="john@acme.com", session_id="s2",
+                     user_id="u_owner", provenance="owner",
+                     require_approval=False, now=1000.0 + 32 * 86400)
+    assert state == "active"
+    assert reg.resolve(surface="email", address="john@acme.com")["session_id"] == "s2"
+
+
+def test_ttl_purge_keeps_an_owner_rejection_tombstone(reg):
+    """AC3: an owner's reject stays a tombstone; the TTL never reopens it."""
+    reg.seed(surface="email", address="spam@x.com", session_id="s1",
+             user_id="u_owner", provenance="owner", require_approval=True,
+             now=1000.0)
+    assert reg.reject(surface="email", address="spam@x.com", user_id="u_owner",
+                      now=1001.0)
+    reg.purge_expired(ttl_secs=30 * 86400, now=1000.0 + 31 * 86400)
+    assert reg.seed(surface="email", address="spam@x.com", session_id="s2",
+                    user_id="u_owner", provenance="owner",
+                    require_approval=True) == "expired"
+
+
+def test_seed_race_does_not_raise_integrity_error(reg, monkeypatch):
+    """AC4: two seeds race SELECT-then-INSERT. The loser must read the
+    winner's row back, never raise IntegrityError (swallowed as `disabled`)."""
+    import core.surfaces.correspondents as mod
+    reg.seed(surface="email", address="j@x.com", session_id="s1",
+             user_id="u_owner", provenance="owner", require_approval=False)
+    real = mod.execute_retry
+    calls = {"n": 0}
+
+    def racing(db, sql, params=(), fetch=None, **kw):
+        # The loser's existence probe ran before the winner's INSERT.
+        if sql.lstrip().startswith("SELECT state") and calls["n"] == 0:
+            calls["n"] += 1
+            return None
+        return real(db, sql, params, fetch=fetch, **kw)
+
+    monkeypatch.setattr(mod, "execute_retry", racing)
+    assert reg.seed(surface="email", address="j@x.com", session_id="s1",
+                    user_id="u_owner", provenance="owner",
+                    require_approval=True) == "active"
+
+
+def test_thread_anchor_race_does_not_raise(reg, monkeypatch):
+    import core.surfaces.correspondents as mod
+    reg.seed(surface="email", address="j@x.com", session_id="s1",
+             user_id="u_owner", provenance="owner", require_approval=False)
+    reg.seed_thread_anchor(surface="email", address="j@x.com", thread_id="<m1>",
+                           session_id="s1", user_id="u_owner")
+    real = mod.execute_retry
+    calls = {"n": 0}
+
+    def racing(db, sql, params=(), fetch=None, **kw):
+        if "thread_id=? AND user_id=?" in sql and sql.lstrip().startswith(
+                "SELECT state") and calls["n"] == 0:
+            calls["n"] += 1
+            return None
+        return real(db, sql, params, fetch=fetch, **kw)
+
+    monkeypatch.setattr(mod, "execute_retry", racing)
+    assert reg.seed_thread_anchor(surface="email", address="j@x.com",
+                                  thread_id="<m1>", session_id="s1",
+                                  user_id="u_owner") == "active"
+
+
+def test_prune_thread_anchors_drops_only_old_anchor_rows(reg):
+    """AC5: one anchor row per outbound message grew without bound."""
+    reg.seed(surface="email", address="j@x.com", session_id="s1",
+             user_id="u_owner", provenance="owner", require_approval=False,
+             now=1000.0)
+    reg.seed_thread_anchor(surface="email", address="j@x.com", thread_id="<old>",
+                           session_id="s1", user_id="u_owner", now=1000.0)
+    reg.seed_thread_anchor(surface="email", address="j@x.com", thread_id="<new>",
+                           session_id="s1", user_id="u_owner", now=90 * 86400.0)
+    removed = reg.prune_thread_anchors(max_age_secs=30 * 86400,
+                                       now=91 * 86400.0)
+    assert removed == 1
+    tids = {r["thread_id"] for r in reg.list()}
+    assert "<old>" not in tids and "<new>" in tids
+    # The base binding is NOT an anchor and is never pruned here.
+    assert "" in tids

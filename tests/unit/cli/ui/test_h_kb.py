@@ -118,11 +118,14 @@ def test_kb_list_with_collection_filter(monkeypatch):
     assert spy["list_kwargs"]["collection"] == "notes"
 
 
-def test_kb_bare_collection_shorthand(monkeypatch):
-    spy = _patch(monkeypatch, sources=["k.md"])
-    ctx, buf = _plain_ctx(args=["mycoll"])  # /kb mycoll → list that collection
+def test_kb_bare_words_search(monkeypatch):
+    """CLI7: one grammar (core.kb_grammar) — bare `/kb <words>` SEARCHES on
+    every seat. It used to list a collection here and search on Telegram."""
+    spy = _patch(monkeypatch, sources=["k.md"], search_result="hit")
+    ctx, buf = _plain_ctx(args=["x402", "services"])
     asyncio.run(h_kb(ctx))
-    assert spy["list_kwargs"]["collection"] == "mycoll"
+    assert spy["list_kwargs"] is None
+    assert spy["search_args"]["query"] == "x402 services"
 
 
 def test_kb_list_uses_ctx_user_id(monkeypatch):

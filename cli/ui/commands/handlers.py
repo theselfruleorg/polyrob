@@ -1068,7 +1068,8 @@ def _h_apps(ctx: CommandContext) -> None:
     # Everything else here (list/show/logs, and the bare verb) is a READ.
     writes = bool(args) and args[0].lower() in ("approve", "reject", "kill")
     try:
-        ctx.emit(apps_reply(ctx.user_id or "local", admin_data_dir(write=writes),
+        from cli._admin_home import admin_owner_tenant
+        ctx.emit(apps_reply(admin_owner_tenant(ctx.user_id), admin_data_dir(write=writes),
                             args, via="repl"), title="apps")
     except Exception as e:
         ctx.emit(f"Apps: {e}", title="apps")
@@ -1077,7 +1078,8 @@ def _h_apps(ctx: CommandContext) -> None:
 def _h_goals(ctx: CommandContext) -> None:
     """Show goals board summary (rendered by ``h_goals_view``)."""
     from cli.ui.commands.h_goals_view import goals_view
-    ctx.emit(goals_view(ctx.user_id or "local"), title="goals")
+    from cli._admin_home import admin_owner_tenant
+    ctx.emit(goals_view(admin_owner_tenant(ctx.user_id)), title="goals")
 
 
 def _h_subagents(ctx: CommandContext) -> None:

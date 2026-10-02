@@ -24,4 +24,4 @@ def test_journey_cli_default_since(monkeypatch):
                         raising=False)
     r = CliRunner().invoke(journey, [])
     assert r.exit_code == 0
-    assert captured["since_label"] == "7d"
+    assert captured["since_label"] == "24h"   # CLI6: the window Telegram and the REPL use

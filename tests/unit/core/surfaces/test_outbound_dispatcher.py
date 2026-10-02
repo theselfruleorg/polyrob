@@ -276,3 +276,83 @@ async def test_attach_event_log_wires_post_construction(tmp_path):
     event = ev.events[0]
     assert event["kind"] == "dead_target_skipped"
     assert event["attrs"]["surface"] == "wa"
+
+
+# --- OB5 / OB6 (2026-10-03 audit) ---------------------------------------------
+
+@pytest.mark.asyncio
+async def test_not_hosted_surface_burns_no_attempt_and_no_breaker(tmp_path):
+    """OB5: a process that does not host the surface used to count "no surface"
+    as an attempt AND a breaker failure, dead-lettering other processes' rows."""
+    from core.surfaces.circuit import SurfaceCircuitBreaker
+    q = OutboundDeliveryQueue(os.path.join(tmp_path, "o.db"))
+    q.enqueue(idempotency_key="a", session_key="s", surface_id="email", dest="x", payload="hi")
+    cb = SurfaceCircuitBreaker(threshold=1)
+    d = OutboundDispatcher(q, lambda sid: None, max_attempts=1, circuit=cb,
+                           rate_per_sec=1000, burst=1000)
+    for t in (100.0, 200.0, 300.0):
+        await d.drain_once(now=t)
+    c = q.counts()
+    assert c["dead"] == 0 and c["pending"] == 1
+    assert cb.is_open("email") is False
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_claims_only_hosted_surfaces(tmp_path):
+    q = OutboundDeliveryQueue(os.path.join(tmp_path, "o.db"))
+    q.enqueue(idempotency_key="a", session_key="s", surface_id="email", dest="x", payload="mail")
+    q.enqueue(idempotency_key="b", session_key="s", surface_id="wa", dest="1", payload="chat")
+    surf = _Surface([SendResult(success=True)])
+    d = OutboundDispatcher(q, lambda sid: surf if sid == "wa" else None,
+                           hosted_surfaces=lambda: ["wa"], rate_per_sec=1000, burst=1000)
+    assert await d.drain_once(now=100.0) == 1
+    assert surf.sent == ["chat"]
+    assert q.counts()["pending"] == 1      # the email row was never claimed here
+
+
+@pytest.mark.asyncio
+async def test_row_reclaimed_mid_batch_is_not_sent_twice(tmp_path):
+    """OB6: a row another process reclaimed while this batch waited is skipped."""
+    import time
+    q = OutboundDeliveryQueue(os.path.join(tmp_path, "o.db"))
+    q.enqueue(idempotency_key="a", session_key="s", surface_id="wa", dest="1", payload="one")
+    q.enqueue(idempotency_key="b", session_key="s", surface_id="wa", dest="1", payload="two")
+
+    class _SlowSurface(_Surface):
+        async def send(self, msg):
+            r = await super().send(msg)
+            # while row 1 is being sent, another process reclaims the batch
+            q.reclaim_inflight(older_than=time.time() + 1)
+            return r
+
+    surf = _SlowSurface([SendResult(success=True), SendResult(success=True)])
+    d = OutboundDispatcher(q, lambda sid: surf, rate_per_sec=1000, burst=1000)
+    await d.drain_once(now=100.0)
+    assert surf.sent == ["one"]
+    assert q.counts()["pending"] == 1      # row 2 is back for its new claimer
+
+
+@pytest.mark.asyncio
+async def test_drain_drops_an_attachment_swapped_since_enqueue(tmp_path):
+    """OB17: the drain re-checks the file identity stamped at validation."""
+    from core.surfaces.attachments import media_entries_from_paths
+    f = tmp_path / "a.md"
+    f.write_text("ok")
+    media = media_entries_from_paths([str(f)])
+    q = OutboundDeliveryQueue(os.path.join(tmp_path, "o.db"))
+    q.enqueue(idempotency_key="a", session_key="s", surface_id="wa", dest="1",
+              payload="hi", media=media)
+    other = tmp_path / "other.txt"
+    other.write_text("secret")
+    f.unlink()
+    f.symlink_to(other)
+    seen = []
+
+    class _S(_Surface):
+        async def send(self, msg):
+            seen.append(msg.media)
+            return SendResult(success=True)
+
+    d = OutboundDispatcher(q, lambda sid: _S([]), rate_per_sec=1000, burst=1000)
+    assert await d.drain_once(now=100.0) == 1
+    assert seen == [[]]

@@ -406,3 +406,20 @@ def test_the_age_words_are_singular_and_plural():
     assert _age_words(3600) == t("inbox.age.hour_one")
     assert _age_words(86400) == t("inbox.age.day_one")
     assert _age_words(86400 * 4 + 5) == t("inbox.age.days", count=4)
+
+
+def test_a_locked_goal_board_is_a_named_refusal_not_a_500(client, inbox, monkeypatch):
+    """Audit WR9: decide_ask raising (a locked goals.db) answers ok:false in
+    words, never a generic 500."""
+    import sqlite3
+
+    class LockedBoard:
+        def decide_ask(self, *a, **k):
+            raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(inbox, "_goal_board", lambda: LockedBoard())
+    resp = client.post("/api/webgate/inbox/ask/g7/fulfill")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is False and "locked" in body["error"]
+    assert body["message"]

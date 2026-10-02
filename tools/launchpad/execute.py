@@ -59,12 +59,18 @@ async def guarded_send(tool, *, execution_context, verb: str, chain: str,
 
     rail = (tool._rail_factory or EvmRail)(chain=chain, signer=signer)
     acct_state = None
+    journal_entry, journal_skipped = None, ""
     try:
         tx = rail.build_call(to=to, data=calldata, value=value_wei)
         if held is not None:
-            # 069 v4 A3: the treasury signs account.execute(...) as the NFT's owner.
+            # 069 v4 A3: the treasury signs account.execute(...) as the NFT's owner; J1: its
+            # journal entry rides the same batch when the collection pins a JournalLog.
             from tools.defi import account_mode
-            tx, acct_state = account_mode.wrap(rail, tx, held, getattr(tool, "_rpc", None))
+            journal_entry, journal_skipped = account_mode.prepare_journal(
+                held, signer, kind="tend", text=f"launchpad {verb} on {chain} via {to}",
+                rpc=getattr(tool, "_rpc", None))
+            tx, acct_state = account_mode.wrap(rail, tx, held, getattr(tool, "_rpc", None),
+                                               journal=journal_entry)
     except Exception as exc:
         return tool._ar(error=f"could not build the transaction: {exc}")
 
@@ -83,7 +89,8 @@ async def guarded_send(tool, *, execution_context, verb: str, chain: str,
     guard_kw = {}
     if held is not None:
         from tools.defi import account_mode
-        intent = account_mode.intent_for(intent, held, acct_state)
+        intent = account_mode.intent_for(intent, held, acct_state,
+                                         journal=journal_entry is not None)
         if getattr(tool, "_rpc", None) is not None:
             guard_kw["account_rpc"] = tool._rpc
         header += account_mode.header_line(held)
@@ -147,7 +154,18 @@ async def guarded_send(tool, *, execution_context, verb: str, chain: str,
             lane=decision.lane, cap_used_usd=used, cap_limit_usd=limit),
             settled=False)
 
-        receipt = await asyncio.to_thread(rail.await_receipt, tx_hash)
+        # CLI1: a cancel in the receipt wait (or the read-back below) records the
+        # broadcast first, against the factory/curve — the ONE seam.
+        from tools.defi.receipt_wait import await_receipt_or_record
+        interrupted = dict(
+            gate=gate, tool=tool, execution_context=execution_context,
+            record_kw=dict(venue="defi", action=f"launchpad_{verb}",
+                           amount_usd=decision.amount_usd or 0.0, counterparty=to,
+                           idempotency_key=idem, result_ref=tx_hash, chain=chain,
+                           account=(held.account if held is not None else None)),
+            notice_kw=dict(verb=f"launchpad {verb}", route=f"{chain}:{to}", chain=chain,
+                           amount_in=calldata[:10], usd=decision.amount_usd))
+        receipt = await await_receipt_or_record(rail, tx_hash, **interrupted)
 
     # The SETTLED notice is emitted below, after the record (043 T2). It used to
     # fire here, inside the reservation, carrying `ledger_recorded=True` — but
@@ -182,8 +200,10 @@ async def guarded_send(tool, *, execution_context, verb: str, chain: str,
     counterparty = to
     extra = ""
     if receipt.succeeded and on_receipt is not None:
+        from tools.defi.receipt_wait import record_on_interrupt
         try:
-            result = await asyncio.to_thread(on_receipt, rail, tx_hash)
+            with record_on_interrupt(tx_hash, **interrupted):   # CLI1
+                result = await asyncio.to_thread(on_receipt, rail, tx_hash)
         except Exception as exc:
             logger.debug("launchpad: receipt read failed (%s)", exc)
             result = ("  ⚠️ the transaction confirmed but its receipt could "
@@ -232,7 +252,8 @@ async def guarded_send(tool, *, execution_context, verb: str, chain: str,
         extra += account_mode.journal_line(
             held, signer, kind="tend",
             text=f"launchpad {verb} on {chain} via {to}: tx {tx_hash} ({receipt.status})",
-            refs=(tx_hash,)).lstrip("\n") + "\n"
+            refs=(tx_hash,), entry=journal_entry, landed=receipt.status != "failed",
+            skipped=journal_skipped, rpc=getattr(tool, "_rpc", None)).lstrip("\n") + "\n"
     if receipt.succeeded:
         return tool._ar(content=header + extra + (
             f"  RESULT: CONFIRMED\n  tx: {tx_hash}\n"

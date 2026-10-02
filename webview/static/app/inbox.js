@@ -24,7 +24,7 @@
  * The POST itself is `http.js` — see it for what `webgate.csrf_guard` actually
  * checks, which is a same-origin `Origin` header and NOT a token.
  */
-import { postJson } from './http.js';
+import { detailText, postJson } from './http.js';
 
 /** The route for one decision. Both segments are encoded: an id can carry a
  *  colon (`telegram:12345`) or a slash. */
@@ -53,7 +53,7 @@ export function answerFor(card) {
  * endpoint records it only for an ask and treats a missing or empty one as no
  * answer — so an app approval sends no body and behaves exactly as before.
  */
-export async function decide(kind, id, verb, { fetcher, fallback, answer } = {}) {
+export async function decide(kind, id, verb, { fetcher, fallback, answer, refused } = {}) {
   try {
     const payload = answer ? { answer } : undefined;
     const { ok, status, body } = await postJson(
@@ -61,9 +61,12 @@ export async function decide(kind, id, verb, { fetcher, fallback, answer } = {})
     if (body && typeof body.message === 'string') {
       return { ok: Boolean(body.ok), message: body.message };
     }
-    const detail = body && typeof body.detail === 'string' ? body.detail : '';
+    // FE19: a `detail` of any shape (string, 422 array, object) reads as
+    // words; a refusal with none reads the console's refusal sentence, never
+    // a bare "403".
+    const detail = body ? detailText(body.detail) : '';
     if (ok) return { ok: true, message: detail };
-    return { ok: false, message: detail || `${status}` };
+    return { ok: false, message: detail || refused || `${status}` };
   } catch (err) {
     console.error('[inbox] the decision did not reach the console', err);
     return { ok: false, message: fallback || '' };
@@ -111,6 +114,7 @@ function bind() {
       const result = await decide(button.dataset.kind, button.dataset.id,
                                   button.dataset.verb,
                                   { fallback: copy.unreachable,
+                                    refused: copy.refused,
                                     answer: answerFor(card) });
       applyResult(card, result);
       if (!result.ok) buttons.forEach((b) => { b.disabled = false; });

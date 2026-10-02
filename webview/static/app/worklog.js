@@ -28,6 +28,8 @@
  * crosses from Python into JS.
  */
 
+import { latestOnly } from "./http.js";
+
 /** The copy the server handed over, as a plain object. */
 export function copyFrom(node) {
   return node ? { ...node.dataset } : {};
@@ -292,10 +294,14 @@ function bind() {
     stateNode.hidden = false;
   }
   draw();
-  const reload = () => load({ raw: state.raw, diagnostics: state.diagnostics,
-                             cls: state.cls })
-    .then((data) => {
-      state.data = data;
+  // FE10: only the latest request draws — an older answer that arrives last
+  // must not show the previous class or switch setting.
+  const latestLoad = latestOnly(load);
+  const reload = () => latestLoad({ raw: state.raw, diagnostics: state.diagnostics,
+                                   cls: state.cls })
+    .then((answer) => {
+      if (answer.stale) return;
+      state.data = answer.value;
       draw();
     })
     .catch((err) => {

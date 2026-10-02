@@ -29,6 +29,7 @@
  * updating with no explanation.
  */
 import { postJson, serverAnswer } from './http.js';
+import { onLiveChange } from './live.js';
 
 /** The copy the server handed over, as a plain object. */
 export function copyFrom(node) {
@@ -156,7 +157,9 @@ function bind() {
     }
   });
 
-  document.addEventListener('polyrob:tick', refresh);
+  // FE4: the tick fires only while the socket is down; onLiveChange also
+  // re-reads on activity, a good re-join and the tab coming back.
+  onLiveChange(refresh);
 }
 
 if (typeof document !== 'undefined') {

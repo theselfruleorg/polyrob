@@ -7,7 +7,7 @@
     'use strict';
 
     // Use shared utilities
-    const { apiCall, formatDateTime, formatCredits, timeAgo, showAlert, showConfirm } = AdminUtils;
+    const { apiCall, formatDateTime, formatCredits, timeAgo, showAlert, showConfirm, h } = AdminUtils;
 
     // 043 phase 5 (R6): de-inlined — the value crosses on the DOM node's
     // data-user-id attribute (was window.TARGET_USER_ID from an inline script,
@@ -34,11 +34,11 @@
             document.getElementById('user-id-display').textContent = `User ID: ${user.user_id}`;
 
             // Update badges
-            let badges = `
-                <span class="badge badge-tier tier-${user.tier}">${user.tier}</span>
-                <span class="badge badge-role role-${user.role}">${user.role}</span>
-            `;
-            document.getElementById('user-badges').innerHTML = badges;
+            // FE16: server fields are written as text, never parsed as HTML.
+            document.getElementById('user-badges').replaceChildren(
+                h('span', { class: `badge badge-tier tier-${user.tier}`, text: user.tier }),
+                ' ',
+                h('span', { class: `badge badge-role role-${user.role}`, text: user.role }));
 
             // Update identity info
             document.getElementById('info-email').textContent = user.email || '-';
@@ -71,20 +71,16 @@
                 return;
             }
 
-            let html = '';
-            for (const tx of credits.recent_transactions.slice(0, 10)) {
+            const rows = credits.recent_transactions.slice(0, 10).map((tx) => {
                 const amountClass = tx.amount > 0 ? 'amount-positive' : 'amount-negative';
                 const amountPrefix = tx.amount > 0 ? '+' : '';
-                html += `
-                    <tr>
-                        <td>${formatDateTime(tx.timestamp)}</td>
-                        <td class="${amountClass}">${amountPrefix}${formatCredits(tx.amount)}</td>
-                        <td>${tx.transaction_type}</td>
-                        <td>${tx.reason || '-'}</td>
-                    </tr>
-                `;
-            }
-            tbody.innerHTML = html;
+                return h('tr', null,
+                    h('td', { text: formatDateTime(tx.timestamp) }),
+                    h('td', { class: amountClass, text: `${amountPrefix}${formatCredits(tx.amount)}` }),
+                    h('td', { text: tx.transaction_type }),
+                    h('td', { text: tx.reason || '-' }));
+            });
+            tbody.replaceChildren(...rows);
 
         } catch (error) {
             console.error('Failed to load credits:', error);
@@ -101,12 +97,11 @@
 
             if (status.is_blocked) {
                 container.classList.add('blocked');
-                container.innerHTML = `
-                    <span style="color: var(--accent-red);">BLOCKED</span>
-                    <div class="block-reason">Reason: ${status.blocked_reason || 'Not specified'}</div>
-                    <div class="block-reason">Blocked at: ${formatDateTime(status.blocked_at)}</div>
-                    <div class="block-reason">By: ${status.blocked_by || 'Unknown'}</div>
-                `;
+                container.replaceChildren(
+                    h('span', { style: 'color: var(--accent-red);', text: 'BLOCKED' }),
+                    h('div', { class: 'block-reason', text: `Reason: ${status.blocked_reason || 'Not specified'}` }),
+                    h('div', { class: 'block-reason', text: `Blocked at: ${formatDateTime(status.blocked_at)}` }),
+                    h('div', { class: 'block-reason', text: `By: ${status.blocked_by || 'Unknown'}` }));
                 btn.textContent = 'Unblock User';
                 btn.classList.remove('btn-danger');
                 btn.classList.add('btn-success');
@@ -114,7 +109,7 @@
                 // Add blocked badge
                 const badges = document.getElementById('user-badges');
                 if (!badges.querySelector('.badge-blocked')) {
-                    badges.innerHTML += '<span class="badge badge-blocked">BLOCKED</span>';
+                    badges.appendChild(h('span', { class: 'badge badge-blocked', text: 'BLOCKED' }));
                 }
             } else {
                 container.classList.remove('blocked');
@@ -155,17 +150,14 @@
                 return;
             }
 
-            let html = '';
-            for (const event of events) {
-                html += `
-                    <div class="audit-item">
-                        <span class="audit-time">${formatDateTime(event.timestamp)}</span>
-                        <span class="audit-type ${event.event_type}">${event.event_type.replace('_', ' ')}</span>
-                        <span class="audit-action">${event.action}</span>
-                    </div>
-                `;
-            }
-            container.innerHTML = html;
+            const items = events.map((event) => {
+                const type = String(event.event_type || '');
+                return h('div', { class: 'audit-item' },
+                    h('span', { class: 'audit-time', text: formatDateTime(event.timestamp) }),
+                    h('span', { class: `audit-type ${type}`, text: type.replace('_', ' ') }),
+                    h('span', { class: 'audit-action', text: event.action }));
+            });
+            container.replaceChildren(...items);
 
         } catch (error) {
             console.error('Failed to load audit trail:', error);

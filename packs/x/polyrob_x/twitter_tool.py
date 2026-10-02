@@ -253,8 +253,9 @@ class TwitterTool(BaseTool):
         # auto-refresh, polyrob_x/x_oauth2.py) wins; the static config/env value is
         # its own last fallback. Re-resolved before every DM read/send via
         # `_ensure_oauth2_fresh`, because this instance lives for hours and the
-        # token lives for two.
-        self.oauth2_access_token = (self._resolve_oauth2_token()
+        # token lives for two. Building the tool never refreshes: only a call
+        # spends the rotating refresh token (2026-10-02, x_oauth2 docstring).
+        self.oauth2_access_token = (self._resolve_oauth2_token(refresh=False)
                                     or twitter_config.get('oauth2_access_token'))
         self.chat_private_keys_b64 = twitter_config.get('chat_private_keys_b64')
         self.chat_key_version = twitter_config.get('chat_key_version')
@@ -281,10 +282,11 @@ class TwitterTool(BaseTool):
             self._enabled = True
 
     @staticmethod
-    def _resolve_oauth2_token(force_refresh: bool = False) -> Optional[str]:
+    def _resolve_oauth2_token(force_refresh: bool = False,
+                              refresh: bool = True) -> Optional[str]:
         try:
             from polyrob_x.x_oauth2 import resolve_access_token
-            return resolve_access_token(force_refresh=force_refresh)
+            return resolve_access_token(force_refresh=force_refresh, refresh=refresh)
         except Exception as e:
             logging.getLogger(__name__).debug("x oauth2 resolve failed: %s", e)
             return None

@@ -98,7 +98,7 @@ class _Refusing:
 @pytest.mark.asyncio
 async def test_oauth2_401_falls_back_to_oauth1_keys(monkeypatch):
     _patch_unauth(monkeypatch)
-    monkeypatch.setattr(XDMClient, "_resolve_oauth2", staticmethod(lambda force_refresh=False: "dead"))
+    monkeypatch.setattr(XDMClient, "_resolve_oauth2", staticmethod(lambda force_refresh=False, refresh=True: "dead"))
     client = XDMClient({"api_key": "k", "api_secret": "s",
                         "access_token": "t", "access_token_secret": "ts"})
     assert client.auth_mode == "oauth2_user"
@@ -121,7 +121,7 @@ async def test_unfixable_401_backs_off_without_calling_x(monkeypatch, caplog):
     for var in ("TWITTER_API_KEY", "TWITTER_API_SECRET_KEY", "TWITTER_ACCESS_TOKEN",
                 "TWITTER_ACCESS_TOKEN_SECRET"):
         monkeypatch.delenv(var, raising=False)
-    monkeypatch.setattr(XDMClient, "_resolve_oauth2", staticmethod(lambda force_refresh=False: "dead"))
+    monkeypatch.setattr(XDMClient, "_resolve_oauth2", staticmethod(lambda force_refresh=False, refresh=True: "dead"))
     client = XDMClient({})
     refusing = _Refusing()
     client._client = refusing

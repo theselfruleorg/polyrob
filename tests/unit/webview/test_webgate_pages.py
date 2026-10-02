@@ -49,7 +49,7 @@ def test_memory_endpoint_calls_provider_search(monkeypatch):
             calls["limit"] = limit
             return "- alpha finding\n- beta finding"
 
-    monkeypatch.setattr(pages, "_memory_provider", lambda: FakeProvider())
+    monkeypatch.setattr(pages, "_memory_provider_status", lambda: (FakeProvider(), None))
     r = client.get("/api/webgate/memory", params={"q": "alpha", "limit": 7})
     assert r.status_code == 200
     body = r.json()
@@ -71,7 +71,7 @@ def test_memory_endpoint_browse_when_empty_query(monkeypatch):
             seen["query"] = query
             return ""
 
-    monkeypatch.setattr(pages, "_memory_provider", lambda: FakeProvider())
+    monkeypatch.setattr(pages, "_memory_provider_status", lambda: (FakeProvider(), None))
     r = client.get("/api/webgate/memory")
     assert r.status_code == 200
     body = r.json()
@@ -82,7 +82,7 @@ def test_memory_endpoint_browse_when_empty_query(monkeypatch):
 
 def test_memory_endpoint_fail_open_no_provider(monkeypatch):
     client, pages = _router_client()
-    monkeypatch.setattr(pages, "_memory_provider", lambda: None)
+    monkeypatch.setattr(pages, "_memory_provider_status", lambda: (None, None))
     r = client.get("/api/webgate/memory")
     assert r.status_code == 200
     assert r.json()["items"] == []
@@ -196,7 +196,7 @@ def test_memory_endpoint_reports_search_error(monkeypatch):
         async def search(self, query, *, user_id=None, session_id=None, limit=5, sort=None):
             raise RuntimeError("fts index corrupt")
 
-    monkeypatch.setattr(pages, "_memory_provider", lambda: BoomProvider())
+    monkeypatch.setattr(pages, "_memory_provider_status", lambda: (BoomProvider(), None))
     r = client.get("/api/webgate/memory")
     assert r.status_code == 200
     body = r.json()
@@ -212,7 +212,7 @@ def test_memory_endpoint_no_error_field_on_success(monkeypatch):
         async def search(self, query, *, user_id=None, session_id=None, limit=5, sort=None):
             return "- alpha"
 
-    monkeypatch.setattr(pages, "_memory_provider", lambda: OkProvider())
+    monkeypatch.setattr(pages, "_memory_provider_status", lambda: (OkProvider(), None))
     body = client.get("/api/webgate/memory").json()
     assert "error" not in body
 

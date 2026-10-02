@@ -35,6 +35,9 @@ _DEFAULT_CHAIN = "base"
 
 USAGE = (
     "Usage: /nft — the agent NFTs I own (pinned collections), their accounts and holdings\n"
+    "/nft trust <collection> [on <chain>] [go] — let me use the NFTs of a collection that I "
+    "own (shows the facts first)\n"
+    "/nft untrust <collection|all> [on <chain>] [go]\n"
     "/nft send <id|collection#id> <to> [on <chain>] [go] — give one away (its account goes "
     "with it; its approvals must be cleared first)\n"
     "/nft list [on <chain>] [address <0x…>]\n"
@@ -76,13 +79,14 @@ async def nft_reply(user_id: Optional[str], args: List[str]) -> str:
     if not user_id:
         return "Only the owner can use /nft."
     tokens = [str(a) for a in (args or []) if str(a).strip()]
+    typed = " ".join(tokens)
     if not tokens:
         return await agent_nft_overview()
 
     verb = tokens.pop(0).lower()
     if verb in ("ls", "holdings"):
         verb = "list"
-    if verb not in ("list", "info", "transfer", "revoke", "send"):
+    if verb not in ("list", "info", "transfer", "revoke", "send", "trust", "untrust"):
         return f"Unknown /nft verb {verb!r}.\n{USAGE}"
 
     execute = False
@@ -92,6 +96,9 @@ async def nft_reply(user_id: Optional[str], args: List[str]) -> str:
 
     named_chain = _pull(tokens, "on")
     chain = named_chain or _DEFAULT_CHAIN
+    if verb in ("trust", "untrust"):
+        return await _collection_trust(user_id, verb, tokens, typed=typed,
+                                       chain=named_chain or _AGENT_NFT_CHAIN, execute=execute)
     from surfaces.telegram.token_ops import _owner_ctx
     ctx = _owner_ctx(user_id)
 
@@ -178,7 +185,9 @@ async def agent_nft_overview() -> str:
     Reads only; an arrival or a loss found here is reported here."""
     from core.env import bool_env
     if not bool_env("AGENT_NFT_ENABLED", False):
-        return "Agent NFTs are off (AGENT_NFT_ENABLED).\n\n" + USAGE
+        return ("Agent NFTs are off. Turn them on with "
+                "`polyrob config set AGENT_NFT_ENABLED true` (it applies on my next restart).\n\n"
+                + USAGE)
     try:
         import asyncio
 
@@ -189,6 +198,8 @@ async def agent_nft_overview() -> str:
             return "No agent wallet is configured, so I own no NFT.\n\n" + USAGE
         treasury = wallet.operational_signer().address
         text = await asyncio.to_thread(nft_holdings.overview, treasury=treasury)
+        from core.wallet import collection_trust
+        text = "\n".join(collection_trust.status_lines()) + "\n\n" + text
     except Exception as exc:
         logger.warning("/nft overview failed", exc_info=True)
         return f"The agent-NFT view did not run: {exc}"
@@ -208,6 +219,42 @@ async def _agent_nft_send(ctx, target: str, to: str, *, chain: str, execute: boo
         body += (f"\n\nAdd `go` to send it: /nft send {target} {to} on {chain} go\n"
                  "⚠️ It is irreversible: the NFT and its account leave this treasury.")
     return body
+
+
+async def _collection_trust(user_id: str, verb: str, tokens: List[str], *, typed: str,
+                            chain: str, execute: bool) -> str:
+    """``/nft trust|untrust <collection>`` — the owner pins a collection from chat
+    (``core.wallet.collection_trust``); without ``go`` it only reads and quotes."""
+    import asyncio
+
+    from core.wallet import collection_trust
+    from core.wallet.token_trust import owner_seat_ctx
+    max_raw, from_raw = _pull(tokens, "max"), _pull(tokens, "from")
+    if len(tokens) != 1:
+        return f"Usage: /nft {verb} <collection> [on <chain>] [go]"
+    try:
+        max_supply = int(max_raw) if max_raw else None
+        from_block = int(from_raw) if from_raw else None
+    except ValueError:
+        return "`max` and `from` must be whole numbers."
+    address = tokens[0]
+    if verb == "untrust":
+        if not execute and address.lower() == "all":
+            return ("This clears every collection you trusted from chat (the system admin's "
+                    f"pins stay).\n\nAdd `go` to clear them: /nft {typed} go")
+        if not execute:
+            return (f"This stops me acting from the accounts of {address} on {chain}.\n\n"
+                    f"Add `go` to untrust it: /nft {typed} go")
+        _ok, msg = await asyncio.to_thread(collection_trust.untrust, owner_seat_ctx(user_id),
+                                           chain, address)
+        return msg
+    if not execute:
+        return await asyncio.to_thread(collection_trust.trust_quote, chain, address,
+                                       max_supply=max_supply, from_block=from_block,
+                                       confirm_line=f"/nft {typed}")
+    _ok, msg = await asyncio.to_thread(collection_trust.trust, owner_seat_ctx(user_id), chain,
+                                       address, max_supply=max_supply, from_block=from_block)
+    return msg
 
 
 __all__ = ["USAGE", "agent_nft_overview", "nft_reply"]

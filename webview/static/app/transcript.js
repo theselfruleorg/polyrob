@@ -30,6 +30,7 @@
  */
 import { loadSocketIo } from './socket-client.js';
 import { postJson, serverAnswer } from './http.js';
+import { fmtUsd } from './format.js';
 
 /** The feed event types this transcript draws, grouped by how it draws them. */
 const USER_TYPES = new Set(['user_message', 'user_message_during_execution']);
@@ -133,7 +134,8 @@ export function elapsedWords(ms) {
 /** A cost the transcript can HONESTLY show, or the dash when it read none. */
 export function costLabel(cost, dash) {
   if (typeof cost !== 'number' || !Number.isFinite(cost)) return dash || '—';
-  return `$${cost.toFixed(2)}`;
+  // FE11: a sub-cent cost is written out, never a confident `$0.00`.
+  return fmtUsd(cost);
 }
 
 /**
@@ -187,6 +189,7 @@ function fillReceipt(template, values) {
     const m = /^\{([a-z_]+)\}$/.exec(part);
     if (m && Object.prototype.hasOwnProperty.call(values, m[1])) {
       const span = el('span', 'val', values[m[1]]);
+      span.dataset.slot = m[1];
       frag.appendChild(span);
     } else if (part) {
       frag.appendChild(document.createTextNode(part));
@@ -368,7 +371,7 @@ export class Transcript {
     const bubble = el('div', 'bubble', line);
     turn.appendChild(bubble);
     this.thread.appendChild(turn);
-    this.userBubbles.set(key, { at: 0, node: bubble, during: false, seed: true });
+    this.userBubbles.set(key, { at: 0, node: bubble, during: false, seed: true, typed: new Set() });
   }
 
   _user(data, ts, event, type) {
@@ -386,9 +389,16 @@ export class Transcript {
       // The stored first line already drew this message: take its clock once.
       prior.seed = false;
       prior.at = at;
+      if (event && event._id) prior.typed.add(type);
       return;
     }
-    if (prior && Math.abs(at - prior.at) <= USER_DEDUPE_MS) {
+    // FE6: two events of the SAME type with distinct `_id`s are two messages
+    // ("yes" to two asks), however close in time. The window still merges the
+    // during-execution copy with its `user_message` (two types, two ids) and
+    // id-less events; one `_id` seen twice never reaches here (`seenIds`).
+    const distinct = Boolean(event && event._id) && prior && prior.typed.has(type);
+    if (prior && !distinct && Math.abs(at - prior.at) <= USER_DEDUPE_MS) {
+      if (event && event._id) prior.typed.add(type);
       // The cut during-execution copy gives way to the full user_message text.
       if (prior.during && !during && text.length > prior.node.textContent.length) {
         prior.node.textContent = text;
@@ -405,7 +415,8 @@ export class Transcript {
     const bubble = el('div', 'bubble', text);
     turn.appendChild(bubble);
     this.thread.appendChild(turn);
-    this.userBubbles.set(key, { at, node: bubble, during });
+    this.userBubbles.set(key, { at, node: bubble, during,
+      typed: new Set(event && event._id ? [type] : []) });
   }
 
   /** Close the open turn in *state*: its receipt drawn once more, without
@@ -601,6 +612,17 @@ export class Transcript {
     }
   }
 
+  /** FE12: advance a live open turn's elapsed time in place (the page calls
+   *  this every second). Only the `{elapsed}` value changes — the receipt is
+   *  not rebuilt, so a focused Stop or Steer button keeps its focus. */
+  tick() {
+    const turn = this.turn;
+    if (!turn || !this.live || !turn.receipt) return;
+    if (turn.state !== 'working' && turn.state !== 'waiting') return;
+    const slot = turn.receipt.querySelector('[data-slot="elapsed"]');
+    if (slot) slot.textContent = elapsedWords(this.now() - turn.start);
+  }
+
   /** Stop → the existing cancel endpoint. Optimistic, like the legacy path. */
   async stop() {
     const url = `/api/task/sessions/${encodeURIComponent(this.sessionId)}/cancel`;
@@ -793,6 +815,82 @@ async function backfill(transcript, sessionId) {
   }
 }
 
+/**
+ * Bind the session socket's events to *transcript*. Exported for tests.
+ *
+ * FE1: a RE-connect after the backfill was drawn holds live events again,
+ * rejoins, and backfills again (`refill`) before it flushes — a reply written
+ * while the laptop slept, the Wi-Fi dropped or the server redeployed is drawn;
+ * the `_id` dedupe keeps what is already on screen to one row. A connect while
+ * a backfill is still loading only rejoins: that backfill covers the gap.
+ *
+ * FE18: the live notice clears only when the server ACKS a join it did not
+ * refuse (the refusal arrives before the ack on the same socket) — never when
+ * the join is merely sent.
+ */
+export function wireSession(socket, transcript, sessionId, opts = {}) {
+  const refill = opts.refill || (() => Promise.resolve());
+  const settle = opts.settle || (() => {});
+  const later = opts.later || setTimeout;
+  let refusals = 0;
+  const join = () => {
+    const before = refusals;
+    socket.emit('join_session', { session_id: sessionId }, () => {
+      if (refusals === before) transcript._readNotice('live', '');
+    });
+  };
+  // Hold live events, backfill again, then flush — the `_id` dedupe keeps
+  // what is already drawn to one row. A backfill already loading covers it.
+  const resync = () => {
+    if (transcript.buffer !== null) return false;
+    transcript.startBuffer();
+    Promise.resolve()
+      .then(() => refill())
+      .catch((err) => console.error('[transcript] re-backfill failed', err))
+      .finally(() => transcript.flush());
+    return true;
+  };
+  socket.on('connect', () => {
+    if (transcript.buffer === null) {
+      resync();
+      join();
+    } else {
+      join();
+    }
+    settle();
+  });
+  // WS4: the server's per-room limit dropped `feed_update`s and says so ONCE
+  // per gap. Wait out its window (bounded), then refill — one pending refill
+  // at a time, however many gaps arrive meanwhile.
+  let gapPending = false;
+  socket.on('feed_gap', (body) => {
+    const room = body && body.session_id ? String(body.session_id) : '';
+    if (room && room !== sessionId && !sessionId.endsWith(room) && !room.endsWith(sessionId)) return;
+    if (gapPending) return;
+    gapPending = true;
+    const asked = Number(body && body.retry_after);
+    const wait = Number.isFinite(asked) && asked > 0 ? Math.min(asked, 300) : 60;
+    later(() => { gapPending = false; resync(); }, wait * 1000);
+  });
+  socket.on('disconnect', () => transcript._readNotice('live', transcript.copy.live_unavailable));
+  socket.on('connect_error', () => {
+    transcript._readNotice('live', transcript.copy.live_unavailable);
+    settle();
+  });
+  // 070 E.31: a refusal carries a code; the console chooses the words and
+  // never shows the server's message.
+  socket.on('error', (body) => {
+    refusals += 1;
+    transcript._readNotice('live', liveNotice(body, transcript.copy));
+    // 070 W0.17: the socket stays on a rate limit; join again after the window.
+    if (body && body.code === 'rate_limited') {
+      const wait = Number(body.retry_after) > 0 ? Number(body.retry_after) : 60;
+      later(join, wait * 1000);
+    }
+  });
+  socket.on('feed_update', (item) => transcript.receive(item));
+}
+
 /** Join the session room. Resolves once the socket first connects (the room
  *  is joined on connect) or fails, or after 3 s — the backfill then runs, and
  *  every live event that arrives meanwhile is held by `transcript.buffer`. */
@@ -813,33 +911,10 @@ async function connect(transcript, sessionId) {
     transports: ['polling', 'websocket'],
     reconnection: true,
   });
-  socket.on('connect', () => {
-    // A reconnect after the backfill is live at once; the first connect is
-    // made live by `flush()` once the backfill is drawn.
-    if (transcript.buffer === null) transcript.live = true;
-    transcript._readNotice('live', '');
-    socket.emit('join_session', { session_id: sessionId });
-    settle();
+  wireSession(socket, transcript, sessionId, {
+    settle: () => settle(),
+    refill: () => backfill(transcript, sessionId),
   });
-  socket.on('disconnect', () => transcript._readNotice('live', transcript.copy.live_unavailable));
-  socket.on('connect_error', () => {
-    transcript._readNotice('live', transcript.copy.live_unavailable);
-    settle();
-  });
-  // 070 E.31: a refusal carries a code; the console chooses the words and
-  // never shows the server's message.
-  socket.on('error', (body) => {
-    transcript._readNotice('live', liveNotice(body, transcript.copy));
-    // 070 W0.17: the socket stays on a rate limit; join again after the window.
-    if (body && body.code === 'rate_limited') {
-      const wait = Number(body.retry_after) > 0 ? Number(body.retry_after) : 60;
-      setTimeout(() => {
-        socket.emit('join_session', { session_id: sessionId });
-        transcript._readNotice('live', '');
-      }, wait * 1000);
-    }
-  });
-  socket.on('feed_update', (item) => transcript.receive(item));
   await first;
 }
 
@@ -883,6 +958,8 @@ export function mount() {
 
   // Join first, then backfill: nothing written while the page loads is lost,
   // and an event in both the backfill and the room draws once (`_id`).
+  // FE12: "Working for 3s" must count while the turn runs.
+  setInterval(() => transcript.tick(), 1000);
   transcript.startBuffer();
   connect(transcript, sessionId)
     .then(() => backfill(transcript, sessionId))

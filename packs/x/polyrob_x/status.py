@@ -39,7 +39,11 @@ def lines_from(st: Dict[str, Any]) -> List[str]:
                     + ("; the next call refreshes it" if refresh else
                        " and no refresh token is held — re-login: `/x login`"))
         else:
-            head = f"X login (OAuth 2.0, DMs): valid, access token expires in {_duration(int(left))}"
+            # 2026-10-03: "expires in 1h 59m" read as "log in again in 2 hours".
+            # The 2-hour access token renews itself; only the login can die.
+            head = ("X login (OAuth 2.0, DMs): valid, renews itself"
+                    + (f" (access token: {_duration(int(left))} left)" if refresh else
+                       f", access token expires in {_duration(int(left))}"))
         if st.get("stored") and not refresh and (left is None or int(left) > 0):
             head += " (no refresh token — it dies at expiry)"
         out = [head]

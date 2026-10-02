@@ -9,14 +9,15 @@ Registry introspects each action's first-parameter annotation to route the
 validated param model, and stringized annotations break that.
 
 Every verb here does the SAME three things and nothing else: the flag, the turn
-origin (+ the 031 pause for a write), then hands the validated params to
-``<package>.verbs.<verb>(tool, params, execution_context)`` (package verb names:
-snapshot, inspect, journal, bind, mint). ``revoke_all`` and ``withdraw_token`` are core-owned
-(``tools/agent_nft/withdraw.py``, 069 v4 A4), like the collection reveal. ``bind`` registers the
-account's ERC-8004 identity; there is no grant verb. The package
-builds the intent (``TxIntent.via_account``) and calls ``tx_guard`` — core's ONE
-authorizer — through :meth:`AgentNftTool.guard`. A missing package is a refusal with
-a remedy, never an import error at registration.
+origin (+ the 031 pause for a write), then runs its body. Core owns snapshot, inspect, journal
+and bind (``tools/agent_nft/core_verbs.py``, C20), revoke_all and withdraw_token
+(``tools/agent_nft/withdraw.py``, 069 v4 A4), adopt's history and handover (``adopt.py``) and the
+collection reveal — none needs the package. The agent-NFT package keeps ``mint`` and adopt's
+pfp / positions / Brief (``<package>.verbs.<verb>(tool, params, execution_context)``) and adds a
+collection's own view lines through ``verbs.extend_view(view, rpc)``. ``bind`` registers the
+account's ERC-8004 identity; there is no grant verb. Every write builds a ``TxIntent`` and
+calls ``tx_guard`` — core's ONE authorizer — through :meth:`AgentNftTool.guard`. A missing
+package is a refusal with a remedy only for its own verbs.
 """
 import logging
 import types
@@ -43,8 +44,20 @@ _DRY = Field(True, description=(
     "happen, broadcasting nothing. Set false to actually send."))
 
 
+_CHAIN = Field("robinhood", description="'robinhood' (4663) or 'robinhood-testnet' (46630).")
+_NFT = Field(None, description=(
+    "Which NFT: '<collection>#<id>', or '<id>' when one collection is pinned on the chain. Omit "
+    "when this treasury holds exactly one tracked NFT there."))
+_ACCOUNT = Field(None, pattern=r"^0x[0-9a-fA-F]{40}$", description=(
+    "Or name the NFT by its token-bound account address."))
+
+
 class SnapshotParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    # C10: two NFTs on one chain must be nameable.
+    chain: Literal["robinhood", "robinhood-testnet"] = _CHAIN
+    nft: Optional[str] = _NFT
+    account: Optional[str] = _ACCOUNT
 
 
 class InspectParams(BaseModel):
@@ -65,6 +78,9 @@ class JournalParams(BaseModel):
     anchor: bool = Field(False, description=(
         "Also anchor the journal head on-chain now (setMetadata through the account; fee only)."))
     max_spend_usd: float = Field(1.0, gt=0, description="Most USD of FEE authorized for an anchor.")
+    chain: Literal["robinhood", "robinhood-testnet"] = _CHAIN
+    nft: Optional[str] = _NFT
+    account: Optional[str] = _ACCOUNT
     dry_run: bool = _DRY
 
 
@@ -72,15 +88,25 @@ class BindParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
     agent_uri: str = Field("", description="Optional registration-file URI for the account's identity.")
     max_spend_usd: float = Field(2.0, gt=0, description="Most USD of FEE authorized.")
+    chain: Literal["robinhood", "robinhood-testnet"] = _CHAIN
+    nft: Optional[str] = _NFT
+    account: Optional[str] = _ACCOUNT
     dry_run: bool = _DRY
 
 
-_CHAIN = Field("robinhood", description="'robinhood' (4663) or 'robinhood-testnet' (46630).")
-_NFT = Field(None, description=(
-    "Which NFT: '<collection>#<id>', or '<id>' when one collection is pinned on the chain. Omit "
-    "when this treasury holds exactly one tracked NFT there."))
-_ACCOUNT = Field(None, pattern=r"^0x[0-9a-fA-F]{40}$", description=(
-    "Or name the NFT by its token-bound account address."))
+class AdoptParams(BaseModel):
+    """C3 — start working from an NFT this treasury owns (ALWAYS owner-approved)."""
+    model_config = ConfigDict(extra="forbid")
+    chain: Literal["robinhood", "robinhood-testnet"] = _CHAIN
+    nft: Optional[str] = _NFT
+    account: Optional[str] = _ACCOUNT
+    accept_open_approvals: bool = Field(False, description=(
+        "Adopt even though the account has open approvals (they survive a transfer)."))
+    accept_incomplete_coverage: bool = Field(False, description=(
+        "Adopt even though the approval table could not be read completely."))
+    track_pnl: bool = Field(True, description="Track the PNL the account holds as an inherited position.")
+    max_spend_usd: float = Field(1.0, gt=0, description="Most USD of FEE for the on-chain handover entry.")
+    dry_run: bool = _DRY
 
 
 class RevokeAllParams(BaseModel):
@@ -219,6 +245,29 @@ class AgentNftTool(WalletHolderMixin, BaseTool):
             logger.warning("agent_nft %s failed", verb, exc_info=True)
             return self._ar(error=f"agent_nft {verb} failed: {exc}. Nothing was broadcast unless a tx hash is shown.")
 
+    # -- core seams the package calls (J1, C3) ---------------------------------
+
+    def journal_history(self, params):
+        """``(held, entries)``: the NFT named by *params* (chain / nft / account) and its verified
+        journal chain (on chain when a ``journal_log`` is pinned). Raises when unreadable."""
+        from tools.agent_nft import journal_write
+        from tools.agent_nft.withdraw import _held
+        held, _signer = _held(self, params, None)
+        return held, journal_write.history(self, held)
+
+    async def write_journal_entry(self, params, *, kind: str, text: str, execution_context=None):
+        """One entry with no action (thesis / note / handover): on chain through the account
+        when a ``journal_log`` is pinned, else the local journal. Honours ``params.dry_run`` and
+        ``params.max_spend_usd``."""
+        from tools.agent_nft import journal_write
+        from tools.agent_nft.withdraw import _held
+        held, signer = _held(self, params, execution_context)
+        return await journal_write.write_entry(
+            self, held=held, signer=signer, kind=kind, text=text,
+            dry_run=getattr(params, "dry_run", True),
+            max_spend_usd=getattr(params, "max_spend_usd", 1.0),
+            execution_context=execution_context)
+
     # -- reads ----------------------------------------------------------------
 
     @BaseTool.action(
@@ -227,7 +276,7 @@ class AgentNftTool(WalletHolderMixin, BaseTool):
         "identity, reveal state, native balance, journal entry count and head. Read-only.",
         param_model=SnapshotParams)
     async def agent_nft_snapshot(self, params: SnapshotParams, execution_context=None):
-        return await self._run("snapshot", params, execution_context, write=False)
+        return await self._core_body("snapshot", params, execution_context, write=False)
 
     @BaseTool.action(
         "Inspect ANY agent NFT before buying or taking it: open approvals FIRST with their coverage "
@@ -235,7 +284,7 @@ class AgentNftTool(WalletHolderMixin, BaseTool):
         "table, lockedUntil, revealed), owner, state, identity count, native balance. Read-only.",
         param_model=InspectParams)
     async def agent_nft_inspect(self, params: InspectParams, execution_context=None):
-        return await self._run("inspect", params, execution_context, write=False)
+        return await self._core_body("inspect", params, execution_context, write=False)
 
     # -- writes (every one through tx_guard with via_account) ---------------------
 
@@ -244,18 +293,34 @@ class AgentNftTool(WalletHolderMixin, BaseTool):
         "instance owns; optionally anchor the head on-chain through the account (fee only).",
         param_model=JournalParams)
     async def agent_nft_journal(self, params: JournalParams, execution_context=None):
-        return await self._run("journal", params, execution_context, write=True)
+        return await self._core_body("journal", params, execution_context, write=True)
 
     @BaseTool.action(
         "Register the owned NFT account's ERC-8004 identity THROUGH the account (agentWallet = the "
         "account). Refuses if the account already holds one. Fee only.",
         param_model=BindParams)
     async def agent_nft_bind_identity(self, params: BindParams, execution_context=None):
-        return await self._run("bind", params, execution_context, write=True)
+        return await self._core_body("bind", params, execution_context, write=True)
+
+    async def _core_body(self, verb: str, params, execution_context, *, write: bool):
+        """C20: snapshot / inspect / journal / bind are core-owned (``tools/agent_nft/core_verbs.py``)
+        and need no package; the package only adds a collection's own lines (``extend_view``)."""
+        err = self._gate(execution_context, verb, write=write,
+                         dry_run=getattr(params, "dry_run", True), needs_package=False)
+        if err:
+            return self._ar(error=err)
+        from tools.agent_nft import core_verbs
+        try:
+            return await getattr(core_verbs, verb)(self, params, execution_context)
+        except Exception as exc:  # noqa: BLE001 — a verb failure is an error result, never a crash
+            logger.warning("agent_nft %s failed", verb, exc_info=True)
+            return self._ar(error=f"agent_nft {verb} failed: {exc}. Nothing was broadcast unless a "
+                                  f"tx hash is shown.")
 
     @BaseTool.action(
         "Revoke the open approvals the approval scan finds on the owned NFT account (ERC-20 "
-        "allowances, ApprovalForAll grants, single-token NFT approvals, Permit2 allowances), through "
+        "allowances, ApprovalForAll grants, single-token NFT approvals, Permit2 allowances, ERC-6909 "
+        "allowances and operators), through "
         "the account, one guarded call each — do this before the NFT leaves. NOT revoked: anything "
         "the scan does not find (an approval table reported incomplete stays incomplete). Fee only.",
         param_model=RevokeAllParams)
@@ -290,6 +355,29 @@ class AgentNftTool(WalletHolderMixin, BaseTool):
     async def agent_nft_withdraw_token(self, params: TakeParams, execution_context=None):
         # Core-owned body (069 v4 A4): the owner's `/nft send <id> <to>` runs it.
         return await self._core("withdraw", params, execution_context, entry=False)
+
+    @BaseTool.action(
+        "Adopt an agent NFT this treasury owns: read its journal history from the chain, then "
+        "(dry_run=false) the package's owner-side checks, pfp, inherited positions and Brief, and "
+        "a signed handover entry on chain through its account. ALWAYS owner-approved.",
+        param_model=AdoptParams)
+    async def agent_nft_adopt(self, params: AdoptParams, execution_context=None):
+        from core.security.owner_turn import owner_turn_refusal
+        why = owner_turn_refusal(execution_context, verb="agent_nft_adopt",
+                                 does="adopts an NFT", public="adopt an agent NFT")
+        if why:
+            return self._ar(error=f"{why}. Nothing was written.")
+        err = self._gate(execution_context, "adopt", write=True, dry_run=params.dry_run,
+                         entry=False, needs_package=not params.dry_run)
+        if err:
+            return self._ar(error=err)
+        from tools.agent_nft import adopt as _adopt
+        try:
+            return await _adopt.adopt(self, params, execution_context)
+        except Exception as exc:  # noqa: BLE001 — a verb failure is an error result, never a crash
+            logger.warning("agent_nft adopt failed", exc_info=True)
+            return self._ar(error=f"agent_nft adopt failed: {exc}. Nothing was broadcast unless a "
+                                  f"tx hash is shown.")
 
     async def _core(self, verb: str, params, execution_context, *, entry: bool):
         err = self._gate(execution_context, verb, write=True, dry_run=params.dry_run,

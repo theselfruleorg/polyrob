@@ -157,9 +157,20 @@ class RemoteEvmSigner:
         return RemoteAccount(self._client, self._address, self._venue)
 
     def sign_message(self, data):
-        """The signer has no generic message signing (066 §5; 069 v4 removed the account
-        journal op with the binding): every message refuses here."""
-        raise WalletSigningUnavailable(_refusal("sign a message"))
+        """ONLY the account journal template (C1): ``journal.sign`` in the signer, which re-checks
+        the template. The signer has no generic message signing (066 §5): every other message
+        refuses here."""
+        from core.wallet.account_journal import is_journal_template
+        if not is_journal_template(bytes(data) if isinstance(data, (bytes, bytearray)) else b""):
+            raise WalletSigningUnavailable(_refusal("sign a message"))
+        if not self._verified_fn():
+            raise WalletSigningUnavailable(
+                "the remote signer is not VERIFIED in this process — refusing to sign")
+        result = self._client.call("journal.sign", {"message": bytes(data).decode("utf-8")})
+        if str(result.get("address") or "").lower() != self._address.lower():
+            raise WalletSigningUnavailable(
+                f"the signer signed the journal with {result.get('address')}, not {self._address}")
+        return result["signature"]
 
     def sign_typed_data(self, domain, types, message):
         raise WalletSigningUnavailable(_refusal("sign typed data"))

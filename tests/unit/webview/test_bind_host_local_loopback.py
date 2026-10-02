@@ -47,3 +47,12 @@ def test_local_default_is_loopback(monkeypatch):
 def test_multitenant_may_bind_non_loopback(monkeypatch):
     wg = _webgate(monkeypatch, "multitenant", host="0.0.0.0")
     assert wg.bind_host() == "0.0.0.0"
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_local_blank_host_is_not_loopback(monkeypatch, blank):
+    """WS6: uvicorn reads an empty host as EVERY interface — at `local` (no auth)
+    a blank WEBGATE_HOST must be forced to loopback, never passed through."""
+    wg = _webgate(monkeypatch, "local", host=blank)
+    assert wg.bind_host() == "127.0.0.1"
+    assert wg._is_loopback_host(blank) is False

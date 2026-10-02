@@ -25,6 +25,13 @@ from api.a2a.streaming import router as a2a_streaming_router
 from api.openai_compat.router import router as openai_compat_router
 
 
+#: API10: only a NEW `message/send` is billed on /a2a/rpc, so it is the only
+#: JSON-RPC body that is challenged or settled; `tasks/*` reads stay free.
+_NEW_SEND = {"jsonrpc": "2.0", "id": 1, "method": "message/send", "params": {
+    "message": {"role": "user", "messageId": "m1",
+                "parts": [{"kind": "text", "text": "hi"}]}}}
+
+
 def _app():
     app = FastAPI()
     # Real routers, real prefixes — same routers api/app.py mounts.
@@ -43,7 +50,7 @@ def test_anonymous_request_to_real_gated_a2a_rpc_gets_402_challenge(monkeypatch)
     monkeypatch.setenv("X402_PRICE_USD", "0.02")
     client = _app()
 
-    resp = client.post("/a2a/rpc", json={"jsonrpc": "2.0", "id": 1, "method": "tasks/list", "params": {}})
+    resp = client.post("/a2a/rpc", json=_NEW_SEND)
 
     assert resp.status_code == 402
     body = resp.json()
@@ -115,7 +122,7 @@ def test_request_with_bearer_header_is_not_challenged(monkeypatch):
 
     resp = client.post(
         "/a2a/rpc",
-        json={"jsonrpc": "2.0", "id": 1, "method": "tasks/list", "params": {}},
+        json=_NEW_SEND,
         headers={"Authorization": "Bearer some.jwt.token"},
     )
 
@@ -131,7 +138,7 @@ def test_misconfigured_x402_does_not_challenge(monkeypatch):
 
     resp = client.post(
         "/a2a/rpc",
-        json={"jsonrpc": "2.0", "id": 1, "method": "tasks/list", "params": {}},
+        json=_NEW_SEND,
     )
     assert resp.status_code != 402
 
@@ -265,7 +272,7 @@ def test_payment_header_with_unavailable_facilitator_gets_honest_error(monkeypat
 
     resp = client.post(
         "/a2a/rpc",
-        json={"jsonrpc": "2.0", "id": 1, "method": "tasks/list", "params": {}},
+        json=_NEW_SEND,
         headers={"X-PAYMENT": "some-base64-payload"},
     )
 
@@ -287,7 +294,7 @@ def test_payment_header_no_other_auth_facilitator_down_is_exactly_503(monkeypatc
 
     resp = client.post(
         "/a2a/rpc",
-        json={"jsonrpc": "2.0", "id": 1, "method": "tasks/list", "params": {}},
+        json=_NEW_SEND,
         headers={"X-PAYMENT": "some-base64-payload"},
     )
 
@@ -330,7 +337,7 @@ def test_stray_payment_header_with_api_key_not_503_reaches_downstream(monkeypatc
 
     resp = client.post(
         "/a2a/rpc",
-        json={"jsonrpc": "2.0", "id": 1, "method": "tasks/list", "params": {}},
+        json=_NEW_SEND,
         headers={
             "X-PAYMENT": "some-base64-payload",
             "X-API-KEY": "rob_some_valid_looking_key",
@@ -349,7 +356,7 @@ def test_stray_payment_header_with_bearer_token_not_503_reaches_downstream(monke
 
     resp = client.post(
         "/a2a/rpc",
-        json={"jsonrpc": "2.0", "id": 1, "method": "tasks/list", "params": {}},
+        json=_NEW_SEND,
         headers={
             "X-PAYMENT": "some-base64-payload",
             "Authorization": "Bearer some.jwt.token",

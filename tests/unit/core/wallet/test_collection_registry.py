@@ -70,6 +70,8 @@ def test_an_unreadable_file_is_not_an_empty_one(tmp_path):
     (lambda d: d["profiles"][0].update(address="0x1234"), "address"),
     (lambda d: d["profiles"][0].update(runtime_sha256="xyz"), "runtime_sha256"),
     (lambda d: d["profiles"][0].update(journal_prefix="bad\nprefix"), "journal_prefix"),
+    (lambda d: d["profiles"][0].update(journal_log="0x1234"), "journal_log"),
+    (lambda d: d["profiles"][0].update(journal_log=None), "journal_log"),
     (lambda d: d["profiles"][0].update(extra=1), "unknown field"),
     (lambda d: d["profiles"][0].pop("max_supply"), "missing"),
     (lambda d: d["profiles"].append(copy.deepcopy(d["profiles"][0])), "pinned twice"),
@@ -80,6 +82,15 @@ def test_off_schema_refuses_the_whole_registry(mutate, needle):
     mutate(doc)
     with pytest.raises(CR.CollectionRegistryError, match=needle):
         CR.parse(doc)
+
+
+def test_j2_the_journal_log_is_optional():
+    """J2: polyrob-desk's ``script/pin.py`` writes ``journal_log``; a profile without it stays valid."""
+    (without,) = CR.parse(_doc())
+    assert without.journal_log is None
+    log = "0x" + "Ab" * 20
+    (with_log,) = CR.parse(_doc(journal_log=log))
+    assert with_log.journal_log == log.lower()
 
 
 def test_known_call_shapes_are_accepted():

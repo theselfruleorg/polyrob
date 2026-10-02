@@ -191,6 +191,9 @@ async def test_set_from_a_workspace_file_on_an_owner_turn(home, tmp_path, monkey
     st = load_avatar(home, "rob")
     assert st.is_set and st.source == "file:new.png"
     assert st.path.read_bytes() == PNG + b"new"
+    # set_from writes the slot only; it must not claim the profile photos changed
+    assert "every surface" not in res.extracted_content
+    assert "polyrob avatar push" in res.extracted_content
 
 
 @pytest.mark.asyncio

@@ -670,7 +670,7 @@ with their current value; from chat, `/config set KEY VALUE`.
 | Budget | `budget.wallet_daily_usd`, `budget.wallet_per_tx_usd`, `budget.defi_autonomous_usd` | daily = min(pref, env); per-tx and autonomous = your approved value, clamped to the daily cap |
 | Goals | `goals.daily_quota`, `goals.max_concurrent`, `goals.notify_on_done` | |
 | Autonomy | `autonomy.self_wake`, `autonomy.background_review` | |
-| Delivery | `delivery.rate_per_hour`, `delivery.daily_cap`, `digest.enabled`, `digest.channel`, `digest.quiet_hours`, `progress.telegram`, `voice.replies` | owner notices and the daily digest; `voice.replies` also answers you with a voice note on Telegram (needs `OPENAI_API_KEY`, or espeak-ng + ffmpeg) |
+| Delivery | `delivery.rate_per_hour`, `delivery.daily_cap`, `digest.enabled`, `digest.channel`, `digest.quiet_hours`, `digest.timezone`, `progress.telegram`, `voice.replies` | owner notices and the daily digest; `voice.replies` also answers you with a voice note on Telegram (needs `OPENAI_API_KEY`, or espeak-ng + ffmpeg) |
 | Outbound | `outbound.policy`, `outbound.domains`, `outbound.max_new_recipients_per_day`, `outbound.daily_send_cap` | |
 | Rooms | `chat.mode`, `chat.name`, `chat.instructions`, `chat.wake_words`, `chat.reply_cap_per_hour`, `chat.member_cooldown_sec`, `chat.context_lines`, `chat.quiet_hours`, `chat.mute_until`, `chat.tone`, `chat.verbosity`, `chat.language` | per room; set with `/groups set here KEY VALUE` |
 | UI | `ui.show_avatar` | |

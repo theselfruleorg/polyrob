@@ -127,3 +127,33 @@ def test_push_twitter_is_hash_idempotent(monkeypatch, tmp_path):
     r2 = CliRunner().invoke(avatar, ["push", "--twitter"])
     assert "updated" in r1.output and "unchanged, skipped" in r2.output
     assert len(calls) == 1
+
+
+def test_push_telegram_sets_the_bot_and_each_group_once(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    monkeypatch.setenv("PFP_PUSH_TELEGRAM", "true")
+    slot.set_avatar(tmp_path, "rob", PNG, source="x")
+    calls = []
+    monkeypatch.setattr("modules.avatar.push.push_telegram_bot",
+                        lambda p: calls.append(("bot", None)))
+    monkeypatch.setattr("modules.avatar.push.push_telegram_chat",
+                        lambda p, c: calls.append(("chat", c)))
+    r1 = CliRunner().invoke(avatar, ["push", "--telegram-chat", "-1001"])
+    r2 = CliRunner().invoke(avatar, ["push", "--telegram-chat", "-1001"])
+    assert "bot photo updated" in r1.output and "chat -1001 photo updated" in r1.output, r1.output
+    assert r2.output.count("unchanged, skipped") == 2, r2.output
+    assert calls == [("bot", None), ("chat", "-1001")]
+
+
+def test_push_telegram_failure_gives_the_manual_path(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    monkeypatch.setenv("PFP_PUSH_TELEGRAM", "true")
+    slot.set_avatar(tmp_path, "rob", PNG, source="x")
+
+    def boom(*a):
+        raise RuntimeError("setChatPhoto: Bad Request: not enough rights")
+    monkeypatch.setattr("modules.avatar.push.push_telegram_bot", boom)
+    monkeypatch.setattr("modules.avatar.push.push_telegram_chat", boom)
+    res = CliRunner().invoke(avatar, ["push", "--telegram-chat", "-1001"])
+    assert res.exit_code == 0, res.output
+    assert "/setuserpic" in res.output and "admin" in res.output

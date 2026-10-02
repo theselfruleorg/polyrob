@@ -69,14 +69,58 @@ class Conversation:
 
 class ConversationCache:
     """conversationId → the newest session webhook + how to reach it proactively.
-    In memory: a restart simply falls back to the OpenAPI until the next inbound."""
 
-    def __init__(self) -> None:
+    OS11: with ``db_path`` the rows are also written to SQLite (table
+    ``dingtalk_conversations``) and read back at start. In memory only, a
+    restart forgot whether a ``cid…`` was a DM, so a notice to a DM was sent
+    to the GROUP API with the DM's conversation id and failed until the user
+    wrote again. A store fault is logged and the cache stays in memory.
+    """
+
+    _SCHEMA = """
+    CREATE TABLE IF NOT EXISTS dingtalk_conversations (
+        chat_id    TEXT PRIMARY KEY,
+        webhook    TEXT NOT NULL,
+        expires_at REAL NOT NULL,
+        is_group   INTEGER NOT NULL,
+        user_id    TEXT NOT NULL
+    );
+    """
+
+    def __init__(self, db_path: Optional[str] = None) -> None:
         self._rows: Dict[str, Conversation] = {}
+        self._db_path = db_path or ""
+        if self._db_path:
+            try:
+                from core.sqlite_util import execute_retry, init_schema
+                init_schema(self._db_path, self._SCHEMA, mkdir=True)
+                for r in execute_retry(
+                        self._db_path, "SELECT chat_id, webhook, expires_at, is_group, "
+                        "user_id FROM dingtalk_conversations", fetch="all") or []:
+                    self._rows[str(r[0])] = Conversation(
+                        webhook=str(r[1] or ""), expires_at=float(r[2] or 0.0),
+                        is_group=bool(r[3]), user_id=str(r[4] or ""))
+            except Exception:
+                logger.warning("dingtalk: conversation store %s unreadable — "
+                               "in memory only", self._db_path, exc_info=True)
+                self._db_path = ""
 
     def remember(self, chat_id: str, conv: Conversation) -> None:
-        if chat_id:
-            self._rows[chat_id] = conv
+        if not chat_id:
+            return
+        self._rows[chat_id] = conv
+        if self._db_path:
+            try:
+                from core.sqlite_util import execute_retry
+                execute_retry(
+                    self._db_path,
+                    "INSERT OR REPLACE INTO dingtalk_conversations "
+                    "(chat_id, webhook, expires_at, is_group, user_id) VALUES (?,?,?,?,?)",
+                    (chat_id, conv.webhook or "", float(conv.expires_at or 0.0),
+                     1 if conv.is_group else 0, conv.user_id or ""))
+            except Exception:
+                logger.warning("dingtalk: conversation %s not persisted", chat_id,
+                               exc_info=True)
 
     def get(self, chat_id: str) -> Optional[Conversation]:
         return self._rows.get(chat_id)

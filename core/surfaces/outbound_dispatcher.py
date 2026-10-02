@@ -4,12 +4,13 @@ in the live run loop, not drain_once, so tests are reproducible)."""
 import asyncio
 import logging
 import random
-from typing import Callable, Optional
+import uuid
+from typing import Callable, Iterable, Optional
 
 from core.config_policy import dead_target_registry_enabled
 from core.surfaces.dead_targets import classify_dead_error
 from core.surfaces.envelopes import OutboundMessage
-from core.surfaces.outbound_queue import OutboundDeliveryQueue
+from core.surfaces.outbound_queue import INFLIGHT_LEASE_SEC, OutboundDeliveryQueue
 from core.rate_limit import TokenBucket
 
 logger = logging.getLogger(__name__)
@@ -18,6 +19,11 @@ logger = logging.getLogger(__name__)
 #: Same idiom as the circuit-breaker defer: attempts are NOT burned, so a hold can
 #: never dead-letter a message — it is released on the first tick after `resume`.
 _PAUSE_HOLD_SEC = 30.0
+
+#: OB5: a row this process claimed but cannot send (its surface is not hosted
+#: here) waits this long and keeps its attempts — "no surface" is a fact about
+#: THIS process, not a delivery failure.
+_NOT_HOSTED_SEC = 15.0
 
 #: 031: session_key prefix of the PROACTIVE, agent-initiated rail
 #: (``MessageRouter.send_message``'s cross-process fallback — the `message` tool
@@ -40,9 +46,15 @@ class OutboundDispatcher:
                  rate_per_sec: float = 20.0, burst: int = 20,
                  circuit: Optional["SurfaceCircuitBreaker"] = None,
                  dead_targets: Optional["DeadTargetStore"] = None,
-                 event_log: Optional[object] = None) -> None:
+                 event_log: Optional[object] = None,
+                 hosted_surfaces: Optional[Callable[[], Iterable[str]]] = None) -> None:
         self._q = queue
         self._lookup = surface_lookup
+        # OB5: the surfaces THIS process can send on. None = claim every
+        # surface (legacy / tests); bootstrap passes the router's subscriptions.
+        self._hosted = hosted_surfaces
+        # OB6: this dispatcher's lease id on the rows it claims.
+        self._token = uuid.uuid4().hex
         self._max = max_attempts
         self._base = base_backoff
         self._bucket = TokenBucket(rate_per_sec, burst)
@@ -120,11 +132,40 @@ class OutboundDispatcher:
         except (TypeError, ValueError):
             return True
 
+    def _resume_partial(self, row, remaining) -> bool:
+        """OB7: a surface that reports its progress on a failed send. ``""`` =
+        the text landed (only a best-effort extra failed): delivered, True.
+        A shorter text = resume from it on the retry, never re-send what went.
+        ``None`` (progress unknown) keeps the whole row for the retry."""
+        if not isinstance(remaining, str):
+            return False
+        if not remaining.strip():
+            return True
+        if remaining != row.get("payload"):
+            setter = getattr(self._q, "set_payload", None)
+            if callable(setter):
+                try:
+                    setter(row["id"], remaining)
+                    logger.info("outbound: row %s partly sent; the retry resumes "
+                                "with %d chars", row["id"], len(remaining))
+                except Exception:
+                    logger.warning("outbound: row %s progress not saved (whole "
+                                   "row retried)", row["id"], exc_info=True)
+        return False
+
     async def drain_once(self, now: float) -> int:
         delivered = 0
         # One probe per drain (not per row): the record is a file read.
         hold = self._pause_hold()
-        for row in self._q.claim_due(now):
+        surfaces = None
+        if self._hosted is not None:
+            try:
+                surfaces = list(self._hosted() or [])
+            except Exception:
+                logger.debug("outbound: hosted-surface probe failed (claim all)",
+                             exc_info=True)
+                surfaces = None
+        for row in self._q.claim_due(now, surfaces=surfaces, token=self._token):
             surface_id = row["surface_id"]
 
             # --- 031 owner pause: HOLD, never drop. State stays 'pending' and
@@ -163,6 +204,20 @@ class OutboundDispatcher:
                                    attempts=row["attempts"])
                 continue
             surface = self._lookup(surface_id)
+            if surface is None:
+                # OB5: not hosted here. Hand it back WITHOUT an attempt or a
+                # breaker failure — the process that hosts it will claim it.
+                self._q.reschedule(row["id"], next_attempt_at=now + _NOT_HOSTED_SEC,
+                                   attempts=row["attempts"], error=row.get("last_error"))
+                logger.debug("outbound: surface %s not hosted here; row %s handed back",
+                             surface_id, row["id"])
+                continue
+            # OB6: renew the lease right before the send. A row another process
+            # reclaimed while this batch waited must not be sent a second time.
+            renew = getattr(self._q, "renew", None)
+            if callable(renew) and not renew(row["id"], row.get("claim_token")):
+                logger.info("outbound: lease on row %s lost (reclaimed); skipped", row["id"])
+                continue
             ok, err = False, "no surface"
             if surface is not None:
                 try:
@@ -179,12 +234,23 @@ class OutboundDispatcher:
                                 media = parsed
                         except (TypeError, ValueError):
                             logger.warning("outbound drain: bad media JSON on row %s", row["id"])
+                    if media:
+                        # OB17: the file must still be the one validated at
+                        # enqueue — a symlink swapped in since is refused.
+                        from core.surfaces.attachments import drop_swapped
+                        media, swapped = drop_swapped(media)
+                        if swapped:
+                            logger.warning("outbound drain: row %s dropped %d attachment(s) "
+                                           "changed since enqueue: %s", row["id"],
+                                           len(swapped), swapped)
                     res = await surface.send(OutboundMessage(
                         session_key=row["session_key"], text=row["payload"],
                         media=media,
                     ))
                     ok = bool(getattr(res, "success", False))
                     err = getattr(res, "error", None) or ("ok" if ok else "send returned False")
+                    if not ok:
+                        ok = self._resume_partial(row, getattr(res, "remaining_text", None))
                 except Exception as exc:  # fail-open: a raising surface reschedules, never crashes
                     ok, err = False, str(exc)
             if ok:
@@ -233,7 +299,7 @@ class OutboundDispatcher:
             try:
                 now_ts = _t.time()
                 if now_ts - getattr(self, "_last_reclaim", 0) > 60:
-                    self._q.reclaim_inflight(older_than=now_ts - 120)
+                    self._q.reclaim_inflight(older_than=now_ts - INFLIGHT_LEASE_SEC)
                     self._last_reclaim = now_ts
                 await self.drain_once(now=now_ts + random.uniform(0, 0.05))
             except Exception as exc:

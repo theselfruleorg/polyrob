@@ -42,6 +42,14 @@ from webview import webgate
 from webview.audit import console_write
 from webview.copy import has, t
 
+
+def _reason(exc: BaseException) -> str:
+    """The bounded, path-free reason for a JSON answer (``pages._safe_reason``,
+    imported lazily: ``webview.pages`` imports this module's neighbours)."""
+    from webview.pages import _safe_reason
+    return _safe_reason(exc)
+
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -689,7 +697,7 @@ def _bridges_body(user_id: str) -> dict:
     try:
         rows = open_bridges(str(user_id))
     except Exception as exc:
-        return {"bridges": None, "unreadable": f"{type(exc).__name__}: {exc}"}
+        return {"bridges": None, "unreadable": _reason(exc)}
     now = time.time()
     out = []
     for r in rows:
@@ -865,7 +873,7 @@ async def api_running(request: Request):
                              "running": [_running_dict(r) for r in rows]})
     except Exception as exc:
         return JSONResponse({"enabled": True, "running": [],
-                             "error": f"{type(exc).__name__}: {exc}"[:200]})
+                             "error": _reason(exc)})
 
 
 # --- what is in progress right now (2026-09-16 audit, B1) ------------------- #
@@ -957,7 +965,7 @@ def _tools_section() -> dict:
         from tools.descriptors import (
             TOOL_DESCRIPTORS, get_default_tools, get_tool_display_name)
     except Exception as exc:
-        return {"items": [], "error": f"{type(exc).__name__}: {exc}"[:200]}
+        return {"items": [], "error": _reason(exc)}
     default = set(get_default_tools())
     by_display = {get_tool_display_name(name): desc
                   for name, desc in TOOL_DESCRIPTORS.items()}
@@ -996,7 +1004,7 @@ def _skills_section(user_id: str) -> dict:
         # ⚠️ 043 A10: this used to become ``{}``, which every row then rendered
         # as "never used" and "0 loads" — a measurement, not the absence of
         # one. The reason rides out so the panel can dash those two columns.
-        usage, usage_error = {}, f"{type(exc).__name__}: {exc}"[:200]
+        usage, usage_error = {}, _reason(exc)
     try:
         from agents.task.agent.skill_manager import get_skill_manager
         sm = get_skill_manager()
@@ -1012,7 +1020,7 @@ def _skills_section(user_id: str) -> dict:
                 "load_count": u.get("load_count", 0),
             })
     except Exception as exc:
-        error = f"{type(exc).__name__}: {exc}"[:200]
+        error = _reason(exc)
     return {"items": (None if error else catalog), "error": error,
             "usage_error": usage_error}
 
@@ -1025,7 +1033,7 @@ def _mcp_section() -> dict:
         from tools.mcp.config import load_local_mcp_servers
         servers = load_local_mcp_servers()
     except Exception as exc:
-        return {"items": [], "error": f"{type(exc).__name__}: {exc}"[:200],
+        return {"items": [], "error": _reason(exc),
                 "enabled": False}
     from core.bootstrap import _cli_extra_gate
     enabled = _cli_extra_gate("mcp")
@@ -1071,7 +1079,7 @@ def _profiles_section() -> dict:
                           "what": model.description or model.name,
                           "on": True, "source": "profile", "last_used": None})
     except Exception as exc:
-        error = f"{type(exc).__name__}: {exc}"[:200]
+        error = _reason(exc)
     return {"items": (None if error else items), "error": error,
             "unreadable_rows": unreadable_rows}
 
@@ -1104,9 +1112,15 @@ async def _memory_search_body(user_id: str, query: str, limit: int) -> dict:
     Both legs are tenant-scoped by the provider. Honest states: no provider is a
     named ``unavailable`` (never an empty list read as "nothing remembered"), and
     a failed recall or notes read is NAMED in its own ``*_error`` field."""
-    from webview.pages import _memory_provider, _split_snippets
-    provider = _memory_provider()
+    from webview.pages import _memory_provider_status, _split_snippets
+    provider, mem_error = _memory_provider_status()
     mode = "search" if (query or "").strip() else "browse"
+    if provider is None and mem_error:
+        # WV4: the configured backend could not be BUILT — both legs are
+        # unreadable, never "nothing remembered" and never "not configured".
+        return {"provider": None, "mode": mode, "recall": None, "notes": None,
+                "recall_error": mem_error, "notes_error": mem_error,
+                "unavailable": False}
     if provider is None:
         return {"provider": None, "mode": mode, "recall": [], "notes": [],
                 "recall_error": None, "notes_error": None, "unavailable": True}
@@ -1115,7 +1129,7 @@ async def _memory_search_body(user_id: str, query: str, limit: int) -> dict:
         raw = await provider.search(query or "", user_id=user_id, limit=limit)
         recall = _split_snippets(raw)
     except Exception as exc:
-        recall_error = f"{type(exc).__name__}: {exc}"[:200]
+        recall_error = _reason(exc)
     notes, notes_error = [], None
     if hasattr(provider, "note_list"):
         try:
@@ -1130,7 +1144,7 @@ async def _memory_search_body(user_id: str, query: str, limit: int) -> dict:
                               "tags": n.get("tags") or [],
                               "updated_ts": n.get("updated_ts")})
         except Exception as exc:
-            notes_error = f"{type(exc).__name__}: {exc}"[:200]
+            notes_error = _reason(exc)
     return {"provider": getattr(provider, "name", None), "mode": mode,
             "recall": recall, "notes": notes, "recall_error": recall_error,
             "notes_error": notes_error, "unavailable": False,
@@ -1150,7 +1164,7 @@ def _held_in_scopes(provider, user_id: str):
         return {"enabled": scopes_enabled(), "scopes": len(rows),
                 "rows": sum(int(r.get("rows") or 0) for r in rows)}
     except Exception as exc:
-        return {"error": f"{type(exc).__name__}: {exc}"[:200]}
+        return {"error": _reason(exc)}
 
 
 @api_router.get("/api/webgate/memory/search")
@@ -1209,7 +1223,7 @@ def _flags_body(q: str, group: str) -> dict:
         from core.flags_catalog import CATALOG
     except Exception as exc:
         return {"flags": [], "count": 0, "queried": True, "groups": [],
-                "error": f"{type(exc).__name__}: {exc}"[:200]}
+                "error": _reason(exc)}
     from webview.config_view import flag_metadata
     ql = q.lower()
     out = []
@@ -1569,9 +1583,12 @@ async def api_memory_add(request: Request):
     Through the active MemoryProvider's own note store (tenant-scoped, capped,
     anon-refused by the provider), created by the owner from the console. Reach,
     not policy: no gate is added and no money verb runs."""
-    from webview.pages import _effective_user_id, _memory_provider
+    from webview.pages import _effective_user_id, _memory_provider_status
     user_id = _effective_user_id(request)
-    provider = _memory_provider()
+    provider, mem_error = _memory_provider_status()
+    if provider is None and mem_error:
+        return JSONResponse({"ok": False, "message": t("agent.unreachable"),
+                             "error": mem_error}, status_code=503)
     if provider is None or not hasattr(provider, "note_create"):
         return JSONResponse({"ok": False, "message": t("agent.memory.unavailable")},
                             status_code=409)
@@ -1603,9 +1620,12 @@ async def api_memory_forget(request: Request):
     the forget is recoverable and the reader (active notes only) stops showing
     it. Tenant-scoped by the provider — a note_id from another tenant is not
     found."""
-    from webview.pages import _effective_user_id, _memory_provider
+    from webview.pages import _effective_user_id, _memory_provider_status
     user_id = _effective_user_id(request)
-    provider = _memory_provider()
+    provider, mem_error = _memory_provider_status()
+    if provider is None and mem_error:
+        return JSONResponse({"ok": False, "message": t("agent.unreachable"),
+                             "error": mem_error}, status_code=503)
     if provider is None or not hasattr(provider, "note_archive"):
         return JSONResponse({"ok": False, "message": t("agent.memory.unavailable")},
                             status_code=409)

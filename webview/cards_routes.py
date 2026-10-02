@@ -41,13 +41,13 @@ def card_view(card) -> dict:
 @router.get("/api/webgate/cards")
 async def api_cards(request: Request):
     """The owner's open cards, newest first. An unreadable store is NAMED
-    (``readable: false``), never an empty list."""
+    (``readable: false``), never an empty list. A READ: it never sweeps stuck
+    cards (that writes and notifies — ``/cards`` in chat does it), and the
+    open list it shows holds only ``open`` cards anyway (audit WR11)."""
     from core.surfaces import cards
     from webview.pages import _wallet_owner_id
     uid = _wallet_owner_id(request)
     try:
-        for stuck in cards.store().sweep_stuck(str(uid)):
-            cards._notify(stuck)
         open_ = cards.store().open_cards(str(uid))
     except Exception as e:
         return JSONResponse({"readable": False, "reason": type(e).__name__,
@@ -76,9 +76,14 @@ async def api_card_pickers(request: Request):
     try:
         from core.wallet.token_trust import trust_view
         from webview.tokens_routes import _positions_db
+        view = trust_view(uid, positions_db=_positions_db())
         out["tokens"] = [{"chain": r.get("chain"), "address": r.get("address"),
                           "symbol": r.get("symbol") or ""}
-                         for r in trust_view(uid, positions_db=_positions_db()).get("trusted", [])]
+                         for r in view.get("trusted", [])]
+        # Audit WR4: a trust source trust_view could not read makes this list
+        # partial — say so, never offer a short list as the whole one.
+        if view.get("unreadable"):
+            out["unreadable"].append("tokens")
     except Exception:
         out["unreadable"].append("tokens")
     try:

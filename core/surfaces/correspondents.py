@@ -162,15 +162,33 @@ class CorrespondentRegistry:
             # idempotent: keep the existing row (never silently downgrade an active one)
             return existing["state"]
 
-        execute_retry(
+        # AC4: a concurrent seed can insert between the SELECT above and this
+        # INSERT. ON CONFLICT DO NOTHING + a re-read gives the loser the
+        # winner's state; the plain INSERT raised IntegrityError, which the
+        # seed caller swallowed as "disabled".
+        inserted = execute_retry(
             self.db_path,
             """INSERT INTO correspondents
                  (surface, address, thread_id, session_id, user_id, state, provenance,
                   created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(surface, address, thread_id, user_id) DO NOTHING""",
             (surface, addr, tid, session_id, user_id, state, provenance, ts, ts),
         )
+        if not inserted:
+            return self._state_of(surface, addr, tid, user_id) or state
         return state
+
+    def _state_of(self, surface: str, addr: str, tid: str,
+                  user_id: str) -> Optional[str]:
+        row = execute_retry(
+            self.db_path,
+            "SELECT state FROM correspondents "
+            "WHERE surface=? AND address=? AND thread_id=? AND user_id=?",
+            (surface, addr, tid, user_id),
+            fetch="one",
+        )
+        return row["state"] if row is not None else None
 
     def approve(
         self,
@@ -352,14 +370,17 @@ class CorrespondentRegistry:
         )
         if existing is not None:
             return existing["state"]
-        execute_retry(
+        inserted = execute_retry(
             self.db_path,
             """INSERT INTO correspondents
                  (surface, address, thread_id, session_id, user_id, state, provenance,
                   created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, 'thread', ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, 'thread', ?, ?)
+               ON CONFLICT(surface, address, thread_id, user_id) DO NOTHING""",
             (surface, addr, thread_id, session_id, user_id, state, ts, ts),
         )
+        if not inserted:  # AC4: a concurrent anchor won the race
+            return self._state_of(surface, addr, thread_id, user_id) or state
         return state
 
     def rebind_session(
@@ -384,15 +405,44 @@ class CorrespondentRegistry:
         )
 
     def purge_expired(self, ttl_secs: float, *, now: Optional[float] = None) -> int:
-        """Mark bindings idle longer than ``ttl_secs`` as expired. Returns the count."""
+        """Remove bindings idle longer than ``ttl_secs``. Returns the count.
+
+        ⚠️ AC3: this used to flip the row to ``expired`` — the same tombstone an
+        owner's :meth:`reject` writes — and the idempotent :meth:`seed` never
+        re-opens a tombstone, so a contact that went quiet for the TTL could
+        never be reached again by any seed or verb. An idle row is now DELETED:
+        it stops resolving exactly as before, and the next outbound seeds it
+        afresh under the current policy (pending unless the owner pre-approved).
+        Rows already ``expired`` (owner rejections, revocations) are left
+        alone — those tombstones are deliberate.
+        """
         ts = time.time() if now is None else now
         cutoff = ts - ttl_secs
         return int(
             execute_retry(
                 self.db_path,
-                """UPDATE correspondents SET state=?, updated_at=?
-                   WHERE state!=? AND updated_at < ?""",
-                (STATE_EXPIRED, ts, STATE_EXPIRED, cutoff),
+                "DELETE FROM correspondents WHERE state!=? AND updated_at < ?",
+                (STATE_EXPIRED, cutoff),
+            )
+        )
+
+    def prune_thread_anchors(self, max_age_secs: float, *,
+                             now: Optional[float] = None) -> int:
+        """Delete thread-anchor rows older than ``max_age_secs`` (AC5).
+
+        :meth:`seed_thread_anchor` writes one row per outbound message and
+        nothing removed them. An anchor only disambiguates a reply among one
+        verified sender's sessions; once it is gone a late reply still resolves
+        on the address-level binding, which this never touches. Returns the
+        count removed.
+        """
+        ts = time.time() if now is None else now
+        return int(
+            execute_retry(
+                self.db_path,
+                "DELETE FROM correspondents WHERE provenance='thread' "
+                "AND updated_at < ?",
+                (ts - float(max_age_secs),),
             )
         )
 

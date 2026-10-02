@@ -274,7 +274,12 @@ def cancel(container: Any, offer_id: str, *, by: str = "owner",
     if row.status != "pending":
         return (f"❌ offer {offer_id} is {row.status}, not pending — a paid "
                 f"offer cannot be cancelled, only credited.")
-    store.set_status(offer_id, "refused", reason=f"cancelled by {by}")
+    if not store.withdraw_pending(offer_id, f"cancelled by {by}"):
+        # RA1: the settlement watcher won between the read and the write.
+        now = store.get(offer_id)
+        status = now.status if now is not None else "gone"
+        return (f"❌ offer {offer_id} is {status}, not pending — a paid "
+                f"offer cannot be cancelled, only credited.")
     return f"✅ Offer {offer_id} withdrawn ({row.verb} on {row.target_name or row.target_user_id})."
 
 

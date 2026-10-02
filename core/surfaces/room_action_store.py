@@ -249,6 +249,22 @@ class OfferStore:
             (float(settled_at), str(offer_id)))
         return bool(rc)
 
+    def withdraw_pending(self, offer_id: str, reason: str) -> bool:
+        """``pending -> refused``, and ONLY that. False when the row moved.
+
+        ⚠️ A cancel that read ``pending`` and then wrote ``refused`` with
+        `set_status` raced the settlement watcher: a payment settled in
+        between was overwritten — the money taken, the effect cancelled, no
+        credit. The predicate is in the UPDATE, so exactly one of
+        `settle_pending` and this wins.
+        """
+        rc = execute_retry(
+            self.db_path,
+            "UPDATE room_action_offers SET status = 'refused', reason = ? "
+            "WHERE offer_id = ? AND status = 'pending'",
+            (str(reason), str(offer_id)))
+        return bool(rc)
+
     def consume_credit(self, credit_offer_id: str, spent_on: str) -> bool:
         """``credited -> redeemed``, atomically. False when someone else won.
 

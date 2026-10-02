@@ -126,6 +126,7 @@ async def test_set_from_a_url_replaces_the_image(env, monkeypatch):
     st = load_avatar(env, "rob")
     assert st.is_set and st.source == "url:https://x.test/a.png"
     assert "set (url:https://x.test/a.png)" in out
+    assert "polyrob avatar push" in out  # the profile photos do not follow on their own
 
 
 @pytest.mark.asyncio
@@ -180,3 +181,46 @@ def test_the_capability_matrix_has_a_row():
     row = CAPABILITY_MATRIX.get("avatar")
     assert row, "no parity row — the verb can silently vanish from a surface"
     assert row[3] == "/avatar"
+
+
+def _room_cmd(text, user="alice"):
+    src = SessionSource("telegram", "-100", "group")
+    inbound = InboundMessage(text=text,
+                             identity=Identity(user_id=user, source=src,
+                                               raw_user_id="555"))
+    return InboundResult(inbound=inbound, decision=RouteDecision(
+        RouteKind.COMMAND, "agent:main:telegram:group:-100", command="/avatar",
+        session_id=None))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("line", ["/avatar set https://x.test/a.png", "/avatar clear"])
+async def test_a_change_is_refused_from_a_room(env, monkeypatch, line):
+    """TG7 (audit 2026-10-03): `/avatar set|clear` changes this instance's
+    face; like every other owner write it is never run from a room."""
+    from core.avatar import load_avatar
+    from tools import avatar_sources
+
+    async def _fake(url):
+        return PNG + b"new", f"url:{url}"
+    monkeypatch.setattr(avatar_sources, "image_from_url", _fake)
+    _write_pfp(env)
+    out = await act_on_inbound(_Agent(str(env)), _room_cmd(line))
+    assert "not available from a group chat" in out
+    assert load_avatar(env, "rob").source == "file:face.png"
+
+
+@pytest.mark.asyncio
+async def test_the_read_in_a_room_posts_no_photo_into_the_room(env, monkeypatch):
+    """TG7: the text answer goes to the owner's DM; the photo used to go to
+    the ROOM's chat id."""
+    sent = []
+
+    async def _photo(task_agent, result, path):
+        sent.append(path)
+        return True
+    monkeypatch.setattr("surfaces.telegram.harness._send_photo_best_effort", _photo)
+    _write_pfp(env)
+    out = await act_on_inbound(_Agent(str(env)), _room_cmd("/avatar"))
+    assert "rob" in out
+    assert sent == []

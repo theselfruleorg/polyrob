@@ -40,6 +40,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 INTERVAL_SEC = 300
+#: C8: consecutive failed passes before the owner is told the watch is blind (6 × 5 min).
+FAILED_PASSES_ALERT = 6
 STATE_FILE = ("agent_nft", "holdings.json")
 LOG_STEP = 50_000
 LOST_KEEP = 50
@@ -206,12 +208,31 @@ def lost_text(row: Dict[str, Any]) -> str:
             f"my work and can no longer act from that account.")
 
 
+#: C8: per state file, ``{"failed": n, "alerted": bool, "last": str}`` for this process.
+_HEALTH: Dict[str, Dict[str, Any]] = {}
+
+
+def blind_text(passes: int, last: str) -> str:
+    return (f"I could not check which agent NFTs I own for {passes} passes in a row "
+            f"(~{passes * INTERVAL_SEC // 60} min). Last problem: {last}. Until this clears, an NFT "
+            f"that arrives or leaves is not reported.")
+
+
+def recovered_text(passes: int) -> str:
+    return f"The agent-NFT holdings watch works again after {passes} failed passes."
+
+
 async def tick(container: Any = None, *, treasury: Optional[str] = None,
                rpc_for: Optional[Callable[[str], Rpc]] = None,
                notify: Optional[Callable] = None, home_dir=None, user_id: Optional[str] = None,
                instance_id: Optional[str] = None, now: Callable[[], float] = time.time) -> WatchResult:
-    """One pass: scan, tell the owner once per change, then persist. Never raises."""
+    """One pass: scan (off the event loop, C7), tell the owner once per change, then persist.
+    Never raises. C8: after :data:`FAILED_PASSES_ALERT` failed passes in a row the owner is told
+    once that the watch is blind, and once when it works again."""
+    import asyncio
     result = WatchResult()
+    notifier = notify or _default_notify
+    health_key = None
     try:
         if treasury is None:
             from core.wallet.factory import get_agent_wallet
@@ -225,23 +246,44 @@ async def tick(container: Any = None, *, treasury: Optional[str] = None,
         from core.instance import resolve_owner_user_id
         user_id = user_id or resolve_owner_user_id()
         path = state_path(home_dir, user_id, instance_id)
+        health_key = str(path)
         try:
             state = load_state(path)
         except Exception as exc:  # noqa: BLE001 — unreadable is not empty: do not rebuild over it
             logger.warning("nft holdings watch: %s is unreadable (%s) — skipping", path, exc)
             result.errors.append(f"state unreadable: {exc}")
             return result
-        result = scan(treasury, state=state, rpc_for=rpc_for, now=now)
+        result = await asyncio.to_thread(scan, treasury, state=state, rpc_for=rpc_for, now=now)
         if result.arrived or result.lost:
-            notifier = notify or _default_notify
             for row in result.arrived:
                 await notifier(container, user_id, arrived_text(row))
             for row in result.lost:
                 await notifier(container, user_id, lost_text(row))
         save_state(path, state)
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
         logger.warning("nft holdings watch: pass failed", exc_info=True)
+        result.errors.append(f"the pass failed ({type(exc).__name__}: {exc})")
+    finally:
+        if health_key is not None:
+            await _track_health(health_key, result, container, user_id, notifier)
     return result
+
+
+async def _track_health(key: str, result: WatchResult, container, user_id, notifier) -> None:
+    h = _HEALTH.setdefault(key, {"failed": 0, "alerted": False, "last": ""})
+    try:
+        if result.errors:
+            h["failed"] += 1
+            h["last"] = result.errors[-1]
+            if h["failed"] >= FAILED_PASSES_ALERT and not h["alerted"]:
+                await notifier(container, user_id, blind_text(h["failed"], h["last"]))
+                h["alerted"] = True
+            return
+        if h["alerted"]:
+            await notifier(container, user_id, recovered_text(h["failed"]))
+        h.update(failed=0, alerted=False, last="")
+    except Exception:  # noqa: BLE001 — the health notice is best effort
+        logger.warning("nft holdings watch: health notice failed", exc_info=True)
 
 
 async def _default_notify(container, user_id, text) -> None:

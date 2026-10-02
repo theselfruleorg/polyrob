@@ -181,3 +181,66 @@ def test_overview_lists_accounts_with_their_approvals_and_reports_changes(chain)
     assert erc6551.account_address(4663, PINNED, 3) in text
     assert "native:  0.005000" in text and "approvals: none (complete" in text
     assert "NEW:" not in nft_holdings.overview(treasury=TREASURY, rpc_for=lambda c: rpc)
+
+
+# --- C7: the scan runs off the event loop; C8: a blind watch is reported once ----------------
+
+@pytest.fixture(autouse=True)
+def _fresh_health():
+    nft_holdings._HEALTH.clear()
+    yield
+    nft_holdings._HEALTH.clear()
+
+
+def test_c7_the_scan_runs_in_a_worker_thread(chain, monkeypatch):
+    import threading
+    seen = []
+    real = nft_holdings.scan
+
+    def spy(*a, **k):
+        seen.append(threading.current_thread() is threading.main_thread())
+        return real(*a, **k)
+    monkeypatch.setattr(nft_holdings, "scan", spy)
+    asyncio.run(nft_holdings.tick(None, treasury=TREASURY, rpc_for=lambda c: chain,
+                                  notify=lambda *a: asyncio.sleep(0)))
+    assert seen == [False]
+
+
+def test_c8_the_owner_is_told_once_when_the_watch_is_blind_and_once_when_it_recovers(chain):
+    told = []
+
+    async def notify(container, user_id, text):
+        told.append(text)
+
+    def broken(method, params):
+        raise RuntimeError("rpc down")
+
+    def run(rpc):
+        return asyncio.run(nft_holdings.tick(None, treasury=TREASURY, rpc_for=lambda c: rpc,
+                                             notify=notify))
+    for _ in range(nft_holdings.FAILED_PASSES_ALERT - 1):
+        run(broken)
+    assert told == []
+    run(broken)
+    assert len(told) == 1 and f"{nft_holdings.FAILED_PASSES_ALERT} passes" in told[0]
+    assert "rpc down" in told[0]
+    run(broken)
+    assert len(told) == 1                                    # once per outage
+    run(chain)
+    assert len(told) == 2 and "works again" in told[1]
+    run(chain)
+    assert len(told) == 2
+
+
+def test_c8_an_unreadable_state_counts_as_a_failed_pass(chain):
+    path = nft_holdings.state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{not json", encoding="utf-8")
+    told = []
+
+    async def notify(container, user_id, text):
+        told.append(text)
+    for _ in range(nft_holdings.FAILED_PASSES_ALERT):
+        asyncio.run(nft_holdings.tick(None, treasury=TREASURY, rpc_for=lambda c: chain,
+                                      notify=notify))
+    assert len(told) == 1 and "state unreadable" in told[0]

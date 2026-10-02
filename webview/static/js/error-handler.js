@@ -70,16 +70,27 @@ class ErrorHandler {
     }
 
     showErrorNotification(errorInfo) {
-        // Create error notification element
+        // FE14: built from nodes with a real listener — an inline `onclick=`
+        // is dropped by the console CSP, which left a dead ×.
         const notification = document.createElement('div');
         notification.className = 'error-notification';
-        notification.innerHTML = `
-            <div class="error-notification-content">
-                <span class="error-icon">⚠️</span>
-                <span class="error-message">Something went wrong. Please try refreshing the page.</span>
-                <button class="error-close" onclick="this.parentElement.parentElement.remove()">×</button>
-            </div>
-        `;
+        const content = document.createElement('div');
+        content.className = 'error-notification-content';
+        const icon = document.createElement('span');
+        icon.className = 'error-icon';
+        icon.textContent = '⚠️';
+        const msg = document.createElement('span');
+        msg.className = 'error-message';
+        msg.textContent = 'Something went wrong. Please try refreshing the page.';
+        const close = document.createElement('button');
+        close.className = 'error-close';
+        close.type = 'button';
+        close.textContent = '×';
+        close.addEventListener('click', () => notification.remove());
+        content.appendChild(icon);
+        content.appendChild(msg);
+        content.appendChild(close);
+        notification.appendChild(content);
 
         // Add to page
         document.body.appendChild(notification);
@@ -161,16 +172,26 @@ class ErrorHandler {
     }
 
     showCriticalError() {
-        // Create critical error overlay
+        // FE14: one overlay, however many errors pass the threshold, and a
+        // Reload button with a real listener (no inline `onclick=`).
+        if (document.querySelector('.error-critical-overlay')) return;
         const overlay = document.createElement('div');
         overlay.className = 'error-critical-overlay';
-        overlay.innerHTML = `
-            <div class="error-critical-content">
-                <h2>⚠️ Critical Error</h2>
-                <p>Multiple errors detected. The page may not work correctly.</p>
-                <button onclick="window.location.reload()" class="btn-reload">Reload Page</button>
-            </div>
-        `;
+        const content = document.createElement('div');
+        content.className = 'error-critical-content';
+        const title = document.createElement('h2');
+        title.textContent = '⚠️ Critical Error';
+        const body = document.createElement('p');
+        body.textContent = 'Multiple errors detected. The page may not work correctly.';
+        const reload = document.createElement('button');
+        reload.type = 'button';
+        reload.className = 'btn-reload';
+        reload.textContent = 'Reload Page';
+        reload.addEventListener('click', () => window.location.reload());
+        content.appendChild(title);
+        content.appendChild(body);
+        content.appendChild(reload);
+        overlay.appendChild(content);
 
         document.body.appendChild(overlay);
 
@@ -299,4 +320,4 @@ const errorHandler = new ErrorHandler();
 // after classic ones, so the global may not exist at their top-level run).
 window.errorHandler = errorHandler;
 
-export { errorHandler };
+export { errorHandler, ErrorHandler };

@@ -198,6 +198,43 @@ class X402PaymentMiddleware(BaseHTTPMiddleware):
     def _is_x402_gated(self, path: str, method: str = "POST") -> bool:
         return (method.upper(), path) in self.X402_GATED_ROUTES
 
+    #: Gated routes whose body decides whether THIS request is billed.
+    _BODY_DECIDES = frozenset({"/a2a/rpc", "/a2a/message/stream"})
+
+    async def _charges(self, request: Request) -> bool:
+        """API10: whether THIS request is one the endpoint layer bills.
+
+        ``/a2a/rpc`` carries every JSON-RPC method on one route; only a NEW
+        ``message/send`` (no ``taskId``) creates a billed task. Every other
+        method — ``tasks/get`` polls, ``tasks/list``, ``tasks/cancel``, a
+        continuation — is free at the endpoint, so settling on it took money
+        for nothing. ``/a2a/message/stream`` bills only a new task the same
+        way. A body that cannot be read as JSON is not a billable request.
+        """
+        path = request.url.path
+        if not self._is_x402_gated(path, request.method):
+            return False
+        if path not in self._BODY_DECIDES:
+            return True
+        try:
+            import json
+            body = json.loads(await request.body() or b"null")
+        except Exception:
+            return False
+        if not isinstance(body, dict):
+            return False
+        if path == "/a2a/rpc":
+            if body.get("method") != "message/send":
+                return False
+            params = body.get("params")
+            body = params if isinstance(params, dict) else {}
+        message = body.get("message")
+        if not isinstance(message, dict):
+            # The endpoint refuses a message/send without a message; nothing
+            # to bill.
+            return False
+        return not message.get("taskId")
+
     def _init_facilitator(self):
         """Initialize the fastapi-x402 facilitator client."""
         try:
@@ -269,13 +306,15 @@ class X402PaymentMiddleware(BaseHTTPMiddleware):
             or request.cookies.get("auth_token")
         )
 
+        # API10: decided per REQUEST, not per route — see _charges.
+        charges = await self._charges(request)
+
         if payment_header:
-            # B3: settle ONLY on a route that actually charges. Without this
+            # B3: settle ONLY on a request that actually charges. Without this
             # gate any path carrying an X-PAYMENT header was verified AND
             # SETTLED — money taken for a request the endpoint layer never
             # bills, including a free read or a caller's stray header.
-            if self._facilitator_client and self._is_x402_gated(
-                    request.url.path, request.method):
+            if self._facilitator_client and charges:
                 return await self._handle_x402_payment(request, call_next, payment_header)
 
             # G-17: a real payment attempt landed on a gated path but the facilitator
@@ -293,7 +332,7 @@ class X402PaymentMiddleware(BaseHTTPMiddleware):
             # defaults to false, so `_facilitator_client` is None on any deployment
             # that hasn't turned x402 on — the default/common case — and this branch
             # used to fire for every such request regardless of other auth).
-            if self._is_x402_gated(request.url.path, request.method) and not has_other_auth:
+            if charges and not has_other_auth:
                 self.logger.error(
                     "x402 payment header present on %s %s but the facilitator client "
                     "is unavailable (fastapi-x402 missing or failed to initialize) — "
@@ -319,7 +358,7 @@ class X402PaymentMiddleware(BaseHTTPMiddleware):
         # X-API-KEY header and are NOT touched here — they fall through to
         # call_next exactly as before, authorized downstream by
         # verify_payment_for_request.
-        if not payment_header and self._is_x402_gated(request.url.path, request.method):
+        if not payment_header and charges:
             config = get_x402_config()
             if not has_other_auth and config.get("pay_to"):
                 return JSONResponse(
@@ -346,6 +385,11 @@ class X402PaymentMiddleware(BaseHTTPMiddleware):
         Returns:
             Response from endpoint or 402 error
         """
+        # API11: once the facilitator reports a settlement, ANY later failure
+        # means the payer paid for nothing. These carry what the except branch
+        # needs to leave a refund-due row behind.
+        settled = None  # dict of record_x402_payment kwargs once settled
+        recorded = False
         try:
             from fastapi_x402.models import PaymentRequirements
             from fastapi_x402.networks import get_default_asset_config, get_network_config
@@ -434,6 +478,23 @@ class X402PaymentMiddleware(BaseHTTPMiddleware):
 
             # Payment successful! Create user and proceed
             user_id = generate_user_id_from_wallet(payer_address)
+            payment_id = settlement_payment_id(
+                settle_response.transaction,
+                payer_address,
+                request.url.path,
+                int(time.time() // 60),
+            )
+            settled = dict(
+                payment_id=payment_id,
+                wallet_address=payer_address,
+                user_id=user_id,
+                amount_usd=amount_usd,
+                network=network,
+                recipient=config["pay_to"],
+                transaction_hash=_norm_tx(settle_response.transaction),
+                amount_atomic=str(amount_atomic),
+                tenant_id=resolve_owner_user_id(),
+            )
 
             # Set request state via the canonical C4 contract (writer installed
             # by api/app.py at mount time — R-4 inversion, no api import here).
@@ -456,23 +517,8 @@ class X402PaymentMiddleware(BaseHTTPMiddleware):
 
             # Record the payment. Always record (N1 fix) — even a tx-less
             # settlement must leave a reconcilable row; never silently drop revenue.
-            payment_id = settlement_payment_id(
-                settle_response.transaction,
-                payer_address,
-                request.url.path,
-                int(time.time() // 60),
-            )
-            await record_x402_payment(
-                payment_id=payment_id,
-                wallet_address=payer_address,
-                user_id=user_id,
-                amount_usd=amount_usd,
-                network=network,
-                recipient=config["pay_to"],
-                transaction_hash=_norm_tx(settle_response.transaction),
-                amount_atomic=str(amount_atomic),
-                tenant_id=resolve_owner_user_id(),
-            )
+            await record_x402_payment(**settled)
+            recorded = True
 
             self.logger.info(
                 f"x402 payment settled: {payer_address[:10]}... -> {user_id} "
@@ -502,8 +548,48 @@ class X402PaymentMiddleware(BaseHTTPMiddleware):
             return response
 
         except Exception as e:
-            self.logger.error(f"x402 payment processing error: {e}", exc_info=True)
+            # API11: never echo the exception (paths, SQL, internals) to the
+            # payer; give a reference id that matches the server log line.
+            import uuid
+            ref = f"x402_{uuid.uuid4().hex[:12]}"
+            self.logger.error(f"x402 payment processing error (ref {ref}): {e}",
+                              exc_info=True)
+            if settled is not None:
+                await self._refund_due_after_failure(settled, recorded, ref)
+                return JSONResponse(
+                    status_code=500,
+                    content={
+                        "error": "Payment settled but the request failed",
+                        "details": ("The payment is recorded for refund. "
+                                    f"Quote reference {ref}."),
+                        "reference": ref,
+                        "payment_id": settled["payment_id"],
+                    },
+                )
             return JSONResponse(
                 status_code=500,
-                content={"error": f"Payment processing error: {str(e)}"}
+                content={"error": "Payment processing error",
+                         "details": f"Quote reference {ref}.",
+                         "reference": ref},
             )
+
+    async def _refund_due_after_failure(self, settled: dict, recorded: bool,
+                                        ref: str) -> None:
+        """API11: leave a refund-due row for a settled payment. Never raises.
+
+        The row is written first when the failure came before the record (the
+        flag is an UPDATE — it needs a row to land on).
+        """
+        if not recorded:
+            try:
+                await record_x402_payment(**settled)
+            except Exception as rec_err:
+                self.logger.error(
+                    "x402 (ref %s): settled payment %s could not be recorded: %s",
+                    ref, settled["payment_id"], rec_err)
+        try:
+            await mark_payment_refund_due(settled["payment_id"])
+        except Exception as flag_err:
+            self.logger.error(
+                "x402 (ref %s): refund-due flag failed for %s: %s",
+                ref, settled["payment_id"], flag_err)

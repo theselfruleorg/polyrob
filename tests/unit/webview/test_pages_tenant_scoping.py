@@ -47,7 +47,7 @@ def test_memory_uses_caller_user_id_not_local_owner(multitenant_pages_client, mo
 
     fake_provider = MagicMock()
     fake_provider.search = fake_search
-    with patch("webview.pages._memory_provider", return_value=fake_provider):
+    with patch("webview.pages._memory_provider_status", return_value=(fake_provider, None)):
         multitenant_pages_client.get(
             "/api/webgate/memory", cookies=_auth_cookie("tenant-42"),
         )

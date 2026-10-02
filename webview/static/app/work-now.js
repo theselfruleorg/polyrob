@@ -28,7 +28,7 @@
  * 4. **It decides nothing itself.** A Stop / Cancel is a POST to an existing
  *    route (`http.js`), and the row says back exactly what the server answered.
  */
-import { postJson } from "./http.js";
+import { latestOnly, postJson } from "./http.js";
 
 /** The copy the server handed over, as a plain object. */
 export function copyFrom(node) {
@@ -537,16 +537,25 @@ function bind() {
 
   wireMutations(nowCtx, schedCtx, copy);
 
-  const drawNow = () => Promise.all([loadGoals(), loadRunning(), loadLive()])
-    .then(([goalsData, runningData, liveData]) =>
-      renderNowNext(nowCtx, goalsData, runningData, copy, { readOnly, live: liveData }))
+  // FE10: only the latest read draws — an older answer that lands last must
+  // not overwrite a fresher one.
+  const readNow = latestOnly(() => Promise.all([loadGoals(), loadRunning(), loadLive()]));
+  const readCron = latestOnly(() => loadCron());
+  const drawNow = () => readNow()
+    .then((answer) => {
+      if (answer.stale) return;
+      const [goalsData, runningData, liveData] = answer.value;
+      renderNowNext(nowCtx, goalsData, runningData, copy, { readOnly, live: liveData });
+    })
     .catch((err) => {
       console.error("[work-now] could not read Now & next", err);
       renderNowNext(nowCtx, { error: (err && String(err.message)) || "error" },
                     null, copy, { readOnly });
     });
-  const drawSchedule = () => loadCron()
-    .then((cronData) => renderSchedule(schedCtx, cronData, copy, { readOnly }))
+  const drawSchedule = () => readCron()
+    .then((answer) => {
+      if (!answer.stale) renderSchedule(schedCtx, answer.value, copy, { readOnly });
+    })
     .catch((err) => {
       console.error("[work-now] could not read the schedule", err);
       renderSchedule(schedCtx, { error: (err && String(err.message)) || "error" },

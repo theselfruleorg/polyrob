@@ -389,6 +389,26 @@ describe("Identity — persona read-only, learned reviewable", () => {
     expect(renderIdentity(r, { error: "500" }, COPY, {})).toBe("unreadable");
     expect(r.querySelector(".entry.is-unknown")).toBeTruthy();
   });
+
+  it("WV2 — an unread SELF doc is 'could not read' and offers no Edit", () => {
+    const r = root();
+    const copy = { ...COPY, id_learned_unreadable: "could not read SELF", id_learned_empty: "nothing yet" };
+    renderIdentity(r, { soul: "persona", self: null, self_error: "disk error" }, copy, {});
+    expect(r.querySelector("button[data-edit-self]")).toBeNull();
+    expect(r.textContent).toContain("could not read SELF");
+    expect(r.textContent).not.toContain("nothing yet");
+    expect(r.textContent).toContain("persona");
+  });
+
+  it("WV2 — an unread persona is 'could not read', not 'not written yet'", () => {
+    const r = root();
+    const copy = { ...COPY, id_persona_unreadable: "could not read SOUL", id_persona_empty: "not written" };
+    renderIdentity(r, { soul: null, soul_error: "permission denied", self: "learned" }, copy, {});
+    expect(r.textContent).toContain("could not read SOUL");
+    expect(r.textContent).not.toContain("not written");
+    // the SELF doc read fine, so it stays editable
+    expect(r.querySelector("button[data-edit-self]")).toBeTruthy();
+  });
 });
 
 describe("Capabilities — one list from three stores", () => {

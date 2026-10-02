@@ -77,10 +77,14 @@ def _owner_tenant() -> str:
     if _OWNER_TENANT is None:
         try:
             from core.instance import resolve_owner_user_id
-            _OWNER_TENANT = str(resolve_owner_user_id() or "")
+            resolved = str(resolve_owner_user_id() or "")
         except Exception:
             logger.debug("access_log: owner tenant unresolved", exc_info=True)
             return ""
+        if not resolved:
+            # AC7: "" is "not resolved yet", never a value to pin for life.
+            return ""
+        _OWNER_TENANT = resolved
     return _OWNER_TENANT
 
 

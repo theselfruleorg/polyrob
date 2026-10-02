@@ -26,6 +26,8 @@
  *    attributes; no 043 template carries an inline script.
  */
 
+import { serverAnswer } from './http.js';
+
 /** The copy the server handed over, as a plain object. */
 export function copyFrom(node) {
   return node ? { ...node.dataset } : {};
@@ -66,12 +68,9 @@ export async function uploadOne(sessionId, file, copy, opts = {}) {
     let body = null;
     try { body = await resp.json(); } catch (err) { body = null; }
     if (!resp.ok) {
-      const detail = body && (body.detail || body.message || body.error);
-      return {
-        ok: false,
-        message: detail ? String(detail)
-          : format(copy && copy.attach_failed, { name: file.name }),
-      };
+      // FE13: a 422 `detail` is an array of objects, never shown raw.
+      const fallback = format(copy && copy.attach_failed, { name: file.name });
+      return { ok: false, message: body ? serverAnswer(body, fallback) : fallback };
     }
     const where = (body && (body.path || body.filename)) || file.name;
     return { ok: true, message: format(copy && copy.attach_done, { name: where }) };

@@ -1,7 +1,7 @@
 # The data half of the X pack (067 P3b): read by core.packs.manifest WITHOUT
 # importing this package, registered in the loader's phase 1.
 id = "x"
-version = "1.2.0"
+version = "1.2.1"
 summary = "X (Twitter): the API tool, the browser rail, the DM surface, cron post delivery"
 pack_api = 1
 requires_core = "==1.2.*"

@@ -105,6 +105,11 @@ class ChainRow:
     #: verified (arming a chain required checking its addresses first), so only
     #: a non-money row needs to set this explicitly.
     assets_verified: bool = False
+    #: C13 — a TESTNET whose native coin has no price anywhere. Money moves here only when the
+    #: owner sets ``VALUELESS_CHAIN_MONEY`` (then :func:`get` returns the row money-enabled);
+    #: ``tx_guard`` prices its native and wrapped native at exactly $0 (so the USD caps never
+    #: bind) and the run is bounded by ``max_fee_wei_per_tx`` in wei, at the rail.
+    valueless: bool = False
 
     @property
     def rpc_env(self) -> str:
@@ -284,6 +289,7 @@ _ROWS: Dict[str, ChainRow] = {
         route_hints=(),
         money_enabled=False,
         assets_verified=True,
+        valueless=True,
     ),
     # Read-only rows: these exist because venues settle on them
     # (onchain.VENUE_CHAIN — hyperliquid/polymarket) and balance reads need the
@@ -445,7 +451,19 @@ def get(chain: str) -> Optional[ChainRow]:
     """The row for *chain*, or None. No default row — unknown stays unknown."""
     if not isinstance(chain, str):
         return None
-    return _ROWS.get(chain.strip().lower())
+    row = _ROWS.get(chain.strip().lower())
+    if row is not None and row.valueless and not row.money_enabled and valueless_money_enabled():
+        import dataclasses
+        row = dataclasses.replace(row, money_enabled=True)
+    return row
+
+
+def valueless_money_enabled() -> bool:
+    """C13: ``VALUELESS_CHAIN_MONEY`` (default OFF) arms money on the ``valueless`` testnet rows
+    (Robinhood Chain testnet 46630) for a core run there — native priced at $0, the fee bounded
+    in wei. Read per call."""
+    from core.env import bool_env
+    return bool_env("VALUELESS_CHAIN_MONEY", False)
 
 
 #: The Solana path segment for each kind — `solscan.io` names an account (never
@@ -502,12 +520,12 @@ def names() -> List[str]:
 def money_chains() -> List[str]:
     """Chains where value may move. A chain joins this list only when its whole
     row is verified — never because an operator pinned an endpoint."""
-    return [r.name for r in _ROWS.values() if r.money_enabled]
+    return [n for n in _ROWS if get(n).money_enabled]
 
 
 def swap_chains() -> List[str]:
     """Chains where a swap may both move value and find a route."""
-    return [r.name for r in _ROWS.values() if r.money_enabled and swap_ready(r.name)[0]]
+    return [n for n in _ROWS if get(n).money_enabled and swap_ready(n)[0]]
 
 
 def rpc_is_pinned(chain: str) -> bool:

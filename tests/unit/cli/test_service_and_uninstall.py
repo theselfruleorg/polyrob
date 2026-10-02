@@ -10,6 +10,30 @@ import pytest
 from click.testing import CliRunner
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_uninstall(tmp_path, monkeypatch):
+    """CLI16 (2026-10-03): every test here is hermetic, whatever ran before it.
+
+    `uninstall_cmd` reached four pieces of process-wide state: the REAL home
+    (`remove_path_blocks(Path.home())` rewrites the shell rc files, and
+    `service_uninstall` reads — and on a hit unloads — the launchd plist / systemd
+    unit under it), the once-per-process env ladder (`ensure_env_loaded`, which
+    loads whatever `.env` the process first saw and can move POLYROB_HOME through
+    an active profile), the CWD, and the install probe. Which of those a test met
+    depended on the tests that ran before it, so `test_purge_names_both_homes…`
+    passed alone and failed in the `-k cli` run. Each is pinned per test.
+    """
+    home = tmp_path / "_home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.delenv("POLYROB_PROFILE", raising=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("cli.commands._bootstrap._env_loaded", True)
+    monkeypatch.setattr("cli.commands.uninstall._package_removal_hint",
+                        lambda: "remove the virtualenv you installed into")
+
+
 def test_exec_argv_uses_this_interpreter_and_the_module(monkeypatch):
     from cli.commands import service
 
@@ -184,3 +208,18 @@ def test_doctor_service_line_says_not_installed_when_nothing_exists(monkeypatch,
                         lambda: tmp_path / "absent.plist")
     monkeypatch.setattr("cli.commands.update._detect_polyrob_units", lambda: [])
     assert "not installed" in doc._service_line()
+
+
+def test_uninstall_never_touches_the_real_home(tmp_path, monkeypatch):
+    """CLI16: the PATH block is stripped from the HERMETIC home, not the user's."""
+    from pathlib import Path
+    from cli.commands.uninstall import uninstall_cmd
+
+    assert Path.home() == tmp_path / "_home"
+    rc = Path.home() / ".zshrc"
+    rc.write_text("keep\n# >>> polyrob >>>\nexport PATH=x\n# <<< polyrob <<<\n")
+    monkeypatch.setenv("POLYROB_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr("cli.commands.uninstall.find_shim", lambda: None)
+    res = CliRunner().invoke(uninstall_cmd, [])
+    assert res.exit_code == 0, res.output

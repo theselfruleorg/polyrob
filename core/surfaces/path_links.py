@@ -120,6 +120,15 @@ def resolve_paths(text: str, *, session_id: Optional[str],
                 return f"`{name}` (attached)", "attached"
         elif media_ok:
             reason = f"attachment limit of {max_files} reached"
+        # OB16: a LINK hands the file over as surely as an attachment does, so
+        # it gets the same secret screen (an attach refusal already ran it).
+        try:
+            from core.surfaces.attachments import secret_screen_reason
+            secret = secret_screen_reason(real)
+        except Exception:
+            secret = "screening errored"
+        if secret:
+            return f"`{name}` (server-only: {secret})", f"server-only:{secret}"
         try:
             from core.surfaces.deep_link import webview_artifact_link
             url = webview_artifact_link(session_id or "", rel)

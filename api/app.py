@@ -470,7 +470,10 @@ async def fallback_auth_middleware(request: Request, call_next):
                     from api.auth_state import set_auth_state
                     set_auth_state(
                         request.state,
-                        user_id=decoded.get("sub", "api_user"),
+                        # API3: the account id is `user_id`; `sub` is the
+                        # wallet (or, on an owner-login token, the only id).
+                        user_id=(decoded.get("user_id") or decoded.get("sub")
+                                 or "api_user"),
                         tier=decoded.get("tier", "free"),
                         role=decoded.get("role", "user"),
                         payment_method=None,
@@ -613,14 +616,9 @@ def create_app() -> FastAPI:
     from api.api_key_auth import APIKeyAuthMiddleware
     app.add_middleware(APIKeyAuthMiddleware)
 
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=cors_origins,
-        allow_credentials=True,
-        allow_methods=allowed_methods,
-        allow_headers=allowed_headers,
-    )
-    logger.info(f"CORS configured for origins: {cors_origins}")
+    # API19: CORS is registered LAST (outermost) — see the end of this
+    # function — so a preflight never meets an auth gate and every refusal
+    # carries the CORS headers a browser needs to read it.
 
     # Add rate limiting middleware
     if API_MODELS_AVAILABLE:
@@ -703,19 +701,26 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(request: Request, exc: RequestValidationError):
-        """Handle validation errors globally."""
-        logger.error(f"Validation error: {exc.errors()} | Path: {request.url.path}")
+        """Handle validation errors globally.
+
+        API9: a ``field_validator`` error carries the raised exception object
+        in ``ctx``; without ``jsonable_encoder`` the JSON render raised and the
+        caller got a 500 instead of the 422.
+        """
+        from fastapi.encoders import jsonable_encoder
+        errors = jsonable_encoder(exc.errors())
+        logger.error(f"Validation error: {errors} | Path: {request.url.path}")
         from api.openai_compat.errors import (
             is_openai_compat_path, openai_error_response,
         )
         if is_openai_compat_path(request.url.path):
             return openai_error_response(
                 400, "Invalid request body", code="invalid_request_error",
-                details=exc.errors(),
+                details=errors,
             )
         return JSONResponse(
             status_code=422,
-            content={"error": "Validation failed", "details": exc.errors()}
+            content={"error": "Validation failed", "details": errors}
         )
 
     @app.exception_handler(AuthError)
@@ -986,6 +991,13 @@ def create_app() -> FastAPI:
                 from utils.auth_utils import get_authenticated_user_id
                 user_id = get_authenticated_user_id(req)
 
+                # API12: the same per-request payment gate as /v1 and A2A —
+                # this route runs the same agent turn and was the one free
+                # door (admin/owner and the service token still bypass).
+                from api import payment_verification
+                await payment_verification.verify_payment_for_request(
+                    req, cost_credits=1)
+
                 from api.chat_via_task import handle_chat_via_task_agent
                 return await handle_chat_via_task_agent(
                     container, user_id, request.text, request.chat_id or user_id,
@@ -1031,9 +1043,21 @@ def create_app() -> FastAPI:
     # errors; AuthenticationMiddleware's 401, the fallback gate's 401/503 and
     # the body-limit 413 each return their own JSONResponse, so an OpenAI SDK
     # client got `{"error": "<string>"}` and reported "unknown error".
-    # Registered LAST = OUTERMOST, so it wraps every other middleware.
+    # Registered next-to-last: it wraps every middleware but CORS (API19).
     from api.openai_compat.errors import OpenAICompatErrorMiddleware
     app.add_middleware(OpenAICompatErrorMiddleware)
+
+    # API19: CORS OUTERMOST. Inside the auth/rate/x402 layers a browser
+    # preflight (OPTIONS, no credentials) was 401'd, and every 401/402/429/413
+    # left without Access-Control-Allow-Origin, so the browser hid the reason.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        allow_credentials=True,
+        allow_methods=allowed_methods,
+        allow_headers=allowed_headers,
+    )
+    logger.info(f"CORS configured for origins: {cors_origins}")
     return app
 
 # Factory function for uvicorn
