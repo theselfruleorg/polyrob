@@ -18,8 +18,8 @@
 
    What the schema contributed and stays: one nav component, two axes; a 3 px
    ruled left margin that carries state; monospace tabular VALUES; an unknown
-   drawn as deliberately as a number (dashed rule + reason); the sources note;
-   the skip link; a visible focus ring; AA contrast.
+   drawn as deliberately as a number (dashed rule + reason); the skip link;
+   a visible focus ring; AA contrast.
    ========================================================================= */
 
 /* --- the schema's token NAMES, bound to the product's tokens -------------- */
@@ -92,7 +92,7 @@ body.console-shell{
   transform:translateY(-300%);
   background:var(--surface-1); color:var(--ink);
   border:1px solid var(--accent); padding:var(--s2) var(--s4);
-  font-size:var(--t-small); text-transform:uppercase; letter-spacing:.5px;
+  font-size:var(--t-small); letter-spacing:.5px;
   text-decoration:none;
 }
 .skip-link:focus{ transform:none }
@@ -139,7 +139,7 @@ body.console-shell{
 .nav-item:hover{ color:var(--accent); background:var(--surface-2) }
 .nav-item[aria-current="page"]{ color:var(--running); border-top-color:var(--running) }
 .nav-glyph{ font-size:16px; line-height:1 }
-.nav-label{ font-size:10px; text-transform:uppercase; letter-spacing:1px }
+.nav-label{ font-size:10px }
 .nav-badge{
   position:absolute; top:6px; left:50%; margin-left:8px;
   min-width:16px; height:16px; padding:0 4px;
@@ -177,9 +177,9 @@ body.console-shell{
 }
 .mark{
   font-family:var(--mark); font-size:22px; line-height:1;
-  color:var(--running); text-transform:uppercase; letter-spacing:1px;
+  color:var(--running);
 }
-.face{                                   /* the Mindprint, standing in */
+.face{                                   /* the avatar slot image   */
   width:28px; height:28px; border-radius:50%; flex:0 0 auto; position:relative;
   background:
     radial-gradient(circle at 34% 40%, var(--running) 0 2px, transparent 2.2px),
@@ -197,7 +197,7 @@ body.console-shell{
   background:none; border:1px solid var(--rule); color:var(--ink-3);
   min-width:44px; height:44px; padding:0 10px;
   display:grid; place-items:center; font-size:var(--t-small);
-  text-decoration:none; text-transform:uppercase; letter-spacing:.5px;
+  text-decoration:none; letter-spacing:.5px;
   transition:all var(--transition-fast);
 }
 .icon-btn .kbd{ display:none; font-family:var(--mono); font-size:var(--t-micro) }
@@ -207,6 +207,10 @@ body.console-shell{
   .icon-btn .glyph{ display:none }
 }
 .icon-btn:hover{ border-color:var(--accent); color:var(--accent); background:var(--surface-2) }
+/* The chats button says its word (070 E.7): "Chats ⌘K", "Chats" on a phone. */
+.chats-btn{ display:inline-flex; align-items:center; gap:6px }
+.chats-btn .glyph{ display:none }
+.btn-label{ font-size:var(--t-small) }
 .head-logout .kbd{ letter-spacing:.5px }
 
 .main{ min-width:0; display:flex; flex-direction:column }
@@ -217,13 +221,14 @@ body.console-shell{
 .pill{
   display:inline-flex; align-items:center; gap:6px;
   padding:2px 8px; border:1px solid var(--rule);
-  font-size:var(--t-micro); text-transform:uppercase; letter-spacing:.5px;
+  font-size:var(--t-micro); letter-spacing:.5px;
   white-space:nowrap; background:transparent; color:var(--ink-3);
 }
 .dot{ width:6px; height:6px; flex:0 0 auto; background:currentColor }
 .pill.is-running  { color:var(--running);   border-color:var(--running) }
 .pill.is-needs-you{ color:var(--needs-you); border-color:var(--needs-you) }
 .pill.is-stopped  { color:var(--stopped);   border-color:var(--stopped) }
+.pill.is-done     { color:var(--ink-3);     border-color:var(--rule-strong) }
 .pill.is-unknown  { color:var(--unknown);   border-color:var(--unknown); border-style:dashed }
 .pill.is-running .dot{ animation:breathe 2.6s ease-in-out infinite }
 @keyframes breathe{ 0%,100%{opacity:1} 50%{opacity:.35} }
@@ -250,8 +255,13 @@ a.entry:hover{ border-left-color:var(--running) }
 .entry-title{ font-size:var(--t-base); color:var(--ink); line-height:1.4 }
 .entry-body{ color:var(--ink-2); font-size:var(--t-small); max-width:var(--measure); margin-top:var(--s2); line-height:var(--line-height-relaxed); overflow-wrap:anywhere }
 .entry-meta{ margin-top:var(--s2); font-size:var(--t-micro); color:var(--ink-3) }
+/* a tool_approval's full grant card (CR-M01): every money field, line by line */
+.entry-card{ white-space:pre-wrap; font-family:var(--mono) }
+/* Money › Moves › Make a move: the send/swap form (action cards) */
+.move-form{ display:grid; grid-template-columns:repeat(auto-fit,minmax(14rem,1fr)); gap:var(--s2) var(--s3); align-items:end }
+.move-form label{ display:flex; flex-direction:column; gap:var(--s1); font-size:var(--t-micro); color:var(--ink-3) }
 .entry-actions{ margin-top:var(--s3); display:flex; flex-wrap:wrap; gap:var(--s2) }
-.entry details summary{ cursor:pointer; color:var(--ink-3); font-size:var(--t-micro); text-transform:uppercase; letter-spacing:.5px }
+.entry details summary{ cursor:pointer; color:var(--ink-3); font-size:var(--t-micro); letter-spacing:.5px }
 /* the sentence a server answered on a card, after a decision */
 .entry-answer[data-ok="true"], .cron-answer, .settle-answer{ color:var(--running) }
 .entry-answer[data-ok="false"]{ color:var(--stopped) }
@@ -271,6 +281,9 @@ a.entry:hover{ border-left-color:var(--running) }
 /* ---- buttons: components.css .btn is the product's button. Only the quiet
         variant and the shell's own sizes are added here. ------------------- */
 .console-shell .btn{ height:auto; min-height:var(--button-height); padding:4px var(--s3) }
+/* The console never transforms case (070 E.2): components.css capitalises .btn and
+   .table th for the legacy pages; the shell resets both. test_no_css_capitals.py */
+.console-shell .btn, .console-shell .table th{ text-transform:none }
 .console-shell .btn:hover:not(:disabled){ border-color:var(--accent); color:var(--accent) }
 .btn-quiet{ border-color:transparent; color:var(--ink-3) }
 .btn-quiet:hover:not(:disabled){ border-color:var(--rule); color:var(--ink) }
@@ -326,6 +339,39 @@ a.entry:hover{ border-left-color:var(--running) }
 .receipt{ margin-top:var(--s3); font-size:var(--t-micro); color:var(--ink-3) }
 .receipt .val{ color:var(--ink-2) }
 
+/* ---- the bound chat: a grid (070 W0.16). Thread + composer in the left
+        column, the Work pane in the right one, scrolling on its own. Below
+        900 px the pane is a drawer the toggle opens. No element relies on a
+        body overflow-x:hidden. --------------------------------------------- */
+.chat-body{ display:grid; grid-template-columns:minmax(0,1fr) 360px; gap:var(--s5); padding:0 var(--s4); flex:1 1 auto }
+.chat-col{ min-width:0; display:flex; flex-direction:column }
+.chat-col .thread{ width:auto; margin:0; max-width:none }
+.work-pane{
+  position:sticky; top:var(--head-h,45px); align-self:start;
+  max-height:calc(100dvh - var(--head-h,45px)); overflow:auto; min-width:0;
+  padding:var(--s5) 0;
+}
+.work-pane .act-what, .work-pane td.what .val{
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; display:block; max-width:100%;
+}
+@media (min-width:640px){ .work-pane td.what{ max-width:0; width:100% } }   /* lets the name cell ellipsize */
+.work-pane-toggle{ display:none }
+@media (max-width:899px){
+  .chat-body{ grid-template-columns:1fr; padding:0 var(--s3) }
+  .work-pane-toggle{ display:inline-flex; align-self:flex-end; margin-top:var(--s3) }
+  .work-pane{
+    position:fixed; left:0; right:0; bottom:calc(var(--bar) + env(safe-area-inset-bottom,0px)); top:auto;
+    max-height:70dvh; background:var(--surface-1); padding:var(--s4);
+    border-top:1px solid var(--rule-strong); transform:translateY(100%); visibility:hidden; z-index:20;
+  }
+  .work-pane.is-open{ transform:none; visibility:visible }
+}
+@media (min-width:768px) and (max-width:899px){ .work-pane{ bottom:0 } }
+@media (max-width:599px){
+  .head{ flex-wrap:nowrap }
+  .head-truth{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+}
+
 /* composer: the product's input (dark, 1 px rule, blue on focus) */
 .composer-wrap{
   position:sticky; bottom:calc(var(--bar) + env(safe-area-inset-bottom,0px));
@@ -374,7 +420,7 @@ a.entry:hover{ border-left-color:var(--running) }
 /* ---- page head ---------------------------------------------------------- */
 .page-head{ display:flex; align-items:baseline; gap:var(--s3); margin-bottom:var(--s5); flex-wrap:wrap;
             padding-bottom:var(--s2); border-bottom:1px solid var(--rule) }
-.page-title{ font-size:var(--t-head); color:var(--running); text-transform:uppercase; letter-spacing:2px }
+.page-title{ font-size:var(--t-head); color:var(--running) }
 .page-sub{ color:var(--ink-3); font-size:var(--t-small); flex:1 1 100% }
 
 /* ---- a quiet note (the 409 "live in the agent" line) -------------------- */
@@ -382,18 +428,33 @@ a.entry:hover{ border-left-color:var(--running) }
   font-family:var(--mono); font-size:var(--t-micro); color:var(--ink-3);
   border-top:1px dashed var(--rule); padding:var(--s3) var(--s4); margin-top:var(--s5);
 }
+/* A run that failed before Rob answered (transcript.js _failedLine). */
+.note.is-failed{ border-left:2px solid var(--stopped); padding-left:var(--s3) }
+/* The one link to the folder behind a chat, and its capped list (070 W0.15). */
+.folder-browse{ margin-top:var(--s3) }
+.folder-link{ font-size:var(--t-small) }
+.folder-list{ margin-top:var(--s2) }
+.folder-list .folder-list{ margin-left:var(--s4) }
+/* A run view's head: who started it, and its task behind a disclosure (070 W0.12). */
+.note.run-head{ border-top:0; border-bottom:1px dashed var(--rule); margin:0 0 var(--s4) }
+.run-head p{ margin:0 }
+.run-task{ margin-top:var(--s2) }
+.run-task summary{ cursor:pointer; color:var(--ink-2) }
+.run-task p{ white-space:pre-wrap; overflow-wrap:anywhere; margin-top:var(--s2); color:var(--ink) }
 
 /* ---- sub-navigation: the product's .tabs / .tab ------------------------- */
 .subnav{
   display:flex; gap:0; overflow-x:auto; margin-bottom:var(--s5);
   border-bottom:1px solid var(--rule); scrollbar-width:none;
 }
+/* A strip that scrolls fades at its right edge, so a hidden tab is hinted. */
+@media (max-width:767px){ .subnav{ mask-image:linear-gradient(90deg,black 85%,transparent) } }
 .subnav::-webkit-scrollbar{ display:none }
 .subnav a{
   padding:var(--s2) var(--s4); white-space:nowrap; min-height:var(--touch-target-min);
   display:flex; align-items:center;
   color:var(--ink-3); text-decoration:none; font-size:var(--t-small);
-  text-transform:uppercase; letter-spacing:.5px;
+  letter-spacing:.5px;
   border-bottom:2px solid transparent; margin-bottom:-1px;
   transition:all var(--transition-fast);
 }
@@ -404,7 +465,7 @@ a.entry:hover{ border-left-color:var(--running) }
 .section{ margin-bottom:var(--s6) }
 .section-head{ display:flex; align-items:baseline; gap:var(--s3); margin-bottom:var(--s3);
                padding-bottom:var(--s1); border-bottom:1px solid var(--rule) }
-.section-title{ font-size:var(--t-small); color:var(--accent); text-transform:uppercase; letter-spacing:1px }
+.section-title{ font-size:var(--t-small); color:var(--accent) }
 .section-aside{ margin-left:auto; font-size:var(--t-micro); color:var(--ink-3) }
 
 /* ---- table: components.css .table gives the head row; values align ------ */
@@ -428,7 +489,7 @@ a.entry:hover{ border-left-color:var(--running) }
   .table .num{ text-align:left }
   .table td[data-label]::before{
     content:attr(data-label) "  "; color:var(--ink-3); font-size:var(--t-micro);
-    text-transform:uppercase; letter-spacing:.5px;
+    letter-spacing:.5px;
   }
 }
 
@@ -442,7 +503,7 @@ a.entry:hover{ border-left-color:var(--running) }
 .book.is-earned{ border-top-color:var(--running) }
 .book.is-spent { border-top-color:var(--rule-strong) }
 .book.is-held  { border-top-color:var(--accent) }
-.book-what{ font-size:var(--t-micro); color:var(--ink-3); text-transform:uppercase; letter-spacing:1px }
+.book-what{ font-size:var(--t-micro); color:var(--ink-3) }
 .book-whose{ font-size:var(--t-micro); color:var(--unknown); margin-top:2px }
 .book-figure{
   font-family:var(--mono); font-variant-numeric:tabular-nums;
@@ -484,7 +545,7 @@ a.entry:hover{ border-left-color:var(--running) }
 .chips{ display:flex; flex-wrap:wrap; gap:var(--s2) }
 .chip{
   background:transparent; border:1px solid var(--rule); padding:3px var(--s3);
-  font-size:var(--t-micro); color:var(--ink-3); text-transform:uppercase; letter-spacing:.5px;
+  font-size:var(--t-micro); color:var(--ink-3); letter-spacing:.5px;
   transition:all var(--transition-fast);
 }
 .chip:hover{ border-color:var(--accent); color:var(--accent) }
@@ -496,13 +557,19 @@ a.entry:hover{ border-left-color:var(--running) }
 .strip .entry{ border:1px solid var(--rule); border-left-width:3px }
 .strip-label{ font-size:var(--t-micro); color:var(--ink-3); margin-bottom:var(--s2); font-family:var(--mono) }
 
-/* ---- source note: every number names the function behind it ------------- */
-.sources{
-  margin-top:var(--s6); border-top:1px dashed var(--rule); padding-top:var(--s3);
-  font-family:var(--mono); font-size:var(--t-micro); color:var(--unknown); line-height:1.7;
-  overflow-wrap:anywhere;
+/* ---- list: ruled rows of what/why + actions (Money › Book tokens) -------- */
+.list{ list-style:none; padding:0; font-size:var(--t-small) }
+.list li{ display:flex; flex-wrap:wrap; align-items:baseline; gap:var(--s2) var(--s3);
+          padding:var(--s3) 0; border-bottom:1px solid var(--rule) }
+.list li:last-child{ border-bottom:0 }
+.list .what{ color:var(--ink); overflow-wrap:anywhere }
+.list .why{ color:var(--ink-3); font-size:var(--t-micro); flex-basis:100% }
+.token-trust-form{ display:flex; flex-wrap:wrap; gap:var(--s2); margin-top:var(--s3) }
+.token-trust-form input{
+  flex:1 1 12ch; min-width:0; background:var(--surface-1); color:var(--ink);
+  border:1px solid var(--rule-control); padding:var(--s2); font:inherit;
 }
-.sources b{ color:var(--ink-3); font-weight:400 }
+.token-trust-form .why{ color:var(--ink-3); font-size:var(--t-micro); flex-basis:100% }
 
 /* ---- the two overlays (Chats, the palette): native <dialog> ------------- */
 .console-shell dialog{ padding:0 }

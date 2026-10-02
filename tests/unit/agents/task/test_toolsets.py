@@ -17,6 +17,14 @@ import pytest
 # Helpers
 # ---------------------------------------------------------------------------
 
+
+def _gates_with_anysite(on: bool) -> dict:
+    """The live-gate store with the anysite gate pinned (the discovery pack
+    registers the real one in the loader's phase 2)."""
+    from core import tool_gates
+    return {**tool_gates._GATES, "anysite": (lambda: on)}
+
+
 def _import_tool_defaults():
     """Fresh import of tool_defaults, bypassing any cached state."""
     import agents.task.tool_defaults as m
@@ -70,7 +78,7 @@ def test_earn_and_owner_interactive_toolsets(monkeypatch):
     assert m.resolve_toolset("earn") == [
         "filesystem", "task", "browser", "perplexity", "mcp", "anysite", "coding"]
     assert m.resolve_toolset("owner_interactive") == [
-        "goal", "twitter", "web_fetch", "filesystem", "task"]
+        "goal", "twitter", "web_fetch", "filesystem", "task", "defi_data"]
 
 
 def test_social_toolset_exists_with_valid_ids():
@@ -89,7 +97,7 @@ def test_research_toolset_ids():
     """resolve_toolset('research') returns the expected tool ids."""
     m = _import_tool_defaults()
     result = m.resolve_toolset("research")
-    assert result == ["filesystem", "task", "perplexity", "anysite", "web_fetch", "polymarket_data", "hyperliquid_data"]
+    assert result == ["filesystem", "task", "perplexity", "anysite", "web_fetch", "polymarket_data", "hyperliquid_data", "defi_data"]
 
 
 def test_resolve_toolset_unknown_returns_default():
@@ -135,7 +143,7 @@ def _cli_default_tools_with_env(env_value=None, monkeypatch=None):
     import unittest.mock as mock
 
     with mock.patch("tools.coding.coding_tools_enabled", return_value=False), \
-         mock.patch("tools.anysite.anysite_cli_enabled", return_value=False), \
+         mock.patch("core.tool_gates._GATES", _gates_with_anysite(False)), \
          mock.patch("core.bootstrap.cli_unavailable_tools", return_value=[]):
 
         if env_value is not None:
@@ -157,13 +165,13 @@ def test_polyrob_agent_toolset_drives_cli_default_tools():
     importlib.reload(m)
 
     with mock.patch("tools.coding.coding_tools_enabled", return_value=False), \
-         mock.patch("tools.anysite.anysite_cli_enabled", return_value=False), \
+         mock.patch("core.tool_gates._GATES", _gates_with_anysite(False)), \
          mock.patch("core.bootstrap.cli_unavailable_tools", return_value=[]), \
          mock.patch.dict(os.environ, {"POLYROB_AGENT_TOOLSET": "research"}):
         importlib.reload(m)
         result = m.cli_default_tools()
 
-    assert result == ["filesystem", "task", "perplexity", "anysite", "web_fetch", "polymarket_data", "hyperliquid_data"]
+    assert result == ["filesystem", "task", "perplexity", "anysite", "web_fetch", "polymarket_data", "hyperliquid_data", "defi_data"]
 
 
 def test_polyrob_agent_toolset_unset_legacy_path():
@@ -174,7 +182,7 @@ def test_polyrob_agent_toolset_unset_legacy_path():
 
     env_without = {k: v for k, v in os.environ.items() if k != "POLYROB_AGENT_TOOLSET"}
     with mock.patch("tools.coding.coding_tools_enabled", return_value=False), \
-         mock.patch("tools.anysite.anysite_cli_enabled", return_value=False), \
+         mock.patch("core.tool_gates._GATES", _gates_with_anysite(False)), \
          mock.patch("core.bootstrap.cli_unavailable_tools", return_value=[]), \
          mock.patch.dict(os.environ, env_without, clear=True):
         importlib.reload(m)
@@ -182,7 +190,8 @@ def test_polyrob_agent_toolset_unset_legacy_path():
 
     # Legacy path with coding=False and anysite=False → [filesystem, task, web_fetch].
     # web_fetch is the lightweight default web reader (zero-dep, always CLI-registerable).
-    assert result == ["filesystem", "task", "web_fetch"]
+    # 071 D1: the read-only defi_data is default ON.
+    assert result == ["filesystem", "task", "web_fetch", "defi_data"]
 
 
 def test_default_toolset_is_behavior_identical_to_unset(monkeypatch):
@@ -198,7 +207,7 @@ def test_default_toolset_is_behavior_identical_to_unset(monkeypatch):
 
     env_without = {k: v for k, v in os.environ.items() if k != "POLYROB_AGENT_TOOLSET"}
     with mock.patch("tools.coding.coding_tools_enabled", return_value=False), \
-         mock.patch("tools.anysite.anysite_cli_enabled", return_value=False), \
+         mock.patch("core.tool_gates._GATES", _gates_with_anysite(False)), \
          mock.patch("core.bootstrap.cli_unavailable_tools", return_value=[]):
         with mock.patch.dict(os.environ, env_without, clear=True):
             importlib.reload(m)
@@ -218,13 +227,13 @@ def test_default_toolset_gets_dynamic_additions():
     importlib.reload(m)
 
     with mock.patch("tools.coding.coding_tools_enabled", return_value=True), \
-         mock.patch("tools.anysite.anysite_cli_enabled", return_value=True), \
+         mock.patch("core.tool_gates._GATES", _gates_with_anysite(True)), \
          mock.patch("core.bootstrap.cli_unavailable_tools", return_value=[]), \
          mock.patch.dict(os.environ, {"POLYROB_AGENT_TOOLSET": "default"}):
         importlib.reload(m)
         result = m.cli_default_tools()
 
-    assert result == ["filesystem", "task", "web_fetch", "coding", "anysite"]
+    assert result == ["filesystem", "task", "web_fetch", "coding", "anysite", "defi_data"]
 
 
 def test_resolve_toolset_default_includes_web_fetch():
@@ -244,7 +253,7 @@ def test_polyrob_agent_toolset_pruned_via_cli_unavailable():
         return [t for t in tools if t in {"browser", "perplexity"}]
 
     with mock.patch("tools.coding.coding_tools_enabled", return_value=False), \
-         mock.patch("tools.anysite.anysite_cli_enabled", return_value=False), \
+         mock.patch("core.tool_gates._GATES", _gates_with_anysite(False)), \
          mock.patch("core.bootstrap.cli_unavailable_tools", side_effect=fake_unavailable), \
          mock.patch.dict(os.environ, {"POLYROB_AGENT_TOOLSET": "research"}):
         importlib.reload(m)
@@ -252,4 +261,4 @@ def test_polyrob_agent_toolset_pruned_via_cli_unavailable():
 
     # research = [filesystem, task, perplexity, anysite, web_fetch, polymarket_data, hyperliquid_data]
     # after pruning browser + perplexity → drop perplexity (browser not present)
-    assert result == ["filesystem", "task", "anysite", "web_fetch", "polymarket_data", "hyperliquid_data"]
+    assert result == ["filesystem", "task", "anysite", "web_fetch", "polymarket_data", "hyperliquid_data", "defi_data"]

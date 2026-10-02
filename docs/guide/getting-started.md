@@ -11,17 +11,22 @@ The default instance is named `polyrob`, and the command is `polyrob`.
 ## Quick start
 
 ```bash
-pipx install "polyrob[all]"
-polyrob init                        # keys, model, toolset, owner
+curl -fsSL https://polyrob.dev/install.sh | bash
 polyrob doctor                      # catches a missing or malformed key first
 polyrob run "summarize https://example.com"
 ```
+
+The installer finds Python 3.11+, clones the source into `~/.polyrob/src`, builds
+a virtualenv, puts a `polyrob` command on your `PATH`, and runs the setup wizard
+inside the pipe (it reads `/dev/tty`, so it can still ask you questions). Already
+a Python user? `pipx install "polyrob[all]" && polyrob setup` does the same
+thing without the clone.
 
 That last command fetches the page with the lightweight `web_fetch` tool, so no
 browser install is needed. Full browser automation is opt-in
 ([below](#optional-the-browser-engine)).
 
-`polyrob init` also binds an **owner** — the identity that autonomy, approvals
+`polyrob setup` (the wizard — `polyrob init` is the same command) also binds an **owner** — the identity that autonomy, approvals
 and self-evolution answer to. Interactively it asks for an instance id and an
 owner id. To script it:
 
@@ -37,7 +42,32 @@ polyrob init --no-prompt --owner aria --instance-id aria --openai-key sk-...
 
 ## Installing
 
-**pipx (recommended)** — a clean, isolated install:
+**The installer (recommended)** — Linux, macOS, WSL2:
+
+```bash
+curl -fsSL https://polyrob.dev/install.sh | bash
+```
+
+Read it first if you prefer (`curl … -o install.sh && less install.sh`); the
+checksum of the published copy is at `https://polyrob.dev/install.sh.sha256`,
+and the same file is in the repository root. Flags:
+
+| Flag | What it does |
+|---|---|
+| `--extras server,browser` | Install pip extras up front |
+| `--browser` / `--no-browser` | Decide the browser engine without being asked |
+| `--no-setup` | Skip the wizard (run `polyrob setup` later) |
+| `--no-prompt` | Ask nothing at all — for scripts and images |
+| `--branch` / `--commit` | Pin the version it installs |
+| `--home DIR` | A different POLYROB home (default `~/.polyrob`) |
+| `--uninstall` | Remove the command, the `PATH` entry, the venv and the source |
+
+It puts code in `~/.polyrob/src`, the virtualenv in `~/.polyrob/venv`, the command
+in `~/.local/bin/polyrob`, and your data — keys, memory, identity — in
+`~/.polyrob/`. Running it again updates in place. Windows without WSL2 is not
+supported; there is no PowerShell installer.
+
+**pipx** — a clean, isolated install if you already have pipx:
 
 ```bash
 pipx install "polyrob[all]"
@@ -58,16 +88,22 @@ pip install "polyrob[browser,server]"
 git clone https://github.com/theselfruleorg/polyrob
 cd polyrob
 pip install -e ".[dev,all]"
+# or: bash install.sh   — installs THIS tree the way the one-liner would
 ```
 
 ### Extras
 
 | Extra | What it adds | Size |
 |---|---|---|
-| *(none)* | Core agent, keyword memory, CLI | ~50 MB |
-| `server` | FastAPI REST API + console | +20 MB |
+| *(none)* | Core agent, keyword memory, CLI, the OpenAI SDK (serves OpenAI, OpenRouter, NVIDIA, DeepSeek and every OpenAI-compatible provider) | ~50 MB |
+| `gemini` | The Google Gemini SDK | +130 MB |
+| `anthropic` | The Anthropic SDK (also the z.ai / Anthropic-transport seats) | +8 MB |
+| `server` | FastAPI REST API + console, upload MIME sniffing | +20 MB |
 | `browser` | Playwright browser automation | +100 MB |
-| `memory-vector` | Hybrid vector recall | +500 MB |
+| `docs` | PDF and DOCX reading (the filesystem tool refuses with the remedy without it) | +5 MB |
+| `media` | Invoice-card QR, run-history GIFs | +40 MB |
+| `anysite` | The AnySite scraping CLI | +5 MB |
+| `memory-vector` | Hybrid vector recall (sqlite-vec + numpy + the embedder) | +500 MB |
 | `crypto` | Web3, x402, the EVM venues | +10 MB |
 | `solana` | Solana signing and trading | +15 MB |
 | `telegram` | Telegram surface | +5 MB |
@@ -75,6 +111,15 @@ pip install -e ".[dev,all]"
 | `voice` | Voice transcription (faster-whisper) | +50 MB |
 | `dev` | Tests, linting, build tooling | +30 MB |
 | `all` | Everything above | ~700 MB |
+
+You rarely type an extra: the **first use** of an optional capability installs it
+(`LAZY_DEPS_MODE=trusted`, the default). It installs the exact files the release
+pinned — every file checked against the sha256 in `requirements.lock` — into
+`~/.polyrob/pylibs`, beside the venv, not into it. Set a Gemini key and the SDK
+arrives on the first Gemini turn; read a PDF and `docs` arrives. With a wallet seed
+on the machine, only wheels install (no package build code runs). On a server that
+holds a seed, a separate installer unit does the install, and without it the miss
+is a refusal that names the extra. `LAZY_DEPS_MODE=off` seals it anywhere.
 
 Python 3.11 or newer. pipx works on macOS, Linux and Windows PowerShell alike;
 on Windows a plain virtualenv (`python -m venv venv`) is equally fine.
@@ -101,7 +146,7 @@ Three things worth knowing:
   z.ai, Kimi and others) is connected with `polyrob auth add <provider>`;
   `polyrob auth status` shows every credential's source, health and expiry. Read
   the terms-of-service warning in
-  [configuration.md §3](configuration.md#plans-that-need-a-sign-in-oauth) first.
+  [configuration.md §4](configuration.md#plans-that-need-a-sign-in-oauth) first.
 - **No key at all?** Declare any OpenAI- or Anthropic-compatible endpoint in
   `~/.polyrob/providers.yaml` — a local Ollama needs no key:
 
@@ -116,7 +161,7 @@ Three things worth knowing:
   ```
 
   Then `polyrob run -p ollama "hello"`. Full rules:
-  [configuration.md §3](configuration.md#your-own-endpoint-providersyaml).
+  [configuration.md §4](configuration.md#your-own-endpoint-providersyaml).
 
 DeepSeek has no standalone bootstrap path (its direct client's tool calling is
 unreliable); reach it through OpenRouter with a `deepseek/deepseek-chat` model.
@@ -159,7 +204,9 @@ polyrob run "analyze the code in ./src for security issues"
 polyrob run "go to producthunt.com, find the top 3 AI tools, build a comparison table"
 ```
 
-Each `polyrob run` is a fresh session. `--resume <id>` continues one.
+Each `polyrob run` is a fresh session. `--resume <id>` continues one. A fresh
+session still reads the tail of your conversation (the owner thread), so it is
+a new workspace, not a memory cliff — see [conversation.md](conversation.md).
 
 For anything exploratory, use the REPL instead:
 
@@ -192,8 +239,10 @@ $ polyrob
 /goals                   the goal board summary
 /autonomy                loops, scheduled cron jobs, open goals
 /inbox                   everything waiting on a decision from you
+/thread [n | <hours>h]   our conversation across every session and rail, newest last
 /pause [word…] [for 6h]  stop autonomous work now; /resume lifts it
-/compact                 compact the conversation through the model
+/context                 what is in the context window, and what the provider billed
+/compact                 age old tool results, then compact the rest through the model
 /exit                    leave the REPL
 ```
 
@@ -215,7 +264,7 @@ polyrob model set-default    # interactive picker for provider + model
 ```
 
 Where each file lives and how precedence resolves:
-[configuration.md §1](configuration.md#1-how-configuration-works).
+[configuration.md §2](configuration.md#2-where-a-setting-lives).
 
 ### Turning things on
 
@@ -230,7 +279,7 @@ polyrob autonomy on                         # writes AUTONOMY_ENABLED=true
 `POLYROB_LOCAL` turns on the **interactive** tools you drive; the
 **self-directed loops** — goals, self-wake, the curator, writable skills — need
 `AUTONOMY_ENABLED` as well. The four axes, what each one moves, and how to stop
-it again: [configuration.md §5](configuration.md#5-the-autonomy-dial).
+it again: [configuration.md §6](configuration.md#6-the-autonomy-dial).
 
 ---
 
@@ -248,7 +297,8 @@ it again: [configuration.md §5](configuration.md#5-the-autonomy-dial).
 ├── memory.db               # cross-session memory
 ├── goals.db                # the goal board
 ├── cron.db                 # scheduled runs
-├── conversations.db        # per-correspondent conversation log
+├── conversations.db        # per-correspondent conversation log (third parties)
+├── owner_thread.db         # your ONE conversation with the agent, every session and rail
 ├── telemetry_events.db     # events, costs, wallet spend
 └── sessions/
     └── session-abc123/
@@ -267,6 +317,47 @@ snapshot that whole set together, so a rollback never restores a half of it.
 `POLYROB_DATA_DIR` moves the runtime root; a named profile replaces both homes
 at once ([profiles.md](profiles.md)). Nothing leaves your machine except calls
 to the LLM provider you configured and any integration you switch on.
+
+---
+
+## Keeping it running
+
+The terminal REPL stops when you close the terminal. To keep the chat surfaces and
+the autonomy loops alive:
+
+```bash
+polyrob service install    # systemd user unit (Linux) or launchd agent (macOS)
+polyrob service status     # installed? running? which surfaces would start?
+polyrob service uninstall  # stop and remove it; your data is untouched
+```
+
+It runs `polyrob gateway`, so every surface you enabled starts from one unit. On
+Linux, `loginctl enable-linger $USER` keeps a user unit running after you log out —
+the install step prints that reminder. The unit pins `POLYROB_HOME` (and the
+profile, if one is active) explicitly, because a systemd user unit inherits nothing
+from your shell.
+
+The installer offers this at the end when the wizard configured a chat surface.
+
+---
+
+## Removing it
+
+```bash
+polyrob uninstall            # command, PATH entry and service. Data is KEPT.
+polyrob uninstall --purge    # also deletes the data home, after a typed confirmation
+bash ~/.polyrob/src/install.sh --uninstall   # also removes the venv and the source
+```
+
+`polyrob uninstall` will not delete the virtualenv it is running from, and it will
+not remove a pip or pipx install — it prints the exact command for those instead.
+
+⚠️ There are **two** homes and `--purge` names both before it deletes anything:
+`~/.polyrob` (per user — keys, settings and the **agent wallet seed**) and
+`./.polyrob` (per project — memory, goals, identity). Memory is per-project by
+design, so other directories keep their own and this verb never sees them.
+Export the mnemonic (`polyrob wallet export`) before `--purge` if that wallet
+ever held funds.
 
 ---
 
@@ -294,7 +385,9 @@ in [upgrading.md](upgrading.md#the-safety-net). Options in full:
 
 | Symptom | What to run |
 |---|---|
-| "No API key found" | `polyrob init`, or `polyrob auth add <provider>` for a sign-in plan |
+| "No API key found" | `polyrob setup`, or `polyrob auth add <provider>` for a sign-in plan |
+| `polyrob: command not found` | Reload your shell (`source ~/.zshrc`) — the installer added `~/.local/bin` to your `PATH` |
+| Not sure what the install did | `polyrob doctor` prints the bootstrap record, the surfaces, the service and the identity docs |
 | The wrong provider answers | `polyrob model list`, then `polyrob model set-default` |
 | "Browser not available" | `pip install "polyrob[browser]"`, then `python -m playwright install chromium` |
 | Recall feels shallow | `pip install "polyrob[memory-vector]"`; the log names the missing extension |

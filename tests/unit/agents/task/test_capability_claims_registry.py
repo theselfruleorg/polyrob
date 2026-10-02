@@ -85,6 +85,58 @@ def _goal_create_still_excludes_money_tools() -> bool:
     return not (allowed_self_goal_tools() & _SPEND_TOOLS)
 
 
+
+# ---- 068 W2 procedure skills ----------------------------------------------
+
+def _trade_tool_methods():
+    import tools.defi.trade_tool as trade_tool
+    return [n.lower() for n in dir(trade_tool.DefiTradeTool) if not n.startswith("_")]
+
+
+def _no_native_order_types_on_defi_trade() -> bool:
+    """True while defi_trade has no limit/stop/trigger/DCA/TWAP order verb."""
+    words = ("limit_order", "stop", "trigger", "order", "dca", "twap", "take_profit")
+    return not any(w in m for m in _trade_tool_methods() for w in words)
+
+
+def _no_hyperliquid_trigger_order() -> bool:
+    """True while the Hyperliquid service exposes no TP/SL trigger-order verb."""
+    import packs.markets.polyrob_markets.hyperliquid.service as hl
+    names = [n.lower() for c in vars(hl).values() if isinstance(c, type)
+             and hasattr(c, "place_limit_order") for n in dir(c)]
+    return not any(w in n for n in names for w in ("trigger", "tpsl", "take_profit", "stop_loss"))
+
+
+def _no_price_impact_field() -> bool:
+    """True while neither swap_quote nor swap reports a price-impact figure."""
+    for rel in ("tools/defi/data_tool.py", "tools/defi/trade_tool.py"):
+        text = (ROOT / rel).read_text(encoding="utf-8").lower()
+        if "price_impact" in text or "price impact" in text:
+            return False
+    return True
+
+
+def _no_onchain_strategy_budget_or_loss_breaker() -> bool:
+    """True while the on-chain money path has no per-strategy budget or drawdown halt."""
+    for base in ("core/money", "core/wallet", "tools/defi"):
+        for path in (ROOT / base).rglob("*.py"):
+            text = path.read_text(encoding="utf-8").lower()
+            if any(w in text for w in ("strategy_budget", "per_strategy", "drawdown", "loss_breaker")):
+                return False
+    return True
+
+
+def _no_lending_verb() -> bool:
+    """True while defi_trade has no lend/supply/borrow verb (call can reach a protocol)."""
+    return not any(w in m for m in _trade_tool_methods()
+                   for w in ("lend", "supply", "borrow", "aave", "morpho"))
+
+
+def _x402_payer_is_base_exact_only() -> bool:
+    """True while the payer has no Solana and no `upto` path."""
+    text = (ROOT / "tools/x402/real_client.py").read_text(encoding="utf-8").lower()
+    return "upto" not in text and "solana_x402" not in text
+
 CLAIMS = (
     CapabilityClaim(
         id="nft-no-rail",
@@ -105,9 +157,69 @@ CLAIMS = (
         # the mechanism `still_true` actually checks.
         phrase="strips the whole money set",
         still_true=_goal_create_still_excludes_money_tools,
-        why="allowed_self_goal_tools() would need to start intersecting a spend "
-            "verb (directly, or via a future AUTONOMOUS_MODE_TOOLS addition) for "
-            "this to flip",
+        why="the UNARMED default: allowed_self_goal_tools() (no autonomy env) would "
+            "need to start intersecting a spend verb for this to flip. Armed, it "
+            "does include defi_trade by design (2026-09-12) -- the skill says so "
+            "since Codex A8 (2026-09-26)",
+    ),
+    CapabilityClaim(
+        id="068-no-native-dex-orders",
+        file="data/prompts/skills/exits/SKILL.md",
+        phrase="no native stop, limit or trigger orders",
+        still_true=_no_native_order_types_on_defi_trade,
+        why="a limit/stop/trigger/DCA/TWAP order verb would need to ship on defi_trade",
+    ),
+    CapabilityClaim(
+        id="068-no-native-dca-order",
+        file="data/prompts/skills/dca/SKILL.md",
+        phrase="there is no native dca or",
+        still_true=_no_native_order_types_on_defi_trade,
+        why="a recurring/DCA order verb would need to ship on defi_trade",
+    ),
+    CapabilityClaim(
+        id="068-no-hl-trigger-order",
+        file="packs/markets/polyrob_markets/skills/hyperliquid-trading/SKILL.md",
+        phrase="there is no trigger (tp/sl) order verb here",
+        still_true=_no_hyperliquid_trigger_order,
+        why="a Hyperliquid trigger (TP/SL) order method would need to ship",
+    ),
+    CapabilityClaim(
+        id="068-exits-no-hl-trigger-order",
+        file="data/prompts/skills/exits/SKILL.md",
+        phrase="but no trigger (tp/sl) order",
+        still_true=_no_hyperliquid_trigger_order,
+        why="a Hyperliquid trigger (TP/SL) order method would need to ship",
+    ),
+    CapabilityClaim(
+        id="068-no-price-impact-field",
+        file="data/prompts/skills/pre-trade-check/SKILL.md",
+        phrase="there is no price-impact field",
+        still_true=_no_price_impact_field,
+        why="swap_quote or swap would need to report a price-impact figure",
+    ),
+    # 068-no-realized-pnl RETIRED 2026-10-02 (071 W3): the rail book records
+    # realized P&L per token (core/open_positions.py position_realized) and
+    # defi_data.positions reads it; position-journal no longer makes the claim.
+    CapabilityClaim(
+        id="068-no-strategy-budget-or-breaker",
+        file="data/prompts/skills/sizing-and-risk/SKILL.md",
+        phrase="does not have yet: a per-strategy or per-goal budget",
+        still_true=_no_onchain_strategy_budget_or_loss_breaker,
+        why="a per-strategy budget or a drawdown/loss breaker would need to ship on the on-chain money path",
+    ),
+    CapabilityClaim(
+        id="068-no-lending-verb",
+        file="data/prompts/skills/stable-cash/SKILL.md",
+        phrase="has no dedicated verb yet",
+        still_true=_no_lending_verb,
+        why="a lending/supply verb would need to ship on defi_trade",
+    ),
+    CapabilityClaim(
+        id="068-x402-base-exact-only",
+        file="data/prompts/skills/x402-pay/SKILL.md",
+        phrase="not supported yet: solana payments, the `upto` scheme",
+        still_true=_x402_payer_is_base_exact_only,
+        why="the x402 payer would need a Solana (solana_x402) or `upto` path",
     ),
 )
 

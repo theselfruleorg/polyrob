@@ -1,6 +1,7 @@
 """032 — the app-service flag readers (docs/CONFIGURATION.md rows are the SSOT)."""
 import os
-from typing import Optional, Tuple
+import re
+from typing import Any, Mapping, Optional, Tuple
 
 from core.config_policy.builder_mode import _builder_capability_default, base_domain, cert_dir_for
 from core.env import bool_env, float_env, int_env
@@ -115,3 +116,41 @@ def app_dir(data_dir: Optional[str], user_id: str, slug: str) -> str:
 
 def logs_path(data_dir: Optional[str], user_id: str, slug: str) -> str:
     return os.path.join(app_dir(data_dir, user_id, slug), "logs.txt")
+
+
+# --- H07: the row fields the ROOT supervisor turns into paths/names ----------
+#
+# The registry db is group-writable by every ``polyrob-data`` identity, so the
+# supervisor must never trust a row field it uses for a filesystem op, a
+# container name or a label. These are checked on the way IN (the registry) and
+# AGAIN by the supervisor before anything touches the disk.
+
+_DIGEST_RE = re.compile(r"[0-9a-f]{12,64}")
+_MAX_TENANT_LEN = 128
+
+
+def valid_app_slug(slug: Any) -> bool:
+    from core.publish import valid_slug
+    return valid_slug(slug) and slug not in RESERVED_SLUGS
+
+
+def valid_app_tenant(user_id: Any) -> bool:
+    from core.instance import is_safe_tenant_id
+    return (isinstance(user_id, str) and 0 < len(user_id) <= _MAX_TENANT_LEN
+            and is_safe_tenant_id(user_id))
+
+
+def valid_workspace_digest(digest: Any) -> bool:
+    return isinstance(digest, str) and bool(_DIGEST_RE.fullmatch(digest))
+
+
+def row_field_error(row: Mapping[str, Any]) -> Optional[str]:
+    """Why a registry row is unsafe to act on, or ``None``. Never echoes the
+    raw value beyond a short repr (it is attacker-controlled text)."""
+    if not valid_app_slug(row.get("slug")):
+        return f"invalid slug {str(row.get('slug'))[:40]!r}"
+    if not valid_app_tenant(row.get("user_id")):
+        return f"invalid tenant {str(row.get('user_id'))[:40]!r}"
+    if not valid_workspace_digest(row.get("workspace_digest")):
+        return "invalid workspace digest (want 12-64 lowercase hex)"
+    return None

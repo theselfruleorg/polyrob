@@ -82,4 +82,29 @@ def apply_request_extras(request_params: Dict[str, Any], client: Any = None,
     apply_provider_routing(request_params, client)
     if client is not None:
         stamp_client(client, request_params)   # prefix identity for the billing record
+    apply_usage_accounting(request_params)
     return apply_reasoning_budget(request_params, max_tokens)
+
+
+def apply_usage_accounting(request_params: Dict[str, Any]) -> Dict[str, Any]:
+    """Ask OpenRouter for the cost it ACTUALLY billed — F23 (2026-09-22).
+
+    Every cost figure in the tree is an ESTIMATE recomputed from the model
+    catalog's per-token prices. On OpenRouter that estimate is a guess about a
+    router: the upstream it picked, its own discounts and its cache pricing are
+    not in our table, and a `cache_discount` never appears in it at all. With
+    `usage: {"include": true}` the response's `usage` block carries `cost`
+    (USD, what OpenRouter charged) and `cache_discount`, which
+    `modules/llm/usage_extract.py` reads and the billing chokepoint stores as
+    the real `api_cost_usd`.
+
+    Free on every OpenRouter model (it only asks for accounting in the
+    response) and merged into `extra_body` beside the routing and reasoning
+    blocks. In place; never raises.
+    """
+    extra = dict(request_params.get("extra_body") or {})
+    usage = dict(extra.get("usage") or {})
+    usage["include"] = True
+    extra["usage"] = usage
+    request_params["extra_body"] = extra
+    return request_params

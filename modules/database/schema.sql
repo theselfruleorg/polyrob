@@ -158,6 +158,12 @@ CREATE TABLE IF NOT EXISTS usage_records (
     input_tokens INTEGER DEFAULT 0,
     output_tokens INTEGER DEFAULT 0,
     cached_tokens INTEGER DEFAULT 0,
+    -- F17: cache-WRITE tokens (a write costs MORE than an uncached token:
+    -- 1.25x on Anthropic's 5m window, 2x on the 1h one). calculate_cost has
+    -- billed it since G3; the row stored only cache READS, so nothing after
+    -- the fact could say whether a session's cache paid for itself.
+    -- Kept in sync with auth_tables.py and migrations v1_10_0.
+    cache_creation_tokens INTEGER DEFAULT 0,
     api_cost_usd REAL DEFAULT 0.0,
     markup_multiplier REAL DEFAULT 1.0,
     -- G-26: real column for the request_id that record_llm_usage generates

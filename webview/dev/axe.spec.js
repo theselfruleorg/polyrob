@@ -146,3 +146,29 @@ if (BASE) test('theme preference writes, applies and survives reload', async ({ 
     expect(response.ok()).toBeTruthy();
   }
 });
+
+// 070 W0.16 — the bound chat is a grid: no horizontal scroll, the composer
+// never covers the Work pane, and on a phone the pane is a closed drawer until
+// its toggle opens it. Needs a bound chat: AXE_CHAT_PATH=/c/<session id>.
+const CHAT = process.env.AXE_CHAT_PATH || '';
+if (BASE && CHAT) test('chat layout does not overflow', async ({ page }, testInfo) => {
+  test.skip(!testInfo.project.name.startsWith('dark'), 'layout is theme-free');
+  for (const viewport of [{ width: 1000, height: 577 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    await page.goto(BASE + CHAT, { waitUntil: 'load' });
+    // Not networkidle: the live socket keeps the network busy.
+    await page.locator('#work-pane .table, #workpane-files-state:not([hidden])').first().waitFor({ state: 'attached' });
+    const box = await page.evaluate(() => {
+      const r = (sel) => { const n = document.querySelector(sel); if (!n) return null; const b = n.getBoundingClientRect(); return { x: b.x, y: b.y, w: b.width, h: b.height, visible: getComputedStyle(n).visibility !== 'hidden' }; };
+      return { scroll: document.documentElement.scrollWidth, inner: innerWidth, composer: r('.chat-col .composer-wrap'), pane: r('#work-pane') };
+    });
+    expect(box.scroll, `horizontal overflow at ${viewport.width}`).toBeLessThanOrEqual(box.inner);
+    const overlap = (a, b) => a && b && b.visible && a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+    expect(overlap(box.composer, box.pane), `composer covers the pane at ${viewport.width}`).toBeFalsy();
+    if (viewport.width < 900) {
+      expect(box.pane.visible).toBe(false);
+      await page.locator('#work-pane-toggle').click();
+      await expect(page.locator('#work-pane')).toHaveClass(/is-open/);
+    }
+  }
+});

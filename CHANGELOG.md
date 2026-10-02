@@ -4,7 +4,491 @@ All notable changes to POLYROB are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+This is the full technical record. Entries use only the six Keep a Changelog
+headings and describe shipped behavior; the rules are in `RELEASING.md`. The
+short, user-facing notes for each release are on its GitHub Release page.
+
 ## [Unreleased]
+
+## [1.2.0] — 2026-10-02
+
+### Added
+
+- **Check any wallet or token.** New read verbs `wallet_holdings`, `wallet_activity` and
+  `token_origin` (Solana and EVM), `positions` (the agent's own P&L), the `/check` command, and
+  cron price watches with an alert threshold.
+- **One owner word per concept.** A glossary of owner words (chat, goal, scheduled job, decision,
+  holdings, limit, network, abilities, permissions and more) is now checked across the console, the
+  command help, Telegram and the terminal; the number of strings with an old word can only fall.
+- **`/run` on Telegram and in the terminal:** list what runs in the background now, numbered, and
+  pause, resume or stop ONE run (`/run pause 2`). Before, only the `polyrob session` command could
+  do this. Refused inside a group.
+- **Agent NFTs:** `/nft` lists the owned NFTs with their accounts, balances and open approvals;
+  `/nft send <id> <to> [go]` gives one away; a watch tells the owner when one arrives or leaves.
+  Sends, swaps, claims and portfolio reads take `account=` or `nft=`. Needs `AGENT_NFT_ENABLED`.
+- **Agent NFTs:** the `agent_nft` tool (inspect, journal, revoke, mint, reveal, withdraw)
+  behind `AGENT_NFT_ENABLED` (default off). The treasury acts through an NFT's ERC-6551
+  account only as the NFT's owner; positions take `account=`.
+- **NFT collections:** the owner pins one in `/etc/polyrob/agent_nft_collections.json`
+  (empty by default: every mint and reveal refuses). `tx_guard` checks exact mint and reveal
+  shapes; `AGENT_NFT_REVEAL_MAX_GAS_USD` (1.00) caps a reveal.
+- **Cron write jobs:** `payload.write_verb` runs one allowlisted write verb (the collection
+  reveal) with no model turn, through its own gates and `tx_guard`. Off unless
+  `CRON_WRITE_JOBS_ENABLED=true`; only an owner-authored job may carry one.
+- **Cron read jobs and pause windows:** `payload.read_verb` runs one allowlisted read verb
+  with no model turn (`deliver_on` `alert`, `always` or `never`); a tick inside
+  `payload.pause_windows` is skipped at $0. Read and write jobs may recur every minute.
+- **Uniswap v4 liquidity:** `defi_data.pool_metrics` monitors a Pons v4 pool, `lp_pool_info`
+  and `lp_quote` read one, and `defi_trade.lp_add(protocol='v4')` adds a full-range
+  position. New caps `LP_ETH_CAP` (default 0), `LP_ETH_DAILY_CAP` and `LP_ETH_FLOOR`.
+- **X login from chat:** `/x login` renews the agent's X API login from any owner seat
+  through a one-time authorize link (needs `X_OAUTH2_REDIRECT_URI`); `/x status`, `/status`
+  and `polyrob doctor` show the login state.
+- **Packs:** optional extensions (`polyrob.packs` entry points, `pack.toml`) add tools,
+  verbs, routes and skills; `polyrob pack list|info|doctor|enable|disable|install|remove`,
+  `POLYROB_PACKS_DISABLED`.
+- **Cron:** a job whose rail needs a credential only the owner can fix (an expired X login,
+  an X API 402) is skipped at $0 instead of running a model turn; the owner is told once.
+- **Cron:** a job that names the same owner-only remedy on 3 runs in a row raises one owner
+  question: I will run it, or retire this job.
+- **Owner money verbs:** `/send`, `/swap`, `/pay <url>`, `/writeoff` and `/unquarantine` on
+  Telegram and the REPL. The bare form quotes; `go` acts within the quote (+5%, or `max
+  <usd>`). The chain is never guessed; a token is an address. Not in rooms.
+- **Action cards:** a money quote is a card with Confirm / Refresh / Cancel
+  (`/card_<id>_ok|re|no`); Confirm runs the quoted line once, with every gate. `/cards`
+  lists open cards; bare `/send` or `/swap` and the console's *Make a move* build the order.
+- **Agent tools:** `present_choice(question, options)` shows 2–6 buttons and returns the
+  owner's pick; `propose_action(command, why)` puts a money verb to the owner as a card.
+  Both are refused in rooms, in sub-agents and in correspondent sessions.
+- **Token trust:** `/wallet tokens`, `/wallet trust|untrust`, `polyrob wallet
+  pin-token|unpin-token|pins` and console Money › Book. A buy of an unproven look-alike asks
+  the owner once; a token this instance launched is trusted.
+- **Buy targets:** a goal or cron job may declare `target_token: {chain, address}`; the run
+  then acquires no other non-canonical token, and the work it creates inherits the target.
+- **Solana sends:** `defi_trade.solana_transfer` sends SOL or an SPL token by mint, creates
+  a missing token account, defaults to `dry_run`, and refuses Token-2022 transfer fees,
+  hooks and unknown extensions.
+- **Wallet submissions:** `polyrob wallet submissions` lists unresolved submissions (one
+  blocks every send); `polyrob wallet release-submission <ref>` releases one only by booking
+  its worst-case charge (`--charge-usd`, or `--never-sent --reason`).
+- **Wallet caps:** `polyrob doctor`, `/status` and `polyrob wallet set-cap` say when the
+  agent's cap is above the signer's hard cap in `signer.toml`, and name both remedies.
+- **x402:** `x402_pay` joins the autonomous toolset when `DEFI_AGENT_AUTONOMY` is armed: up
+  to `X402_AUTONOMOUS_MAX_USD` it pays and reports, above it waits for `/approve`.
+  `x402_fetch` takes `request_id`, so a retry never pays twice.
+- **Trading skills:** ten procedure skills (`token-identity`, `pre-trade-check`,
+  `trade-execution`, `exits`, `dca` and more); `treasury-trading` is split into five smaller
+  skills; `hyperliquid-trading` and `polymarket-trading` teach the basics.
+- **Skills:** a skill's `requires` list pulls in at most two prerequisite skills past
+  `max_skills`; a disabled skill is never pulled back in.
+- **Chat:** `/why [n]` lists the last gate refusals (default 5, at most 20) with the tool
+  and the gate's reason, on Telegram, the REPL and the console.
+- **Chat:** `/cron list|show|add|edit|cancel` on Telegram and the REPL alike; `add` takes
+  `tools=` and `target=<address> chain=<chain>`, and `edit` changes the schedule or the
+  task.
+- **Chat:** an owner question with lettered options (`A) … or B) …`) carries one answer
+  button per option on Telegram.
+- **Cron:** `cronjob_show` returns a job's full definition; `cronjob_edit` changes a live
+  job in place (task, schedule, cap, rig, delivery, skills). An autonomous run may edit only
+  its own jobs.
+- **Outward acts:** every outward act is one `external_write` telemetry row by class
+  (social, comms, public, money, code, self, network); an autonomous write in a class the
+  owner paused is refused. `EXTERNAL_WRITE_TELEMETRY` and `EXTERNAL_WRITE_PAUSE_GATE` (on).
+- **Security ledger:** rate-limit trips are recorded and ranked. `scripts/security_scan.py`
+  runs pip-audit, gitleaks and host checks (exit 0 clean, 1 findings, 2 incomplete, 3
+  error); the verdict shows on the `security` status line.
+- **Memory scopes:** a goal tree or a cron job can keep its memory in its own scope
+  (`AUTONOMY_MEMORY_REGIME` `shared`|`scoped`|`sealed`, default `scoped`); `polyrob owner
+  memory scopes`. Behind `MEMORY_SCOPES_ENABLED` (default off).
+- **Rails:** standing work is configuration: a rail is an objective with a recurrence,
+  managed with `/rail` and `polyrob rails` (new, edit, on/off, grant, revoke, export,
+  import). A money grant stays inert unless money is armed.
+- **Workers:** `delegate_task(profile="<id>")` runs an owner-approved worker with its own
+  brief, budget, model and tools; `polyrob workers` and `/workers`. The agent can only
+  propose a worker. Behind `WORKERS_ENABLED` (default off).
+- **Wallet signer:** `polyrob-signer` is a separate process that holds the seed, re-runs the
+  money guard, signs only known shapes and holds anything above its caps in
+  `/etc/polyrob/signer.toml`. `WALLET_SIGNER=local|shadow|remote` (default `local`).
+- **Files:** `filesystem_append_file` takes `after_anchor` and inserts after the one line
+  that contains it; no match or more than one match writes nothing.
+- **Feishu / Lark surface:** set `FEISHU_APP_ID` and `FEISHU_APP_SECRET` (long connection,
+  extra `[feishu]`) or `FEISHU_TRANSPORT=webhook`; `OWNER_FEISHU_ID` makes it an owner seat.
+  In a group it answers only when @-mentioned.
+- **DingTalk surface:** Stream Mode (no public URL, no extra), text in DMs and on an
+  @-mention in groups. Credentials `DINGTALK_CLIENT_ID` / `DINGTALK_CLIENT_SECRET`.
+- **Surfaces:** `polyrob surfaces list | add | probe` shows each surface's flag and
+  credentials, stores a credential in the env file, and proves it with a read that never
+  sends.
+- **Surfaces:** Discord, Slack and Signal read the owner's photos and files like Telegram
+  and email; a contact's files are named but never downloaded.
+- **Telegram:** approval notices and `/pending` carry approve/reject buttons (a press counts
+  as the presser typing the command); the "/" menu comes from the verb table.
+- **Telegram voice replies:** with `/prefs set voice.replies true` the agent also answers a
+  DM with a voice note (OpenAI speech or local espeak-ng). Off by default.
+- **Chains:** Optimism as a read-only chain (token screens, prices, balances); no money
+  moves on it.
+- **Pause:** `/pause release` holds the release train.
+- **Money claims:** an outbound message that says money moved ("I paid $5") is refused as
+  `financial_claim_unverified` unless the wallet audit log or a settled invoice holds a
+  matching record. `FINANCIAL_CLAIM_GATE_ENABLED` (default on).
+- **Custody status:** a `custody` status section says whether the process is non-dumpable
+  and its env scrubbed, and shows the lazy-install mode and the installed features.
+- **Prompt cache:** `ANTHROPIC_CACHE_TTL` (`auto`|`5m`|`1h`, default `auto`): a 1h cache for
+  an interactive turn and 5m for an autonomous run, on the Anthropic API only. `/status`
+  economics shows cache `writes` (migration `v1.10.0`).
+- **Knowledge:** a `knowledge` status section; the knowledge base indexes what the agent
+  writes (`KB_AUTO_INGEST_ARTIFACTS`, `polyrob kb reindex`); sessions expire after
+  `SESSION_RETENTION_DAYS` (90, `polyrob sessions prune`); repeated recall becomes one note.
+- **Install:** `install.sh` installs POLYROB on Linux, macOS and WSL2 in one command
+  (`--uninstall` keeps your data). New `polyrob setup`, `service`, `uninstall`, `config
+  edit` and `tools enable|disable`; an optional extra installs on first use.
+
+### Changed
+
+- **Agent NFTs:** `agent_nft_withdraw_token` requires `to=`; it and `agent_nft_revoke_all` work
+  without the optional agent-NFT package.
+- **The owner sign-in page and its errors read in plain words** ("Sign in to Rob").
+- **Live-update refusals show a plain console sentence,** never the server's text.
+- **The console nav says Chat and Rob;** the chats button has a visible name ("Chats ⌘K"), the
+  pause button says "Pause Rob", and the head lines are short and plain.
+- **The avatar is an image slot.** Every new instance starts with the polyrob mark; set your own
+  from a file, a URL or an NFT (`polyrob avatar set`, `/avatar set`, `agent_avatar set_from` on an
+  owner turn). Every surface shows it.
+- **Inbox cards say how long they have waited,** and when they expire if they can.
+- **Rob > Overview shows each permission as a question with a Yes or No answer,** names what it
+  could not check in plain words, and says where memory is kept in words.
+- **The console no longer shows labels in capital letters.**
+- **The console no longer shows developer source footers;** the Inbox says in one line whether
+  every list answered.
+- **Token reads:** prices come from DexScreener, GeckoTerminal and Jupiter and block a trade only
+  when they differ by more than 10 % (25 % on thin pools); the `token_info` screen adds on-chain
+  facts, Jupiter, RugCheck and Honeypot.is in a short summary. `DEFI_DATA_ENABLED` is on by default.
+- **Replies:** the agent speaks to its user only with `send_message`; `done(text)` is the
+  run record. A cron `deliver` gets the run's last `send_message` (none sent, none
+  delivered); `style.verbosity=detailed` appends the record for the owner.
+- **Prompts and tool text:** the model notes, the sub-agent contract, the output judge and
+  the tool descriptions match the code: `send_message` then `done`, `propose_action` for a
+  money move, `present_choice` for a choice, and the real units and limits.
+- **Persona:** a chat seat renders the persona in `PERSONALITY_DEFAULT_CHARACTER`.
+- **Skills:** the money, markets, X, discovery and general skills match the code and name
+  chat verbs, never a `polyrob …` command; money triggers no longer fire on common words,
+  and `secret-handling`, `person-analyzer` and others have narrower triggers.
+- **First-party packs:** `discovery`, `markets` and `x` ship inside the `polyrob` wheel. ⚠️
+  Their SDKs stay extras (`polyrob[twitter]`, `[anysite]`, `[crypto]`); without one, the
+  pack's tools are withheld with the remedy. `install.sh --packs` adds them.
+- **Markets pack:** the Polymarket and Hyperliquid tools are the `markets` pack; their
+  routes moved to `/api/packs/markets/polymarket/*` and `/api/packs/markets/hyperliquid/*`.
+- **Owner authority:** in a genuine owner turn (chat, or `/send … go`, `/bridge … go`,
+  `/pay`) the autonomy pause and the autonomous ceiling do not apply; the caps and the
+  simulation bind everyone. An owner approval now sends, not re-queues.
+- **Refusal taint:** after a money action fails or a gate refuses it, the rest of that run
+  cannot post to a public or non-owner destination; a public cron `deliver` goes to the
+  owner instead. A genuine owner turn clears the taint.
+- **Token identity:** `defi_trade.swap`, `solana_swap` and `launchpad_buy` check WHICH
+  contract they buy before any quote: a symbol pinned to another address, a second contract
+  for a tracked symbol and an unverified token above $5 are refused.
+- **Book:** `/book` and `defi_data.reconcile` warn when one symbol has more than one
+  contract, show positions the ledger does not list and each position's status, and no
+  longer claim trading is halted on a disagreement.
+- **Copy:** owner-facing refusals name chat verbs (`/resume`, `/pending`), a daily-cap
+  refusal says when the cap frees, and the agent may not claim an act is queued or sent
+  without a tool result.
+- **Telegram:** `/config set` shows where a flag write applies.
+- **Lean base install:** `pip install polyrob` carries 24 base dependencies (was 36) and one
+  provider SDK; the rest moved to extras (`gemini`, `anthropic`, `memory-vector`, `docs`,
+  `media`, `server`). ⚠️ Without `server` an upload is refused with 503.
+- **Goals:** `/goal cancel <id>` means never again (`--once` stops only this run; `/goal
+  allow` turns it back on). `/goals` shows what is off, who asked for each goal, and a `NOW
+  · STUCK · NEXT · OVER` summary.
+- **Config:** `polyrob config set`, the REPL `/config set` (now with `--global`) and the
+  console validate and report the same way; a REPL write of a live-safe autonomy flag
+  applies at once, and `/autonomy on|off` needs no restart.
+- **Owner rules:** `OWNER_RULES_IMMEDIATE` defaults on (a rule stated in chat binds on that
+  turn), `OWNER_DOC_MAX_CHARS` goes 1600 → 4000, a replaced rule moves under `##
+  Superseded`, and a `rules` status section names anything not loaded.
+- **Records:** a workspace `.md` declares `kind: instruction | record`, and the file verbs
+  refuse to rewrite or delete a record (`DOC_KIND_ENFORCED`, default on). A cron job or goal
+  can pin its skills (`skills=[…]`).
+- **Surfaces:** `polyrob gateway` starts Discord, Slack, Signal, WhatsApp and every new
+  surface once its credentials are set (`*_SURFACE_ENABLED=false` keeps one off); new
+  options `--skip`, `--no-autonomy`, `--idle-when-empty`, `--host`.
+- **Webhooks:** a webhook surface can answer a platform challenge and ack before the turn
+  runs (replayed once after a restart); bodies are capped (64 KB, WhatsApp 3 MB) and a bot
+  is capped at 20 lines a minute.
+- **Money regime:** the posture card shows `supervised`, `autonomous` or `armed` and names
+  what is missing; `AUTONOMOUS_RIG_DEFAULT=money_rail` no longer gives `defi_trade` to
+  agent-authored work outside `armed`.
+- **Prices:** `token_info` names the pool behind a price and grades confidence on that
+  pool's depth; the busiest pool by 24h volume is picked; an unknown price stays unknown,
+  never `0.0`.
+- **Prompt cache:** `TOOL_SCHEMA_STABLE_ORDER`, `STABLE_AUTONOMOUS_TOOLSET`,
+  `TOOL_RESULT_MAX_TOKENS` (6000) and `OPENROUTER_PROMPT_CACHE` default on; a restart
+  replays the rendered prompt (`FOUNDATION_REPLAY`) and catalog changes arrive at the tail.
+- **Late tools:** a tool loaded mid-session grows `tools[]` (default), is deferred on an
+  Anthropic model that supports it (`ANTHROPIC_DEFERRED_TOOLS`, on), or goes through the
+  `tool_call` bridge (`TOOL_SCHEMAS_FROZEN`, off).
+- **Preferences:** `voice.transcript_echo`, `stream.telegram` and
+  `delivery.lifecycle_daily_cap` are owner preferences.
+- **Context:** a tool result reaches the model once; compaction thresholds are 70/85/95 %
+  (`COMPACTION_*_PCT`), old long tool results shrink to a pointer first, and old images
+  retire in batches. `/context` reads the provider's own token count.
+- **Context:** the project-context file cap follows the model window (4%, 4,000–40,000
+  tokens); `MAX_EXTRACTED_CONTENT_SIZE` drops to 100,000 characters and
+  `MAX_EXTRACTED_CONTENT_TURN_SIZE` (200,000) bounds a turn.
+- **Billing:** on OpenRouter the billed `usage.cost` outranks the catalog estimate; an
+  absent cost is `None`, never `0.0`.
+- **Update:** `polyrob update --apply` reinstalls the extras you have under
+  `requirements.lock` and waits up to `--wait-idle` (1800 s) for running work (`--no-wait`,
+  `--force`).
+- **Models:** an unknown `claude*` id resolves by family (`opus`, `sonnet`, `fable`,
+  `haiku`, bare `claude`) instead of a 200K sonnet row.
+
+### Deprecated
+
+- The venue API paths `/api/polymarket/*` and `/api/hyperliquid/*` still answer for one
+  release with a `Deprecation` header. Move clients to `/api/packs/markets/...`; 1.3.0
+  removes the old paths.
+- `LAZY_DEPS_ENABLED` is a deprecated alias of `LAZY_DEPS_MODE` (`true` = `trusted`, `false`
+  = `off`).
+
+### Removed
+
+- **The Mindprint avatar generator.** `polyrob pfp` (generate, randomize, keep, say, studio), the
+  console's `/pfp.*` routes and the live terminal face are gone. A kept face is not carried over:
+  the slot shows the polyrob mark until you run `polyrob avatar set <image>`.
+- **Dead prompt code:** the unused system-prompt managers and the shipped
+  `data/prompts/system_prompts.json` and `autov2_prompts.json`;
+  `send_message.timeout_seconds` left the schema (a call that passes it still works).
+- **Separate first-party pack distributions,** `PROD_PACKS` and the per-pack closure files.
+  `install.sh`, `polyrob update` and `python -m migrations.migrate upgrade` retire a
+  leftover one.
+- **Plain chat text is never a command.** A sentence that starts with stop, pause or resume
+  is chat; use `/pause` (`/halt`) and `/resume`. The plain-word approve/reject and the
+  `pause.phrases` preference are gone; use `/approve`, `/reject` or the tap tokens.
+- The `VOICE_TRANSCRIPT_ECHO`, `TELEGRAM_INCREMENTAL_STREAM` and
+  `USER_DELIVERY_LIFECYCLE_DAILY_CAP` env flags (now owner preferences).
+- The agent-writable `project/.pylibs` lazy-install directory.
+- The unused `CompactionManager` policy and the dead `AUTO_KNOWLEDGE_RETENTION_DAYS`
+  setting.
+
+### Fixed
+
+- **`/x status` says what each X credential unlocks and how to restore it**: the API login
+  covers DMs (`/x login`); the browser session covers posts and outreach (`polyrob x-account capture-session`).
+- **`polyrob dashboard` no longer creates `./data/task` in the folder it runs from:** with no
+  `DATA_ROOT`/`POLYROB_DATA_DIR`, its session tree is `<data home>/sessions`, the tree `polyrob`
+  writes. `HEAD /avatar.png` answers 200 instead of 405.
+- **A console run that ended without a closing event no longer reads "Working for …" forever:** it
+  says "Stopped after … without a final word.", and the Timeline counts steps, not "actions".
+- **`defi_data.positions` lists holdings open only in the position ledger** (bought before the rail
+  book) as LEDGER-ONLY with basis unknown, read-only; an unreadable ledger says "could not read".
+- **The position-ledger reader keeps the first row per address**, so superseded rows left in the
+  `## Open positions` table no longer count twice or show up as reconcile mismatches.
+- **Anthropic and Anthropic-compatible providers work again with `anthropic` 1.6:** a call no longer
+  fails with "unexpected keyword argument 'temperature'"; a third-party endpoint still receives the
+  sampling settings.
+- **`launchpad_claim` labels its dollar line as the claim's gas fee** (`cost:`), not as the value
+  of what is claimed.
+- **`polyrob wallet init` with no `--data-dir` writes the derivation scheme under `<home>/wallet`,**
+  where the running agent reads it; before, a bip44 wallet could resolve to a different address.
+- **An operator-pinned Solana payment mint keeps its case;** before, the asset store lowercased it
+  and named an account that does not exist.
+- **An unknown console address shows the error page instead of raw JSON;** it says what happened in
+  plain words and keeps the details behind "Show details".
+- **`cronjob_show` names the job's provider pin** — `provider: (owner's seat)` or `<pin> (pinned)`,
+  and for a credit-dead pin, the seat it reroutes to (or that runs are skipped).
+- **The console no longer shows a stuck rate-limit banner after a few page loads;** live updates
+  resume by themselves.
+- **A credit top-up now unlatches the provider on its own.** At most once per 5 minutes the goal
+  dispatcher re-checks a latched seat's balance (OpenRouter `/credits`) and releases the seat only
+  when the provider reports a positive balance.
+- **The chat page no longer clips the file pane or covers it with the message box;** on a phone the
+  pane opens as a drawer ("Files and steps").
+- **A chat's Files list shows only the files that chat wrote,** plus what you gave it; the
+  shared project folder is behind one link with its size.
+- **The chat's file list reads at most 500 entries four folders deep** and no longer re-reads the
+  folder every 30 seconds while live updates work.
+- **Starting a task where no language model is available now fails with a clear reason** (503
+  `no_model`) instead of an empty chat; the console keeps your text and names Telegram and the terminal.
+- **A chat shows your question even when the run failed;** a scheduled job's run says it is not a
+  chat, with its task behind a disclosure. A bound chat's tab says Chat, not New.
+- **The chats list names who started each chat,** tells a failed chat from a stopped one, shows
+  finished chats in a neutral colour and shows times in your time zone.
+- **The chats list no longer shows raw file errors.** A row with a part that would not read says
+  "Part of this chat is missing."; the rows say "Done", "Unknown", "Untitled chat" and "Watch only".
+- **Reopening a long chat shows its newest events,** not its oldest.
+- **The chat no longer draws a step twice** or misses one that happened while the page loaded.
+- **Messages you add while Rob works now show in the chat.**
+- **A chat that failed now says so;** a chat waiting for your answer no longer shows as stopped.
+- **The chat no longer lists sending a reply or finishing as steps,** draws each reply under its
+  own steps, and ends each turn with its own summary.
+- **Chat step times and the turn duration show real times** instead of 0:00 and 0s, and a
+  receipt says "1 step", not "1 actions".
+- **On a phone, the Schedule table labels its first column** ("What it does") again.
+- **The Work pane names a partial file read** instead of drawing a blank line.
+- Token reads: Arbitrum and Polygon had no price, Solana holdings lost decimals and Token-2022,
+  Alchemy read one page, `reconcile` never said CLEAN on an airdropped wallet, and an unknown
+  cost basis was stored as $0.
+- Every tool call now records its completion. Before, the console, the REPL fallback and
+  Telegram progress never saw a tool finish, because the completion was written only on a code
+  path that never ran.
+- Session feed folders no longer fill with lock files.
+- A reply could fail to appear live in the console until a reload.
+- Events of a session resumed after a restart no longer overwrite its first events.
+- Rob no longer stores the conversation context it is given as a memory of its own.
+- **ERC-8004 identity:** `read_agent_id` works on a registry that is not ERC721Enumerable
+  (the Robinhood Chain registries), so the double-registration check no longer says "could
+  not check"; agentId 0 is a real id.
+- **Money figures:** `defi_data.portfolio` values canonical and pinned tokens first, so the
+  wallet's own position no longer shows as raw units; `launchpad_claim` prints what a claim
+  is worth. The agent gives the owner only tool-printed money figures.
+- **Stall reports:** each stall of the goal pipeline names itself (`stall #N` and the time),
+  so a later stall is no longer dropped as a duplicate.
+- **Prompts:** the per-step reminder, the correspondent DM framing, the browser and
+  Polymarket blocks and `<owner-instructions>` name only what the session really has; the
+  background reviewer now sees the work it reviews.
+- **Browser:** `search_google` URL-encodes the query; a `&`, `#` or `%` no longer cuts it.
+- **Apps:** the approve hints name `/apps approve` and the console, not a shell command.
+- **Tools:** `session_search(collection=…)` says so when the knowledge base is off or
+  failing.
+- **Skills:** a cron-only session no longer gets `dca` or `exits`, matched skills are
+  delivered first and can be loaded again after compaction, and one malformed user rule no
+  longer drops every skill.
+- **Runtime nudges:** the planning, empty-action, loop and verify-before-done nudges enter
+  history as control messages, not as a user turn, so a nudge can no longer become the
+  active task; the texts name only registered actions.
+- **X OAuth 2.0:** a refused refresh token records a re-login verdict naming `/x login` and
+  is not re-sent; two processes no longer spend the same refresh token; DMs fall back to the
+  OAuth 1.0a keys on a 401.
+- **X posts:** a new tweet that is not readable yet is reported as X lag, not as a failed
+  post.
+- **`polyrob x-account`:** on a deployed box it acts on the deployed data home and refuses
+  when a key it needs is missing; before, it wrote a record the agent could not read.
+- **Deploy:** `RESTART_ONLY=1` restarts every unit that reads `/etc/polyrob/polyrob.env`.
+- **Approvals:** a decided Telegram button is removed; the REPL and the console chat box run
+  the tap tokens (`/approve_p_<hex>`, `/fulfill_<ask>_<letter>`); the fallback grant card
+  carries one-tap tokens.
+- **Money:** a send whose outcome is unknown says "outcome unknown — do not send again",
+  never "NOT sent"; such a bridge stays `in_flight`.
+- **Packs:** a pack's money verbs can register, pack faults are isolated per pack, and
+  `polyrob update` installs the `markets` pack for a `crypto` install.
+- **Wallet:** `defi_trade.transfer` sends the native gas asset (`token='native'`); a repeat
+  `/send` to a Solana address is no longer a replay; a run that can never sign no longer
+  raises an approval.
+- **Wallet:** an unreadable pin or position store reads as UNREADABLE, not empty; chain
+  names are case-insensitive; `approve_token` clamps a near-balance amount; armed goal runs
+  can transfer, not only swap.
+- **x402:** a payment above $1 is no longer refused by the SDK's default; a multi-network
+  challenge is paid on Base USDC; a metered URL is payable more than once; the replay key is
+  stored whole before signing.
+- **Chat:** a cron job created from chat gets `CRON_DEFAULT_MAX_DURATION_SEC`; "resume",
+  "continue" or "restart" never pause.
+- **Coding:** the verify-before-done and ship-what-was-tested gates fire again and no longer
+  fire on prose edits or a refused `run_tests`; `run_tests` writes its full output to a log
+  and gets 300 s.
+- **Coding:** edits keep CRLF, BOM, mode and hard links, refuse binary and read-only files
+  and write atomically; `apply_patch` matches hunks more reliably; TypeScript checks use the
+  nearest `tsconfig.json`.
+- **Telegram:** `/bridge … go` above the autonomous ceiling no longer freezes the bot; it
+  reports when it lands.
+- **Publishing:** `publish` accepts a directory such as `dist/`, swaps in a complete new
+  version of a live page and reports a failed promotion.
+- **Hyperliquid:** agent approval, leverage changes and order cancellations enter the owner
+  approval queue in both payment modes.
+- **Skills:** skill provenance is per tenant; chained `patch_skill` edits make one pending
+  item; a queued owner rule offers a tappable `/approve_p_<hex>`.
+- **Autonomy:** rails keep a money-free base, seeders recheck due state, direct cron room
+  delivery respects the pause, and a failed database read is unreadable, not empty.
+- **Console:** the wallet views show the submission journal again, and Money's Cash and
+  Limits say when the ledger could not be read instead of showing zeros.
+- **X:** the startup self-test uses the credential the client really carries (no false `403
+  Forbidden`).
+- **Owner thread:** records the true surface and refuses a cron `deliver_target` that is not
+  the owner's own address.
+- **Webhooks:** failed turns are kept and pending events retry on redelivery.
+- **Runtime:** admin token checks and billing reconciliation work again; X cooldown
+  telemetry no longer raises `NameError`; speech converters get no credentials and are
+  stopped on timeout.
+- **MCP:** a cached MCP resource read no longer fails.
+- **Uninstall:** `polyrob uninstall --purge` names and deletes both homes behind a typed
+  confirmation; `polyrob doctor` reads system units too.
+- **Install:** `requirements.lock` serves Python 3.11 again; a missing extra is named
+  instead of a raw `ModuleNotFoundError`; `polyrob update` no longer reads a `pid: 0` marker
+  as a live turn.
+- **Context:** the emergency prune keeps at least the last 3 messages with complete tool
+  pairs.
+- **Console Inbox:** a `tool_approval` card shows the full grant card, not a 160-character
+  preview.
+- **REPL approvals:** `[s]ession` and `[a]lways` no longer widen a money action to every
+  later amount; a money action offers only once, deny or never.
+- **Console:** `/send … go` or `/bridge … go` in the chat box answers "started" at once; the
+  result arrives as a notice.
+- **Cron:** a job is no longer skipped as an X DM job because its task text quotes or
+  forbids a DM.
+
+### Security
+
+- **Feishu/Lark webhooks are signed or refused:** an event outside a ±5-minute timestamp
+  window is refused, and token-only mode (no `FEISHU_ENCRYPT_KEY`) refuses every event unless
+  `FEISHU_WEBHOOK_ALLOW_UNSIGNED=true`.
+- **A cross-chain bridge from an EVM chain pays only Relay's pinned deposit contracts:** a quote
+  naming any other `to` refuses before signing (the Solana origin already pinned the program).
+- **`polyrob-signer` spends an owner's over-cap grant when a send may have left**, so one approval
+  cannot carry a second over-cap send after an unknown outcome or a failed ledger write.
+- **An installed skill's reference files get the same Unicode and bidi-override scan as its
+  `SKILL.md`.**
+- **Agent NFTs:** a pinned collection's token leaves a wallet only when its account has no open
+  approval, and `tx_guard` re-checks the collection's `runtime_sha256` on every mint, reveal
+  or move; an unreadable or changed check refuses.
+- **Token-bound accounts:** `tx_guard` refuses the Tokenbound forwarder, an account selector
+  at any calldata offset (including `executeNested`), and any move of an NFT into an account
+  of its own collection; only one exact approve, call, reset `executeBatch` passes.
+- **NFT sale safety:** the open-approval scan covers ERC-20, ERC-721 and Permit2 grants of
+  an NFT's account, with guarded ERC-721 and Permit2 revoke shapes. A read-only
+  `robinhood-testnet` chain (`DEFI_EVM_RPC_ROBINHOOD_TESTNET`) serves the account reads.
+- **Money and outbound rails:** launchpad `slippage_bps` is capped at 1000; `email_send` has
+  the same forged-turn gate as `message`; a leaf sub-agent cannot ask the owner; the markets
+  pack's own-account reads are blocked for correspondents.
+- **Skills:** a user skill can never take a builtin or pack skill id (before,
+  `secret-handling` could be replaced).
+- **Correspondent sessions:** memory recall, the digests, the continuity bridges and the
+  health note are skipped in a session whose output goes to a third party.
+- **Untrusted framing:** browser, MCP and web results, recalled summaries, delegated parent
+  context and attached text files are wrapped as untrusted data on every path.
+- **Packs:** a manifest cannot grant itself first-party privileges; third-party code packs
+  are refused while the process holds the wallet seed.
+- **Money:** only the owner's own approval lifts the autonomous ceiling; a dapp page's
+  transaction is never an owner turn; a failed pause probe or ledger result refuses.
+- **Wallet:** the agent's file tools cannot write the owner pin and token-provenance stores.
+- **Publishing and coding:** published pages carry the vhost's security headers (re-run
+  `scripts/setup_publish_vhost.sh`); `coding.grep` applies the read policy to every file.
+- **Custody:** the custody process is non-dumpable and the seed variables leave
+  `os.environ`, so a child cannot read them; a mistyped seed never reaches a log; the wallet
+  audit files are `0600`. ⚠️ No core dumps and no `py-spy`/`gdb` attach.
+- **Installs:** every install is hash-pinned by `requirements.lock`. Lazy installs go
+  through one trusted installer (`LAZY_DEPS_MODE` `off|trusted|legacy`, default `trusted`).
+  ⚠️ A server without custody now installs lazily; `LAZY_DEPS_MODE=off` keeps the refusal.
+- **Approvals:** an approve counts as an exit only to a pinned route spender; the approval
+  card shows every money field and a calldata digest.
+- **Swaps:** every EVM swap asserts its minimum output; `solana_swap` checks the simulated
+  output and refuses an unobserved output mint.
+- **Solana guard:** every top-level token and system instruction is decoded (authority
+  changes, closes, durable nonces and a fee above 0.01 SOL refuse), and the Solana bridge
+  requires the pinned Relay program.
+- **Generic call and dapp:** position managers, v4 pool managers, Permit2 and Pons contracts
+  are reachable only through their typed verbs; Permit2 grants are refused.
+- **Deploy:** `deploy_token` refuses `vanity` / `salt` and must mint exactly the supply to
+  the wallet; the ERC-8004 agentId comes from the receipt and a second registration in
+  flight is refused.
+- **Payments:** the deposit monitor credits only the increase; every EVM invoice gets a
+  random sub-cent tail; a canceled subscription is never reactivated; an x402 authorization
+  over 600 s is refused.
+- **Gates:** wallet reads are owner-scoped; Hyperliquid and Polymarket bind the tenant per
+  call; `/pause trading` binds every entry verb; a forwarded Telegram message taints the
+  turn.
+- **Runtime:** money verbs run off the event loop; a reverted swap writes no position; LP
+  add and remove check the pool price and cap slippage at 1000 bps; the bridge re-authorizes
+  after an owner wait.
 
 ## [1.1.0] — 2026-09-21
 

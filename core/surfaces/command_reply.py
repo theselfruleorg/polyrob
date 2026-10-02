@@ -35,6 +35,9 @@ class CommandReply:
     text: str
     to_room: bool = False
     media: Tuple[dict, ...] = ()
+    #: An action card this reply shows (``core.surfaces.cards``): a seat that
+    #: renders buttons shows the card's, and remembers where it put them.
+    card_id: Optional[str] = None
 
 
 def reply_text(value: Any) -> str:

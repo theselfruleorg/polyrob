@@ -394,6 +394,12 @@ class LLMRunnerMixin:
 		from agents.task.session_class import apply_session_output_budget
 		apply_session_output_budget(self.llm, self.session_id)
 
+		# F4: stamp this session's Anthropic prompt-cache TTL on the same client,
+		# for the same reason — a provider fallback mid-run builds a new client.
+		# Interactive turns buy the 1h cache window; autonomous runs keep 5m.
+		from agents.task.session_class import apply_session_cache_ttl
+		apply_session_cache_ttl(self.llm, self.session_id)
+
 		# CRITICAL FIX: Add timeout wrapper to prevent infinite hangs
 		# Also handle LLM-specific errors with automatic provider fallback
 		try:

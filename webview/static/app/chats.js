@@ -11,9 +11,10 @@
  * 1. **A row says WHO started it.** `creator` (043 A17) is the difference
  *    between a chat you had and a run the agent started by itself at 4am; a
  *    list that cannot tell them apart is a list you stop opening.
- * 2. **A row's state is one of three**, derived from the session's own status,
- *    and an unrecognised status renders as UNKNOWN rather than as one of the
- *    three. A status nobody has seen before is not "done".
+ * 2. **A row's state is one of five** (working, waiting for you, done, did
+ *    not finish, stopped), derived from the session's own status, and an
+ *    unrecognised status renders as UNKNOWN. A status nobody has seen before
+ *    is not "done".
  * 3. **It says nothing it did not read.** A failed fetch renders the honest
  *    sentence, never an empty list — an empty list is a claim.
  *
@@ -23,25 +24,43 @@
  * crosses from Python into JS.
  */
 
-/** Session status -> one of three states, or "unknown". */
+/**
+ * Session status -> running | waiting | done | failed | stopped, or "unknown"
+ * (070 W0.11). A suspended run waits for the owner; a failed run did not
+ * finish, which is not the same as being stopped.
+ */
 export function statusOf(raw) {
   const status = String(raw || "").trim().toLowerCase();
   if (["running", "created", "initializing", "resumed"].includes(status)) return "running";
+  if (["suspended", "waiting", "paused"].includes(status)) return "waiting";
   if (["completed", "done", "finished"].includes(status)) return "done";
-  if (["failed", "cancelled", "canceled", "error", "stopped", "suspended"].includes(status)) {
-    return "stopped";
-  }
+  if (["failed", "error"].includes(status)) return "failed";
+  if (["cancelled", "canceled", "stopped"].includes(status)) return "stopped";
   return "unknown";
 }
 
-/** The pill class the design system already defines for each state. */
+/** The pill class for each state: done is neutral, failed is red, waiting amber. */
 export function statusClass(state) {
   return {
     running: "is-running",
-    done: "is-stopped",
+    waiting: "is-needs-you",
+    done: "is-done",
+    failed: "is-stopped",
     stopped: "is-stopped",
     unknown: "is-unknown",
   }[state] || "is-unknown";
+}
+
+/** The start time in the browser's own zone; the stored UTC text as a fallback. */
+export function createdLabel(session) {
+  const iso = session?.created_iso;
+  if (iso) {
+    const when = new Date(iso);
+    if (!Number.isNaN(when.getTime())) {
+      return when.toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+    }
+  }
+  return session?.created || "";
 }
 
 /** Who started this session, in words. An unknown creator is never guessed. */
@@ -74,9 +93,12 @@ export function rowNode(session, copy) {
   const who = el("span", "val", creatorLabel(session, copy));
   who.dataset.creator = String(session?.creator || "");
   meta.appendChild(who);
-  if (session?.created) {
+  const created = createdLabel(session);
+  if (created) {
     meta.appendChild(document.createTextNode(" "));
-    meta.appendChild(el("span", "val", session.created));
+    const when = el("span", "val", created);
+    when.dataset.created = session?.created_iso || session?.created || "";
+    meta.appendChild(when);
   }
   // 043 A32: a session whose live orchestrator runs in Rob's OWN process, not
   // this console. GET /api/webgate/chats — the ONE catalog since A12 deleted
@@ -93,7 +115,14 @@ export function rowNode(session, copy) {
     }
     meta.appendChild(live);
   }
-  if (Object.keys(session?.unreadable || {}).length) meta.appendChild(el("span", "unknown-why", Object.values(session.unreadable).join("; ")));
+  // A part of this row that would not read is ONE plain line; the raw reason
+  // rides in the tooltip only, never in the row text (070 E.9).
+  if (Object.keys(session?.unreadable || {}).length) {
+    meta.appendChild(document.createTextNode(" "));
+    const why = el("span", "unknown-why", (copy && copy.part_missing) || "");
+    why.title = Object.values(session.unreadable).join("; ");
+    meta.appendChild(why);
+  }
   row.appendChild(meta);
   return row;
 }
@@ -152,7 +181,8 @@ export async function load(dialog, offset = 0, fetcher = fetch) {
     }
     if (Object.keys(data.unreadable || {}).length) {
       state.hidden = false;
-      state.textContent = `${copy.unreadable || ''} ${Object.values(data.unreadable).join('; ')}`;
+      state.textContent = copy.unreadable || '';
+      console.debug('[chats] unreadable parts of the catalog', data.unreadable);
     }
     if (data.next_offset != null) {
       const more = el('button', 'btn', copy.more); more.type = 'button'; more.dataset.chatsMore = '1';

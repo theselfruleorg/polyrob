@@ -518,6 +518,18 @@ describe("Cash — the two ledgers, NEVER summed", () => {
     expect(renderCash(root, { error: "503" }, CASH)).toBe("unreadable");
     expect(root.textContent).toContain("503");
   });
+  it("a readable:false body is 'could not read', never its zero figures", () => {
+    const root = document.createElement("div");
+    const body = ledger({ readable: false, error: "the ledger read failed (RuntimeError)" });
+    expect(renderCash(root, body, CASH)).toBe("unreadable");
+    expect(root.textContent).toContain(CASH.cash_unreadable);
+    expect(root.textContent).not.toContain("$0.00");
+  });
+  it("readable:false with no reason is still unreadable", () => {
+    const root = document.createElement("div");
+    expect(renderCash(root, ledger({ readable: false }), CASH)).toBe("unreadable");
+    expect(root.textContent).not.toContain("$0.00");
+  });
 });
 
 describe("Cash — the owner wallet is wired as a read-only identity", () => {
@@ -657,6 +669,14 @@ describe("Limits — today's used/limit from the ledger, and a link to Agent", (
     const root = document.createElement("div");
     expect(renderLimits(root, { error: "boom" }, LIM)).toBe("unreadable");
     expect(root.textContent).toContain("boom");
+  });
+  it("a readable:false ledger is unreadable, never its placeholder caps", () => {
+    const root = document.createElement("div");
+    const body = ledger({ readable: false, error: "the ledger read failed (OSError)",
+      caps: { daily_cap_usd: 100, daily_used_usd: 0, daily_left_usd: 100 } });
+    expect(renderLimits(root, body, LIM)).toBe("unreadable");
+    expect(root.textContent).toContain(LIM.lim_unknown);
+    expect(root.textContent).not.toContain("$0.00 of");
   });
 });
 

@@ -118,5 +118,5 @@ def test_console_cancel_permitted_for_a_non_owner_on_their_own_session(srv, monk
     fake = _AgentWithCancel(str(tmp_path))
     monkeypatch.setattr(srv, "_in_process_task_agent", lambda: fake)
     reply = asyncio.run(srv._maybe_handle_console_command("sess1", "u_stranger", "/cancel"))
-    assert reply == "Task cancelled."
+    assert reply.startswith("Task cancelled.") and "/pause" in reply
     assert fake.cancelled == ["sess1"]

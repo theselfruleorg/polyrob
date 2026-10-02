@@ -30,6 +30,10 @@ def _temp_env(monkeypatch, tmp_path):
     for k in ("DATA_DIR", "DATA_ROOT", "CHARACTERS_DIR", "KNOWLEDGE_DIR",
               "CACHE_DIR", "DB_PATH", "TELEMETRY_DATA_DIR"):
         monkeypatch.setenv(k, str(tmp_path / k.lower()))
+    # 070 W1.5: the data home and the memory store too — this test wrote the
+    # <owner-thread> rows found in the developer's own .polyrob/memory.db.
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "polyrob_data"))
+    monkeypatch.setenv("MEMORY_BACKEND", "none")
     # Keep the run loop lean: no stall monitor, no GIF, no vision screenshots.
     monkeypatch.setenv("LOG_LEVEL", "ERROR")
 

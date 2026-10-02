@@ -746,6 +746,8 @@ async def _h_memory(ctx: CommandContext) -> None:
                     title="memory",
                 )
                 return
+            # 025: no `scope=` = the SHARED view — a goal's quarantined findings
+            # never surface here (`/memory scopes` names them without reading them).
             hits = await provider.search(query, user_id=ctx.user_id or "local", limit=10)
             text = hits.strip() if isinstance(hits, str) else str(hits or "").strip()
             if not text:
@@ -755,6 +757,11 @@ async def _h_memory(ctx: CommandContext) -> None:
             ctx.emit(text, title="memory")
             return
 
+        # ---- /memory scopes — quarantined goal/cron findings (025) -------------
+        if ctx.args and str(ctx.args[0]).lower() == "scopes":
+            ctx.emit(_memory_scopes_text(provider, ctx.user_id or "local"), title="memory")
+            return
+
         # ---- /memory (no args) — active provider name (legacy) ---------------
         if not name or not external:
             ctx.emit("No external memory backend active (recall disabled).", title="memory")
@@ -762,6 +769,24 @@ async def _h_memory(ctx: CommandContext) -> None:
         ctx.emit(f"Active memory provider: {name}", title="memory")
     except Exception as exc:
         ctx.emit(f"Could not resolve memory provider: {exc}", title="memory")
+
+
+def _memory_scopes_text(provider, user_id: str) -> str:
+    """`/memory scopes`: what is quarantined, by scope (never the findings)."""
+    from cli.ui import candy
+    from modules.memory.scope import scopes_enabled
+    if provider is None or not hasattr(provider, "list_scopes"):
+        return "unavailable(this memory backend has no scopes)"
+    try:
+        rows = provider.list_scopes(user_id)
+    except Exception as exc:
+        return f"unavailable({type(exc).__name__}: {exc})"
+    head = ("Memory scopes: ON" if scopes_enabled() else
+            "Memory scopes: OFF — these rows are already visible as shared recall")
+    if not rows:
+        return head + "\n" + candy.empty("quarantined memory scopes", yet=False)
+    lines = [f"  {r['label']}  {r['rows']} row(s)" for r in rows]
+    return "\n".join([head, *lines, "Promote or purge: polyrob owner memory scopes"])
 
 
 def _resolve_memory_backend_name() -> str:
@@ -1249,17 +1274,6 @@ def _parse_window_seconds(arg: str) -> Optional[float]:
     parser (``cli.ui.commands.window``); this name is a test seam."""
     from cli.ui.commands.window import parse_window_seconds
     return parse_window_seconds(arg)
-    arg = arg.strip().lower()
-    try:
-        if arg.endswith("m"):
-            return float(arg[:-1]) * 60
-        if arg.endswith("h"):
-            return float(arg[:-1]) * 3600
-        if arg.endswith("d"):
-            return float(arg[:-1]) * 86400
-        return float(arg)  # bare number = seconds
-    except Exception:
-        return None
 
 
 def _h_telemetry(ctx: CommandContext) -> None:
@@ -1275,7 +1289,8 @@ def _h_telemetry(ctx: CommandContext) -> None:
         ctx.emit(f"(event log unavailable: {e})")
         return
     if not event_log_enabled():
-        ctx.emit("(telemetry event log disabled — set TELEMETRY_EVENT_LOG_ENABLED=true)")
+        from core.remedy import flag_remedy
+        ctx.emit(f"(telemetry event log disabled — {flag_remedy('TELEMETRY_EVENT_LOG_ENABLED')})")
         return
 
     window = ctx.args[0] if ctx.args else ""
@@ -1461,8 +1476,8 @@ def build_default_registry() -> CommandRegistry:
     ))
     reg.register(Command(
         "memory", _h_memory,
-        "Show the memory provider; /memory search <query> to recall cross-session",
-        usage="[search <query>]", group="remember",
+        "Show the memory provider; /memory search <query> to recall; /memory scopes",
+        usage="[search <query> | scopes]", group="remember",
     ))
     from cli.ui.commands.h_profile import h_profile
     reg.register(Command(
@@ -1475,7 +1490,8 @@ def build_default_registry() -> CommandRegistry:
     reg.register(Command("steps", _h_steps, "Show the last turn's steps/tools trace", group="look"))
     reg.register(Command(
         "autonomy", _h_autonomy,
-        help="show autonomy loops + scheduled cron jobs / open goals",
+        help="show autonomy loops + scheduled cron jobs / open goals; on/off switch the loops live",
+        usage="[on|off] [--global]",
         group="control",
     ))
     reg.register(Command("goals", _h_goals, "Show goals board summary", group="work", **help_kwargs("goals")))
@@ -1500,20 +1516,21 @@ def build_default_registry() -> CommandRegistry:
     from cli.ui.commands.h_cron import h_cron
     from cli.ui.commands.h_mcp import h_mcp
     from cli.ui.commands.h_kb import h_kb
-    from cli.ui.commands.h_pfp import h_pfp
+    from cli.ui.commands.h_avatar import h_avatar
 
     reg.register(Command(
         "skills", h_skills,
-        "List/search skills; manage the install pipeline (list/info/install/approve/remove)",
-        usage="[query | list | info <id> | install <spec> | approve <id> | remove <id>]",
+        "List/search skills; install pipeline + taps (list/info/install/approve/remove/tap/search/update)",
+        usage="[query | list | info <id> | install <spec> | approve <id> | remove <id> | tap ... | search <q> | update [id]]",
         group="work",
     ))
     from cli.ui.commands.h_cron import HELP_CRON
     reg.register(Command(
         "cron", h_cron,
-        "Durable scheduled runs: list, add, or cancel",
+        "Durable scheduled runs: list, add, edit, or cancel",
         aliases=("crons",),
-        usage="[list] | add <schedule> <task…> | cancel <id>", group="work",
+        usage="[list] | add <schedule> <task…> | edit <id> <field> <value> | cancel <id>",
+        group="work",
         help_long=HELP_CRON[0], elsewhere=HELP_CRON[1],
     ))
     reg.register(Command("mcp", h_mcp, "MCP servers: list, add, remove, test", usage="[list|add <id> <https-url> [key]|remove <id>|test <id>]", group="set up"))
@@ -1523,9 +1540,9 @@ def build_default_registry() -> CommandRegistry:
         usage="[list [collection] | search <query>]", group="remember",
     ))
     reg.register(Command(
-        "pfp", h_pfp,
-        "Show/generate the agent avatar (Mindprint; generation is optional)",
-        usage="[status|generate [force]|show]", aliases=("avatar",), group="display",
+        "avatar", h_avatar,
+        "Show or set the agent's avatar image (a file, a URL, or an NFT)",
+        usage="[show | set <file|url> | set nft <chain>:<contract>:<id>]", group="display",
     ))
     # 043 D1: /inbox + /book. Their registrar lives beside them in h_inbox.py —
     # this file is AT its size ratchet, whose instruction is to extract rather
@@ -1580,6 +1597,12 @@ def build_default_registry() -> CommandRegistry:
         "fulfill", h_fulfill,
         "Mark an ask fulfilled (unblocks its goals)",
         usage="<id>", group="needs you", **help_kwargs("fulfill"),
+    ))
+    from cli.ui.commands.h_run import h_run
+    reg.register(Command(
+        "run", h_run,
+        "Pause, resume or stop one background run",
+        usage="[pause|resume|stop <n>]", group="control", **help_kwargs("run"),
     ))
     reg.register(Command(
         "missed", h_missed,
@@ -1680,6 +1703,7 @@ def build_default_registry() -> CommandRegistry:
         group="look",
     ))
     from cli.ui.commands.h_a23 import register as _a23; _a23(reg, Command)  # 043 A23: the ten REPL parity verbs (own h_*.py modules; this file is at its size ratchet)
+    from cli.ui.commands.h_contributed import register as _contributed; _contributed(reg, Command)  # 067 P5a: pack-contributed verbs
     return reg
 
 

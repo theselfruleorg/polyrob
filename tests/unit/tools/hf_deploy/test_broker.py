@@ -224,3 +224,32 @@ def test_deploy_allows_clean_workspace(monkeypatch, tmp_path, deploy_env):
     url = asyncio.run(broker.deploy_space(space_repo="o/a", workspace_dir=str(tmp_path)))
     assert url.endswith(".hf.space")
     assert "upload_folder" in [c[0] for c in apis[0].calls]
+
+
+def test_deploy_uploads_a_staged_copy_without_symlinks_or_git(monkeypatch, tmp_path, deploy_env):
+    """M15: the upload is a snapshot of the shippable tree, never the live
+    workspace — a file symlink to a host secret and `.git/` never reach the Space,
+    and the scan covers exactly the uploaded bytes."""
+    import os
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "app.py").write_text("print('hello world')")
+    (ws / ".git").mkdir()
+    (ws / ".git" / "config").write_text("[remote] url = https://example.invalid/x")
+    host_secret = tmp_path / "host_secret.txt"
+    host_secret.write_text("not for the public")
+    os.symlink(str(host_secret), str(ws / "linked.txt"))
+    seen = {}
+
+    class _Api(FakeHfApi):
+        def upload_folder(self, repo_id=None, repo_type=None, folder_path=None):
+            seen["files"] = sorted(
+                os.path.relpath(os.path.join(d, f), folder_path)
+                for d, _dirs, files in os.walk(folder_path) for f in files)
+            seen["path"] = folder_path
+            super().upload_folder(repo_id=repo_id, repo_type=repo_type, folder_path=folder_path)
+
+    broker = _broker(api_factory=lambda t: _Api(t))
+    asyncio.run(broker.deploy_space(space_repo="o/a", workspace_dir=str(ws)))
+    assert seen["files"] == ["app.py"]
+    assert seen["path"] != str(ws) and not os.path.exists(seen["path"])  # staged, then removed

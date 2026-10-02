@@ -25,7 +25,8 @@ def hardening_flags(
 ) -> List[str]:
     """PURE: the hardening flags for one container.
 
-    ``install_host`` (sandbox-dev ONLY) binds an additional writable ``/install``.
+    ``install_host`` (sandbox-dev ONLY) binds an additional writable ``/install``;
+    the caller must have ``lstat``-verified it (H02 — never a symlink).
     ``mount_target``/``read_only_mount``/``workdir`` let the app-service supervisor
     mount the tested-tree snapshot read-only at ``/app`` — the rootfs stays
     ``--read-only`` and every cap/pid/memory/user flag is identical either way.
@@ -47,6 +48,11 @@ def hardening_flags(
         "-v", mount,
     ]
     if install_host:
-        flags += ["-v", f"{install_host}:/install"]
+        # ``--mount type=bind`` (not ``-v``): a missing source is an ERROR instead
+        # of a silently daemon-created root-owned dir, and the source is never
+        # re-interpreted. A comma would split the --mount spec, so refuse it.
+        if "," in install_host:
+            raise ValueError(f"install_host must not contain a comma: {install_host!r}")
+        flags += ["--mount", f"type=bind,src={install_host},dst=/install"]
     flags += ["-w", workdir]
     return flags

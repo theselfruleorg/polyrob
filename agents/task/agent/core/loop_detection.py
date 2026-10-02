@@ -67,30 +67,37 @@ class LoopDetectionMixin:
         # Build intervention message based on error type.
         # Chat-schema: tag as INTERVENTION control content (origin + <system-directive>
         # envelope) so it is not indistinguishable from a genuine user turn.
+        # F12: name only REGISTERED actions — a directive naming an absent tool
+        # (mcp_execute_tool / filesystem_write_file on a rig without them) sends
+        # the model to call something that does not exist.
+        try:
+            _ctrl = getattr(self, "controller", None)
+            _names = set(_ctrl.get_action_names()) if _ctrl else set()
+        except Exception:
+            _names = set()
         if is_validation_error:
+            _mcp = ""
+            if "mcp_execute_tool" in _names:
+                _mcp = """
+
+🔍 FOR MCP TOOLS: when you call mcp_execute_tool, the 'arguments' field must be a
+JSON object that holds the nested tool's required parameters, for example:
+{"server_name": "example_server", "tool_name": "search",
+ "arguments": {"count": 100, "query": "crypto tweets"}}"""
             intervention_msg = make_control_message(f"""🚨 TOOL CALL ERROR LOOP DETECTED: {reason}
 
 ⚠️ Your tool calls are failing repeatedly with the SAME validation error.
 The error message above tells you exactly what's wrong - READ IT CAREFULLY.
 
-🔍 DIAGNOSIS FOR MCP TOOLS:
-If calling mcp_execute_tool, the 'arguments' field must be a proper JSON object with the required parameters.
-For example, a search tool requires: {{"count": 100, "query": "your search query"}}
-
 🛑 TO FIX THIS:
 1. READ the error message - it tells you which parameter is missing
-2. INCLUDE all required parameters in your tool call
-3. For mcp_execute_tool, ensure 'arguments' contains the nested tool's parameters as a JSON object
-
-Example correct mcp_execute_tool call:
-{{
-  "server_name": "example_server",
-  "tool_name": "search",
-  "arguments": {{"count": 100, "query": "crypto tweets"}}
-}}
+2. INCLUDE all required parameters in your tool call{_mcp}
 
 DO NOT just repeat the same broken call. FIX the parameters first.""", MessageOrigin.INTERVENTION)
         else:
+            _create = ("3. If you need to CREATE something, use filesystem_write_file NOW\n"
+                       if "filesystem_write_file" in _names else "")
+            _stuck_n = "4" if _create else "3"
             intervention_msg = make_control_message(f"""🚨 CRITICAL LOOP DETECTED: {reason}
 
 ⚠️ You have been repeating the same actions without making progress. This is wasting resources.
@@ -98,12 +105,7 @@ DO NOT just repeat the same broken call. FIX the parameters first.""", MessageOr
 🛑 YOU MUST DO SOMETHING DIFFERENT NOW:
 1. DO NOT read the same files again - you already have their content
 2. DO NOT repeat the same action sequence
-3. If you need to CREATE something, use filesystem_write_file NOW
-4. If you're truly stuck, call the 'done' action with your current progress
-
-📋 Your available actions include:
-- filesystem_write_file: CREATE new files (HTML, text, etc.)
-- done: Mark task complete with summary
+{_create}{_stuck_n}. If you're truly stuck, call the 'done' action with your current progress
 
 TAKE A DIFFERENT ACTION IMMEDIATELY. Reading the same files again will result in task termination.""", MessageOrigin.INTERVENTION)
 

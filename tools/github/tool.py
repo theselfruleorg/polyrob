@@ -7,8 +7,10 @@ directly over httpx (no subprocess is ever spawned, so the ``build_child_env``/
 ``SECRET_PAT`` sandbox env-scrub used by ``code_exec`` doesn't apply here and isn't
 needed) — and it is never logged or returned in an ``ActionResult``. The GitHubClient
 is injectable (``self._client_factory``) so tests never hit the network. Mutating
-actions (open_pr/merge_pr/pr_comment/issue_create) are high-impact (approval-gated +
-leaf-blocked at the gate layer, Task 9).
+actions (open_pr/merge_pr/pr_comment/issue_create) are high-impact and leaf-blocked at the
+gate layer (Task 9). Their approval lanes live in ``core/verb_policy_rows.py`` and the
+descriptions state them: open_pr/merge_pr are ``recommended`` (asked at posture >= 2 or when
+an operator gates them), pr_comment/issue_create have no lane (coding-agent review, 2026-09-25).
 
 LANDMINE: NO ``from __future__ import annotations``.
 """
@@ -151,7 +153,9 @@ class GitHubTool(BaseTool):
 
     # -- actions --------------------------------------------------------------
 
-    @BaseTool.action("Open a pull request — high-impact, approval-gated", param_model=OpenPRParams)
+    @BaseTool.action(
+        "Open a pull request — high-impact and public. Asks the owner only at compute posture >= 2 or when the operator gates it (under full autonomy it then proceeds and notifies); otherwise it runs at once",
+        param_model=OpenPRParams)
     async def github_open_pr(self, params: OpenPRParams, execution_context=None):
         err = _validate_repo(params.repo)
         if err:
@@ -171,7 +175,10 @@ class GitHubTool(BaseTool):
             return f"PR #{pr.get('number')} [{pr.get('state')}] {pr.get('title')}\n{pr.get('html_url')}"
         return await self._do(execution_context, _fn)
 
-    @BaseTool.action("Comment on a PR/issue — high-impact, approval-gated", param_model=PRCommentParams)
+    @BaseTool.action(
+        "Comment on a PR/issue — high-impact and public; it does not ask the owner, so post only "
+        "what the owner asked for",
+        param_model=PRCommentParams)
     async def github_pr_comment(self, params: PRCommentParams, execution_context=None):
         err = _validate_repo(params.repo)
         if err:
@@ -181,7 +188,10 @@ class GitHubTool(BaseTool):
             return f"Commented: {r.get('html_url')}"
         return await self._do(execution_context, _fn)
 
-    @BaseTool.action("Create an issue — high-impact, approval-gated", param_model=IssueCreateParams)
+    @BaseTool.action(
+        "Create an issue — high-impact and public; it does not ask the owner, so file only "
+        "what the owner asked for",
+        param_model=IssueCreateParams)
     async def github_issue_create(self, params: IssueCreateParams, execution_context=None):
         err = _validate_repo(params.repo)
         if err:
@@ -226,7 +236,9 @@ class GitHubTool(BaseTool):
             return str(r)
         return await self._do(execution_context, _fn)
 
-    @BaseTool.action("Merge a pull request — high-impact, approval-gated", param_model=MergePRParams)
+    @BaseTool.action(
+        "Merge a pull request — high-impact and public. Asks the owner only at compute posture >= 2 or when the operator gates it (under full autonomy it then proceeds and notifies); otherwise it runs at once",
+        param_model=MergePRParams)
     async def github_merge_pr(self, params: MergePRParams, execution_context=None):
         err = _validate_repo(params.repo)
         if err:

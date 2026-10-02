@@ -69,7 +69,7 @@ async def test_cancel_permitted_for_non_owner_in_own_dm(env):
     result = _cmd("/cancel", user_id="u_stranger", chat_id="555", chat_type="dm")
     out = await act_on_inbound(ta, result, spawn=lambda c: None)
     assert ta.cancelled == ["sess_1"]
-    assert out == "Task cancelled."
+    assert out.startswith("Task cancelled.") and "/pause" in out
 
 
 @pytest.mark.asyncio
@@ -78,7 +78,7 @@ async def test_cancel_permitted_for_owner_in_group(env):
     result = _cmd("/cancel", user_id="alice", chat_id="999", chat_type="group")
     out = await act_on_inbound(ta, result, spawn=lambda c: None)
     assert ta.cancelled == ["sess_1"]
-    assert out == "Task cancelled."
+    assert out.startswith("Task cancelled.") and "/pause" in out
 
 
 # ---------------------------------------------------------------------------

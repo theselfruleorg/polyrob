@@ -44,8 +44,10 @@ def test_money_tools_covered_by_correspondent_gate():
         for verb in ("place_limit_order", "place_market_order", "cancel_order"):
             assert is_high_impact(verb), verb
             assert is_high_impact(f"{venue}_{verb}"), f"{venue}_{verb}"
-        # …while reads stay allowed (the reason the tool_ids aren't blocked).
-        assert not is_high_impact(f"{venue}_get_trade_history"), venue
+        # …while MARKET-DATA reads stay allowed (the reason the tool_ids aren't
+        # blocked). Own-account reads (trade history, positions, orders) are
+        # correspondent_blocked since the 2026-09-29 review.
+        assert not is_high_impact(f"{venue}_get_orderbook"), venue
 
 
 def test_gate_sets_reference_real_tool_ids():
@@ -68,7 +70,8 @@ def test_gate_sets_reference_real_tool_ids():
         "shell", "process", "self_env", "hf_deploy", "github", "coding",
         "code_execution", "git", "goal", "cronjob", "knowledge",
         "x402_pay", "x402_invoice", "defi_trade", "publish", "x_browser",
-        "app_service", "launchpad", "dapp_browser",
+        "worker_manage",  # 041: a gated controller action with a capability row
+        "app_service", "launchpad", "dapp_browser", "agent_nft",
     }
     named = set(DELEGATE_BLOCKED_TOOLS) | set(MONEY_TOOLS) | set(HIGH_IMPACT_TOOL_IDS)
     unknown = named - registry_vocab - _ASPIRATIONAL_IDS

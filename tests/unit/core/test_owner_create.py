@@ -56,8 +56,9 @@ def test_create_goal_strips_blank_tool_ids_but_does_not_filter():
 def test_create_goal_no_tools_writes_no_tools_key():
     board = _FakeBoard()
     create_goal(board, user_id="u1", title="t")
-    # payload is None (no tools, no acceptance) so dispatch's wide default applies.
-    assert board.calls[0]["payload"] is None
+    # No tools key (dispatch's wide default applies); the only stamp is the
+    # 034 provenance mark — the owner seat is the author.
+    assert board.calls[0]["payload"] == {"authored_by": "owner"}
 
 
 def test_create_goal_carries_acceptance_and_tenant_and_priority():
@@ -174,3 +175,19 @@ def test_create_cron_against_a_real_service_schedules_and_audits(tmp_path):
                       user_id="u1", via="webview")
     assert job.id
     assert job.id in {j.id for j in svc.list_jobs(user_id="u1")}
+
+
+def test_a_cron_without_a_duration_gets_the_operator_default(monkeypatch):
+    """Validation 2026-09-27: create_cron hard-coded 600s, so /cron add from chat
+    ignored CRON_DEFAULT_MAX_DURATION_SEC, which every other creator honours."""
+    from core.owner_create import create_cron
+    monkeypatch.setenv("CRON_DEFAULT_MAX_DURATION_SEC", "1500")
+    seen = {}
+
+    class _Svc:
+        def schedule(self, **kw):
+            seen.update(kw)
+            return object()
+
+    create_cron(_Svc(), task="check", schedule_spec="every 1h", user_id="u1")
+    assert seen["max_duration_seconds"] == 1500

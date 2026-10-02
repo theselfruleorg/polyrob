@@ -7,6 +7,7 @@ from typing import Optional, List
 
 # Import credit constants from single source of truth
 from modules.credits.pricing import WELCOME_BONUS, DEN_SIGNUP_ALLOWANCE
+from core.token_check_hook import token_checker
 
 logger = logging.getLogger(__name__)
 
@@ -164,7 +165,8 @@ class IdentityMapper:
         Only updates tier if user is currently 'free' or 'holder'.
         """
 
-        if not self.alchemy_tool:
+        check_token = token_checker()
+        if not self.alchemy_tool or check_token is None:
             self.logger.warning("Alchemy tool not available - cannot verify token ownership")
             return
 
@@ -181,9 +183,7 @@ class IdentityMapper:
             if current_tier in admin_granted_tiers:
                 self.logger.info(f"User {user_id} has admin-granted tier '{current_tier}' - preserving (not overwriting)")
                 # Still update token count for reference, but don't change tier
-                from tools.alchemy.alchemy_tool import CheckTokenParams
-                params = CheckTokenParams(address=wallet_address)
-                result = await self.alchemy_tool.alchemy_check_token(params)
+                result = await check_token(self.alchemy_tool, wallet_address)
                 token_count = result.get('token_count', 0)
 
                 await self.db.execute("""
@@ -194,10 +194,7 @@ class IdentityMapper:
                 return
 
             # Check NFT ownership via Alchemy tool
-            from tools.alchemy.alchemy_tool import CheckTokenParams
-            params = CheckTokenParams(address=wallet_address)
-
-            result = await self.alchemy_tool.alchemy_check_token(params)
+            result = await check_token(self.alchemy_tool, wallet_address)
 
             has_token = result.get('has_token', False)
             token_count = result.get('token_count', 0)

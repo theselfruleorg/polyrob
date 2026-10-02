@@ -346,3 +346,30 @@ def test_a_chain_with_no_rail_at_all_still_says_nothing_can_move():
         chains._ROWS.update(real)
     assert ok is False
     assert "Nothing can be sent, approved or swapped" in why
+
+
+def test_the_robinhood_testnet_row_is_read_only_and_its_env_name_is_exportable(monkeypatch):
+    """W13: 46630 is a registry row for the agent-NFT testnet-first rule, and nothing moves there."""
+    row = chains.get("robinhood-testnet")
+    assert row is not None and row.chain_id == 46630 and row.native_symbol == "ETH"
+    assert row.money_enabled is False and row.route_hints == () and row.aggregator_spender is None
+    assert row.wrapped_native == "0x7943e237c7F95DA44E0301572D358911207852Fa"
+    assert "robinhood-testnet" not in chains.money_chains()
+    assert row.rpc_env == "DEFI_EVM_RPC_ROBINHOOD_TESTNET"
+    assert chains.rpc_env_name("robinhood") == "DEFI_EVM_RPC_ROBINHOOD"
+    monkeypatch.setenv("DEFI_EVM_RPC_ROBINHOOD_TESTNET", "http://127.0.0.1:9")
+    from core.wallet import onchain, tx_guard
+    assert onchain.rpc_url_for_chain("robinhood-testnet") == "http://127.0.0.1:9"
+    assert tx_guard.rpc_is_pinned("robinhood-testnet") and chains.rpc_is_pinned("robinhood-testnet")
+    ok, _why = chains.money_ready("robinhood-testnet")
+    assert ok is False
+
+
+def test_every_money_chain_has_a_price_source():
+    """071 R1: arbitrum and polygon were money-enabled with NO dexscreener_id,
+    so every holding there was unvalued, the swap cross-check was "unavailable"
+    and the identity gate held every buy to $5. A chain the agent can spend on
+    must be one it can price."""
+    unpriced = [r.name for r in chains.all_rows()
+                if r.money_enabled and not r.dexscreener_id]
+    assert unpriced == []

@@ -18,7 +18,6 @@ Components:
     - HierarchicalMemory: 3-layer memory models
     - PhaseManager: Phase transition detection and grouping
     - ContextRetriever: Phase-based context injection
-    - CompactionManager: Message and step compaction
     - TaskContextManager: Orchestration and lifecycle management
 
 Reference:
@@ -34,7 +33,6 @@ from .hierarchical_memory import (
 
 from .phase_manager import PhaseManager
 from .context_retriever import ContextRetriever
-from .compaction_manager import CompactionManager
 from .semantic_retriever import SemanticRetriever
 from .task_context_manager import TaskContextManager
 
@@ -44,7 +42,6 @@ __all__ = [
     'Step',
     'PhaseManager',
     'ContextRetriever',
-    'CompactionManager',
     'SemanticRetriever',
     'TaskContextManager',
 ]

@@ -106,14 +106,14 @@ class GreenLedgerOrch:
 
 @pytest.fixture
 def green_orch():
-    return GreenLedgerOrch([("str_replace", None), ("run_tests", None)])
+    return GreenLedgerOrch([("coding_str_replace", None), ("coding_run_tests", None)])
 
 
 @pytest.fixture
 def edited_after_test_orch():
-    return GreenLedgerOrch([("run_tests", None), ("str_replace", None)])
+    return GreenLedgerOrch([("coding_run_tests", None), ("coding_str_replace", None)])
 
 
 @pytest.fixture
 def no_green_orch():
-    return GreenLedgerOrch([("str_replace", None), ("run_tests", "1 failed")])
+    return GreenLedgerOrch([("coding_str_replace", None), ("coding_run_tests", "1 failed")])

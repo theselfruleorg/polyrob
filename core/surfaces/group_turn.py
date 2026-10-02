@@ -32,7 +32,7 @@ _CTRL = re.compile(r"[\r\n\t\x00-\x1f\x7f]+")
 #: `</correspondent-message>` defang that ``hitl_ingress.inject_correspondent_
 #: message`` applies on the correspondent rail.
 _FENCES = ("group-context", "addressed", "correspondent-message",
-           "untrusted_tool_result")
+           "untrusted_tool_result", "owner-thread")
 _FENCE = re.compile(r"<\s*/?\s*(?:%s)\b[^>]*>" % "|".join(_FENCES), re.IGNORECASE)
 
 #: Per-line and per-block caps for the rendered context (fix round 1). The
@@ -46,6 +46,12 @@ CONTEXT_BLOCK_MAX_CHARS = 6000
 def _defang(text: str) -> str:
     """Neutralize every emitted fence inside untrusted content."""
     return _FENCE.sub("[filtered]", str(text or ""))
+
+
+#: 061: the public name of the ONE fence neutralizer. The owner thread renders
+#: rail bodies (a cron quoting a stranger's DM) inside ``<owner-thread>``, so it
+#: must defang the same fence set — imported, never re-derived.
+defang = _defang
 
 
 def neutralize_name(name: str) -> str:

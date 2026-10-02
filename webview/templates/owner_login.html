@@ -1,15 +1,15 @@
 {% extends "layout.html" %}
-{% block title %}Owner Login — POLYROB{% endblock %}
+{% block title %}{{ t('login.title') }}{% endblock %}
 {% block content %}
 <div class="login-page" style="max-width: 40ch; margin: 4rem auto;">
-  <h1>Owner Login</h1>
+  <h1>{{ t('login.heading') }}</h1>
   {% if error %}<p class="error-message">{{ error }}</p>{% endif %}
   <form method="post" action="/owner-login">
     <input type="hidden" name="return_to" value="{{ return_to | default('/') }}">
     {% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}
-    <label>Username <input type="text" name="username" autofocus required></label>
-    <label>Password <input type="password" name="password" required></label>
-    <button type="submit">Log in</button>
+    <label>{{ t('login.username') }} <input type="text" name="username" autocomplete="username" autofocus required></label>
+    <label>{{ t('login.password') }} <input type="password" name="password" autocomplete="current-password" required></label>
+    <button type="submit">{{ t('login.submit') }}</button>
   </form>
 </div>
 {% endblock %}

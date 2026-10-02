@@ -20,6 +20,7 @@ import threading
 
 from tools.code_exec.backend import ExecutionBackend
 from tools.code_exec.env_policy import SAFE_ALLOWLIST, SECRET_PAT, build_child_env
+from tools.code_exec.limits import exec_timeout_cap
 from tools.code_exec.result import ExecutionRequest, ExecutionResult
 
 
@@ -47,10 +48,11 @@ class LocalSubprocessBackend(ExecutionBackend):
 
     # -- helpers --------------------------------------------------------------
 
-    def _clamp_timeout(self, t) -> float:
+    def _clamp_timeout(self, t, ceiling=None) -> float:
+        cap = exec_timeout_cap(self.max_timeout, ceiling)
         if t is None:
-            return self.max_timeout
-        return max(1.0, min(float(t), self.max_timeout))
+            return cap
+        return max(1.0, min(float(t), cap))
 
     def _build_env(self, extra) -> dict:
         # Delegate to the shared policy (single source of truth for the scrub).
@@ -76,7 +78,7 @@ class LocalSubprocessBackend(ExecutionBackend):
 
     async def run(self, request: ExecutionRequest) -> ExecutionResult:
         lang = (request.language or "").lower()
-        timeout = self._clamp_timeout(request.timeout)
+        timeout = self._clamp_timeout(request.timeout, getattr(request, "ceiling", None))
         env = self._build_env(request.env)
         # NOTE: request.network is IGNORED by this backend — a local subprocess always has
         # host network. Sandbox backends (DockerBackend, Task 3) honor request.network.

@@ -19,34 +19,25 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _x402_price_usd() -> float:
-    """Single x402 price source (F12) — keeps the card aligned with the live charge."""
-    from modules.x402.x402_integration import get_x402_price_usd
-    return get_x402_price_usd()
+def _x402_option() -> Optional[Dict[str, Any]]:
+    """The ``authentication_options.x402`` block, or None when no rail
+    contributes it or it cannot import (067 P0.9). The card is PUBLIC and must
+    render without the x402 modules; it then simply does not offer
+    pay-per-request.
 
-
-def _resolve_payment_address() -> str:
-    """Single treasury source (W2.2): the same resolver invoices/challenges
-    use (env wins, agent wallet fills an empty env — W1.1), with the legacy
-    `X402_PAYMENT_ADDRESS` env spelling kept as a last fallback.
-
-    B41: routed through ``api.x402_advertisement.treasury_address``, which
-    caches the answer per process — this card is PUBLIC and unauthenticated,
-    and the underlying resolver derives a wallet signing key on every call."""
-    from api.x402_advertisement import treasury_address
-    return treasury_address()
-
-
-def _supported_assets() -> List[str]:
-    """Assets the per-request x402 rail can actually settle (B22)."""
-    from api.x402_advertisement import supported_assets
-    return supported_assets()
-
-
-def _supported_chains() -> List[str]:
-    """Chains the per-request x402 rail can actually settle on (B22)."""
-    from api.x402_advertisement import supported_chains
-    return supported_chains()
+    067 P5a — the ``a2a.payment`` hook: the block comes from the contributed
+    card option (``api.contributions.register_card_payment_option``; today
+    ``api/money_contributions.x402_card_option``, the wallet pack after P5c)."""
+    from api.contributions import card_payment_options
+    for name, build in card_payment_options():
+        if name != "x402":
+            continue
+        try:
+            return build()
+        except ImportError as e:
+            logger.info("Agent card: x402 rail not importable (%s); card omits x402", e)
+            return None
+    return None
 
 
 def _credits_block() -> Dict[str, Any]:
@@ -237,14 +228,18 @@ def build_agent_card(request: Optional[Request] = None) -> AgentCard:
         )
     ]
 
+    x402_option = _x402_option()
+
     # Security schemes
-    security_schemes = {
-        "x402": SecurityScheme(
+    security_schemes: Dict[str, SecurityScheme] = {}
+    if x402_option is not None:
+        security_schemes["x402"] = SecurityScheme(
             type="apiKey",
             name="X-PAYMENT",
             in_="header",
             description="x402 cryptocurrency payment. Pay-per-request, no account required. See /api/x402/pricing for details."
-        ),
+        )
+    security_schemes.update({
         "apiKey": SecurityScheme(
             type="apiKey",
             name="X-API-KEY",
@@ -257,48 +252,30 @@ def build_agent_card(request: Optional[Request] = None) -> AgentCard:
             bearerFormat="JWT",
             description="JWT token from wallet SIWE authentication. For web UI users."
         )
-    }
+    })
 
     # Security requirements - API key is easiest for agents
-    security = [
-        {"apiKey": []},  # Recommended: API key (simple, persistent)
-        {"x402": []},    # Alternative: pay-per-request (no account)
-        {"bearer": []}   # Alternative: JWT (for web users)
-    ]
+    security = [{"apiKey": []}]  # Recommended: API key (simple, persistent)
+    if x402_option is not None:
+        security.append({"x402": []})  # Alternative: pay-per-request (no account)
+    security.append({"bearer": []})  # Alternative: JWT (for web users)
+
+    authentication_options: Dict[str, Any] = {
+        "api_key": {
+            "description": "Recommended for AI agents. Create once, use forever.",
+            "how_to_get": "1) Login with wallet at /api/auth/nonce + /api/auth/verify, 2) POST /api/auth/api-keys",
+            "requires": "DEN token ownership",
+            "header": "X-API-KEY: rob_xxx..."
+        },
+    }
+    if x402_option is not None:
+        authentication_options["x402"] = x402_option
 
     # Pricing information (x402 extension)
     pricing = {
         "model": "pay-per-request",
         "description": "Pay only for what you use. No subscription required.",
-        "authentication_options": {
-            "api_key": {
-                "description": "Recommended for AI agents. Create once, use forever.",
-                "how_to_get": "1) Login with wallet at /api/auth/nonce + /api/auth/verify, 2) POST /api/auth/api-keys",
-                "requires": "DEN token ownership",
-                "header": "X-API-KEY: rob_xxx..."
-            },
-            "x402": {
-                "description": "Pay-per-request with crypto. No account needed.",
-                "how_to_use": (
-                    "Standard x402 flow: 1) send your request; 2) on HTTP 402 read the "
-                    "payment requirements; 3) retry with an X-PAYMENT header (base64 "
-                    "EIP-3009 authorization). Settlement is handled automatically."
-                ),
-                "per_request_usd": _x402_price_usd(),
-                # B22: derived from the asset registry, not a hand-kept list.
-                # The old ["usdc","usdt","eth"] / ["base","ethereum"] pair was
-                # false in both halves — the per-request rail settles USDC on
-                # Base through fastapi_x402 and nothing else, so a payer who
-                # believed the card and sent USDT or ETH paid an address that
-                # would never be matched to their request.
-                "supported_chains": _supported_chains(),
-                "supported_assets": _supported_assets(),
-                # W2.2 (2026-08-21): same resolver invoices use (env wins,
-                # wallet fills in) — the card and invoices can never disagree.
-                "payment_address": _resolve_payment_address(),
-                "facilitator": os.environ.get("X402_FACILITATOR_URL", "") or "Direct signature verification"
-            }
-        },
+        "authentication_options": authentication_options,
         # B23: observed, not declared — credits exist only when the account
         # system AND the credit system are on (balance_manager registered).
         "credits": _credits_block(),

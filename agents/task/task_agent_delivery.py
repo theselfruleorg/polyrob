@@ -840,6 +840,27 @@ class TaskAgentDeliveryMixin:
             if _recorded_public is None:
                 _recorded_public = self._bound_key_is_room(session_id)
             orchestrator._public_session = bool(_recorded_public)
+            # 060 WS-5: the rail's pinned skills survive an eviction.
+            orchestrator._rail_skill_ids = list(
+                (session_info.get('request') or {}).get('skills') or [])
+            # 068 G2: the declared buy target survives an eviction too.
+            orchestrator._money_target = (session_info.get('request') or {}).get('money_target')
+            # 025: the goal/cron memory scope survives an eviction too.
+            from agents.task.task_agent_support import bind_memory_scope
+            bind_memory_scope(session_id, session_info.get('request') or {})
+            # H16: restore the correspondent-created stamp from the durable creator.
+            orchestrator._correspondent_session = (
+                str(session_info.get('creator') or '') == "correspondent")
+            # M02: a correspondent taint that no owner turn cleared survives the
+            # eviction/restart — the restored history still holds their text.
+            try:
+                if orchestrator.restore_correspondent_taint():
+                    logger.warning(f"recreated session {session_id}: correspondent "
+                                   "taint restored (high-impact tools gated)")
+            except Exception as e:
+                logger.warning(f"recreated session {session_id}: taint restore failed "
+                               f"— tainting fail-closed: {e}")
+                orchestrator._correspondent_tainted = True
 
             # #0 mute-on-resume: re-attach the outbound chat surface BEFORE initialize()
             # so a resumed chat's replies route back out (recreation otherwise leaves

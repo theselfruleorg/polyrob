@@ -30,6 +30,7 @@ def _pages_client(monkeypatch, tmp_path, user_id="alice"):
     monkeypatch.setattr(pages.webgate, "data_dir", lambda: str(tmp_path))
     app = FastAPI()
     app.include_router(pages.router)
+    app.include_router(pages.money_router)  # 067 P5a: Money readers
     return TestClient(app), pages
 
 

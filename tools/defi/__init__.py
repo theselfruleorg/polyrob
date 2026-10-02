@@ -5,7 +5,7 @@ No signer is constructed and nothing is broadcast from this package.
 
 
 def defi_data_enabled() -> bool:
-    """Gate for the `defi_data` read tool. Default OFF.
+    """Gate for the `defi_data` read tool. Default ON.
 
     Thin re-export of the tier-0 SSOT (`core.config_policy.policy`) so this and
     `agents/task/tool_defaults` can never disagree about whether the tool is on.

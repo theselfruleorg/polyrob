@@ -36,7 +36,7 @@ from agents.task.task_agent_support import (  # noqa: F401  (re-exported: existi
     _SELF_WAKE_TASKS,
     _resolve_chat_runtime,
     _resolve_session_runtime,
-    build_session_metadata,
+    build_session_metadata, bind_memory_scope, memory_scope_fields,
     room_session_source,
     _spawn_detached,
     task_unavailable_message,
@@ -410,7 +410,9 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
                 max_steps=request.get('max_steps', 50),
                 temperature=request.get('temperature', 0.0),
                 use_vision=request.get('use_vision', True),
-                session_config=request.get('session_config')
+                session_config=request.get('session_config'),
+                skills=request.get('skills'), **memory_scope_fields(request),
+                money_target=request.get('money_target'),
             )
 
         # SECURITY (C4): a client may supply a custom session_id (CLI/API/A2A). If
@@ -454,6 +456,15 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
         # a room session private-shaped. A room's safety flag must never depend on
         # a transport flag.
         orchestrator._public_session = room_session_source(kwargs.get("session_source"))
+        orchestrator._rail_skill_ids = list(session_request.skills or [])  # 060 WS-5
+        orchestrator._money_target = session_request.money_target  # 068 G2
+        bind_memory_scope(actual_id, session_request)  # 025: goal/cron memory scope
+        # H16: a session created FOR a correspondent (conversation resume) is
+        # third-party-facing for its whole life — owner-only state (the owner
+        # thread tail, owner asks) never enters it. Restored from `creator` on
+        # recreate (task_agent_delivery), like `_public_session`.
+        orchestrator._correspondent_session = (
+            resolve_creator(kwargs.get("creator"), kwargs.get("session_source")) == "correspondent")
 
         # P1b-2: bind this session's orchestrator to the Singular Chat outbound bus
         # BEFORE initialize() — _register_stream_callback captures the router+key by

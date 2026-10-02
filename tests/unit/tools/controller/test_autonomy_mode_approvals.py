@@ -532,7 +532,8 @@ def test_money_spend_flags_default_false_under_full_autonomy_and_not_mode_govern
     _enable_full(monkeypatch)
 
     from core.wallet.config import load_wallet_config
-    from tools.crypto_trade_gate import evaluate_live_trade
+    evaluate_live_trade = pytest.importorskip(
+        "polyrob_markets.trade_gate").evaluate_live_trade  # the markets pack (067 P4)
     from tools.x402 import x402_client_enabled
 
     assert x402_client_enabled() is False

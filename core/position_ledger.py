@@ -49,6 +49,35 @@ class LedgerPosition:
     qty: Optional[float]  # None = row present but size unparseable
     line: str
 
+    @property
+    def is_open(self) -> bool:
+        """Whether this row still occupies a slot.
+
+        A rail that exits in full may write the record the DELTA way — editing
+        the Size cell to ``0 — FULL EXIT …`` and leaving the row in place rather
+        than moving it to ``## Closed positions``. The row is then honest
+        bookkeeping but NOT a position, and counting it costs a real entry slot
+        (2026-09-23: SCOUT skipped `open_rows: 6` against a cap of 6 while the
+        book held 5, hours after a full exit freed the capital).
+
+        ``qty is None`` — the size is present but unparseable — stays OPEN. The
+        ledger's standing contract is that unknown is never zero, and the
+        fail-safe direction here is to keep holding the slot rather than free
+        one against a figure nobody could read.
+        """
+        return self.qty is None or self.qty > 0
+
+
+def open_positions(rows: List["LedgerPosition"]) -> List["LedgerPosition"]:
+    """The rows that still occupy a slot, in table order.
+
+    Use this wherever a COUNT of positions is taken. The parser deliberately
+    keeps every row it found — `reconcile` compares the ledger against chain row
+    by row, and a zero row matched against a zero balance is a match, so
+    dropping it there would invent a discrepancy.
+    """
+    return [r for r in rows if r.is_open]
+
 
 def _parse_qty(cell: str) -> Optional[float]:
     cleaned = cell.strip().strip("*`").replace(",", "").replace("~", "")
@@ -82,6 +111,11 @@ def parse_open_positions(text: str) -> Tuple[List[LedgerPosition], Optional[str]
         return [], ("the ledger has no '## Open positions' section — the state "
                     "table is missing, so there is nothing to reconcile against")
     rows: List[LedgerPosition] = []
+    # The FIRST row per address is the live one; later rows for the same
+    # address are superseded history the rail left in place (2026-10-02: 11
+    # PNL rows made reconcile report 10 phantom mismatches). EVM hex folds
+    # case; base58 does not (068 B3).
+    seen = set()
     for line in lines[start:]:
         stripped = line.strip()
         if stripped.startswith("## "):
@@ -103,6 +137,10 @@ def parse_open_positions(text: str) -> Tuple[List[LedgerPosition], Optional[str]
                 qty = _parse_qty(cell)
                 if qty is not None:
                     break
+        key = address.lower() if address.startswith("0x") else address
+        if key in seen:
+            continue
+        seen.add(key)
         symbol = (cells[0].strip("*` ") if cells else "") or "?"
         rows.append(LedgerPosition(symbol=symbol, address=address, qty=qty,
                                    line=stripped))
@@ -142,6 +180,9 @@ def resolve_position_ledger_path(data_dir: Optional[str] = None) -> Optional[str
     return hits[0] if len(hits) == 1 else None
 
 
+_HEAD_BYTES = 1_000_000
+
+
 def read_open_positions(data_dir: Optional[str] = None,
                         path: Optional[str] = None) -> Tuple[List[LedgerPosition], Optional[str]]:
     """``(rows, error)`` for the live ledger. ``error`` non-None means UNKNOWN —
@@ -149,11 +190,19 @@ def read_open_positions(data_dir: Optional[str] = None,
     ledger = path or resolve_position_ledger_path(data_dir)
     if not ledger:
         return [], "no position ledger found (set POSITION_LEDGER_PATH)"
+    # The cap bounds the HEAD that must hold the state table, not the file:
+    # only the `## Open positions` section is parsed and the rails append
+    # their run logs below it (2026-09-21: a whole-file cap blanked every
+    # status seat's treasury read once the narrative tail passed 1 MB).
     try:
-        if os.path.getsize(ledger) > 1_000_000:
-            return [], f"{os.path.basename(ledger)} exceeds 1MB — not a position ledger"
-        with open(ledger, "r", encoding="utf-8", errors="replace") as fh:
-            text = fh.read()
+        with open(ledger, "rb") as fh:
+            head = fh.read(_HEAD_BYTES + 1)
     except OSError as e:
         return [], f"{type(e).__name__}: {e}"
+    text = head[:_HEAD_BYTES].decode("utf-8", errors="replace")
+    if len(head) > _HEAD_BYTES and not any(
+            ln.lstrip().startswith("##") and "open positions" in ln.lower()
+            for ln in text.splitlines()):
+        return [], (f"{os.path.basename(ledger)} exceeds 1MB and its first 1MB holds "
+                    "no '## Open positions' section — not a position ledger")
     return parse_open_positions(text)

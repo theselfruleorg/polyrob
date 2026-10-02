@@ -21,6 +21,26 @@ from enum import Enum
 from agents.task.utils import get_safe_file_lock
 from agents.task.path import pm, get_safe_singleton
 from agents.task.constants import DEFAULT_USER_ID
+from core.data_perms import apply_birth_mode
+
+
+def _publish_feed_file(tmp_name: str, feed_dir: Path, prefix: str, ms: int) -> Path:
+    """Publish a written temp file as ``{prefix}_{ms}.json`` without overwriting.
+
+    ``os.link`` fails if the name exists, so two events in one millisecond land
+    as ``…_{ms}`` and ``…_{ms+1}`` (order kept) instead of the second silently
+    replacing the first. The caller unlinks *tmp_name*.
+    """
+    import os
+
+    for k in range(1000):
+        final = feed_dir / f"{prefix}_{ms + k}.json"
+        try:
+            os.link(tmp_name, final)
+            return final
+        except FileExistsError:
+            continue
+    raise FileExistsError(f"no free feed name for {prefix}_{ms}")
 
 logger = logging.getLogger(__name__)
 
@@ -118,9 +138,11 @@ SESSION_CREATOR_KINDS = frozenset({
 # `"owner"` ("you") was a claim about WHO that nothing had established. The
 # correspondent RESUME path (agents/task/conversation_resume.py) passes
 # `creator="correspondent"` explicitly and is unaffected either way.
-_OWNER_CHAT_SURFACES = frozenset({
-    "telegram", "whatsapp", "discord", "slack", "signal", "x", "webview",
-})
+#: Derived from the surface catalog (064 F1): every owner seat whose inbound
+#: sender is not forgeable, plus the console.
+from core.surfaces.catalog import owner_chat_ids as _owner_chat_ids  # noqa: E402
+
+_OWNER_CHAT_SURFACES = frozenset({*_owner_chat_ids(), "webview"})
 _CLI_SURFACES = frozenset({"cli", "repl", "local"})
 
 
@@ -501,23 +523,28 @@ class SessionManager:
                 }
             }
             
-            # Write to feed with timestamp-based filename
-            filename = f"status_{int(timestamp * 1000)}.json"
-            status_path = feed_dir / filename
-            
-            # Simple atomic write
-            temp_path = status_path.with_suffix('.tmp')
+            # Atomic write, same shape as add_to_feed: a unique dot-prefixed
+            # temp (the watcher skips it, retention sweeps ``.*.tmp``), then
+            # link onto a free name (_publish_feed_file); group-readable so the
+            # console can read it.
+            import os
+            import tempfile
+
+            temp_path = None
             try:
-                with open(temp_path, 'w') as f:
+                fd, temp_path = tempfile.mkstemp(dir=str(feed_dir), prefix=".", suffix=".tmp")
+                with os.fdopen(fd, 'w') as f:
                     json.dump(status_event, f, indent=2)
-                temp_path.replace(status_path)
+                apply_birth_mode(temp_path)
+                _publish_feed_file(temp_path, feed_dir, "status", int(timestamp * 1000))
                 self.logger.debug(f"📊 Emitted status event: {new_status} (was: {previous_status})")
             except Exception as e:
                 self.logger.error(f"Failed to write status event: {e}")
-                if temp_path.exists():
+            finally:
+                if temp_path is not None:
                     try:
-                        temp_path.unlink()
-                    except Exception:
+                        os.unlink(temp_path)
+                    except OSError:
                         pass
                         
         except Exception as e:
@@ -904,11 +931,33 @@ class SessionManager:
         if agent_id:
             feed_entry['agent_id'] = agent_id
 
-        # Write to feed file
-        feed_file = feed_dir / f"{event_type}_{int(timestamp * 1000)}.json"
-        with open(feed_file, 'w') as f:
-            json.dump(feed_entry, f, indent=2)
-        
+        # Write to feed file atomically (W1.3): a dot-prefixed temp file that
+        # no ``*.json`` glob or the console watcher filter sees, then linked
+        # onto a free final name — whole or not at all, never over another event.
+        import os
+        import tempfile
+
+        tmp_name = None
+        try:
+            fd, tmp_name = tempfile.mkstemp(dir=str(feed_dir), prefix=".", suffix=".tmp")
+            with os.fdopen(fd, 'w') as f:
+                json.dump(feed_entry, f, indent=2)
+            # mkstemp births 0600; the console reads as another UID.
+            apply_birth_mode(tmp_name)
+            _publish_feed_file(tmp_name, feed_dir, event_type, int(timestamp * 1000))
+        except Exception as exc:
+            self.logger.warning(
+                "add_to_feed: could not write %s event for session %s: %s",
+                event_type, session_id, exc,
+            )
+            return
+        finally:
+            if tmp_name is not None:
+                try:
+                    os.unlink(tmp_name)
+                except OSError:
+                    pass
+
         self.logger.debug(f"Added {event_type} event to feed for session {session_id}")
 
     def _save_summary_file(self, session_id: str, filename: str, data: Dict[str, Any]) -> None:

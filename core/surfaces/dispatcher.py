@@ -47,29 +47,47 @@ _COMMANDS = ("/task", "/cancel", "/new", "/help",
              "/inbox",   # 043 D1: the one list of what needs the owner; /pending stays
              "/book",    # 043 D1: the ledger against every money chain
              "/pending", "/approve", "/reject", "/asks", "/fulfill",
+             "/cards",   # 2026-09-27: action cards; /card_<id>_<act> taps map here
              "/allow", "/deny", "/allowlist",
              "/groups", "/mute",  # 044 T18: room presence admin (owner or that room's admin)
              "/paid",             # 046: paid room actions (owner or room admin)
              "/ban", "/unban", "/unmute",   # 046 phase 2: the rest of the catalog
              "/halt", "/resume", "/pause",  # owner pause record (031; /halt = alias of /pause)
              "/cron", "/goal", "/wallet", "/invoices", "/settle",  # G13 write verbs
+             "/rail",   # 036: standing work (rails + their grants), owner-only
              "/trade",  # owner-launched money-granted run (2026-09-09)
              "/bridge",  # 037 cross-chain move; owner-only, approval-gated
              "/launch", "/deploy", "/lp",  # token/liquidity writes; owner-only, capped
              "/claim",   # 046/E6: the launchpad creator-fee claim, from the phone
+             "/pay",     # 068 X4: pay one x402 resource (quote unless `go`)
+             "/send",    # owner-UX 2026-09-26: send from the wallet (quote unless `go`)
+             "/swap",    # 2026-09-27: swap from the wallet (quote -> card unless `go`)
+             "/check",   # 071: any address or ticker, read-only (owner seat)
+             "/writeoff", "/unquarantine",  # W1: a holding's lifecycle, owner seat
              "/nft",      # E7: hold / look / send / revoke, owner seat
              "/dapp",     # E9: the wallet sessions a page holds, and cutting one off
              "/identity",  # E8: this instance's own ERC-8004 registration
              "/contacts",  # E10: who replied, and the transcript with one of them
+             "/why",       # O10: the last gate refusals, verbatim (read-only)
+             "/thread",    # 061: the ONE owner transcript, every rail and seat
              "/status", "/avatar", "/mode", "/recap", "/journey", "/goals", "/prefs", "/config",
              "/cwd",   # C67: where I am working right now (read-only)
              "/missed",
+             "/run",     # 070 D1: pause/resume/stop ONE background run (core/run_control.py)
              "/apps",  # 032 durable app service (approve an address, health, kill, logs)
              "/mcp",   # per-tenant MCP servers; owner-only (core/mcp_admin.py)
              "/kb", "/files",
              "/dev",  # owner ↔ on-host dev-loop rail (proposal 027 WS-1)
              "/start")  # Telegram first-contact convention -> welcome (030 L9);
                         # NOT owner-gated, so it stays out of _OWNER_ADMIN_COMMANDS
+
+
+def command_names() -> frozenset:
+    """Every token routed as a COMMAND: :data:`_COMMANDS` plus the verbs a pack
+    contributed (``core.verbs.register_verbs``, 067 P5a). Use this, not the
+    tuple, for membership — a contributed verb is not in the literal."""
+    from core.verbs import routed_names
+    return frozenset(_COMMANDS) | routed_names()
 
 # 030 L9: a leading token that LOOKS like a command (Telegram command grammar,
 # optional @botname suffix) but isn't in _COMMANDS must still classify as COMMAND —
@@ -194,6 +212,7 @@ DENIAL_REASONS = (
     "no_origin_session",       # correspondent with nothing to attach the reply to
     "tier_fault",              # tier model raised -> fail CLOSED
     "forgeable_sender",        # email with the correspondent model off
+    "bot_pair_guard",          # 064 F4: a (surface, bot) pair past its loop budget
 )
 
 
@@ -220,15 +239,72 @@ async def route_inbound(
     route. One out-parameter beats stamping five more returns.
     """
     trace: dict = {}
-    decision = await _route_inbound_impl(container, inbound,
-                                         is_chitchat=is_chitchat, _trace=trace)
+    decision = _bot_pair_refusal(inbound)
+    if decision is None:
+        decision = await _route_inbound_impl(container, inbound,
+                                             is_chitchat=is_chitchat, _trace=trace)
     if decision.tier is None and trace.get("tier"):
         decision.tier = trace["tier"]
+    # Security review 2026-09-23 (Low): the revive runs only for an ACCEPTED
+    # message. It used to run before every gate, so a denied stranger — or a
+    # forged email `From:` — could clear a dead-target row it never earned.
+    if decision.kind != RouteKind.DENIED:
+        _revive_dead_target(container, inbound)
     try:
         record_route(inbound, decision)
     except Exception:
         logger.debug("route_inbound: access-log record skipped", exc_info=True)
     return decision
+
+
+def _bot_pair_refusal(inbound: InboundMessage) -> Optional[RouteDecision]:
+    """064 F4: a bot sender past its pair's loop budget is dropped silently,
+    before any tier/room logic. A human sender is never counted."""
+    if not getattr(inbound, "sender_is_bot", False):
+        return None
+    try:
+        from core.surfaces import bot_pair_guard
+        src = inbound.identity.source
+        peer = inbound.identity.raw_user_id or inbound.identity.user_id
+        if bot_pair_guard.allow(src.surface_id, peer):
+            return None
+        logger.info("route_inbound: bot-pair loop guard dropped %s:%s",
+                    src.surface_id, peer)
+        return RouteDecision(RouteKind.DENIED,
+                             build_session_key(src, inbound.identity.user_id),
+                             silent=True, reason="bot_pair_guard")
+    except Exception:
+        logger.debug("route_inbound: bot-pair guard skipped", exc_info=True)
+        return None
+
+
+def _revive_dead_target(container: Any, inbound: InboundMessage) -> None:
+    """T1.5: an ACCEPTED inbound revives a previously dead-marked target.
+
+    Receiving proves the sender is reachable again. Clears both identity tuples
+    (outbound dest for telegram is the CHAT id; inbound sender is the USER id —
+    they coincide for DMs, differ for groups). Idempotent no-op if never marked.
+
+    The caller runs this only for a non-DENIED decision, and never on a
+    forgeable-sender surface (email: `From:` proves nothing about
+    reachability). Fully fail-open: a store fault never changes routing.
+    """
+    try:
+        _surface_id = getattr(inbound.identity.source, "surface_id", None)
+        if not _surface_id or _surface_id in _FORGEABLE_NETWORK_SURFACES:
+            return
+        from core.config_policy import dead_target_registry_enabled
+        if not dead_target_registry_enabled():
+            return
+        dead_targets = container.get_service("dead_targets") if container else None
+        if dead_targets is None:
+            return
+        _chat_id = getattr(inbound.identity.source, "chat_id", None)
+        _sender_id = inbound.identity.raw_user_id or inbound.identity.user_id
+        dead_targets.clear(_surface_id, _chat_id or "")
+        dead_targets.clear(_surface_id, _sender_id or "")
+    except Exception as e:  # never block routing on a revive fault
+        logger.debug("route_inbound dead-target revive skipped: %s", e)
 
 
 #: Surfaces already told (once) that their rooms need the Singular Chat bus.
@@ -247,7 +323,8 @@ def _warn_rooms_need_bus(surface_id: str) -> None:
             "%s room messages are being DENIED: GROUP_CHAT_ENABLED is on but the "
             "Singular Chat bus is not installed — rooms need SINGULAR_CHAT_ENABLED "
             "(the chat<->session registry, room caps, ledger and outbound router "
-            "all come from it). Set SINGULAR_CHAT_ENABLED=true and restart.",
+            "all come from it). Enable it: polyrob config set SINGULAR_CHAT_ENABLED "
+            "true --global (takes effect: restart).",
             surface_id)
     except Exception:  # pragma: no cover - a logging fault must not deny differently
         pass
@@ -324,27 +401,12 @@ async def _route_inbound_impl(
     user_id = inbound.identity.user_id
     session_key = build_session_key(inbound.identity.source, user_id)
     text = (inbound.text or "").strip()
-
-    # 0-revive) T1.5: ANY inbound message revives a previously dead-marked target —
-    # receiving proves the sender is reachable again. Clears both identity tuples
-    # (outbound dest for telegram is the CHAT id; inbound sender is the USER id —
-    # they coincide for DMs, differ for groups). Idempotent no-op if never marked.
-    # Fully fail-open: any lookup/store fault must never block routing, and this
-    # runs before every other gate below so a revive never depends on tier/pairing
-    # outcomes.
-    try:
-        from core.config_policy import dead_target_registry_enabled
-        if dead_target_registry_enabled():
-            dead_targets = container.get_service("dead_targets") if container else None
-            if dead_targets is not None:
-                _surface_id = getattr(inbound.identity.source, "surface_id", None)
-                _chat_id = getattr(inbound.identity.source, "chat_id", None)
-                _sender_id = inbound.identity.raw_user_id or user_id
-                if _surface_id:
-                    dead_targets.clear(_surface_id, _chat_id or "")
-                    dead_targets.clear(_surface_id, _sender_id or "")
-    except Exception as e:  # never block routing on a revive fault
-        logger.debug("route_inbound dead-target revive skipped: %s", e)
+    #: H06 (2026-09-23): a FORWARDED message is quoted third-party text. It can
+    #: be a turn (as DATA) but NEVER a command, whatever its shape — the sender
+    #: is authenticated, the words are not his. `_slash` is the one "is this a
+    #: slash line" read below, so no branch can classify a forward as a verb.
+    _forwarded = bool(getattr(inbound, "forwarded", False))
+    _slash = text.startswith("/") and not _forwarded
 
     # 0) ACCESS GATE (polyrob D3) — when POLYROB_REQUIRE_PAIRING is on, an unpaired
     #    non-owner is denied (and issued a pairing code). Fail-open + default-off, so
@@ -416,7 +478,7 @@ async def _route_inbound_impl(
         # is unaffected, turns stay denied, and the only thing that becomes
         # reachable is the owner's room-admin verb. session_id stays None — there
         # is no room session yet, and `/groups` never needs one.
-        if _is_groups_verb(text) and _owner_principal_of(user_id):
+        if _slash and _is_groups_verb(text) and _owner_principal_of(user_id):
             return RouteDecision(RouteKind.COMMAND, session_key,
                                  command="/groups", session_id=None)
         try:
@@ -485,14 +547,14 @@ async def _route_inbound_impl(
             # reachable only in an `active` room: the mode gate refused the
             # line before the grant was ever consulted.
             _granted_command = False
-            if role == "member" and text.startswith("/"):
+            if role == "member" and _slash:
                 _tok = text.split()[0].lower().split("@", 1)[0]
                 _granted_command = (
                     _tok in _MEMBER_GRANTABLE_COMMANDS
                     and _tok.lstrip("/") in (policy.member_verbs or ()))
             if not mode_allows_trigger(policy, mentioned=mentioned, role=role,
                                        wake_hit=wake_word_hit(policy, text),
-                                       is_command=text.startswith("/"),
+                                       is_command=_slash,
                                        granted_command=_granted_command):
                 return RouteDecision(RouteKind.DENIED, session_key, silent=True,
                                      reason="no_mention", tier=tier.value)
@@ -520,7 +582,7 @@ async def _route_inbound_impl(
                 # plain MEMBER falls through unchanged (his slash line is
                 # still a room turn — member verbs are a later, separate
                 # schema row).
-                if role == "admin" and text.startswith("/"):
+                if role == "admin" and _slash:
                     admin_token = text.split()[0].lower().split("@", 1)[0]
                     if admin_token in _GROUP_ADMIN_COMMANDS:
                         return RouteDecision(RouteKind.COMMAND, session_key,
@@ -534,7 +596,7 @@ async def _route_inbound_impl(
                 #
                 # The handler still does its OWN role check, so admitting the
                 # line here grants routing, never authority.
-                if role == "member" and text.startswith("/"):
+                if role == "member" and _slash:
                     member_token = text.split()[0].lower().split("@", 1)[0]
                     if (member_token in _MEMBER_GRANTABLE_COMMANDS
                             and _member_verb_granted(container, _surf, _chat,
@@ -578,7 +640,7 @@ async def _route_inbound_impl(
             # 044 I1: the owner's own room TURN is capped too (a room's budget is
             # the room's, not a per-speaker one) — but only the turn. His COMMAND
             # is classified below and is deliberately upstream of this refusal.
-            if _room_reply_capped and not text.startswith("/"):
+            if _room_reply_capped and not _slash:
                 logger.info("route_inbound: owner room turn refused (%s) %s:%s",
                             _cap_why, _surf, _chat)
                 return RouteDecision(RouteKind.DENIED, session_key, silent=True,
@@ -671,11 +733,11 @@ async def _route_inbound_impl(
 
     # 1) COMMAND — control verbs win even over an active session. Carry the bound
     #    session_id so /cancel/ /new actually act on it (was None -> silent no-op).
-    if text.startswith("/"):
+    if _slash:
         # Telegram group syntax sends "/help@MyBot" — strip the @bot suffix so
         # known commands still match (030 L9).
         token = text.split()[0].lower().split("@", 1)[0]
-        if token in _COMMANDS or _COMMAND_SHAPE_RE.fullmatch(token):
+        if token in command_names() or _COMMAND_SHAPE_RE.fullmatch(token):
             return RouteDecision(
                 RouteKind.COMMAND, session_key, command=token,
                 session_id=(row.get("session_id") if row else None),

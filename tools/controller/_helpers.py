@@ -138,6 +138,11 @@ def build_session_search_hint(recalled: str, limit: int, sort: str = None) -> st
     return ""  # sort == "oldest": no forward-pagination story exists
 
 
+#: marks, in a Controller's ``_activated_skills`` set, that a repeat load_skill
+#: for the id was already answered with the short ack (D4). Never a valid skill id.
+_SKILL_ACK_SUFFIX = "#ack"
+
+
 def build_load_skill_result(session_skills, skill_id, activated=None, skill_dir=None) -> ActionResult:
     """Resolve a load_skill(skill_id) call to an ActionResult (S-1).
 
@@ -175,9 +180,20 @@ def build_load_skill_result(session_skills, skill_id, activated=None, skill_dir=
             error=f"Unknown skill_id '{sid}'. Available in this session: {available}",
             include_in_memory=True,
         )
-    if activated is not None and sid in activated:
+    # D4 (review 2026-09-29): the ack is a token saver, not a lock. Compaction
+    # (and eviction) can drop the delivered body from the context; after that,
+    # an "already active" answer on every call left the skill unreachable for
+    # the rest of the session. So the FIRST repeat acks and says how to get the
+    # body back; the NEXT repeat re-sends it.
+    ack_marker = f"{sid}{_SKILL_ACK_SUFFIX}"
+    if activated is not None and sid in activated and ack_marker not in activated:
+        activated.add(ack_marker)
         result = ActionResult(
-            extracted_content=f"Skill '{sid}' is already active this session — no need to reload.",
+            extracted_content=(
+                f"Skill '{sid}' is already active this session — no need to reload. "
+                f"If its instructions are no longer in your context (the history was "
+                f"compacted), call load_skill(\"{sid}\") once more and the full body "
+                f"is sent again."),
             include_in_memory=True,
             metadata={'skill_already_active': True},
         )
@@ -187,6 +203,7 @@ def build_load_skill_result(session_skills, skill_id, activated=None, skill_dir=
     body = getattr(skill, 'content', '') or ''
     if activated is not None:
         activated.add(sid)
+        activated.discard(ack_marker)
     result = ActionResult(
         extracted_content=f'<skill id="{sid}">\n{body}\n</skill>',
         include_in_memory=True,
@@ -229,3 +246,25 @@ def self_mod_emitter(execution_context, controller, user_id, *, kind, source,
             pass
 
     return _self_mod_ev
+
+
+def forget_activated_skill(controller, skill_id) -> None:
+    """Drop ``skill_id`` from a Controller's ``_activated_skills`` set.
+
+    ⚠️ Without this, ``skill_manage``'s own error message is unfollowable.
+    ``build_load_skill_result`` short-circuits an id already in ``activated``
+    with "already active this session — no need to reload" (a token saver), so
+    after a write bumped the body, ``load_skill`` — the ONLY reload verb —
+    returned the ack and refreshed nothing. On 2026-09-21 prod the agent hit
+    ``revision conflict; reload before editing``, did exactly what the error
+    said, and was told there was nothing to reload.
+
+    Called after EVERY successful skill write, so the next ``load_skill``
+    re-emits the current body. Fail-open and pure side-effect: a controller
+    without the set is a no-op.
+    """
+    sid = (str(skill_id) or "").strip().strip('"')
+    activated = getattr(controller, "_activated_skills", None)
+    if sid and isinstance(activated, set):
+        activated.discard(sid)
+        activated.discard(f"{sid}{_SKILL_ACK_SUFFIX}")

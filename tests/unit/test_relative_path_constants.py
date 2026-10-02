@@ -12,13 +12,17 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_mcp_key_path_is_absolute_and_cwd_independent(tmp_path, monkeypatch):
+    """The dev Fernet key lives in the DATA HOME (never the install tree, which is
+    site-packages for a pip install); with the data home pinned it is CWD-invariant."""
     from tools.mcp.security import _key_file_path
 
+    home = tmp_path / "home"
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(home))
     monkeypatch.chdir(tmp_path)
     p = _key_file_path()
     assert p.is_absolute()
-    assert not str(p).startswith(str(tmp_path))
-    assert p == REPO_ROOT / "data" / ".mcp_encryption_key"
+    assert p == home.resolve() / ".mcp_encryption_key"
+    assert not str(p).startswith(str(REPO_ROOT / "core"))
 
 
 def test_prompts_default_dir_anchored():

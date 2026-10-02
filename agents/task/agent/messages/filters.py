@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import re
 from typing import Any, Dict, List, Optional, Type
 
 from modules.llm.messages import (
@@ -31,6 +32,19 @@ logger = logging.getLogger(__name__)
 DEDUP_MIN_CHARS = 160
 
 
+def _dedup_reference(digest: str) -> str:
+	"""The back-reference text for a repeated tool result (F16(i)).
+
+	CONTENT-ADDRESSED ON PURPOSE. The text used to carry the first occurrence's
+	POSITION in the assembled list (``#7``), which renumbers whenever anything
+	lands ahead of it — a left-eviction, a restore, an insert — so the same
+	unchanged conversation re-serialized to different bytes and every provider
+	cache re-billed the prefix from that message onward. The digest identifies
+	the earlier result without depending on where it sits.
+	"""
+	return f"[duplicate of an earlier tool result in this conversation — output identical to {digest}]"
+
+
 def dedup_tool_results(messages: List[BaseMessage]) -> List[BaseMessage]:
 	"""Replace byte-identical repeated LONG tool outputs with a back-reference (B2).
 
@@ -44,22 +58,131 @@ def dedup_tool_results(messages: List[BaseMessage]) -> List[BaseMessage]:
 	"""
 	import hashlib
 
-	seen: Dict[str, int] = {}
+	seen: set[str] = set()
 	out: List[BaseMessage] = []
 	for msg in messages:
 		if (isinstance(msg, ToolMessage) and isinstance(msg.content, str)
 				and len(msg.content) >= DEDUP_MIN_CHARS):
 			digest = hashlib.md5(msg.content.encode("utf-8", "ignore")).hexdigest()[:12]
 			if digest in seen:
-				ref = ToolMessage(
-					content=f"[duplicate of an earlier tool result #{seen[digest]} — output identical to {digest}]",
-					tool_call_id=msg.tool_call_id,
-				)
-				out.append(ref)
+				out.append(ToolMessage(content=_dedup_reference(digest),
+				                       tool_call_id=msg.tool_call_id))
 				continue
-			seen[digest] = len(out)
+			seen.add(digest)
 		out.append(msg)
 	return out
+
+
+# F15 — deterministic ageing of old tool results (after a reference agent's context compressor).
+# A 40k-char web_fetch from 30 steps ago used to sit in the context verbatim, at
+# cache-read price, until the 85 % band fired the expensive LLM compaction. This
+# pass demotes it to its first line plus a NAMED pointer, with no LLM call. It runs
+# only at a compaction boundary — already a cold prefix — so it costs no extra
+# cache miss, and it never touches the protected tail.
+TOOL_RESULT_AGE_KEEP_RECENT = 6
+#: how much of the first line survives, so ageing a single-line 40k JSON blob is
+#: still idempotent (the aged body must land under the threshold).
+TOOL_RESULT_AGE_HEAD_CHARS = 240
+#: the marker that says "already aged" — the pass must never age its own output.
+AGED_RESULT_MARKER = "[…aged:"
+#: a pointer the offload path (``result_offload.py``) already wrote into the
+#: content: ``read_file`` + ``file_path="<name>"``. Kept VERBATIM when present —
+#: inventing a second phrasing of the same pointer is how an agent learns to
+#: guess file names.
+_OFFLOAD_POINTER = re.compile(r"^.*read_file.*file_path.*$", re.MULTILINE)
+
+
+#: D4 (review 2026-09-29): a ``load_skill`` result (``<skill id="...">`` body)
+#: is never aged. It is an instruction the agent follows for the rest of the
+#: session, not bulk data; ageing it left one line of doctrine while the
+#: controller still answered "already active" to a reload.
+SKILL_RESULT_PREFIX = '<skill id="'
+
+
+def tool_result_age_chars() -> int:
+	"""``TOOL_RESULT_AGE_CHARS`` (default 2000) — the size past which an old tool
+	result is demoted. ``0`` disables the pass entirely."""
+	from core.env import int_env
+	return int_env("TOOL_RESULT_AGE_CHARS", 2000)
+
+
+def _aged_body(content: str) -> str:
+	"""The demoted form: the first line (capped) + ONE named pointer."""
+	head = content.split("\n", 1)[0].strip()[:TOOL_RESULT_AGE_HEAD_CHARS]
+	pointer = _OFFLOAD_POINTER.search(content)
+	if pointer:
+		note = (f"{AGED_RESULT_MARKER} {len(content):,} chars dropped from the context to make "
+		        f"room; the full result is on disk — {pointer.group(0).strip()}]")
+	else:
+		note = (f"{AGED_RESULT_MARKER} {len(content):,} chars dropped from the context to make "
+		        f"room; this result was never offloaded to the workspace, so there is no file to "
+		        f"read — re-run the tool if you still need it]")
+	return f"{head}\n{note}" if head else note
+
+
+def age_old_tool_results(messages: List[BaseMessage],
+                         keep_recent: int = TOOL_RESULT_AGE_KEEP_RECENT,
+                         max_chars: Optional[int] = None) -> List[BaseMessage]:
+	"""Demote long tool results OUTSIDE the protected tail to one line + a pointer.
+
+	Pairing is never at risk: the ``ToolMessage`` stays exactly where it is and
+	keeps its ``tool_call_id`` — only its CONTENT shrinks — so no
+	``AIMessage(tool_calls)`` is ever left without its answer.
+
+	A ``load_skill`` result (``SKILL_RESULT_PREFIX``) is never aged (D4).
+
+	IDEMPOTENT: an aged body carries ``AGED_RESULT_MARKER`` and is skipped, and the
+	surviving head is capped so a single-line blob lands under the threshold too.
+	Does not mutate the input list or the input messages.
+	"""
+	limit = tool_result_age_chars() if max_chars is None else int(max_chars)
+	if limit <= 0 or not messages:
+		return list(messages)
+	protected = max(0, len(messages) - max(0, int(keep_recent)))
+	out: List[BaseMessage] = []
+	for idx, msg in enumerate(messages):
+		content = getattr(msg, "content", None)
+		if (idx < protected and isinstance(msg, ToolMessage) and isinstance(content, str)
+				and len(content) > limit and AGED_RESULT_MARKER not in content
+				and not content.startswith(SKILL_RESULT_PREFIX)):
+			aged = copy.copy(msg)
+			aged.content = _aged_body(content)
+			out.append(aged)
+			continue
+		out.append(msg)
+	return out
+
+
+# F10: the batch size the bounded history deque evicts in when it saturates.
+# One message per append is the pathological case — it shifts the whole
+# conversation left on EVERY step, so no provider ever sees the same prefix
+# twice; a batch pays the cold prefix once and then runs warm for a while.
+EVICTION_MIN_BATCH = 8
+EVICTION_BATCH_DIVISOR = 10
+
+
+def unwrap_message(item: Any) -> Any:
+	"""A ``ManagedMessage`` or a bare ``BaseMessage`` -> the bare message."""
+	return getattr(item, "message", item)
+
+
+def pair_safe_left_cut(messages: Any, cut: int) -> int:
+	"""Move a LEFT cut point forward so the survivors never START with a ToolMessage.
+
+	A history slice that begins with a ``ToolMessage`` has lost the
+	``AIMessage(tool_calls)`` that declared it; ``repair_tool_message_pairs``
+	then silently drops the orphan on every subsequent request (the same hazard
+	the compactor guards at ``compactor.py:366-377``, from the other side — it
+	extends the kept TAIL backwards to pick the owning AIMessage up, while an
+	eviction has already dropped that AIMessage and so must drop the orphan too).
+
+	Returns the adjusted cut (clamped to ``len(messages)``).
+	"""
+	n = len(messages)
+	cut = max(0, min(int(cut), n))
+	while cut < n and isinstance(unwrap_message(messages[cut]), ToolMessage):
+		cut += 1
+	return cut
 
 
 def _message_has_base64_image(message: BaseMessage) -> bool:
@@ -76,47 +199,99 @@ def _message_has_base64_image(message: BaseMessage) -> bool:
 	return False
 
 
+# F7: how many image-bearing turns the history may hold before any are retired,
+# how many are retired in one step, and how many are never retired. The old rule
+# anchored on the NEWEST image and stripped everything before it, so the
+# previously-newest turn was rewritten on EVERY step — a browser session
+# screenshots every step, so a 30-step run never reused its prefix past the
+# last-but-one screenshot. A step function pays that rewrite once per batch.
+IMAGE_STRIPPED_MARKER = "[historical image stripped]"
+
+
+def media_keep_max() -> int:
+	"""``MEDIA_KEEP_MAX`` (default 6) — image turns held before any is retired."""
+	from core.env import int_env
+	return int_env("MEDIA_KEEP_MAX", 6)
+
+
+def media_retire_batch() -> int:
+	"""``MEDIA_RETIRE_BATCH`` (default 4) — image turns retired in ONE step."""
+	from core.env import int_env
+	return int_env("MEDIA_RETIRE_BATCH", 4)
+
+
+def media_keep_floor() -> int:
+	"""``MEDIA_KEEP_FLOOR`` (default 2) — newest image turns never retired."""
+	from core.env import int_env
+	return int_env("MEDIA_KEEP_FLOOR", 2)
+
+
+def _strip_images_from(message: BaseMessage) -> BaseMessage:
+	"""A copy of ``message`` with every base64 image block replaced by the marker."""
+	new_content = []
+	for block in message.content:
+		if (
+			isinstance(block, dict)
+			and block.get("type") == "image_url"
+			and "base64" in str(block.get("image_url", {}).get("url", ""))
+		):
+			new_content.append({"type": "text", "text": IMAGE_STRIPPED_MARKER})
+		else:
+			new_content.append(block)
+	stripped = copy.copy(message)
+	stripped.content = new_content
+	return stripped
+
+
 def strip_historical_media(messages: List[BaseMessage]) -> List[BaseMessage]:
-	"""Strip base64 images from every image-bearing turn EXCEPT the most recent (B3).
+	"""Retire old base64 images in BATCHES, never by re-anchoring every step (F7).
 
-	POLYROB's blunt ``STRIP_BASE64_IMAGES`` removes *all* images at parse, which hurts
-	multi-step vision tasks. Reference instead anchors on the last image-bearing turn and
-	strips base64 only from turns *before* it — preserving vision continuity for the
-	current turn while still bounding history growth. Does not mutate the input list.
+	POLYROB's blunt ``STRIP_BASE64_IMAGES`` removes *all* images at parse, which
+	hurts multi-step vision tasks. The first fix anchored on the newest
+	image-bearing turn and stripped every turn before it — correct for size, fatal
+	for the prompt cache: each new screenshot demoted the previous one, rewriting a
+	message the provider had already cached and colding everything behind it on
+	EVERY step of a browser run.
 
-	See docs/REFERENCE_VS_ROB_CONTEXT_SYSTEM_2026-06.md §9 (B3).
+	The rule is now a step function:
+
+	* ``<= MEDIA_KEEP_MAX`` (6) image turns — nothing is touched, so consecutive
+	  assemblies are byte-identical up to the new turn.
+	* over it — retire the OLDEST turns in one batch (at least
+	  ``MEDIA_RETIRE_BATCH``, and always enough to land back at or under
+	  ``MEDIA_KEEP_MAX``), while never retiring the newest ``MEDIA_KEEP_FLOOR``
+	  (2) turns. One cold step, then a warm run until the next batch.
+
+	IDEMPOTENT: a retired turn no longer carries base64, so it is no longer
+	counted, and the batch is sized to land at or under the ceiling — re-running
+	this on its own output returns the same bytes. Does not mutate the input list.
 	"""
-	anchor = -1
-	for idx, msg in enumerate(messages):
-		if _message_has_base64_image(msg):
-			anchor = idx
-
-	if anchor < 0:
+	indices = [idx for idx, msg in enumerate(messages) if _message_has_base64_image(msg)]
+	if not indices:
 		return list(messages)
 
-	out: List[BaseMessage] = []
-	for idx, msg in enumerate(messages):
-		if idx < anchor and _message_has_base64_image(msg):
-			new_content = []
-			for block in msg.content:
-				if (
-					isinstance(block, dict)
-					and block.get("type") == "image_url"
-					and "base64" in str(block.get("image_url", {}).get("url", ""))
-				):
-					new_content.append({"type": "text", "text": "[historical image stripped]"})
-				else:
-					new_content.append(block)
-			stripped = copy.copy(msg)
-			stripped.content = new_content
-			out.append(stripped)
-		else:
-			out.append(msg)
-	return out
+	keep_max = max(0, media_keep_max())
+	if len(indices) <= keep_max:
+		return list(messages)
+
+	floor = max(0, media_keep_floor())
+	batch = max(1, media_retire_batch())
+	# At least one batch, and enough to land back at/under the ceiling so a second
+	# pass is a no-op; never past the floor of newest turns.
+	retire = min(max(batch, len(indices) - keep_max), max(0, len(indices) - floor))
+	if retire <= 0:
+		return list(messages)
+
+	doomed = set(indices[:retire])
+	return [_strip_images_from(msg) if idx in doomed else msg
+	        for idx, msg in enumerate(messages)]
 
 
 class FiltersMixin:
-	# Empty slots so the composed MessageManager keeps its own __slots__ (no __dict__).
+	# F29: empty slots so the composed MessageManager keeps its own __slots__ and
+	# never grows a __dict__. This is only TRUE while EVERY class in the MRO
+	# declares one — three mixins omitted it until 2026-09-22, so the claim in
+	# this comment was false for as long as it had been written.
 	__slots__ = ()
 
 	def merge_successive_messages(self, messages: list[BaseMessage], class_to_merge: Type[BaseMessage]) -> list[BaseMessage]:

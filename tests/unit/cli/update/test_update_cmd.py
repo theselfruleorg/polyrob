@@ -1,6 +1,8 @@
 """T1.4 (read-only slice) — `polyrob update --check/--dry-run/--json` behavior."""
 import json
 
+import pytest
+
 from click.testing import CliRunner
 
 import cli.commands.update as up
@@ -373,3 +375,92 @@ def test_git_channel_detached_head_refuses_before_snapshot(monkeypatch, tmp_path
     assert res.exit_code == EXIT_ERROR
     data = json.loads(res.output)
     assert data["reason"] == "check_failed" and "detached" in data["error"]
+
+
+# --- 058: --apply perceives the agent's state and waits for the wrap-up ------
+
+def _apply_rig(monkeypatch, tmp_path):
+    import cli.commands.update as up
+    from cli.update.context import UpdateContext
+    from cli.update.engine import ApplyResult
+    _patch(monkeypatch, method="git", current="0.4.2", latest="0.4.3")
+    monkeypatch.setattr(up, "build_runners", lambda ctx, **kw: object(), raising=False)
+    uctx = UpdateContext(data_home=tmp_path, snapshots_root=tmp_path / "s", db_paths=[])
+    monkeypatch.setattr(up, "resolve_update_context", lambda *a, **k: uctx)
+    monkeypatch.setattr(up, "active_use_reasons", lambda *a, **k: [], raising=False)
+
+    class _Snap:
+        name = "SNAP1"
+    applied = []
+    monkeypatch.setattr(up, "apply_update",
+                        lambda **kw: applied.append(kw) or ApplyResult(True, None, None, _Snap(), False),
+                        raising=False)
+    return applied
+
+
+def test_apply_waits_for_a_running_goal_then_applies(monkeypatch, tmp_path):
+    from cli.update import agent_state as st
+    applied = _apply_rig(monkeypatch, tmp_path)
+    states = iter([st.AgentActivity(reasons=["1 goal(s) running"]), st.AgentActivity()])
+    monkeypatch.setattr(st, "observe", lambda home, **kw: next(states))
+    monkeypatch.setattr(st.time, "sleep", lambda s: None)
+    res = CliRunner().invoke(update_cmd, ["--apply", "--yes", "--wait-idle", "60"])
+    assert res.exit_code == EXIT_UP_TO_DATE, res.output
+    assert "busy: 1 goal(s) running" in res.output and "Waiting for the wrap-up" in res.output
+    assert "idle after" in res.output and applied
+
+
+def test_apply_refuses_after_the_wait_naming_what_is_still_busy(monkeypatch, tmp_path):
+    from cli.update import agent_state as st
+    applied = _apply_rig(monkeypatch, tmp_path)
+    monkeypatch.setattr(st, "observe",
+                        lambda home, **kw: st.AgentActivity(reasons=["a live human turn (owner_chat, session abc)"]))
+    clock = [0.0]
+    monkeypatch.setattr(st.time, "sleep", lambda s: clock.__setitem__(0, clock[0] + s))
+    monkeypatch.setattr(st.time, "monotonic", lambda: clock[0])
+    res = CliRunner().invoke(update_cmd, ["--apply", "--yes", "--wait-idle", "30"])
+    assert res.exit_code == EXIT_ERROR
+    assert "still busy after 30 s" in res.output and "owner_chat" in res.output
+    assert "--force" in res.output and not applied
+
+
+def test_apply_no_wait_refuses_immediately(monkeypatch, tmp_path):
+    from cli.update import agent_state as st
+    applied = _apply_rig(monkeypatch, tmp_path)
+    monkeypatch.setattr(st, "observe", lambda home, **kw: st.AgentActivity(reasons=["1 cron job(s) running"]))
+    monkeypatch.setattr(st, "wait_for_wrap_up", lambda *a, **k: pytest.fail("waited despite --no-wait"))
+    res = CliRunner().invoke(update_cmd, ["--apply", "--yes", "--no-wait"])
+    assert res.exit_code == EXIT_ERROR and "cron job" in res.output and not applied
+
+
+def test_apply_json_carries_the_busy_reasons(monkeypatch, tmp_path):
+    from cli.update import agent_state as st
+    _apply_rig(monkeypatch, tmp_path)
+    monkeypatch.setattr(st, "observe",
+                        lambda home, **kw: st.AgentActivity(unreadable=["goals.db (DatabaseError: file is not a database)"]))
+    res = CliRunner().invoke(update_cmd, ["--apply", "--yes", "--json", "--no-wait"])
+    body = json.loads(res.output.strip().splitlines()[-1])
+    assert body["error"] == "in_use" and "goals.db" in body["unreadable"][0]
+
+
+def test_apply_force_swaps_under_a_busy_agent(monkeypatch, tmp_path):
+    from cli.update import agent_state as st
+    applied = _apply_rig(monkeypatch, tmp_path)
+    monkeypatch.setattr(st, "observe", lambda home, **kw: st.AgentActivity(reasons=["1 goal(s) running"]))
+    res = CliRunner().invoke(update_cmd, ["--apply", "--yes", "--no-wait", "--force"])
+    assert res.exit_code == EXIT_UP_TO_DATE, res.output
+    assert applied
+
+
+def test_manual_steps_name_the_installed_extras(monkeypatch):
+    import cli.commands.update as up
+    from cli.update.detect import EDITABLE_GIT, PIP, PIPX
+    monkeypatch.setattr("cli.update.extras.installed_extras", lambda repo: ["docs", "server"])
+    assert 'pip install -U "polyrob[docs,server]"' in up._manual_steps_for(PIP)
+    steps = up._manual_steps_for(EDITABLE_GIT)
+    assert '--extras "docs,server"' in steps and "pip install --require-hashes -r" in steps
+    assert "pip install --no-deps --no-build-isolation -e ." in steps
+    assert "pipx upgrade polyrob" in up._manual_steps_for(PIPX)  # pipx keeps its own spec
+    monkeypatch.setattr("cli.update.extras.installed_extras", lambda repo: [])
+    assert "pip install -U polyrob " in up._manual_steps_for(PIP)
+    assert '--extras ""' in up._manual_steps_for(EDITABLE_GIT)

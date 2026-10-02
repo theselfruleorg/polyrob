@@ -198,7 +198,9 @@ class SkillCurator:
             result["error"] = str(e)
         self._prune_episodes()
         self._prune_memories()
+        self._prune_sessions()
         self._consolidate_notes()
+        self._consolidate_recall()
         return result
 
     def _prune_episodes(self) -> None:
@@ -216,6 +218,32 @@ class SkillCurator:
                     logger.info("curator: pruned %d old episodes", removed)
         except Exception:
             logger.warning("episodic prune skipped", exc_info=True)
+
+    def _prune_sessions(self) -> None:
+        """Session-TREE retention (WS-K2, 2026-09-22) — the third window, on the
+        same cadence as the other two and never on the write path.
+
+        `memories` (365 d) and `episodes` (90 d) were swept here; the largest
+        store on disk was swept by nobody (prod: 2,449 trees, 5.0 GB, 694 over
+        30 days old). The sweep is capped per tick so a backlog drains over
+        several runs instead of deleting 694 directories while the agent serves
+        turns, and it keeps any tree that holds a registered artifact, is named
+        by a live goal, or is still owned by a worker.
+
+        Fail-open like its two siblings: an unreadable goals.db or artifacts.db
+        raises inside `plan_sweep` and REFUSES the sweep, which is the safe
+        direction — nothing is deleted on a read we could not make.
+        """
+        try:
+            from core.runtime_paths import resolve_data_home
+            from core.session_retention import retention_days, sweep
+            if retention_days() <= 0:
+                return
+            out = sweep(str(resolve_data_home()))
+            if out.get("removed") or out.get("failed"):
+                logger.info("curator: session sweep %s", out)
+        except Exception:
+            logger.warning("session sweep skipped", exc_info=True)
 
     def _consolidate_notes(self) -> None:
         """C4 (2026-07-11): mechanical note consolidation — the notes twin of the
@@ -257,6 +285,36 @@ class SkillCurator:
         except Exception as e:
             logger.debug("curator note event emit skipped: %s", e)
 
+    def _consolidate_recall(self) -> None:
+        """Distil repeated recall into ONE curated note (WS-K4, 2026-09-22).
+
+        Prod held 19,001 raw recall rows and 0 curated notes — the distilled
+        store had never been written to, so every repeated lesson was learned
+        again from scratch. Deterministic (no LLM: the CURATOR_LLM_MERGE lesson
+        applies — a clustering nobody can predict is worse than none) and
+        NON-DESTRUCTIVE: it writes notes and never prunes a row.
+
+        Global across tenants, like its two sibling sweeps, and fail-open.
+        """
+        try:
+            from agents.task.constants import AutonomyConfig
+            from modules.memory.registry import get_memory_registry
+            if not AutonomyConfig.memory_consolidate():
+                return
+            prov = get_memory_registry().active()
+            if prov is None or not hasattr(prov, "consolidate_recall"):
+                return
+            from modules.memory.recall_consolidation import tenants_with_recall
+            totals = {"written": 0, "updated": 0, "clusters": 0}
+            for user_id in tenants_with_recall(getattr(prov, "db_path", "")):
+                got = prov.consolidate_recall(user_id=user_id)
+                for key in totals:
+                    totals[key] += int(got.get(key) or 0)
+            if totals["written"] or totals["updated"]:
+                logger.info("curator: recall consolidation %s", totals)
+        except Exception:
+            logger.warning("recall consolidation skipped", exc_info=True)
+
     def _prune_memories(self) -> None:
         """Cross-session `memories` retention sweep (B3, 2026-07-11) — same
         contract as the episode sweep: curator cadence only, all tenants,
@@ -277,6 +335,20 @@ class SkillCurator:
                     logger.info("curator: pruned %d old memories", removed)
         except Exception:
             logger.warning("memory prune skipped", exc_info=True)
+        # 025: an unpromoted memory SCOPE is working memory, not an archive —
+        # purged after RETENTION_DAYS. Only while scopes are ON (OFF shows every
+        # row as shared, and a sweep must never delete what a reader can see).
+        try:
+            from modules.memory.registry import get_memory_registry
+            from modules.memory.scope import scopes_enabled
+            from modules.memory.sqlite_scope_store import scope_age_cutoff
+            prov = get_memory_registry().active()
+            if scopes_enabled() and prov is not None and hasattr(prov, "purge_stale_scopes"):
+                purged = prov.purge_stale_scopes(older_than_ts=scope_age_cutoff(self._now()))
+                if purged:
+                    logger.info("curator: purged %d unpromoted scoped memories", purged)
+        except Exception:
+            logger.warning("memory scope retention skipped", exc_info=True)
 
 
 class CuratorTicker:

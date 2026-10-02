@@ -1,0 +1,100 @@
+{
+  "social-discovery": {
+    "triggers": {
+      "tool_ids": [
+        "anysite",
+        "twitter"
+      ],
+      "keywords": [
+        "engagement targets",
+        "who to engage",
+        "find accounts on x",
+        "accounts to engage",
+        "discover on x",
+        "discover on twitter",
+        "social discovery",
+        "find people to engage",
+        "find prospects on x",
+        "who to reply to",
+        "trending in ai"
+      ],
+      "action_names": [
+        "twitter_search",
+        "twitter_get_user",
+        "twitter_get_tweets",
+        "twitter_get_mentions",
+        "twitter_get_timeline"
+      ],
+      "task_patterns": [
+        "\\b(find|discover|identify)\\b.*\\b(accounts?|people|targets?|prospects?|conversations?)\\b.*\\b(on x|x\\.com|twitter|social)\\b",
+        "\\bwho (to|should (i|we|you)) (engage|reply to|follow)\\b",
+        "\\b(engagement|social)\\b.*\\b(discovery|targets?)\\b",
+        "\\bfind\\b.*\\b(mentions|conversations)\\b.*\\b(on x|twitter)\\b"
+      ]
+    },
+    "priority": 6,
+    "auto_activate": true,
+    "description": "Discover public X/social accounts and conversations with AnySite first (anysite_describe, then anysite_api), using native X account reads where they are authoritative and preserving write gates",
+    "version": "3"
+  },
+  "x-engagement": {
+    "triggers": {
+      "tool_ids": [
+        "twitter",
+        "x_browser"
+      ],
+      "keywords": [
+        "post on x",
+        "post on twitter",
+        "tweet",
+        "reply on x",
+        "quote tweet",
+        "quote-tweet",
+        "dm on x",
+        "send a dm on x",
+        "read x dms",
+        "check x inbox",
+        "reply to x dm",
+        "engage on x",
+        "engage on twitter",
+        "x thread",
+        "twitter thread",
+        "publish on x",
+        "x poll",
+        "twitter poll",
+        "x poll results",
+        "ask the community on x",
+        "x community vote"
+      ],
+      "action_names": [
+        "twitter_post",
+        "twitter_reply",
+        "twitter_quote",
+        "twitter_thread",
+        "twitter_dm",
+        "twitter_get_dms",
+        "twitter_get_mentions",
+        "twitter_get_timeline",
+        "x_post",
+        "x_dm",
+        "x_read_dms",
+        "twitter_poll_results",
+        "x_browser_x_post",
+        "x_browser_x_reply",
+        "x_browser_x_dm",
+        "x_browser_x_read_dms"
+      ],
+      "task_patterns": [
+        "\\b(post|publish|tweet|thread)\\b.*\\b(on x|to x|x\\.com|twitter)\\b",
+        "\\b(reply|respond|quote)\\b.*\\b(tweet|x thread|x post|on x|twitter)\\b",
+        "\\b(read|check|review|reply to|send)\\b.*\\b(dms?|direct messages?|inbox)\\b.*\\b(on x|x account|twitter)\\b",
+        "\\b(x|twitter) (dms?|inbox)\\b",
+        "\\bengage\\b.*\\b(on x|twitter)\\b"
+      ]
+    },
+    "priority": 7,
+    "auto_activate": true,
+    "description": "Operate X account communication on the API rail (the captured-browser rail only where the owner chose it)—read inboxes, post/reply, and send DMs with correct routing, approval, and completion evidence",
+    "version": "5"
+  }
+}

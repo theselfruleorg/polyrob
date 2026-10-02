@@ -1,0 +1,169 @@
+{
+  "polymarket-market-research": {
+    "triggers": {
+      "tool_ids": [
+        "polymarket_data"
+      ],
+      "keywords": [
+        "polymarket",
+        "prediction market",
+        "implied probability",
+        "market odds",
+        "event probability",
+        "polymarket orderbook",
+        "polymarket spread"
+      ],
+      "action_names": [],
+      "task_patterns": [
+        "polymarket.*(market|price|odds|research)",
+        "implied.*probability",
+        "prediction.*market",
+        "(odds|probability).*of.*event"
+      ]
+    },
+    "priority": 5,
+    "auto_activate": true,
+    "description": "Read Polymarket markets (discover, details, price as implied probability, orderbook, spread, volume) with no wallet",
+    "version": "2"
+  },
+  "polymarket-portfolio-review": {
+    "triggers": {
+      "tool_ids": [
+        "polymarket_data"
+      ],
+      "keywords": [
+        "polymarket positions",
+        "polymarket portfolio",
+        "polymarket pnl",
+        "polymarket trade history",
+        "polymarket exposure"
+      ],
+      "action_names": [],
+      "task_patterns": [
+        "polymarket.*(position|portfolio|pnl|history)",
+        "summari[sz]e.*polymarket.*(exposure|pnl)"
+      ]
+    },
+    "priority": 5,
+    "auto_activate": true,
+    "description": "Read the configured Polymarket account's positions and trade history from the public Data API (no address parameter); summarize exposure and P&L",
+    "version": "2"
+  },
+  "hyperliquid-market-data": {
+    "triggers": {
+      "tool_ids": [
+        "hyperliquid_data"
+      ],
+      "keywords": [
+        "hyperliquid",
+        "perps",
+        "perp funding rate",
+        "hyperliquid funding",
+        "hyperliquid mids",
+        "hyperliquid orderbook",
+        "perp price"
+      ],
+      "action_names": [],
+      "task_patterns": [
+        "hyperliquid.*(price|market|funding|perp|spot)",
+        "perp.*funding",
+        "perp.*(price|market)"
+      ]
+    },
+    "priority": 5,
+    "auto_activate": true,
+    "description": "Read Hyperliquid perp/spot markets: mids, funding rates, orderbook depth, and funding as a sentiment signal (no wallet)",
+    "version": "2"
+  },
+  "hyperliquid-account-review": {
+    "triggers": {
+      "tool_ids": [
+        "hyperliquid_data"
+      ],
+      "keywords": [
+        "hyperliquid account",
+        "hyperliquid margin",
+        "hyperliquid open orders",
+        "hyperliquid fills",
+        "hyperliquid agent status",
+        "hyperliquid balances"
+      ],
+      "action_names": [],
+      "task_patterns": [
+        "hyperliquid.*(account|balance|margin|orders|fills)",
+        "open.*orders.*hyperliquid"
+      ]
+    },
+    "priority": 5,
+    "auto_activate": true,
+    "description": "Read Hyperliquid account state, balances, open orders, and fills (the tool queries the master address itself; no address parameter); confirm agent authorization",
+    "version": "2"
+  },
+  "polymarket-trading": {
+    "name": "Polymarket Trading",
+    "triggers": {
+      "tool_ids": [
+        "polymarket"
+      ],
+      "keywords": [
+        "place polymarket order",
+        "buy polymarket",
+        "sell polymarket",
+        "polymarket limit order",
+        "polymarket market order",
+        "cancel polymarket order"
+      ],
+      "action_names": [
+        "polymarket_place_limit_order",
+        "polymarket_place_market_order",
+        "polymarket_cancel_order",
+        "polymarket_cancel_all_orders"
+      ],
+      "task_patterns": [
+        "(place|buy|sell|cancel).*polymarket",
+        "polymarket.*(limit|market).*order"
+      ]
+    },
+    "priority": 5,
+    "auto_activate": false,
+    "description": "GATED: place/cancel Polymarket orders. Owner-only, read-first, >$500 confirmation gate; references crypto-trading-safety",
+    "requires": [
+      "crypto-trading-safety"
+    ]
+  },
+  "hyperliquid-trading": {
+    "name": "Hyperliquid Trading",
+    "triggers": {
+      "tool_ids": [
+        "hyperliquid"
+      ],
+      "keywords": [
+        "place hyperliquid order",
+        "hyperliquid trade",
+        "update leverage",
+        "approve agent",
+        "hyperliquid limit order",
+        "hyperliquid market order"
+      ],
+      "action_names": [
+        "hyperliquid_place_limit_order",
+        "hyperliquid_place_market_order",
+        "hyperliquid_update_leverage",
+        "hyperliquid_cancel_order",
+        "hyperliquid_approve_agent"
+      ],
+      "task_patterns": [
+        "(place|buy|sell|cancel).*hyperliquid",
+        "update.*leverage",
+        "approve.*agent",
+        "hyperliquid.*(limit|market).*order"
+      ]
+    },
+    "priority": 5,
+    "auto_activate": false,
+    "description": "GATED: place/modify/cancel Hyperliquid orders and set leverage. Owner-only, read-first, testnet-first, exposure cap + >$500 gate; references crypto-trading-safety",
+    "requires": [
+      "crypto-trading-safety"
+    ]
+  }
+}

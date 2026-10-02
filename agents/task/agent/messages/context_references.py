@@ -111,21 +111,93 @@ def _load_folder(path: str, root: Optional[str] = None) -> Optional[str]:
 				entries.append(f"{name} <redacted secret>")
 				continue
 		except Exception:
-			pass  # fail-soft: keep entry if guard raises
+			# Fail closed: a guard that cannot decide must not reveal the entry.
+			entries.append(f"{name} <redacted: secret guard unavailable>")
+			continue
 		entries.append(f"{name}/" if os.path.isdir(full) else name)
 	return "\n".join(entries)
+
+
+# Host git must never read a user/system config and must never run a command the
+# repository's own `.git/config` names (fsmonitor, hooks, external diff, textconv).
+_GIT_HARDENING = [
+	"-c", "core.fsmonitor=",
+	"-c", "core.hooksPath=/dev/null",
+	"-c", "diff.external=",
+]
+
+
+def _git_child_env() -> dict:
+	"""A scrubbed env for the host ``git`` child: no credentials, no user config.
+
+	Mirrors the allowlist the git tool uses (``tools/git/tool.py::_run_git``); the
+	agents tier may not import tools/, so the four names are repeated here.
+	"""
+	env = {k: os.environ[k] for k in ("PATH", "HOME", "LANG", "LC_ALL") if k in os.environ}
+	env["GIT_TERMINAL_PROMPT"] = "0"
+	env["GIT_CONFIG_NOSYSTEM"] = "1"
+	env["GIT_CONFIG_GLOBAL"] = os.devnull
+	env["GIT_ALLOW_PROTOCOL"] = "file"
+	return env
+
+
+def _diff_refusal(path: Optional[str], root: Optional[str]) -> Optional[str]:
+	"""Why ``@diff[:path]`` must not run, or None when it may.
+
+	Refuses: host execution under wallet custody, an argument that git would read as an
+	option, and a path that escapes the root (the same confinement ``@file`` uses).
+	"""
+	from core.security.host_execution import host_execution_refusal
+
+	refusal = host_execution_refusal()
+	if refusal:
+		return refusal
+	if path is None:
+		return None
+	if path.startswith("-"):
+		return "argument looks like a git option"
+	base = root or os.getcwd()
+	candidate = path if os.path.isabs(path) else os.path.join(base, path)
+	if not _is_within_root(candidate, base):
+		return "path outside allowed root"
+	return None
+
+
+def _repo_defines_filters(cwd: str, env: dict) -> bool:
+	"""True when the repo config names a filter driver (``filter.<x>.clean`` runs on diff).
+
+	Fails closed: an unreadable config counts as "defines filters".
+	"""
+	import subprocess
+
+	try:
+		proc = subprocess.run(
+			["git", "config", "--includes", "--get-regexp", r"^filter\."],
+			cwd=cwd, env=env, capture_output=True, text=True, timeout=10,
+		)
+	except Exception:
+		return True
+	# 1 = no match; 0 = at least one filter key; anything else = error (fail closed).
+	return proc.returncode != 1
 
 
 def _load_diff(path: Optional[str], root: Optional[str]) -> Optional[str]:
 	import subprocess
 
-	cmd = ["git", "diff"]
+	if _diff_refusal(path, root):
+		return None  # _expand renders the refusal; never run git here
+	cwd = root or os.getcwd()
+	env = _git_child_env()
+	if _repo_defines_filters(cwd, env):
+		return "(diff refused: the repository config defines a filter driver)"
+	cmd = ["git", *_GIT_HARDENING, "diff", "--no-ext-diff", "--no-textconv"]
 	if path:
-		cmd.append(path)
+		cmd += ["--", path]
 	try:
 		result = subprocess.run(
 			cmd,
-			cwd=root or None,
+			cwd=cwd,
+			env=env,
 			capture_output=True,
 			text=True,
 			timeout=10,
@@ -250,7 +322,13 @@ def preprocess_context_references(
 					except OSError:
 						return f"[{label}: binary file; not inlined]"
 			except Exception:
-				pass  # fail-soft: fall through to normal load on guard error
+				# Fail closed: never inline a file the secret guard could not clear.
+				return f"[{label}: secret guard unavailable; refused]"
+
+		if kind == "diff":
+			_why = _diff_refusal(arg, root)
+			if _why:
+				return f"[{label}: {_why}; refused]"
 
 		content = _load(kind, arg, root)
 		if content is None:

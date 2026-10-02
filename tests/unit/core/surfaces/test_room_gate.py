@@ -15,19 +15,30 @@ def test_env_override_drops_forbidden_ids(monkeypatch):
     assert rp.room_tool_ids() == ["task", "web_fetch"]
 
 
+def _record_warnings(monkeypatch):
+    """Record rp.logger warnings directly: caplog misses them when an earlier test in
+    the full suite disabled propagation or raised the level on a parent logger."""
+    seen = []
+    monkeypatch.setattr(rp.logger, "warning",
+                        lambda msg, *a, **k: seen.append(msg % a if a else msg))
+    return seen
+
+
 def test_env_override_empty_string_is_an_empty_toolset_not_the_default(monkeypatch, caplog):
     """Fix round 1 (review Important #1): a deliberate lockdown (GROUP_TURN_TOOLS="")
     must resolve to [] -- NEVER floored back to DEFAULT_ROOM_TOOLS -- and must log a
     WARNING so an operator notices the room agent can now only chat."""
+    seen = _record_warnings(monkeypatch)
     monkeypatch.setenv("GROUP_TURN_TOOLS", "")
     assert rp.room_tool_ids() == []
-    assert any("room toolset is empty" in r.getMessage() for r in caplog.records)
+    assert any("room toolset is empty" in m for m in seen)
 
 
 def test_env_override_all_forbidden_is_also_an_empty_toolset(monkeypatch, caplog):
+    seen = _record_warnings(monkeypatch)
     monkeypatch.setenv("GROUP_TURN_TOOLS", "defi_trade,shell")
     assert rp.room_tool_ids() == []
-    assert any("room toolset is empty" in r.getMessage() for r in caplog.records)
+    assert any("room toolset is empty" in m for m in seen)
 
 
 @pytest.mark.asyncio

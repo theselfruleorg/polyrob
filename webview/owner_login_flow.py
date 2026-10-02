@@ -11,6 +11,8 @@ enforcement is skipped anyway (matching the no-auth posture).
 import os
 from typing import Optional
 
+from webview.copy import t
+
 
 def csrf_token_for(nonce: Optional[str]) -> Optional[str]:
     """Stateless double-submit token: HMAC(JWT_SECRET_KEY, nonce).
@@ -46,7 +48,9 @@ def render_owner_login(request, *, return_to: str = "/", error=None,
 
     nonce = _secrets.token_hex(16)
     response = _srv._templates.TemplateResponse(request, "owner_login.html", {
-        "request": request, "return_to": return_to, "error": error,
+        "request": request, "return_to": return_to,
+        # 070 E.32: the caller passes a copy KEY (login.*), never a sentence.
+        "error": t(error) if error else None,
         "csrf_token": csrf_token_for(nonce),
     }, status_code=status_code)
     response.set_cookie(

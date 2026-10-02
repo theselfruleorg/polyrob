@@ -128,3 +128,26 @@ async def test_empty_from_both_says_both_were_asked():
     tool = DefiDataTool(search_fn=lambda s: [], search2_fn=lambda s: [])
     out = _text(await tool.token_resolve(ResolveParams(symbol="NOPE")))
     assert "dexscreener" in out.lower() and "geckoterminal" in out.lower()
+
+
+# --- owner UX: exact matches first, capped, no pool name as token name -----
+
+@pytest.mark.asyncio
+async def test_exact_symbol_matches_rank_first_and_the_list_is_capped():
+    deep_other = _cand("0x" + "a" * 40, 9e8, symbol="TRX-USDT")
+    exact = _cand("0x" + "b" * 40, 1e3, symbol="pnl")
+    rest = [_cand("0x" + f"{i:040x}", 1e6 - i, symbol=f"X{i}") for i in range(12)]
+    tool = DefiDataTool(search_fn=lambda s: [deep_other, exact] + rest,
+                        search2_fn=lambda s: [])
+    res = await tool.token_resolve(ResolveParams(symbol="PNL"))
+    out = _text(res)
+    rows = [ln for ln in out.splitlines() if ln.startswith("  0x")]
+    assert rows[0].strip().startswith(exact.address), "the exact match leads"
+    assert len(rows) == 10 and "+4 more" in out
+    assert "NOT a resolution" in out and "must choose" in out
+    assert len(res.metadata["candidates"]) == 14
+
+
+def test_a_pool_name_is_not_passed_off_as_the_token_name():
+    [cand] = parse_search_pools(_search_payload())
+    assert cand.symbol == "CASHCAT" and cand.name is None

@@ -4,6 +4,9 @@ same tools but different system prompts (persona / SOUL / SELF / project-context
 reuse the FIRST session's cached system prompt — a cross-session prompt leak. The reuse
 key must include a hash of the system_instruction.
 """
+import pytest
+
+pytest.importorskip("google.generativeai", reason="the [gemini] extra is not installed (058 lean core) — GeminiClient imports the SDK at module load")
 from modules.llm.gemini_client import GeminiClient
 
 

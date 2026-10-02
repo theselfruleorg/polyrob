@@ -58,6 +58,33 @@ On a fresh data directory, migration status may exit 1 after successfully
 reporting that the database needs its baseline; any crash or other exit code is
 a release failure.
 
+## First-party packs (inside the wheel)
+
+The first-party packs (`packs/discovery`, `packs/markets`, `packs/x`) ship INSIDE
+the `polyrob` wheel (067, one install): there is ONE distribution to build, check
+and upload. Their SDKs are core extras (`twitter`, `anysite`, `crypto`; each
+`pack.toml` names its own). In the release PR:
+
+- set each `packs/*/*/pack.toml` `version = "X.Y.Z"` and its `requires_core` to
+  `==X.Y.*`;
+- regenerate the pack index (its first-party rows carry `dist = "polyrob"` and the
+  core version) and check it:
+
+```bash
+python scripts/gen_pack_index.py
+python scripts/gen_pack_index.py --check
+pytest tests/unit/core/packs tests/unit/core/test_lock_closure_packs.py
+```
+
+The wheel smoke test above covers the packs. After the bare install,
+`polyrob pack list` must show the three packs `loaded`, each naming its extra
+(`needs pip install 'polyrob[twitter]'` …); after `pip install '<wheel>[twitter,anysite,crypto]'`
+they must show `loaded` with nothing needed.
+
+⚠️ Never build or upload a separate pack distribution: the retired separate
+names are in `core.packs.index.RETIRED_DISTS` — the loader refuses them, and
+`polyrob pack install` refuses a third-party source that takes one.
+
 ## Tag and publish
 
 After the release PR is merged, update local `main`, verify the commit SHA, and
@@ -93,6 +120,46 @@ python -m venv /tmp/polyrob-pypi-crypto
 /tmp/polyrob-pypi-crypto/bin/python -c \
   "import core.wallet.tx_guard, modules.payments.networks; print('crypto extra ok')"
 ```
+
+## Changelog and release notes
+
+POLYROB keeps two records of every release. They have different readers and
+different rules.
+
+**`CHANGELOG.md` — the full technical record.** Every change that a user,
+operator or integrator can observe, with the detail they need: commands, flags,
+endpoints, file names and migration steps are welcome here.
+
+- Group each release under the Keep a Changelog headings only: `### Added`,
+  `### Changed`, `### Deprecated`, `### Removed`, `### Fixed`, `### Security`.
+  No dates, topics or work-item names in a heading.
+- One change per bullet: what changed, and what it means for the reader.
+- Keep it short: a bullet is at most 3 lines (about 40 words). The detail belongs
+  in the docs, not here. `tests/test_changelog_release.py` caps long bullets.
+- One piece of work is ONE bullet per heading, however many commits it took. Do
+  not list its steps, its internal modules, or the bugs you found and fixed in
+  it before it shipped — those are part of the feature, not `### Fixed`.
+- Add a new bullet at the TOP of its heading, after a blank line, and read the
+  section back: never insert inside another session's bullet.
+- Describe the shipped behavior, not the work: no proposal, phase, workstream or
+  wave names, no review or audit narration, no "not started yet", no production
+  incident stories, and no links to documents that do not ship.
+- During development, entries accumulate under `## [Unreleased]`. At the release
+  cut, merge them into the six headings above and remove anything that is not a
+  shipped change. `tests/test_changelog_release.py` enforces the headings and the
+  work-item ban on every release after 1.1.0.
+
+**Release notes — the short version.** The GitHub Release page and the website's
+What's new page carry the same short notes, written for a person deciding whether
+to update:
+
+- a theme of at most 8 words and a one-sentence summary of at most 25 words;
+- 3 to 5 highlights, each a label of at most 5 words and one sentence of at most
+  20 words that says what the user can now do;
+- no code, file paths, environment flags, API routes or internal names — that
+  detail lives in `CHANGELOG.md`, and the notes end with a link to it.
+
+Never paste the `CHANGELOG.md` section into the GitHub Release.
 
 ## Public-release boundary
 

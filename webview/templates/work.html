@@ -148,7 +148,6 @@
         </div>
       </div>
 
-      <p class="sources">{{ t('work.sources')|safe }}</p>
     </div>
 
     {# The words the Log stream is read into (unchanged). data-classes is
@@ -184,6 +183,7 @@
          data-read_only="{{ 1 if read_only else 0 }}"
          data-loading="{{ t('work.now.loading') }}"
          data-empty_now="{{ t('work.now.empty_now') }}"
+         data-sched_header_what="{{ t('work.schedule.header_what') }}"
          data-cron_title="{{ t('work.now.cron_title') }}"
          data-session_title="{{ t('work.now.session_title') }}"
          data-open_chat="{{ t('work.now.open_chat') }}"

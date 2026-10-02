@@ -316,6 +316,20 @@ def build_planner_prompt(board, user_id: str, deliverables_root: Optional[Path],
 
         sections.append("BLOCKED (do NOT recreate; fix or avoid):\n" + "\n".join(
             _blocked_line(g) for g in blocked))
+    # 034 §3.5 read site 3: the planner is told what the owner switched OFF, in
+    # his words. board.create() refuses these anyway; this stops the planner
+    # spending a turn proposing them (or a reworded variant).
+    try:
+        _off = board.suppressions(user_id=user_id) if hasattr(board, "suppressions") else []
+    except Exception:
+        import logging
+        logging.getLogger(__name__).debug("planner: suppression read failed", exc_info=True)
+        _off = []
+    if _off:
+        from core.goal_suppressions import describe
+        sections.append(
+            "SUPPRESSED (the owner said never again — do NOT propose these or a "
+            "variant of them):\n" + "\n".join(f"- {describe(x)}" for x in _off[:30]))
     if ready:
         sections.append("ALREADY QUEUED (ready):\n" + "\n".join(f"- {g.title}" for g in ready))
 

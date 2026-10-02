@@ -7,7 +7,7 @@
 import { describe, it, expect, vi } from "vitest";
 
 import { applyState, pausedFrom, toggle } from "../static/app/pause.js";
-import { keepFace, renderIdentity } from "../static/app/agent.js";
+import { renderIdentity } from "../static/app/agent.js";
 import {
   appEntry, artifactsRead, killApp, renderApps,
 } from "../static/app/work-apps.js";
@@ -33,7 +33,7 @@ const answered = (body, ok = true, status = 200) => vi.fn(async () => ({
 
 describe("A2 — the head's Pause/Resume control", () => {
   const COPY = { pause: "Pause", resume: "Resume", pause_label: "Pause or resume",
-                 pause_unreachable: "The request did not reach the console." };
+                 pause_unreachable: "That did not go through. Try again." };
 
   const button = () => {
     const b = document.createElement("button");
@@ -92,52 +92,20 @@ describe("A2 — the head's Pause/Resume control", () => {
 
 // --- A19: the keep ceremony ------------------------------------------------- #
 
-describe("A19 — keeping the face is one-way, and the body decides", () => {
+describe("A19 (superseded) — the face section has no control", () => {
+  // The keep/reroll ceremony is gone with the generator: the avatar is one
+  // image set from the CLI, Telegram or the agent, and the console only shows it.
   const COPY = {
-    id_face_title: "Rob's face", id_face_body: "generated once",
-    id_reroll: "Make a new face", id_keep: "Keep this face",
-    id_keep_hint: "Keeping is permanent.",
-    id_kept_title: "Kept for good", id_kept_body: "permanent",
+    id_face_title: "Rob's face", id_face_body: "One image, used everywhere.",
     id_persona_title: "How Rob should behave", id_learned_title: "What Rob learned",
-    id_keep_done: "Kept.", id_keep_failed: "I could not keep the face.",
   };
 
-  it("offers Keep beside the reroll while the record is a draft", () => {
+  it("draws the face section with no reroll or keep button", () => {
     const r = root();
-    renderIdentity(r, { soul: "s", self: "x" }, COPY,
-      { pfp: { traits: { tier: 1 }, locked: false } });
-    expect(r.querySelector("button[data-keep]")).toBeTruthy();
-    expect(r.querySelector("button[data-reroll]")).toBeTruthy();
-    expect(r.textContent).toContain("Keeping is permanent.");
-  });
-
-  it("offers NEITHER once it is kept — a control that can only refuse", () => {
-    const r = root();
-    renderIdentity(r, { soul: "s", self: "x" }, COPY,
-      { pfp: { traits: { tier: 1 }, locked: true } });
+    renderIdentity(r, { soul: "s", self: "x" }, COPY, {});
+    expect(r.textContent).toContain("One image, used everywhere.");
     expect(r.querySelector("button[data-keep]")).toBeNull();
     expect(r.querySelector("button[data-reroll]")).toBeNull();
-    expect(r.textContent).toContain("Kept for good");
-  });
-
-  it("offers no Keep when there is no face to keep", () => {
-    const r = root();
-    renderIdentity(r, { soul: "s" }, COPY, { pfp: { error: "404" } });
-    expect(r.querySelector("button[data-keep]")).toBeNull();
-  });
-
-  it("derives ok from the BODY — a 200 refusal is a refusal", async () => {
-    const fetcher = answered({ ok: false, message: "the identity is kept" });
-    expect(await keepFace(COPY, { fetcher })).toEqual({
-      ok: false, message: "the identity is kept",
-    });
-  });
-
-  it("renders a 409 as the server's own refusal text", async () => {
-    const fetcher = answered({ ok: false, error: "no avatar to keep" }, false, 409);
-    const res = await keepFace(COPY, { fetcher });
-    expect(res.ok).toBe(false);
-    expect(res.message).toBe("no avatar to keep");
   });
 });
 
@@ -308,9 +276,7 @@ describe("A18 — the palette says where a verb runs", () => {
 // --- A23: the Work pane's files are reachable ------------------------------- #
 
 describe("A23 — a file the pane lists can be opened", () => {
-  const COPY = { tier_ready: "Ready", tier_ready_why: "for you",
-                 tier_working: "Working", tier_working_why: "its own",
-                 tier_given: "Given", tier_given_why: "by you",
+  const COPY = { tier_ready: "Ready", tier_working: "Working", tier_given: "Given",
                  verdict_ok: "ok", files_empty: "empty" };
 
   it("builds the file read url, and nothing when either half is missing", () => {
@@ -321,17 +287,17 @@ describe("A23 — a file the pane lists can be opened", () => {
   });
 
   it("keeps a deliverable's path so it can be linked, not only named", () => {
-    const built = buildFiles(null, [{ path: "out/report.md", verdict: "ok" }]);
+    const built = buildFiles([{ name: "report.md", path: "out/report.md", kind: "report", verdict: "ok" }], null);
     expect(built.ready[0].path).toBe("out/report.md");
   });
 
   it("links every row on a bound session and never emits a dead anchor", () => {
     const r = root();
     renderFiles(r, null, {
-      tree: { children: [{ name: "notes.txt", type: "file" },
-                         { name: "inbound", type: "dir",
-                           children: [{ name: "brief.pdf", type: "file" }] }] },
-      artifacts: [{ path: "out/report.md", verdict: "ok" }],
+      artifacts: [{ name: "report.md", path: "out/report.md", kind: "report", verdict: "ok" },
+                  { name: "notes.txt", path: "notes.txt", kind: "file" },
+                  { name: "far.md", path: null, kind: "report" }],
+      inbound: { children: [{ name: "brief.pdf", type: "file" }] },
       sessionId: "s1",
     }, COPY);
     const hrefs = Array.from(r.querySelectorAll("a")).map((a) => a.getAttribute("href"));
@@ -339,10 +305,11 @@ describe("A23 — a file the pane lists can be opened", () => {
     expect(hrefs).toContain("/api/session/s1/workspace/file?path=notes.txt");
     expect(hrefs).toContain("/api/session/s1/workspace/file?path=inbound%2Fbrief.pdf");
     expect(hrefs.every(Boolean)).toBe(true);
+    expect(r.textContent).toContain("far.md"); // named, with no link
 
     const noSession = root();
     renderFiles(noSession, null, {
-      tree: { children: [{ name: "notes.txt", type: "file" }] }, artifacts: [],
+      artifacts: [{ name: "notes.txt", path: "notes.txt", kind: "file" }],
     }, COPY);
     expect(noSession.querySelector("a")).toBeNull(); // plain text, not a dead link
   });

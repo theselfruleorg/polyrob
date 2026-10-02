@@ -234,3 +234,16 @@ def test_edit_task_file_is_tenant_scoped(tmp_path):
     res = _invoke(["edit", job_id, "--task-file", str(f), "--user", "u2"], tmp_path)
     assert res.exit_code != 0
     assert _jobs(tmp_path, "u1")[0].task == "old prose"
+
+
+def test_edit_slot_cap_sets_and_clears_the_preflight(tmp_path):
+    _invoke(["schedule", "scout rail", "3h", "--user", "u1"], tmp_path)
+    job_id = _jobs(tmp_path, "u1")[0].id
+    res = _invoke(["edit", job_id, "--slot-cap", "6", "--user", "u1"], tmp_path)
+    assert res.exit_code == 0, res.output
+    assert _jobs(tmp_path, "u1")[0].payload["preflight"] == {"kind": "slot_cap", "max_open_rows": 6}
+    res = _invoke(["edit", job_id, "--slot-cap", "none", "--user", "u1"], tmp_path)
+    assert res.exit_code == 0, res.output
+    assert "preflight" not in _jobs(tmp_path, "u1")[0].payload
+    res = _invoke(["edit", job_id, "--slot-cap", "0", "--user", "u1"], tmp_path)
+    assert res.exit_code != 0 and "slot-cap" in res.output

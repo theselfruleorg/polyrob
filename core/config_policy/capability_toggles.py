@@ -152,7 +152,7 @@ def prefs_tool_enabled() -> bool:
 
 def invoice_card_enabled() -> bool:
     """Whether `x402_request` also renders a branded PNG invoice card into the
-    session workspace (`modules/pfp/cards.py::render_invoice_card`) alongside
+    session workspace (`modules/cards/cards.py::render_invoice_card`) alongside
     the existing text-only result. Default OFF; ON under POLYROB_LOCAL
     (single-user CLI) via the _SAFE_LOCAL_FLAGS group. An explicit
     INVOICE_CARD_ENABLED always wins.
@@ -379,11 +379,14 @@ def defi_data_enabled() -> bool:
 
     Tier-0 SSOT so both consumers (``tools/defi`` registration,
     ``agents/task/tool_defaults`` session tool_ids) import DOWNWARD and cannot
-    disagree. Default OFF and deliberately NOT in ``_SAFE_LOCAL_FLAGS`` — prod
-    runs ``POLYROB_LOCAL=1`` beside a live mainnet wallet.
+    disagree. Default ON since 071 D1 (2026-10-02): it is read-only — no signer,
+    no broadcast — and with it OFF a chat user's "check this address" had no
+    tool at all. The own-wallet reads (portfolio, positions, reconcile) stay
+    gated by NAME (owner turn, correspondent, room); ``DEFI_DATA_ENABLED=false``
+    still removes the tool. The SPEND tool (``defi_trade``) is unaffected.
     """
     from core.env import bool_env
-    return bool_env("DEFI_DATA_ENABLED", False)
+    return bool_env("DEFI_DATA_ENABLED", True)
 
 
 def defi_trade_enabled() -> bool:
@@ -394,3 +397,44 @@ def defi_trade_enabled() -> bool:
     """
     from core.env import bool_env
     return bool_env("DEFI_TRADE_ENABLED", False)
+
+
+def tool_usage_telemetry() -> bool:
+    """``TOOL_USAGE_TELEMETRY`` (058 T4.1) — emit one ``tool_invoked`` event per
+    tool action into the durable event log. Default ON; OFF is byte-identical to
+    before the event existed. Volume: a few rows per LLM call, same sqlite log
+    as ``usage``."""
+    from core.env import bool_env
+    return bool_env("TOOL_USAGE_TELEMETRY", True)
+
+
+#: 066 P1: the three lazy-install modes. ``trusted`` = hashed closures into a
+#: read-only overlay (the installer unit on a provisioned server, in process
+#: locally); ``legacy`` = the 058 pip-into-this-venv path; ``off`` = refuse.
+LAZY_DEPS_MODES = ("off", "trusted", "legacy")
+
+
+def lazy_deps_mode() -> str:
+    """``LAZY_DEPS_MODE`` (066 P1) = ``off|trusted|legacy``, default ``trusted``.
+
+    Back-compat: with no ``LAZY_DEPS_MODE``, the old boolean ``LAZY_DEPS_ENABLED``
+    maps ``true`` -> ``trusted`` and ``false`` -> ``off``. An unknown value is
+    ``off`` (fail closed) and logs once."""
+    import os
+    raw = (os.environ.get("LAZY_DEPS_MODE") or "").strip().lower()
+    if raw:
+        if raw in LAZY_DEPS_MODES:
+            return raw
+        import logging
+        logging.getLogger(__name__).warning(
+            "LAZY_DEPS_MODE=%r is not one of %s; lazy installs are OFF", raw, "|".join(LAZY_DEPS_MODES))
+        return "off"
+    if (os.environ.get("LAZY_DEPS_ENABLED") or "").strip():
+        from core.env import bool_env
+        return "trusted" if bool_env("LAZY_DEPS_ENABLED", False) else "off"
+    return "trusted"
+
+
+def lazy_deps_enabled() -> bool:
+    """Any lazy-install mode but ``off`` (see :func:`lazy_deps_mode`)."""
+    return lazy_deps_mode() != "off"

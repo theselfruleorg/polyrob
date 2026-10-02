@@ -1,8 +1,6 @@
-"""`/avatar` — the owner sees the agent's face from the phone.
+"""`/avatar` — the owner sees, sets and clears the agent's avatar from the phone.
 
-The Mindprint identity reached no chat surface at all. `pfp push` sets a profile
-picture on X and Discord and prints BotFather steps for Telegram, but nothing
-ever SHOWED the owner the face, its traits, or the voice signature.
+The avatar is ONE image slot (`core/avatar.py`); core generates no face.
 
 ⚠️ A Telegram verb is dead unless it joins FOUR lists — `dispatcher._COMMANDS`
 (routing), `harness._OWNER_ADMIN_COMMANDS` (the owner gate), `_HELP_BODY` (the
@@ -50,17 +48,12 @@ def _cmd(command, text, user="alice"):
         command=command, session_id=None))
 
 
-def _write_pfp(home, instance="rob", *, locked=True):
-    d = home / "identity" / instance / "pfp"
-    d.mkdir(parents=True, exist_ok=True)
-    d.joinpath("pfp.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"x" * 64)
-    d.joinpath("pfp.json").write_text(json.dumps({
-        "generator": "mindprint@v2", "seed": "POLYROB", "variant": "#a1b2",
-        "instance_id": instance, "seed_hex": "0x1546", "locked": locked,
-        "traits": {"tier": "legendary", "eyes": "square", "mouth": "grin"},
-        "voice": {"pitch": 1.29, "rate": 1.02, "timbre": 0.78},
-    }))
-    return d
+PNG = b"\x89PNG\r\n\x1a\n" + b"x" * 64
+
+
+def _write_pfp(home, instance="rob"):
+    from core.avatar import set_avatar
+    return set_avatar(home, instance, PNG, source="file:face.png").path
 
 
 @pytest.fixture
@@ -87,38 +80,84 @@ async def test_it_is_refused_for_a_non_owner(env):
 
 
 @pytest.mark.asyncio
-async def test_it_reports_the_identity(env):
+async def test_it_reports_the_avatar_and_its_source(env):
     _write_pfp(env)
     out = await act_on_inbound(_Agent(str(env)), _cmd("/avatar", "/avatar"))
     assert "rob" in out
-    assert "legendary" in out
-    assert "1.29" in out, "the voice signature must be shown"
+    assert "set (file:face.png)" in out
 
 
 @pytest.mark.asyncio
-async def test_a_draft_is_named_as_a_draft(env):
-    _write_pfp(env, locked=False)
+async def test_an_unset_slot_shows_the_default_and_names_the_set_command(env):
+    from core.avatar import DEFAULT_AVATAR
+    from surfaces.telegram.owner_ops import avatar_reply
+    text, img = avatar_reply(str(env), [])
+    assert "default polyrob mark" in text and "/avatar set" in text
+    assert img == str(DEFAULT_AVATAR)
+
+
+@pytest.mark.asyncio
+async def test_no_avatar_at_all_is_honest_and_names_the_set_command(env, monkeypatch):
+    monkeypatch.setattr("core.avatar.DEFAULT_AVATAR", env / "missing.png")
     out = await act_on_inbound(_Agent(str(env)), _cmd("/avatar", "/avatar"))
-    assert "draft" in out.lower()
+    assert "not set" in out.lower()
+    assert "/avatar set" in out
 
 
 @pytest.mark.asyncio
-async def test_no_avatar_is_honest_and_names_the_setup_command(env):
-    """Prod's real state on 2026-09-15 — the answer must be actionable, not a
-    blank or a crash."""
-    out = await act_on_inbound(_Agent(str(env)), _cmd("/avatar", "/avatar"))
-    assert "not set up" in out.lower()
-    assert "pfp generate" in out
-
-
-@pytest.mark.asyncio
-async def test_it_is_read_only_and_never_offers_to_change_the_identity(env):
-    """`keep` is permanent. A chat verb must not be able to fire it."""
+async def test_an_unreadable_record_is_not_reported_as_absent(env):
+    from core.avatar import avatar_dir
     _write_pfp(env)
-    out = await act_on_inbound(_Agent(str(env)), _cmd("/avatar", "/avatar keep"))
-    meta = json.loads((env / "identity" / "rob" / "pfp" / "pfp.json").read_text())
-    assert meta["locked"] is True  # unchanged
-    assert "read-only" in out.lower() or "owner" in out.lower() or "usage" in out.lower()
+    (avatar_dir(env, "rob") / "avatar.json").write_text("{broken")
+    out = await act_on_inbound(_Agent(str(env)), _cmd("/avatar", "/avatar"))
+    assert "unreadable" in out and "not set" not in out
+
+
+@pytest.mark.asyncio
+async def test_set_from_a_url_replaces_the_image(env, monkeypatch):
+    from core.avatar import load_avatar
+    from tools import avatar_sources
+
+    async def _fake(url):
+        return PNG + b"new", f"url:{url}"
+    monkeypatch.setattr(avatar_sources, "image_from_url", _fake)
+    out = await act_on_inbound(_Agent(str(env)),
+                               _cmd("/avatar", "/avatar set https://x.test/a.png"))
+    st = load_avatar(env, "rob")
+    assert st.is_set and st.source == "url:https://x.test/a.png"
+    assert "set (url:https://x.test/a.png)" in out
+
+
+@pytest.mark.asyncio
+async def test_a_refused_image_leaves_the_old_one(env, monkeypatch):
+    from core.avatar import load_avatar
+    from tools import avatar_sources
+
+    async def _fake(url):
+        return b"not an image", f"url:{url}"
+    monkeypatch.setattr(avatar_sources, "image_from_url", _fake)
+    _write_pfp(env)
+    out = await act_on_inbound(_Agent(str(env)),
+                               _cmd("/avatar", "/avatar set https://x.test/a.txt"))
+    assert "NOT changed" in out
+    assert load_avatar(env, "rob").source == "file:face.png"
+
+
+@pytest.mark.asyncio
+async def test_clear_empties_the_slot(env):
+    from core.avatar import load_avatar
+    _write_pfp(env)
+    out = await act_on_inbound(_Agent(str(env)), _cmd("/avatar", "/avatar clear"))
+    assert "cleared" in out
+    assert load_avatar(env, "rob").is_default
+
+
+def test_set_runs_off_the_poll_loop():
+    """A URL / NFT fetch must not hold the sequential Telegram poll loop."""
+    from surfaces.telegram.harness import _runs_in_background
+    assert _runs_in_background("/avatar", _cmd("/avatar", "/avatar set https://x"))
+    assert not _runs_in_background("/avatar", _cmd("/avatar", "/avatar"))
+    assert not _runs_in_background("/avatar", _cmd("/avatar", "/avatar clear"))
 
 
 def test_the_face_is_sent_as_a_photo_not_just_described(env):
@@ -127,7 +166,7 @@ def test_the_face_is_sent_as_a_photo_not_just_described(env):
     from surfaces.telegram import owner_ops
     _write_pfp(env)
     text, png = owner_ops.avatar_reply(str(env), [])
-    assert png and png.endswith("pfp.png"), (
+    assert png and png.endswith("avatar.png"), (
         "the reply returns no image path, so nothing can be sent")
     # …and the harness hands that path to the media rail.
     import inspect

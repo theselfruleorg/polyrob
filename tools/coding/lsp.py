@@ -85,13 +85,71 @@ def diagnose_file(path: str, root: str, timeout_sec: float = 8.0, runner=None) -
             proc = run(["pyright", "--outputjson", path], root, timeout_sec)
             errors = _parse_pyright(getattr(proc, "stdout", "") or "")
         else:  # tsc
-            proc = run(["tsc", "--noEmit", path], root, timeout_sec)
+            cmd = _tsc_command(path, root, ext)
+            if cmd is None:
+                return ""
+            proc = run(cmd, root, timeout_sec)
             errors = _parse_tsc(getattr(proc, "stdout", "") or "", getattr(proc, "stderr", "") or "")
+            if "-p" in cmd:
+                errors = _only_for(errors, path, root)
     except Exception:
         # Fail-open: FileNotFoundError (missing binary), subprocess.TimeoutExpired,
         # or anything else a checker/runner can throw.
         return ""
     return _cap(errors)
+
+
+def _find_tsconfig(path: str, root: str):
+    """The nearest ``tsconfig.json`` from *path*'s directory up to *root*, or None."""
+    here = os.path.dirname(os.path.abspath(os.path.join(root, path)))
+    top = os.path.abspath(root)
+    # Containment BEFORE any probe: never stat a config outside the workspace.
+    while here == top or here.startswith(top + os.sep):
+        candidate = os.path.join(here, "tsconfig.json")
+        if os.path.isfile(candidate):
+            return candidate
+        if here == top:
+            return None
+        here = os.path.dirname(here)
+    return None
+
+
+def _tsc_command(path: str, root: str, ext: str):
+    """The tsc argv for *path*, or None when no check would be honest.
+
+    Coding-agent review B10 (2026-09-24): ``tsc --noEmit <file>`` IGNORES the
+    project's ``tsconfig.json`` (paths, jsx, lib, strictness), so it reported
+    errors the project does not have; on a ``.js`` file it reported TS6504
+    ("did you mean allowJs") as an error. Under a tsconfig, check the PROJECT
+    and keep only this file's errors. Without one, a ``.js``/``.jsx`` file has
+    no type contract to check, and a ``.tsx`` file needs ``--jsx preserve``.
+    """
+    tsconfig = _find_tsconfig(path, root)
+    if tsconfig:
+        return ["tsc", "--noEmit", "--pretty", "false", "-p", tsconfig]
+    if ext in (".js", ".jsx"):
+        return None
+    cmd = ["tsc", "--noEmit", "--pretty", "false"]
+    if ext == ".tsx":
+        cmd += ["--jsx", "preserve"]
+    return cmd + [path]
+
+
+_LOCATED_RE = re.compile(r"^(?P<file>.+?):\d+:\d+ ")
+
+
+def _only_for(errors: list, path: str, root: str) -> list:
+    """Project mode: keep *path*'s own ``file:line:col ...`` lines and every
+    UNLOCATED compiler/config error (a broken tsconfig is the project's real
+    problem, not noise); drop other files' findings. The file part is matched
+    up to ``:line:col`` so a Windows drive letter (``C:\\x.ts``) survives."""
+    want = os.path.realpath(os.path.join(root, path))
+    kept = []
+    for line in errors:
+        m = _LOCATED_RE.match(line)
+        if m is None or os.path.realpath(os.path.join(root, m.group("file"))) == want:
+            kept.append(line)
+    return kept
 
 
 def _parse_pyright(stdout: str) -> list:
@@ -133,6 +191,9 @@ def _parse_tsc(stdout: str, stderr: str) -> list:
                 f"{m.group('code')}: {m.group('message')}"
             )
         else:
+            # An unlocated "error TSxxxx" is a compiler/config error: real, so
+            # reported (the .js TS6504 false positive is gone because a .js
+            # file with no tsconfig is not checked at all).
             out.append(raw)
     return out
 

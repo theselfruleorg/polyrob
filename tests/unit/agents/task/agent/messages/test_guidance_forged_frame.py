@@ -64,3 +64,25 @@ def test_mixed_batch_keeps_user_frame():
     )
     text = _last_text(mm)
     assert "NEW USER MESSAGE" in text
+
+
+def test_delegation_result_frame_says_relay_to_a_waiting_user():
+    """F12: the 'no redundant status' rule must not swallow a result a user asked for."""
+    mm = _mm()
+    mm.inject_user_guidance(
+        [{"text": "<delegation-result>42</delegation-result>", "kind": "delegation_result",
+          "metadata": {}}],
+        session_context={"continuation": True},
+    )
+    text = _last_text(mm)
+    assert "AUTONOMOUS RE-ENTRY" in text
+    assert "If a user is waiting for this result, send it to them with send_message." in text
+
+
+def test_self_wake_frame_has_no_relay_line():
+    mm = _mm()
+    mm.inject_user_guidance(
+        [{"text": "continue", "kind": "self_wake", "metadata": {}}],
+        session_context={"continuation": True},
+    )
+    assert "send_message" not in _last_text(mm)

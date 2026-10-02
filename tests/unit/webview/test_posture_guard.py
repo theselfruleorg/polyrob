@@ -101,3 +101,25 @@ def test_lifespan_calls_the_guard():
     import webview.server as server
     src = inspect.getsource(server.startup_event)
     assert "assert_console_posture" in src
+
+
+# Security review 2026-09-23 (Low): a non-loopback bind at `local` posture.
+@pytest.mark.parametrize("argv", [["uvicorn", "webview.server:app", "--host", "0.0.0.0"],
+                                  ["uvicorn", "webview.server:app", "--host=192.168.1.4"]])
+def test_non_loopback_argv_bind_refuses_local_posture(argv):
+    with pytest.raises(RuntimeError):
+        _assert({}, argv=argv)
+
+
+def test_non_loopback_env_bind_refuses_local_posture():
+    with pytest.raises(RuntimeError):
+        _assert({"WEBGATE_HOST": "0.0.0.0"}, argv=["uvicorn"])
+
+
+def test_non_loopback_bind_allowed_by_override():
+    _assert({"WEBGATE_HOST": "0.0.0.0", "WEBVIEW_ALLOW_LOCAL_POSTURE": "1"}, argv=["uvicorn"])
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "localhost", "::1", "[::1]"])
+def test_loopback_bind_is_not_a_signal(host):
+    _assert({"WEBGATE_HOST": host}, argv=["uvicorn", "--host", host])

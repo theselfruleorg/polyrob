@@ -59,12 +59,42 @@ def _counts_line(counts: Dict[str, int]) -> str:
     return f"{candy.GUTTER}{total} goal(s) on the board — {parts}"
 
 
+def read_off(user_id: str) -> Tuple[Optional[List[Any]], Optional[str]]:
+    """034 §11.1: what the owner switched OFF — ``(rows, None)`` or
+    ``(None, reason)``. A READ never creates the store or the table."""
+    path = _board_path()
+    if not os.path.exists(path):
+        return [], None
+    try:
+        from core.goal_suppressions import active
+        return active(path, user_id=user_id), None
+    except Exception as exc:  # unreadable — never a confident "nothing is off"
+        return None, f"{type(exc).__name__}: {exc}"
+
+
+def _off_lines(user_id: str) -> List[str]:
+    off, reason = read_off(user_id)
+    if off is None:
+        return ["", f"{candy.GUTTER}OFF — unavailable ({reason}); I cannot tell "
+                    "what you switched off"]
+    if not off:
+        return []
+    from core.goal_suppressions import describe
+    out = ["", candy.section(f"off ({len(off)})"),
+           f"{candy.GUTTER}you switched these off; `/goal allow <title>` turns one back on"]
+    out += [f"{candy.GUTTER}○ {describe(x)}" for x in off[:_VIEW_LIMIT]]
+    return out
+
+
 def goals_view(user_id: str, *, limit: int = _VIEW_LIMIT) -> str:
     """The rendered ``/goals`` body."""
     rows, counts, reason = read_board(user_id, limit=limit)
     if rows is None:
         return (f"{candy.GUTTER}unavailable ({reason}) — that is UNKNOWN, not "
                 f"an empty board.")
+    off = _off_lines(user_id)
+    if not rows and off:
+        return "\n".join([candy.empty("goals", "nothing on the board")] + off)
     if not rows:
         # E17: one grammar, no flag names — name a verb the owner can RUN.
         # ⚠️ `/goal` steers an EXISTING goal (show|ready|pause|resume|retry|
@@ -74,13 +104,19 @@ def goals_view(user_id: str, *, limit: int = _VIEW_LIMIT) -> str:
         return candy.empty("goals",
                            "seed one with `/trade <what to do>`, or "
                            "`polyrob goals create` for anything else")
-    lines = [candy.status_line(g.status, f"{g.id[:8]}: {g.title[:40]}") for g in rows]
+    # 034 §3.1: every row says who asked for it (derived, never narrated).
+    from core.goal_legibility import bucket_line, origin_tag
+    lines = [candy.status_line(g.status, f"{g.id[:8]}: {g.title[:40]}  {origin_tag(g)}")
+             for g in rows]
     if counts:
         lines.append("")
         lines.append(_counts_line(counts))
+        # 034 §3.2: the four owner facts over the seven machine statuses.
+        lines.append(f"{candy.GUTTER}{bucket_line(counts)}")
     if sum(counts.values()) > len(rows):
         # NOT a promise of every row: `goals list` is itself windowed
         # (``-n``, max 500), so it cannot show more than its own ceiling.
         lines.append(f"{candy.GUTTER}(newest {len(rows)} shown — "
                      f"`polyrob goals list -n 100` widens the window)")
+    lines.extend(off)
     return "\n".join(lines)

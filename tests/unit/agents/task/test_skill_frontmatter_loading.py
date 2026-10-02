@@ -49,6 +49,14 @@ Body content for the demo skill.
 """
 
 
+@pytest.fixture(autouse=True)
+def _no_pack_skills(monkeypatch):
+    """The catalog counts below are of THIS fixture's library: an installed
+    pack's skills (067 P3, e.g. the discovery pack) are not part of it."""
+    from agents.task.agent import skill_store
+    monkeypatch.setattr(skill_store, "pack_scopes", lambda: [])
+
+
 @pytest.fixture
 def skills_dir(tmp_path: Path) -> Path:
     d = tmp_path / "skills"

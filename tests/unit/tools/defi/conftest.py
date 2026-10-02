@@ -44,6 +44,25 @@ def _no_indexer_network(monkeypatch):
     def _blocked(*a, **kw):
         raise RuntimeError("unit tests must not reach the network")
 
-    for module in ("tools.defi.providers.geckoterminal", "tools.defi.providers.dexscreener"):
+    for module in ("tools.defi.providers.geckoterminal", "tools.defi.providers.dexscreener",
+                   "tools.defi.providers.jupiter_price"):
         monkeypatch.setattr(f"{module}._get", _blocked, raising=False)
+    # 071 W1: quotes and screener answers are cached (20 s / 60 s). A value a
+    # previous test stubbed must never answer this one.
+    from core.intel.cache import clear_all
+    clear_all()
+    # 071: the address classifier and the Solana display enumeration probe
+    # the chain; blocked here they read as UNKNOWN, which every caller treats as
+    # "proceed as before".
+    monkeypatch.setattr("core.wallet.address_kind._evm_probe", _blocked, raising=False)
+    monkeypatch.setattr("core.wallet.address_kind._svm_probe", _blocked, raising=False)
+    monkeypatch.setattr("core.wallet.solana_onchain.token_holdings", _blocked, raising=False)
+    # 071 W4: the history / origin reads (Blockscout GET + Solana RPC).
+    monkeypatch.setattr("core.wallet.activity._get", _blocked, raising=False)
+    monkeypatch.setattr("core.wallet.activity._rpc", _blocked, raising=False)
+    # 071 W2: the merged screen's chain facts and keyless audit providers.
+    # Blocked, each source reads NOT CHECKED — never a pass.
+    monkeypatch.setattr("core.wallet.spl_facts._rpc", _blocked, raising=False)
+    monkeypatch.setattr("core.wallet.evm_facts._rpc", _blocked, raising=False)
+    monkeypatch.setattr("tools.defi.providers.token_audits._get", _blocked, raising=False)
     yield

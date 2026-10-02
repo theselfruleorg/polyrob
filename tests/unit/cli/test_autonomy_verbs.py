@@ -245,9 +245,11 @@ async def test_mode_renders_card_and_change_hint(tg_env):
     for axis in ("autonomy master", "capability mode", "loop posture",
                  "compute posture"):
         assert axis in out, f"axis {axis!r} missing:\n{out}"
-    # how to change: mode/posture are env flags, not chat prefs
-    assert "polyrob autonomy on|off" in out
-    assert "prefs-only" in out
+    # how to change (A11): the master is chat-writable; mode/posture are not,
+    # and owner copy names no server CLI when a chat way exists.
+    assert "/config set AUTONOMY_ENABLED" in out
+    assert "need the server" in out
+    assert "prefs-only" not in out
 
 
 @pytest.mark.asyncio

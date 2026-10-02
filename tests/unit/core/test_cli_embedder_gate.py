@@ -92,6 +92,11 @@ def test_embedder_registered_lazily_when_kb_enabled(monkeypatch):
     monkeypatch.setenv("KB_ENABLED", "1")
     monkeypatch.delenv("MEMORY_BACKEND", raising=False)
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
+    # A spec-less stand-in: the gate probes find_spec, so without it this test only
+    # passed on a box that happens to have sentence-transformers installed.
+    stub = types.ModuleType("sentence_transformers")
+    stub.SentenceTransformer = _StubST
+    monkeypatch.setitem(sys.modules, "sentence_transformers", stub)
 
     import core.bootstrap as bootstrap
     importlib.reload(bootstrap)

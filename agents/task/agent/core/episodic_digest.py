@@ -47,14 +47,18 @@ async def build_activity_digest(*, user_id: Optional[str], kind: str,
             total += float(e.spend_usd or 0)
             lines.append(f"- {e.kind}:{e.outcome or '?'} ${float(e.spend_usd or 0):.2f} "
                          f"\"{(e.task or '')[:60]}\"")
-        body = ("\n".join(lines)
-                + f"\n({len(rows)} runs in last {window_hours}h, ${total:.2f} total). "
-                  "Call recent_activity(since=\"8h\") for more/older.")
+        # C6: wrap ONLY the data rows (task text is attacker-authorable). The
+        # summary and the instruction stay OUTSIDE the wrapper — an instruction
+        # inside a "treat this as data" block cancels itself (T1-01 class).
+        data = "\n".join(lines)
         try:
             from core.security.untrusted_wrap import wrap_untrusted
-            body = wrap_untrusted("recent_activity", body)
+            data = wrap_untrusted("recent_activity", data)
         except Exception:
             pass
+        body = (data
+                + f"\n({len(rows)} runs in last {window_hours}h, ${total:.2f} total). "
+                  "Call recent_activity(since=\"8h\") for more/older.")
         from modules.llm.messages import make_control_message, MessageOrigin
         return make_control_message(
             f"<recent_activity window=\"last {window_hours}h\">\n{body}\n</recent_activity>",
@@ -85,15 +89,17 @@ async def build_mission_continuity(*, user_id: Optional[str], window_hours: int 
         if not rows:
             return None
         lines = [f"- {e.kind}:{e.outcome or '?'} \"{(e.task or '')[:70]}\"" for e in rows]
-        body = ("\n".join(lines)
+        # C6: rows inside the wrapper, the instruction outside it.
+        data = "\n".join(lines)
+        try:
+            from core.security.untrusted_wrap import wrap_untrusted
+            data = wrap_untrusted("recent_activity", data)
+        except Exception:
+            pass
+        body = (data
                 + f"\n({len(rows)} recent runs in last {window_hours}h). "
                   "Build on this — do NOT repeat work already done; if it's all covered, "
                   "surface the blocker/next step rather than re-deriving 'nothing new'.")
-        try:
-            from core.security.untrusted_wrap import wrap_untrusted
-            body = wrap_untrusted("recent_activity", body)
-        except Exception:
-            pass
         from modules.llm.messages import make_control_message, MessageOrigin
         return make_control_message(
             f"<mission_continuity window=\"last {window_hours}h\">\n{body}\n</mission_continuity>",

@@ -67,8 +67,10 @@ def _x402_invoicing_enabled() -> bool:
 
 
 def _hf_deploy_enabled() -> bool:
-    from tools.hf_deploy import hf_deploy_enabled
-    return hf_deploy_enabled()
+    # tools/hf_deploy registers its gate at import (loaded by ``import tools``);
+    # unregistered reads as off.
+    from core.tool_gates import gate_on
+    return gate_on("hf_deploy")
 
 
 _SURFACE_GC_INTERVAL_SEC = 3600  # hourly
@@ -324,6 +326,13 @@ def _build_goal_ticker(task_agent, data_dir):
     return build_goal_ticker(task_agent, data_dir=data_dir)
 
 
+def _build_rails_ticker(data_dir):
+    """036: rails seed standing work from the board, in-process (pause-first,
+    idle-gated). Via the dispatcher module — no new core -> agents edge."""
+    from agents.task.goals.dispatcher import build_rails_ticker
+    return build_rails_ticker(data_dir=data_dir)
+
+
 def _requeue_on_boot(board) -> int:
     """§5.1 cold-start requeue. NOT pause-gated (031 review): a `running` row after
     a restart is a lie whatever the pause state, and requeueing starts nothing —
@@ -364,6 +373,25 @@ def _build_bridge_watcher(task_agent):
             logger.debug("bridge watcher: balance refresh failed: %s", e)
 
     return IntervalTicker(_tick, interval_seconds=bridge_watcher.INTERVAL_SEC)
+
+
+def _build_nft_holdings_watch(task_agent):
+    """069 v4 A4 — which NFTs of pinned collections the treasury owns: report an arrival or a
+    loss to the owner once. Reads only; NOT pause-gated (the bridge watcher's reasoning)."""
+    from core.tickers import IntervalTicker
+    from core.wallet import nft_holdings
+
+    container = getattr(task_agent, "container", None)
+
+    async def _tick():
+        try:
+            result = await nft_holdings.tick(container)
+            if result.arrived or result.lost or result.errors:
+                logger.info("nft holdings watch: %s", result.as_dict())
+        except Exception as e:
+            logger.warning("nft holdings watch tick failed: %s", e)
+
+    return IntervalTicker(_tick, interval_seconds=nft_holdings.INTERVAL_SEC)
 
 
 def _build_settlement_watcher(task_agent):
@@ -612,9 +640,11 @@ def _schedule_hf_deploy_reconcile() -> None:
 
     async def _sweep() -> None:
         try:
-            from tools.hf_deploy.reconcile import reconcile_deployed_apps
-            from tools.hf_deploy.registry import default_deployed_apps_db
-            flipped = await reconcile_deployed_apps(db_path=default_deployed_apps_db())
+            from core.boot_reconcilers import boot_reconciler
+            reconcile = boot_reconciler("hf_deploy")
+            if reconcile is None:
+                return
+            flipped = await reconcile()
             if flipped:
                 logger.info(
                     "hf_deploy reconcile: flipped %d drifted live app(s) to failed", flipped)
@@ -1134,6 +1164,10 @@ def start_autonomy(*, task_agent, data_dir: str | None = None) -> AutonomyHandle
             handles._add("goals", _build_goal_ticker(task_agent, data_dir))
         except Exception as e:
             logger.warning("Could not start goal dispatcher: %s", e)
+        try:
+            handles._add("rails", _build_rails_ticker(data_dir))
+        except Exception as e:
+            logger.warning("Could not start the rails ticker: %s", e)
     # 056 WS5 (D1): let a due MONEY cron job pre-empt a running board goal. The
     # scheduler owns the trigger, the dispatcher owns the cancel+requeue; this is
     # the one place both are in hand. Fail-open: no hook = never yield.
@@ -1189,6 +1223,12 @@ def start_autonomy(*, task_agent, data_dir: str | None = None) -> AutonomyHandle
             handles._add("bridges", _build_bridge_watcher(task_agent))
     except Exception as e:
         logger.warning("Could not start the bridge watcher: %s", e)
+    try:
+        from core.wallet import nft_holdings as _nh
+        if _nh.enabled():
+            handles._add("nft_holdings", _build_nft_holdings_watch(task_agent))
+    except Exception as e:
+        logger.warning("Could not start the NFT holdings watch: %s", e)
     # 043 A8/A42: the durable "what did this process actually start" record —
     # the status snapshot's loop-liveness check reads it as its `expected` set
     # instead of hardcoding cron/goals.

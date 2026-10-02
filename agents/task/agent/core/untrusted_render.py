@@ -22,9 +22,12 @@ This module closes that without inventing a second taxonomy:
   (non-str, `< UNTRUSTED_WRAP_MIN_CHARS`, delimiter defanging) cannot drift.
 
 Gated on `UNTRUSTED_TOOL_RESULT_WRAP` exactly like the ToolMessage path: OFF ⇒
-nothing is stamped upstream and nothing is wrapped here (byte-identical). An
-unstamped result — the legacy non-native path — renders raw rather than being
-guessed at.
+nothing is stamped upstream and nothing is wrapped here (byte-identical).
+C5: the non-native path has no tool-call ids, so ``result_processing.
+_stamp_result_sources`` stamps from the step's action names instead (an
+unpairable result in a step with an untrusted action is stamped with that
+source — over-wrapping is harmless). A result that is still unstamped comes
+from a trusted action and renders raw.
 """
 from __future__ import annotations
 

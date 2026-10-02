@@ -53,6 +53,18 @@ def is_valid_mnemonic(text: str) -> bool:
         return False
 
 
+def derive_deposit_key(master_seed: str, user_id: str) -> bytes:
+    """The per-user DEPOSIT key (``PAYMENT_MASTER_SEED``/``MASTER_SEED``).
+
+    The ONE derivation, shared by ``modules.payments.wallet_generator`` (the
+    agent-side generator in ``WALLET_SIGNER=local``) and ``polyrob-signer``
+    (066 §5.5: the deposit seed moves into the signer in ``remote``). A deposit
+    address must never depend on which process derived it.
+    """
+    return hashlib.pbkdf2_hmac("sha256", str(master_seed).encode("utf-8"),
+                               str(user_id).encode("utf-8"), _PBKDF2_ITERS, dklen=32)
+
+
 def derive_key(seed: str, venue: str, scheme: str) -> bytes:
     if venue not in VENUE_INDEX:
         raise ValueError(f"unknown venue '{venue}' (expected one of {sorted(VENUE_INDEX)})")
@@ -71,10 +83,16 @@ def derive_key(seed: str, venue: str, scheme: str) -> bytes:
         try:
             acct = Account.from_mnemonic(seed.strip(), account_path=path)
         except Exception as e:
+            # CR-M08: `from None`, never `from e`. The library's message names
+            # the mistyped words, so a chained cause carried the seed into
+            # traceback.format_exc() -> ActionResult.error -> history/LLM/logs.
+            # Only the exception TYPE survives, which names no secret.
+            err_type = type(e).__name__
             raise ValueError(
                 "AGENT_WALLET_MASTER_SEED is not a valid BIP-39 mnemonic but "
-                "derivation is 'bip44' — fix the seed or set AGENT_WALLET_DERIVATION=legacy"
-            ) from e
+                "derivation is 'bip44' — fix the seed or set AGENT_WALLET_DERIVATION=legacy "
+                f"({err_type})"
+            ) from None
         return bytes(acct.key)
     raise ValueError(f"unknown derivation scheme '{scheme}' (expected one of {SCHEMES})")
 
@@ -164,6 +182,15 @@ def write_scheme_once(scheme: str, data_dir: Optional[Path] = None) -> Path:
             f"'{scheme}' (addresses would change; funds could strand)")
     meta.parent.mkdir(parents=True, exist_ok=True)
     from datetime import datetime, timezone
+    # CR-L31: the audit ledger's genesis mark goes down BEFORE the meta (a
+    # wallet of record), so the audit sink never reads a fresh wallet as a
+    # deleted ledger. Fail-open: a genesis that will not write leaves the sink to
+    # refuse spending, which is the safe side.
+    try:
+        from core.wallet.audit_sink import JsonlAuditSink
+        JsonlAuditSink(str(meta.parent / "audit.jsonl")).ensure_genesis()
+    except Exception:
+        logger.warning("wallet audit genesis mark not written", exc_info=True)
     meta.write_text(json.dumps({
         "derivation": scheme,
         "created_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),

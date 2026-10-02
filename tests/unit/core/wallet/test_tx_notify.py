@@ -209,6 +209,7 @@ def test_notify_soon_holds_a_reference_to_its_task(monkeypatch):
         sent.append(text)
         return "sent"
     monkeypatch.setattr("core.surfaces.user_delivery.deliver_user_message", _deliver)
+    monkeypatch.setenv("TX_NOTIFY_SENT_HOLD_SEC", "0")  # the reference claim, not the hold
 
     async def _drive():
         tn.notify_soon(None, "owner", tn.TxNotice(verb="swap", route="base",
@@ -276,3 +277,106 @@ def test_the_event_is_recorded_even_when_delivery_fails(monkeypatch):
 def test_both_event_kinds_are_registered():
     from core.event_kinds import KNOWN_KINDS, TX_BROADCAST, TX_SETTLED
     assert TX_BROADCAST in KNOWN_KINDS and TX_SETTLED in KNOWN_KINDS
+
+
+# --------------------------------------------------------------------------
+# One notice per settled transaction (2026-09-22): SENT is held, and a
+# settlement that lands inside the hold collapses it into the SETTLED line.
+# The 09-21 22:02Z exit of $1.60 was 6 critical-lane DMs (SENT + CONFIRMED ×
+# approve/swap/revoke). SENT still goes out on its own when the transaction is
+# genuinely still pending after the hold — that is the case it exists for.
+# --------------------------------------------------------------------------
+
+def _bc(**kw):
+    return tn.TxNotice(verb="swap", route="base", chain=None, amount_in="1 X",
+                       usd=1.6, tx_ref="0xabc", lane="autonomous",
+                       cap_used_usd=2.0, cap_limit_usd=10.0, **kw)
+
+
+def test_a_settlement_inside_the_hold_collapses_the_sent_notice(monkeypatch):
+    sent = []
+
+    async def _deliver(container, user_id, text, **kw):
+        sent.append(text)
+        return "sent"
+    monkeypatch.setattr("core.surfaces.user_delivery.deliver_user_message", _deliver)
+    monkeypatch.setenv("TX_NOTIFY_SENT_HOLD_SEC", "0.2")
+    tn._reset_hold_state()
+
+    async def _drive():
+        tn.notify_soon(None, "owner", _bc(), settled=False)
+        await asyncio.sleep(0.05)
+        tn.notify_soon(None, "owner", tn.TxNotice(
+            verb="swap", route="base", amount_in="1 X", usd=1.6, tx_ref="0xabc",
+            state=tn.STATE_CONFIRMED, measured="+0.001 ETH", ledger_recorded=True),
+            settled=True)
+        await asyncio.sleep(0.4)
+    asyncio.run(_drive())
+    assert len(sent) == 1, sent
+    text = sent[0]
+    assert text.startswith("✅ CONFIRMED")
+    # nothing lost: the SENT facts ride on the one line that goes out
+    assert "1 X ($1.60)" in text
+    assert "cap: $2.00 of $10.00 daily" in text and "lane autonomous" in text
+    assert "measured +0.001 ETH" in text
+
+
+def test_a_transaction_still_pending_after_the_hold_gets_its_sent_notice(monkeypatch):
+    sent = []
+
+    async def _deliver(container, user_id, text, **kw):
+        sent.append(text)
+        return "sent"
+    monkeypatch.setattr("core.surfaces.user_delivery.deliver_user_message", _deliver)
+    monkeypatch.setenv("TX_NOTIFY_SENT_HOLD_SEC", "0.1")
+    tn._reset_hold_state()
+
+    async def _drive():
+        tn.notify_soon(None, "owner", _bc(), settled=False)
+        await asyncio.sleep(0.3)
+    asyncio.run(_drive())
+    assert len(sent) == 1 and sent[0].startswith("⛓ SENT")
+
+
+def test_the_broadcast_audit_event_is_recorded_at_broadcast_not_after_the_hold(monkeypatch):
+    """The hold delays the OWNER's line only; the durable record is immediate."""
+    recorded = []
+
+    class _Log:
+        def record(self, kind, **kw):
+            recorded.append(kind)
+    monkeypatch.setattr("core.event_log.event_log_enabled", lambda: True)
+    monkeypatch.setattr("core.event_log.get_event_log", lambda *a, **k: _Log())
+
+    async def _deliver(container, user_id, text, **kw):
+        return "sent"
+    monkeypatch.setattr("core.surfaces.user_delivery.deliver_user_message", _deliver)
+    monkeypatch.setenv("TX_NOTIFY_SENT_HOLD_SEC", "5")
+    tn._reset_hold_state()
+
+    async def _drive():
+        tn.notify_soon(None, "owner", _bc(), settled=False)
+        await asyncio.sleep(0.05)
+        assert "tx_broadcast" in recorded
+        for t in list(tn._PENDING):
+            t.cancel()
+    asyncio.run(_drive())
+
+
+def test_hold_zero_is_byte_identical_to_the_two_notice_rail(monkeypatch):
+    sent = []
+
+    async def _deliver(container, user_id, text, **kw):
+        sent.append(text)
+        return "sent"
+    monkeypatch.setattr("core.surfaces.user_delivery.deliver_user_message", _deliver)
+    monkeypatch.setenv("TX_NOTIFY_SENT_HOLD_SEC", "0")
+    tn._reset_hold_state()
+
+    async def _drive():
+        tn.notify_soon(None, "owner", _bc(), settled=False)
+        await asyncio.sleep(0.05)
+        tn.notify_soon(None, "owner", _bc(state=tn.STATE_CONFIRMED), settled=True)
+        await asyncio.sleep(0.05)
+    asyncio.run(_drive())
+    assert [t.split(" ")[1] for t in sent] == ["SENT", "CONFIRMED"]

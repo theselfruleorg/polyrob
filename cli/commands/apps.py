@@ -124,13 +124,13 @@ def _print_lines(lines):
 @click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
 def list_cmd(user, as_json):
     """List this tenant's apps with status, URL and last health."""
-    from core.app_service.owner_ops import list_lines, row_json
+    from core.app_service.owner_ops import CLI_APPROVE_HINTS, list_lines, row_json
     reg = _registry(write=False)
     tenant = _tenant(user)
     if as_json:
         click.echo(_json.dumps([row_json(r) for r in reg.list_for(tenant)], indent=2, default=str))
         return
-    lines = list(list_lines(reg, tenant))
+    lines = list(list_lines(reg, tenant, approve_hint=CLI_APPROVE_HINTS))
     if not lines:
         # C47: an empty list printed NOTHING at all — indistinguishable from a
         # verb that silently failed. One grammar, and it says which tenant.

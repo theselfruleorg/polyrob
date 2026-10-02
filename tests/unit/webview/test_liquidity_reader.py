@@ -11,6 +11,7 @@ def client(monkeypatch, uid='tenant'):
     monkeypatch.setattr(pages, '_effective_user_id', lambda request: uid)
     app = FastAPI()
     app.include_router(pages.router)
+    app.include_router(pages.money_router)  # 067 P5a: Money readers
     return TestClient(app)
 
 

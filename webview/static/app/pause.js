@@ -105,6 +105,17 @@ export async function toggle(verb, copy, opts = {}) {
   }
 }
 
+/**
+ * The console's words for a live-update refusal (070 E.31). The server sends a
+ * `code`; its `message` is never shown. `rate_limited` reads as "too many
+ * reconnects"; any other refusal is "live updates are off here".
+ */
+export function liveRefusalLine(body, copy) {
+  const code = body && body.code;
+  if (code === 'rate_limited') return (copy && copy.live_busy) || '';
+  return (copy && copy.live_refused) || '';
+}
+
 // --------------------------------------------------------------------- wiring
 
 /** Show the answer beside the head line, replacing any previous one. */
@@ -121,8 +132,10 @@ function bind() {
   // A32: live.js relays the activity room's refusal here rather than dropping
   // it — a console that quietly stops updating looks like a quiet agent.
   document.addEventListener('polyrob:live-refused', (ev) => {
-    say(serverAnswer(ev && ev.detail, copy.live_refused || ''));
+    say(liveRefusalLine(ev && ev.detail, copy));
   });
+  // 070 W0.17: a good join clears the notice — it never sticks after a reconnect.
+  document.addEventListener('polyrob:live-ok', () => say(''));
   if (!button) return; // read-only console, or a page without the shell head
 
   const refresh = () => readState().then((body) => applyState(button, pausedFrom(body), copy));

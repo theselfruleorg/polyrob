@@ -74,6 +74,10 @@ CODE_HASHES: Dict[Tuple[str, str], str] = {
     ("robinhood", "0x73991a25c818bf1f1128deaab1492d45638de0d3"): "0x0a493d1af3d0f25fed8efa205244ebee14114267a08647fc38c515c7cd6ead4f",
     ("robinhood", "0x8366a39cc670b4001a1121b8f6a443a643e40951"): "0xbd3881180b547f5fe817545743cfb4343e96b1bc6640dcd70c106b0066e95626",
     ("robinhood", "0x58daec3116aae6d93017baaea7749052e8a04fa7"): "0xc873e135dc9aaec88489cfbad146b4cb49d6a32e0d80326377784b7ba17670b2",
+    # v4 StateView + Permit2 on 4663, measured 2026-09-29 (anvil fork of 4663,
+    # `cast keccak $(cast code …)`); core handoff W6, 090 R0.4.
+    ("robinhood", "0xf3334192d15450cdd385c8b70e03f9a6bd9e673b"): "0x7d9c591e0956fd89d98feb4ffcfe8bf1f7a62bd485edd979fa21d104b49878a6",
+    ("robinhood", "0x000000000022d473030f116ddee9f6b43ac78ba3"): "0x5208783f52488f7d3493e5e38311ab707c1d75457fe472a19b0b4d57d66a7fca",
     ("base", "0x33128a8fc17869897dce68ed026d694621f6fdfd"): "0x95707a4ac71f20181a63ef7d180e3c625be5d20fc8f6f980befa966bad568132",
     ("base", "0x03a520b32c04bf3beef7beb72e919cf822ed34f1"): "0x9177a11768996e8f951e0f0013d7165134178b15b21fb9916108f995e6c564bf",
     ("base", "0x498581ff718922c3f8e6a244956af099b2652b2b"): "0x83b2af6e9f3158defc2811cbcb0db71ecf8b2ba2abea39c39e370ac5c6f43eb6",
@@ -83,6 +87,17 @@ CODE_HASHES: Dict[Tuple[str, str], str] = {
     ("ethereum", "0x000000000004444c5dc75cb358380d2e3de08a90"): "0x785f1014552b7ce7d5fb7d0c970ca60edee94fd00425d7ca21609acac7ce1293",
     ("ethereum", "0xbd216513d74c8cf14cf4747e6aaa6420ff64ee9e"): "0x77e36c08b19959a30dde46dec9abe6208e371ff2f56884a56fe1e1a53615528b",
 }
+
+
+#: v4 HOOKS a liquidity write may touch, keyed ``(chain, lowercase hook)`` →
+#: keccak(runtime). A hook runs inside every add/remove, so an unpinned hook is
+#: an unreviewed contract on the money path: refuse it. ``address(0)`` (no hook)
+#: needs no pin. Pons MEME_HOOK measured 2026-09-29 on a 4663 fork (090 R0.4).
+HOOK_HASHES: Dict[Tuple[str, str], str] = {
+    ("robinhood", "0xe5e702641ea86f4ae6cc3cdaed2b886f976be044"): "0xc21b1e6c1b45403e81a581f22ed6d9c747997af1cfdac1b1dc9f4b1d346a10db",
+}
+
+_ZERO = "0x" + "0" * 40
 
 
 def all_rows() -> Tuple[DexRow, ...]:
@@ -126,22 +141,46 @@ def resolve_position_manager(chain: Optional[str], protocol: str) -> str:
 def verify_pins(rpc: Callable, chain: str, protocol: str) -> None:
     """Re-hash the code at every write target for (chain, protocol). Refuses on
     any mismatch or on missing code. `rpc(method, params)`."""
-    from eth_utils import keccak
     row = row_for(chain, protocol)
     if row is None:
         raise DexPinError(f"no pinned Uniswap {protocol} deployment on {chain}")
-    for addr in (row.factory, row.position_manager, row.pool_manager):
+    # v4 also re-hashes StateView (the reads a write is sized from) and Permit2
+    # (which moves the ERC-20 leg) — 090 R0.4.
+    extra = (row.state_view, row.permit2) if protocol == "v4" else ()
+    for addr in (row.factory, row.position_manager, row.pool_manager, *extra):
         if not addr:
             continue
-        expected = CODE_HASHES.get((row.chain, addr.lower()))
-        if not expected:
-            raise DexPinError(f"{addr} on {chain} has no measured code hash — refusing")
-        code = rpc("eth_getCode", [addr, "latest"])
-        if not isinstance(code, str) or len(code) <= 2:
-            raise DexPinError(f"{addr} has NO code on {chain} — the pinned Uniswap "
-                              f"{protocol} deployment is not there. Refusing.")
-        got = "0x" + keccak(bytes.fromhex(code[2:])).hex()
-        if got != expected:
-            raise DexPinError(
-                f"the code at {addr} hashes to {got}, not the pinned {expected}. The "
-                f"deployment has changed since it was reviewed — refusing.")
+        _check_code(rpc, row.chain, addr, CODE_HASHES.get((row.chain, addr.lower())),
+                    f"the pinned Uniswap {protocol} deployment")
+
+
+def hook_pinned(chain: Optional[str], hook: Optional[str]) -> bool:
+    """True for ``address(0)`` or a hook with a measured hash on *chain*."""
+    h = str(hook or "").lower()
+    return h == _ZERO or (str(chain or "").lower(), h) in HOOK_HASHES
+
+
+def verify_hook(rpc: Callable, chain: str, hook: str) -> None:
+    """Re-hash a v4 hook before a write that runs it. ``address(0)`` passes
+    (no hook runs); an unpinned hook or a changed runtime REFUSES."""
+    h = str(hook or "").lower()
+    if h == _ZERO:
+        return
+    _check_code(rpc, str(chain).lower(), h, HOOK_HASHES.get((str(chain).lower(), h)),
+                "the pinned v4 hook")
+
+
+def _check_code(rpc: Callable, chain: str, addr: str, expected: Optional[str],
+                what: str) -> None:
+    from eth_utils import keccak
+    if not expected:
+        raise DexPinError(f"{addr} on {chain} has no measured code hash — refusing")
+    code = rpc("eth_getCode", [addr, "latest"])
+    if not isinstance(code, str) or len(code) <= 2:
+        raise DexPinError(f"{addr} has NO code on {chain} — {what} is not there. "
+                          f"Refusing.")
+    got = "0x" + keccak(bytes.fromhex(code[2:])).hex()
+    if got != expected:
+        raise DexPinError(
+            f"the code at {addr} hashes to {got}, not the pinned {expected}. The "
+            f"deployment has changed since it was reviewed — refusing.")

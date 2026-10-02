@@ -44,6 +44,14 @@ class SlackHarness(BaseHarness):
     async def _deliver_to(self, target, text: str) -> None:
         await self._client.send_message(target, text)
 
+    async def _fetch_media(self, media) -> Optional[bytes]:
+        """A Slack private file: the bot token rides ONLY to files.slack.com."""
+        from surfaces._shared import fetch_capped
+        from surfaces.slack.socket_mode import FILE_HOSTS
+        return await fetch_capped(
+            media.url, allowed_hosts=FILE_HOSTS,
+            headers={"Authorization": f"Bearer {self._client._bot_token}"})
+
     async def run(self) -> None:
         try:
             auth = await self._client.auth_test()

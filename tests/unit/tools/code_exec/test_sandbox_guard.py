@@ -18,6 +18,8 @@ def test_server_local_subprocess_refused(monkeypatch):
 
 
 def test_server_docker_allowed(monkeypatch):
+    monkeypatch.setattr("tools.code_exec.sandbox_guard.docker_socket_unreachable_reason",
+                        lambda backend: None)
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
     monkeypatch.delenv("CODE_EXEC_NETWORK", raising=False)
     assert require_sandbox_or_none("docker") is None
@@ -39,6 +41,8 @@ def test_server_exec_blocked_enabled_but_not_sandbox(monkeypatch):
 
 
 def test_server_exec_allowed_with_docker(monkeypatch):
+    monkeypatch.setattr("tools.code_exec.sandbox_guard.docker_socket_unreachable_reason",
+                        lambda backend: None)
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
     monkeypatch.setenv("CODE_EXEC_ENABLED", "true")
     monkeypatch.setenv("CODE_EXEC_BACKEND", "docker")

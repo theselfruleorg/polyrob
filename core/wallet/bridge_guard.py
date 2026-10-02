@@ -307,6 +307,31 @@ def open_bridges_all(*, db_path: Optional[str] = None) -> list:
     return [dict(r) if not isinstance(r, dict) else r for r in rows]
 
 
+def conflicting_open_bridge(*, dest_chain_id: int, recipient: str,
+                            currency_out: Optional[str],
+                            db_path: Optional[str] = None) -> Optional[dict]:
+    """An unresolved bridge to the SAME (destination chain, recipient, asset),
+    or None (CR-L12).
+
+    Phase 2 proves an arrival by a balance RISE, which cannot say whose rise it
+    is: two open bridges into one balance would each claim the other's funds.
+    So at most one may be open per (chain, recipient, asset). An unreadable
+    store RAISES — "no bridge in flight" is not an answer we can give about a
+    store we could not read.
+    """
+    want_chain = int(dest_chain_id)
+    want_asset = str(currency_out or _NATIVE_EVM).lower()
+    for row in open_bridges_all(db_path=db_path):
+        try:
+            same_chain = int(row.get("dest_chain_id") or 0) == want_chain
+        except (TypeError, ValueError):
+            same_chain = False
+        if (same_chain and _same(row.get("recipient"), recipient)
+                and str(row.get("currency_out") or _NATIVE_EVM).lower() == want_asset):
+            return row
+    return None
+
+
 def mark_escalated(bid: str, *, at: Optional[float] = None,
                    db_path: Optional[str] = None) -> None:
     """Stamp that the owner has been told. Fail-open."""

@@ -172,6 +172,13 @@ class AuthTables:
                     input_tokens INTEGER DEFAULT 0,
                     output_tokens INTEGER DEFAULT 0,
                     cached_tokens INTEGER DEFAULT 0,
+                    -- F17: cache-WRITE tokens. A write costs MORE than an
+                    -- uncached token (1.25x on Anthropic's 5m window, 2x on the
+                    -- 1h one) and calculate_cost has billed it since G3 -- but
+                    -- the row stored reads only, so nothing after the fact could
+                    -- say whether a session's cache paid for itself. Mirrored in
+                    -- schema.sql and migrations v1_10_0.
+                    cache_creation_tokens INTEGER DEFAULT 0,
                     api_cost_usd REAL DEFAULT 0.0,
                     markup_multiplier REAL DEFAULT 1.0,
                     -- G-26: real column for the request_id record_llm_usage generates
@@ -205,9 +212,22 @@ class AuthTables:
             # column that doesn't exist yet would raise and crash boot (this
             # whole method re-raises on any exception).
             existing_usage_cols = await self.db.fetch_all("PRAGMA table_info(usage_records)")
-            if "request_id" not in {c["name"] for c in existing_usage_cols}:
+            existing_usage_names = {c["name"] for c in existing_usage_cols}
+            if "request_id" not in existing_usage_names:
                 try:
                     await self.db.execute("ALTER TABLE usage_records ADD COLUMN request_id TEXT")
+                except Exception as e:
+                    if "duplicate column" not in str(e).lower():
+                        raise
+
+            # F17: same idempotent-ALTER idiom for cache_creation_tokens. A fresh
+            # install STAMPS migrations without executing them, so this inline
+            # self-heal -- not migrations v1_10_0 -- is what actually runs there.
+            if "cache_creation_tokens" not in existing_usage_names:
+                try:
+                    await self.db.execute(
+                        "ALTER TABLE usage_records ADD COLUMN cache_creation_tokens INTEGER DEFAULT 0"
+                    )
                 except Exception as e:
                     if "duplicate column" not in str(e).lower():
                         raise

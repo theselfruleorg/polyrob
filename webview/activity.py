@@ -178,10 +178,28 @@ def summarize(kind: str, data: Dict[str, Any]) -> str:
         return f"self-wake → {d.get('outcome', '?')} ({_snip(d.get('reason'), 60)})"
     if kind == ek.WALLET_SPEND:
         return f"wallet spend ${d.get('amount_usd', '?')} @ {d.get('venue', '?')}"
+    # The controller emits these with `action=` (never `tool=`): reading only
+    # `tool` rendered every denial as "?".
     if kind == ek.TOOL_DENIED:
-        return f"tool DENIED: {d.get('tool') or d.get('tool_name') or '?'}"
+        name = d.get('action') or d.get('tool') or d.get('tool_name') or '?'
+        reason = d.get('reason')
+        return f"tool DENIED: {name}" + (f" — {_snip(reason, 80)}" if reason else "")
     if kind == ek.TOOL_TIMEOUT:
-        return f"tool timeout: {d.get('tool') or d.get('tool_name') or '?'}"
+        return f"tool timeout: {d.get('action') or d.get('tool') or d.get('tool_name') or '?'}"
+    if kind == ek.EXTERNAL_WRITE:
+        # 033: ONE branch for every outward act, whichever tool made it. The
+        # envelope is typed (core/effects.py::ENVELOPE_KEYS); `effect` rides in
+        # from the row's own column (normalize_db_event).
+        who = d.get('action') or d.get('tool') or '?'
+        line = f"{d.get('effect') or '?'} write: {who}"
+        if d.get('target') and d.get('target') != 'unknown':
+            line += f" → {d.get('target')}"
+        outcome = d.get('outcome') or 'ok'
+        if outcome != 'ok':
+            line += f" ({outcome.upper()})"
+        if d.get('autonomous'):
+            line += " [autonomous]"
+        return line
     if kind == ek.AUTONOMY_TICK:
         return f"autonomy tick {d.get('loop', '?')} alive={d.get('alive', '?')}"
     if kind == ek.OWNER_NOTICE:
@@ -292,6 +310,9 @@ def normalize_db_event(source: str, row: Dict[str, Any]) -> Dict[str, Any]:
     kind = str(row.get("kind") or "event")
     if kind.startswith("goal"):
         _ensure_goal_title(attrs)
+    effect = str(row.get("effect") or "")
+    if effect:
+        attrs = {**attrs, "effect": effect}
     return {
         "id": f"telemetry:{row.get('id')}",
         "ts": float(row.get("ts") or 0.0),
@@ -299,6 +320,7 @@ def normalize_db_event(source: str, row: Dict[str, Any]) -> Dict[str, Any]:
         "user_id": str(row.get("user_id") or ""),
         "session_id": str(row.get("session_id") or ""),
         "kind": kind,
+        "effect": effect,
         "summary": summarize(kind, attrs),
         "payload": _cap_payload(attrs),
     }

@@ -1,0 +1,220 @@
+# The data half of the markets pack (067 P4): read by core.packs.manifest
+# WITHOUT importing this package, registered in the loader's phase 1.
+id = "markets"
+version = "1.2.0"
+summary = "Prediction markets and perps: Polymarket and Hyperliquid (read tools, gated trade tools, API routes)"
+pack_api = 1
+requires_core = "==1.2.*"
+requires_packs = []
+tier = "first-party"
+# 067 (one install): the core extra that carries this pack's SDKs. The pack
+# ships inside polyrob; without the extra it loads and names `polyrob[crypto]`.
+extra = "crypto"
+capabilities = ["tools", "money", "api_routes"]
+
+# --- polymarket: the Polymarket trade tool --------------------------------------
+# Trading venues: reads stay allowed while tainted (deliberately NOT high_impact
+# as a tool id); the trade verbs are blocked by NAME while correspondent-tainted
+# (their rows below) and every order verb is on the owner approval lane
+# (approval_owner = "hook"). Server only: credentials live in the database.
+# Known wording debt, kept verbatim from core: the reserved remedy says "never
+# autonomous", which contradicts the x402 micro lane and DEFI_AGENT_AUTONOMY.
+[tools.polymarket]
+# 067 (one install): without this module the tool is withheld and names the pack's extra.
+requires = ["py_clob_client_v2"]
+capabilities = ["money", "delegate_blocked", "readable_while_tainted", "writes_money"]
+cli = "incompatible"
+permissions = ["network.read", "trade.execute"]
+gate = { tier = "reserved", label = "trading", remedy = "owner-only; trading is never autonomous" }
+
+# L9 (2026-07-15): live-trade order verbs get the SAME owner-in-the-loop an
+# invoice does. 067 P1: the venue trade verbs, NAMESPACED.
+# 2026-09-29 (review C10/F13): the OWN-ACCOUNT reads (balance, positions,
+# orders, trade history) are correspondent_blocked, like defi_data_portfolio —
+# the reconnaissance an attacker wants before a drain. Market data stays open.
+[tools.polymarket.verbs.polymarket_filter_markets_by_category]
+effect = "none"
+[tools.polymarket.verbs.polymarket_get_all_positions]
+effect = "none"
+correspondent_blocked = true
+[tools.polymarket.verbs.polymarket_get_balance]
+effect = "none"
+correspondent_blocked = true
+[tools.polymarket.verbs.polymarket_get_closing_soon_markets]
+effect = "none"
+[tools.polymarket.verbs.polymarket_get_crypto_markets]
+effect = "none"
+[tools.polymarket.verbs.polymarket_get_current_price]
+effect = "none"
+[tools.polymarket.verbs.polymarket_get_featured_markets]
+effect = "none"
+[tools.polymarket.verbs.polymarket_get_market_details]
+effect = "none"
+[tools.polymarket.verbs.polymarket_get_market_volume]
+effect = "none"
+[tools.polymarket.verbs.polymarket_get_open_orders]
+effect = "none"
+correspondent_blocked = true
+[tools.polymarket.verbs.polymarket_get_order_history]
+effect = "none"
+correspondent_blocked = true
+[tools.polymarket.verbs.polymarket_get_orderbook]
+effect = "none"
+[tools.polymarket.verbs.polymarket_get_portfolio_summary]
+effect = "none"
+correspondent_blocked = true
+[tools.polymarket.verbs.polymarket_get_sports_markets]
+effect = "none"
+[tools.polymarket.verbs.polymarket_get_spread]
+effect = "none"
+[tools.polymarket.verbs.polymarket_get_trade_history]
+effect = "none"
+correspondent_blocked = true
+[tools.polymarket.verbs.polymarket_get_trending_markets]
+effect = "none"
+[tools.polymarket.verbs.polymarket_search_markets]
+effect = "none"
+[tools.polymarket.verbs.polymarket_place_limit_order]
+effect = "money"
+side = "spend"
+approval_owner = "hook"
+correspondent_blocked = true
+[tools.polymarket.verbs.polymarket_place_market_order]
+effect = "money"
+side = "spend"
+approval_owner = "hook"
+correspondent_blocked = true
+[tools.polymarket.verbs.polymarket_cancel_order]
+effect = "money"
+correspondent_blocked = true
+[tools.polymarket.verbs.polymarket_cancel_all_orders]
+effect = "money"
+correspondent_blocked = true
+
+# --- polymarket_data: read-only market data (no wallet, delegable) ------------
+# Its own tool id nested in the polymarket namespace: every action it emits is
+# rowed here (inherits the empty ceiling: a read).
+[tools.polymarket_data]
+cli = "incompatible"
+permissions = ["network.read"]
+
+[tools.polymarket_data.verbs.polymarket_data_filter_markets_by_category]
+[tools.polymarket_data.verbs.polymarket_data_get_all_positions]
+correspondent_blocked = true
+[tools.polymarket_data.verbs.polymarket_data_get_closing_soon_markets]
+[tools.polymarket_data.verbs.polymarket_data_get_crypto_markets]
+[tools.polymarket_data.verbs.polymarket_data_get_current_price]
+[tools.polymarket_data.verbs.polymarket_data_get_featured_markets]
+[tools.polymarket_data.verbs.polymarket_data_get_market_details]
+[tools.polymarket_data.verbs.polymarket_data_get_market_volume]
+[tools.polymarket_data.verbs.polymarket_data_get_orderbook]
+[tools.polymarket_data.verbs.polymarket_data_get_portfolio_summary]
+correspondent_blocked = true
+[tools.polymarket_data.verbs.polymarket_data_get_sports_markets]
+[tools.polymarket_data.verbs.polymarket_data_get_spread]
+[tools.polymarket_data.verbs.polymarket_data_get_trade_history]
+correspondent_blocked = true
+[tools.polymarket_data.verbs.polymarket_data_get_trending_markets]
+[tools.polymarket_data.verbs.polymarket_data_search_markets]
+
+# --- hyperliquid: the Hyperliquid perps/spot trade tool -----------------------
+# Same shape as polymarket. L9 order verbs on the owner lane; delegation,
+# leverage and cancellations are owner_always too (42833dfa2): these venue
+# mutations have no simulate-and-assert exemption.
+[tools.hyperliquid]
+# 067 (one install): without this module the tool is withheld and names the pack's extra.
+requires = ["hyperliquid"]
+capabilities = ["money", "delegate_blocked", "readable_while_tainted", "writes_money"]
+cli = "incompatible"
+permissions = ["network.read", "trade.execute"]
+gate = { tier = "reserved", label = "trading", remedy = "owner-only; trading is never autonomous" }
+
+[tools.hyperliquid.verbs.hyperliquid_agent_status]
+effect = "none"
+correspondent_blocked = true
+[tools.hyperliquid.verbs.hyperliquid_get_account_state]
+effect = "none"
+correspondent_blocked = true
+[tools.hyperliquid.verbs.hyperliquid_get_all_mids]
+effect = "none"
+[tools.hyperliquid.verbs.hyperliquid_get_current_price]
+effect = "none"
+[tools.hyperliquid.verbs.hyperliquid_get_fills]
+effect = "none"
+correspondent_blocked = true
+[tools.hyperliquid.verbs.hyperliquid_get_funding_rate]
+effect = "none"
+[tools.hyperliquid.verbs.hyperliquid_get_open_orders]
+effect = "none"
+correspondent_blocked = true
+[tools.hyperliquid.verbs.hyperliquid_get_orderbook]
+effect = "none"
+[tools.hyperliquid.verbs.hyperliquid_get_perpetual_markets]
+effect = "none"
+[tools.hyperliquid.verbs.hyperliquid_get_spot_balances]
+effect = "none"
+correspondent_blocked = true
+[tools.hyperliquid.verbs.hyperliquid_get_spot_markets]
+effect = "none"
+[tools.hyperliquid.verbs.hyperliquid_place_limit_order]
+effect = "money"
+side = "spend"
+approval_owner = "hook"
+correspondent_blocked = true
+[tools.hyperliquid.verbs.hyperliquid_place_market_order]
+effect = "money"
+side = "spend"
+approval_owner = "hook"
+correspondent_blocked = true
+[tools.hyperliquid.verbs.hyperliquid_cancel_order]
+effect = "money"
+lane = "owner_always"
+side = "spend"
+approval_owner = "hook"
+correspondent_blocked = true
+[tools.hyperliquid.verbs.hyperliquid_cancel_all_orders]
+effect = "money"
+lane = "owner_always"
+side = "spend"
+approval_owner = "hook"
+correspondent_blocked = true
+[tools.hyperliquid.verbs.hyperliquid_approve_agent]
+effect = "money"
+lane = "owner_always"
+side = "spend"
+approval_owner = "hook"
+correspondent_blocked = true
+[tools.hyperliquid.verbs.hyperliquid_revoke_agent]
+effect = "money"
+lane = "owner_always"
+side = "spend"
+approval_owner = "hook"
+correspondent_blocked = true
+[tools.hyperliquid.verbs.hyperliquid_update_leverage]
+effect = "money"
+lane = "owner_always"
+side = "spend"
+approval_owner = "hook"
+correspondent_blocked = true
+
+# --- hyperliquid_data: read-only market data and account state (no signing) ---
+[tools.hyperliquid_data]
+cli = "incompatible"
+permissions = ["network.read"]
+
+[tools.hyperliquid_data.verbs.hyperliquid_data_agent_status]
+correspondent_blocked = true
+[tools.hyperliquid_data.verbs.hyperliquid_data_get_account_state]
+correspondent_blocked = true
+[tools.hyperliquid_data.verbs.hyperliquid_data_get_all_mids]
+[tools.hyperliquid_data.verbs.hyperliquid_data_get_current_price]
+[tools.hyperliquid_data.verbs.hyperliquid_data_get_fills]
+correspondent_blocked = true
+[tools.hyperliquid_data.verbs.hyperliquid_data_get_funding_rate]
+[tools.hyperliquid_data.verbs.hyperliquid_data_get_open_orders]
+correspondent_blocked = true
+[tools.hyperliquid_data.verbs.hyperliquid_data_get_orderbook]
+[tools.hyperliquid_data.verbs.hyperliquid_data_get_perpetual_markets]
+[tools.hyperliquid_data.verbs.hyperliquid_data_get_spot_balances]
+correspondent_blocked = true
+[tools.hyperliquid_data.verbs.hyperliquid_data_get_spot_markets]

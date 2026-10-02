@@ -37,13 +37,13 @@ PINNED_ERROR_SITES = {
     "cli/commands/todos.py": 2,
     "cli/commands/tools.py": 1,
     "cli/commands/whatsapp.py": 1,
-    "cli/commands/x_account.py": 2,
+    "packs/x/polyrob_x/commands/x_account.py": 2,  # the X pack's x-account
 }
 
 
 def _counts():
     found = {}
-    for py in (ROOT / "cli").rglob("*.py"):
+    for py in [*(ROOT / "cli").rglob("*.py"), *(ROOT / "packs").rglob("*.py")]:
         if "__pycache__" in py.parts:
             continue
         n = py.read_text(errors="ignore").count(NEEDLE)

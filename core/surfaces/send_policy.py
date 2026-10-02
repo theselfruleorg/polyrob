@@ -12,3 +12,13 @@ class SendDecision(str, Enum):
     ALLOW = "allow"                  # free-form send permitted
     TEMPLATE_ONLY = "template_only"  # only a pre-approved template may be sent
     DENY = "deny"                    # no message may be sent right now
+
+
+def window_decision(window, last_inbound, now: float) -> SendDecision:
+    """The ONE reading of a reply window (064 F4): ALLOW inside it, the window's
+    ``outside`` decision after it or before any inbound. No window = ALLOW."""
+    if window is None:
+        return SendDecision.ALLOW
+    if last_inbound is not None and (now - last_inbound) <= window.ttl_s:
+        return SendDecision.ALLOW
+    return SendDecision(window.outside)

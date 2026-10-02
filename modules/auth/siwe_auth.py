@@ -7,15 +7,90 @@ SIWE is the industry standard for wallet authentication:
 - Secure by design with nonce management
 """
 
+import hmac
 import logging
-from datetime import datetime, timedelta
+import os
+import re
+from datetime import datetime, timedelta, timezone
 from typing import Optional
+from urllib.parse import urlparse
 import secrets
 import hashlib
 from eth_account.messages import encode_defunct
 from web3 import Web3
 
 logger = logging.getLogger(__name__)
+
+#: The SIWE ``domain`` default — the same value ``/api/auth/nonce`` has always
+#: stamped when ``WEBVIEW_DOMAIN`` is unset.
+DEFAULT_SIWE_DOMAIN = "localhost:3000"
+
+#: How far in the FUTURE an ``Issued At`` may sit (client clock skew). Beyond
+#: it the message is refused: a future timestamp used to stay "fresh" forever.
+ISSUED_AT_MAX_SKEW_S = 60
+
+_SIWE_HEADER_RE = re.compile(
+    r"^(?P<domain>\S+) wants you to sign in with your Ethereum account:$")
+_SIWE_FIELDS = ("URI", "Version", "Chain ID", "Nonce", "Issued At",
+                "Expiration Time", "Not Before", "Request ID")
+
+
+def configured_siwe_domain() -> str:
+    """The host this instance signs users in for (``WEBVIEW_DOMAIN``).
+
+    ONE reader: ``/api/auth/nonce`` stamps it into the message and
+    :meth:`SIWEAuthenticator.verify_signature` requires it back.
+    """
+    return (os.environ.get("WEBVIEW_DOMAIN") or DEFAULT_SIWE_DOMAIN).strip()
+
+
+def parse_siwe_message(message: str) -> Optional[dict]:
+    """Parse an EIP-4361 message into ``{domain, address, <Field>: value}``.
+
+    Returns None for anything that is not the EIP-4361 shape: no header, no
+    address line, a field block that does not start with ``URI:``, an
+    unknown or DUPLICATED field. The field block is the text after the last
+    blank line, so a ``Nonce:`` inside the statement can never be read as the
+    nonce.
+    """
+    if not isinstance(message, str) or "\r" in message:
+        return None
+    lines = message.split("\n")
+    if len(lines) < 4:
+        return None
+    m = _SIWE_HEADER_RE.match(lines[0])
+    if not m:
+        return None
+    address = lines[1].strip()
+    if not address or lines[2] != "":
+        return None
+    try:
+        last_blank = max(i for i, ln in enumerate(lines) if ln == "")
+    except ValueError:
+        return None
+    block = lines[last_blank + 1:]
+    if not block or not block[0].startswith("URI: "):
+        return None
+    out: dict = {"domain": m.group("domain"), "address": address}
+    for ln in block:
+        if ln == "Resources:" or ln.startswith("- "):
+            continue  # the optional resource list carries no binding field
+        key, sep, value = ln.partition(": ")
+        if not sep or key not in _SIWE_FIELDS or key in out:
+            return None
+        out[key] = value.strip()
+    for required in ("URI", "Version", "Chain ID", "Nonce", "Issued At"):
+        if not out.get(required):
+            return None
+    return out
+
+
+def _parse_ts(value: str) -> datetime:
+    """An RFC 3339 timestamp as an AWARE UTC datetime (naive reads as UTC)."""
+    dt = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 class SIWEAuthenticator:
@@ -69,23 +144,67 @@ class SIWEAuthenticator:
         wallet_address: str,
         message: str,
         signature: str,
-        nonce: Optional[str] = None
+        nonce: Optional[str] = None,
+        *,
+        expected_domain: Optional[str] = None,
     ) -> bool:
         """
-        Verify wallet signature.
+        Verify a signed EIP-4361 message.
 
-        Args:
-            wallet_address: Ethereum wallet address
-            message: Signed message
-            signature: Signature from wallet
-            nonce: Optional nonce to verify (prevents replay attacks)
+        Security review 2026-09-23 (M11). The message is PARSED, and every
+        binding field must hold:
 
-        Returns:
-            True if signature is valid and nonce is correct
+        * ``domain`` == the configured host (``expected_domain``, else
+          :func:`configured_siwe_domain`), and the ``URI`` authority is the
+          same host;
+        * the address line is ``wallet_address`` and the signer recovers to it;
+        * ``Nonce:`` == the submitted ``nonce`` (required), which is consumed
+          ATOMICALLY with the ``Chain ID`` check against the stored row;
+        * ``Issued At`` is at most :data:`ISSUED_AT_MAX_SKEW_S` in the future
+          and younger than 5 minutes; an ``Expiration Time`` is in the future.
+
+        Returns True only when all hold. Never raises.
         """
 
         try:
-            # 1. Verify signature cryptographically
+            if not nonce:
+                self.logger.warning("SIWE verify refused: no nonce submitted")
+                return False
+            fields = parse_siwe_message(message)
+            if fields is None:
+                self.logger.warning("SIWE verify refused: not an EIP-4361 message")
+                return False
+
+            # 1. Domain + URI bind the signature to THIS host.
+            domain = (expected_domain or configured_siwe_domain()).strip().lower()
+            if fields["domain"].lower() != domain:
+                self.logger.warning(f"SIWE domain mismatch: {fields['domain']!r}")
+                return False
+            if (urlparse(fields["URI"]).netloc or "").lower() != domain:
+                self.logger.warning(f"SIWE URI host mismatch: {fields['URI']!r}")
+                return False
+            if fields["address"].lower() != wallet_address.lower():
+                self.logger.warning("SIWE address line does not match the wallet")
+                return False
+            if fields["Version"] != "1":
+                return False
+
+            # 2. The in-message nonce IS the submitted nonce.
+            if not hmac.compare_digest(fields["Nonce"].encode(), str(nonce).encode()):
+                self.logger.warning("SIWE nonce in message does not match the submitted nonce")
+                return False
+            try:
+                chain_id = int(fields["Chain ID"])
+            except ValueError:
+                return False
+
+            # 3. Freshness: no future Issued At beyond the skew, no stale message,
+            # no passed Expiration Time.
+            if not self._check_message_freshness(message):
+                self.logger.warning(f"Message not fresh for {wallet_address[:8]}...")
+                return False
+
+            # 4. Verify signature cryptographically.
             message_hash = encode_defunct(text=message)
             recovered_address = self.w3.eth.account.recover_message(
                 message_hash,
@@ -99,22 +218,11 @@ class SIWEAuthenticator:
                 )
                 return False
 
-            # 2. Verify nonce if provided (prevents replay attacks), bound to the
-            # chain_id declared in the submitted message (prevents chain-ID replay:
-            # a nonce issued for one chain must not validate a message claiming another).
-            if nonce:
-                submitted_chain_id = self._extract_chain_id(message)
-                valid_nonce = await self._verify_nonce(wallet_address, nonce, chain_id=submitted_chain_id)
-                if not valid_nonce:
-                    self.logger.warning(f"Invalid or expired nonce for {wallet_address[:8]}...")
-                    return False
-
-                # Consume nonce (one-time use)
-                await self._consume_nonce(wallet_address, nonce)
-
-            # 3. Check message freshness (5 minute window)
-            if not self._check_message_freshness(message):
-                self.logger.warning(f"Message expired for {wallet_address[:8]}...")
+            # 5. Consume the nonce ATOMICALLY, bound to the chain it was issued
+            # for: one UPDATE both checks and spends it, so two concurrent
+            # verifies of one nonce cannot both succeed.
+            if not await self._consume_nonce_atomic(wallet_address, nonce, chain_id):
+                self.logger.warning(f"Invalid, used or expired nonce for {wallet_address[:8]}...")
                 return False
 
             self.logger.info(f"Successfully verified signature for {wallet_address[:8]}...")
@@ -216,6 +324,25 @@ Expiration Time: {expiration}"""
                     return None
         return None
 
+    async def _consume_nonce_atomic(self, wallet_address: str, nonce: str,
+                                    chain_id: Optional[int]) -> bool:
+        """Check AND spend a nonce in one statement. True when it was live.
+
+        Live = not used, not expired, and issued for ``chain_id`` (a legacy row
+        with ``chain_id IS NULL`` keeps its grace period, as in
+        :meth:`_verify_nonce`).
+        """
+        result = await self.db.execute("""
+            UPDATE auth_nonces
+            SET used = 1
+            WHERE wallet_address = ?
+                AND nonce = ?
+                AND used = 0
+                AND expires_at > datetime('now')
+                AND (chain_id IS NULL OR chain_id = ?)
+        """, (wallet_address.lower(), nonce, chain_id))
+        return getattr(result, "rowcount", 0) == 1
+
     async def _consume_nonce(self, wallet_address: str, nonce: str):
         """Mark nonce as used (one-time use)."""
 
@@ -227,39 +354,34 @@ Expiration Time: {expiration}"""
 
     def _check_message_freshness(self, message: str, max_age: int = 300) -> bool:
         """
-        Check if message was created recently.
+        Is the EIP-4361 message fresh?
 
-        Prevents replay attacks with old signatures.
-
-        Args:
-            message: The signed message
-            max_age: Maximum age in seconds (default: 5 minutes)
-
-        Returns:
-            True if message is fresh
+        ``Issued At`` must be no more than :data:`ISSUED_AT_MAX_SKEW_S` in the
+        future and younger than ``max_age`` seconds; an ``Expiration Time``,
+        when present, must be in the future and a ``Not Before`` in the past.
+        There is no other timestamp source: the old free-text ``timestamp:``
+        fallback is gone (M11). Anything unparseable is NOT fresh.
         """
 
         try:
-            # Extract "Issued At" from SIWE message
-            for line in message.split('\n'):
-                if line.startswith('Issued At:'):
-                    issued_at_str = line.split('Issued At:')[1].strip()
-                    issued_at = datetime.fromisoformat(issued_at_str.replace('Z', ''))
-                    age = (datetime.utcnow() - issued_at).total_seconds()
-                    return age < max_age
-
-            # Fallback: check for timestamp in message
-            if 'timestamp:' in message.lower():
-                timestamp_str = message.split('timestamp:')[-1].strip().split()[0]
-                timestamp = int(timestamp_str)
-                age = datetime.now().timestamp() - timestamp
-                return age < max_age
-
+            fields = parse_siwe_message(message)
+            if fields is None:
+                return False
+            now = datetime.now(timezone.utc)
+            issued_at = _parse_ts(fields["Issued At"])
+            age = (now - issued_at).total_seconds()
+            if age < -ISSUED_AT_MAX_SKEW_S or age >= max_age:
+                return False
+            if fields.get("Expiration Time"):
+                if _parse_ts(fields["Expiration Time"]) <= now:
+                    return False
+            if fields.get("Not Before"):
+                if _parse_ts(fields["Not Before"]) > now + timedelta(seconds=ISSUED_AT_MAX_SKEW_S):
+                    return False
+            return True
         except Exception as e:
             self.logger.debug(f"Could not parse message timestamp: {e}")
-
-        # If we can't verify freshness, reject (fail-safe)
-        return False
+            return False
 
     async def cleanup_expired_nonces(self):
         """Clean up expired nonces (run periodically)."""

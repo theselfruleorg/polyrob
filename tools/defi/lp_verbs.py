@@ -1,4 +1,8 @@
-"""Guarded Uniswap v3 liquidity writes. One transaction; approvals stay separate."""
+"""Guarded Uniswap liquidity writes. One transaction; approvals stay separate.
+
+v3: add/remove/collect. v4 (048 phase 3): lp_add of a new full-range position
+on a Pons PoolKey only — see ``tools/defi/lp_v4_verbs.py``."""
+import asyncio
 from dataclasses import dataclass
 from decimal import Decimal
 import time
@@ -73,7 +77,39 @@ def _pons_warning(rpc, chain, tokens, holder, fragment):
     return warning
 
 
-def prepare_add(p, rpc, holder, npm):
+def pool_price_check(p, t0, t1, dec0, dec1, sqrt_price_x96, price_fn):
+    """CR-M12: the pool's spot price against an INDEPENDENT one, or refuse.
+
+    LP minimums are derived from the pool's own spot price, which anyone with
+    capital can move for the length of our transaction. When both legs have an
+    independent price and the pool drifts past the swap rail's tolerance, the
+    deposit/withdrawal is refused exactly like a disagreeing swap route. No
+    independent price for a leg: the note says so and the guard's valuation
+    stays the bound (it refuses an unpriceable leg in an existing pool).
+    """
+    from tools.defi.trade_tool import _route_drift_max_pct
+    if price_fn is None or not sqrt_price_x96:
+        return ''
+    try:
+        p0, p1 = price_fn(p.chain, t0), price_fn(p.chain, t1)
+    except Exception:
+        p0 = p1 = None
+    if not p0 or not p1 or p0 <= 0 or p1 <= 0:
+        return 'pool price check: UNAVAILABLE (no independent price for a leg)\n'
+    s = sqrt_price_x96 / M.Q96
+    pool = (s * s) * (10 ** dec0) / (10 ** dec1)          # token1 per token0
+    independent = p0 / p1
+    drift = abs(pool - independent) / independent * 100.0
+    limit = _route_drift_max_pct()
+    if drift > limit:
+        raise ValueError(
+            f'pool price {pool:.8g} disagrees with the independent price '
+            f'{independent:.8g} by {drift:.2f}% (limit {limit:.0f}%); a thin or '
+            f'manipulated pool extracts value through LP minimums. Nothing was built')
+    return f'pool price check: AGREES ({drift:.2f}% drift)\n'
+
+
+def prepare_add(p, rpc, holder, npm, price_fn=None):
     chain_row = chains.get(p.chain)
     from core.wallet.tokens import normalize_address
     native_a, native_b = p.token_a.lower() == 'native', p.token_b.lower() == 'native'
@@ -102,6 +138,7 @@ def prepare_add(p, rpc, holder, npm):
             events.append((dex_registry.row_for(p.chain, 'v3').factory, A.TOPIC_POOL_CREATED))
     else:
         sqrt = ps.sqrt_price_x96
+        warning += pool_price_check(p, t0, t1, *ds, sqrt, price_fn)
     lo, hi = ticks(p.range, A.FEE_TIERS[p.fee], *ds, flipped)
     if p.token_id is not None:
         if str(R.view(rpc, npm, A.NPM_OWNER_OF, [p.token_id])).lower() != holder.lower():
@@ -157,11 +194,12 @@ def _multicall(inner):
     return inner[0] if len(inner) == 1 else encode(A.NPM_MULTICALL, [[bytes.fromhex(c[2:]) for c in inner]])
 
 
-def prepare_exit(p, rpc, holder, npm, verb):
+def prepare_exit(p, rpc, holder, npm, verb, price_fn=None):
     if str(R.view(rpc, npm, A.NPM_OWNER_OF, [p.token_id])).lower() != holder.lower():
         raise ValueError('wallet does not own this position')
     pv = R.position(rpc, p.chain, p.token_id)
     inner, events = [], [(npm, A.TOPIC_COLLECT)]
+    note = ''
     # Read the actual collect return, not the nominal fee-growth estimate:
     # core rounding can leave that estimate several raw units too high.
     collectible = R.collectible_fees(rpc, p.chain, p.token_id, holder)
@@ -174,6 +212,8 @@ def prepare_exit(p, rpc, holder, npm, verb):
         if not liq:
             raise ValueError('position has no removable liquidity; use lp_collect for tokens owed')
         ps = R.pool_state(rpc, p.chain, pv.pool)
+        note = pool_price_check(p, pv.token0, pv.token1, pv.dec0, pv.dec1,
+                                ps.sqrt_price_x96, price_fn)
         amounts = M.amounts_for_liquidity(ps.sqrt_price_x96,
             M.sqrt_price_at_tick(pv.tick_lower), M.sqrt_price_at_tick(pv.tick_upper), liq)
         minimums = [max(1, n * (10000 - p.slippage_bps) // 10000) if n else 0 for n in amounts]
@@ -192,7 +232,7 @@ def prepare_exit(p, rpc, holder, npm, verb):
         lp_position=(npm, p.token_id), lp_position_effect='burn' if burn else 'hold',
         expected_events=tuple(events), idempotency_key=verb + ':' + uuid.uuid4().hex)
     return Plan(intent, _multicall(inner), 0, pv.pool, (pv.token0, pv.token1),
-        (pv.dec0, pv.dec1), f'pool: {pv.pool}; position: {p.token_id}\nreceipts (raw minima): {intent.lp_inflows}\n')
+        (pv.dec0, pv.dec1), f'pool: {pv.pool}; position: {p.token_id}\nreceipts (raw minima): {intent.lp_inflows}\n' + note)
 
 
 def receipt_position(plan, raw_receipt, holder):
@@ -227,18 +267,31 @@ def receipt_position(plan, raw_receipt, holder):
 async def _perform(tool, p, ctx, verb):
     from core.wallet.broadcast.evm import EvmRail
     from core.wallet import tx_notify
-    from core.wallet.authority import leaf_refusal, spend_pause_refusal
+    from core.money.authorize import SpendIntent, authorize_spend
     from tools.defi.trade_tool import _unsupported_chain
     if not liquidity_enabled():
         return tool._ar(error=f'liquidity writes are off; set {FLAG}=true. Nothing was broadcast.')
-    err = leaf_refusal(ctx, verb) or _unsupported_chain(p.chain)
+    # 067 P1b: the kernel's leaf + principal steps first, as before.
+    verdict = authorize_spend(SpendIntent(what=verb, pause=False), ctx)
+    err = (verdict.reason if verdict.refused else None) or _unsupported_chain(p.chain)
     if err:
         return tool._ar(error=err)
-    if p.protocol != 'v3':
-        return tool._ar(error='Uniswap v4 requires the phase-3 Permit2 rail; v3 only today. Nothing was broadcast.')
-    paused = spend_pause_refusal()
-    if paused:
-        return tool._ar(error=paused)
+    if p.protocol not in ('v3', 'v4'):
+        return tool._ar(error=f'unknown protocol {p.protocol!r}; v3 or v4. Nothing was broadcast.')
+    if p.protocol == 'v4' and verb != 'lp_add':
+        return tool._ar(error=('Uniswap v4 builds lp_add (a new full-range position on a Pons '
+                               'PoolKey) only; v4 withdrawal and fee collection are not built '
+                               '(090 R5: no exits during the window). Nothing was broadcast.'))
+    # CR-L21: a deposit OPENS a position, so the scoped trade_entry pause binds
+    # it; a removal or a fee collection is an exit and stays available.
+    entry = verb == 'lp_add'
+    pause_only = SpendIntent(principal=False, leaf=False, entry=entry)
+    from tools.controller.turn_origin import (
+        _is_autonomous_goal_turn, _is_forged_or_autonomous_turn)
+    verdict = authorize_spend(pause_only, ctx, forged_fn=_is_forged_or_autonomous_turn,
+                              autonomous_ok_fn=_is_autonomous_goal_turn)
+    if verdict.refused:
+        return tool._ar(error=verdict.reason)
     wallet = tool._get_wallet()
     if wallet is None:
         return tool._ar(error='agent wallet not enabled (AGENT_WALLET_ENABLED)')
@@ -246,20 +299,41 @@ async def _perform(tool, p, ctx, verb):
     try:
         rail = (tool._rail_factory or EvmRail)(chain=p.chain, signer=signer)
         rpc = getattr(tool, '_lp_rpc', None) or rail._rpc
-        npm = dex_registry.resolve_position_manager(p.chain, 'v3')
-        dex_registry.verify_pins(rpc, p.chain, 'v3')
-        plan = prepare_add(p, rpc, signer.address, npm) if verb == 'lp_add' else prepare_exit(p, rpc, signer.address, npm, verb)
+        npm = dex_registry.resolve_position_manager(p.chain, p.protocol)
+        dex_registry.verify_pins(rpc, p.chain, p.protocol)
+        if p.protocol == 'v4':
+            from tools.defi.lp_v4_verbs import prepare_add_v4
+            plan = prepare_add_v4(p, rpc, signer.address, npm, price_fn=tool._price)
+        else:
+            plan = (prepare_add(p, rpc, signer.address, npm, price_fn=tool._price)
+                    if verb == 'lp_add' else
+                    prepare_exit(p, rpc, signer.address, npm, verb, price_fn=tool._price))
     except Exception as exc:
         return tool._ar(error=f'refused: {exc}. RESULT: NOT SENT.')
     async with gate.reserve():
-        from tools.controller.action_registration import _is_forged_or_autonomous_turn
+        from tools.controller.action_registration import (
+            _is_autonomous_goal_turn, _is_forged_or_autonomous_turn)
+        cap_note = ''
+        if p.protocol == 'v4':
+            # 090 R4 caps: a refusal before a broadcast; a note on a dry run, so
+            # the guard's own judgement stays visible while the cap is unset.
+            from tools.defi.lp_v4_verbs import caps_refusal
+            native_held = dict(plan.intent.lp_held_balances).get(None, 0)
+            why = caps_refusal(gate, plan.value, native_held)
+            if why and not p.dry_run:
+                return tool._ar(error=f'refused: {why}. RESULT: NOT SENT.')
+            cap_note = f'LP caps: {why or "within LP_ETH_CAP / LP_ETH_DAILY_CAP / LP_ETH_FLOOR"}\n'
         try:
             tx = rail.build_call(to=npm, data=plan.data, value=plan.value)
-            decision = (tool._guard_fn or tx_guard.authorize)(plan.intent, tx,
+            # CR-M10: simulation, signing RPC and receipt polling run off the
+            # event loop so the held reservation never freezes other sessions.
+            decision = await asyncio.to_thread(
+                tool._guard_fn or tx_guard.authorize, plan.intent, tx,
                 holder=signer.address, gate=gate, execution_context=ctx, tool_self=tool,
                 price_fn=tool._price, fallback_price_fn=tool._fallback_price,
-                forged_fn=_is_forged_or_autonomous_turn, liquidity_rpc=rpc)
-            header = f'{verb} on {p.chain} (Uniswap v3)\n{plan.description}guard: {decision.reason}; value: {decision.amount_usd}; lane: {decision.lane}\n'
+                forged_fn=_is_forged_or_autonomous_turn,
+                autonomous_ok_fn=_is_autonomous_goal_turn, liquidity_rpc=rpc)
+            header = f'{verb} on {p.chain} (Uniswap {p.protocol})\n{plan.description}{cap_note}guard: {decision.reason}; value: {decision.amount_usd}; lane: {decision.lane}\n'
             if not decision.allowed:
                 return tool._ar(content=header + 'RESULT: NOT SENT.')
             if not decision.sim_gas_used:
@@ -269,23 +343,28 @@ async def _perform(tool, p, ctx, verb):
                 note = f'would mint position #{decision.position_token_id} (prediction only)\n' if plan.intent.lp_position_effect == 'mint' else ''
                 return tool._ar(content=header + note + 'RESULT: DRY RUN. Re-run with dry_run=false to send.')
             # Re-check the owner's pause immediately before signing.
-            if spend_pause_refusal():
+            if authorize_spend(pause_only, ctx,
+                               forged_fn=_is_forged_or_autonomous_turn,
+                              autonomous_ok_fn=_is_autonomous_goal_turn).refused:
                 raise ValueError('owner paused spending before broadcast')
-            tx_hash = rail.sign_and_send(tx)
+            tx_hash = await asyncio.to_thread(rail.sign_and_send, tx)
         except Exception as exc:
+            from core.wallet.broadcast.evm import broadcast_failure_text, outcome_unknown
+            if outcome_unknown(exc):
+                return tool._ar(error=broadcast_failure_text(exc))
             return tool._ar(error=f'refused before broadcast: {exc}')
-        tool._notify_tx(ctx, tx_notify.TxNotice(verb=verb, route=p.chain + ':v3',
+        tool._notify_tx(ctx, tx_notify.TxNotice(verb=verb, route=f'{p.chain}:{p.protocol}',
             chain=p.chain, amount_in=plan.description, usd=decision.amount_usd,
             tx_ref=tx_hash, lane=decision.lane), settled=False)
         # Once submitted, ALWAYS book the cap, even if polling or receipt parsing
         # fails. Never describe a receipt failure as "nothing sent".
         asset, positions, detail, state = None, [], '', tx_notify.STATE_IN_FLIGHT
         try:
-            receipt = rail.await_receipt(tx_hash)
+            receipt = await asyncio.to_thread(rail.await_receipt, tx_hash)
             detail = receipt.status
             if receipt.status == 'success':
                 state = tx_notify.STATE_CONFIRMED
-                raw = rpc('eth_getTransactionReceipt', [tx_hash])
+                raw = await asyncio.to_thread(rpc, 'eth_getTransactionReceipt', [tx_hash])
                 token_id = receipt_position(plan, raw, signer.address)
                 # The token-keyed book cannot represent an LP claim separately.
                 # Adding the legs would double-count previously acquired tokens;
@@ -297,10 +376,13 @@ async def _perform(tool, p, ctx, verb):
                 state = tx_notify.STATE_REVERTED
         except Exception as exc:
             detail = f'SUBMITTED; receipt/accounting unverified ({exc}). Do not retry blindly.'
+        # v4: stamp the native sent (the declared maximum — the SWEEP refund is
+        # not subtracted, so the LP caps over-count, never under-count).
+        extra = {'native_raw': plan.value} if p.protocol == 'v4' else {}
         gate.record(venue='defi', action=verb, amount_usd=decision.amount_usd,
             counterparty=plan.pool, idempotency_key=plan.intent.idempotency_key,
-            result_ref=tx_hash, chain=p.chain, asset=asset, positions=positions)
-        tool._notify_tx(ctx, tx_notify.TxNotice(verb=verb, route=p.chain + ':v3',
+            result_ref=tx_hash, chain=p.chain, asset=asset, positions=positions, **extra)
+        tool._notify_tx(ctx, tx_notify.TxNotice(verb=verb, route=f'{p.chain}:{p.protocol}',
             chain=p.chain, amount_in=plan.description, usd=decision.amount_usd,
             tx_ref=tx_hash, state=state, detail=detail, ledger_recorded=True), settled=True)
         return tool._ar(content=header + f'RESULT: {detail}\ntx: {tx_hash}')

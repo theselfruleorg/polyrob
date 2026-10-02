@@ -21,7 +21,7 @@ appendix at the end for when each claim was verified.
 | **License** | MIT | MIT | MIT |
 | **Language** | Python | Python | TypeScript / Node (native macOS/iOS in Swift) |
 | **Primary focus** | Durable, self-hosted autonomy that scales to multi-tenant | Self-improving single-operator agent | Omni-channel personal assistant |
-| **Multi-provider LLM** | ✅ [Six built-ins plus flat-rate rows, OAuth plans and your own endpoint](guide/configuration.md#3-providers-and-models) | ✅ 300+ models (portal / OpenRouter / own endpoint) | ✅ Claude, OpenAI, Gemini, DeepSeek |
+| **Multi-provider LLM** | ✅ [Six built-ins plus flat-rate rows, OAuth plans and your own endpoint](guide/configuration.md#4-providers-and-models) | ✅ 300+ models (portal / OpenRouter / own endpoint) | ✅ Claude, OpenAI, Gemini, DeepSeek |
 | **Provider failover** | ✅ Automatic cross-provider on billing, quota and rate-limit errors | ✅ Credential pooling + rotation | ✅ Across auth profiles |
 | **Subscription sign-in (OAuth)** | ✅ Claude Pro/Max, ChatGPT Codex, Copilot, SuperGrok, Qwen, MiniMax | ❓ | ✅ ChatGPT / Codex |
 | **Persistent memory** | ✅ SQLite FTS5, optional local vector recall, tenant-scoped | ✅ FTS5 + reflective/curated, pluggable providers | ⚠️ Session history + workspace files |

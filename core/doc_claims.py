@@ -61,6 +61,9 @@ _CLAIM_TERMS = (
 )
 _CLAIM_RE = re.compile(r"\b(?:" + "|".join(_CLAIM_TERMS) + r")\b", re.IGNORECASE)
 
+#: 060 WS-6: the heading that starts a rules doc's superseded section.
+_SUPERSEDED_RE = re.compile(r"^\s*##\s+superseded\s*$", re.IGNORECASE)
+
 def claim_provenance_required() -> bool:
     """Is the claim guard armed? ``DOC_CLAIM_PROVENANCE_REQUIRED``, default OFF.
 
@@ -134,6 +137,8 @@ def changed_lines(old: str, new: str) -> List[str]:
     old_bodies = {strip_stamp(l).strip() for l in (old or "").splitlines()}
     out = []
     for line in (new or "").splitlines():
+        if _SUPERSEDED_RE.match(line):
+            break  # 060 WS-6: the superseded section is history, never a change
         body = strip_stamp(line).strip()
         if not body:
             continue
@@ -160,7 +165,13 @@ def stamp_changed_lines(old: str, new: str, source: str,
         if body and body not in old_lines:
             old_lines[body] = l
     out = []
-    for line in (new or "").splitlines():
+    lines = (new or "").splitlines()
+    for idx, line in enumerate(lines):
+        if _SUPERSEDED_RE.match(line):
+            # 060 WS-6: the superseded section keeps the stamps it was retired
+            # with; re-stamping it would date history as observed today.
+            out.extend(lines[idx:])
+            break
         body = strip_stamp(line).strip()
         if not body:
             out.append(line)
@@ -217,7 +228,119 @@ def unsourced_claim_error(lines: List[str]) -> str:
     )
 
 
+# --- 060 WS-6: supersede, never evict ---------------------------------------
+#
+# OpenClaw's USER.md model: a directive is ACTIVE or SUPERSEDED, and a superseded
+# one is kept, dated, with its successor. Before this, a rule that was rewritten
+# or deleted to make room under the owner-doc cap was simply gone — on 2026-09-20
+# one rule fit only after two older enforcement anchors were cut. Now a line an
+# update DROPS moves under ``## Superseded`` with the date (and its successor when
+# the edit replaced exactly one line), the loader injects only the ACTIVE part,
+# and the cap counts only the active part.
+
+#: The ONE heading that starts the superseded section of a rules doc.
+SUPERSEDED_HEADING = "## Superseded"
+
+#: The superseded section's own bound. Past it the OLDEST entries fall off the
+#: live file — nothing is lost: every active write archives the whole prior doc
+#: first (``SelfContextWriter._archive_existing``).
+SUPERSEDED_MAX_CHARS = 8000
+
+def owner_rules_supersede() -> bool:
+    """``OWNER_RULES_SUPERSEDE`` — supersede, never evict. Default ON.
+
+    ``false`` restores the flat owner doc: a dropped line is gone, the loader
+    injects the whole file and the cap counts the whole file. Literal name on
+    purpose (``test_flags_reverse`` scans for it).
+    """
+    return bool_env("OWNER_RULES_SUPERSEDE", True)
+
+
+def split_superseded(text: str):
+    """``(active, superseded)`` — the doc before the ``## Superseded`` heading,
+    and the section body after it (heading excluded). No heading => ``(text, "")``."""
+    lines = (text or "").splitlines()
+    for i, line in enumerate(lines):
+        if _SUPERSEDED_RE.match(line):
+            active = "\n".join(lines[:i]).rstrip()
+            sup = "\n".join(lines[i + 1:]).strip("\n")
+            return active, sup
+    return (text or ""), ""
+
+
+def superseded_entries(text: str) -> List[str]:
+    """The superseded section's entries, one per non-blank line, oldest first."""
+    _active, sup = split_superseded(text)
+    return [l for l in sup.splitlines() if l.strip()]
+
+
+def active_rule_lines(text: str) -> List[str]:
+    """The ACTIVE part's content lines (headings and blanks excluded)."""
+    active, _sup = split_superseded(text)
+    return [l for l in active.splitlines() if l.strip() and not l.lstrip().startswith("#")]
+
+
+def _entry_body(line: str) -> str:
+    body = line.strip()
+    if body.startswith("- "):
+        body = body[2:]
+    return body
+
+
+def carry_superseded(old: str, new: str, *, observed_at: Optional[str] = None) -> str:
+    """Return ``new`` with every ACTIVE rule line of ``old`` that ``new`` drops
+    kept under ``## Superseded``, dated — never silently evicted.
+
+    - The old doc's superseded entries are ALWAYS carried (a writer cannot erase
+      the section by omitting it); entries ``new`` itself lists are kept too.
+    - A dropped line gets ``— superseded <date>``; when the edit replaced exactly
+      one line with exactly one line, ``by: <successor>`` names the new one.
+    - Headings are structure, not rules, and are never carried.
+    - Idempotent: nothing dropped and no section on either side => ``new`` as is.
+    """
+    new_active, new_sup = split_superseded(new)
+    old_active, old_sup = split_superseded(old)
+    new_bodies = {strip_stamp(l).strip() for l in new_active.splitlines()}
+    dropped = [l for l in old_active.splitlines()
+               if l.strip() and not l.lstrip().startswith("#")
+               and strip_stamp(l).strip() not in new_bodies]
+    entries: List[str] = []
+    seen = set()
+    for line in (old_sup + "\n" + new_sup).splitlines():
+        if line.strip() and line.strip() not in seen:
+            seen.add(line.strip())
+            entries.append(line.rstrip())
+    if dropped:
+        date = normalize_observed_at(observed_at)
+        added = changed_lines(old_active, new_active)
+        successor = ""
+        if len(dropped) == 1 and len(added) == 1:
+            successor = _entry_body(strip_stamp(added[0])).strip()
+            if len(successor) > 160:
+                successor = successor[:159] + "…"
+        for line in dropped:
+            entry = f"- {_entry_body(line)} — superseded {date}"
+            if successor:
+                entry += f" by: {successor}"
+            if entry.strip() not in seen:
+                seen.add(entry.strip())
+                entries.append(entry)
+    if not entries:
+        return new
+    # Bound the section; the oldest fall off (archived with the prior doc).
+    while entries and len("\n".join(entries)) > SUPERSEDED_MAX_CHARS:
+        entries.pop(0)
+    return new_active.rstrip() + "\n\n" + SUPERSEDED_HEADING + "\n\n" + "\n".join(entries) + "\n"
+
+
 __all__ = [
+    "SUPERSEDED_HEADING",
+    "SUPERSEDED_MAX_CHARS",
+    "active_rule_lines",
+    "carry_superseded",
+    "owner_rules_supersede",
+    "split_superseded",
+    "superseded_entries",
     "claim_provenance_required",
     "changed_lines",
     "find_unsourced_claims",

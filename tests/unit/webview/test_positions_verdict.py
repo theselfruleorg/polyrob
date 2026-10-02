@@ -53,6 +53,7 @@ def _client(monkeypatch, tmp_path, user_id="u1"):
     monkeypatch.setattr(pages, "_data_dir", lambda: str(tmp_path))
     app = FastAPI()
     app.include_router(pages.router)
+    app.include_router(pages.money_router)  # 067 P5a: Money readers
     return TestClient(app), pages
 
 
@@ -135,7 +136,7 @@ def test_api_positions_verdict_on_reconcile_error_is_unverified_not_clean(
 
 
 def test_api_positions_verdict_none_when_disabled(monkeypatch, tmp_path):
-    monkeypatch.delenv("DEFI_DATA_ENABLED", raising=False)
+    monkeypatch.setenv("DEFI_DATA_ENABLED", "false")  # 071 D1: default is ON
     client, _ = _client(monkeypatch, tmp_path)
     res = client.get("/api/webgate/positions")
     assert res.status_code == 200

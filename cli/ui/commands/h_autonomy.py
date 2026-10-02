@@ -1,4 +1,4 @@
-"""/autonomy — the read-only autonomy panel (030 file-size extraction).
+"""/autonomy — the autonomy panel, and `on`/`off` live switches (026 P5).
 
 Extracted from handlers.py per the god-file ratchet; the registry and the
 legacy import path (`from cli.ui.commands.handlers import _h_autonomy`) keep
@@ -105,18 +105,30 @@ def _autonomy_snapshot(user_id: str, data_dir: str = "data") -> dict:
     }
 
 
-def _h_autonomy(ctx: CommandContext) -> None:
-    """Show autonomy loop state + cron-job / open-goal counts (read-only)."""
+async def _switch(ctx: CommandContext, on: bool, is_global: bool) -> None:
+    from cli.ui.autonomy_live import autonomy_switch
+    ctx.emit(await autonomy_switch(on, is_global=is_global), title="autonomy")
+
+
+def _h_autonomy(ctx: CommandContext):
+    """Show autonomy loop state + cron-job / open-goal counts; `on`/`off` switch
+    the loops live (returns an awaitable the dispatcher awaits)."""
     from cli.ui import candy
     from core.status_render import pause_headline_from
 
-    # 026 P0.5: `/autonomy on` used to print the status panel and silently
-    # ignore the argument — error honestly and name the real write path.
+    # 026 P5: `/autonomy on|off [--global]` writes AUTONOMY_ENABLED through
+    # the one write path WITH a live apply and starts/stops this REPL's loops
+    # (no restart). Any other argument still errors and names the verbs.
     if ctx.args:
+        verb = ctx.args[0].lower()
+        extra = [a for a in ctx.args[1:] if a != "--global"]
+        if verb in ("on", "off") and not extra:
+            return _switch(ctx, verb == "on", "--global" in ctx.args[1:])
         ctx.emit(
-            f"/autonomy takes no arguments yet (got: {' '.join(ctx.args)}).\n"
-            "It is read-only here — turn autonomy on or off with "
-            "`polyrob autonomy on` / `polyrob autonomy off` (restart applies).\n"
+            f"/autonomy takes `on`, `off` or nothing (got: {' '.join(ctx.args)}).\n"
+            "`/autonomy on` / `/autonomy off` switch the loops in this session "
+            "and persist it; from a shell, `polyrob autonomy on` / "
+            "`polyrob autonomy off` (restart applies).\n"
             "For an immediate freeze/unfreeze of all loops use /pause "
             "[everything|trading|background|messages|deploying] [for 6h] "
             "and /resume (live, no restart).",
@@ -164,7 +176,8 @@ def _h_autonomy(ctx: CommandContext) -> None:
 
     lines.append("")
     # E18: the ONE remedy, spoken as the verb — never the flag name.
-    lines.append(f"{candy.GUTTER}turn it on/off: `polyrob autonomy on` / "
+    lines.append(f"{candy.GUTTER}turn it on/off: `/autonomy on` / `/autonomy off` "
+                 "(live in this session); from a shell `polyrob autonomy on` / "
                  "`polyrob autonomy off` (restart applies)")
 
     ctx.emit("\n".join(lines), title="autonomy")

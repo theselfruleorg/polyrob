@@ -97,6 +97,12 @@ class MCPActionRegistrar:
                         # Store metadata for routing
                         executor_func._mcp_server = server_name
                         executor_func._mcp_tool = tool_meta.name
+                        # 033: a server-declared readOnlyHint narrows this action's
+                        # effect to none (tools/controller/effect_hooks.py). Only an
+                        # explicit True counts; nothing here can RAISE trust.
+                        _ann = getattr(tool_meta, "annotations", None) or {}
+                        executor_func._mcp_read_only = (
+                            isinstance(_ann, dict) and _ann.get("readOnlyHint") is True)
 
                         # Register with the registry
                         self.registry.wrap_function(

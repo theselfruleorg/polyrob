@@ -136,9 +136,9 @@ def inspect_submission(row, *, evm_rpc=None, solana_rpc=None):
                                 f'Could not verify chain evidence ({type(exc).__name__}); reservation retained.')
 
 
-def recovery_report(*, evm_rpc=None, solana_rpc=None):
+def recovery_report(*, evm_rpc=None, solana_rpc=None, data_dir=None):
     from core.wallet.submission_journal import unresolved
-    rows = unresolved()  # Damaged storage raises; never return a false clean report.
+    rows = unresolved(data_dir)  # Damaged storage raises; never return a false clean report.
     return [asdict(inspect_submission(row, evm_rpc=evm_rpc, solana_rpc=solana_rpc)) for row in rows]
 
 

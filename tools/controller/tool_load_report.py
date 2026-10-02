@@ -24,32 +24,16 @@ import logging
 import os
 from typing import Dict, Optional
 
+from core.tool_capabilities import gate_flag_map
+
 logger = logging.getLogger(__name__)
 
 #: tool_id -> the env flag whose OFF value explains "this tool is not registered".
-#: Every value is checked against the flags catalog by
-#: tests/unit/tools/controller/test_tool_load_failures.py, so it cannot rot into
-#: naming a flag that no longer exists.
-TOOL_GATE_FLAGS: Dict[str, str] = {
-    "publish": "PUBLISH_ENABLED",
-    "app_service": "APP_SERVICE_ENABLED",
-    "hf_deploy": "HF_DEPLOY_ENABLED",
-    "github": "GITHUB_TOOL_ENABLED",
-    "git": "GIT_TOOLS_ENABLED",
-    "coding": "CODING_TOOLS_ENABLED",
-    "code_execution": "CODE_EXEC_ENABLED",
-    "shell": "SHELL_TOOLS_ENABLED",
-    "process": "SHELL_TOOLS_ENABLED",
-    "self_env": "SELF_ENV_ENABLED",
-    "cronjob": "CRON_ENABLED",
-    "goal": "GOALS_ENABLED",
-    "knowledge": "KB_ENABLED",
-    "x_browser": "X_BROWSER_ENABLED",
-    "defi_trade": "DEFI_TRADE_ENABLED",
-    "defi_data": "DEFI_DATA_ENABLED",
-    "x402_invoice": "X402_INVOICE_ENABLED",
-    "mcp": "MCP_ENABLED",
-}
+#: A VIEW (067 P1) of the ``gate`` field of the per-tool rows in
+#: core/tool_capabilities.py — declare a tool's flag there. Every value is checked
+#: against the flags catalog by tests/unit/tools/controller/test_tool_load_failures.py,
+#: so it cannot rot into naming a flag that no longer exists.
+TOOL_GATE_FLAGS: Dict[str, str] = gate_flag_map()
 
 
 #: Ids the GOAL vocabulary grants (`tools/goal_tools.py::_SELF_GOAL_ALLOWED_TOOLS`,
@@ -103,6 +87,16 @@ def describe_missing_tool(tool_id: str, *, container=None,
     Never raises: an unresolvable id degrades to a plain not-registered line.
     """
     tool_id = (tool_id or "").strip()
+    try:
+        from core.packs import state as _packs
+        if _packs.tool_withheld(tool_id):
+            pack_id = _packs.pack_of_tool(tool_id)
+            rec = _packs.record(pack_id)
+            why = f"{rec.status}" + (f": {rec.reason}" if rec and rec.reason else "") if rec else "unknown"
+            return (f"gated:pack-not-loaded — provided by pack '{pack_id}', which is {why}; "
+                    "the owner enables it (`polyrob pack enable`), the agent cannot")
+    except Exception:
+        logger.debug("pack probe failed for %r", tool_id, exc_info=True)
     flag = TOOL_GATE_FLAGS.get(tool_id)
     if flag and not _tool_is_registered(tool_id):
         # The tool exists in the codebase but its registration was skipped, so the
@@ -141,3 +135,33 @@ def format_tool_gap_note(failures: Optional[Dict[str, str]]) -> str:
 
 __all__ = ["ACTION_IDS_NOT_TOOLS", "TOOL_GATE_FLAGS", "action_id_gap",
            "describe_missing_tool", "format_tool_gap_note"]
+
+
+def shared_identity_refusal(tool_id: str, user_id: Optional[str]) -> Optional[str]:
+    """M04 (2026-09-23): the load-time gap for a ``shared_identity`` tool asked
+    for by a NON-owner tenant, or None when it may load.
+
+    These tools move no money, so the money gate never saw them — yet each acts
+    AS the instance: posts from its X account, mails from its mailbox, pushes
+    with its GitHub/HF credentials, serves a public URL, drives its MCP servers,
+    or schedules durable work. An A2A/API caller that names one in
+    ``metadata.tools`` must not borrow that identity. The dimension is the ONE
+    list (``core.tool_capabilities``); the owner check is the one alias-aware
+    helper the ship rail uses. Fail-CLOSED."""
+    try:
+        from core.tool_capabilities import ids_with
+        name = str(tool_id or "")
+        if name.startswith("mcp:"):
+            name = name[4:]
+        if name not in ids_with("shared_identity"):
+            return None
+        from core.config_policy import local_mode_enabled
+        from core.instance import is_owner_local_safe, resolve_owner_principal
+        if is_owner_local_safe(user_id, owner_principal=resolve_owner_principal(),
+                               local_enabled=local_mode_enabled()):
+            return None
+    except Exception:
+        pass
+    return ("gated:owner_only — this tool acts as the instance's own identity "
+            "(account, mailbox, credentials or public URL); only the owner tenant "
+            "may load it")

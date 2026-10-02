@@ -1,13 +1,9 @@
 """polyrob gateway — run ALL enabled surfaces in ONE process.
 
-Builds the container once and then starts each enabled surface concurrently:
-  - Telegram long-polling  (TELEGRAM_SURFACE_ENABLED)
-  - WhatsApp webhook       (WHATSAPP_SURFACE_ENABLED)
-  - Email IMAP poll        (EMAIL_SURFACE_ENABLED)
-  - Discord gateway WS     (DISCORD_SURFACE_ENABLED)
-  - Slack Socket Mode      (SLACK_SURFACE_ENABLED)
-  - Signal signal-cli SSE  (SIGNAL_SURFACE_ENABLED)
-  - X (Twitter) DM polling (X_SURFACE_ENABLED)
+Builds the container once and then starts every surface in the surface catalog
+(``core/surfaces/catalog.py``) whose ``*_SURFACE_ENABLED`` flag is on, each
+through its own ``surfaces/<id>/launch.py`` (the contract: ``surfaces/_launch.py``).
+Webhook surfaces share ONE HTTP server on ``--port`` (``/webhooks/<id>``).
 
 All surfaces share the same TaskAgent, outbound dispatcher, surface bus, and
 autonomy runtime, so cross-surface outbound routing works out of the box.
@@ -30,16 +26,49 @@ from core.runtime_paths import data_dir_or_home
 
 @click.command()
 @click.option("--port", default=8080, show_default=True,
-              help="Port for the WhatsApp (and any HTTP-based) webhook surface")
+              help="Port for the shared webhook server (WhatsApp and any webhook surface)")
+@click.option("--host", default="0.0.0.0", show_default=True,
+              help="Bind address for the webhook server (127.0.0.1 behind a proxy)")
 @click.option("--telegram-token", default=None, envvar="TELEGRAM_BOT_TOKEN",
               help="Telegram bot token (else TELEGRAM_BOT_TOKEN env)")
+@click.option("--skip", default="", metavar="IDS",
+              help="Comma list of surfaces to leave to their own process "
+                   "(e.g. telegram,email when those run as separate services)")
+@click.option("--no-autonomy", is_flag=True,
+              help="Do not start the cron/goal/curator loops here (another process owns them)")
+@click.option("--idle-when-empty", is_flag=True,
+              help="With nothing to run, stay up idle instead of exiting (a service "
+                   "unit then restarts with every deploy and picks up a new surface)")
 @click.option("--verbose", "-v", is_flag=True, help="Show debug logging")
-def gateway(port: int, telegram_token, verbose: bool):
-    """Run all enabled surfaces (Telegram/WhatsApp/Email/Discord/Slack/Signal/X) in one process."""
-    asyncio.run(_run_gateway(port, telegram_token, verbose))
+def gateway(port: int, host: str, telegram_token, skip: str, no_autonomy: bool,
+            idle_when_empty: bool, verbose: bool):
+    """Run every enabled chat surface in one process."""
+    skip_ids = {s.strip().lower() for s in (skip or "").split(",") if s.strip()}
+    asyncio.run(_run_gateway(port, telegram_token, verbose, host=host, skip=skip_ids,
+                             autonomy=not no_autonomy, idle_when_empty=idle_when_empty))
 
 
-async def _run_gateway(port: int, telegram_token_opt, verbose: bool) -> None:
+def _enabled_specs(skip=frozenset()) -> list:
+    """Catalog rows this gateway runs: enabled (flag, or configured = on) and not
+    left to another process."""
+    from core.surfaces.catalog import surfaces as _catalog_surfaces
+    from core.surfaces.config import SurfaceConfig
+    return [spec for spec in _catalog_surfaces()
+            if spec.id not in skip and SurfaceConfig.surface_enabled(spec.id)]
+
+
+def _withheld_enabled(skip=frozenset()) -> list:
+    """``(row, reason)`` for pack surfaces whose flag is on but whose pack did
+    not load (067 P3b): named, never silently absent."""
+    from core.surfaces.catalog import withheld_surfaces
+    from core.env import bool_env
+    return [(spec, why) for spec, why in withheld_surfaces()
+            if spec.id not in skip and bool_env(spec.enabled_flag, False)]
+
+
+async def _run_gateway(port: int, telegram_token_opt, verbose: bool, *, host: str = "0.0.0.0",
+                       skip=frozenset(), autonomy: bool = True,
+                       idle_when_empty: bool = False) -> None:
     import logging as _logging
     logger = _logging.getLogger(__name__)
 
@@ -62,6 +91,15 @@ async def _run_gateway(port: int, telegram_token_opt, verbose: bool) -> None:
     # override=False silently ignore a file-set CORRESPONDENT_ACCESS_ENABLED=false).
     os.environ.setdefault("SINGULAR_CHAT_ENABLED", "true")
     os.environ.setdefault("CORRESPONDENT_ACCESS_ENABLED", "true")
+
+    # Nothing to run → decide BEFORE the container build (which costs hundreds of
+    # MB): a service unit idles cheaply; an interactive run explains and exits.
+    if idle_when_empty and not _enabled_specs(skip):
+        click.echo(click.style("[gateway] ", fg="yellow")
+                   + "no chat surface is configured here yet — idling until the next "
+                     "restart (a deploy, or after `polyrob surfaces add <id>`).")
+        await asyncio.Event().wait()
+        return
 
     # Logging: verbose→DEBUG; headless→INFO; interactive→quiet (mirrors telegram.py).
     headless = not sys.stderr.isatty()
@@ -115,75 +153,56 @@ async def _run_gateway(port: int, telegram_token_opt, verbose: bool) -> None:
     autonomy_handles = None
     try:
         from agents.task.constants import local_mode_enabled
-        if local_mode_enabled():
+        if autonomy and local_mode_enabled():
             from core.autonomy_runtime import start_autonomy
             _data_dir = data_dir_or_home(getattr(getattr(container, "config", None), "data_dir", None))
             autonomy_handles = start_autonomy(task_agent=task_agent, data_dir=_data_dir)
     except Exception:
         autonomy_handles = None
 
-    # --- Resolve which surfaces are enabled ---
+    # --- Resolve which surfaces are enabled (064 F1: from the surface catalog) ---
+    from core.surfaces.catalog import surfaces as _catalog_surfaces
     from core.surfaces.config import SurfaceConfig
 
-    tg_enabled = SurfaceConfig.telegram_surface_enabled()
-    wa_enabled = SurfaceConfig.whatsapp_surface_enabled()
-    em_enabled = SurfaceConfig.email_surface_enabled()
-    dc_enabled = SurfaceConfig.discord_surface_enabled()
-    sl_enabled = SurfaceConfig.slack_surface_enabled()
-    sg_enabled = SurfaceConfig.signal_surface_enabled()
-    x_enabled = SurfaceConfig.x_surface_enabled()
+    # 067 P3b: a pack's surface row (e.g. X from the x pack) runs only while its
+    # pack loaded; phase 2 is idempotent (the container build above ran it).
+    from core.packs.loader import load_packs
+    load_packs()
+    enabled = _enabled_specs(skip)
+    for _spec, _why in _withheld_enabled(skip):
+        click.echo(click.style("[gateway] ", fg="yellow") + f"{_spec.id}: not started — {_why}")
 
-    if not (tg_enabled or wa_enabled or em_enabled
-            or dc_enabled or sl_enabled or sg_enabled or x_enabled):
-        click.echo(click.style("[gateway] ", fg="yellow")
-                   + "No surfaces enabled. Set at least one of:\n"
-                     "  TELEGRAM_SURFACE_ENABLED=true\n"
-                     "  WHATSAPP_SURFACE_ENABLED=true\n"
-                     "  EMAIL_SURFACE_ENABLED=true\n"
-                     "  DISCORD_SURFACE_ENABLED=true\n"
-                     "  SLACK_SURFACE_ENABLED=true\n"
-                     "  SIGNAL_SURFACE_ENABLED=true\n"
-                     "  X_SURFACE_ENABLED=true")
-        # Clean up what we started before bailing.
-        if dispatcher is not None:
-            try:
-                await dispatcher.stop()
-            except Exception:
-                pass
+    async def _stop_runtime():
+        """Clean up what we started before bailing / on shutdown."""
         if autonomy_handles is not None:
             try:
                 await autonomy_handles.stop()
             except Exception:
                 pass
+        if dispatcher is not None:
+            try:
+                await dispatcher.stop()
+            except Exception:
+                pass
+
+    if not enabled:
+        from core.remedy import flag_command
+        click.echo(click.style("[gateway] ", fg="yellow")
+                   + "No surfaces enabled. Enable at least one (takes effect: restart):\n"
+                   + "\n".join(f"  {flag_command(spec.enabled_flag)}"
+                               for spec in _catalog_surfaces()))
+        await _stop_runtime()
         return
 
-    enabled_names = []
-    if tg_enabled:
-        enabled_names.append("telegram")
-    if wa_enabled:
-        enabled_names.append(f"whatsapp(:{port})")
-    if em_enabled:
-        enabled_names.append("email")
-    if dc_enabled:
-        enabled_names.append("discord")
-    if sl_enabled:
-        enabled_names.append("slack")
-    if sg_enabled:
-        enabled_names.append("signal")
-    if x_enabled:
-        enabled_names.append("x")
-    click.echo(click.style("gateway online", fg="green")
-               + ": " + ", ".join(enabled_names))
+    click.echo(click.style("gateway online", fg="green") + ": " + ", ".join(
+        f"{spec.id}(:{port})" if spec.transport == "webhook" else spec.id
+        for spec in enabled))
 
-    # ---- Collect surface tasks / harnesses ----
-    coroutines = []
-    tg_harness = None
-    wa_server = None
-    wa_harness = None
-    em_harness = None
-    # Discord/Slack/Signal/X harnesses (uniform run()/stop() contract) — collected
-    # for the shutdown sweep in `finally`.
-    connector_harnesses = []
+    def _warn(msg: str) -> None:
+        click.echo(click.style("[gateway] WARN: ", fg="yellow") + msg)
+
+    def _note(msg: str) -> None:
+        click.echo(click.style(f"  {msg}", dim=True))
 
     def _skip_reason(exc: BaseException) -> str:
         """Skip-line detail; a missing optional dep gains the pip-extra remedy."""
@@ -192,230 +211,76 @@ async def _run_gateway(port: int, telegram_token_opt, verbose: bool) -> None:
         hint = missing_extra_hint(str(exc))
         return f"{exc} ({hint})" if hint else str(exc)
 
-    def _run_harness(h):
-        async def _run():
+    # ---- Launch each enabled surface through its package's launch(ctx) ----
+    # An enabled surface with missing credentials WARNs and is skipped; one that
+    # raises is skipped too — never a crash of the whole multi-surface process.
+    import importlib
+
+    from surfaces._launch import LaunchContext
+    ctx = LaunchContext(
+        container=container, task_agent=task_agent,
+        data_dir=data_dir_or_home(getattr(getattr(container, "config", None), "data_dir", None)),
+        port=port, warn=_warn, note=_note,
+        options={"telegram_token": telegram_token_opt})
+    launched = []   # (spec, Launched)
+    for spec in enabled:
+        try:
+            mod = importlib.import_module(f"{spec.module}.launch")
+            got = await mod.launch(ctx)
+        except Exception as exc:
+            _warn(f"{spec.label} surface failed to start, skipping: {_skip_reason(exc)}")
+            continue
+        if got is not None:
+            launched.append((spec, got))
+
+    coroutines = []
+
+    def _run(fn):
+        async def _go():
             try:
-                await h.run()
+                await fn()
             except asyncio.CancelledError:
                 pass
-        return _run()
+        return _go()
 
-    # --- Telegram ---
-    if tg_enabled:
-        tok = (telegram_token_opt or os.environ.get("TELEGRAM_BOT_TOKEN") or "").strip()
-        if not tok:
-            click.echo(click.style("[gateway] WARN: ", fg="yellow")
-                       + "TELEGRAM_SURFACE_ENABLED=true but no token "
-                         "(set --telegram-token or TELEGRAM_BOT_TOKEN). "
-                         "Skipping Telegram.")
-        else:
-            try:
-                from surfaces.telegram.harness import build_telegram_harness
-                _tg_data_dir = data_dir_or_home(getattr(getattr(container, "config", None), "data_dir", None))
-                tg_harness = build_telegram_harness(container, task_agent, token=tok,
-                                                    webhook_base=None, data_dir=_tg_data_dir)
-                await tg_harness.start()
+    for _spec, got in launched:
+        if got.run is not None:
+            coroutines.append(_run(got.run))
 
-                async def _run_tg():
-                    try:
-                        await tg_harness.run_polling()
-                    except asyncio.CancelledError:
-                        pass
-
-                coroutines.append(_run_tg())
-            except Exception as exc:
-                tg_harness = None
-                click.echo(click.style("[gateway] WARN: ", fg="yellow")
-                           + f"Telegram surface failed to start, skipping: {_skip_reason(exc)}")
-
-    # --- WhatsApp ---
-    # Preflight Meta WhatsApp credentials — otherwise the gateway serves the webhook
-    # but the verify handshake + every send fail later (401/404) with no local signal.
-    # Mirrors whatsapp.py's preflight; downgraded to WARN+skip (gateway skips a broken
-    # surface rather than aborting the whole multi-surface process, like the tg-token case).
-    wa_missing = [v for v in ("WHATSAPP_ACCESS_TOKEN", "WHATSAPP_PHONE_NUMBER_ID", "WHATSAPP_VERIFY_TOKEN")
-                  if not (os.environ.get(v) or "").strip()] if wa_enabled else []
-    if wa_enabled and wa_missing:
-        click.echo(click.style("[gateway] WARN: ", fg="yellow")
-                   + "WHATSAPP_SURFACE_ENABLED=true but missing "
-                   + ", ".join(wa_missing) + ". Skipping WhatsApp.")
-    elif wa_enabled:
+    # --- ONE webhook server for every webhook surface (/webhooks/<surface_id>) ---
+    web_server = None
+    webhook_specs = [spec for spec, got in launched if got.webhook]
+    if webhook_specs:
         try:
             import uvicorn  # noqa: PLC0415 — intentionally lazy
             from fastapi import FastAPI
             from api.webhooks import router as webhooks_router, set_container_provider
-            from surfaces.whatsapp.harness import build_whatsapp_harness
-
-            # CRITICAL: assemble + register the harness — this is what registers
-            # webhook_surfaces['whatsapp']. Without it every Meta verify/inbound POST
-            # 404s (the endpoint has no surface to route to), even though we serve it.
-            # Pin state DBs (dedup / window) to the container's data_dir for isolation.
-            _wa_data_dir = data_dir_or_home(getattr(getattr(container, "config", None), "data_dir", None))
-            wa_harness = build_whatsapp_harness(container, task_agent, data_dir=_wa_data_dir)
 
             set_container_provider(lambda: container)
-            wa_app = FastAPI(title="polyrob gateway — whatsapp webhook")
-            wa_app.include_router(webhooks_router)
-
-            wa_config = uvicorn.Config(wa_app, host="0.0.0.0", port=port,
-                                       log_level=log_level.lower())
-            wa_server = uvicorn.Server(wa_config)
-
-            async def _run_wa():
-                try:
-                    await wa_server.serve()
-                except asyncio.CancelledError:
-                    pass
-
-            coroutines.append(_run_wa())
-            click.echo(click.style(
-                f"  whatsapp webhook: configure Meta to POST to http(s)://<host>:{port}/webhooks/whatsapp",
-                dim=True))
+            web_app = FastAPI(title="polyrob gateway — webhooks")
+            web_app.include_router(webhooks_router)
+            web_server = uvicorn.Server(uvicorn.Config(
+                web_app, host=host, port=port, log_level=log_level.lower()))
+            # The replay finishes BEFORE the server accepts a request: its reset of
+            # `processing` rows must only ever touch rows a DEAD process held.
+            from surfaces._launch import recover_webhook_surfaces
+            await recover_webhook_surfaces(container, task_agent, note=_note, warn=_warn)
+            coroutines.append(_run(web_server.serve))
         except Exception as exc:
-            wa_harness = None
-            wa_server = None
-            click.echo(click.style("[gateway] WARN: ", fg="yellow")
-                       + f"WhatsApp surface failed to start, skipping: {_skip_reason(exc)}")
-
-    # --- Email ---
-    if em_enabled:
-        _data_dir = data_dir_or_home(getattr(getattr(container, "config", None), "data_dir", None))
-        try:
-            from core.surfaces.correspondents import CorrespondentRegistry
-            if container.get_service("correspondent_registry") is None:
-                container.register_service(
-                    "correspondent_registry",
-                    CorrespondentRegistry(os.path.join(_data_dir, "correspondents.db")),
-                )
-        except Exception as exc:
-            click.echo(click.style("[gateway] WARN: ", fg="yellow")
-                       + f"correspondent registry unavailable: {exc}")
-
-        try:
-            from tools.email_tool import EmailTool
-            email_tool = EmailTool("email", container.config, container)
-            poll_sec = SurfaceConfig.email_imap_poll_sec()
-
-            from surfaces.email.harness import build_email_harness
-            em_harness = build_email_harness(container, task_agent, email_tool=email_tool,
-                                             data_dir=_data_dir, poll_interval=poll_sec)
-            await em_harness.start()
-            from core.instance import resolve_agent_email
-            addr = resolve_agent_email() or "(unconfigured)"
-            click.echo(click.style(f"  email polling {addr} every {poll_sec}s", dim=True))
-
-            async def _run_em():
-                try:
-                    await em_harness.run_polling()
-                except asyncio.CancelledError:
-                    pass
-
-            coroutines.append(_run_em())
-        except Exception as exc:
-            em_harness = None
-            click.echo(click.style("[gateway] WARN: ", fg="yellow")
-                       + f"Email surface failed to start, skipping: {_skip_reason(exc)}")
-
-    _conn_data_dir = data_dir_or_home(getattr(getattr(container, "config", None), "data_dir", None))
-
-    # --- Discord ---
-    if dc_enabled:
-        dc_tok = (os.environ.get("DISCORD_BOT_TOKEN") or "").strip()
-        if not dc_tok:
-            click.echo(click.style("[gateway] WARN: ", fg="yellow")
-                       + "DISCORD_SURFACE_ENABLED=true but no DISCORD_BOT_TOKEN. "
-                         "Skipping Discord.")
-        else:
-            try:
-                from surfaces.discord.harness import build_discord_harness
-                h = build_discord_harness(container, task_agent, token=dc_tok,
-                                          data_dir=_conn_data_dir)
-                connector_harnesses.append(h)
-                coroutines.append(_run_harness(h))
-            except Exception as exc:
-                click.echo(click.style("[gateway] WARN: ", fg="yellow")
-                           + f"Discord surface failed to start, skipping: {_skip_reason(exc)}")
-
-    # --- Slack ---
-    if sl_enabled:
-        sl_bot = (os.environ.get("SLACK_BOT_TOKEN") or "").strip()
-        sl_app = (os.environ.get("SLACK_APP_TOKEN") or "").strip()
-        if not (sl_bot and sl_app):
-            missing = [n for n, v in (("SLACK_BOT_TOKEN", sl_bot), ("SLACK_APP_TOKEN", sl_app)) if not v]
-            click.echo(click.style("[gateway] WARN: ", fg="yellow")
-                       + "SLACK_SURFACE_ENABLED=true but missing "
-                       + ", ".join(missing) + " (needs BOTH xoxb- and xapp- tokens). "
-                         "Skipping Slack.")
-        else:
-            try:
-                from surfaces.slack.harness import build_slack_harness
-                h = build_slack_harness(container, task_agent, bot_token=sl_bot,
-                                        app_token=sl_app, data_dir=_conn_data_dir)
-                connector_harnesses.append(h)
-                coroutines.append(_run_harness(h))
-            except Exception as exc:
-                click.echo(click.style("[gateway] WARN: ", fg="yellow")
-                           + f"Slack surface failed to start, skipping: {_skip_reason(exc)}")
-
-    # --- Signal ---
-    if sg_enabled:
-        sg_daemon = (os.environ.get("SIGNAL_DAEMON_URL") or "http://127.0.0.1:8080").strip()
-        sg_account = (os.environ.get("SIGNAL_ACCOUNT") or "").strip()
-        if not sg_account:
-            click.echo(click.style("[gateway] WARN: ", fg="yellow")
-                       + "SIGNAL_SURFACE_ENABLED=true but no SIGNAL_ACCOUNT "
-                         "(the +E164 number linked in signal-cli). Skipping Signal.")
-        else:
-            try:
-                from surfaces.signal.harness import build_signal_harness
-                h = build_signal_harness(container, task_agent, daemon_url=sg_daemon,
-                                         account=sg_account, data_dir=_conn_data_dir)
-                connector_harnesses.append(h)
-                coroutines.append(_run_harness(h))
-            except Exception as exc:
-                click.echo(click.style("[gateway] WARN: ", fg="yellow")
-                           + f"Signal surface failed to start, skipping: {_skip_reason(exc)}")
-
-    # --- X (Twitter) DMs ---
-    if x_enabled:
-        _x_required = ("TWITTER_API_KEY", "TWITTER_API_SECRET_KEY",
-                       "TWITTER_ACCESS_TOKEN", "TWITTER_ACCESS_TOKEN_SECRET")
-        x_missing = [k for k in _x_required if not (os.environ.get(k) or "").strip()]
-        try:
-            from tools.x_oauth2 import oauth2_configured as _x_oauth2_configured
-            _x_oauth2 = _x_oauth2_configured()
-        except Exception:
-            _x_oauth2 = bool((os.environ.get("TWITTER_OAUTH2_ACCESS_TOKEN") or "").strip())
-        if x_missing and not _x_oauth2:
-            click.echo(click.style("[gateway] WARN: ", fg="yellow")
-                       + "X_SURFACE_ENABLED=true but missing " + ", ".join(x_missing)
-                       + " (set an OAuth 2.0 PKCE user token or all OAuth 1.0a "
-                         "user-context keys). Skipping X.")
-        else:
-            try:
-                from surfaces.x.harness import build_x_harness
-                h = build_x_harness(container, task_agent, data_dir=_conn_data_dir)
-                connector_harnesses.append(h)
-                coroutines.append(_run_harness(h))
-            except Exception as exc:
-                click.echo(click.style("[gateway] WARN: ", fg="yellow")
-                           + f"X surface failed to start, skipping: {_skip_reason(exc)}")
+            names = ", ".join(spec.label for spec in webhook_specs)
+            _warn(f"webhook server failed to start, skipping {names}: {_skip_reason(exc)}")
+            web_server = None
 
     if not coroutines:
-        # All surfaces were enabled in flags but none produced a runnable coroutine
-        # (e.g. Telegram flag set but no token).
-        click.echo(click.style("[gateway] WARN: ", fg="yellow")
-                   + "No surfaces could be started (check tokens / credentials).")
-        if dispatcher is not None:
-            try:
-                await dispatcher.stop()
-            except Exception:
-                pass
-        if autonomy_handles is not None:
-            try:
-                await autonomy_handles.stop()
-            except Exception:
-                pass
+        # Every enabled surface was skipped (e.g. Telegram flag set but no token).
+        _warn("No surfaces could be started (check tokens / credentials).")
+        for _spec, got in launched:
+            if got.stop is not None:
+                try:
+                    await got.stop()
+                except Exception:
+                    pass
+        await _stop_runtime()
         return
 
     click.echo(click.style("Ctrl-C to stop", dim=True))
@@ -425,10 +290,14 @@ async def _run_gateway(port: int, telegram_token_opt, verbose: bool) -> None:
     gather_task = asyncio.ensure_future(asyncio.gather(*coroutines, return_exceptions=True))
 
     def _stop(*_a):
-        if tg_harness is not None:
-            tg_harness._running = False
-        if wa_server is not None:
-            wa_server.should_exit = True
+        for _spec, got in launched:
+            if got.on_signal is not None:
+                try:
+                    got.on_signal()
+                except Exception:
+                    pass
+        if web_server is not None:
+            web_server.should_exit = True
         gather_task.cancel()
 
     try:
@@ -450,34 +319,11 @@ async def _run_gateway(port: int, telegram_token_opt, verbose: bool) -> None:
         pass
     finally:
         click.echo("\n" + click.style("stopping gateway…", dim=True))
-        if autonomy_handles is not None:
-            try:
-                await autonomy_handles.stop()
-            except Exception:
-                pass
-        if dispatcher is not None:
-            try:
-                await dispatcher.stop()
-            except Exception:
-                pass
-        if tg_harness is not None:
-            try:
-                await tg_harness.stop()
-            except Exception:
-                pass
-        if em_harness is not None:
-            try:
-                await em_harness.stop()
-            except Exception:
-                pass
-        if wa_harness is not None:
-            try:
-                await wa_harness.stop()
-            except Exception:
-                pass
-        for h in connector_harnesses:
-            try:
-                await h.stop()
-            except Exception:
-                pass
-        # WhatsApp server shuts itself down via should_exit; no explicit stop needed.
+        await _stop_runtime()
+        for _spec, got in launched:
+            if got.stop is not None:
+                try:
+                    await got.stop()
+                except Exception:
+                    pass
+        # The webhook server shuts itself down via should_exit; no explicit stop needed.

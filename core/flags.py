@@ -22,7 +22,7 @@ Secrets (keys/tokens/passwords) are never echoed: :func:`is_secret_flag` masks
 their values in every resolution, so ``doctor --flags`` output is safe to paste.
 No behavior change to any flag consumer — same parsers underneath.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Callable, Optional
 
 from core.env import parse_bool
@@ -129,6 +129,7 @@ class Flag:
     default_doc: str
     kind: str  # 'bool' | 'int' | 'str' | 'enum' (valid values in flag_enums SSOT)
     description: str = ""  # 030 WS-F1: the doc's "What it does" cell (compressed)
+    tier: str = "advanced"  # 067 F1: 'public' | 'advanced' | 'internal' (generator-derived)
 
 
 @dataclass(frozen=True)
@@ -147,7 +148,8 @@ PATTERNS: list[Flag] = []
 for _name, _group, _default, *_rest in CATALOG:
     _flag = Flag(name=_name, group=_group, default_doc=_default,
                  kind=_enum_kind(_name) or _infer_kind(_default),
-                 description=(_rest[0] if _rest else ""))
+                 description=(_rest[0] if _rest else ""),
+                 tier=(_rest[1] if len(_rest) > 1 else "advanced"))
     if "<" in _name:
         PATTERNS.append(_flag)
     else:
@@ -167,6 +169,17 @@ def pattern_flag_for(name: str) -> Optional[Flag]:
     return None
 
 
+def flag_for(name: str) -> Optional[Flag]:
+    """The catalog Flag for a concrete *name*: an exact row, else the ``<...>``
+    pattern row it matches (renamed to *name*), else None. A family documented
+    only by its pattern row (``OWNER_<SURFACE>_ID``) resolves like any flag."""
+    flag = REGISTRY.get(name)
+    if flag is not None:
+        return flag
+    pattern = pattern_flag_for(name)
+    return replace(pattern, name=name) if pattern is not None else None
+
+
 DynamicDefault = Callable[[str], Optional[tuple]]
 
 
@@ -177,7 +190,9 @@ def resolve_flag(name: str, env: dict, dynamic_default: Optional[DynamicDefault]
     ``(value, source_label)`` tuple or None) > the documented static default.
     Secret flags report ``(set, masked)`` / ``(unset)`` instead of the value.
     """
-    flag = REGISTRY[name]
+    flag = flag_for(name)
+    if flag is None:
+        raise KeyError(name)
     raw = env.get(name)
     if raw is not None and str(raw).strip() != "":
         if is_secret_flag(name):

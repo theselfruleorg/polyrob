@@ -210,6 +210,18 @@ class SelfContextWriter:
             logger.debug("%s provenance skipped (fail-open): %s", self._LOG_LABEL, e)
             return body
 
+    # --- body hooks (060 WS-6) ------------------------------------------------
+
+    def _prepare_body(self, uid: str, body: str, *, pending: Optional[bool],
+                      created_by: str, observed_at: Optional[str]) -> str:
+        """Last transform before the cap/scan gate. The base doc is written as
+        given; the owner RULES doc overrides this to supersede, never evict."""
+        return body
+
+    def _capped_len(self, body: str) -> int:
+        """The length the char cap is measured on (the whole body by default)."""
+        return len(body)
+
     def propose(self, content: str, *, user_id: str,
                 created_by: str = PROVENANCE_AGENT,
                 pending: Optional[bool] = None,
@@ -240,10 +252,13 @@ class SelfContextWriter:
         if isinstance(prov, SelfContextWriteResult):
             return prov
         body = prov
+        body = self._prepare_body(uid, body, pending=pending, created_by=created_by,
+                                  observed_at=observed_at)
         # Over-cap ERRORS — never silently truncate an identity doc.
-        if len(body) > self._MAX_CHARS:
+        capped = self._capped_len(body)
+        if capped > self._MAX_CHARS:
             return SelfContextWriteResult(False, errors=[
-                f"{self._CAP_NOUN} is {len(body)}/{self._MAX_CHARS} chars — {self._CAP_HINT}"])
+                f"{self._CAP_NOUN} is {capped}/{self._MAX_CHARS} chars — {self._CAP_HINT}"])
         if not body.strip():
             return SelfContextWriteResult(False, errors=["empty content"])
 

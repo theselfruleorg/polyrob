@@ -740,14 +740,22 @@ def clear_notified_item(user_id: str, kind: str, item_id: str, *,
 def summarize_doc_change(before: Optional[str], after: Optional[str]) -> str:
     """One owner-readable line describing a document change. Pure, never raises."""
     try:
-        old_lines = [ln.strip() for ln in (before or "").splitlines() if ln.strip()]
-        new_lines = [ln.strip() for ln in (after or "").splitlines() if ln.strip()]
+        # 060 WS-6: compare the ACTIVE rules; a line moved under `## Superseded`
+        # is reported as superseded (kept, dated), not as a deletion.
+        from core.doc_claims import split_superseded, superseded_entries
+        before_active, _b = split_superseded(before or "")
+        after_active, _a = split_superseded(after or "")
+        retired = len(superseded_entries(after or "")) - len(superseded_entries(before or ""))
+        old_lines = [ln.strip() for ln in before_active.splitlines() if ln.strip()]
+        new_lines = [ln.strip() for ln in after_active.splitlines() if ln.strip()]
         old_set, new_set = set(old_lines), set(new_lines)
         added = [ln for ln in new_lines if ln not in old_set]
         removed = [ln for ln in old_lines if ln not in new_set]
         if not added and not removed:
             return "no change"
         parts = [f"+{len(added)}/-{len(removed)} lines"]
+        if retired > 0:
+            parts.append(f"{retired} superseded (kept under '## Superseded', dated)")
         if added:
             head = added[0]
             parts.append(f'added: "{head[:100]}"' + ("…" if len(head) > 100 else ""))

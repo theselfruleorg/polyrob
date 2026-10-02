@@ -1,10 +1,8 @@
 """033 T0.2 — cron delivery must use the GATED actions, not the raw helpers.
 
-`cron/delivery.py` built a raw TwitterTool and called `post()`, which skips
-_check_ready, the hourly rate limit, TWITTER_REQUIRE_APPROVAL, the cross-session
-repeat-post cooldown and the social_write record. A cron job with
-deliver=twitter published to the timeline with zero governance. `_deliver_email`
-skipped `email_send`'s whole tier/allowlist/cap/seed stack the same way.
+`_deliver_email` skipped `email_send`'s whole tier/allowlist/cap/seed stack.
+The twitter half (the X pack's ``twitter`` delivery channel, 067 P3b) is in
+tests/packs/x/test_cron_delivery_channel.py.
 """
 import types
 
@@ -16,43 +14,6 @@ class _Job:
     user_id = "tenant-1"
     session_id = "sess-1"
     task = "a scheduled task"
-
-
-@pytest.mark.asyncio
-async def test_twitter_delivery_goes_through_the_gated_action(monkeypatch):
-    import cron.delivery as d
-
-    called = {}
-
-    class _Tool:
-        async def twitter_post(self, params, execution_context=None):
-            called["text"] = params.text
-            called["ctx"] = execution_context
-            return types.SimpleNamespace(error=None, extracted_content="ok")
-
-        async def post(self, *a, **k):
-            raise AssertionError("cron must not call the ungated post() helper")
-
-    monkeypatch.setattr(d, "_config_and_container", lambda ta: ({}, None))
-    monkeypatch.setattr(d, "_build_twitter_tool", lambda cfg, c: _Tool())
-
-    assert await d._deliver_twitter(None, _Job(), "hello world") is True
-    assert called["text"] == "hello world"
-    assert called["ctx"].user_id == "tenant-1"
-    assert called["ctx"].session_id == "sess-1"
-
-
-@pytest.mark.asyncio
-async def test_twitter_delivery_reports_a_refusal_as_failure(monkeypatch):
-    import cron.delivery as d
-
-    class _Tool:
-        async def twitter_post(self, params, execution_context=None):
-            return types.SimpleNamespace(error="paused (social)", extracted_content=None)
-
-    monkeypatch.setattr(d, "_config_and_container", lambda ta: ({}, None))
-    monkeypatch.setattr(d, "_build_twitter_tool", lambda cfg, c: _Tool())
-    assert await d._deliver_twitter(None, _Job(), "hi") is False
 
 
 @pytest.mark.asyncio
@@ -110,3 +71,32 @@ async def test_email_delivery_reports_a_tier_denial_as_failure(monkeypatch):
     monkeypatch.setattr(d, "_build_email_tool", lambda cfg, c: _Tool())
     monkeypatch.setattr(d, "_owner_email", lambda ta, job: "stranger@example.com")
     assert await d._deliver_email(None, _Job(), "body", None) is False
+
+
+@pytest.mark.asyncio
+async def test_room_delivery_respects_a_pause_set_while_cron_ran(tmp_path, monkeypatch):
+    import cron.delivery as d
+    from core.autonomy_control import pause
+    monkeypatch.setenv("EXTERNAL_WRITE_PAUSE_GATE", "true")
+    monkeypatch.setenv("POLYROB_HOME", str(tmp_path))
+    monkeypatch.setenv("TELEMETRY_EVENT_LOG_ENABLED", "false")
+    pause(str(tmp_path), scopes=("all",))
+    class Router:
+        async def send_message(self, *args):
+            pytest.fail("an autonomous room post escaped the pause")
+    container = types.SimpleNamespace(
+        config=types.SimpleNamespace(data_dir=str(tmp_path)),
+        get_service=lambda key: Router() if key == "message_router" else None)
+    assert await d._deliver_room(container, _Job(), "report", "-100") == "deferred"
+
+
+@pytest.mark.asyncio
+async def test_room_delivery_pause_probe_fails_closed(monkeypatch):
+    import cron.delivery as d
+    import core.effects as effects
+    monkeypatch.setenv("EXTERNAL_WRITE_PAUSE_GATE", "true")
+    monkeypatch.setenv("TELEMETRY_EVENT_LOG_ENABLED", "false")
+    def unavailable(*a, **k):
+        raise OSError("unreadable")
+    monkeypatch.setattr(effects, "effect_pause_refusal", unavailable)
+    assert await d._deliver_room(None, _Job(), "report", "-100") == "deferred"

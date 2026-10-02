@@ -84,7 +84,7 @@ async def test_anysite_api_records_a_rail_probe_event(monkeypatch, tmp_path):
     log = el.TelemetryEventLog(str(tmp_path / "te.db"))
     monkeypatch.setattr(el, "get_event_log", lambda *a, **k: log)
     monkeypatch.setattr(el, "event_log_enabled", lambda: True)
-    from tools.anysite import tool as at
+    at = pytest.importorskip("polyrob_discovery.anysite.tool")
     from types import SimpleNamespace
     monkeypatch.setattr(at.AnysiteTool, "_prepare", lambda self: True)
     monkeypatch.setattr(at, "build_api_argv", lambda e, p, f: ["x"])

@@ -26,8 +26,10 @@ inherits unchanged.
 """
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import logging
-import uuid
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +40,74 @@ FLAG = "DEFI_CALL_ENABLED"
 def call_enabled() -> bool:
     from core.env import bool_env
     return bool_env(FLAG, False)
+
+
+def _typed_verb_only_destinations() -> dict:
+    """Pinned contracts a caller-authored call may NEVER address (CR-H06).
+
+    Each holds value the wallet CONTROLS but does not HOLD — an LP position,
+    a Permit2 grant, a launchpad lock — so the guard, which measures holder
+    balances and holder-emitted events, cannot see a call that redirects it
+    (e.g. NPM ``decreaseLiquidity`` + ``collect`` to a third party reads as a
+    $0 call). Only the typed verbs, which assert those effects, may reach them.
+    """
+    out = {}
+    try:
+        from core.wallet import dex_registry
+        for row in dex_registry.all_rows():
+            for addr, what in ((row.position_manager, "the Uniswap position manager"),
+                               (row.pool_manager, "the Uniswap v4 pool manager"),
+                               (row.permit2, "Permit2")):
+                if addr:
+                    out[addr.lower()] = what
+        out[dex_registry._PERMIT2.lower()] = "Permit2"
+    except Exception:
+        logger.warning("typed-verb destinations: dex registry unreadable", exc_info=True)
+        raise
+    try:
+        from tools.launchpad import pons_abi as P
+        for addr in (P.FACTORY, P.ROUTER, P.DEPLOYER, P.MEME_HOOK, P.LOCKER):
+            out[addr.lower()] = "a pinned Pons launchpad contract"
+    except Exception:
+        logger.warning("typed-verb destinations: launchpad pins unreadable", exc_info=True)
+        raise
+    return out
+
+
+def typed_verb_only_refusal(to: str) -> Optional[str]:
+    """Why a generic call / dapp transaction to ``to`` is refused, or None.
+
+    Fails CLOSED: a pin table that cannot be read refuses the call.
+    """
+    try:
+        pinned = _typed_verb_only_destinations()
+    except Exception as exc:
+        return (f"refused: the pinned-contract table could not be read ({exc}); "
+                f"failing closed")
+    what = pinned.get(str(to or "").lower())
+    if what is None:
+        return None
+    return (f"refused: {to} is {what}. It holds value the wallet controls but "
+            f"does not hold (positions, grants, locks), which this guard cannot "
+            f"measure — use the typed verb (lp_* / launchpad_* / approve_token), "
+            f"never a generic call")
+
+
+def intent_idempotency_key(prefix: str, *, chain: str, to: str, data: str,
+                           value_wei: int, tx: Optional[dict] = None,
+                           execution_context=None) -> str:
+    """A replay key derived from the STABLE intent (CR-L02) — never a uuid.
+
+    ``(chain, to, sha256(calldata), value, nonce, session)``. The nonce of the
+    built transaction makes a deliberate repeat (a later nonce) a new key
+    while a double submission of the same built transaction collides, so the
+    PolicyGate replay guard is live instead of inert.
+    """
+    digest = hashlib.sha256((data or "0x").lower().encode("ascii", "replace")).hexdigest()
+    nonce = (tx or {}).get("nonce")
+    session = getattr(execution_context, "session_id", None) or "-"
+    return (f"{prefix}:{chain}:{str(to or '').lower()}:{digest[:32]}:"
+            f"{int(value_wei or 0)}:n{nonce if nonce is not None else '?'}:{session}")
 
 
 async def perform_call(tool, params, execution_context=None):
@@ -81,6 +151,9 @@ async def perform_call(tool, params, execution_context=None):
         to_addr = normalize_address(params.to)
     except Exception as exc:
         return tool._ar(error=f"refused: `to` is not a valid address ({exc})")
+    pinned_err = typed_verb_only_refusal(to_addr)
+    if pinned_err:
+        return tool._ar(error=pinned_err + " Nothing was broadcast.")
 
     # The guard's ERC-20 branch refuses ANY material native movement alongside a
     # declared token outflow ("the transaction does something that was not
@@ -144,13 +217,15 @@ async def perform_call(tool, params, execution_context=None):
         return tool._ar(error="agent wallet not enabled (AGENT_WALLET_ENABLED)")
     signer = wallet.operational_signer()
     gate = wallet.policy
-    idem = f"defi_call:{params.chain}:{to_addr}:{data[:10]}:{uuid.uuid4().hex[:8]}"
 
     rail = (tool._rail_factory or EvmRail)(chain=params.chain, signer=signer)
     try:
         tx = rail.build_call(to=to_addr, data=data, value=value_wei)
     except Exception as exc:
         return tool._ar(error=f"could not build the call: {exc}")
+    idem = intent_idempotency_key(
+        "defi_call", chain=params.chain, to=to_addr, data=data,
+        value_wei=value_wei, tx=tx, execution_context=execution_context)
 
     intent = tx_guard.TxIntent(
         chain=params.chain,
@@ -166,13 +241,18 @@ async def perform_call(tool, params, execution_context=None):
 
     authorize = tool._guard_fn or tx_guard.authorize
     async with gate.reserve():
-        from tools.controller.action_registration import _is_forged_or_autonomous_turn
+        from tools.controller.action_registration import (
+            _is_autonomous_goal_turn, _is_forged_or_autonomous_turn)
 
-        decision = authorize(intent, tx, holder=signer.address, gate=gate,
+        # CR-M10: the guard's RPC/simulation and the receipt poll are blocking;
+        # a thread keeps the event loop (owner /stop, Telegram) alive meanwhile.
+        decision = await asyncio.to_thread(
+                             authorize, intent, tx, holder=signer.address, gate=gate,
                              execution_context=execution_context, tool_self=tool,
                              price_fn=tool._price,
                              fallback_price_fn=tool._fallback_price,
-                             forged_fn=_is_forged_or_autonomous_turn)
+                             forged_fn=_is_forged_or_autonomous_turn,
+                             autonomous_ok_fn=_is_autonomous_goal_turn)
 
         header = (
             f"call {data[:10]} on {to_addr} ({params.chain})\n"
@@ -190,7 +270,7 @@ async def perform_call(tool, params, execution_context=None):
 
         if decision.sim_gas_used:
             try:
-                tx = rail.size_gas(tx, decision.sim_gas_used)
+                tx = await asyncio.to_thread(rail.size_gas, tx, decision.sim_gas_used)
             except Exception as exc:
                 return tool._ar(error=(
                     f"refused at gas sizing: {exc} — nothing was broadcast"))
@@ -203,9 +283,10 @@ async def perform_call(tool, params, execution_context=None):
                 "broadcast. Re-run with dry_run=false to send."))
 
         try:
-            tx_hash = rail.sign_and_send(tx)
+            tx_hash = await asyncio.to_thread(rail.sign_and_send, tx)
         except Exception as exc:
-            return tool._ar(error=f"broadcast failed: {exc} — nothing was sent")
+            from core.wallet.broadcast.evm import broadcast_failure_text
+            return tool._ar(error=broadcast_failure_text(exc))
 
         _used, _limit = tx_notify.caps_from_gate(gate)
         tool._notify_tx(execution_context, tx_notify.TxNotice(
@@ -214,7 +295,7 @@ async def perform_call(tool, params, execution_context=None):
             usd=decision.amount_usd, tx_ref=tx_hash, lane=decision.lane,
             cap_used_usd=_used, cap_limit_usd=_limit), settled=False)
 
-        receipt = rail.await_receipt(tx_hash)
+        receipt = await asyncio.to_thread(rail.await_receipt, tx_hash)
         gate.record(venue="defi", action="call",
                     amount_usd=decision.amount_usd or 0.0,
                     counterparty=to_addr, idempotency_key=idem,

@@ -63,13 +63,21 @@ class _Wallet:
         return ME
 
 
-def _quote(out=10_000_000, floor=9_900_000):
+def _quote(out=1_000_000, floor=990_000, *, ti=USDC, to=WSOL, amt=1_000_000):
+    # CR-H03: a quote must be for THE request (mints + amount), and its floor
+    # is asserted against the simulated receipt — so the fixture quotes what
+    # was asked and the default deltas below deliver at least the floor.
     from tools.defi.providers.jupiter import JupiterQuote
-    return JupiterQuote(chain="solana", token_in=USDC, token_out=WSOL,
-                        amount_in_raw=1_000_000, amount_out_raw=out,
+    return JupiterQuote(chain="solana", token_in=ti, token_out=to,
+                        amount_in_raw=amt, amount_out_raw=out,
                         amount_out_min_raw=floor, venue="jupiter:Orca",
                         raw={"outAmount": str(out),
                              "otherAmountThreshold": str(floor)})
+
+
+def _clean_screen():
+    from tools.defi.providers.base import ScreenVerdict
+    return ScreenVerdict(available=True, checks={"transfer_fee": "no"})
 
 
 def _params(**kw):
@@ -80,13 +88,18 @@ def _params(**kw):
 
 def _tool(wallet=None, *, deltas=None, **kw):
     from core.wallet.solana_simulation import SolanaDeltas
-    deltas = deltas or SolanaDeltas(ok=True, token_deltas={USDC: -1_000_000})
+    deltas = deltas or SolanaDeltas(ok=True, fee_lamports=5_000, token_deltas={USDC: -1_000_000},
+                                    native_delta=1_000_000)
     defaults = dict(
         wallet=wallet or _Wallet(),
         solana_decimals_fn=lambda m: 6,
-        solana_quote_fn=lambda *a, **k: _quote(),
+        solana_quote_fn=lambda ti, to, amt, **k: _quote(ti=ti, to=to, amt=amt),
         solana_build_fn=lambda *a, **k: b"\x01",
         solana_simulate_fn=lambda **k: deltas,
+        # CR-M05: the blockhash check reads the pinned RPC; fixtures say valid.
+        solana_blockhash_fn=lambda raw: (True, "valid"),
+        # CR-L10: a buy of a non-pinned mint is screened; fixtures screen clean.
+        solana_screen_fn=lambda mint: _clean_screen(),
     )
     defaults.update(kw)
     return DefiTradeTool(**defaults)
@@ -151,7 +164,8 @@ async def test_kill_switch_refuses(monkeypatch):
     monkeypatch.setattr("core.wallet.tx_guard._halted", lambda: True)
     tool = _tool()
     res = await tool.solana_swap(_params())
-    assert res.error and "HALTED" in res.error
+    assert res.error and "paused" in res.error and "/resume" in res.error
+    assert "(owner kill-switch)" not in res.error
 
 
 @pytest.mark.asyncio
@@ -174,7 +188,7 @@ async def test_entry_pause_allows_an_exit_shaped_swap(monkeypatch):
     monkeypatch.setattr(
         "tools.defi.trade_tool.DefiTradeTool._solana_held_raw",
         lambda self, owner, mint: 1_000_000)
-    deltas = SolanaDeltas(ok=True, token_deltas={WSOL: -1_000_000, USDC: 1_000_000})
+    deltas = SolanaDeltas(ok=True, fee_lamports=5_000, token_deltas={WSOL: -1_000_000, USDC: 1_000_000})
     tool = _tool(deltas=deltas)
     res = await tool.solana_swap(_params(token_in=WSOL, token_out=USDC,
                                          max_spend_usd=200.0, dry_run=True))
@@ -248,7 +262,7 @@ async def test_monitor_exit_sell_to_usdc_is_allowed(monkeypatch):
     monkeypatch.setenv("DEFI_MONITOR_EXITS", "true")
     _forged(monkeypatch)
     from core.wallet.solana_simulation import SolanaDeltas
-    deltas = SolanaDeltas(ok=True, token_deltas={MEME: -5_000_000,
+    deltas = SolanaDeltas(ok=True, fee_lamports=5_000, token_deltas={MEME: -5_000_000,
                                                  USDC: 4_000_000})
     tool = _tool(deltas=deltas,
                  price_fn=lambda c, a: None,
@@ -267,7 +281,7 @@ async def test_monitor_exit_requires_a_measured_inflow(monkeypatch):
     monkeypatch.setenv("DEFI_MONITOR_EXITS", "true")
     _forged(monkeypatch)
     from core.wallet.solana_simulation import SolanaDeltas
-    deltas = SolanaDeltas(ok=True, token_deltas={MEME: -5_000_000})
+    deltas = SolanaDeltas(ok=True, fee_lamports=5_000, token_deltas={MEME: -5_000_000})
     tool = _tool(deltas=deltas,
                  price_fn=lambda c, a: 1.0,
                  solana_held_fn=lambda owner, mint: 10_000_000)
@@ -294,7 +308,7 @@ async def test_monitor_exit_does_not_admit_an_entry(monkeypatch):
 @pytest.mark.asyncio
 async def test_outflow_exceeding_declared_refuses(monkeypatch):
     from core.wallet.solana_simulation import SolanaDeltas
-    deltas = SolanaDeltas(ok=True, token_deltas={USDC: -2_500_000})
+    deltas = SolanaDeltas(ok=True, fee_lamports=5_000, token_deltas={USDC: -2_500_000})
     tool = _tool(deltas=deltas)
     res = await tool.solana_swap(_params(amount_in=1.0, max_spend_usd=5.0))
     assert res.error and "more than the declared" in res.error
@@ -305,7 +319,8 @@ async def test_outflow_exceeding_declared_refuses(monkeypatch):
 @pytest.mark.asyncio
 async def test_unpriceable_outflow_refuses(monkeypatch):
     from core.wallet.solana_simulation import SolanaDeltas
-    deltas = SolanaDeltas(ok=True, token_deltas={MEME: -5_000_000})
+    deltas = SolanaDeltas(ok=True, fee_lamports=5_000, token_deltas={MEME: -5_000_000},
+                          native_delta=1_000_000)
     tool = _tool(deltas=deltas,
                  price_fn=lambda c, a: None,
                  fallback_price_fn=lambda c, a: None,
@@ -344,3 +359,188 @@ async def test_broadcast_records_the_spend(monkeypatch):
     assert rec["action"] == "solana_swap"
     assert rec["amount_usd"] == 1.0
     assert rec["result_ref"] == "sig123"
+
+
+# -- CR-H03: what ARRIVES is asserted, not only what leaves -------------------
+
+@pytest.mark.asyncio
+async def test_cr_h03_a_route_that_takes_and_returns_nothing_refuses():
+    from core.wallet.solana_simulation import SolanaDeltas
+    deltas = SolanaDeltas(ok=True, fee_lamports=5_000, token_deltas={USDC: -1_000_000, MEME: 0})
+    tool = _tool(deltas=deltas)
+    res = await tool.solana_swap(_params(token_out=MEME, dry_run=True))
+    assert res.error and "below the route's floor" in res.error
+
+
+@pytest.mark.asyncio
+async def test_cr_h03_an_unobserved_output_mint_refuses():
+    from core.wallet.solana_simulation import SolanaDeltas
+    deltas = SolanaDeltas(ok=True, fee_lamports=5_000, token_deltas={USDC: -1_000_000})
+    tool = _tool(deltas=deltas)
+    res = await tool.solana_swap(_params(token_out=MEME, dry_run=True))
+    assert res.error and "could not observe the token you are buying" in res.error
+
+
+@pytest.mark.asyncio
+async def test_cr_h03_a_sol_receipt_below_the_floor_refuses():
+    from core.wallet.solana_simulation import SolanaDeltas
+    deltas = SolanaDeltas(ok=True, fee_lamports=5_000, token_deltas={USDC: -1_000_000},
+                          native_delta=-5_000)
+    tool = _tool(deltas=deltas)
+    res = await tool.solana_swap(_params(dry_run=True))
+    assert res.error and "below the route's floor" in res.error
+
+
+@pytest.mark.asyncio
+async def test_cr_h03_a_receipt_at_the_floor_passes():
+    from core.wallet.solana_simulation import SolanaDeltas
+    deltas = SolanaDeltas(ok=True, fee_lamports=5_000, token_deltas={USDC: -1_000_000, MEME: 990_000})
+    tool = _tool(deltas=deltas)
+    res = await tool.solana_swap(_params(token_out=MEME, dry_run=True))
+    assert res.error is None, res.error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("override", [
+    dict(ti=MEME), dict(to=MEME), dict(amt=999_999)])
+async def test_cr_h03_a_quote_for_another_trade_refuses(override):
+    kw = dict(ti=USDC, to=WSOL, amt=1_000_000) | override
+    tool = _tool(solana_quote_fn=lambda *a, **k: _quote(**kw))
+    res = await tool.solana_swap(_params(dry_run=True))
+    assert res.error and "does not match the request" in res.error
+
+
+# -- CR-M05: the blockhash is checked before signing -------------------------
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("check", [
+    lambda raw: (False, "isBlockhashValid=False"),
+    lambda raw: (_ for _ in ()).throw(RuntimeError("rpc down")),
+])
+async def test_cr_m05_an_invalid_or_unchecked_blockhash_is_never_signed(monkeypatch, check):
+    monkeypatch.setenv("DEFI_SOLANA_RPC", "https://solana.example/rpc")
+    wallet = _Wallet()
+    sent = []
+    tool = _tool(wallet, solana_send_fn=lambda raw: sent.append(raw) or "sig",
+                 solana_confirm_fn=lambda sig: (True, "finalized"),
+                 solana_blockhash_fn=check)
+    res = await tool.solana_swap(_params(dry_run=False))
+    assert res.error and "blockhash" in res.error
+    assert sent == [] and not wallet.policy.recorded
+
+
+def test_cr_m05_the_default_check_asks_the_rpc_for_the_embedded_blockhash(monkeypatch):
+    from solders.hash import Hash
+    from solders.keypair import Keypair
+    from solders.message import MessageV0
+    from solders.transaction import VersionedTransaction
+    from core.wallet import solana_rail
+
+    kp = Keypair()
+    bh = Hash.new_unique()
+    msg = MessageV0.try_compile(kp.pubkey(), [], [], bh)
+    raw = bytes(VersionedTransaction(msg, [kp]))
+    calls = []
+
+    def rpc(self, method, params, timeout=10.0):
+        calls.append((method, params))
+        return {"value": False}
+    monkeypatch.setattr(solana_rail.SolanaRail, "_rpc", rpc)
+    ok, detail = DefiTradeTool()._solana_blockhash_valid(raw)
+    assert not ok
+    assert calls[0][0] == "isBlockhashValid" and calls[0][1][0] == str(bh)
+
+
+# -- CR-L06: native SOL beyond fee + retained rent is charged ----------------
+
+@pytest.mark.asyncio
+async def test_cr_l06_native_excess_is_charged_to_the_caps():
+    from core.wallet.solana_simulation import SolanaDeltas
+    wallet = _Wallet()
+    # 0.009 SOL leaves beside a USDC->MEME buy: under the 0.01 "rent" ceiling,
+    # but only 5,000 lamports of it is the fee.
+    deltas = SolanaDeltas(ok=True, fee_lamports=5_000, native_delta=-9_005_000,
+                          token_deltas={USDC: -1_000_000, MEME: 990_000})
+    tool = _tool(wallet, deltas=deltas, price_fn=lambda c, a: 100.0)
+    res = await tool.solana_swap(_params(token_out=MEME, max_spend_usd=5.0, dry_run=True))
+    assert res.error is None, res.error
+    # $1.00 of USDC + 0.009 SOL * $100 = $1.90
+    assert wallet.policy.checked[0][1] == 1.9
+
+
+@pytest.mark.asyncio
+async def test_cr_l06_retained_rent_is_not_charged():
+    from core.wallet.solana_simulation import SolanaDeltas
+    wallet = _Wallet()
+    deltas = SolanaDeltas(ok=True, fee_lamports=5_000, retained_rent_lamports=2_039_280,
+                          native_delta=-2_044_280,
+                          token_deltas={USDC: -1_000_000, MEME: 990_000})
+    tool = _tool(wallet, deltas=deltas, price_fn=lambda c, a: 100.0)
+    res = await tool.solana_swap(_params(token_out=MEME, dry_run=True))
+    assert res.error is None, res.error
+    assert wallet.policy.checked[0][1] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_cr_l06_an_unknown_fee_refuses():
+    from core.wallet.solana_simulation import SolanaDeltas
+    deltas = SolanaDeltas(ok=True, native_delta=1_000_000,
+                          token_deltas={USDC: -1_000_000})
+    tool = _tool(deltas=deltas)
+    res = await tool.solana_swap(_params(dry_run=True))
+    assert res.error and "fee" in res.error
+
+
+@pytest.mark.asyncio
+async def test_cr_l06_an_unpriceable_excess_refuses():
+    from core.wallet.solana_simulation import SolanaDeltas
+    deltas = SolanaDeltas(ok=True, fee_lamports=5_000, native_delta=-1_005_000,
+                          token_deltas={USDC: -1_000_000, MEME: 990_000})
+    tool = _tool(deltas=deltas, price_fn=lambda c, a: None)
+    res = await tool.solana_swap(_params(token_out=MEME, dry_run=True))
+    assert res.error and "no trustworthy price" in res.error
+
+
+# -- CR-L10: a buy is screened for ACTIVE Token-2022 traps -------------------
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("flag", ["transfer_fee_active", "transfer_hook_active",
+                                  "default_account_frozen", "non_transferable",
+                                  "permanent_delegate"])
+async def test_cr_l10_a_blocking_flag_refuses_the_buy(flag):
+    from tools.defi.providers.base import ScreenVerdict
+    quoted = []
+    tool = _tool(solana_screen_fn=lambda m: ScreenVerdict(available=True, flags=[flag]),
+                 solana_quote_fn=lambda *a, **k: quoted.append(a))
+    res = await tool.solana_swap(_params(token_out=MEME, dry_run=True))
+    assert res.error and flag in res.error
+    assert not quoted
+
+
+@pytest.mark.asyncio
+async def test_cr_l10_an_unavailable_screen_refuses_the_buy():
+    from tools.defi.providers.base import ScreenVerdict
+    tool = _tool(solana_screen_fn=lambda m: ScreenVerdict(available=False))
+    res = await tool.solana_swap(_params(token_out=MEME, dry_run=True))
+    assert res.error and "UNAVAILABLE" in res.error
+
+
+@pytest.mark.asyncio
+async def test_cr_l10_informational_flags_do_not_refuse():
+    from core.wallet.solana_simulation import SolanaDeltas
+    from tools.defi.providers.base import ScreenVerdict
+    deltas = SolanaDeltas(ok=True, fee_lamports=5_000,
+                          token_deltas={USDC: -1_000_000, MEME: 990_000})
+    tool = _tool(deltas=deltas, solana_screen_fn=lambda m: ScreenVerdict(
+        available=True, flags=["mintable", "freezable"]))
+    res = await tool.solana_swap(_params(token_out=MEME, dry_run=True))
+    assert res.error is None, res.error
+
+
+@pytest.mark.asyncio
+async def test_cr_l10_a_sell_into_the_pinned_quote_asset_is_not_screened():
+    def boom(m):
+        raise AssertionError("pinned quote assets are not screened")
+    tool = _tool(solana_screen_fn=boom)
+    res = await tool.solana_swap(_params(dry_run=True))      # USDC -> wSOL
+    assert res.error is None, res.error

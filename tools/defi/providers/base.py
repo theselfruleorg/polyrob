@@ -43,11 +43,27 @@ class PriceInfo:
     ``confidence`` is "high" only for a token priced across multiple pools with
     real depth. "low" means the price is attacker-influenceable and must not be
     summed into a headline total. "unknown" means there is no price at all.
+
+    ``liquidity_usd`` is the TOTAL across the token's pools;
+    ``priced_liquidity_usd`` is the depth of the ONE pool the price came from,
+    which is what makes that price cheap or expensive to move. They differ
+    whenever a token has more than one pool, and grading trust on the total was
+    grading it on the wrong number (2026-09-23). None = the provider did not say.
     """
     price_usd: Optional[float]
     liquidity_usd: Optional[float]
     pool_count: int
     confidence: str  # "high" | "low" | "unknown"
+    priced_liquidity_usd: Optional[float] = None
+    #: The pool the PRICE came from. Two reports of one token that name
+    #: different addresses are reports of different venues — which is how the
+    #: 2026-09-23 PNL confusion should have been caught, and was not: the same
+    #: rail read $4,133 then $17,887 with nothing saying it had changed pool.
+    #: None when the provider did not say; never guessed.
+    priced_pool_address: Optional[str] = None
+    #: 071 R5: set when the provider did NOT answer (timeout, HTTP error). An
+    #: outage and "no pool" used to render identically; they are different facts.
+    error: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -67,6 +83,11 @@ class ScreenVerdict:
     #: "no risk flags raised" makes a partial screen read exactly like a clean
     #: one. Naming the absent checks is the difference.
     missing: List[str] = field(default_factory=list)
+    #: 068: the token's SELF-REPORTED symbol/name when the screener returns them
+    #: (GoPlus Solana: ``metadata``). Attacker-authored, like any ``symbol()`` —
+    #: used only to detect a symbol collision, never as identity. None = not sent.
+    symbol: Optional[str] = None
+    name: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -145,7 +166,13 @@ class Provider(Protocol):
 
 def confidence_for(price_usd: Optional[float], liquidity_usd: Optional[float],
                    pool_count: int) -> str:
-    if price_usd is None:
+    # CR-L04: a price of zero (or a negative / non-finite one) is an indexer
+    # artifact, not a valuation — it must never rate "high".
+    import math
+    try:
+        if price_usd is None or not math.isfinite(float(price_usd)) or float(price_usd) <= 0:
+            return "unknown"
+    except (TypeError, ValueError):
         return "unknown"
     if (liquidity_usd or 0.0) >= LIQUIDITY_CONFIDENCE_FLOOR_USD and pool_count >= 2:
         return "high"

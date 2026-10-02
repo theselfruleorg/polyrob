@@ -1,11 +1,11 @@
 ---
 name: polyrob-user-guide
-description: 'The map of what POLYROB is, its surfaces, configuration layers, autonomy, money/safety model, and skills/learning — load this first when the owner asks what you can do, how to enable/configure something, or wants help with settings/preferences/the operating contract'
+description: The map of what POLYROB is, its surfaces, configuration layers, autonomy, money/safety model, and skills/learning — load this first when the owner asks what you can do, how to enable/configure something, or wants help with settings/preferences/the operating contract
 license: MIT
 metadata:
   polyrob-priority: '1'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":["preferences","owner_doc_manage"],"keywords":["what can you do","how do i","enable","configure","settings","help","features","preferences","contract","wallet","avatar","export","seed","private key"],"task_patterns":["what can you do","how do (i|we)","help me (configure|set up|enable)","(enable|configure|change).*(setting|feature|preference)","what.*(features|can you)"],"tool_ids":[]}'
+  polyrob-triggers: '{"action_names":[],"keywords":["what can you do","how do i","enable","configure","settings","help","features","preferences","contract","wallet","avatar","export","seed","private key"],"task_patterns":["what can you do","how do (i|we)","help me (configure|set up|enable)","(enable|configure|change).*(setting|feature|preference)","what.*(features|can you)"],"tool_ids":[]}'
   polyrob-version: '2'
 ---
 # POLYROB User Guide
@@ -15,8 +15,17 @@ autonomous AI agent framework (github.com/theselfruleorg/polyrob). "POLYROB"
 is the framework; the running deployment is one **instance** — by default
 named `polyrob` (`POLYROB_INSTANCE_ID`, or the active profile name). This skill is the map: what you are, what
 the owner can do on each surface, how your configuration is layered, and where
-to look for depth. Load a `references/` file with `load_skill` only when the
-current step actually needs that depth — don't front-load all of them.
+to look for depth. Read a `references/` file with
+`read_skill_resource(skill_id="polyrob-user-guide", resource_path="references/<file>.md")`
+only when the current step actually needs that depth — don't front-load all of
+them.
+
+⚠️ **The `polyrob …` commands below are TERMINAL commands.** On a chat seat
+(Telegram, WhatsApp, Discord, Slack, Signal, email) never tell the owner to run
+one: name the chat verb instead (`/status`, `/mode`, `/pending`, `/approve`,
+`/config`, `/wallet`, `/cron`, `/help`), or, when no chat verb exists, say the
+step needs his terminal. In the terminal REPL you may name a `polyrob …`
+command — label it as a terminal command.
 
 ## When to use
 
@@ -29,8 +38,9 @@ codebase actually does.
 
 ## What POLYROB is
 
-- A multi-provider LLM agent (OpenAI, Anthropic, Gemini, DeepSeek, OpenRouter,
-  NVIDIA NIM) with automatic provider failover, persistent cross-session
+- A multi-provider LLM agent (OpenAI, Anthropic, Gemini, OpenRouter, NVIDIA
+  NIM, Z.AI (GLM), Moonshot (Kimi), xAI, Cerebras and more; DeepSeek through
+  OpenRouter) with automatic provider failover, persistent cross-session
   memory, durable autonomy (goals/cron survive restarts), browser automation,
   a coding toolset, and a skills system (this file is one such skill).
 - Self-hosted: the owner runs it on their own machine or server. Nothing
@@ -50,6 +60,14 @@ codebase actually does.
 | Email | `polyrob email` | IMAP-poll inbound + SMTP outbound; v1 is correspondent-only (owner-by-email is off — a `From:` header is forgeable) |
 | REST API + A2A | `polyrob serve` | Programmatic sessions/messages (`/api/...`), Google Agent-to-Agent protocol (`/a2a/...`), optional OpenAI-compatible `/v1` surface |
 | Web console | `polyrob dashboard` (alias `polyrob webgate`) | Browser view of sessions, memory, autonomy, identity; runs in one of three postures — `local` (loopback, no login — the default), `own_ops` (public status page + owner login), `multitenant` (full SaaS + wallet/SIWE) |
+
+Setup and lifecycle verbs the owner has: `polyrob setup` (the seven-section
+wizard; `polyrob init` is the same command), `polyrob doctor` (health + what is
+missing, each with one command), `polyrob model` (bare: pick provider+model),
+`polyrob config edit`, `polyrob tools enable|disable <id>`, `polyrob service
+install|status|uninstall` (keep the agent running after the terminal closes),
+`polyrob update --apply`, and `polyrob uninstall`. A money tool is never
+enabled by `tools enable` — that refuses and names the deliberate path.
 
 Owner identity is bound once (`polyrob init`, or `POLYROB_OWNER_USER_ID` /
 `POLYROB_OWNER_TELEGRAM_ID` / `POLYROB_OWNER_EMAIL`). On the CLI/REPL, the
@@ -77,19 +95,24 @@ mechanical to most conversational:
    operator's policy but never loosen it. You read/change these
    conversationally with the `preferences` action (below); the owner can also
    use `polyrob config` / the REPL `/config`.
-3. **`contract.md`** — an owner-authored (or agent-proposed, owner-reviewed)
-   prose block of durable operating rules ("always ask before X", "budget
-   comfort is $Y/day"), injected into your identity context each session as
-   `## Operating contract`. If that heading is **absent** from your identity
-   context, no contract exists yet for this owner — see
+3. **`owner.md` — the owner's rules and facts** — ONE doc of durable
+   operating rules ("always ask before X", "budget comfort is $Y/day") and
+   facts about the owner (timezone, projects, how he likes to be helped),
+   injected into your identity context each session as `## Owner facts` (the
+   heading may carry the doc's age). Both `preferences(operation=
+   "contract_propose")` and `owner_doc_manage` write it. On a GENUINE owner
+   turn, with `OWNER_RULES_IMMEDIATE` on (the default), a write **applies
+   immediately**; on a forged turn (self-wake, delegation result, sub-agent,
+   autonomous goal/cron run) it is queued in `/pending`. The active text is
+   capped at `OWNER_DOC_MAX_CHARS` (4000 characters); a rule a write drops
+   moves under `## Superseded`, dated, and is never silently deleted. An older
+   install may still show a `## Operating contract` section (a legacy
+   `contract.md`); no new one is created. If neither heading is in your
+   identity context, the owner has no rules doc yet — see
    `references/setup-interview.md` for the one-time interview to offer.
-4. **SOUL / SELF / owner-facts** — `identity/` docs injected alongside the
-   contract: SOUL is operator-authored and frozen (who you are, per
-   instance); SELF is your own evolving self-notes (gated
-   `SELF_CONTEXT_WRITABLE`); owner-facts (`owner.md`, via `owner_doc_manage`)
-   are durable facts about the owner you maintain (their timezone, projects,
-   how they like to be helped) — gated `OWNER_DOC_WRITABLE`, quarantined for
-   review, ≤1600 chars.
+4. **SOUL / SELF** — `identity/` docs injected alongside the owner doc: SOUL
+   is operator-authored and frozen (who you are, per instance); SELF is your
+   own evolving self-notes (gated `SELF_CONTEXT_WRITABLE`).
 
 ### Conversational config: the `preferences` action
 
@@ -103,16 +126,23 @@ Call `preferences(operation=..., key?, value?, text?)`:
   immediately per their granularity. **GUARDED** keys (`approvals.require`,
   `approvals.provider`, `approvals.deny`, budget ceilings) can never be
   written directly by you — `set` queues a proposal instead.
-- `operation="contract_propose"` with `text` — propose durable operating
-  rules; always quarantined for owner review.
+- `operation="contract_propose"` with `text` — record a durable operating
+  rule in `owner.md`. `text` is the FULL doc body, not one line: start from
+  the current `## Owner facts` text, keep every line, add the rule (a line you
+  leave out is retired under `## Superseded`). It applies at once on a genuine
+  owner turn (see layer 3), else it is queued. Report what the result says.
 
-Guarded proposals and contract proposals land in the **same owner review
-queue** the owner drains with `/pending` (REPL) or `polyrob owner pending` —
-`list`, `show <kind> <id>`, `approve <kind> <id>`, `reject <kind> <id>`, kinds
-`skill | self_context | owner_doc | contract | pref_change`. `/approve <id>`
-DECIDES one waiting item, on every seat. A **separate** command, `/gates`
-(REPL) / `polyrob approvals` (CLI), manages which actions require approval
-before you may run them at all — see `references/money-and-safety.md`.
+Guarded proposals and queued rule writes land in the **same owner review
+queue**. On a chat seat the owner uses `/pending` to see it and `/approve <id>`
+or `/reject <id>` to decide one item. In the REPL: `/pending`, then
+`/pending show|approve|reject <kind> <id>` (or `/pending approve all`). In
+the terminal CLI: `polyrob owner pending` lists, `polyrob owner show-pending
+KIND ID` shows one in full, `polyrob owner promote KIND ID` / `polyrob owner
+reject KIND ID` decide. Kinds: `skill | self_context | owner_doc | contract |
+pref_change` (the CLI also takes `tool_approval`). A **separate** command,
+`/gates` (REPL only) / `polyrob approvals` (CLI), manages which actions
+require approval before you may run them at all — see
+`references/money-and-safety.md`.
 
 ## Autonomy — concept level
 
@@ -131,16 +161,19 @@ You operate under hard, code-enforced limits, not just prose rules: budget
 ceilings (autonomy spend, wallet daily/per-transaction caps, x402 invoice
 caps), an approval-gate mechanism for named actions, and a correspondent
 capability gate that blocks money/comms/code-exec/delegation/browser tools
-whenever a session is talking to someone other than the owner. You must never
-trade, spend, or take a delegation/leaf/forged turn as a standing authority —
-every money-moving action needs a fresh, genuine owner instruction. Full
-model: `references/money-and-safety.md`.
+whenever a session is talking to someone other than the owner. Every
+money-moving action needs a genuine owner turn OR an owner-granted lane (a
+job, goal or rail the owner set up that carries the money tool, inside the
+autonomy and caps he armed). A delegation, leaf or forged turn is never an
+authority, and neither is an old instruction. Full model:
+`references/money-and-safety.md`.
 
 ## Money & identity artifacts
 
 Beyond the spend limits above, the instance can also own durable artifacts:
-an on-chain crypto wallet (`polyrob wallet init`/`export`/`set-cap`) and
-optional presentational identity material (an avatar via `/pfp`, and the
+an on-chain crypto wallet (`polyrob wallet init`/`export`/`set-cap`, terminal
+commands) and optional presentational identity material (an avatar image,
+set with `polyrob avatar set <file|url>` or from an NFT, and the
 operator-authored SOUL docs via `polyrob soul init`). None of these are
 auto-created — the owner opts in explicitly, on their own terminal. The one
 hard rule: wallet key material (mnemonic/private keys) is exportable ONLY
@@ -163,8 +196,10 @@ pipeline, and the writable-skill quarantine: `references/skills-and-learning.md`
 ## Anti-hallucination clause
 
 If a POLYROB feature, command, or flag is not mentioned here, do NOT treat
-absence as evidence it doesn't exist — check `agent_status`, or tell the
-owner to run `polyrob doctor --flags`.
+absence as evidence it doesn't exist — check `agent_status`, or point the
+owner to `/status` (and `/mode` for the autonomy posture) on a chat seat; in
+the terminal REPL, `polyrob doctor --flags` (a terminal command) lists every
+flag.
 
 ## Live-grounding rule
 
@@ -172,13 +207,12 @@ Everything above and in `references/` is **static** knowledge about how
 POLYROB is built. It is NOT a live snapshot of THIS session's configuration.
 For what's actually on right now — which flags are set, what your effective
 preferences are, what tools/budget you have this turn — always use
-`agent_status`, the `preferences` action, or tell the owner to run `polyrob
-doctor` / `polyrob doctor --flags`. Never guess or assert a current
-configuration value from memory of this skill. If `agent_status` (or a
-`preferences`/`agent_status`-shaped tool) isn't available in this session,
-that just means the tool or its gating flag isn't enabled here — don't treat
-its absence as "no config exists"; tell the owner to run `polyrob doctor
---flags` instead.
+`agent_status` or the `preferences` action. Never guess or assert a current
+configuration value from memory of this skill. If neither tool is available
+in this session, that just means the tool or its gating flag isn't enabled
+here — don't treat its absence as "no config exists"; point the owner to
+`/status` and `/mode` on a chat seat, or to `polyrob doctor --flags` in the
+terminal REPL.
 
 ## References
 

@@ -21,6 +21,11 @@ one of an approval ladder:
                    (tightening a denylist is always safe -> written immediately,
                    no owner-review gate needed).
 
+⚠️ Money is never widened. [s]ession and [a]lways are keyed by the action NAME
+only, so for a money action (``core.money.classify.money_action``) the ladder
+offers only o/d/n and treats a typed s/a as [o]nce: one keystroke must not cover
+every later call at any amount.
+
 Unrecognized input re-prompts once, then fails CLOSED (deny) — never guesses.
 
 The blocking input runs in a worker thread (``asyncio.to_thread``) so it yields the
@@ -83,6 +88,22 @@ def _parse_ladder(answer: Any) -> Optional[str]:
     return _LADDER_ALIASES.get(str(answer).strip().lower())
 
 
+#: What the ladder says when it will not widen a money approval.
+MONEY_ONE_AT_A_TIME = "money actions are approved one at a time"
+
+
+def _is_money(action_name: str) -> bool:
+    """True when *action_name* can move money — the approval queue's own
+    fail-CLOSED predicate (over ``core.money.classify.money_action``), so the
+    two approval seats cannot disagree. A classifier that cannot answer counts
+    as money, so the ladder never widens on doubt."""
+    try:
+        from tools.controller.approval_queue import _is_money_action
+        return bool(_is_money_action(action_name))
+    except Exception:
+        return True
+
+
 class InteractiveCLIApprover(ApprovalProvider):
     """Prompt the local operator to approve/deny a gated action via the ladder."""
 
@@ -109,6 +130,15 @@ class InteractiveCLIApprover(ApprovalProvider):
         return "{" + ", ".join(parts) + "}"
 
     def _prompt(self, action_name: str, params: Dict[str, Any]) -> str:
+        if _is_money(action_name):
+            # ⚠️ [s]ession/[a]lways are keyed by the action NAME only, so one
+            # keystroke on a money verb would cover every later call at any
+            # amount. Money is never widened: the ladder does not offer them.
+            return (
+                f"\n[approval] Allow '{action_name}'? {self._digest(params)}\n"
+                f"  ({MONEY_ONE_AT_A_TIME})\n"
+                "  [o]nce / [d]eny / [n]ever: "
+            )
         return (
             f"\n[approval] Allow '{action_name}'? {self._digest(params)}\n"
             "  [o]nce / [s]ession / [a]lways-allow / [d]eny / [n]ever: "
@@ -116,9 +146,10 @@ class InteractiveCLIApprover(ApprovalProvider):
 
     @staticmethod
     def _reprompt(action_name: str) -> str:
+        choices = "o/d/n" if _is_money(action_name) else "o/s/a/d/n"
         return (
             f"  unrecognized answer for '{action_name}' — "
-            "enter one of o/s/a/d/n: "
+            f"enter one of {choices}: "
         )
 
     def _read_decision(self, input_fn: Callable[[str], str], action_name: str,
@@ -217,6 +248,11 @@ class InteractiveCLIApprover(ApprovalProvider):
     def _apply_decision(self, decision: str, action_name: str) -> bool:
         if decision == "once":
             return True
+        if decision in ("session", "always") and _is_money(action_name):
+            # Never widen money: an s/a typed anyway approves THIS call only.
+            print(f"[approval] '{action_name}': {MONEY_ONE_AT_A_TIME} "
+                  "— approved once, not remembered")
+            return True
         if decision == "session":
             self._session_approved.add(action_name)
             return True
@@ -234,8 +270,10 @@ class InteractiveCLIApprover(ApprovalProvider):
         return False  # unreachable: _read_decision only returns known tokens
 
     async def request(self, action_name: str, params: Dict[str, Any], context: Any) -> bool:
-        # [s]ession/[a]lways-allow short-circuit: no prompt, no disk I/O.
-        if action_name in self._session_approved:
+        # [s]ession/[a]lways-allow short-circuit: no prompt, no disk I/O. A
+        # money action never short-circuits (it is never added; this is the
+        # second lock).
+        if action_name in self._session_approved and not _is_money(action_name):
             return True
 
         from core.approval_input import get_approval_input

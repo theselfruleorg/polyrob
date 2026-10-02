@@ -208,11 +208,22 @@ HELP_TEXT: Dict[str, Tuple[str, str]] = {
         "  pause is on.",
         "the same lift on Telegram, the app, and `polyrob autonomy resume`.",
     ),
+    "run": (
+        "  One background run — a goal, a scheduled job or a helper — not\n"
+        "  all of them (that is /pause). The list is numbered; the number\n"
+        "  picks the run. I act at my next step.\n"
+        "\n"
+        "    /run                    what runs now, numbered\n"
+        "    /run pause 2            pause run 2\n"
+        "    /run resume 2           let it go on\n"
+        "    /run stop 2             stop it",
+        "Telegram /run, and `polyrob session pause|resume|cancel <id>`.",
+    ),
     "halt": (
         "  The fast path to a full stop: no words to remember, no scope to\n"
         "  pick. Same effect as /pause with nothing after it — everything\n"
         "  in-flight is cancelled and put back on the board.",
-        "the plain word \"stop\" does the same in chat, on Telegram and here.",
+        "/halt works the same in chat, on Telegram and here; plain words are never a command.",
     ),
     "pending": (
         "  I sometimes write things I don't apply until you look at them: a\n"

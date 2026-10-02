@@ -3,24 +3,18 @@ from core.config import AgentConfig, ServerConfig, BotConfig
 
 # The exact platform fields that must live on ServerConfig, NOT AgentConfig.
 PLATFORM_FIELDS = [
-    "enable_auth", "jwt_secret_key", "beta_mode_enabled", "require_den_token",
-    "bypass_den_check_for_admins", "bypass_payment_for_admins",
+    "enable_auth", "jwt_secret_key", "bypass_payment_for_admins",
     "enable_credit_system", "deposit_monitor_enabled", "deposit_check_interval",
     "sweep_interval", "min_sweep_usd",
     "master_seed", "ethereum_rpc_url", "sepolia_rpc_url", "polygon_rpc_url",
     "base_rpc_url", "arbitrum_rpc_url", "treasury_address",
-    "x402_enabled", "x402_facilitator_url", "x402_facilitator_api_key",
-    "x402_facilitator_api_secret", "x402_default_chain", "x402_payment_recipient",
-    "x402_payment_deadline_seconds", "agent_wallet_enabled", "agent_wallet_backend",
-    "agent_wallet_network", "agent_wallet_max_per_tx_usd", "x402_client_enabled",
-    "x402_client_facilitator_url",
-    "eip8004_enabled", "eip8004_chain_id", "eip8004_identity_registry",
-    "eip8004_reputation_registry", "eip8004_validation_registry", "eip8004_agent_id",
-    "eip8004_agent_wallet", "eip8004_agent_private_key", "eip8004_supported_trust",
+    "x402_enabled", "x402_facilitator_url",
     "collabland_api_key", "collabland_api_url", "collabland_rules", "collabland_id",
     "collabland_secret",
     "alchemy_api_key", "alchemy_api_url", "den_token_contract_address",
 ]
+# 067 F4 deleted the unread x402/agent-wallet/ERC-8004/beta-gate mirrors; those
+# env names are read directly by core/wallet/config.py and modules/eip8004/.
 
 
 def test_serverconfig_subclasses_agentconfig():

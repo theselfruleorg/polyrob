@@ -24,8 +24,9 @@ may be absent in a given deployment):
   ``database_manager`` store;
 - **outbound spend** — wallet payments from the durable telemetry event log's
   ``wallet_spend`` events (``core/wallet/factory._emit_spend_to_event_log``);
-- **inbound** — x402 receipts from ``x402_payment_requests`` (settled rows),
-  plus the open pipeline (pending agent invoices).
+- **inbound** — payment receipts (settled rows) plus the open pipeline (pending
+  agent invoices), read through the ``credits.inbound_receipts`` hook
+  (``register_inbound_receipts``; today the x402 rail registers it).
 """
 import logging
 import time
@@ -49,14 +50,16 @@ async def _resolve_db(db=None):
 
 
 def _policy_gate():
-    """Seam over ``core.wallet.factory.get_policy_gate()`` — module-level so a
+    """Seam over ``core.money.hooks.get_spend_ledger()`` (the wallet registers
+    ``core.wallet.factory.get_policy_gate``) — module-level so a
     test can monkeypatch it directly (A39/A6, 043). Fail-open to ``None`` on
     ANY exception (wallet disabled, misconfigured env, no data home yet):
     the caps block this feeds must degrade to all-``None``, never a
     fabricated ``$0.00`` cap."""
     try:
-        from core.wallet.factory import get_policy_gate
-        return get_policy_gate()
+        # 067 P1b: the kernel ledger getter; the wallet registers the provider.
+        from core.money.hooks import get_spend_ledger
+        return get_spend_ledger()
     except ImportError:
         # A base install without the `crypto` extra has no wallet BY DESIGN, so
         # this is not a warn-worthy condition (2026-09-21). It used to warn, and
@@ -68,6 +71,19 @@ def _policy_gate():
     except Exception:
         logger.warning("ledger: policy gate unavailable for caps block", exc_info=True)
         return None
+
+
+def _operator_scope_ok(user_id: str) -> bool:
+    """CR-M07: the operator wallet's balances and PolicyGate headroom are the
+    OWNER's facts, not a tenant's. ONE seam (``core.money.authority.
+    owner_refusal``); a probe error fails CLOSED (withheld, rendered unknown)."""
+    try:
+        from core.money.authority import owner_refusal
+        return owner_refusal(user_id) is None
+    except Exception:
+        logger.warning("ledger: owner probe failed; operator facts withheld",
+                       exc_info=True)
+        return False
 
 
 def _caps_block() -> Dict[str, Any]:
@@ -171,43 +187,46 @@ def _wallet_leg(user_id: str, days: int) -> Dict[str, Any]:
         return {"wallet_spend_usd": 0.0, "wallet_payments": 0, "wallet_metering": "error"}
 
 
+#: 067 P5a — the ``credits.inbound_receipts`` hook: an async
+#: ``reader(database, user_id, days) -> {income_usd, settled_payments,
+#: pending_invoices_usd, pending_invoices, refund_due_usd, refund_due_count}``
+#: that raises on a read failure. The credits module names no payment table;
+#: the rail that owns the receipts registers the reader (today
+#: ``modules/x402/inbound_receipts.py``, imported on first use through
+#: ``_IN_TREE_RECEIPTS``; the wallet pack after 067 P5c). No reader = the
+#: inbound leg is UNAVAILABLE (never a fabricated $0.00).
+_INBOUND_READER = None
+_IN_TREE_RECEIPTS = ("modules.x402.inbound_receipts",)
+_receipts_loaded = False
+
+
+def register_inbound_receipts(reader) -> None:
+    """Register the inbound receipts reader (last writer wins)."""
+    global _INBOUND_READER
+    if not callable(reader):
+        raise TypeError(f"inbound receipts reader {reader!r} is not callable")
+    _INBOUND_READER = reader
+
+
+def _inbound_reader():
+    global _receipts_loaded
+    if _INBOUND_READER is None and not _receipts_loaded:
+        _receipts_loaded = True
+        import importlib
+        for name in _IN_TREE_RECEIPTS:
+            try:
+                importlib.import_module(name)
+            except ImportError:
+                logger.debug("ledger: no inbound receipts rail installed (%s)", name)
+    return _INBOUND_READER
+
+
 async def _inbound_leg(database, user_id: str, days: int) -> Dict[str, Any]:
     try:
-        # json_extract (SQLite JSON1, bundled), not `metadata LIKE '%"tenant_id":
-        # "<id>"%'` — a LIKE pattern treats `_`/`%` as wildcards, and real tenant
-        # ids contain underscores (u_<hex>), so 'u_abc' would also match a
-        # lookalike 'uXabc' row on this money query (G-14).
-        settled = await database.fetch_one(
-            """SELECT COALESCE(SUM(amount_usd), 0) AS usd, COUNT(*) AS n
-               FROM x402_payment_requests
-               WHERE (user_id = ? OR json_extract(metadata, '$.tenant_id') = ?)
-                 AND status IN ('completed', 'settled_no_tx')
-                 AND created_at >= datetime('now', ?)""",
-            (user_id, user_id, f"-{int(days)} day"),
-        )
-        pending = await database.fetch_one(
-            """SELECT COALESCE(SUM(amount_usd), 0) AS usd, COUNT(*) AS n
-               FROM x402_payment_requests
-               WHERE (user_id = ? OR json_extract(metadata, '$.tenant_id') = ?) AND status = 'pending'""",
-            (user_id, user_id),
-        )
-        # D11 (2026-09-21): money we TOOK and must give back is neither income nor
-        # pending — it is its own line, or the ledger reads richer than it is.
-        refund = await database.fetch_one(
-            """SELECT COALESCE(SUM(amount_usd), 0) AS usd, COUNT(*) AS n
-               FROM x402_payment_requests
-               WHERE (user_id = ? OR json_extract(metadata, '$.tenant_id') = ?) AND status = 'refund_due'""",
-            (user_id, user_id),
-        )
-        return {
-            "income_usd": round(float(settled.get("usd") or 0), 6) if settled else 0.0,
-            "settled_payments": int(settled.get("n") or 0) if settled else 0,
-            "pending_invoices_usd": round(float(pending.get("usd") or 0), 6) if pending else 0.0,
-            "pending_invoices": int(pending.get("n") or 0) if pending else 0,
-            "refund_due_usd": round(float(refund.get("usd") or 0), 6) if refund else 0.0,
-            "refund_due_count": int(refund.get("n") or 0) if refund else 0,
-            "inbound_available": True,
-        }
+        reader = _inbound_reader()
+        if reader is None:
+            raise LookupError("no inbound receipts reader is registered")
+        return {**(await reader(database, user_id, days)), "inbound_available": True}
     except Exception:
         logger.warning("ledger: x402 inbound leg unavailable", exc_info=True)
         return {"income_usd": 0.0, "settled_payments": 0,
@@ -296,7 +315,10 @@ async def build_ledger(user_id: str, *, days: int = 7, include_balances: bool = 
         "provider_balance_usd": None,
         "available": bool(costs["costs_available"]),
     }
-    if include_balances:
+    # CR-M07: a non-owner tenant never sees the operator wallet's balance, the
+    # provider credit, or the spend-cap headroom — they render unknown (None).
+    operator_ok = _operator_scope_ok(user_id)
+    if include_balances and operator_ok:
         from modules.credits import balances as _bal
         treasury["balance_usd"] = await _bal.treasury_balance_usd(user_id)
         runtime["provider_balance_usd"] = await _bal.provider_balance_usd()
@@ -308,7 +330,9 @@ async def build_ledger(user_id: str, *, days: int = 7, include_balances: bool = 
         **inbound,
         "treasury": treasury,
         "runtime": runtime,
-        "caps": _caps_block(),
+        "caps": _caps_block() if operator_ok else {
+            "daily_cap_usd": None, "daily_used_usd": None,
+            "daily_left_usd": None, "per_tx_cap_usd": None},
     }
 
 

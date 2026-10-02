@@ -3,7 +3,6 @@
 import logging
 from typing import Dict, Any, Optional, List, Type, Set, Tuple
 from core.config import BotConfig
-from core.exceptions import ContainerError
 from core.logging import get_component_logger
 from enum import Enum
 from dataclasses import dataclass

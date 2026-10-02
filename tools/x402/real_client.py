@@ -144,6 +144,10 @@ _NON_IDEMPOTENT_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 # advisory quote()/probe-amount-display path only (Task 4b review fix).
 _USDC_ATOMIC_PER_USD = 1_000_000
 
+#: CR-L26: the longest EIP-3009 authorization window we sign (seconds). The
+#: SDK signs `validBefore = now + max_timeout_seconds`, which the SERVER picks.
+_MAX_AUTHORIZATION_SECONDS = 600
+
 
 class RealX402Client:
     """Production x402 client adapter wrapping the official x402 Python SDK.
@@ -291,7 +295,7 @@ class RealX402Client:
         return decoded
 
     @staticmethod
-    def _parse_402_challenge(response) -> Optional[dict]:
+    def _parse_402_challenge(response, configured: Optional[str] = None) -> Optional[dict]:
         """Parse a 402 PAYMENT-REQUIRED challenge → {amount, network, pay_to}.
 
         Returns None if the header is absent. Individual fields may be None if not
@@ -317,6 +321,19 @@ class RealX402Client:
                 return None
             accepts = RealX402Client._normalize_accepts(decoded)
             entry = accepts[0] if accepts else decoded  # V2 list, or V1 flat
+            # 068 X5: a server may list several payable entries (Solana,
+            # Polygon, Base…). With a configured network, read the FIRST entry
+            # we can actually pay — our network, canonical USDC — instead of
+            # refusing because a different one happens to come first. With no
+            # match the first entry stays, and the checks refuse it as before.
+            if configured and accepts:
+                for cand in accepts:
+                    if (isinstance(cand, dict)
+                            and RealX402Client._networks_match(configured, cand.get("network"))
+                            and RealX402Client._asset_is_canonical_usdc(
+                                configured, cand.get("asset"))):
+                        entry = cand
+                        break
             version = decoded.get("x402Version")
             # Minor (Task 4 review): tolerate a stringy "1"/"2" version marker
             # (e.g. a server that serializes it as JSON string, not int) —
@@ -358,9 +375,9 @@ class RealX402Client:
                     "_unparseable": True}
 
     @classmethod
-    def _parse_402_amount(cls, response) -> Optional[float]:
+    def _parse_402_amount(cls, response, configured: Optional[str] = None) -> Optional[float]:
         """Best-effort: required USD amount from a 402 response (None if absent)."""
-        ch = cls._parse_402_challenge(response)
+        ch = cls._parse_402_challenge(response, configured=configured)
         return ch.get("amount") if ch else None
 
     # `core/wallet/config.py::WalletConfig.network` is always exactly "testnet"
@@ -614,7 +631,8 @@ class RealX402Client:
     # X402PaymentClient interface
     # ------------------------------------------------------------------
 
-    async def quote(self, url: str, *, pinned_ip: Optional[str] = None) -> Optional[float]:
+    async def quote(self, url: str, *, pinned_ip: Optional[str] = None,
+                    network: Optional[str] = None) -> Optional[float]:
         """Best-effort price probe: return the required USD amount or None.
 
         Sends a plain GET without an X-PAYMENT header. If the server
@@ -637,7 +655,10 @@ class RealX402Client:
             async with httpx.AsyncClient(**client_kwargs(url, pinned_ip)) as http:
                 resp = await http.get(url)
                 if resp.status_code == 402:
-                    return self._parse_402_amount(resp)
+                    # 068 B8: the SAME payable-entry choice the payer makes —
+                    # with a configured network, the Base-USDC entry, not
+                    # whichever entry the server listed first.
+                    return self._parse_402_amount(resp, configured=network)
                 return None
         except Exception as exc:  # noqa: BLE001
             logger.debug("quote: probe failed for %s: %s", url, exc)
@@ -653,6 +674,7 @@ class RealX402Client:
         network: str,
         max_amount_usd: float,
         pinned_ip: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
     ) -> X402Result:
         """Perform an auto-paying HTTP request via the x402 SDK.
 
@@ -704,7 +726,8 @@ class RealX402Client:
                         probe_kwargs["content"] = body_bytes
                     probe_resp = await probe_client.request(**probe_kwargs)
                     if probe_resp.status_code == 402:
-                        challenge = self._parse_402_challenge(probe_resp) or {}
+                        challenge = self._parse_402_challenge(
+                            probe_resp, configured=network) or {}
                         probe_amount = challenge.get("amount")
                         probe_pay_to = challenge.get("pay_to")
                         # H2 fail-CLOSED: if a payment is required but we can't read
@@ -764,7 +787,24 @@ class RealX402Client:
         # before any payload is ever created — see `_USDC_ATOMIC_PER_USD`'s comment.
         max_amount_atomic = int(round(max_amount_usd * _USDC_ATOMIC_PER_USD))
         x402_c = x402Client()
-        register_exact_evm_client(x402_c, sdk_signer, policies=[max_amount(max_amount_atomic)])
+        # 068 X1: since x402 2.20 the SDK carries its OWN default spend control —
+        # $1 per payment — and applies it before every policy. Never configured
+        # here, it silently refused every payment above $1, even one the owner
+        # approved. The cap is OURS: set it to the same max_amount_usd the probe,
+        # the max_amount policy and the PolicyGate re-check already enforce.
+        if hasattr(x402_c, "set_spend_controls"):
+            x402_c.set_spend_controls({"max_amount_per_payment": f"${max_amount_usd:.6f}"})
+
+        def _payable_first(version, reqs):
+            # 068 X5: keep only the entries we can pay (our network, canonical
+            # USDC); the before-creation hook still re-checks the one selected.
+            ok = [r for r in reqs
+                  if self._networks_match(network, getattr(r, "network", None))
+                  and self._asset_is_canonical_usdc(network, getattr(r, "asset", None))]
+            return ok or reqs
+
+        register_exact_evm_client(x402_c, sdk_signer,
+                                  policies=[_payable_first, max_amount(max_amount_atomic)])
 
         payment_info: dict = {"happened": False, "amount": None, "pay_to": None,
                               "submission_ref": None, "authorized_amount": None}
@@ -792,6 +832,22 @@ class RealX402Client:
                         f"to pay (fail-closed)"
                     )
                 )
+            # CR-L26: the server chooses how long the EIP-3009 authorization
+            # we sign stays valid. Uncapped, a server can ask for years and
+            # hold a transferable authorization indefinitely. The SDK treats a
+            # missing/zero value as 3600 s, so that is refused too.
+            try:
+                selected_timeout = int(getattr(selected, "max_timeout_seconds", 0) or 0)
+            except (TypeError, ValueError):
+                selected_timeout = 0
+            if not 0 < selected_timeout <= _MAX_AUTHORIZATION_SECONDS:
+                return AbortResult(
+                    reason=(
+                        f"x402: {url} asks for a {selected_timeout or 'default (3600)'} s "
+                        f"authorization window; the limit is "
+                        f"{_MAX_AUTHORIZATION_SECONDS} s — refusing to pay (fail-closed)"
+                    )
+                )
             # C1 half 2 (2026-07-15): re-run the wallet PolicyGate against the
             # REAL amount the SDK selected, before any payload is signed. Runs
             # AFTER the asset-pin above so `_USDC_ATOMIC_PER_USD`'s 6-decimal
@@ -816,6 +872,10 @@ class RealX402Client:
                 authorized_amount = float(selected.get_amount()) / _USDC_ATOMIC_PER_USD
                 payment_info["submission_ref"] = prepare_attempt(
                     "x402", signer.address, authorized_amount,
+                    # 068 B6: the fetch's replay key rides the journal row, so
+                    # an operator release books under it and a retry of the
+                    # same request can never pay twice.
+                    idempotency_key=idempotency_key,
                 )
                 payment_info["authorized_amount"] = authorized_amount
             except Exception:

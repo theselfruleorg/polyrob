@@ -13,11 +13,10 @@ from core.config import ServerConfig, AgentConfig
 def test_bool_fields_accept_falsey_tokens_without_crashing(monkeypatch, falsey):
     monkeypatch.setenv("MCP_ENABLED", falsey)
     monkeypatch.setenv("SUB_AGENTS_ENABLED", falsey)
-    monkeypatch.setenv("SSL_VERIFY", falsey)
     cfg = ServerConfig()  # must NOT raise
     assert cfg.mcp_enabled is False
     assert cfg.sub_agents_enabled is False
-    assert cfg.ssl_verify is False
+    assert cfg.browser_headless is True  # untouched bool keeps its default
 
 
 @pytest.mark.parametrize("truthy", ["true", "1", "yes", "on"])

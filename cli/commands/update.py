@@ -42,10 +42,26 @@ EXIT_ERROR = 1
 # "migrations run on next start".
 _MIGRATE = "python -m migrations.migrate upgrade"
 _AUTO_MIGRATE_NOTE = "(schema migrations apply automatically on the next start)"
+# `{spec}` / `{extras}` are filled per install by `_manual_steps_for`: the
+# extras THIS install has (058 — a bare `pip install -e .` / `pip install -U
+# polyrob` drops them; pipx keeps the spec it was installed with).
+_HASHED_DEPS = ("python core/lock_closure.py deps --lock requirements.lock --pyproject pyproject.toml "
+                "--extras \"{extras_csv}\"{packs_flag} -o polyrob-deps.txt && "
+                "pip install --require-hashes -r polyrob-deps.txt")
 _MANUAL_STEPS = {
-    EDITABLE_GIT: f"git pull --ff-only && pip install -e . && {_MIGRATE}",
-    GIT: f"git pull --ff-only && pip install . && {_MIGRATE}",
-    PIP: f"python -m pip install -U polyrob  {_AUTO_MIGRATE_NOTE}",
+    # 066 P1 / D2: hash-checked — the lock's closure of the extras, then the project --no-deps.
+    # 067 (one install): {packs_flag} carries a retired separate pack dist's pack as
+    # its SDK extra; {retire} then retires the old dist's METADATA (never pip
+    # uninstall: it would delete pack files polyrob owns) after the project install.
+    EDITABLE_GIT: (f"git pull --ff-only && {_HASHED_DEPS} && "
+                   f"pip install --no-deps --no-build-isolation -e .{{retire}} && {_MIGRATE}"),
+    GIT: (f"git pull --ff-only && {_HASHED_DEPS} && "
+          f"pip install --no-deps --no-build-isolation .{{retire}} && {_MIGRATE}"),
+    # A pack dist is NEVER appended here: an unrestricted `pip install -U` of a
+    # pack name fetches whatever the index holds, which replaces reviewed code
+    # (a retired first-party name may be anyone's there; a third-party pack came
+    # from a pinned commit). {pack_note} names each pack's reviewed path instead.
+    PIP: f"python -m pip install -U {{spec}}  {_AUTO_MIGRATE_NOTE}{{pack_note}}",
     PIPX: f"pipx upgrade polyrob  {_AUTO_MIGRATE_NOTE}",
     DOCKER: "docker compose pull && docker compose up -d --build",
     UNKNOWN: "update via the package manager you installed POLYROB with "
@@ -107,10 +123,59 @@ def _systemd_manual_steps(units: list) -> str:
             "sudo systemctl daemon-reload && sudo systemctl start <that unit>")
 
 
-def _manual_steps_for(method: str) -> str:
+def _manual_steps_for(method: str, repo_root=None) -> str:
     if method == SYSTEMD:
         return _systemd_manual_steps(_detect_polyrob_units())
-    return _MANUAL_STEPS.get(method, _MANUAL_STEPS[UNKNOWN])
+    try:
+        from cli.update.extras import installed_extras, upgrade_spec
+        extras = installed_extras(repo_root)
+    except Exception:  # detection is advice, never a blocker
+        extras = []
+    try:
+        from cli.update import packs as pk
+        installed = pk.installed_packs()
+        retired = sorted({p.dist for p in pk.retired_installed(installed)})
+        pack_ids = sorted({p.id for p in pk.retired_installed(installed)})
+    except Exception:  # detection is advice, never a blocker
+        installed, retired, pack_ids = [], [], []
+    bracket = f"[{','.join(extras)}]" if extras else ""
+    return _MANUAL_STEPS.get(method, _MANUAL_STEPS[UNKNOWN]).format(
+        spec=upgrade_spec(extras) if extras else "polyrob", extras=bracket,
+        extras_csv=",".join(extras), packs_flag=f" --packs {','.join(pack_ids)}" if pack_ids else "",
+        retire=" && python core/packs/retire.py" if retired else "",
+        pack_note=_wheel_pack_note(installed) if method == PIP else "")
+
+
+def _wheel_pack_note(installed) -> str:
+    """How a wheel install updates each installed pack — never through the
+    index (Codex 067 follow-up #1). A first-party pack ships inside polyrob
+    (067, one install): `pip install -U polyrob[...]` updates it, nothing to
+    add. A retired separate pack dist is uninstalled. Anything else is
+    third-party: re-install from a pinned source. An unreadable index treats
+    every pack as third-party (fail closed)."""
+    if not installed:
+        return ""
+    try:
+        from core.packs.index import first_party_identities
+        first = {k: v[0] for k, v in first_party_identities().items()}
+    except Exception:  # noqa: BLE001 — an unreadable index vouches for nothing
+        first = {}
+    from cli.update.packs import retired_installed
+    retired = retired_installed(installed)
+    fp = [p for p in installed if first.get(p.id) == p.dist]
+    tp = [p for p in installed if p not in fp and p not in retired]
+    parts = []
+    if retired:
+        names = " ".join(sorted({p.dist for p in retired}))
+        parts.append(f"retired pack distribution(s) {names}: the packs ship inside polyrob "
+                     f"now — after the upgrade run python -m core.packs.retire (never pip "
+                     f"uninstall them: it deletes pack files polyrob owns)")
+    for p in tp:
+        parts.append(f"third-party pack {p.id} ({p.dist}): never auto-upgraded; re-install "
+                     f"from a pinned source: polyrob pack install <source>@<sha>")
+    if not parts:
+        return ""
+    return " ; packs are not upgraded by that command — " + " ; ".join(parts)
 
 
 def _http_get(url: str, timeout: float = 6.0) -> str:
@@ -258,8 +323,10 @@ def _git_channel_status(ctx):
                         source_ref=f"branch {st['branch']}"), st
 
 
-def _do_apply(channel: str, assume_yes: bool, force: bool, as_json: bool) -> None:
-    """Automated apply: snapshot → install → migrate → verify → auto-rollback."""
+def _do_apply(channel: str, assume_yes: bool, force: bool, as_json: bool,
+              wait_idle: float = 1800.0) -> None:
+    """Automated apply: wait for the wrap-up → snapshot → install → migrate →
+    verify → auto-rollback."""
     ctx = detect_install()
     git_state = None
     if channel == "git":
@@ -283,7 +350,7 @@ def _do_apply(channel: str, assume_yes: bool, force: bool, as_json: bool) -> Non
     target_ref = status.latest if channel != "git" else None
     runners = build_runners(ctx, target_ref=target_ref)
     if runners is None:
-        manual = _manual_steps_for(ctx.method)
+        manual = _manual_steps_for(ctx.method, ctx.repo_root)
         if as_json:
             click.echo(_json.dumps({"applied": False, "reason": "unsupported_method",
                                    "method": ctx.method, "manual_steps": manual}))
@@ -295,6 +362,42 @@ def _do_apply(channel: str, assume_yes: bool, force: bool, as_json: bool) -> Non
         sys.exit(EXIT_ERROR)
 
     uctx = resolve_update_context()
+    # 058: perceive the agent's state and wait for the wrap-up. A live turn, a
+    # running goal or a cron rail (or one due imminently) is a reason to WAIT,
+    # not to give up — the same gate scripts/deploy_when_idle.sh applies before
+    # a prod deploy. An unreadable store is busy. A resident server PROCESS is a
+    # different fact (waiting never ends it) and is refused below as before.
+    from cli.update.agent_state import observe, wait_for_wrap_up
+    activity = observe(uctx.data_home)
+    if not activity.idle and wait_idle > 0:
+        if not as_json:
+            click.echo(click.style(f"POLYROB is busy: {activity.describe()}.", fg="yellow"))
+            click.echo(f"Waiting for the wrap-up (up to {int(wait_idle)} s; --no-wait to refuse instead)…")
+        last = [""]
+
+        def _tick(act, waited):
+            if as_json:
+                return
+            text = act.describe()
+            if text != last[0]:
+                click.echo(f"  … still busy after {int(waited)} s: {text}")
+                last[0] = text
+
+        activity = wait_for_wrap_up(uctx.data_home, timeout=wait_idle, on_tick=_tick)
+        if activity.idle and not as_json:
+            click.echo(click.style(f"Agent idle after {int(activity.waited)} s — continuing.", fg="green"))
+    if not activity.idle and not force:
+        if as_json:
+            click.echo(_json.dumps({"applied": False, "error": "in_use",
+                                   "reasons": list(activity.reasons),
+                                   "unreadable": list(activity.unreadable),
+                                   "waited_sec": int(activity.waited)}))
+            sys.exit(EXIT_ERROR)
+        click.echo(click.style(
+            f"Refusing to apply: POLYROB is still busy after {int(activity.waited)} s.", fg="red"))
+        click.echo(f"  - {activity.describe()}")
+        click.echo("Retry later, raise --wait-idle, or pass --force to swap code under it anyway.")
+        sys.exit(EXIT_ERROR)
     reasons = active_use_reasons(uctx.db_paths)
     if reasons and not force:
         if as_json:
@@ -341,6 +444,8 @@ def _do_apply(channel: str, assume_yes: bool, force: bool, as_json: bool) -> Non
         else:
             click.echo(click.style(
                 f"✓ Updated to {status.latest}. (snapshot: {res.snapshot.name})", fg="green"))
+            for line in _restart_hints():
+                click.echo(line)
         sys.exit(EXIT_UP_TO_DATE)
     if as_json:
         click.echo(_json.dumps({
@@ -363,6 +468,38 @@ def _do_apply(channel: str, assume_yes: bool, force: bool, as_json: bool) -> Non
     sys.exit(EXIT_ERROR)
 
 
+def _restart_hints() -> list:
+    """After a successful update, name what is still running the OLD code.
+
+    062: `polyrob service install` can now leave a background agent running,
+    and an update that rewrites the code under a live process changes nothing
+    until it restarts. Saying "updated" without saying that is the kind of
+    half-true report this repo keeps paying for.
+    """
+    out = []
+    try:
+        from cli.commands.service import (LAUNCHD_LABEL, UNIT_NAME,
+                                          _launchd_plist_path, _platform,
+                                          _systemd_unit_path)
+        plat = _platform()
+        if plat == "linux" and _systemd_unit_path().is_file():
+            out.append(f"  Restart the background service:  systemctl --user restart {UNIT_NAME}")
+        elif plat == "macos" and _launchd_plist_path().is_file():
+            out.append(f"  Restart the background service:  launchctl kickstart -k "
+                       f"gui/$(id -u)/{LAUNCHD_LABEL}")
+    except Exception:
+        pass
+    try:
+        units = _detect_polyrob_units()
+        if units:
+            out.append("  Restart the system units:  sudo systemctl restart "
+                       + " ".join(units))
+    except Exception:
+        pass
+    out.append("  A running REPL or chat surface keeps the OLD code until it restarts.")
+    return out
+
+
 @click.command("update")
 @click.option("--check", "check_only", is_flag=True,
               help="Report current vs latest and exit (0 up-to-date, 10 newer, 1 unknown/error).")
@@ -380,9 +517,14 @@ def _do_apply(channel: str, assume_yes: bool, force: bool, as_json: bool) -> Non
 @click.option("--force", is_flag=True,
               help="With --rollback or --apply, override the in-use guard (risks DB corruption).")
 @click.option("--json", "as_json", is_flag=True, help="Machine-readable output.")
+@click.option("--wait-idle", "wait_idle", type=float, default=1800.0, metavar="SECONDS",
+              help="With --apply: wait up to this long for a live turn / goal / cron job "
+                   "to wrap up before swapping code (default 1800).")
+@click.option("--no-wait", "no_wait", is_flag=True,
+              help="With --apply: refuse immediately when the agent is busy instead of waiting.")
 def update_cmd(check_only: bool, dry_run: bool, channel: str, do_apply: bool,
                do_rollback: bool, snapshot_name: str, do_list: bool, assume_yes: bool,
-               force: bool, as_json: bool):
+               force: bool, as_json: bool, wait_idle: float, no_wait: bool):
     """Check for and apply POLYROB updates."""
     if sum((check_only, dry_run, do_apply, do_rollback, do_list)) > 1:
         message = "Choose only one of --check, --dry-run, --apply, --rollback, --list-snapshots."
@@ -401,13 +543,13 @@ def update_cmd(check_only: bool, dry_run: bool, channel: str, do_apply: bool,
         _do_rollback(snapshot_name, assume_yes, as_json, force=force)
         return  # _do_rollback exits
     if do_apply:
-        _do_apply(channel, assume_yes, force, as_json)
+        _do_apply(channel, assume_yes, force, as_json, wait_idle=0.0 if no_wait else wait_idle)
         return  # _do_apply exits
 
     ctx = detect_install()
     source = _source_for(ctx)
     status = resolve_status(channel=channel, fetch=_http_get, source=source)
-    manual = _manual_steps_for(ctx.method)
+    manual = _manual_steps_for(ctx.method, ctx.repo_root)
 
     # U10: surface the DB-schema-vs-code state alongside the version check —
     # "code updated, DB never migrated" is exactly the failure this command
@@ -418,9 +560,18 @@ def update_cmd(check_only: bool, dry_run: bool, channel: str, do_apply: bool,
     except Exception:
         schema_line = None
 
+    # 067 (one install): a leftover retired separate pack distribution.
+    try:
+        from cli.update.packs import retired_installed, retired_note
+        pack_lines = retired_note()
+        retired_dists = sorted({p.dist for p in retired_installed()})
+    except Exception:  # advice, never a blocker
+        pack_lines, retired_dists = [], []
+
     if as_json:
         payload = {**status.as_dict(), "method": ctx.method,
-                   "self_updatable": ctx.self_updatable, "manual_steps": manual}
+                   "self_updatable": ctx.self_updatable, "manual_steps": manual,
+                   "retired_pack_dists": retired_dists}
         if schema_line is not None:
             payload["db_schema"] = schema_line
         click.echo(_json.dumps(payload, indent=2))
@@ -437,6 +588,8 @@ def update_cmd(check_only: bool, dry_run: bool, channel: str, do_apply: bool,
             click.echo(click.style("→ An update is available.", fg="yellow"))
         elif status.latest is not None:
             click.echo(click.style("✓ You are up to date.", fg="green"))
+        for line in pack_lines:
+            click.echo(click.style(line, fg="yellow"))
 
     # --check: pure status, CI exit code.
     if check_only:
@@ -452,13 +605,14 @@ def update_cmd(check_only: bool, dry_run: bool, channel: str, do_apply: bool,
                 f"\nAutomated update is not available for a {ctx.method} install.", fg="cyan"))
         elif ctx.method in (GIT, EDITABLE_GIT):
             if dry_run:
-                click.echo("\nPlan (dry-run): snapshot → install → migrate → "
-                           "verify → auto-rollback on failure")
+                click.echo("\nPlan (dry-run): wait for the agent to wrap up → snapshot → "
+                           "install → migrate → verify → auto-rollback on failure")
                 click.echo("Run `polyrob update --apply` to perform it.")
             else:
                 click.echo(click.style(
                     "\nRun `polyrob update --apply` for the automated update "
-                    "(snapshot → install → migrate → verify, auto-rollback on failure) "
+                    "(waits for the agent to wrap up, then snapshot → install → migrate → "
+                    "verify, auto-rollback on failure) "
                     "— or update manually:", fg="cyan"))
         else:
             click.echo(click.style(

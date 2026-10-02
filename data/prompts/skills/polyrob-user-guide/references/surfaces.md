@@ -9,9 +9,12 @@ loop, several front doors — each surface adapts inbound/outbound to the SAME
 - `polyrob run "<task>"` — one-shot: create a session, run the task, print
   the result and exit. `--resume SESSION_ID` continues an existing session
   instead of starting a new task. Flags: `--model`/`-m`, `--provider`/`-p`
-  (openai/anthropic/gemini/openrouter/nvidia — DeepSeek rides
-  `-p openrouter -m deepseek/deepseek-chat`), `--tools`/`-t`, `--toolset`
-  (`minimal|default|research|coding|development|browser|full|safe`),
+  (any provider row with a key: openai, anthropic, gemini, openrouter,
+  nvidia, zai (Z.AI GLM), moonshot (Kimi), xai (Grok), cerebras, and more —
+  `polyrob model list` shows the ones this install can use; DeepSeek rides
+  `-p openrouter -m deepseek/deepseek-chat`),
+  `--tools`/`-t`, `--toolset` (`minimal|default|safe|research|
+  trading_research|coding|development|browser|social|earn|full`),
   `--max-steps` (default 50), `--plain`, `--verbose`/`-v`.
 - `polyrob chat` (or bare `polyrob`) — the interactive REPL: a persistent
   session, multiline editing (Shift+Enter), history (Up/Down), auto-save.

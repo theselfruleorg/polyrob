@@ -16,35 +16,15 @@ from __future__ import annotations
 
 import logging
 
+from core.tool_capabilities import gate_disclosure_map
+
 logger = logging.getLogger(__name__)
 
-# tool_id -> (gate description, tier, remedy shown to the agent)
-GATED_TOOL_REGISTRY: dict = {
-    "twitter":        ("TWITTER_ENABLED", "disabled",
-                       "owner configures X user credentials; TWITTER_ENABLED=true unlocks writes"),
-    "x_browser":      ("X_BROWSER_ENABLED + captured X session", "disabled",
-                       "owner enables X_BROWSER_ENABLED and runs `polyrob x-account capture-session`"),
-    "mcp":            ("MCP_ENABLED + config/mcp_config.json", "disabled",
-                       "owner sets MCP_ENABLED=true and configures servers"),
-    "email":          ("SMTP/IMAP credentials + outbound policy", "disabled",
-                       "owner configures email creds; sends follow outbound.policy"),
-    "x402_invoice":   ("X402_INVOICE_ENABLED", "disabled",
-                       "owner sets X402_INVOICE_ENABLED=true (auto-ON in autonomous mode)"),
-    "knowledge":      ("KB_ENABLED", "disabled", "owner sets KB_ENABLED=true"),
-    "browser":        ("session tool_ids", "loadable", "request tool_ids=['browser']"),
-    "coding":         ("CODING_TOOLS_ENABLED", "disabled", "owner sets CODING_TOOLS_ENABLED=true"),
-    "goal":           ("GOALS_ENABLED", "disabled", "owner sets GOALS_ENABLED=true"),
-    "cronjob":        ("CRON_ENABLED (AUTONOMY_POSTURE>=full)", "disabled",
-                       "owner raises AUTONOMY_POSTURE or sets CRON_ENABLED=true"),
-    "code_execution": ("CODE_EXEC_ENABLED / AGENT_COMPUTE_POSTURE>=1", "disabled",
-                       "owner raises AGENT_COMPUTE_POSTURE (host axis; not part of AUTONOMY_MODE)"),
-    "shell":          ("AGENT_COMPUTE_POSTURE>=1", "disabled",
-                       "owner raises AGENT_COMPUTE_POSTURE"),
-    "x402_pay":       ("money-SPEND", "reserved",
-                       "owner-only, explicitly enabled, never autonomous; raise an ask if truly needed"),
-    "hyperliquid":    ("trading", "reserved", "owner-only; trading is never autonomous"),
-    "polymarket":     ("trading", "reserved", "owner-only; trading is never autonomous"),
-}
+# tool_id -> (gate description, tier, remedy shown to the agent). A VIEW (067 P1) of
+# the ``gate`` field of the per-tool rows in core/tool_capabilities.py — declare a
+# tool's disclosure there. Its membership differs from TOOL_GATE_FLAGS on purpose
+# (see the note above gate_flag_map there).
+GATED_TOOL_REGISTRY: dict = gate_disclosure_map()
 
 
 def _hint_enabled() -> bool:

@@ -9,6 +9,8 @@ snapshot). One spelling, imported everywhere.
 """
 from __future__ import annotations
 
+import re
+
 # goal lifecycle
 STATUS_TRIAGE = "triage"
 STATUS_WAITING = "waiting"
@@ -37,8 +39,27 @@ ASK_FULFILLED = "fulfilled"
 ASK_REJECTED = "rejected"
 ASK_OBSOLETE = "obsolete"
 
+# ask kinds (``payload.ask_kind``) that are DECIDED on /pending by their own
+# decider, never by /fulfill or owner_ask(answer=): a tool/spend approval and
+# the W1 token-identity question (which contract is the real token). Every
+# generic ask listing skips them, so one decision is never shown twice.
+ASK_KIND_TOOL_APPROVAL = "tool_approval"
+ASK_KIND_TOKEN_IDENTITY = "token_identity"
+OWN_SURFACE_ASK_KINDS = frozenset({ASK_KIND_TOOL_APPROVAL, ASK_KIND_TOKEN_IDENTITY})
+
+
+def has_own_surface(payload) -> bool:
+    """True when an ask with this payload is decided on /pending, not /fulfill."""
+    return isinstance(payload, dict) and payload.get("ask_kind") in OWN_SURFACE_ASK_KINDS
+
 # objective lifecycle (disjoint from goal statuses so nothing dispatches them)
 OBJ_ACTIVE = "active"
 OBJ_PAUSED = "paused"
 OBJ_DROPPED = "dropped"
 OBJ_DONE = "done"
+
+
+def normalize_title(title: str) -> str:
+    """The ONE title key: lowercase, alnum words, single spaces. The board's
+    dedup, the suppression store and the renderers all compare titles by it."""
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", str(title or "").lower()).split())

@@ -66,8 +66,8 @@ def test_init_skip_keys_skips_section_one(monkeypatch, tmp_path):
     # --skip-keys + --quick: only the model prompt should appear.
     result = runner.invoke(init_mod.init_cmd, ["--skip-keys", "--quick"], input="\n")
     assert result.exit_code == 0, result.output
-    assert "Section 1/6" not in result.output
-    assert "Section 2/6" in result.output
+    assert "Section 1/7" not in result.output
+    assert "Section 2/7" in result.output
 
 
 def test_init_next_steps_block(monkeypatch, tmp_path):
@@ -76,7 +76,7 @@ def test_init_next_steps_block(monkeypatch, tmp_path):
     result = runner.invoke(init_mod.init_cmd, ["--quick", "--skip-keys"], input="\n")
     assert "Next steps" in result.output
     assert "wallet init" in result.output
-    assert "pfp generate" in result.output
+    assert "polyrob avatar set" in result.output
 
 
 def test_init_wallet_optin_prompt_wired(monkeypatch, tmp_path):
@@ -92,19 +92,20 @@ def test_init_wallet_optin_prompt_wired(monkeypatch, tmp_path):
     # skipped via --skip-keys; the now-removed autonomy-budget prompt is NOT
     # in this list — see test_init_guardrails.py's _full_flow_input for the
     # reference sequence). One line per slot, in order:
-    #   1. "" -> Section 2/6 default model            (blank = skip)
-    #   2. "" -> Section 3/6 toolset                   (blank = default "default")
-    #   3. "" -> Section 4/6 template                  (blank = default "general")
-    #   4. "" -> Section 5/6 instance id               (blank = default "rob")
-    #   5. "" -> Section 5/6 owner user id             (blank = default = instance id)
-    #   5b. "" -> Section 4/6 give this instance its own character? (No, F0)
-    #   6. "n" -> Section 6/6 enable interactive local tools?  (No)
-    #   7. "n" -> Section 6/6 enable autonomy?                  (No)
-    #   8. "n" -> Section 6/6 apply approval preset?            (No)
-    #   9. "" -> Section 6/6 daily digest channel               (blank = off)
-    #  10. "y" -> Optional: agent crypto wallet opt-in          (YES <- checked)
+    #   1. "" -> Section 2/7 default model            (blank = skip)
+    #   2. "" -> Section 3/7 toolset                   (blank = default "default")
+    #   3. "" -> Section 4/7 template                  (blank = default "general")
+    #   4. "" -> Section 5/7 instance id               (blank = default "rob")
+    #   5. "" -> Section 5/7 owner user id             (blank = default = instance id)
+    #   5b. "" -> Section 4/7 give this instance its own character? (No, F0)
+    #   6. "n" -> Section 6/7 enable interactive local tools?  (No)
+    #   7. "n" -> Section 6/7 enable autonomy?                  (No)
+    #   8. "n" -> Section 6/7 apply approval preset?            (No)
+    #   9. "" -> Section 6/7 daily digest channel               (blank = off)
+    #  10. "" -> Section 7/7 reach me / chat surface            (blank = skip)
+    #  11. "y" -> Optional: agent crypto wallet opt-in          (YES <- checked)
     result = runner.invoke(
         init_mod.init_cmd, ["--skip-keys"],
-        input="\n\n\n\n\n\nn\nn\nn\n\ny\n")
+        input="\n\n\n\n\n\nn\nn\nn\n\n\ny\n")
     assert result.exit_code == 0, result.output
     assert called, "wallet init flow was not invoked"

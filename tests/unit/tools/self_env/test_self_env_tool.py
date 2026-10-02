@@ -307,3 +307,21 @@ def test_self_env_registered_only_at_posture_2(monkeypatch):
     monkeypatch.setenv("AGENT_COMPUTE_POSTURE", "2")
     c._refreeze_compute_posture_for_tests()
     assert self_env_enabled() is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rel", ["core/wallet/authority.py", "core/money/authority.py",
+                                 "core/money/authorize.py"])
+async def test_patch_source_refuses_the_money_kernel(monkeypatch, tmp_path, rel):
+    """067 P1b moved the refusals from core/wallet/ to core/money/. The
+    self-patch guard follows them, or the move is a bypass."""
+    _posture(monkeypatch, "2")
+    target = tmp_path / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("X = 1\n")
+    t = _tool(tmp_path)
+    res = await t.self_env_patch_source(
+        PatchSourceParams(path=rel, old_string="X = 1", new_string="X = 2"),
+        execution_context=_owner_ctx())
+    assert res.error and "refusing to patch" in res.error
+    assert target.read_text() == "X = 1\n"

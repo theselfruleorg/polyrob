@@ -134,3 +134,50 @@ def test_status_money_line_says_none_on_a_genuinely_flat_book(tmp_path, monkeypa
 
     sec = _money_section("u1", {"runtime": {}, "treasury": {}}, str(tmp_path))
     assert "open positions: none recorded" in "\n".join(sec.lines)
+
+
+def test_a_long_run_log_tail_still_reads_the_table(tmp_path):
+    """2026-09-21: the whole-file 1 MB cap blanked the treasury read on every
+    status seat once the rails' appended run logs passed 1 MB. The table is at
+    the top and is the only thing parsed, so the cap bounds the head that must
+    hold it — a long tail reads fine, a headless 1 MB file still refuses."""
+    from core.position_ledger import read_open_positions
+    led = tmp_path / "kb-root-position-ledger.md"
+    led.write_text("# L\n\n## Open positions\n\n| T | A | S |\n|-|-|-|\n"
+                   "| X | 0xB2000000000000000000004c27f6523082f41D01 | 28.9 |\n\n"
+                   "## Run log\n" + ("- narrative line\n" * 80_000))
+    assert led.stat().st_size > 1_000_000
+    rows, err = read_open_positions(path=str(led))
+    assert err is None and len(rows) == 1 and rows[0].qty == 28.9
+    headless = tmp_path / "big.md"
+    headless.write_text(("x" * 1_000_001) + "\n## Open positions\n")
+    rows, err = read_open_positions(path=str(headless))
+    assert rows == [] and err and "exceeds 1MB" in err
+
+
+# 2026-10-02: the buyback rail wrote a NEW PNL row each tranche (newest first)
+# and marked the old one with a `> SUPERSEDED` quote instead of removing it, so
+# the table held 11 PNL rows and reconcile reported 10 phantom mismatches. The
+# ledger is a RECORD (a rewrite is refused by design), so the reader keeps the
+# FIRST row per address — the ledger's own note: "the live row is the FIRST PNL
+# row in the table".
+def test_superseded_duplicate_rows_keep_the_first_per_address():
+    from core.position_ledger import parse_open_positions
+    pnl = "0xbBa60AB93Fc409b1A34371CBF6c3173795Ed2c7e"
+    text = "\n".join([
+        "## Open positions", "",
+        "| Token | Address | Size | Entry | Thesis | Date |",
+        "|---|---|---|---|---|---|",
+        f"| PNL | {pnl} | 165,486,471.599803 | x | live | 10-01 |",
+        "> SUPERSEDED 2026-10-01 — the row below was the previous cycle's PNL row",
+        f"| PNL | {pnl} | 160,502,624.621523 | x | old | 09-30 |",
+        "| HOOKR | 0x18E674231A58c239Dc7DaeDcffE15Ec3A24cff5c | 252.029490 | x | y | z |",
+        f"| PNL | {pnl.lower()} | 156,387,468.62 | x | older | 09-29 |",
+        "> SUPERSEDED 2026-09-25 — a trailing note that sits above an unrelated row",
+        "| SHROOM | 0xab093dEF657F15dF31b33922A95e047aDd645B29 | 150.940181 | x | y | z |",
+        "", "## Closed positions",
+    ])
+    rows, err = parse_open_positions(text)
+    assert err is None
+    assert [r.symbol for r in rows] == ["PNL", "HOOKR", "SHROOM"]
+    assert rows[0].qty == 165486471.599803

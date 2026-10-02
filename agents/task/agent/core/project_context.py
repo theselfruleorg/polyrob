@@ -10,11 +10,20 @@ caps content to *cap_tokens*, and returns the selected context.
 Returns ``None`` if nothing is found or any unrecoverable error occurs (fully
 fail-open at the outer level).
 
+F25 (2026-09-22 cache/context review) changed three things about the cap:
+  - the cap follows the MODEL WINDOW (``clamp(window * 4 %, 4 000, 40 000)``) instead
+    of a fixed 20 000 tokens, falling back to *cap_tokens* when the window is unknown;
+  - the cut keeps a HEAD and a TAIL (70 % / 20 %) with a NAMED marker that carries the
+    file's path, so the end of the file — where a project file usually puts its
+    landmines — is not the part that silently disappears;
+  - one-file-wins still holds (a documented precedence decision), but a
+    lower-precedence sibling in the same directory is NAMED as skipped.
+
 Safety properties:
   - Skips any file whose path is flagged by ``is_secret_path``.
   - Rejects any document whose content is flagged by the ``is_suspicious`` threat
     scanner (fail-CLOSED if unavailable or if it raises).
-  - Truncates concatenated content to *cap_tokens* with an appended notice.
+  - Truncates content to the effective cap with a named head+tail marker.
   - All I/O errors are swallowed; the whole function returns ``None`` on exception.
 """
 from __future__ import annotations
@@ -44,6 +53,64 @@ _CONTEXT_FILENAMES: tuple[str, ...] = (
 
 # Header template injected before each file's content so the model knows the source.
 _FILE_HEADER_TPL = "<!-- project-context: {filename} -->"
+
+#: The pre-F25 fixed cap, and the value ``PROJECT_CONTEXT_MAX_TOKENS`` still defaults
+#: to. Used as the fallback when the model window is unknown, and as the sentinel
+#: construction.py compares against to tell "operator pinned it" from "default".
+DEFAULT_PROJECT_CONTEXT_CAP_TOKENS = 20000
+
+#: Share of the model's input window the project file may occupy, and the floor/ceiling
+#: the share is clamped into. 4 % of a 200 K window is 8 K; of a 1 M window, 40 K.
+_WINDOW_SHARE = 0.04
+_CAP_FLOOR_TOKENS = 4000
+_CAP_CEILING_TOKENS = 40000
+
+#: Head/tail split of the cap when the file is over budget (a reference agent's ratio). The
+#: remaining 10 % is headroom for the marker.
+_KEEP_HEAD_RATIO = 0.70
+_KEEP_TAIL_RATIO = 0.20
+
+
+def resolve_cap_tokens(
+    context_window: Optional[int],
+    *,
+    default_cap: int = DEFAULT_PROJECT_CONTEXT_CAP_TOKENS,
+) -> int:
+    """Effective project-context cap for a model whose input window is *context_window*.
+
+    ``clamp(window * 4 %, 4 000, 40 000)``. Returns *default_cap* unchanged when the
+    window is unknown or not a usable positive int — so a caller that cannot resolve a
+    window keeps exactly the pre-F25 behaviour.
+    """
+    if not isinstance(context_window, int) or isinstance(context_window, bool):
+        return default_cap
+    if context_window <= 0:
+        return default_cap
+    share = int(context_window * _WINDOW_SHARE)
+    return max(_CAP_FLOOR_TOKENS, min(_CAP_CEILING_TOKENS, share))
+
+
+#: Named-skip line appended when a lower-precedence sibling sits next to the winner.
+_SKIPPED_SIBLING_TPL = (
+    "<!-- project-context: also present in this directory but NOT loaded "
+    "(lower precedence): {names} — read the file directly if you need it -->"
+)
+
+
+def _lower_precedence_siblings(winner: str, directory: Path) -> list[str]:
+    """Recognised names below *winner* in precedence that exist in *directory*."""
+    try:
+        rank = _CONTEXT_FILENAMES.index(winner)
+    except ValueError:
+        return []
+    out: list[str] = []
+    for name in _CONTEXT_FILENAMES[rank + 1:]:
+        try:
+            if (directory / name).is_file():
+                out.append(name)
+        except OSError:
+            continue
+    return out
 
 
 def should_load_project_context(
@@ -85,7 +152,8 @@ def build_project_context_message(
     server_mode: bool,
     cwd: str,
     workspace_dir: Optional[str],
-    cap_tokens: int = 20000,
+    cap_tokens: int = DEFAULT_PROJECT_CONTEXT_CAP_TOKENS,
+    context_window: Optional[int] = None,
 ) -> Optional[str]:
     """End-to-end: decide → resolve the tier root → load → frame.
 
@@ -94,6 +162,11 @@ def build_project_context_message(
     Pure except for the filesystem read in :func:`load_project_context`; the caller
     resolves ``workspace_dir`` (via the path manager) and passes it in, so this stays
     unit-testable without a live session.
+
+    *context_window* is the model's input window. When it is given, the cap is
+    window-relative (:func:`resolve_cap_tokens`) — a 20 000-token file was 10 % of a
+    200 K window and 2 % of a 1 M one. When it is ``None``, *cap_tokens* is used
+    unchanged, so every existing caller keeps its exact behaviour.
     """
     if not should_load_project_context(
         autoload=autoload, local=local, server_mode=server_mode
@@ -102,10 +175,11 @@ def build_project_context_message(
     root = resolve_project_context_root(local=local, cwd=cwd, workspace_dir=workspace_dir)
     if root is None:
         return None
+    effective_cap = resolve_cap_tokens(context_window, default_cap=cap_tokens)
     # P1-8: on the server the walk is CONFINED to the tenant workspace — it must
     # never ascend to a surrounding git root, which on a deployment whose data
     # root lives inside a source checkout is the install's own AGENTS.md/CLAUDE.md.
-    ctx = load_project_context(root, cap_tokens=cap_tokens, confine_to_root=not local)
+    ctx = load_project_context(root, cap_tokens=effective_cap, confine_to_root=not local)
     if ctx is None:
         return None
     return frame_project_context(ctx, trusted=local)
@@ -149,7 +223,7 @@ def _find_git_root(start: Path) -> Optional[Path]:
 def load_project_context(
     root: str | Path,
     *,
-    cap_tokens: int = 20000,
+    cap_tokens: int = DEFAULT_PROJECT_CONTEXT_CAP_TOKENS,
     confine_to_root: bool = False,
 ) -> Optional[str]:
     """Load and return project context from recognised context files.
@@ -206,7 +280,7 @@ def _load_project_context_impl(root: Path, *, cap_tokens: int,
     # Name-first precedence: walk filenames in precedence order; for each, find its
     # most-local occurrence across the dirs. The FIRST name that yields a usable
     # file wins, and we stop — recognised names are not concatenated (L1 fix).
-    found: list[tuple[str, str]] = []  # at most one (filename, content)
+    found: list[tuple[str, str, Path]] = []  # at most one (filename, content, path)
 
     for filename in _CONTEXT_FILENAMES:
         if found:
@@ -262,7 +336,7 @@ def _load_project_context_impl(root: Path, *, cap_tokens: int,
                     )
                     continue
 
-            found.append((filename, raw))
+            found.append((filename, raw, candidate))
             break  # most-local occurrence of the winning name — stop walking dirs
 
     if not found:
@@ -270,29 +344,44 @@ def _load_project_context_impl(root: Path, *, cap_tokens: int,
 
     # Concatenate with per-file headers.
     parts: list[str] = []
-    for filename, content in found:
+    for filename, content, _path in found:
         header = _FILE_HEADER_TPL.format(filename=filename)
         parts.append(f"{header}\n{content}")
 
     combined = "\n\n".join(parts)
+    winner_name, _winner_raw, winner_path = found[0]
 
-    # Cap to cap_tokens.
+    # Cap to cap_tokens. F25: head + tail, NAMED, with the path as the way out — a
+    # head-only cut with an HTML comment told the model nothing about what it lost
+    # or how to get it, and a project file's landmines are usually near the end.
     total_tokens = estimate_tokens_rough(combined)
     if total_tokens > cap_tokens:
-        # Truncate the combined text to approximately cap_tokens.
-        # chars = tokens * 4 (estimate_tokens_rough uses len // 4).
-        max_chars = cap_tokens * 4
-        truncated = combined[:max_chars]
-        notice = f"\n\n<!-- project-context: truncated to {cap_tokens} tokens -->"
-        combined = truncated + notice
+        from agents.task.agent.core.result_budget import named_truncation
+        combined = named_truncation(
+            combined,
+            cap_tokens,
+            way_out=f"read {winner_path} for the full file",
+            keep_head_ratio=_KEEP_HEAD_RATIO,
+            keep_tail_ratio=_KEEP_TAIL_RATIO,
+            label="project context ",
+        )
         logger.debug(
             "project_context: truncated from ~%d to ~%d tokens", total_tokens, cap_tokens
+        )
+
+    # F25: one-file-wins stays (a precedence decision, not an accident), but a
+    # lower-precedence sibling next to the winner is NAMED — otherwise the model
+    # cannot know the file exists, let alone read it on purpose.
+    skipped = _lower_precedence_siblings(winner_name, winner_path.parent)
+    if skipped:
+        combined += (
+            "\n\n" + _SKIPPED_SIBLING_TPL.format(names=", ".join(skipped))
         )
 
     logger.debug(
         "project_context: loaded %d file(s) [%s], ~%d tokens",
         len(found),
-        ", ".join(name for name, _ in found),
+        ", ".join(name for name, _, _ in found),
         estimate_tokens_rough(combined),
     )
     return combined

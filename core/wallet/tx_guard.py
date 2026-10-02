@@ -26,6 +26,7 @@ Fail-closed is not configurable here: any probe failure refuses.
 from __future__ import annotations
 
 import logging
+import math
 import os
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Sequence, Tuple
@@ -166,6 +167,10 @@ class TxIntent:
     #: computed from OUR bytes proves what was deployed without reading a single
     #: byte of runtime back.
     create2_salt: Optional[str] = None
+    #: CR-H07: the raw supply the deployed token's constructor MUST mint to the
+    #: holder (``Transfer(0x0 -> holder)`` from the new contract, exact sum).
+    #: Set by ``deploy_token``; None = no mint is asserted.
+    expected_holder_mint_raw: Optional[int] = None
     #: This transaction moves a NON-FUNGIBLE (2026-09-15). The FOURTH shape,
     #: after a spend, a deploy and a claim — and like each of those it exists
     #: because every other branch refused it for a different reason: step 3
@@ -224,6 +229,57 @@ class TxIntent:
     lp_position: Optional[Tuple[str, Optional[int]]] = None
     lp_position_effect: str = "hold"
     expected_events: Sequence[Tuple[str, str]] = ()
+    #: 050 §7.3, 069 v4 §2 — "the key signs, the account holds". The NFT's ERC-6551
+    #: account, operated ONLY as the NFT's current owner: the pre-flight refuses unless
+    #: ``owner()`` of the account IS the signing treasury (no grants, no operator keys).
+    #: When set, the signed transaction is ``{to: via_account, data:
+    #: execute(inner_to, value, inner_data, 0)}`` and EVERY other field of this
+    #: intent describes the INNER call; the guard measures the account as the
+    #: holder and the treasury as the sender. Not a seventh shape: every shape
+    #: except deploy and liquidity may ride it.
+    via_account: Optional[str] = None
+    #: The account's ``state()`` the verb read when it built this intent. A
+    #: pre-flight re-read that differs refuses (the account changed under us —
+    #: a sale, a lock, a nested execute). Required with ``via_account``.
+    via_account_state: Optional[int] = None
+    #: W3 — single-token ERC-721 approvals this call CLEARS: ``(contract, token_id)``, the
+    #: ``approve(address(0), id)`` shape (``erc6551.encode_erc721_revoke``). Only with
+    #: ``is_nft_op``. Held to the simulation: ``Approval(holder, 0x0, id)`` from that
+    #: contract must be emitted, or the call refuses.
+    nft_approval_revokes: Sequence[Tuple[str, int]] = ()
+    #: W3 — Permit2 allowances this call REVOKES: ``(token, spender)``, via Permit2
+    #: ``approve(token, spender, 0, 0)`` or ``lockdown``. Only with ``is_allowance_op`` (no
+    #: grants), ``to`` = the pinned Permit2 and ``token`` = one of the revoked tokens. Held to
+    #: the simulation: Permit2 must emit ``Approval``/``Lockdown`` with amount 0 for each pair.
+    permit2_revokes: Sequence[Tuple[str, str]] = ()
+    #: W8 — the approve-spend-reset batch through a token-bound account (requires ``via_account``).
+    #: The owner signs ``account.executeBatch([L1, L2, L3])`` with EXACTLY three operation-0
+    #: legs: L1 = ``token.approve(S, X)`` (0 < X <= ``amount_raw``), L2 = the spend call to
+    #: ``S`` = ``to``, L3 = ``token.approve(S, 0)``. Every leg is checked structurally; L2 is
+    #: the inner call the rest of the guard judges (outflow of ``token`` <= ``amount_raw``);
+    #: and the simulation must show ``allowance(account, S) == 0`` AFTER — no claim survives
+    #: the transaction. Any other ``executeBatch`` stays an account-admin call and refuses.
+    via_account_batch: bool = False
+    #: The collection reveal (069 v4; a pinned collection profile with the ``reveal``
+    #: capability): ``reveal(uint256[] ids)`` on a pinned collection, signed by the
+    #: treasury, value 0. The
+    #: registration precedent: it moves nothing, so the RECEIPT is the shape — the simulation
+    #: must show exactly one ``Revealed``/``Recommitted`` per id in ``reveal_ids``, every log
+    #: from the collection, and no movement of the signer (``core.wallet.collection_reveal``). Its
+    #: cost is the fee, priced like a registration's.
+    is_collection_reveal: bool = False
+    reveal_ids: Sequence[int] = ()
+    #: The collection paid mint (069 v4; a pinned collection profile with the ``mint``
+    #: capability; testnet-run F2): ``mint(to, qty, minPnlOutPerToken)`` on a pinned collection,
+    #: signed by the treasury with ``to`` = the treasury and ``value == amount_raw == qty × PRICE``. The
+    #: one shape where native value LEAVES and NFTs ARRIVE: the NFT branch refuses any native
+    #: movement and the native branch cannot see a token arrive, so the mint verb could
+    #: never pass either. The simulation must show the exact payment and exactly the declared ids
+    #: minted to the signer (``core.wallet.collection_mint``). Priced as value + worst-case fee.
+    is_collection_mint: bool = False
+    #: The ids the mint creates, consecutive (``nextId .. nextId+qty-1``); ``qty`` is their
+    #: count and must equal the calldata's ``qty``.
+    mint_ids: Sequence[int] = ()
 
 
 @dataclass(frozen=True)
@@ -280,7 +336,9 @@ def autonomous_max_usd(user_id=None, home_dir=None) -> float:
     """Spend that may execute without asking the owner.
 
     Distinct from the catastrophic per-transaction ceiling, which is a
-    loss limit and is min-merged so a pref can only LOWER it. This one is an
+    loss limit: its env value is the default, and an owner-approved
+    ``budget.wallet_per_tx_usd`` pref may LOWER or RAISE it, clamped to the
+    daily cap (``core.wallet.config``, since 2026-09-18). This one is an
     interruption dial: raising it cannot widen maximum loss, because the
     backstop still binds, so the owner may raise it from any seat
     (``budget.defi_autonomous_usd``). It is CLAMPED to the backstop here —
@@ -304,10 +362,18 @@ def autonomous_max_usd(user_id=None, home_dir=None) -> float:
             logger.debug("autonomous-ceiling pref unreadable; using env",
                          exc_info=True)
             value = env_value
+    # M09: a NaN/inf pref (hand-edited file, or written before _coerce refused
+    # it) must never reach the comparison — `x > NaN` is always False, so a NaN
+    # ceiling waves every spend through. Fall back to the env value.
+    if not math.isfinite(value):
+        logger.warning("budget.defi_autonomous_usd is not finite (%r); using env", value)
+        value = env_value
     try:
         from core.wallet.config import effective_max_per_tx_usd
-        backstop = effective_max_per_tx_usd(user_id, home_dir)
+        backstop = float(effective_max_per_tx_usd(user_id, home_dir))
     except Exception:
+        backstop = float_env("AGENT_WALLET_MAX_PER_TX_USD", 250.0)
+    if not math.isfinite(backstop):
         backstop = float_env("AGENT_WALLET_MAX_PER_TX_USD", 250.0)
     return min(value, backstop)
 
@@ -319,7 +385,13 @@ def rpc_is_pinned(chain: str) -> bool:
     unauthenticated and rate-limited, and it is simultaneously the source of the
     simulation, the deltas and the balances the caps are computed from.
     """
-    return bool(os.getenv(f"DEFI_EVM_RPC_{chain.upper()}", "").strip())
+    from core.wallet.chains import rpc_env_name
+    return bool(os.getenv(rpc_env_name(chain), "").strip())
+
+
+def _rpc_env_name(chain: str) -> str:
+    from core.wallet.chains import rpc_env_name
+    return rpc_env_name(chain)
 
 
 def _halted() -> bool:
@@ -450,12 +522,31 @@ def _grant_is_exit_bounded(intent: TxIntent, g_token: str, g_spender: str,
     return spender in pinned
 
 
+def _is_nft_revoke_only(intent: TxIntent) -> bool:
+    """An NFT op that only RETIRES approvals (ApprovalForAll false, single-token clears)."""
+    return bool(intent.is_nft_op and not intent.nft_out and not intent.expected_nft_in
+                and (intent.nft_operator_ops or intent.nft_approval_revokes)
+                and not any(bool(a) for (_c, _o, a) in intent.nft_operator_ops))
+
+
+def intent_is_risk_reducing(intent: TxIntent) -> bool:
+    """068 R3-2: withdrawing capital the wallet already has a claim on — LP
+    remove/collect (a liquidity op with no outflows), a claim of what is owed,
+    a revoke (an allowance op with no grants). Such an intent acquires nothing
+    the run's ``target_token`` restricts, so the inflow backstop exempts it."""
+    return bool((intent.is_liquidity_op and not intent.lp_outflows)
+                or intent.is_claim
+                or (intent.is_allowance_op and not intent.expected_allowance_grants)
+                or _is_nft_revoke_only(intent))
+
+
 def _intent_is_exit_shaped(intent: TxIntent) -> bool:
     """True when the DECLARED intent can only CLOSE a position, never open one.
 
     - a revoke (allowance op, no grants) is always an exit;
-    - an approve whose every grant is on the held token and within the held
-      balance is exit-bounded;
+    - an approve whose every grant is exit-bounded (``_grant_is_exit_bounded``:
+      held token, within held balance, to the declared destination, which is a
+      route spender the chain pins);
     - a swap that sends the held token (within held balance) and declares the
       chain's QUOTE ASSET as its inflow is a sell-to-quote.
     The declaration is not trusted on its own: the simulation still asserts the
@@ -464,15 +555,19 @@ def _intent_is_exit_shaped(intent: TxIntent) -> bool:
     if intent.is_liquidity_op:
         return (not intent.lp_outflows and bool(intent.lp_inflows)
                 and any(n > 0 for _, n in intent.lp_inflows))
+    if _is_nft_revoke_only(intent):
+        return True  # an NFT revoke, like an allowance revoke, only retires a claim
     if intent.is_allowance_op:
         if not intent.expected_allowance_grants:
             return True  # revoke
-        if intent.held_balance_raw is None:
-            return False
+        # CR-H01: the SAME three conditions the pricing exemption demands
+        # (held token within held balance, spender == declared destination,
+        # spender pinned as a route spender). A grant of the held token to an
+        # arbitrary spender opens a claim on the wallet — it is not an exit,
+        # and must not pass the entry-pause or the monitor-exit lane.
         return all(
-            g_token.lower() == (intent.token or "").lower()
-            and g_amount <= intent.held_balance_raw
-            for (g_token, _s, g_amount) in intent.expected_allowance_grants)
+            _grant_is_exit_bounded(intent, g_token, g_spender, g_amount)
+            for (g_token, g_spender, g_amount) in intent.expected_allowance_grants)
     quote = _chain_quote_asset(intent.chain)
     return bool(
         quote and intent.inflow_token
@@ -502,6 +597,38 @@ def _autonomous_turn_allowed(execution_context, tool_self, autonomous_ok_fn) -> 
         return False
 
 
+#: ``execution_context.metadata`` key the controller's approval hook stamps when
+#: the owner approved THIS call (``tools/controller/approval.py``). The
+#: controller clears it after the call, so it never outlives the action it was
+#: minted for.
+OWNER_GRANT_KEY = "owner_grant"
+
+
+def _owner_grant_covers(execution_context, intent) -> bool:
+    """True when the owner approved this very call and that approval covered
+    this intent's declared bound. Fail-closed: any doubt answers False."""
+    try:
+        metadata = getattr(execution_context, "metadata", None) or {}
+        grant = metadata.get(OWNER_GRANT_KEY)
+        if not isinstance(grant, dict) or grant.get("approved") is not True:
+            return False
+        granted = grant.get("max_spend_usd")
+        if isinstance(granted, bool) or not isinstance(granted, (int, float)):
+            return False
+        return float(intent.max_spend_usd) <= float(granted)
+    except Exception:
+        return False
+
+
+def owner_authority(execution_context, forged_fn, tool_self, intent) -> Tuple[bool, bool]:
+    """``(owner_direct, owner_granted)`` — step 0, for the rails that mirror
+    this guard without an EVM transaction (the Solana swap and send). ONE
+    answer, so the mirrors cannot drift from :func:`_authorize`."""
+    from core.money.authority import owner_direct_turn
+    owner_direct = owner_direct_turn(execution_context, forged_fn, tool_self)
+    return owner_direct, (not owner_direct) and _owner_grant_covers(execution_context, intent)
+
+
 def _record_money_refusal(reason: str, tool_self, execution_context,
                           *, detail: str = "") -> None:
     """Typed lane-2 emit for a money-verb refusal. Fail-open by construction —
@@ -529,17 +656,74 @@ def authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
               entry_paused_fn: Optional[Callable] = None,
               forged_fn: Optional[Callable] = None,
               autonomous_ok_fn: Optional[Callable] = None,
-              liquidity_rpc: Optional[Callable] = None) -> Decision:
+              liquidity_rpc: Optional[Callable] = None,
+              account_rpc: Optional[Callable] = None) -> Decision:
     """Authorize *tx* against *intent*. Returns a Decision; never broadcasts.
 
     The caller must hold ``gate.reserve()`` across authorize → broadcast →
     record so a concurrent transaction cannot both clear a nearly-exhausted cap.
+
+    066 P2: with ``WALLET_SIGNER`` = ``shadow``/``remote`` an allowed decision
+    (or the owner-approval lane) is recorded in :mod:`core.signer.attest`, so
+    the signing point can hand the SAME intent to ``polyrob-signer``, which runs
+    this very function again in its own process. ``local`` records nothing.
     """
+    decision = _authorize(
+        intent, tx, holder=holder, gate=gate, execution_context=execution_context,
+        tool_self=tool_self, simulate_fn=simulate_fn, price_fn=price_fn,
+        fallback_price_fn=fallback_price_fn, rpc_is_pinned_fn=rpc_is_pinned_fn,
+        halted_fn=halted_fn, entry_paused_fn=entry_paused_fn, forged_fn=forged_fn,
+        autonomous_ok_fn=autonomous_ok_fn, liquidity_rpc=liquidity_rpc,
+        account_rpc=account_rpc)
+    if decision.allowed and decision.lane in ("owner_direct", "owner_approved"):
+        # Book the spend with the lane it was authorized on, so the pause alarm
+        # can tell the owner acting from the agent breaching (fail-open: a fake
+        # gate without the note is only a less precise audit row).
+        try:
+            gate.note_lane(intent.idempotency_key, decision.lane)
+        except Exception:
+            logger.debug("spend lane note skipped", exc_info=True)
+    if decision.allowed or decision.lane == "owner_queue":
+        try:
+            from core.signer import MODE_LOCAL, signer_mode
+            if signer_mode() != MODE_LOCAL:
+                from core.signer import attest
+                attest.record(intent, tx)
+        except Exception:
+            logger.warning("signer attestation not recorded; the signer will refuse this send",
+                           exc_info=True)
+    return decision
+
+
+def _authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
+               execution_context=None, tool_self=None,
+               simulate_fn: Optional[Callable] = None,
+               price_fn: Optional[Callable] = None,
+               fallback_price_fn: Optional[Callable] = None,
+               rpc_is_pinned_fn: Optional[Callable] = None,
+               halted_fn: Optional[Callable] = None,
+               entry_paused_fn: Optional[Callable] = None,
+               forged_fn: Optional[Callable] = None,
+               autonomous_ok_fn: Optional[Callable] = None,
+               liquidity_rpc: Optional[Callable] = None,
+               account_rpc: Optional[Callable] = None) -> Decision:
+    """The guard itself (see :func:`authorize`)."""
     simulate_fn = simulate_fn or (lambda **kw: simulation.simulate(**kw))
     rpc_is_pinned_fn = rpc_is_pinned_fn or rpc_is_pinned
     halted_fn = halted_fn or _halted
     entry_paused_fn = entry_paused_fn or _entry_paused
 
+    # -- 0. Who is asking? -------------------------------------------------
+    # Owner intent in a genuine owner turn IS authorization: the pause (steps
+    # 1/1b and the ledger's copy) and the autonomous ceiling (step 9) bound what
+    # the agent does ON ITS OWN, not the owner acting through it. The hard bounds
+    # (principal, simulation, declared bound, per-tx + daily caps) bind everyone.
+    # 2026-09-26: the owner could not send his own ETH for three hours — "Stop"
+    # paused everything including his seat, then the $300 ceiling returned a lane
+    # nothing consumed. ⚠️ A missing context is never the owner (the signer).
+    owner_direct, owner_granted = owner_authority(
+        execution_context, forged_fn, tool_self, intent)
+    pause_fn = (lambda: False) if owner_direct else halted_fn
 
     # -- 1. Owner pause (fail closed) --------------------------------------
     # ⚠️ NOT a kill-switch. `halted_fn` is `AutonomyConfig.autonomy_halted()`, which
@@ -551,7 +735,7 @@ def authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
     # through this branch and still sent the owner hunting for a phantom switch
     # (census, 2026-09-12). One shared renderer now serves both.
     try:
-        if halted_fn():
+        if pause_fn():
             from core.autonomy_control import pause_refusal_text
             # 045: a money verb refused by the owner's own pause is exactly the
             # kind of unauthorized-action the lane-2 ledger exists to count, and
@@ -577,13 +761,17 @@ def authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
     # unnoticed). Exit-shaped intents (sells to quote, revokes) are never
     # blocked — the pause is about not adding NEW risk.
     try:
-        if entry_paused_fn() and not _intent_is_exit_shaped(intent):
+        # A collection reveal opens no position and moves nothing (the full pause above
+        # still holds it); holding it here would only let a due id re-commit
+        # (the collection's rule: never delay a due id).
+        if (not owner_direct and not intent.is_collection_reveal and entry_paused_fn()
+                and not _intent_is_exit_shaped(intent)):
             _record_money_refusal(
                 "pause", tool_self, execution_context,
                 detail=f"entry_pause chain={getattr(intent, 'chain', '?')}")
             return Decision(False, (
                 "refused: new treasury entries are PAUSED (owner entry-pause) "
-                "— exits still run; clear with `polyrob owner resume-entries`"))
+                "— exits still run; the owner lifts it with /resume trading"))
     except Exception as exc:
         return Decision(False, f"refused: entry-pause probe failed ({exc}); failing closed")
 
@@ -638,12 +826,36 @@ def authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
     if principal_error:
         return Decision(False, f"refused: {principal_error}")
 
+    # -- 2b. Token-bound account: the key signs, the account holds (050 §7.3) --------------
+    # 069 v4: the signing treasury OWNS the NFT (checked in the pre-flight) — no grants.
+    # ⚠️ From here on `tx` is the INNER call when `via_account` is set, so every
+    # structural destination check below judges what the ACCOUNT will call;
+    # `outer_tx` (what the treasury key signs) is what gets simulated and what
+    # pays the fee. `holder` becomes the account; `sender` is the signer.
+    outer_tx = tx
+    sender = None
+    if intent.via_account:
+        inner, via_error = _via_account_inner(intent, tx)
+        if via_error:
+            _record_money_refusal("money_gate", tool_self, execution_context, detail=f"account: {via_error}")
+            return Decision(False, f"refused: {via_error}")
+        sender, holder, tx = holder, intent.via_account, inner
+    elif intent.via_account_batch:
+        return Decision(False, ("refused: an approve-spend-reset batch runs through a token-bound "
+                                "account — declare `via_account`"))
+    else:
+        admin = _account_call_refusal(tx, deep=not intent.is_deploy)
+        if admin:
+            _record_money_refusal("money_gate", tool_self, execution_context, detail=f"account: {admin}")
+            return Decision(False, f"refused: {admin}")
+
     # -- 3. Structural -----------------------------------------------------
     if intent.amount_raw < 0:
         return Decision(False, "refused: amount cannot be negative")
     if intent.amount_raw == 0 and not (intent.is_allowance_op or intent.is_deploy
                                        or intent.is_claim or intent.is_nft_op
-                                       or intent.is_registration or intent.is_liquidity_op):
+                                       or intent.is_registration or intent.is_liquidity_op
+                                       or intent.is_collection_reveal):
         # A zero-value transfer is meaningless. An allowance op legitimately
         # moves nothing and must say so explicitly — it is never inferred. A
         # deployment commonly endows the constructor with nothing at all, and
@@ -661,6 +873,30 @@ def authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
             liquidity_guard.structural(intent, tx)
         except (ValueError, TypeError, AttributeError) as exc:
             return Decision(False, f"refused: {exc}")
+
+    if intent.is_collection_reveal:
+        # A pinned collection (reveal capability), value 0, exactly reveal(uint256[]) for the
+        # declared ids, no other shape. Checked here, before any RPC.
+        from core.wallet import collection_reveal as _collection_reveal
+        _reveal_err = _collection_reveal.structural(intent, tx)
+        if _reveal_err:
+            _record_money_refusal("money_gate", tool_self, execution_context,
+                                  detail=f"collection_reveal: {_reveal_err}")
+            return Decision(False, f"refused: {_reveal_err}")
+    elif intent.reveal_ids:
+        return Decision(False, "refused: reveal ids were declared without is_collection_reveal")
+
+    if intent.is_collection_mint:
+        # A pinned collection (mint capability), exactly mint(treasury, qty, min) for the declared
+        # consecutive ids, value == amount_raw == qty × PRICE, no other shape. Before any RPC.
+        from core.wallet import collection_mint as _collection_mint
+        _mint_err = _collection_mint.structural(intent, tx, holder)
+        if _mint_err:
+            _record_money_refusal("money_gate", tool_self, execution_context,
+                                  detail=f"collection_mint: {_mint_err}")
+            return Decision(False, f"refused: {_mint_err}")
+    elif intent.mint_ids:
+        return Decision(False, "refused: mint ids were declared without is_collection_mint")
 
     if intent.is_registration:
         # Declared and PINNED, never inferred, and checked HERE so a malformed
@@ -706,7 +942,7 @@ def authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
                 "DEPLOYMENT or a CLAIM — they assert different things about "
                 "what moves"))
         if not (intent.nft_out or intent.expected_nft_in
-                or intent.nft_operator_ops):
+                or intent.nft_operator_ops or intent.nft_approval_revokes):
             return Decision(False, (
                 "refused: an NFT operation must declare what leaves "
                 "(`nft_out`), what must arrive (`expected_nft_in`), or the "
@@ -720,6 +956,27 @@ def authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
                     f"standing claim on every token of the collection, present "
                     f"and future, and no simulation can bound what it later "
                     f"enables. Only a revoke (approved=False) may be declared"))
+
+    if intent.nft_approval_revokes and not intent.is_nft_op:
+        return Decision(False, (
+            "refused: a single-token ERC-721 revoke is an NFT operation — declare "
+            "is_nft_op=True with it"))
+    if intent.permit2_revokes:
+        from core.wallet import erc6551 as _erc6551
+        _p2 = _erc6551.PERMIT2.lower()
+        if not intent.is_allowance_op or intent.expected_allowance_grants:
+            return Decision(False, (
+                "refused: a Permit2 revoke is an allowance operation that grants "
+                "nothing — declare is_allowance_op=True and no grants"))
+        if (intent.to or "").lower() != _p2 or str((tx or {}).get("to") or "").lower() != _p2:
+            return Decision(False, (
+                f"refused: a Permit2 revoke must be addressed to the pinned Permit2 "
+                f"{_erc6551.PERMIT2} (intent {intent.to!r}, transaction {tx.get('to')!r})"))
+        if not intent.token or intent.token.lower() not in {
+                str(t).lower() for (t, _s) in intent.permit2_revokes}:
+            return Decision(False, (
+                "refused: a Permit2 revoke must declare `token` = one of the tokens it "
+                "revokes, so the simulation measures that nothing of it moves"))
 
     if intent.is_claim:
         # A claim is declared, never inferred, and the declaration is checked
@@ -809,13 +1066,31 @@ def authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
         return Decision(False, (
             f"refused: no pinned RPC for {intent.chain}. Simulation, deltas and caps "
             f"all read from it, so the shared public endpoint cannot be the trust "
-            f"anchor for moving funds — set DEFI_EVM_RPC_{intent.chain.upper()}"))
+            f"anchor for moving funds — set {_rpc_env_name(intent.chain)}"))
+
+    if intent.is_collection_mint or intent.is_collection_reveal:
+        # 069 v4 A3: the pinned profile's runtime_sha256 is re-checked against the live code
+        # before the guard trusts the collection's own events (fail closed).
+        _code_why = _collection_runtime_refusal(
+            intent.chain, intent.to, account_rpc or simulation._default_rpc_for(intent.chain))
+        if _code_why:
+            _record_money_refusal("money_gate", tool_self, execution_context,
+                                  detail=f"collection: {_code_why}")
+            return Decision(False, f"refused: {_code_why}")
+
+    if intent.via_account:
+        preflight = _via_account_preflight(
+            intent, sender, account_rpc or simulation._default_rpc_for(intent.chain),
+            inner_to=tx.get("to"))
+        if preflight:
+            _record_money_refusal("money_gate", tool_self, execution_context, detail=f"account: {preflight}")
+            return Decision(False, f"refused: {preflight}")
 
     if intent.is_liquidity_op:
         from core.wallet import dex_registry, abi
         rpc = liquidity_rpc or simulation._default_rpc_for(intent.chain)
         try:
-            dex_registry.verify_pins(rpc, intent.chain, "v3")
+            liquidity_guard.verify_pins(rpc, intent, tx)   # v3, or v4 + its hook (W6)
             if intent.lp_position_effect != "mint":
                 raw = rpc("eth_call", [{"to": intent.to, "data": abi.encode_call(
                     "ownerOf", [{"type": "uint256"}], [intent.lp_position[1]])}, "latest"])
@@ -827,17 +1102,37 @@ def authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
 
     # -- 5. Simulate -------------------------------------------------------
     spenders = sorted({s for (_t, s, _a) in intent.expected_allowance_grants}
-                      | set(intent.watch_spenders))
+                      | set(intent.watch_spenders)
+                      | ({str(intent.to)} if intent.via_account_batch and intent.to else set()))
     tokens = [t for t in (intent.token, intent.inflow_token) if t]
     if intent.is_liquidity_op:
         tokens = sorted({t.lower() for t, _ in (*intent.lp_outflows, *intent.lp_inflows) if t})
     try:
-        deltas = simulate_fn(tx=tx, holder=holder, chain=intent.chain,
-                             tokens=tokens, spenders=spenders)
+        if sender:
+            deltas = simulate_fn(tx=outer_tx, holder=holder, chain=intent.chain,
+                                 tokens=tokens, spenders=spenders, sender=sender)
+        else:
+            deltas = simulate_fn(tx=tx, holder=holder, chain=intent.chain,
+                                 tokens=tokens, spenders=spenders)
     except Exception as exc:
         return Decision(False, f"refused: simulation raised ({exc})")
     if not deltas.ok:
         return Decision(False, f"refused: simulation not trustworthy — {deltas.error}")
+
+    # 068 N1: a run bound to a target acquires only the target — checked on what
+    # the simulation shows ARRIVING, so a generic call or a dapp transaction that
+    # never named its acquisition cannot slip another token or an NFT in.
+    try:
+        from core.wallet.buy_target import simulated_acquisition_refusal
+        _target_why = simulated_acquisition_refusal(
+            execution_context, chain=intent.chain, deltas=deltas, holder=holder,
+            risk_reducing=intent_is_risk_reducing(intent))
+    except Exception as exc:
+        _target_why = f"refused: the target check could not run ({exc}); failing closed"
+    if _target_why:
+        _record_money_refusal("money_gate", tool_self, execution_context,
+                              detail="target_token")
+        return Decision(False, _target_why)
 
     # -- 6. Assert the deltas against the declaration ----------------------
     outflow_raw = 0
@@ -855,7 +1150,7 @@ def authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
         from core.wallet import deploy_guard as _deploy_guard
 
         deploy_facts, why = _deploy_guard.assert_deploy(
-            intent, deltas, holder=holder, nonce=tx.get("nonce"))
+            intent, deltas, holder=holder, nonce=outer_tx.get("nonce"))
         if why:
             return Decision(False, why)
         moved = int(deltas.native_delta)
@@ -913,6 +1208,12 @@ def authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
         # what must be proven is that the RECEIPT arrived and that nothing else
         # moved. Both are asserted below, against the measurement.
         outflow_raw = 0
+        if int(deltas.native_delta) < -_NATIVE_DUST_WEI:
+            # CR-L05: a token-only claim used to skip every native assertion,
+            # so a "claim" that also drained native value read as a claim.
+            return Decision(False, (
+                f"refused: the claim moves {-int(deltas.native_delta)} wei of "
+                f"native value OUT of the wallet — a claim sends nothing"))
         for l_token, l_moved in (deltas.token_deltas or {}).items():
             if l_moved < 0:
                 # A contract that pays you and quietly takes a token is not a
@@ -942,6 +1243,28 @@ def authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
                 return Decision(False, (
                     f"refused: the claim returns {got} of {intent.inflow_token}, "
                     f"below the declared minimum {intent.min_inflow_raw}"))
+    elif intent.is_collection_mint:
+        # The collection paid mint (F2): exactly the price leaves, exactly
+        # the declared ids arrive from 0x0, and nothing else of the signer's moves or is
+        # named (core.wallet.collection_mint). The value is what the caps are charged below.
+        from core.wallet import collection_mint as _collection_mint
+        _mint_err = _collection_mint.assert_simulation(intent, deltas, holder)
+        if _mint_err:
+            _record_money_refusal("money_gate", tool_self, execution_context,
+                                  detail=f"collection_mint: {_mint_err}")
+            return Decision(False, f"refused: {_mint_err}")
+        outflow_raw = int(intent.amount_raw)
+    elif intent.is_collection_reveal:
+        # The collection reveal. Nothing moves, so the RECEIPT is asserted:
+        # one Revealed/Recommitted per declared id, every log from the collection,
+        # nothing naming the signer (core.wallet.collection_reveal).
+        from core.wallet import collection_reveal as _collection_reveal
+        _reveal_err, _revealed, _recommitted = _collection_reveal.assert_simulation(
+            intent, deltas, holder)
+        if _reveal_err:
+            _record_money_refusal("money_gate", tool_self, execution_context,
+                                  detail=f"collection_reveal: {_reveal_err}")
+            return Decision(False, f"refused: {_reveal_err}")
     elif intent.is_registration:
         # Registering sends NO value, so the native branch below cannot serve --
         # it refuses a zero outflow as a measurement failure, and moving nothing
@@ -1027,6 +1350,22 @@ def authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
             return Decision(False, (
                 f"refused: allowance grant {change} exceeds the declared {permitted}"))
 
+    if intent.via_account_batch:
+        # W8: the reset leg must leave NOTHING standing — absolute, not a delta (an allowance
+        # that stood before the batch reads as a decrease and would pass a delta check).
+        _key = next((k for k in (getattr(deltas, "allowance_after", None) or {})
+                     if k[0].lower() == intent.token.lower()
+                     and k[1].lower() == str(intent.to).lower()), None)
+        if _key is None:
+            return Decision(False, (
+                "refused: the simulation did not measure the spender's final allowance — "
+                "the batch's reset cannot be proven, so it is not assumed"))
+        if int(deltas.allowance_after[_key]) != 0:
+            return Decision(False, (
+                f"refused: after the batch {intent.to} still holds an allowance of "
+                f"{deltas.allowance_after[_key]} on {intent.token} — an approve-spend-reset "
+                f"batch must end at exactly 0"))
+
     # -- 6a. Assert the declared MINIMUM INFLOW ---------------------------
     # 042. The other half of the delta contract: everything above bounds what
     # LEAVES, this bounds what must COME BACK. It is what makes caller-supplied
@@ -1077,6 +1416,20 @@ def authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
             f"refused: the transaction emits an UNDECLARED Approval of {l_amount} "
             f"on {l_token} to {l_spender} — a hidden approve is not bounded by a "
             f"USD cap, because the drain happens in a later transaction"))
+    for (l_p2, l_token, l_spender, l_amount) in (
+            getattr(deltas, "holder_permit2_grants", None) or ()):
+        # CR-H06: a Permit2 grant is a standing claim held by Permit2, not an
+        # ERC-20 allowance — no read above measures it, and no verb declares
+        # one — except the exact, expiring grant to the pinned v4 PositionManager
+        # that approve_token(via='permit2') declares (W6). Any other refuses.
+        from core.wallet.liquidity_guard import permit2_grant_declared
+        if l_amount > 0 and not permit2_grant_declared(
+                intent, tx, l_p2, l_token, l_spender, l_amount):
+            return Decision(False, (
+                f"refused: the transaction emits a Permit2 Approval of "
+                f"{l_amount} on {l_token} to {l_spender} (via {l_p2}) — a "
+                f"standing claim no read here measures and no verb declares; "
+                f"the drain happens in a later transaction"))
     for (l_token, _l_to, l_amount) in deltas.holder_transfers:
         if intent.is_liquidity_op and l_token.lower() in liquidity_guard.legs(intent.lp_outflows):
             continue
@@ -1124,6 +1477,27 @@ def authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
                 f"refused: the intent declares it receives {s} {c} #{i} x{a}, "
                 f"but the simulation shows it does not arrive"))
 
+    # W3 — a DECLARED revoke must be measured, exactly like a declared move (6d).
+    _cleared = {(str(c).lower(), int(i)) for (c, to, i) in deltas.holder_nft_approvals
+                if str(to).lower() == _ZERO_ADDRESS}
+    for (c, i) in intent.nft_approval_revokes:
+        if (str(c).lower(), int(i)) not in _cleared:
+            return Decision(False, (
+                f"refused: the intent declares it clears the approval of {c} #{i}, but "
+                f"the simulation emits no Approval(holder, 0x0, {i}) from it — the "
+                f"transaction does not do what the intent says"))
+    if intent.permit2_revokes:
+        from core.wallet import erc6551 as _erc6551
+        _p2_zeroed = {(str(t).lower(), str(sp).lower())
+                      for (p2, t, sp, amt) in (getattr(deltas, "holder_permit2_grants", None) or ())
+                      if str(p2).lower() == _erc6551.PERMIT2.lower() and int(amt) == 0}
+        for (t, sp) in intent.permit2_revokes:
+            if (str(t).lower(), str(sp).lower()) not in _p2_zeroed:
+                return Decision(False, (
+                    f"refused: the intent declares it revokes the Permit2 allowance of "
+                    f"{t} to {sp}, but the simulation shows Permit2 emit no zero "
+                    f"Approval/Lockdown for that pair"))
+
     # 6e — the blanket grant. A grant can never be declared (step 3 refuses a
     # True in `nft_operator_ops`), so ANY observed grant is undeclared by
     # construction. A revoke only retires a claim and is always fine.
@@ -1141,11 +1515,44 @@ def authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
                 and l_c.lower() == intent.lp_position[0].lower()
                 and l_id == intent.lp_position[1] and l_to.lower() == _ZERO_ADDRESS):
             continue  # ERC721._burn clears this token's approval
+        if l_to.lower() == _ZERO_ADDRESS:
+            # CR-L16: Approval(owner, 0x0, id) CLEARS the token's approval —
+            # OZ < 4.8 and the Uniswap NPM emit it on every transfer. It
+            # retires a claim and grants nothing.
+            continue
         if (l_c.lower(), l_to.lower()) in _declared_nft_approvals:
             continue
         return Decision(False, (
             f"refused: the transaction emits an UNDECLARED Approval of "
             f"{l_c} #{l_id} to {l_to} — a standing claim on that token"))
+
+    # -- 6g. No token inside an account of its own collection (W2) ---------
+    # contracts/SPEC.md §7.2: `transferFrom(alice, accountOf(id), id)` bricks a
+    # token and its account forever (AccountV3 refuses its own token only in
+    # onERC721Received, which transferFrom never calls), and two tokens can own
+    # each other. The contract refuses it in `_update`; this is the mirror for
+    # every NFT the guarded wallet moves — measured moves, any verb, any shape.
+    _nest = _collection_account_destination_refusal(intent.chain, tx, deltas.holder_nft_out)
+    if not _nest and deltas.holder_nft_out:
+        _nest = _nft_nesting_refusal(
+            intent.chain, deltas.holder_nft_out,
+            account_rpc or simulation._default_rpc_for(intent.chain))
+    if _nest:
+        _record_money_refusal("money_gate", tool_self, execution_context, detail=f"account: {_nest}")
+        return Decision(False, f"refused: {_nest}")
+
+    # -- 6g'. A pinned collection's token leaves only with its code pinned and its account
+    # carrying NO open approval (069 v4 §5 rules 3 and 5). Approvals survive a transfer of the
+    # NFT: a token that leaves with one open hands the next owner an account a stranger can
+    # still drain. Absolute — no owner override (the remedy is one guarded call,
+    # agent_nft_revoke_all) — and fail closed on an incomplete scan.
+    if deltas.holder_nft_out:
+        _gone = _pinned_nft_departure_refusal(
+            intent.chain, deltas.holder_nft_out,
+            account_rpc or simulation._default_rpc_for(intent.chain))
+        if _gone:
+            _record_money_refusal("money_gate", tool_self, execution_context, detail=f"account: {_gone}")
+            return Decision(False, f"refused: {_gone}")
 
     # -- 6f. The REGISTRATION receipt (046) -------------------------------
     # (initialised above the branch so every later return can carry it)
@@ -1226,7 +1633,31 @@ def authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
 
     # -- 7. Price the risk -------------------------------------------------
     amount_usd = None
-    if (intent.is_claim or intent.is_nft_op or intent.is_registration
+    if intent.is_collection_mint:
+        # A paid mint's cost is its VALUE PLUS ITS FEE (the deploy precedent): the price
+        # leaves for good, and the tokens that arrive have no market price to net against
+        # it (an NFT is unpriceable, see below). The worst-case fee is what size_gas signs for.
+        from core.wallet import chains as _chains
+        _row = _chains.get(intent.chain)
+        _proxy = getattr(_row, "wrapped_native", None) if _row else None
+        if not _proxy:
+            return Decision(False, (
+                f"refused: chain {intent.chain!r} pins no wrapped-native address, so the "
+                f"mint price cannot be priced — and an unpriced spend booked at $0.00 would "
+                f"widen every other cap by its own size"))
+        try:
+            unit_price = price_fn(intent.chain, _proxy) if price_fn else None
+        except Exception:
+            unit_price = None
+        if unit_price is None:
+            return Decision(False, _unpriceable_reason(
+                "the mint price", exit_bounded=False,
+                had_fallback=fallback_price_fn is not None))
+        _sized_gas = int((deltas.gas_used or 0) * 3 // 2) or int(outer_tx.get("gas") or 0)
+        _worst_fee_wei = _sized_gas * int(outer_tx.get("maxFeePerGas") or 0)
+        _decimals = int(getattr(_row, "native_decimals", 18) or 18)
+        amount_usd = ((outflow_raw + _worst_fee_wei) / (10 ** _decimals)) * unit_price
+    elif (intent.is_claim or intent.is_nft_op or intent.is_registration or intent.is_collection_reveal
             or (intent.is_liquidity_op and not intent.lp_outflows)):
         # The cost of a claim is its FEE. Nothing leaves, so pricing an outflow
         # would book it at $0.00 — the confident-zero class that let 114
@@ -1258,8 +1689,8 @@ def authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
             return Decision(False, _unpriceable_reason(
                 _what, exit_bounded=False,
                 had_fallback=fallback_price_fn is not None))
-        _sized_gas = int((deltas.gas_used or 0) * 3 // 2) or int(tx.get("gas") or 0)
-        _worst_fee_wei = _sized_gas * int(tx.get("maxFeePerGas") or 0)
+        _sized_gas = int((deltas.gas_used or 0) * 3 // 2) or int(outer_tx.get("gas") or 0)
+        _worst_fee_wei = _sized_gas * int(outer_tx.get("maxFeePerGas") or 0)
         _decimals = int(getattr(_row, "native_decimals", 18) or 18)
         amount_usd = (_worst_fee_wei / (10 ** _decimals)) * unit_price
     elif intent.is_liquidity_op:
@@ -1376,8 +1807,8 @@ def authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
             return Decision(False, _unpriceable_reason(
                 "the deployment fee", exit_bounded=False,
                 had_fallback=fallback_price_fn is not None))
-        _sized_gas = int((deltas.gas_used or 0) * 3 // 2) or int(tx.get("gas") or 0)
-        _worst_fee_wei = _sized_gas * int(tx.get("maxFeePerGas") or 0)
+        _sized_gas = int((deltas.gas_used or 0) * 3 // 2) or int(outer_tx.get("gas") or 0)
+        _worst_fee_wei = _sized_gas * int(outer_tx.get("maxFeePerGas") or 0)
         _decimals = int(getattr(_row, "native_decimals", 18) or 18)
         amount_usd = ((outflow_raw + _worst_fee_wei) / (10 ** _decimals)) * unit_price
     else:
@@ -1445,8 +1876,10 @@ def authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
             f"${intent.max_spend_usd:.4f}"))
 
     # -- 8. PolicyGate (per-tx ceiling, rolling caps, replay) --------------
-    verdict = gate.check(venue="defi", amount_usd=amount_usd,
-                         idempotency_key=intent.idempotency_key)
+    from core.money.ledger import pause_probe
+    with pause_probe(pause_fn):
+        verdict = gate.check(venue="defi", amount_usd=amount_usd,
+                             idempotency_key=intent.idempotency_key)
     if not verdict.allowed:
         from core.security.refusals import record_refusal
         record_refusal("money_gate", tool=getattr(tool_self, "name", None) or "",
@@ -1455,8 +1888,15 @@ def authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
         return Decision(False, f"refused by PolicyGate: {verdict.reason}", amount_usd=amount_usd)
 
     # -- 9. Approval lane --------------------------------------------------
+    # The ceiling is the agent's own dial ("ask me above $X"). An owner-direct
+    # turn already IS the owner asking — a model-built spend above the ceiling
+    # was tapped by the controller's pre-hook before it got here (a declared
+    # bound within the ceiling is the only exemption, and step 7 holds the
+    # simulated value to it). An owner grant for THIS call is the tap this lane
+    # exists to collect; before 2026-09-26 the grant was consumed and this step
+    # re-queued the call: "NOT SENT".
     _ceiling = autonomous_max_usd(*ceiling_scope(execution_context))
-    if amount_usd > _ceiling:
+    if amount_usd > _ceiling and not owner_direct and not owner_granted:
         return Decision(False, (
             f"owner approval required: ${amount_usd:.4f} is above the autonomous "
             f"ceiling ${_ceiling:.2f}"),
@@ -1465,9 +1905,9 @@ def authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
             agent_id=registered_agent_id, position_token_id=position_token_id)
 
     # An unattended, self-directed spend must have an aggregate damage bound. The
-    # per-tx ceiling ($25 default) alone cannot stop an injection during a trade
-    # leg from looping within-ceiling swaps that drain the treasury one ticket at
-    # a time. WALLET_DAILY_CAP_USD is that bound; H3 (2026-08-22) gave it a
+    # autonomous ceiling (DEFI_AUTONOMOUS_MAX_USD, $25 default) alone cannot stop
+    # an injection during a trade leg from looping within-ceiling swaps that
+    # drain the treasury one ticket at a time. WALLET_DAILY_CAP_USD is that bound; H3 (2026-08-22) gave it a
     # finite $100/24h default, so this refusal now only fires when the operator
     # has explicitly disabled the cap (WALLET_DAILY_CAP_USD=none/off) — arming
     # DEFI_AUTONOMOUS_TURN_TRADING on top of that would leave the loop unbounded.
@@ -1482,9 +1922,360 @@ def authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
             sim_gas_used=deltas.gas_used, deploy=deploy_facts,
             agent_id=registered_agent_id, position_token_id=position_token_id)
 
-    return Decision(True, "authorized" + (" (paired-leg implied valuation)" if lp_implied else ""), lane="autonomous", amount_usd=amount_usd,
+    _lane = ("owner_direct" if owner_direct
+             else "owner_approved" if owner_granted else "autonomous")
+    return Decision(True, "authorized" + (" (paired-leg implied valuation)" if lp_implied else ""), lane=_lane, amount_usd=amount_usd,
                     sim_gas_used=deltas.gas_used, deploy=deploy_facts,
                     agent_id=registered_agent_id, position_token_id=position_token_id)
+
+
+# ==========================================================================
+# 050 §7.3 — token-bound account (ERC-6551) helpers
+# ==========================================================================
+
+def _via_account_inner(intent: TxIntent, tx: dict) -> Tuple[Optional[dict], Optional[str]]:
+    """Decode the signed ``execute`` into the INNER call the rest of the guard judges.
+
+    Returns ``(inner_tx, None)`` or ``(None, reason)``. Everything here is
+    structural (no RPC): the signed destination IS the account, the calldata IS
+    ``execute(inner_to, value, data, 0)``, and the inner call is not aimed back
+    at the account itself.
+    """
+    from core.wallet import erc6551
+    via = str(intent.via_account).lower()
+    if intent.is_deploy or intent.is_liquidity_op:
+        return None, ("a token-bound account cannot deploy or change liquidity (v1): "
+                      "`execute` with operation != 0 is an account-admin call, and LP is "
+                      "out of scope")
+    if intent.via_account_state is None:
+        return None, ("an account call must declare the account `state()` it read "
+                      "(`via_account_state`) — without it a sale, lock or nested "
+                      "execute between build and broadcast is invisible")
+    if str((tx or {}).get("to") or "").lower() != via:
+        return None, (f"the transaction is addressed to {tx.get('to')!r}, not the "
+                      f"declared token-bound account {intent.via_account}")
+    if int((tx or {}).get("value") or 0) != 0:
+        return None, ("the owner must send no value to the token-bound account — the "
+                      "value the inner call moves comes from the account")
+    if intent.via_account_batch:
+        return _via_account_batch_inner(intent, tx)
+    admin = erc6551.admin_selector_name(tx.get("data"))
+    if admin:
+        return None, (f"`{admin}` on a token-bound account is an account-admin call; the "
+                      f"owner may only `execute` with operation 0")
+    try:
+        inner_to, value, inner_data, op = erc6551.decode_execute(tx.get("data") or "")
+    except Exception as exc:  # noqa: BLE001
+        return None, f"the account call is not execute(address,uint256,bytes,uint8) ({exc})"
+    if op != 0:
+        return None, f"execute with operation {op} is an account-admin call"
+    if inner_to.lower() == via:
+        return None, "the token-bound account may not call itself (that is how admin calls hide)"
+    if erc6551.is_trusted_forwarder(inner_to):
+        return None, (f"the inner call targets {inner_to}, an ERC-2771 forwarder the account "
+                      f"trusts — through it the account would act as its own trusted sender")
+    nested = erc6551.embedded_account_selector(inner_data)
+    if nested:
+        return None, (f"the inner call carries an account-admin or nested execute selector "
+                      f"(`{nested}`) — at any depth, an account call may not drive an account")
+    inner = {"to": inner_to, "data": inner_data, "value": value}
+    for k in ("chainId", "nonce", "gas", "maxFeePerGas", "maxPriorityFeePerGas"):
+        if k in tx:
+            inner[k] = tx[k]
+    return inner, None
+
+
+def _via_account_batch_inner(intent: TxIntent, tx: dict) -> Tuple[Optional[dict], Optional[str]]:
+    """W8: ``executeBatch([approve(S, X), spend, approve(S, 0)])`` — judge each leg; return the
+    SPEND leg as the inner call. Structural only (the final allowance is asserted after the
+    simulation, in :func:`_authorize`)."""
+    from core.wallet import abi, erc6551
+    via = str(intent.via_account).lower()
+    if (not intent.token or intent.is_allowance_op or intent.is_nft_op or intent.is_claim
+            or intent.is_registration or intent.nft_approval_revokes or intent.permit2_revokes
+            or intent.expected_allowance_grants):
+        return None, ("an approve-spend-reset batch is a token SPEND: declare `token` and no "
+                      "other shape (no allowance op, NFT, claim, registration or grant — the "
+                      "transient grant is reset inside the batch)")
+    try:
+        legs = erc6551.decode_execute_batch(tx.get("data") or "")
+    except Exception as exc:  # noqa: BLE001
+        return None, f"the account batch is not executeBatch((address,uint256,bytes,uint8)[]) ({exc})"
+    if len(legs) != 3:
+        return None, (f"an approve-spend-reset batch has exactly 3 legs, not {len(legs)} — any "
+                      f"other executeBatch is an account-admin call")
+    token = intent.token.lower()
+    spender = str(intent.to or "").lower()
+    approve_sel = abi.selector("approve(address,uint256)")
+    for i, (to, value, data, op) in enumerate(legs, 1):
+        if op != 0:
+            return None, f"batch leg {i} has operation {op} — an account-admin call"
+        if to.lower() == via:
+            return None, f"batch leg {i} calls the token-bound account itself"
+        if erc6551.is_trusted_forwarder(to):
+            return None, f"batch leg {i} targets {to}, an ERC-2771 forwarder the account trusts"
+        nested = erc6551.embedded_account_selector(data)
+        if nested:
+            return None, (f"batch leg {i} carries an account-admin or nested execute selector "
+                          f"(`{nested}`)")
+
+    def _approve(leg) -> Optional[Tuple[str, int]]:
+        to, value, data, _op = leg
+        if to.lower() != token or value != 0 or (data or "")[:10].lower() != approve_sel:
+            return None
+        try:
+            s_, amt = abi.decode([{"type": "address"}, {"type": "uint256"}], data[10:])
+        except Exception:  # noqa: BLE001
+            return None
+        return str(s_).lower(), int(amt)
+
+    first, last = _approve(legs[0]), _approve(legs[2])
+    if first is None or last is None:
+        return None, ("an approve-spend-reset batch must open with token.approve(spender, X) "
+                      "and close with token.approve(spender, 0) on the declared token")
+    if first[0] != spender or last[0] != spender:
+        return None, (f"the batch approves {first[0]} / resets {last[0]}, but the spend leg's "
+                      f"declared destination is {intent.to} — the approved spender, the "
+                      f"reset spender and the called contract must be the same address")
+    if not 0 < first[1] <= int(intent.amount_raw):
+        return None, (f"the batch's transient grant {first[1]} must be > 0 and no larger than "
+                      f"the declared spend {intent.amount_raw}")
+    if last[1] != 0:
+        return None, f"the batch's last leg approves {last[1]}, not 0 — it does not reset"
+    s_to, s_value, s_data, _ = legs[1]
+    if s_to.lower() != spender:
+        return None, (f"the batch's spend leg calls {s_to}, not the approved spender "
+                      f"{intent.to}")
+    inner = {"to": s_to, "data": s_data, "value": s_value}
+    for k in ("chainId", "nonce", "gas", "maxFeePerGas", "maxPriorityFeePerGas"):
+        if k in tx:
+            inner[k] = tx[k]
+    return inner, None
+
+
+def _account_call_refusal(tx: dict, *, deep: bool = True) -> Optional[str]:
+    """A call that does NOT declare ``via_account`` must not carry an ERC-6551
+    execute or account-admin selector: otherwise caller-supplied calldata could
+    drive a token-bound account while the guard measures the TREASURY (whose balances
+    do not move), and every account rule would be skipped.
+
+    G0.2 (measured on a 4663 fork, 2026-09-29): checking only the TOP-level
+    selector let ``forwarder.aggregate3([(account, execute(...))])`` through as
+    a 1-wei treasury send, and 0.05 ETH left the account. So: the destination
+    may not be a pinned ERC-2771 forwarder, and with ``deep`` the selector is
+    refused at ANY byte offset (a deployment's init code is exempt — bytecode
+    carries PUSH4 selectors, and a constructor never acts through an account)."""
+    from core.wallet import erc6551
+    to = (tx or {}).get("to")
+    if erc6551.is_trusted_forwarder(to):
+        return (f"the transaction targets {to}, an ERC-2771 forwarder token-bound "
+                f"accounts trust — through it the signer acts on an account while the "
+                f"guard measures the treasury; an account call must declare `via_account`")
+    data = (tx or {}).get("data") or ""
+    if not isinstance(data, str) or len(data) < 10:
+        return None
+    sel = data[:10].lower()
+    name = erc6551.ACCOUNT_CALL_SELECTORS.get(sel)
+    if name is None and deep:
+        name = erc6551.embedded_account_selector(data)
+    if name:
+        return (f"this calldata carries a token-bound-account call (`{name}`, execute / "
+                f"account admin, at any depth); an account call must declare `via_account` "
+                f"so the account's assets are what the guard measures")
+    return None
+
+
+def _via_account_preflight(intent: TxIntent, sender: str, rpc, *,
+                           inner_to: Optional[str] = None) -> Optional[str]:
+    """Rule 5: reads BEFORE simulation. Any failed read refuses (fail closed).
+
+    069 v4 (the simple model): the SIGNER must be the NFT's current owner — the only way this
+    instance acts through an account. There is no grant path: ``setPermissions`` is an
+    account-admin selector the guard refuses, and a permissioned caller is never accepted."""
+    from core.wallet import erc6551
+    acct = intent.via_account
+    try:
+        erc6551.verify(rpc)
+        impl = erc6551.read_implementation(rpc, acct)
+        if impl.lower() != erc6551.ACCOUNT_V3_IMPL.lower():
+            return (f"the token-bound account clones {impl}, not the pinned AccountV3 "
+                    f"{erc6551.ACCOUNT_V3_IMPL}")
+        if erc6551.read_is_locked(rpc, acct):
+            return "the token-bound account is LOCKED by its owner — nothing moves until the lock ends"
+        owner = erc6551.read_owner(rpc, acct)
+        if str(owner).lower() != str(sender).lower():
+            return (f"this wallet ({sender}) does not own the NFT of the token-bound account "
+                    f"{acct} (its owner is {owner}) — an agent acts through an account only "
+                    f"as the NFT's current owner")
+        if inner_to and erc6551.read_is_trusted_forwarder(rpc, acct, inner_to):
+            return (f"the token-bound account trusts {inner_to} as an ERC-2771 forwarder — the "
+                    f"inner call may not go through it")
+        state = erc6551.read_state(rpc, acct)
+        if state != int(intent.via_account_state):
+            return (f"the token-bound account state moved ({intent.via_account_state} → "
+                    f"{state}) since the intent was built — re-read and rebuild")
+    except Exception as exc:  # noqa: BLE001
+        return f"Account pre-flight could not be verified ({exc}); failing closed"
+    return None
+
+
+def _pinned_collection_accounts(chain: str):
+    """``(chain_id, {pinned collection address}, frozenset of every account address of every
+    pinned collection's ids 0..max_supply)`` from the owner's collection registry. Raises when
+    the registry cannot be trusted (the callers refuse)."""
+    from core.wallet import collection_registry, erc6551
+    chain_id = collection_registry.chain_id_of(chain)
+    profiles = collection_registry.profiles_on(chain_id)
+    pinned = {p.address for p in profiles}
+    accounts = frozenset().union(*(
+        erc6551.collection_account_addresses(chain_id, p.address, p.max_supply,
+                                             implementation=v.implementation, salt=v.salt)
+        for p in profiles for v in p.accounts))
+    return chain_id, pinned, accounts
+
+
+def _collection_account_destination_refusal(chain: str, tx: dict, nft_out) -> Optional[str]:
+    """W2, the half a code read cannot see: an account that is NOT DEPLOYED YET has no code, so
+    a pinned collection's token sent (or minted) to ``accountOf(k)`` for a token ``k`` not yet
+    minted passes the contract's own check and later sits inside token k's account. Pure CREATE2
+    math instead (``erc6551.collection_account_addresses``, every id up to each profile's
+    ``max_supply``), against (a) every measured move of a pinned collection's token and (b)
+    every ABI word of a call addressed to a pinned collection (a ``mint(to, …)`` /
+    ``transferFrom(…, to, …)`` names its destination there). Static, no RPC. An untrusted
+    collection registry refuses (fail closed)."""
+    try:
+        _chain_id, pinned, accounts = _pinned_collection_accounts(chain)
+    except Exception as exc:  # noqa: BLE001
+        # Owner decision 2026-10-01: an untrusted registry refuses only what it guards — a
+        # transaction that moves an NFT (and the collection mint/reveal shapes, which refuse in
+        # their own modules). A swap or a send with no NFT movement does not depend on it.
+        if nft_out:
+            return (f"the owner's collection registry cannot be trusted ({exc}) — the nesting "
+                    f"rule cannot run for this NFT move; failing closed")
+        return None
+    if not pinned:
+        return None
+    why = ("{what} names {dest}, the ERC-6551 account address of a pinned collection's token "
+           "(deployed or not) — a token inside such an account can own itself and is bricked "
+           "forever")
+    for (contract, std, dest, token_id, _amt) in nft_out or ():
+        if str(contract).lower() in pinned and str(dest or "").lower() in accounts:
+            return why.format(what=f"the move of {std} {contract} #{token_id}", dest=dest)
+    to = str((tx or {}).get("to") or "").lower()
+    data = str((tx or {}).get("data") or "").lower().removeprefix("0x")
+    if to in pinned and len(data) >= 8:
+        body = data[8:]
+        for i in range(0, len(body) - 63, 64):
+            word = body[i:i + 64]
+            if word[:24] == "0" * 24 and ("0x" + word[24:]) in accounts:
+                return why.format(what=f"a call to the pinned collection {to}", dest="0x" + word[24:])
+    return None
+
+
+def _collection_runtime_refusal(chain: str, collection: Optional[str], rpc) -> Optional[str]:
+    """The pinned profile of *collection* on *chain*, re-checked against the live code."""
+    from core.wallet import collection_registry
+    try:
+        profile = collection_registry.profile_for(collection_registry.chain_id_of(chain),
+                                                  str(collection or ""))
+    except Exception as exc:  # noqa: BLE001
+        return f"the owner's collection registry cannot be trusted ({exc}); failing closed"
+    if profile is None:
+        return f"{collection} is not a pinned collection on {chain}"
+    return collection_registry.runtime_refusal(rpc, profile)
+
+
+def _pinned_nft_departure_refusal(chain: str, nft_out, rpc) -> Optional[str]:
+    """069 v4 §5 rule 5 (+ rule 3 for the collection's code). For every measured move of a
+    PINNED collection's token out of the holder: the collection's live code must hash to the
+    pinned ``runtime_sha256``, and the token's ERC-6551 account (every pinned account version)
+    must have NO open approval — ERC-20 allowances, ERC-721 approvals, ApprovalForAll and
+    Permit2 (``erc6551.open_approvals``, scanned from the profile's ``deploy_block`` to the
+    head, every row live-confirmed; a row whose live read failed stays). The scan is complete
+    by construction (the account cannot approve anything before its collection exists); any
+    failed read is an incomplete scan and refuses. A token of an unpinned collection is not
+    judged here."""
+    from core.wallet import collection_registry, erc6551
+    try:
+        chain_id = collection_registry.chain_id_of(chain)
+        pinned = {p.address: p for p in collection_registry.profiles_on(chain_id)}
+    except Exception as exc:  # noqa: BLE001
+        return (f"the owner's collection registry cannot be trusted ({exc}) — the approval "
+                f"rule cannot run for this NFT move; failing closed")
+    head = None
+    for (contract, std, _dest, token_id, _amt) in nft_out or ():
+        profile = pinned.get(str(contract).lower())
+        if profile is None:
+            continue
+        why = collection_registry.runtime_refusal(rpc, profile)
+        if why:
+            return why
+        if "permit2" not in tuple(getattr(erc6551, "APPROVAL_KINDS", ())):
+            return ("the approval scan does not cover Permit2 — an incomplete table is never "
+                    "'empty'; failing closed")
+        for version in profile.accounts:
+            account = erc6551.account_address(chain_id, profile.address, int(token_id),
+                                              salt=version.salt,
+                                              implementation=version.implementation)
+            try:
+                if head is None:
+                    head = int(rpc("eth_blockNumber", []), 16)
+                rows = erc6551.open_approvals(rpc, account, profile.deploy_block, to_block=head)
+            except Exception as exc:  # noqa: BLE001
+                return (f"the approval scan of {account}, the account of {std} {contract} "
+                        f"#{token_id}, did not complete ({exc}) — an incomplete table is never "
+                        f"'empty', so the token may not leave; failing closed")
+            if rows:
+                shown = "; ".join(
+                    f"{r.kind} {r.contract}"
+                    + (f" #{r.token_id}" if r.token_id is not None else "")
+                    + f" → {r.spender}" + ("" if r.verified else " (unconfirmed)")
+                    for r in rows[:5])
+                more = f" (+{len(rows) - 5} more)" if len(rows) > 5 else ""
+                return (f"{std} {contract} #{token_id} may not leave while its account "
+                        f"{account} has {len(rows)} open approval(s): {shown}{more}. "
+                        f"Approvals survive a transfer of the NFT, so the next owner's account "
+                        f"could still be drained. Clear approvals first: agent_nft_revoke_all, "
+                        f"then send it")
+    return None
+
+
+def _nft_nesting_refusal(chain: str, nft_out, rpc) -> Optional[str]:
+    """W2. For each measured NFT move out of the holder, read the destination's code: when it is
+    an ERC-6551 registry clone (any implementation) whose footer names the moved token's OWN
+    collection — or a pinned collection when the moved token is from a pinned collection —
+    refuse (a self-cycle or a nesting that can close a cycle). A clone bound to ANOTHER chain
+    refuses too: there ``owner()`` is ``address(0)`` and the token is lost. Unreadable code
+    refuses, and so does an untrusted collection registry."""
+    from core.wallet import erc6551
+    try:
+        chain_id, pinned, _accounts = _pinned_collection_accounts(chain)
+    except Exception as exc:  # noqa: BLE001
+        return (f"the owner's collection registry cannot be trusted ({exc}) — the nesting rule "
+                f"cannot run; failing closed")
+    for (contract, std, dest, token_id, _amt) in nft_out:
+        d = str(dest or "").lower()
+        if not d or int(d, 16) == 0 or d == _DEAD_ADDRESS.lower():
+            continue  # a burn: no account to nest into
+        try:
+            clone = erc6551.read_clone(rpc, dest)
+        except Exception as exc:  # noqa: BLE001
+            return (f"could not read the code at {dest}, the destination of {std} {contract} "
+                    f"#{token_id} ({exc}) — a token-bound account there could brick the token; "
+                    f"failing closed")
+        if clone is None:
+            continue
+        _impl, _salt, f_chain, f_contract, f_id = clone
+        if f_chain != chain_id:
+            return (f"{dest} is a token-bound account of chain {f_chain}, not {chain} "
+                    f"({chain_id}) — here its owner() is address(0), so {std} {contract} "
+                    f"#{token_id} sent there is lost")
+        c = str(contract).lower()
+        if f_contract.lower() == c or (c in pinned and f_contract.lower() in pinned):
+            return (f"{std} {contract} #{token_id} would move into {dest}, the token-bound "
+                    f"account of {f_contract} #{f_id} — a token inside an account of its own "
+                    f"collection can own itself and is bricked forever")
+    return None
 
 
 def _price_allowance_grants(intent: TxIntent, *, price_fn, fallback_price_fn,

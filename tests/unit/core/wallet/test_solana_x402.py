@@ -26,6 +26,25 @@ def _adapter():
     return SolanaX402Signer(SolanaSigner.from_mnemonic(MNEMONIC))
 
 
+_MINT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
+_PAY_TO = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM"
+_TOKEN = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+
+
+def _transfer_checked(owner, *, signer=True, amount=1_000, mint=_MINT,
+                      pay_to=_PAY_TO, decimals=6):
+    from solders.instruction import AccountMeta, Instruction
+    from solders.pubkey import Pubkey
+    from core.wallet.solana_x402 import _ata
+    data = bytes([12]) + int(amount).to_bytes(8, "little") + bytes([decimals])
+    return Instruction(Pubkey.from_string(_TOKEN), data, [
+        AccountMeta(Pubkey.from_string(_ata(owner, mint, _TOKEN)), False, True),
+        AccountMeta(Pubkey.from_string(mint), False, False),
+        AccountMeta(Pubkey.from_string(_ata(pay_to, mint, _TOKEN)), False, True),
+        AccountMeta(Pubkey.from_string(owner), signer, False),
+    ])
+
+
 def test_it_satisfies_the_sdk_protocol_shape():
     a = _adapter()
     assert isinstance(a.address, str) and not a.address.startswith("0x")
@@ -94,7 +113,9 @@ def test_signing_is_allowed_when_a_facilitator_pays_and_we_are_the_authority():
     a = _adapter()
     facilitator = derive_solana_keypair(MNEMONIC, 9).pubkey()
     me = Pubkey.from_string(a.address)
-    ix = Instruction(Pubkey.default(), b"", [AccountMeta(me, True, False)])
+    # CR-L28: the adapter signs only the pinned TransferChecked.
+    a.pin(mint=_MINT, pay_to=_PAY_TO, amount=1_000)
+    ix = _transfer_checked(a.address, signer=True)
     msg = MessageV0.try_compile(facilitator, [ix], [], Hash.default())
     tx = VersionedTransaction.populate(
         msg, [solders.signature.Signature.default()] * 2)
@@ -119,7 +140,8 @@ def test_signing_refuses_a_slot_that_is_not_a_required_signer():
     a = _adapter()
     facilitator = derive_solana_keypair(MNEMONIC, 9).pubkey()
     me = Pubkey.from_string(a.address)
-    ix = Instruction(Pubkey.default(), b"", [AccountMeta(me, False, True)])
+    a.pin(mint=_MINT, pay_to=_PAY_TO, amount=1_000)
+    ix = _transfer_checked(a.address, signer=False)
     msg = MessageV0.try_compile(facilitator, [ix], [], Hash.default())
     tx = VersionedTransaction.populate(msg, [solders.signature.Signature.default()])
     with pytest.raises(ValueError, match="required signer"):

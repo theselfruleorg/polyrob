@@ -170,11 +170,13 @@ class HFDeployTool(BaseTool):
 
     @BaseTool.action(
         "Deploy the current session workspace as a Hugging Face Space (Docker SDK). "
-        "The FIRST publish of a new app name requires an approving provider "
-        "(interactive by default; denied on an unattended/headless run). Once an "
-        "app is approved, later redeploys of that SAME app run unattended within the "
-        "configured daily/interval caps. Requires a green run_tests with no edits "
-        "since (ship == tested).",
+        "The FIRST publish of a new app name needs the owner's approval (a terminal "
+        "prompt on a supervised local run; a durable owner ask under autonomous mode; "
+        "refused where no one can answer). Once an app is approved, later redeploys "
+        "of that SAME app run unattended within the configured daily/interval caps. "
+        "Requires a successful coding_run_tests in this session with no coding edit since "
+        "(ship == tested: it proves a green test run happened, not what the tests covered; "
+        "writes by other tools are not tracked).",
         param_model=DeployParams,
     )
     async def deploy(self, params: DeployParams, execution_context=None) -> ActionResult:

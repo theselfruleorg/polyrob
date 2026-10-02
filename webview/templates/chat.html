@@ -16,104 +16,11 @@
   thread itself is a READ and renders on every posture.
 #}
 {% extends "shell.html" %}
-{% block body_attrs %} data-session-id="{{ session_id or 'new' }}" data-is-new="{{ 'true' if is_new else 'false' }}" data-is-owner="{{ 'true' if is_owner else 'false' }}" data-is-authenticated="{{ 'true' if is_authenticated else 'false' }}" data-read-only="{{ 'true' if read_only else 'false' }}"{% endblock %}
+{% block body_attrs %} data-session-id="{{ session_id or 'new' }}" data-is-new="{{ 'true' if is_new else 'false' }}" data-is-owner="{{ 'true' if is_owner else 'false' }}" data-is-authenticated="{{ 'true' if is_authenticated else 'false' }}" data-read-only="{{ 'true' if read_only else 'false' }}" data-first-line="{{ first_line if run_kind == 'chat' else '' }}" data-run-kind="{{ run_kind }}" data-run-live="{{ run_live }}"{% endblock %}
 {% block body %}
-{%- if is_new %}
-    <div class="open">
-      <div class="face open-face" aria-hidden="true"></div>
-      <h1 class="open-hero">{{ hero|safe }}</h1>
-      <p class="open-sub">{{ t('chat.open.sub') }}</p>
-{%- if not read_only %}
-      {# A starter is a SHORTCUT INTO THE COMPOSER, and read-only has no
-         composer — chat-open.js binds them only after it finds the form, so
-         rendering them here shipped four buttons that did nothing. #}
-      <div class="starters" role="group" aria-label="{{ t('chat.open.starters_label') }}">
-{%- for starter in starters %}
-        <button class="starter" type="button">{{ starter }}</button>
-{%- endfor %}
-      </div>
-{%- endif %}
-    </div>
-{%- elif ownership_unknown %}
-    {# ⚠️ The ownership PROBE failed — that is not "this session does not
-       exist", which is what a 404 would have said. No thread either: the
-       modules would bind to a session the check never cleared. #}
-    <h1 class="vh">{{ t('chat.title') }}</h1>
-    <div class="state">
-      <div class="state-glyph" aria-hidden="true">{{ page_glyph }}</div>
-      <p class="state-body">{{ t('chat.ownership_unknown') }}</p>
-    </div>
-{%- else %}
-    <h1 class="vh">{{ t('chat.title') }}</h1>
-    {# The Work pane sits BESIDE the thread — a disclosure, not a nav slot:
-       what this chat MADE (Files, three tiers) beside what it DID (Timeline),
-       both read-only. The two-column layout is the one inline declaration the
-       schema (docs/design/040/web/chat-work-pane.html) carries; the CSP already
-       has style-src 'unsafe-inline'. On a narrow screen the aside
-       wraps below the thread. workpane.js fills it, or leaves the honest empty /
-       unreadable state — it never blanks. #}
-    <div style="display:flex;gap:var(--s5);align-items:flex-start;flex-wrap:wrap">
-      <div class="thread" id="chat-messages" style="flex:1 1 360px;min-width:0"></div>
-      <aside id="work-pane" style="flex:1 1 320px;min-width:0;max-width:420px">
-        <div class="section">
-          <div class="section-head">
-            <h2 class="section-title">{{ t('workpane.files_title') }}</h2>
-            <span class="section-aside">{{ t('workpane.files_aside') }}</span>
-          </div>
-          <div id="workpane-files"></div>
-          <p class="state-body" id="workpane-files-state" hidden></p>
-          <p class="entry-meta">{{ t('workpane.files_note') }}</p>
-        </div>
-        <div class="section">
-          <div class="section-head">
-            <h2 class="section-title">{{ t('workpane.timeline_title') }}</h2>
-            <span class="section-aside" id="workpane-timeline-aside"></span>
-          </div>
-          <div id="workpane-timeline"></div>
-          <p class="state-body" id="workpane-timeline-state" hidden></p>
-          <p class="entry-meta">{{ t('workpane.timeline_note') }}</p>
-        </div>
-      </aside>
-    </div>
-    {# The words the running transcript says, crossing from the copy layer into
-       transcript.js the same way chats.js reads #chats-copy — no 043 template
-       carries an inline script. ⚠️ The names carry an UNDERSCORE, not a hyphen:
-       `dataset` camel-cases a hyphen away, and the JS keys them as written. #}
-    <div id="transcript-copy" data-history_unavailable="{{ t('chat.history_unavailable') }}" data-live_unavailable="{{ t('chat.live_unavailable') }}" data-action_unavailable="{{ t('chat.action_unavailable') }}" hidden
-         data-stop="{{ t('chat.stop') }}"
-         data-steer="{{ t('chat.steer') }}"
-         data-receipt_working="{{ t('chat.receipt.working') }}"
-         data-receipt_done="{{ t('chat.receipt.done') }}"
-         data-receipt_stopped="{{ t('chat.receipt.stopped') }}"
-         data-cost_unknown="{{ t('chat.receipt.cost_unknown') }}"
-         data-act_did_work="{{ t('chat.act.did_work') }}"
-         data-act_failed="{{ t('chat.act.failed') }}"
-         data-live_at_agent="{{ t('chat.live_at_agent') }}"></div>
-    {# The words the Work pane says, crossing from the copy layer into
-       workpane.js the same way. ⚠️ Underscore, not hyphen: `dataset` camel-cases
-       a hyphen away, and workpane.js keys them as written. The narrator's own
-       fallback (chat.act.*) rides on #transcript-copy above; workpane.js merges
-       both so the Timeline says the same name-free line the thread does. #}
-    <div id="workpane-copy" hidden
-         data-loading="{{ t('workpane.loading') }}"
-         data-files_empty="{{ t('workpane.files_empty') }}"
-         data-files_unreadable="{{ t('workpane.files_unreadable') }}"
-         data-tier_ready="{{ t('workpane.tier_ready') }}"
-         data-tier_ready_why="{{ t('workpane.tier_ready_why') }}"
-         data-tier_working="{{ t('workpane.tier_working') }}"
-         data-tier_working_why="{{ t('workpane.tier_working_why') }}"
-         data-tier_given="{{ t('workpane.tier_given') }}"
-         data-tier_given_why="{{ t('workpane.tier_given_why') }}"
-         data-verdict_ok="{{ t('workpane.verdict_ok') }}"
-         data-verdict_changed="{{ t('workpane.verdict_changed') }}"
-         data-verdict_missing="{{ t('workpane.verdict_missing') }}"
-         data-verdict_unknown="{{ t('workpane.verdict_unknown') }}"
-         data-timeline_empty="{{ t('workpane.timeline_empty') }}"
-         data-timeline_unreadable="{{ t('workpane.timeline_unreadable') }}"
-         data-timeline_count="{{ t('workpane.timeline_count') }}"></div>
-    <script src="/static/app/workpane.js" type="module"></script>
-{%- endif %}
-
+{#- The composer, drawn once: under the thread (inside .chat-col) on a bound
+    chat, under the hero on the cold open, alone when ownership is unknown. #}
+{%- macro composer() %}
     <div class="composer-wrap">
 {%- if ownership_unknown %}
       <p class="composer-note">{{ t('chat.ownership_unknown_note') }}</p>
@@ -130,7 +37,7 @@
          you could still do from a read-only seat. #}
       <p class="composer-note">{{ t('chat.read_only.verbs') }}</p>
 {%- else %}
-      <form class="composer" id="chat-composer" data-unreachable="{{ t('chat.action_unavailable') }}">
+      <form class="composer" id="chat-composer" data-unreachable="{{ t('chat.action_unavailable') }}" data-no_model="{{ t('chat.open.no_model') }}">
         <textarea class="composer-input" id="chat-input" rows="1"
                   aria-label="{{ t('chat.composer.label') }}"
                   placeholder="{{ t('chat.composer.placeholder') if is_new else t('chat.composer.placeholder_busy') }}"></textarea>
@@ -170,7 +77,138 @@
 {%- endif %}
 {%- endif %}
     </div>
-    <p class="sources">{{ t('chat.sources')|safe }}</p>
+{%- endmacro %}
+{%- if is_new %}
+    <div class="open">
+      <div class="face open-face" aria-hidden="true"></div>
+      <h1 class="open-hero">{{ hero|safe }}</h1>
+      <p class="open-sub">{{ t('chat.open.sub') }}</p>
+{%- if not read_only %}
+      {# A starter is a SHORTCUT INTO THE COMPOSER, and read-only has no
+         composer — chat-open.js binds them only after it finds the form, so
+         rendering them here shipped four buttons that did nothing. #}
+      <div class="starters" role="group" aria-label="{{ t('chat.open.starters_label') }}">
+{%- for starter in starters %}
+        <button class="starter" type="button">{{ starter }}</button>
+{%- endfor %}
+      </div>
+{%- endif %}
+    </div>
+{{ composer() }}
+{%- elif ownership_unknown %}
+    {# ⚠️ The ownership PROBE failed — that is not "this session does not
+       exist", which is what a 404 would have said. No thread either: the
+       modules would bind to a session the check never cleared. #}
+    <h1 class="vh">{{ t('chat.title') }}</h1>
+    <div class="state">
+      <div class="state-glyph" aria-hidden="true">{{ page_glyph }}</div>
+      <p class="state-body">{{ t('chat.ownership_unknown') }}</p>
+    </div>
+{{ composer() }}
+{%- else %}
+    {# 070 W0.16: a two-column grid. The thread AND its composer sit in the
+       left column, so the sticky composer never covers the pane; the Work pane
+       scrolls on its own in the right column. Below 900 px the pane is a drawer
+       opened by the toggle (workpane.js). What this chat MADE (Files) beside
+       what it DID (Timeline), both read-only; workpane.js fills it, or leaves
+       the honest empty / unreadable state — it never blanks. #}
+    <div class="chat-body">
+      <div class="chat-col">
+        <h1 class="vh">{{ t('chat.title') }}</h1>
+        <button class="btn btn-quiet work-pane-toggle" id="work-pane-toggle" type="button"
+                aria-controls="work-pane" aria-expanded="false">{{ t('workpane.toggle') }}</button>
+{%- if run_kind == 'run' %}
+        {# 070 W0.12: a run Rob or a job started is a run view, not a chat with
+           you. Its task sits behind a closed disclosure. #}
+        <div class="note run-head" data-run-kind="run">
+          <p>{{ run_head }}</p>
+{%- if first_line %}
+          <details class="run-task"><summary>{{ t('chat.run_head.task') }}</summary><p>{{ first_line }}</p></details>
+{%- endif %}
+        </div>
+{%- endif %}
+        <div class="thread" id="chat-messages"></div>
+{{ composer() }}
+      </div>
+      <aside class="work-pane" id="work-pane">
+        <div class="section">
+          <div class="section-head">
+            <h2 class="section-title">{{ t('workpane.files_title') }}</h2>
+            <span class="section-aside">{{ t('workpane.files_aside') }}</span>
+          </div>
+          <p class="state-body" id="workpane-files-state" hidden></p>
+          <div id="workpane-files"></div>
+          <p class="entry-meta">{{ t('workpane.files_note') }}</p>
+        </div>
+        <div class="section">
+          <div class="section-head">
+            <h2 class="section-title">{{ t('workpane.timeline_title') }}</h2>
+            <span class="section-aside" id="workpane-timeline-aside"></span>
+          </div>
+          <div id="workpane-timeline"></div>
+          <p class="state-body" id="workpane-timeline-state" hidden></p>
+          <p class="entry-meta">{{ t('workpane.timeline_note') }}</p>
+        </div>
+      </aside>
+    </div>
+    {# The words the running transcript says, crossing from the copy layer into
+       transcript.js the same way chats.js reads #chats-copy — no 043 template
+       carries an inline script. ⚠️ The names carry an UNDERSCORE, not a hyphen:
+       `dataset` camel-cases a hyphen away, and the JS keys them as written. #}
+    <div id="transcript-copy" data-history_unavailable="{{ t('chat.history_unavailable') }}" data-live_unavailable="{{ t('chat.live_unavailable') }}" data-live_busy="{{ t('shell.live_busy') }}" data-action_unavailable="{{ t('chat.action_unavailable') }}" hidden
+         data-stop="{{ t('chat.stop') }}"
+         data-card_ok="{{ t('chat.card.ok') }}"
+         data-card_re="{{ t('chat.card.re') }}"
+         data-card_no="{{ t('chat.card.no') }}"
+         data-card_pick="{{ t('chat.card.pick') }}"
+         data-steer="{{ t('chat.steer') }}"
+         data-receipt_working="{{ t('chat.receipt.working') }}"
+         data-receipt_done="{{ t('chat.receipt.done') }}"
+         data-receipt_stopped="{{ t('chat.receipt.stopped') }}"
+         data-cost_unknown="{{ t('chat.receipt.cost_unknown') }}"
+         data-receipt_so_far="{{ t('chat.receipt.so_far') }}"
+         data-receipt_waiting="{{ t('chat.receipt.waiting') }}"
+         data-receipt_failed="{{ t('chat.receipt.failed') }}"
+         data-receipt_ended="{{ t('chat.receipt.ended') }}"
+         data-turn_failed="{{ t('chat.turn_failed') }}"
+         data-steps_none="{{ t('chat.receipt.steps_none') }}"
+         data-steps_one="{{ t('chat.receipt.steps_one') }}"
+         data-steps_many="{{ t('chat.receipt.steps_many') }}"
+         data-cost_known="{{ t('chat.receipt.cost_known') }}"
+         data-act_did_work="{{ t('chat.act.did_work') }}"
+         data-act_failed="{{ t('chat.act.failed') }}"
+         data-live_at_agent="{{ t('chat.live_at_agent') }}"></div>
+    {# The words the Work pane says, crossing from the copy layer into
+       workpane.js the same way. ⚠️ Underscore, not hyphen: `dataset` camel-cases
+       a hyphen away, and workpane.js keys them as written. The narrator's own
+       fallback (chat.act.*) rides on #transcript-copy above; workpane.js merges
+       both so the Timeline says the same name-free line the thread does. #}
+    <div id="workpane-copy" hidden
+         data-loading="{{ t('workpane.loading') }}"
+         data-files_empty="{{ t('workpane.files_empty') }}"
+         data-files_unreadable="{{ t('workpane.files_unreadable') }}"
+         data-files_tree_unreadable="{{ t('workpane.files_tree_unreadable') }}"
+         data-files_ledger_unreadable="{{ t('workpane.files_ledger_unreadable') }}"
+         data-tier_ready="{{ t('workpane.tier_ready') }}"
+         data-tier_working="{{ t('workpane.tier_working') }}"
+         data-tier_given="{{ t('workpane.tier_given') }}"
+         data-show_all="{{ t('workpane.show_all') }}"
+         data-shared_link="{{ t('workpane.shared_link') }}"
+         data-shared_link_more="{{ t('workpane.shared_link_more') }}"
+         data-folder_link="{{ t('workpane.folder_link') }}"
+         data-shared_title="{{ t('workpane.shared_title') }}"
+         data-shared_note="{{ t('workpane.shared_note') }}"
+         data-verdict_ok="{{ t('workpane.verdict_ok') }}"
+         data-verdict_changed="{{ t('workpane.verdict_changed') }}"
+         data-verdict_missing="{{ t('workpane.verdict_missing') }}"
+         data-verdict_unknown="{{ t('workpane.verdict_unknown') }}"
+         data-timeline_empty="{{ t('workpane.timeline_empty') }}"
+         data-timeline_unreadable="{{ t('workpane.timeline_unreadable') }}"
+         data-timeline_count="{{ t('workpane.timeline_count') }}"
+         data-timeline_count_one="{{ t('workpane.timeline_count_one') }}"></div>
+    <script src="/static/app/workpane.js" type="module"></script>
+{%- endif %}
+
     {# Loaded on EVERY posture. The thread is a READ, and gating the script on
        read-only left /c/{id} permanently blank on the one posture prod runs —
        the composer is already absent above, and `data-read-only` is what keeps

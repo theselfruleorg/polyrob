@@ -79,7 +79,10 @@ def test_402_response_shares_middleware_challenge_builder():
     """The endpoint-layer 402 must not revive a dead app.state.x402_handler
     indirection — it should call the same builder the middleware uses."""
     import inspect
+    import api.money_contributions as mc
     import api.payment_verification as pv
-    src = inspect.getsource(pv.payment_required_response)
+    # 067 P5a: the x402 block of a 402 body is the contributed payment option.
+    assert "getattr(request.app.state" not in inspect.getsource(pv.payment_required_response)
+    src = inspect.getsource(mc.x402_payment_option)
     assert "getattr(request.app.state" not in src
     assert "build_x402_challenge" in src

@@ -32,7 +32,6 @@ class BaseAgent(BaseComponent):
         self.character_manager = None
         self.active_character = None
         self.memory_manager = None
-        self.system_prompt_manager = None
         
         # Initialize state
         self._initialized = False
@@ -91,9 +90,6 @@ class BaseAgent(BaseComponent):
                 # Get optional services properly, only if they exist
                 if self.container.has_service('memory_manager'):
                     self.memory_manager = self.container.get_service('memory_manager')
-                
-                if self.container.has_service('system_prompt_manager'):
-                    self.system_prompt_manager = self.container.get_service('system_prompt_manager')
                 
                 if self.container.has_service('knowledge_base'):
                     self.knowledge_base = self.container.get_service('knowledge_base')
@@ -181,11 +177,6 @@ class BaseAgent(BaseComponent):
             self.active_character = character
             if self.llm_client:
                 self.llm_client.active_character = character
-            if self.system_prompt_manager:
-                await self.system_prompt_manager.set_prompt(
-                    self.name,
-                    self.system_prompt_manager.get_prompt(self.name, character=character)
-                )
             self.logger.info(f"Updated {self.name} agent character to {character.name}")
         except Exception as e:
             self.logger.error(f"Error setting character: {e}")
@@ -377,14 +368,9 @@ class BaseAgent(BaseComponent):
     ) -> Dict[str, Any]:
         """Prepare base context for response generation."""
         try:
-            # Get system prompt
+            # The retired SystemPromptManager (2026-09-29) was the only source;
+            # the task agent builds its own system prompt.
             system_prompt = ""
-            if self.system_prompt_manager:
-                system_prompt = await self.system_prompt_manager.get_prompt(
-                    role=self.name,
-                    model_type=self.llm_client.__class__.__name__.lower().replace('client', ''),
-                    character=self.active_character
-                )
             
             # Dead branch removed (D10, 2026-07-11): MemoryManager.knowledge_base is
             # permanently None since the RAG KB was retired — cross-session recall

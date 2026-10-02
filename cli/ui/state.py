@@ -92,6 +92,7 @@ class SessionState:
         self.tokens_in: int = 0
         self.tokens_out: int = 0
         self.tokens_cached: int = 0
+        self.tokens_cache_written: int = 0
         self.tokens_total: int = 0
         self.cost_estimate_total: float = 0.0
         self.unpriced_calls: int = 0
@@ -106,6 +107,10 @@ class SessionState:
         self.ctx_percent: float = 0.0
         self.ctx_tokens: int = 0
         self.ctx_max: int = 0
+        # "provider_usage" once a call has reported its own prompt_tokens,
+        # "local_estimate" until then — a surface must not print an estimate as
+        # if it were measured.
+        self.ctx_source: str = "local_estimate"
         self.compactions: int = 0
 
         # Sub-agent grouping: the first registered agent is the "main" agent;
@@ -351,20 +356,36 @@ class SessionState:
         except Exception:
             return
 
+        # F19: ONE reading. The bar used to show the HISTORY total against the
+        # window while /context showed the whole assembly — two "how full is it"
+        # numbers on one screen.
+        usage = None
         try:
-            self.ctx_percent = mm.get_context_usage_percent()
+            candidate = mm.context_usage()
+            # A stub/mock may return anything; only a real reading is trusted.
+            if isinstance(candidate, dict) and "pct" in candidate:
+                usage = candidate
         except Exception:
-            pass
+            usage = None
 
-        try:
-            self.ctx_tokens = mm.history.total_tokens
-        except Exception:
-            pass
-
-        try:
-            self.ctx_max = mm.max_input_tokens
-        except Exception:
-            pass
+        if usage:
+            self.ctx_percent = float(usage.get("pct") or 0.0)
+            self.ctx_tokens = int(usage.get("total_tokens") or 0)
+            self.ctx_max = int(usage.get("limit") or 0)
+            self.ctx_source = str(usage.get("source") or "local_estimate")
+        else:
+            try:
+                self.ctx_percent = mm.get_context_usage_percent()
+            except Exception:
+                pass
+            try:
+                self.ctx_tokens = mm.history.total_tokens
+            except Exception:
+                pass
+            try:
+                self.ctx_max = mm.max_input_tokens
+            except Exception:
+                pass
 
         try:
             self.compactions = mm._compaction_count
@@ -436,6 +457,15 @@ class SessionState:
         completion = number("completion_tokens")
         total = number("token_count")
         cost = number("cost_estimate")
+        # F18: the record has carried the cache split all along and the bar read
+        # every field EXCEPT this one — ``tokens_cached`` was declared and never
+        # written, so the one number that says whether caching works was invisible.
+        cached = number("cached_tokens")
+        written = number("cache_creation_tokens")
+        if isinstance(cached, (int, float)):
+            self.tokens_cached += int(cached)
+        if isinstance(written, (int, float)):
+            self.tokens_cache_written += int(written)
         if isinstance(prompt, (int, float)):
             self.tokens_in += int(prompt)
         if isinstance(completion, (int, float)):
@@ -456,6 +486,17 @@ class SessionState:
     # ------------------------------------------------------------------
     # Derived helpers
     # ------------------------------------------------------------------
+
+    def cache_hit_percent(self) -> float:
+        """Share of prompt tokens the provider served from cache, 0-100.
+
+        ``0.0`` means "unknown" as well as "nothing cached" — a surface must keep
+        the segment OFF at 0 rather than claim a 0 % hit rate on a seat that
+        never reports the field (F18).
+        """
+        if self.tokens_in <= 0 or self.tokens_cached <= 0:
+            return 0.0
+        return min(100.0, self.tokens_cached / self.tokens_in * 100.0)
 
     def elapsed(self) -> float:
         """Seconds elapsed since this ``SessionState`` was constructed."""

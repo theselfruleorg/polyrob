@@ -21,8 +21,9 @@ describes the mechanisms, not this session's live config.
   loop (`CRON_RUN_LOOP`, default ON — a job that used to only create an idle
   session now really executes). Delivery of the result out-of-band (Telegram/
   email) is a separate opt-in (`CRON_DELIVERY_ENABLED`). Owner-facing:
-  REPL `/cron`. Agent-facing: `cronjob_schedule/list/cancel` (tool must be in
-  the session's tool_ids).
+  REPL `/cron`. Agent-facing: `cronjob_schedule/list/show/edit/cancel` (tool must be in
+  the session's tool_ids). To change a live job, `cronjob_show` it and
+  `cronjob_edit` it (patch `old_text` → `new_text`) — never cancel and re-type it.
 - **Self-wake** (`SELF_WAKE_ENABLED`) — re-enters an idle session as a forged
   continuation turn (e.g. after a background delegation finishes, or a goal
   wants to report back). Bounded by a per-session depth cap

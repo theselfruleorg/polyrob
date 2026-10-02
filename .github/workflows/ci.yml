@@ -15,12 +15,108 @@ jobs:
       # (README "Contributing": pip install -e ".[dev,all]"). A bare
       # `pip install -e .` fails collection on missing playwright/fastapi.
       - run: pip install -e ".[dev,all]"
-      # The pfp renderer tests launch real headless chromium via playwright.
+      # 067 (one install): the first-party packs ship inside polyrob — the
+      # editable install above provides them; [all] carries their SDK extras.
+      # The browser tests launch real headless chromium via playwright.
       - run: python -m playwright install --with-deps chromium
       # -p no:randomly: the blessed deterministic invocation. pytest-randomly
       # (a [dev] extra) otherwise shuffles test order per run, and a handful of
       # order-dependent tests turn CI into a coin flip.
       - run: pytest -q -p no:randomly
+  base-install:
+    # The `test` job installs [dev,all], so it can never catch a dependency that
+    # moved to an extra but is still imported on the default agent path. This one
+    # installs EXACTLY what `pip install polyrob` gives a new user. 058 T0.1.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install -e .
+      - name: the default agent path imports with no extras
+        env: { POLYROB_DATA_DIR: /tmp/polyrob-ci }
+        run: |
+          python - <<'PY'
+          # build_cli_container is async (core/bootstrap.py) — IMPORTED, not called:
+          # running it needs a data home, a provider key and a loop, none of which
+          # belong in an import smoke test.
+          from core.bootstrap import build_cli_container
+          from agents.task.constants import BASE_DEFAULT_TOOLS
+          from modules.memory.task import TaskContextManager
+          from tools.filesystem import FileSystem
+          from modules.llm.llm_factory import create_chat_model
+          # the 058 surfaces whose dependency moved to an extra: each must IMPORT
+          # bare and refuse with the extra named, never traceback
+          import tools.document_parser, tools.filesystem_pdf, modules.cards.cards
+          import utils.gif_utils, core.optional_extras, cli.update.extras
+          from core.lazy_deps import remedy
+          assert "polyrob[docs]" in remedy("docs.pdf")
+          print("base import OK:", BASE_DEFAULT_TOOLS)
+          PY
+      - name: a bare install still runs a CLI verb
+        env: { POLYROB_DATA_DIR: /tmp/polyrob-ci }
+        run: python -m cli.polyrob doctor --flags --search MEMORY_BACKEND
+      - name: every core module imports with no extras; the packs name their extras (067)
+        env: { POLYROB_DATA_DIR: /tmp/polyrob-ci }
+        run: |
+          python - <<'PY'
+          # The lean-core proof: every core module imports bare, and the
+          # first-party packs (shipped inside polyrob, 067 one install) load with
+          # their SDK extras named, never a traceback. NEEDS_EXTRA is SHRINK-ONLY: the
+          # modules that import a crypto-extra dependency at module level today
+          # (P5 moves the wallet code to the wallet pack and deletes rows here).
+          import importlib, pkgutil
+          from importlib.metadata import entry_points
+          import core
+          # Phase 1 BEFORE the walk: importing core.bootstrap builds the capability
+          # views, and a pack row registered after that is refused (067 P2).
+          from core.packs.loader import load_packs, register_policies
+          register_policies()
+          eps = {e.name: e.dist.metadata["Name"] for e in entry_points(group="polyrob.packs")}
+          assert eps == {"discovery": "polyrob", "markets": "polyrob", "x": "polyrob"}, eps
+          NEEDS_EXTRA = {
+              "core.security.pinned_transport",  # httpx (a crypto/solana extra dep)
+              "core.signer.remote", "core.wallet.agent_wallet", "core.wallet.erc6551",
+              "core.wallet.factory", "core.wallet.signer", "core.wallet.tokens",
+          }
+          bad, stale = {}, set(NEEDS_EXTRA)
+          for m in pkgutil.walk_packages(core.__path__, "core."):
+              try:
+                  importlib.import_module(m.name)
+              except ImportError as exc:
+                  if m.name not in NEEDS_EXTRA:
+                      bad[m.name] = str(exc)
+                  stale.discard(m.name)
+          assert not bad, bad
+          assert not stale, f"imports bare now — delete from NEEDS_EXTRA: {sorted(stale)}"
+          from core.packs import state
+          load_packs()
+          assert not state.discovery_error(), state.discovery_error()
+          recs = {r.id: r for r in state.records()}
+          assert set(recs) == set(eps) and all(r.status == state.LOADED for r in recs.values()), \
+              [r.line() for r in recs.values()]
+          assert all(r.needs for r in recs.values()), [r.line() for r in recs.values()]
+          assert "polyrob[twitter]" in recs["x"].line(), recs["x"].line()
+          print("bare install OK:", state.summary_line())
+          PY
+  prod-extras:
+    # The set a production box installs (requirements.txt = the hashed closure
+    # of PROD_EXTRAS, generated from the lock). `pip check` + the imports the
+    # deploy's own import-test relies on, so PROD_EXTRAS drift is caught before
+    # a deploy is. 058; 066 P1: hash-checked (prod is also wheel-only), then
+    # the project itself --no-deps (pip's hash mode cannot hash a directory).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install --require-hashes --prefer-binary -r requirements.txt
+      - run: pip install --no-deps --no-build-isolation -e .
+      - run: pip check
+      - env: { POLYROB_DATA_DIR: /tmp/polyrob-ci }
+        run: |
+          python -c "import magic, pypdf, docx, imageio, qrcode, numpy; import api.upload_sniff, tools.document_parser, modules.cards.cards, surfaces.telegram.harness; print('prod extras OK')"
+          python -c "from core.packs.loader import register_policies, load_packs; register_policies(); load_packs(); from core.packs import state; assert state.records() and all(r.status == state.LOADED and not r.needs for r in state.records()), [r.line() for r in state.records()]; print(state.summary_line())"
   secrets:
     runs-on: ubuntu-latest
     steps:

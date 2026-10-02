@@ -17,14 +17,19 @@ def test_pause_never_reaches_the_developers_real_data_home(tmp_path, monkeypatch
     from core.runtime_paths import resolve_data_home
 
     real = Path(resolve_data_home())
+    record = real / ac.PAUSE_FILENAME
+    # A developer may already have paused this home before pytest starts.
+    # Isolation means the existing record is unchanged, or remains absent.
+    before = (record.read_bytes(), record.stat().st_mtime_ns) if record.exists() else None
     bases = ac.state_bases(str(tmp_path))
     assert str(real) not in bases, (
         f"the REAL data home {real} is a pause-record base inside a test")
 
     ac.pause(str(tmp_path), via="test")
     assert (tmp_path / ac.PAUSE_FILENAME).exists(), "the test's own base still works"
-    assert not (real / ac.PAUSE_FILENAME).exists(), (
-        f"a unit test paused the developer's real data home ({real})")
+    after = (record.read_bytes(), record.stat().st_mtime_ns) if record.exists() else None
+    assert after == before, (
+        f"a unit test changed the developer's real pause record ({real})")
 
 
 def test_env_pinned_data_home_still_uses_the_real_resolution(tmp_path, monkeypatch):

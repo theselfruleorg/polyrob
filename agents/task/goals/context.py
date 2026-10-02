@@ -193,7 +193,11 @@ def build_goal_run_task(goal: Goal, objective: Optional[Goal], *,
             ]
             owner_answer = str(unblocked.get("answer") or "").strip()
             if owner_answer:
-                lines.append(f"- the owner answered: {owner_answer[:1000]}")
+                from agents.task.goals.rail_answers import render_owner_answer
+                lines.append("- the owner answered (quoted):")
+                lines.append(render_owner_answer(
+                    owner_answer, ask_id=str(unblocked.get("ask_id") or "")[:12],
+                    via=str(unblocked.get("answer_via") or "owner seat")))
         else:
             lines = [
                 "PREVIOUS ATTEMPT (this goal was retried — address the gap, don't repeat it):",

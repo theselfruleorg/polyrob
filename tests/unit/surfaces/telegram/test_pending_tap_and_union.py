@@ -171,18 +171,35 @@ async def test_the_disambiguation_list_is_tappable(env):
 @pytest.mark.asyncio
 async def test_approve_all_decides_every_queue(env):
     """`/approve all` is advertised as "everything at once" and left two queues
-    untouched."""
+    untouched.
+
+    M08 (security analysis 2026-09-23): it still READS every queue, but a money
+    ask is HELD for an individual decision and NAMED in the reply. This test
+    used to assert the defi_trade ask was bulk-approved — the unsafe shape."""
     from tools.controller.approval_queue import all_pending
     _seed_pending_self(env)
     board = _seed_tool_approval(env)
 
     out = await act_on_inbound(_Agent(str(env)), _cmd("/approve", "/approve all"))
 
-    assert "2 approved" in out, out
+    assert "1 approved" in out, out
+    assert "individual decision" in out and "money ask" in out, out
     from core.instance import resolve_instance_id
     left = all_pending(user_id="alice", home_dir=str(env),
                        instance_id=resolve_instance_id(), board=board)
-    assert left.items == []
+    assert [i["kind"] for i in left.items] == ["tool_approval"]
+
+
+@pytest.mark.asyncio
+async def test_reject_all_still_takes_a_money_ask(env):
+    """Denying is always safe, so a bulk REJECT is not narrowed."""
+    from tools.controller.approval_queue import decide_all_pending
+    from core.instance import resolve_instance_id
+    board = _seed_tool_approval(env)
+    ok_n, _fail, _msgs = decide_all_pending(
+        approve=False, user_id="alice", home_dir=str(env),
+        instance_id=resolve_instance_id(), board=board)
+    assert ok_n == 1
 
 
 @pytest.mark.asyncio
@@ -215,30 +232,6 @@ def test_the_tap_tokens_are_routable_commands():
     assert _COMMAND_SHAPE_RE.match("/approve_p_abc123")
     assert _COMMAND_SHAPE_RE.match("/approve_all")
     assert "/approve" in _COMMANDS
-
-
-# --- the plain word -----------------------------------------------------------
-
-def test_a_plain_word_is_read_as_a_decision():
-    from core.surfaces.owner_admin import parse_pending_decision
-
-    assert parse_pending_decision("approve") == ("/approve", None)
-    assert parse_pending_decision("reject") == ("/reject", None)
-    assert parse_pending_decision("approve all") == ("/approve", "all")
-    assert parse_pending_decision("yes please approve them all") == ("/approve", "all")
-
-
-def test_a_sentence_is_not_a_decision():
-    """The word has to be one the owner could only have meant as a decision."""
-    from core.surfaces.owner_admin import parse_pending_decision
-
-    for text in ("I approve of that plan",
-                 "reject the third candidate token, it is a honeypot",
-                 "approve and reject are both confusing",
-                 "ok",            # the commonest filler there is
-                 "yes",
-                 ""):
-        assert parse_pending_decision(text) is None, text
 
 
 # --- one union, one decider, every seat ---------------------------------------

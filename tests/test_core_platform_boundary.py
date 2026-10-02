@@ -49,8 +49,6 @@ BLOCKED_API_MODULES = (
     "api.admin_endpoints",
     "api.x402_endpoints",
     "api.eip8004_endpoints",
-    "api.polymarket_routes",
-    "api.hyperliquid_routes",
     "api.mcp_routes",
     "api.skill_endpoints",
     "api.kb",

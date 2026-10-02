@@ -387,3 +387,18 @@ class AlchemyTool(BaseTool):
                 "status": "error",
                 "message": f"Failed to test Alchemy API: {str(e)}"
             } 
+
+
+# ---------------------------------------------------------------------------
+# Identity-mapper hook: modules/auth may not import tools, so the NFT-gate
+# check registers itself here at import (067 P0.11).
+# ---------------------------------------------------------------------------
+
+
+async def _check_token_for_identity_mapper(tool: "AlchemyTool", wallet_address: str):
+    return await tool.alchemy_check_token(CheckTokenParams(address=wallet_address))
+
+
+from core.token_check_hook import register_token_checker  # noqa: E402
+
+register_token_checker(_check_token_for_identity_mapper)

@@ -236,6 +236,8 @@ def test_mode_auto_over_cap_rejection_never_notifies(tmp_path, monkeypatch):
 # whenever spend_lane's amount-keyed exemption doesn't apply (the `live` params
 # below carry no `max_amount_usd`, so it never exempts in these tests).
 _SPEND_VERBS = (
+    "hyperliquid_approve_agent", "hyperliquid_revoke_agent", "hyperliquid_update_leverage",
+    "hyperliquid_cancel_order", "hyperliquid_cancel_all_orders",
     "hyperliquid_place_limit_order", "hyperliquid_place_market_order",
     "polymarket_place_limit_order", "polymarket_place_market_order",
     "defi_trade_transfer", "defi_trade_swap", "defi_trade_solana_swap",
@@ -255,6 +257,7 @@ _SPEND_VERBS = (
     "defi_trade_call",
     "defi_trade_lp_add", "defi_trade_lp_remove", "defi_trade_lp_collect",
     "defi_trade_solana_deploy_token",
+    "defi_trade_solana_transfer",
     # 2026-09-15: the non-fungible verbs, both SPEND-side. `nft_transfer` is
     # additionally in ALWAYS_OWNER_APPROVED_VERBS, so the tiered lane can never
     # exempt it -- an NFT has no price any cap could bound.
@@ -275,6 +278,8 @@ _SPEND_VERBS = (
     # 2026-09-14: the inverse of wrap, on the same lane for the same reason.
     "defi_trade_unwrap",
     "dapp_browser_dapp_connect",
+    # 050/069: the agent_nft writes, all SPEND-side (mint/take additionally never exemptible).
+    "agent_nft_collection_mint", "agent_nft_withdraw_token", "agent_nft_bind_identity", "agent_nft_journal", "agent_nft_revoke_all", "agent_nft_collection_reveal",
 )
 
 
@@ -305,6 +310,24 @@ def test_mode_auto_trade_verb_denied_when_owner_queue_denies(tmp_path, monkeypat
         "hyperliquid_place_limit_order", {"amount_usd": 5}, _owner_ctx()))
 
     assert reason is not None and "hyperliquid_place_limit_order" in reason
+
+
+@pytest.mark.parametrize("mode", ["approve", "auto"])
+@pytest.mark.parametrize("verb", ["cancel_order", "cancel_all_orders", "approve_agent",
+                                  "revoke_agent", "update_leverage"])
+def test_hyperliquid_mutations_cannot_bypass_owner_queue(tmp_path, monkeypatch, mode, verb):
+    monkeypatch.setenv("PAYMENT_APPROVAL_MODE", mode)
+    monkeypatch.setenv("DEFI_TIERED_SPEND_LANE", "true")
+    monkeypatch.setitem(approval._PROVIDERS, "owner_queue", _SpyProvider)
+    _SpyProvider.outcome = False
+    name = f"hyperliquid_{verb}"
+    controller = _make_controller(tmp_path)
+    # These verbs have no simulation contract: a forged dry_run argument must
+    # not exempt their real changes, even below a declared USD ceiling.
+    params = {"dry_run": True, "max_spend_usd": 0.01}
+    reason = asyncio.run(controller._run_pre_tool_call_hooks(name, params, _owner_ctx()))
+    assert reason is not None, name
+    assert (name, params) in _SpyProvider.calls
 
 
 def test_mode_auto_trade_verb_wires_the_money_specific_timeout(tmp_path, monkeypatch):
@@ -658,3 +681,25 @@ def test_tiered_lane_never_loosens_the_venue_order_verbs(tmp_path, monkeypatch):
             verb, {"dry_run": True, "max_spend_usd": 0.01, "amount_usd": 0.01},
             _owner_ctx()))
         assert _SpyProvider.calls, f"{verb} must always queue"
+
+
+# --- security analysis 2026-09-23 (Low): an unwired lane fails CLOSED -------
+
+@pytest.mark.parametrize("mode", ["approve", "auto"])
+def test_a_payment_lane_that_fails_to_wire_denies_its_tools(tmp_path, monkeypatch, mode):
+    """The wiring used to only LOG on an exception, leaving every payment verb
+    ungated for the session. Now a deny-all hook takes its place."""
+    monkeypatch.setenv("PAYMENT_APPROVAL_MODE", mode)
+    constants._refreeze_payment_approval_flags_for_tests()
+
+    def _boom(*a, **kw):
+        raise RuntimeError("wiring exploded")
+
+    monkeypatch.setattr(approval, "make_approval_hook", _boom)
+    c = _make_controller(tmp_path)
+
+    reason = asyncio.run(c._run_pre_tool_call_hooks(
+        "defi_trade_swap", {"dry_run": False}, _owner_ctx()))
+    assert reason and "could not be wired" in reason
+    # A non-payment action is untouched by the fallback.
+    assert asyncio.run(c._run_pre_tool_call_hooks("read_file", {}, None)) is None

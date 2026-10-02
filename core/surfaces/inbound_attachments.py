@@ -234,15 +234,20 @@ def inject_file_content(
         try:
             with open(full_path, "r", encoding="utf-8") as fh:
                 content = fh.read()
-            return (f"{message_text}\n\n[Attached file: {name} ({_human_size(size)})]\n"
-                    f"--- File Content Start ---\n{content}\n--- File Content End ---"), None
+            # F12: an attached file is DATA — it may be a forwarded page or a
+            # correspondent's document, and an instruction inside it must not
+            # read as the owner's. The owner's own words are message_text.
+            from core.security.untrusted_wrap import wrap_untrusted
+            return (f"{message_text}\n\n[Attached file: {name} ({_human_size(size)}) — "
+                    f"its content is below as data]\n"
+                    f"{wrap_untrusted(f'attachment:{name}', content)}"), None
         except (UnicodeDecodeError, OSError):
             pass  # fall through to the reference form
 
     return (f"{message_text}\n\n[Attached file: {name} ({_human_size(size)})]\n"
             f"File type: {ext or 'unknown'}\n"
             f"Path in workspace: {rel_path}\n"
-            f'To read it, use: filesystem_read_file(path="{rel_path}")'), None
+            f'To read it, use: filesystem_read_file(file_path="{rel_path}")'), None
 
 
 # --- the rail --------------------------------------------------------------

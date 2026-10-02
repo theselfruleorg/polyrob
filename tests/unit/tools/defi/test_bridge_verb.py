@@ -65,7 +65,8 @@ def test_an_autonomous_turn_is_ALLOWED_and_bounded_by_the_cap(monkeypatch):
     Asserted by what it no longer says — it passes the turn gate and refuses
     later, on the stub wallet."""
     monkeypatch.setenv(bv.FLAG, "true")
-    monkeypatch.setattr("core.wallet.tx_guard._halted", lambda: False)
+    monkeypatch.setattr("core.config_policy.AutonomyConfig.autonomy_halted",
+                        staticmethod(lambda: False))
     monkeypatch.setattr("core.autonomy_control.allows",
                         lambda kind: SimpleNamespace(allowed=True, reason="ok"))
     r = _run(bv.perform_bridge(_Tool(), _params(dry_run=False), SimpleNamespace(user_id="owner")))
@@ -87,7 +88,8 @@ def test_the_031_pause_stops_a_REAL_bridge(monkeypatch):
     monkeypatch.setenv(bv.FLAG, "true")
     monkeypatch.setattr("tools.controller.turn_origin._is_forged_or_autonomous_turn",
                         lambda ctx, _: False)
-    monkeypatch.setattr("core.wallet.tx_guard._halted", lambda: False)
+    monkeypatch.setattr("core.config_policy.AutonomyConfig.autonomy_halted",
+                        staticmethod(lambda: False))
     monkeypatch.setattr("core.autonomy_control.allows",
                         lambda kind: SimpleNamespace(allowed=False,
                                                      reason="paused (all) by owner"))
@@ -107,7 +109,8 @@ def test_the_pause_does_NOT_block_a_dry_run(monkeypatch):
 
     def _must_not_be_called():
         raise AssertionError("the pause gate ran on a dry run")
-    monkeypatch.setattr("core.wallet.tx_guard._halted", _must_not_be_called)
+    monkeypatch.setattr("core.config_policy.AutonomyConfig.autonomy_halted",
+                        staticmethod(_must_not_be_called))
     # It gets past the pause and refuses later, on the stub wallet — which is
     # exactly the point: the pause is no longer what stopped it.
     r = _run(bv.perform_bridge(_Tool(), _params(dry_run=True), SimpleNamespace(user_id="owner")))
@@ -120,7 +123,8 @@ def test_a_pause_probe_failure_fails_closed(monkeypatch):
     monkeypatch.setenv(bv.FLAG, "true")
     monkeypatch.setattr("tools.controller.turn_origin._is_forged_or_autonomous_turn",
                         lambda ctx, _: False)
-    monkeypatch.setattr("core.wallet.tx_guard._halted", lambda: False)
+    monkeypatch.setattr("core.config_policy.AutonomyConfig.autonomy_halted",
+                        staticmethod(lambda: False))
 
     def boom(kind):
         raise RuntimeError("unreadable")
@@ -135,7 +139,8 @@ def test_an_erc20_ORIGIN_is_refused(monkeypatch):
     monkeypatch.setenv(bv.FLAG, "true")
     monkeypatch.setattr("tools.controller.turn_origin._is_forged_or_autonomous_turn",
                         lambda ctx, _: False)
-    monkeypatch.setattr("core.wallet.tx_guard._halted", lambda: False)
+    monkeypatch.setattr("core.config_policy.AutonomyConfig.autonomy_halted",
+                        staticmethod(lambda: False))
     monkeypatch.setattr("core.autonomy_control.allows",
                         lambda kind: SimpleNamespace(allowed=True, reason="ok"))
     r = _run(bv.perform_bridge(_Tool(), _params(token_in="usdc"), SimpleNamespace(user_id="owner")))
@@ -327,7 +332,27 @@ def test_an_ungranted_approval_never_invents_a_handle(monkeypatch):
     ok, note = _run(bv._require_owner_approval(_Tool(), params_summary={},
                                                execution_context=None))
     assert ok is False
-    assert "tap-" in note
+    assert "tap" in note
     assert "/pending" in note
-    assert "NOT the relay request id" in note
     assert "durable" in note.lower()
+    # Review B4 (2026-09-29): the owner decides with a tap on the card; the
+    # note must not hand the agent a command/id template to relay.
+    assert "Do NOT give the owner a command or an id" in note
+    assert "/approve <" not in note
+
+
+def test_the_policy_gate_is_checked_inside_the_reserve_on_both_origins():
+    """M10 (security analysis 2026-09-23): the Solana origin recorded the spend
+    but never ran `gate.check` — no kill-switch, per-tx ceiling, daily cap,
+    replay or submission-journal check — and the EVM check ran outside the
+    reserve. One check, inside the reserve, before EITHER send."""
+    import inspect
+
+    from tools.defi import bridge_verb
+    src = inspect.getsource(bridge_verb.perform_bridge)
+    reserve_at = src.index("async with gate.reserve():")
+    check_at = src.index("gate.check(", reserve_at)
+    assert check_at < src.index("to_thread(EvmOriginLeg.send, prepared)", reserve_at)
+    assert check_at < src.index("to_thread(tool._solana_send, raw_tx, signer)", reserve_at)
+    assert src.index("gate.record(", reserve_at) > check_at
+    assert "idempotency_key=idem" in src[check_at:check_at + 200]

@@ -62,9 +62,34 @@ class TestItGrantsTheMoneyVerb:
 
 
 class TestItIsStillBounded:
-    def test_the_reply_states_that_spends_still_need_approval(self):
-        """The owner must not think this bypasses the approval queue."""
-        assert "approv" in _reply(["bridge", "sol"]).lower()
+    def test_the_reply_is_honest_about_the_ceiling(self, monkeypatch):
+        """Since the owner grant (2026-09-26) an approved spend above the ceiling
+        IS sent on the run's next attempt — the reply says so, and never claims
+        'not queued' (validation, 2026-09-27)."""
+        monkeypatch.setenv("DEFI_AUTONOMOUS_TURN_TRADING", "true")
+        out = _reply(["bridge", "sol"])
+        assert "not queued" not in out
+        assert "asks you first (/pending)" in out
+        assert "next attempt sends it" in out
+
+    def test_no_ask_is_promised_when_the_run_cannot_sign(self, monkeypatch):
+        monkeypatch.setenv("DEFI_AUTONOMOUS_TURN_TRADING", "false")
+        out = _reply(["bridge", "sol"])
+        assert "asks you first (/pending)" not in out.split("\n\n", 1)[-1]
+
+    def test_the_reply_says_paused_when_dispatch_is_paused(self, monkeypatch):
+        from core import autonomy_control
+        st = autonomy_control.Decision(False, "paused (all)", None)
+        monkeypatch.setattr(autonomy_control, "allows", lambda kind, d=None: st)
+        out = _reply(["bridge", "sol"])
+        assert "Paused — it runs after /resume." in out
+        assert "next dispatcher tick" not in out
+
+    def test_the_reply_says_it_cannot_sign_when_turn_trading_is_off(self, monkeypatch):
+        monkeypatch.delenv("DEFI_AUTONOMOUS_TURN_TRADING", raising=False)
+        assert "cannot send a transaction" in _reply(["bridge", "sol"])
+        monkeypatch.setenv("DEFI_AUTONOMOUS_TURN_TRADING", "true")
+        assert "cannot send a transaction" not in _reply(["bridge", "sol"])
 
     def test_it_names_only_real_owner_actions(self):
         from core.owner_remedy import unknown_owner_actions

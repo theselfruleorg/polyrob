@@ -63,6 +63,8 @@ MONEY_VERBS = (
     "defi_trade_call",
     "defi_trade_lp_add", "defi_trade_lp_remove", "defi_trade_lp_collect",
     "defi_trade_solana_deploy_token",
+    # The Solana send (SOL or an SPL token), guarded like solana_swap.
+    "defi_trade_solana_transfer",
 )
 
 

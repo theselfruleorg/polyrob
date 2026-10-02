@@ -19,23 +19,47 @@ from core.surfaces.envelopes import Identity, InboundMessage, SessionSource
 logger = logging.getLogger(__name__)
 
 
+#: Hosts a Slack file URL may point at (064 F3). The fetch sends the BOT
+#: TOKEN, so nothing outside Slack's own file host may ever receive it.
+FILE_HOSTS = ("files.slack.com",)
+
+
+def parse_files(event: dict) -> list:
+    """A message's ``files`` → ``Media`` (064 F3); bytes fetched later, by tier."""
+    from core.surfaces.media import Media, kind_for_mime
+    out = []
+    for f in event.get("files") or []:
+        if not isinstance(f, dict):
+            continue
+        url = f.get("url_private_download") or f.get("url_private")
+        if not url:
+            continue
+        mime = f.get("mimetype") or None
+        out.append(Media(kind=kind_for_mime(mime), mime=mime, url=str(url),
+                         filename=f.get("name") or None,
+                         ref=str(f.get("id") or "") or None))
+    return out
+
+
 def parse_event(event: dict, bot_user_id: str,
                 user_directory: Any = None) -> Optional[InboundMessage]:
     """Slack ``message`` event → InboundMessage, or None to ignore.
 
     Ignores: non-message events, our own/bot messages, and message subtypes
-    (edits/joins/etc). ``channel_type == "im"`` → dm; anything else → group
-    (W3 gating applies). ``thread_ts`` rides as thread_id.
+    (edits/joins/etc) — except ``file_share`` (064 F3: a message that carries
+    files), which is read with its ``files``. ``channel_type == "im"`` → dm;
+    anything else → group (W3 gating applies). ``thread_ts`` rides as thread_id.
     """
     if event.get("type") != "message":
         return None
-    if event.get("subtype") or event.get("bot_id"):
+    if event.get("subtype") not in (None, "file_share") or event.get("bot_id"):
         return None
     author_id = str(event.get("user") or "")
     if not author_id or author_id == str(bot_user_id):
         return None
     text = str(event.get("text") or "").strip()
-    if not text:
+    media = parse_files(event)
+    if not text and not media:
         return None
 
     channel = str(event.get("channel") or "")
@@ -65,6 +89,7 @@ def parse_event(event: dict, bot_user_id: str,
         idempotency_key=str(event.get("client_msg_id")
                             or f"{channel}:{event.get('ts')}"),
         raw=event,
+        media=media,
         mentions_bot=f"<@{bot_user_id}>" in text,
     )
 

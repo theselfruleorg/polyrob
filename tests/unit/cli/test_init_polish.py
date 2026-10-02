@@ -4,13 +4,13 @@ import re
 
 
 def test_wizard_section_numbering_is_consistent():
-    """O2: sections number 1/6..6/6 — no stale /4 or /5 denominators, and the
-    Owner pairing section is numbered like the rest."""
+    """O2: sections number 1/7..7/7 — no stale denominator, and every section
+    (Owner pairing, and 062's "Reach me") is numbered like the rest."""
     import cli.commands.init as m
     src = inspect.getsource(m)
     denominators = set(re.findall(r"Section \d/(\d)", src))
-    assert denominators == {"6"}, f"mixed wizard denominators: {denominators}"
-    assert "Section 5/6: Owner pairing" in src
+    assert denominators == {"7"}, f"mixed wizard denominators: {denominators}"
+    assert "Section 5/7: Owner pairing" in src
 
 
 def test_closing_key_check_reads_all_env_layers():

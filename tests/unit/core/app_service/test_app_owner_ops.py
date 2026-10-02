@@ -93,3 +93,13 @@ def test_every_owner_seat_says_WHY_a_re_approval_is_pending(tmp_path):
     # a FIRST approval is not a "change"
     fresh = _reg(tmp_path / "c")
     assert owner_ops.pending_reason(fresh.get("st", "u1")) is None
+
+
+def test_approve_hint_names_the_seat_verbs(tmp_path):
+    # A chat seat names the slash verb and the console, never a shell verb; the
+    # `polyrob apps` CLI passes its own hint (prompt-skill review 2026-09-29).
+    r = _reg(tmp_path)
+    chat = owner_ops.list_lines(r, "u1")[-1]
+    assert "/apps approve <slug>" in chat and "polyrob apps" not in chat
+    cli = owner_ops.list_lines(r, "u1", approve_hint=owner_ops.CLI_APPROVE_HINTS)[-1]
+    assert cli == "approve: polyrob apps approve <slug>"

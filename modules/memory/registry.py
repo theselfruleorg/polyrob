@@ -42,6 +42,37 @@ def reset_memory_registry() -> None:
     _registry = None
 
 
+_warned_scopeless: set = set()
+
+
+def _scope_kwargs(method, session_id) -> dict:
+    """025: ``{"scope": spec}`` when the provider method accepts it.
+
+    The spec comes from the session binding (``modules.memory.scope``), so every
+    router caller — the per-step drain, the close drain, prefetch, session_search
+    — carries its session's scope without a second plumbing path. A provider that
+    does NOT accept ``scope`` while scopes are ON gets ONE warning naming it:
+    isolation silently absent is never acceptable."""
+    from modules.memory.scope import scopes_enabled, session_scope
+    if not scopes_enabled():
+        return {}
+    try:
+        params = inspect.signature(method).parameters
+    except (TypeError, ValueError):
+        params = {}
+    if "scope" in params:
+        return {"scope": session_scope(session_id)}
+    target = getattr(method, "__self__", None)
+    if target is not None and not getattr(target, "is_external", True):
+        return {}  # the Null/built-in provider stores nothing to isolate
+    owner = type(target if target is not None else method).__name__
+    if owner not in _warned_scopeless:
+        _warned_scopeless.add(owner)
+        logger.warning("memory scopes requested but provider %s does not support them "
+                       "— isolation is OFF for it", owner)
+    return {}
+
+
 async def memory_prefetch(query: str, *, session_id: str, user_id: Optional[str] = None) -> str:
     """Route a prefetch through the active provider; '' for Null / on any error.
 
@@ -52,7 +83,8 @@ async def memory_prefetch(query: str, *, session_id: str, user_id: Optional[str]
     if provider is None:
         return ""
     try:
-        return await provider.prefetch(query, session_id=session_id, user_id=user_id)
+        return await provider.prefetch(query, session_id=session_id, user_id=user_id,
+                                       **_scope_kwargs(provider.prefetch, session_id))
     except Exception as e:  # never break the agent loop on a memory backend hiccup
         logger.warning("memory_prefetch failed: %s", e)
         return ""
@@ -85,6 +117,7 @@ async def memory_search(query: str, *, session_id: str = "", user_id: Optional[s
         kwargs["before_id"] = before_id
     if with_ids and "with_ids" in params:
         kwargs["with_ids"] = with_ids
+    kwargs.update(_scope_kwargs(provider.search, session_id))
     try:
         return await provider.search(query, user_id=user_id, session_id=session_id,
                                      limit=limit, sort=sort, **kwargs)
@@ -101,7 +134,8 @@ async def memory_sync_turn(user_content: str, assistant_content: str, *,
         return  # Null/built-in: nothing to persist externally
     try:
         await provider.sync_turn(user_content, assistant_content,
-                                 session_id=session_id, user_id=user_id)
+                                 session_id=session_id, user_id=user_id,
+                                 **_scope_kwargs(provider.sync_turn, session_id))
     except Exception as e:
         logger.warning("memory_sync_turn failed: %s", e)
 

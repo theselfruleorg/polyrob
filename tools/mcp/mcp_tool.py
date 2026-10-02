@@ -801,13 +801,18 @@ class MCPTool(BaseTool):
                 last_modified=time.time()
             )
             
-            # Cache the result if enabled
+            # Cache the result if enabled. Best-effort: a cache write failure
+            # must never turn a successful read into a ToolError (it did, for
+            # every read, until 2026-09-22 — harness/cache review F27).
             if self.cache_manager and self.mcp_config.enable_resource_caching:
-                await self.cache_manager.set(
-                    cache_key,
-                    resource_content.model_dump(),
-                    ttl=self.mcp_config.cache_ttl_seconds
-                )
+                try:
+                    await self.cache_manager.set(
+                        cache_key,
+                        resource_content.model_dump(),
+                        ttl=self.mcp_config.cache_ttl_seconds
+                    )
+                except Exception as cache_err:
+                    self.logger.warning(f"Resource cache write skipped: {cache_err}")
             
             self.logger.info(f"Resource '{params.resource_uri}' read successfully from server '{params.server_name}'")
             

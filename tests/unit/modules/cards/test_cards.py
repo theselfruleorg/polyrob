@@ -1,0 +1,206 @@
+"""render_invoice_card — branded PNG invoice card (Task 6, Phase 1).
+
+Pure Pillow, deterministic, fail-open. This is the FIRST layout on the
+compositor (the future presence-plan card layouts reuse its internal
+helpers); only the invoice layout is a public entry today.
+"""
+from pathlib import Path
+
+from PIL import Image, ImageDraw, ImageFont
+
+from modules.cards import cards
+
+_INVOICE = {
+    "request_id": "inv_marker123",
+    "amount_usd": 12.34,
+    "asset": "usdc",
+    "chain": "base",
+    "recipient": "0xTREASURYADDR000000000000000000000001",
+    "purpose": "MARKER_PURPOSE_STRING for the research widget",
+    "expires_at_epoch": 1770000000,  # 2026-02-02 02:40 UTC
+    "status": "pending",
+}
+_ARTIFACT_NO_QR = {
+    "pay_text": "Pay $12.34 USDC on base to 0xTREASURYADDR000000000000000000000001",
+    "pay_uri": None,
+}
+_ARTIFACT_WITH_QR = {
+    "pay_text": "Pay $12.34 USDC on base to 0xTREASURYADDR000000000000000000000001",
+    "pay_uri": "0xTREASURYADDR000000000000000000000001",
+}
+
+
+def _spy_draw_text(monkeypatch):
+    """Record every ImageDraw.text() call's text argument — a robust,
+    OCR-free way to assert 'this field landed on the card'."""
+    drawn = []
+    orig = ImageDraw.ImageDraw.text
+
+    def spy(self, xy, text, *a, **kw):
+        drawn.append(text)
+        return orig(self, xy, text, *a, **kw)
+
+    monkeypatch.setattr(ImageDraw.ImageDraw, "text", spy)
+    return drawn
+
+
+def test_renders_a_valid_png_with_sane_dimensions(tmp_path):
+    out = cards.render_invoice_card(_INVOICE, _ARTIFACT_WITH_QR, tmp_path / "card.png")
+    assert isinstance(out, Path)
+    assert out.exists()
+    data = out.read_bytes()
+    assert data[:8] == b"\x89PNG\r\n\x1a\n"
+    img = Image.open(out)
+    assert img.width >= 400
+    assert img.height >= 400
+
+
+def test_all_core_fields_land_on_the_card(tmp_path, monkeypatch):
+    drawn = _spy_draw_text(monkeypatch)
+    cards.render_invoice_card(_INVOICE, _ARTIFACT_WITH_QR, tmp_path / "card.png")
+    joined = "\n".join(str(t) for t in drawn)
+    assert _INVOICE["request_id"] in joined
+    assert "12.34" in joined
+    assert "MARKER_PURPOSE_STRING" in joined
+    assert "2026-02-02" in joined  # human expiry rendered from epoch
+
+
+def test_billed_to_lands_when_payer_contact_present(tmp_path, monkeypatch):
+    drawn = _spy_draw_text(monkeypatch)
+    invoice = dict(_INVOICE, payer_contact="alice@example.com")
+    cards.render_invoice_card(invoice, _ARTIFACT_WITH_QR, tmp_path / "card.png")
+    joined = "\n".join(str(t) for t in drawn)
+    assert "alice@example.com" in joined
+
+
+def test_billed_to_omitted_when_payer_contact_absent(tmp_path, monkeypatch):
+    drawn = _spy_draw_text(monkeypatch)
+    assert "payer_contact" not in _INVOICE
+    cards.render_invoice_card(_INVOICE, _ARTIFACT_WITH_QR, tmp_path / "card.png")
+    joined = "\n".join(str(t) for t in drawn)
+    assert "BILLED TO" not in joined.upper() or "billed to" not in joined.lower()
+
+
+def test_qr_block_omitted_cleanly_when_pay_uri_none(tmp_path, monkeypatch):
+    calls = []
+    orig = cards._build_qr_image
+
+    def spy(data):
+        calls.append(data)
+        return orig(data)
+
+    monkeypatch.setattr(cards, "_build_qr_image", spy)
+    out = cards.render_invoice_card(_INVOICE, _ARTIFACT_NO_QR, tmp_path / "no_qr.png")
+    assert calls == []
+    assert out.exists()  # still a clean render, no crash
+
+
+def test_qr_block_rendered_when_pay_uri_present(tmp_path, monkeypatch):
+    calls = []
+    orig = cards._build_qr_image
+
+    def spy(data):
+        calls.append(data)
+        return orig(data)
+
+    monkeypatch.setattr(cards, "_build_qr_image", spy)
+    cards.render_invoice_card(_INVOICE, _ARTIFACT_WITH_QR, tmp_path / "with_qr.png")
+    assert calls == [_ARTIFACT_WITH_QR["pay_uri"]]
+
+
+def test_font_loader_falls_back_when_repo_font_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(cards, "_FONT_REGULAR", tmp_path / "does-not-exist.ttf")
+    monkeypatch.setattr(cards, "_FONT_BOLD", tmp_path / "does-not-exist-bold.ttf")
+    font = cards._load_font(20)
+    assert font is not None
+    assert hasattr(font, "getbbox") or hasattr(font, "getsize")
+    # end-to-end: the whole card still renders cleanly on the fallback font
+    out = cards.render_invoice_card(_INVOICE, _ARTIFACT_NO_QR, tmp_path / "fallback.png")
+    assert out.exists()
+
+
+def test_bold_font_loader_falls_back_independently(tmp_path, monkeypatch):
+    monkeypatch.setattr(cards, "_FONT_BOLD", tmp_path / "does-not-exist-bold.ttf")
+    font = cards._load_font(20, bold=True)
+    assert font is not None
+
+
+def test_deterministic_given_same_inputs(tmp_path):
+    p1 = cards.render_invoice_card(_INVOICE, _ARTIFACT_WITH_QR, tmp_path / "a.png")
+    p2 = cards.render_invoice_card(_INVOICE, _ARTIFACT_WITH_QR, tmp_path / "b.png")
+    assert p1.read_bytes() == p2.read_bytes()
+
+
+def test_avatar_falls_back_to_the_brand_mark(tmp_path, monkeypatch):
+    # no instance avatar under this empty data home -> the default avatar (the
+    # shipped brand mark), never a generated face, never raises.
+    monkeypatch.setattr("core.runtime_paths.resolve_data_home", lambda: tmp_path)
+    path = cards._resolve_avatar_path("rob")
+    assert path is not None
+    assert path.is_file()
+    assert path.name == "polyrob-avatar-512.png"
+
+
+def test_with_no_default_either_the_card_uses_its_own_brand_mark(tmp_path, monkeypatch):
+    monkeypatch.setattr("core.avatar.DEFAULT_AVATAR", tmp_path / "missing.png")
+    monkeypatch.setattr("core.runtime_paths.resolve_data_home", lambda: tmp_path)
+    assert cards._resolve_avatar_path("rob").name == "polyrob-mark-256.png"
+
+
+def test_avatar_prefers_the_instance_avatar_when_set(tmp_path, monkeypatch):
+    import io
+    from core.avatar import set_avatar
+    buf = io.BytesIO()
+    Image.new("RGB", (8, 8), (1, 2, 3)).save(buf, "PNG")
+    st = set_avatar(tmp_path, "rob", buf.getvalue(), source="file:face.png")
+    monkeypatch.setattr("core.runtime_paths.resolve_data_home", lambda: tmp_path)
+    assert cards._resolve_avatar_path("rob") == st.path
+
+
+def test_an_svg_avatar_falls_back_to_the_brand_mark(tmp_path, monkeypatch):
+    from core.avatar import set_avatar
+    set_avatar(tmp_path, "rob", b'<svg xmlns="http://www.w3.org/2000/svg"></svg>', source="x")
+    monkeypatch.setattr("core.runtime_paths.resolve_data_home", lambda: tmp_path)
+    assert cards._resolve_avatar_path("rob").name == "polyrob-mark-256.png"
+
+
+def test_render_survives_missing_avatar_entirely(tmp_path, monkeypatch):
+    monkeypatch.setattr(cards, "_resolve_avatar_path", lambda instance_id: None)
+    out = cards.render_invoice_card(_INVOICE, _ARTIFACT_NO_QR, tmp_path / "no_avatar.png")
+    assert out.exists()
+
+
+# --- 046 Phase 0: the card names the ACTUAL token ---------------------------
+
+def test_a_usdc_card_is_unchanged(tmp_path, monkeypatch):
+    drawn = _spy_draw_text(monkeypatch)
+    cards.render_invoice_card(_INVOICE, _ARTIFACT_WITH_QR, tmp_path / "c.png")
+    assert any("$12.34 USDC" in str(t) for t in drawn)
+
+
+def test_a_non_usdc_card_leads_with_the_token_amount(tmp_path, monkeypatch):
+    """⚠️ A ROB invoice rendered as "$0.50 USDC" tells the payer to send the
+    wrong asset — money they do not get back. The token amount leads because it
+    is what they must actually send."""
+    drawn = _spy_draw_text(monkeypatch)
+    invoice = dict(_INVOICE, amount_usd=0.5, asset="rob", chain="robinhood",
+                   asset_id="rob", asset_symbol="ROB",
+                   asset_address="0x" + "bb" * 20, asset_decimals=18,
+                   amount_raw=7 * 10 ** 18)
+    cards.render_invoice_card(invoice, _ARTIFACT_WITH_QR, tmp_path / "c.png")
+    assert any("ROB" in str(t) for t in drawn)
+    assert any(str(t).startswith("7 ") for t in drawn)
+    assert any("≈ $0.5" in str(t) for t in drawn)
+    assert not any("USDC" in str(t) for t in drawn if "ROB" not in str(t)
+                   and str(t).startswith("$"))
+
+
+def test_a_sub_unit_token_amount_is_never_rounded_to_nothing(tmp_path, monkeypatch):
+    """⚠️ The two-decimal money format rendered every memecoin price as $0.00.
+    A payer who sends what the card shows would send nothing."""
+    drawn = _spy_draw_text(monkeypatch)
+    invoice = dict(_INVOICE, amount_usd=0.01, asset_id="rob",
+                   asset_symbol="ROB", asset_address="0x" + "bb" * 20,
+                   asset_decimals=18, amount_raw=1_234_000_000_000_000)
+    cards.render_invoice_card(invoice, _ARTIFACT_WITH_QR, tmp_path / "c.png")
+    assert any("0.001234" in str(t) for t in drawn)

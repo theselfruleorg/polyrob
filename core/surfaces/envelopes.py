@@ -55,6 +55,40 @@ class InboundMessage:
     sender_is_bot: bool = False             # 044 T8: the sender is itself a bot
                                             # (Telegram from.is_bot); default False
                                             # preserves every existing surface/test
+    forwarded: bool = False                 # H06 (2026-09-23): the surface saw a
+                                            # FORWARDED message. Its text is quoted
+                                            # third-party DATA (already wrapped by the
+                                            # surface), never a COMMAND and never a
+                                            # pending decision or stop phrase.
+
+
+#: ``Action.style`` values a renderer may map to a button colour.
+ACTION_STYLES = ("default", "primary", "danger")
+
+
+@dataclass(frozen=True)
+class Action:
+    """One tappable choice on an outbound message (064 F2).
+
+    ``command`` is EXACTLY what the owner could type: a one-token tappable
+    command (``/approve_p_a1b2c3``) or a ``core/verbs.py`` verb (``/status``).
+    Anything else is refused at construction — a button is a new input path,
+    and it may only ever say what a typed message could. A press is routed as
+    the presser typing ``command``; the presser comes from the platform's
+    authenticated identity, never from the button.
+    """
+    label: str
+    command: str
+    style: str = "default"
+
+    def __post_init__(self):
+        from core.surfaces.actions import is_action_command
+        if not is_action_command(self.command):
+            raise ValueError(f"not a tappable command or verb: {self.command!r}")
+        if self.style not in ACTION_STYLES:
+            raise ValueError(f"unknown action style: {self.style!r}")
+        if not (self.label or "").strip():
+            raise ValueError("an action needs a label")
 
 
 @dataclass
@@ -74,6 +108,26 @@ class OutboundMessage:
     # The legacy email-subject entry `{"subject": ...}` remains legal (EmailSurface.send
     # reads media[0]["subject"]) but is NOT a renderable media entry.
     media: list = field(default_factory=list)
+    #: 064 F2: tappable choices (``Action``). A surface with
+    #: ``supports_actions`` renders them as buttons; the TEXT keeps the same
+    #: commands, so a surface without actions renders byte-equal to before.
+    actions: list = field(default_factory=list)
+
+
+#: ``ReplyWindow.kind`` values (064 F4). How long, after the user last spoke,
+#: the platform lets the bot answer freely:
+#: ``service_window`` (WhatsApp 24 h, template outside), ``token`` (a one-shot
+#: reply token — LINE), ``session_webhook`` (a per-conversation URL with a TTL —
+#: DingTalk), ``stream`` (an open stream — QQ passive reply), ``context_token``
+#: (a per-peer token that must ride every reply — WeChat iLink).
+REPLY_WINDOW_KINDS = ("token", "session_webhook", "stream", "context_token", "service_window")
+
+
+@dataclass(frozen=True)
+class ReplyWindow:
+    kind: str                     # one of REPLY_WINDOW_KINDS
+    ttl_s: int                    # seconds after the last inbound
+    outside: str = "template_only"   # SendDecision value outside the window
 
 
 @dataclass
@@ -87,6 +141,19 @@ class SurfaceCapabilities:
     service_window_secs: int = 0            # >0 = business-initiated send window (WhatsApp 24h)
     requires_template_outside_window: bool = False  # outside the window, only templates send
     media_out: bool = False                 # can render OutboundMessage.media (photo/attachment)
+    reply_window: Optional[ReplyWindow] = None   # 064 F4: None = free outbound
+    supports_actions: bool = False          # 064 F2: renders OutboundMessage.actions as buttons
+    voice_out: Optional[str] = None         # 064 F5: voice-note format ("ogg_opus"); None = no voice
+
+    def effective_reply_window(self) -> Optional[ReplyWindow]:
+        """``reply_window``, else the legacy ``service_window_secs`` pair."""
+        if self.reply_window is not None:
+            return self.reply_window
+        if self.service_window_secs > 0:
+            return ReplyWindow("service_window", self.service_window_secs,
+                               "template_only" if self.requires_template_outside_window
+                               else "deny")
+        return None
 
 
 @dataclass

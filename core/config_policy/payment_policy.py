@@ -14,12 +14,13 @@ from core.config_policy.autonomy_mode import full_autonomy_enabled
 
 # The payment-approval action-name lanes (RECEIVE vs SPEND) are pure data and
 # live in payment_tools.py (god-file ratchet); re-imported here so every
-# existing importer of this module keeps working.
-from core.config_policy.payment_tools import (  # noqa: F401,E402
-    PAYMENT_APPROVAL_TOOLS,
-    PAYMENT_RECEIVE_APPROVAL_TOOLS,
-    VERB_OWNED_APPROVAL_GATES,
-)
+# existing importer of this module keeps working. 067 P4 prerequisite: the views
+# are lazy, so they are re-exported lazily too (a module ``__getattr__``); an
+# eager import here would build them at ``import core``.
+from core.config_policy import payment_tools as _payment_tools  # noqa: E402
+from core.lazy_views import lazy_module_getattr as _lazy, reexport_map as _reexport  # noqa: E402
+
+__getattr__ = _lazy(__name__, {}, _reexport(_payment_tools.__name__, _payment_tools.LAZY_VIEWS))
 
 
 # fix pass 1 (Finding 2): the payment-approval flags are FROZEN AT IMPORT — snapshotted

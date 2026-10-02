@@ -31,7 +31,7 @@ Running `polyrob` with no command opens the interactive REPL.
 `polyrob --help` groups the commands under **Start here**, **Surfaces**,
 **Autonomy & work**, **Money**, **Owner** and **Other**. Aliases render on the
 canonical row and stay invocable: `sessions`=`session`, `models`=`model`,
-`profiles`=`profile`, `webgate`=`dashboard`, and `soul`/`persona`/`pfp` are the
+`profiles`=`profile`, `webgate`=`dashboard`, and `soul`/`persona`/`avatar` are the
 three `identity` subgroups also reachable at the top level. `polyrob knowledge`
 is a deprecated alias for `polyrob kb export`. Entries marked **related** are
 different command trees, not interchangeable aliases (`skills`/`skill`,
@@ -64,6 +64,18 @@ credential-shaped inputs and credential setup commands are omitted.
 Use `/attach "path to image.png"` to stage local files for the next agent step.
 The command prints the saved paths. If the conversation is idle, type a message
 after attaching to start the next turn.
+
+#### The status bar
+
+The line at the bottom of the REPL is the live meter:
+
+    claude-sonnet-4-6 · 41.9k↑ 3.2k↓ · ctx 31% · cache 93% · $0.0412 · ready
+
+`ctx` is how full the context window is, read from the provider's own token
+count once it has reported one. `cache` is the share of prompt tokens the
+provider served from cache on the last request — it is **omitted, never shown
+as `0 %`**, when the seat does not report cached tokens, so a blank there means
+"unknown", not "nothing cached". `/context` is the long form of both.
 
 ### `polyrob run <task>` — one shot
 
@@ -102,15 +114,19 @@ use Click's stderr diagnostics before a run/result stream is created.
 `--no-input` does not bypass approval policy: interactive requests are denied.
 Queued approval providers retain their own decision/timeout behavior.
 
-### `polyrob init` — first-run setup
+### `polyrob setup` — first-run setup
 
 ```bash
-polyrob init
-polyrob init --no-prompt --owner aria --instance-id aria --openai-key sk-...
+polyrob setup                 # `polyrob init` is the same command
+polyrob setup --no-prompt --owner aria --instance-id aria --openai-key sk-...
 ```
 
-Writes `~/.polyrob/.env` (mode 600) and creates `./.polyrob/sessions` for this
-project. Re-run it any time.
+Seven sections: provider keys, default model, toolset, template/persona, owner
+pairing, autonomy and guardrails, and the chat surface you want to reach it on.
+Writes `~/.polyrob/.env` (mode 600), creates `./.polyrob/sessions` for this
+project, seeds the identity docs if there are none, creates `~/.agents/skills`
+for your own skills, and records the install in
+`~/.polyrob/.polyrob-bootstrap.json`. Re-run it any time.
 
 | Option | Description |
 |---|---|
@@ -130,15 +146,18 @@ project. Re-run it any time.
 polyrob doctor                        # status snapshot: pause state, ranked health, sections
 polyrob doctor --full                 # plus the full check transcript
 polyrob doctor --json
-polyrob doctor --flags                # every env flag with its resolved value and source
+polyrob doctor --flags                # the public env flags (plus any you set), resolved value and source
+polyrob doctor --flags --all          # every tier: public, advanced, internal
 polyrob doctor --flags --group memory
 polyrob doctor --flags --search x402
 polyrob doctor --changed              # only flags set away from their default
 ```
 
 Plain `doctor` leads with the same snapshot every other seat renders. `--group`,
-`--search` and `--changed` each imply `--flags`, combine with AND, and filter
-`--json` too; no match prints `no flags match …` and exits 0.
+`--search` and `--changed` each imply `--flags`, combine with AND, search every
+tier, and filter `--json` too; no match prints `no flags match …` and exits 0.
+A bare `--flags` shows only the public tier and the flags you set; `--all`
+shows the rest.
 
 ### `polyrob auth` — provider credentials
 
@@ -162,7 +181,12 @@ you connect one.
 items) alongside the rendered prose, and honours `--full` — without it the
 `report` field is the one-line pointer, not the transcript. `--flags` dumps
 every registered env flag with its resolved value and source; `--perms` audits
-the shared data home.
+the shared data home. The economics section of the snapshot is where you check
+whether prompt caching is paying: it names the share of input tokens served
+from cache, the tokens written *into* cache (a write costs more than an
+ordinary input token, so a prefix rewritten fifty times and one written once
+read very differently), the first-call cache hit rate, and the median uncached
+tokens per call.
 
 ### `polyrob keys` — API access keys
 
@@ -191,15 +215,20 @@ polyrob config check             # validate the env files against the catalog
 polyrob config migrate           # copy secrets out of the legacy env files
 ```
 
-`set` routes by the shape of the key — secret, env flag, or preference. The read
-verbs take `--json`. How the routing and precedence work:
-[configuration.md §1](configuration.md#1-how-configuration-works).
+`set` routes by the shape of the key — secret, env flag, or preference. The CLI,
+the REPL `/config set KEY VALUE [--global] [--confirm]` and the console all write
+through one path, so they validate and report the same way. In the REPL, a flag of
+the autonomy loop or posture groups applies live in that session; every other flag
+(money, approval, inbound access, the frozen ones) says `takes effect: restart`.
+The read verbs take `--json`. How the routing and precedence work:
+[configuration.md §1](configuration.md#2-where-a-setting-lives).
 
 ### `polyrob model`
 
 ```bash
+polyrob model                              # the picker (provider, then model)
 polyrob model list                         # models + which provider keys are present
-polyrob model set-default                  # interactive picker
+polyrob model set-default                  # the same picker
 polyrob model set-default anthropic claude-sonnet-4-5
 ```
 
@@ -216,9 +245,49 @@ polyrob update --rollback [--snapshot NAME]
 
 **`--apply` is automated for git and editable installs only.** A pip or pipx
 install prints the manager command instead (`pipx upgrade polyrob`,
-`python -m pip install -U polyrob`); schema migrations run on the next start either
-way. Other options: `--channel stable|pre|git`, `-y/--yes`, `--force`
-(overrides the in-use guard, risks database corruption), `--json`.
+`python -m pip install -U "polyrob[<your extras>]"`); schema migrations run on the
+next start either way. The reinstall carries the extras this install already has
+(`.[docs,gemini,…]`) under `requirements.lock`, so an update never drops a
+capability or moves a pinned package.
+
+**It waits for the agent to wrap up.** Before swapping code, `--apply` reads the
+same signals the production deployer reads — a live turn, a running goal, a cron
+job running or due within two minutes, the workspace lock — and waits, printing
+what it is waiting on, up to `--wait-idle SECONDS` (default 1800). Still busy
+after that: it refuses and names the reason. `--no-wait` refuses at once;
+`--force` swaps under a busy agent anyway. After a successful `--apply` it names
+what is still running the OLD code — the background service, any `polyrob*`
+system unit, and any live REPL or chat surface. A resident server process is a
+different matter: waiting never ends it, so the update still refuses there and
+prints the stop/start steps for your units. Other options: `--channel
+stable|pre|git`, `-y/--yes`, `--json`.
+
+### `polyrob service` — keep it running
+
+```bash
+polyrob service install     # systemd user unit (Linux) or launchd agent (macOS)
+polyrob service status      # installed? running? which surfaces would start?
+polyrob service uninstall
+```
+
+Runs `polyrob gateway`, so every enabled surface starts from one unit. On Linux
+`loginctl enable-linger $USER` keeps a user unit alive after you log out. The
+unit pins `POLYROB_HOME` (and the active profile) explicitly, because a systemd
+user unit inherits nothing from your shell.
+
+### `polyrob uninstall`
+
+```bash
+polyrob uninstall            # command, PATH entry and service. Data is KEPT.
+polyrob uninstall --purge    # also the data home, after a typed confirmation
+```
+
+It will not delete the virtualenv it is running from or the package manager's
+copy — it prints the exact command for those. `--purge` names **both** homes
+first: `~/.polyrob` (per user — keys, settings, the **agent wallet seed**) and
+`./.polyrob` (per project — memory, goals, identity). Other project directories
+keep their own memory and are never touched. Export the mnemonic
+(`polyrob wallet export`) before `--purge` if that wallet ever held funds.
 
 ### `polyrob version`
 
@@ -260,7 +329,9 @@ polyrob autonomy resume [WORD…]
 polyrob autonomy halt                   # alias of pause with no words
 ```
 
-`on`/`off` write `AUTONOMY_ENABLED` and apply to the next process.
+`on`/`off` write `AUTONOMY_ENABLED` and apply to the next process. In the REPL,
+`/autonomy on` / `/autonomy off` write the same flag, apply it live, and start or
+stop the loops of that session with no restart.
 `pause`/`resume` are live and need no restart — they write the one pause record
 every loop, timer and script reads. See [owner-controls.md](owner-controls.md).
 
@@ -287,6 +358,7 @@ polyrob cron schedule "check the feed" 30m [--max-duration 180] [--user ID]
 polyrob cron list
 polyrob cron show <id>
 polyrob cron edit <id> --max-duration 1800     # raise/lower a job's hard cap (≤1800 s), applies from its next run
+polyrob cron edit <id> --slot-cap 6            # $0 preflight: skip the run while the ledger's Open-positions table holds ≥6 rows (`--slot-cap none` drops it)
 polyrob cron cancel <id>
 polyrob cron prune [--cancelled-older-than 7d] [--dry-run] [--all]
 polyrob cron digest ["every day 08:00"] [--off] [--deliver telegram] [--days 1]
@@ -294,6 +366,15 @@ polyrob cron digest ["every day 08:00"] [--off] [--deliver telegram] [--days 1]
 
 Schedule specs: a duration (`30m`), `every monday 09:00`, a 5-field cron
 expression, or an ISO timestamp for a one-shot.
+
+The agent has the same verbs as tools when `cronjob` is in its tool set:
+`cronjob_schedule`, `cronjob_list`, `cronjob_show` (the full task — `list`
+truncates it), `cronjob_edit` and `cronjob_cancel`. `cronjob_edit` patches a
+live job in place: it replaces one exact passage of the task (the passage must
+occur once) and can change the schedule, cap, rig, delivery or pinned skills.
+It never rewrites the whole task, so rules elsewhere in the task survive the
+edit. An autonomous run may edit only jobs it scheduled itself; a job you
+scheduled changes only when you ask in chat or through `polyrob cron edit`.
 
 `digest` is the owner daily digest — the roll-up of everything the delivery
 rail could not send you live. It composes from the ledger, the event log and
@@ -379,8 +460,17 @@ alias for it.
 
 ### `polyrob tools`
 
-`list`, `status`, `show <tool>`, `permissions`, `export-catalog`. `status` names
-the gate and the remedy for every tool the session cannot use.
+`list`, `status`, `show <tool>`, `permissions`, `export-catalog`, plus
+`enable <id>` / `disable <id>`. `status` names the gate and the remedy for every
+tool the session cannot use.
+
+`enable` writes the tool's own flag, resolved from the documented flag catalog —
+a tool whose flag cannot be resolved that way (the browser, which rides its pip
+extra) is refused rather than guessed at. A **money** tool is refused too: it is
+a deliberate owner grant, and the spend caps and approval lane are the other
+half of it. A high-impact tool is enabled with a warning naming the gates that
+stay closed anyway — a sub-agent, a self-wake turn and a correspondent-tainted
+session still cannot reach it.
 
 ### `polyrob surface`
 
@@ -415,7 +505,7 @@ polyrob wallet book               # the ledger against every money chain
 polyrob wallet set-cap daily|per-tx USD [--env]
 polyrob wallet bridge <from> <to> <amount> [--execute] [--token-out native]
 polyrob wallet bridges            # bridges not yet proven to have arrived
-polyrob wallet deploy-token SYMBOL SUPPLY NAME… [--chain base|solana] [--vanity b0b] [--execute]
+polyrob wallet deploy-token SYMBOL SUPPLY NAME… [--chain base|solana] [--execute]
 polyrob wallet launch SYMBOL NAME… [--buy 0.1] [--logo URL] [--execute]
 polyrob wallet curve TOKEN [--buy N | --sell N]
 polyrob wallet claim TOKEN [--execute]          # creator fees the launchpad owes this wallet
@@ -545,7 +635,7 @@ The instance's identity, in three subgroups:
 
 - `polyrob identity soul init` — scaffold the operator-authored SOUL docs.
 - `polyrob identity persona init <slug> [--from NAME]` · `list` · `show [slug]` — the character (voice) layer.
-- `polyrob identity avatar` — `generate`, `randomize`, `pick`, `keep`, `show`, `say`, `push`, `studio`.
+- `polyrob identity avatar` — `show`, `set <file|url>`, `set --nft chain:contract:id`, `clear`, `push`.
 - `polyrob identity register [--chain base] [--execute]` — mint this instance's
   ERC-8004 identity from its own wallet. It is a dry run by default. ⚠️
   `register()` is NOT idempotent: the verb reads the CHAIN for an existing token
@@ -554,10 +644,11 @@ The instance's identity, in three subgroups:
 - `polyrob identity set-uri <agent_id> [--execute]` — update the published
   registration document for an agentId you already hold. Mints nothing.
 
-`generate` mints a random draft face and voice; `randomize` re-rolls it; `keep`
-freezes it permanently; `say` plays the voice signature through the system TTS.
-`polyrob soul`, `polyrob persona` and `polyrob pfp` reach the same three groups
-directly.
+The avatar is one image the instance shows on every surface; a new instance
+shows the polyrob mark until you set your own. `set` takes a file,
+a URL, or an NFT (its metadata `image`); `push` sends it to X or Discord.
+POLYROB generates no faces. `polyrob soul`, `polyrob persona` and
+`polyrob avatar` reach the same three groups directly.
 
 ### `polyrob profile`
 
@@ -590,7 +681,7 @@ Inside the REPL every command starts with `/`. `/help` lists them grouped;
 | `/session` (`/info`) | This session's identity: instance, owner, user, model, memory, workspace |
 | `/history` | This conversation's turns |
 | `/clear` | Clear history, keep the system prompt |
-| `/compact` (`/compress`) | Compact history through the model, in the background |
+| `/compact` (`/compress`) | Age old tool results to a pointer, then compact what is left through the model, in the background |
 | `/export <format> [output]` | Export this session's data |
 | `/replay <session-id>` | Replay a session's feed — a visual history, not a re-attach |
 | `/new` | Start fresh — clear the history without leaving the REPL |
@@ -614,7 +705,7 @@ Inside the REPL every command starts with `/`. `/help` lists them grouped;
 | Command | Description |
 |---|---|
 | `/goals` | Goal board summary |
-| `/cron` (`/crons`) `[list]` | Scheduled cron jobs, read-only |
+| `/cron` (`/crons`) `[list\|show <id>\|add <schedule> <task…> [tools=a,b] [target=<address> chain=<chain>]\|edit <id> schedule\|task <value>\|cancel <id>]` | Durable scheduled runs: list, show, add, edit one field, or cancel |
 | `/apps` | Deployed apps and their state |
 | `/todos` | Workspace todos from `todo.md` |
 | `/subagents` | Delegation capability and limits |
@@ -627,16 +718,22 @@ Inside the REPL every command starts with `/`. `/help` lists them grouped;
 |---|---|
 | `/finance [days]` | Treasury and runtime cost, as two blocks that are never summed |
 | `/usage` (`/cost`) | Authoritative usage breakdown for this session |
+| `/check <address> [chain]` · `/check <TICKER>` | Read any wallet or token: a wallet's holdings, or a token's identity, price, safety screen and holders |
 | `/book` | The ledger against every money chain: one verdict, then what disagrees |
 | `/invoices [<status>]` | Agent invoices (x402 receivables). Statuses: `pending`, `settling`, `completed`, `settled_no_tx`, `expired`, `refund_due` |
 | `/settle <id> [tx-hash]` | Attest an invoice as paid |
-| `/deploy <SYMBOL> <supply> <name…> [on <chain>] [vanity <hex>] [go]` | Deploy a fixed-supply token; quotes unless you add `go` |
+| `/deploy <SYMBOL> <supply> <name…> [on <chain>] [go]` | Deploy a fixed-supply token; quotes unless you add `go` |
 | `/launch <SYMBOL> <name…> [buy <amount>] [go]` | Launch a token on the Pons launchpad; quotes unless you add `go` |
 | `/lp positions\|pool\|quote\|add\|remove\|collect` | Uniswap v3 liquidity; dry-runs unless you add `go` |
 | `/claim <token> [go]` | Claim the creator fees a launched token has earned |
 | `/nft list\|info\|transfer\|revoke …` | Collectibles this wallet holds |
 | `/dapp list\|revoke <session-id>` | Web pages the wallet is armed for, and how to cut one off |
 | `/paid …` | Paid room actions: status, pricing, offers |
+| `/send <amount> <native\|token-address> to <address> on <chain> [max <usd>] [go]` | Send native value or a token to an address; quotes unless you add `go`. The quote is an action card: `/card_<id>_ok` sends exactly that quote, at most the quote + 5%. Your own send passes the autonomous ceiling and the pause; the per-transaction and daily caps still bind |
+| `/swap <amount> <native\|token> to <token> on <chain> [slippage <bps>] [max <usd>] [go]` | Swap one token for another; the quote (route, minimum out, value, caps) is an action card, and Confirm swaps at most the quote + 5%. `/send` or `/swap` alone builds the order step by step: type the numbered card token for each choice |
+| `/writeoff <chain> <address> [go] [reason]` | Write a holding off: the loss is its recorded cost, and nothing is sold |
+| `/unquarantine <chain> <address> [go]` | Undo the quarantine of a look-alike holding, so it counts as open again |
+| `/cards [<id> ok\|no\|re\|1-6]` | Open action cards: confirm a quote, refresh it, cancel it, or answer the agent's question. Typing a card's token (`/card_<id>_ok`) is the same as tapping its button |
 
 **control**
 
@@ -645,8 +742,9 @@ Inside the REPL every command starts with `/`. `/help` lists them grouped;
 | `/pause [word…] [for 6h]` | Pause autonomous work now — everything, or `trading`, `background`, `messages`, `deploying`, or a raw scope |
 | `/halt` | `/pause` with no words |
 | `/resume [word…]` | Lift the pause, everything or one scope |
-| `/autonomy` | Autonomy loops, scheduled cron jobs and open goals |
+| `/autonomy [on\|off] [--global]` | Autonomy loops, scheduled cron jobs and open goals; `on`/`off` switch the loops in this session (live, no restart) and persist the choice |
 | `/cancel` | Stop the task running now |
+| `/run [pause\|resume\|stop <n>]` | What runs in the background now, numbered; pause, resume or stop one run |
 | `/mode` | The effective autonomy posture, and how to change it |
 | `/dev <text>` | Message the on-host dev and ops loop directly |
 
@@ -667,8 +765,10 @@ Inside the REPL every command starts with `/`. `/help` lists them grouped;
 | `/meter` | THIS turn's token meter (the REPL-only counter `/status` used to be) |
 | `/doctor` | The `polyrob doctor` health report |
 | `/contacts [<surface> <address>]` | Who the agent has written to, and the transcript with one of them |
+| `/thread [n \| <hours>h]` | Your conversation with the agent across every session and rail, newest last |
 | `/files [n]` | Recent files the agent produced |
-| `/context` | Context assembly: per-slot token counts and share of the window |
+| `/why [n]` | The last n refusals (default 5, at most 20): when, which tool, and the gate's reason word for word |
+| `/context` | What is in the window: per-slot token counts and share, a row for the one-shot messages riding this turn, and the provider's own figures for the last request (prompt · cached · written · uncached). A `≈` marks a number that is still a local estimate |
 | `/steps` | The last turn's steps and tools |
 | `/telemetry [window]` | Cross-session event counts and wallet spend |
 | `/tools` | The agent's registered tools and actions |
@@ -695,7 +795,7 @@ Inside the REPL every command starts with `/`. `/help` lists them grouped;
 |---|---|
 | `/verbose` | Toggle the live trace: steps, tools, reasoning |
 | `/quiet` | Mute or restore the default tool transcript |
-| `/pfp` (`/avatar`) `[status\|generate [force]\|show]` | Show or generate the agent avatar |
+| `/avatar` `[show\|set <path\|url>]` | Show or set the agent avatar |
 | `/identity register\|set-uri [on <chain>] [go]` | The instance's ON-CHAIN identity (ERC-8004). It is no longer an alias of `/self` |
 
 **leave**
@@ -730,7 +830,7 @@ than being printed as if it were a user-facing answer.
 `~/.polyrob/.env` is your global config, `./.polyrob/.env` is the per-project
 override, and a profile replaces both. The full precedence order and the file
 each command writes are in
-[configuration.md §1](configuration.md#1-how-configuration-works); `polyrob
+[configuration.md §1](configuration.md#2-where-a-setting-lives); `polyrob
 config path` prints them for the process you are running.
 
 ---

@@ -232,6 +232,10 @@ class DeepSeekClient(LLMClient):
 
             self.logger.debug(f"DeepSeek API request: model={self.model_type}, max_tokens={request_body.get('max_tokens')}")
 
+            # F20: prefix identity for the billing record.
+            from modules.llm.prefix_stamp import stamp_client
+            stamp_client(self, request_body)
+
             # Make the API request
             response = await asyncio.to_thread(
                 requests.post,
@@ -345,7 +349,11 @@ class DeepSeekClient(LLMClient):
         self.logger.info("DeepSeek client cleaned up")
 
     async def _make_validation_request(self) -> Any:
-        """Make minimal test request to DeepSeek."""
+        """Make minimal test request to DeepSeek.
+
+        F20: deliberately NOT prefix-stamped — a one-token connectivity probe
+        carries neither the session's system prompt nor its tools.
+        """
         data = {
             "model": self.model_type,
             "messages": [{"role": "user", "content": "test"}],
@@ -406,6 +414,10 @@ class DeepSeekClient(LLMClient):
             )
 
             self.logger.info(f"[_generate_with_tools] Starting API request: model={self.model_type}, tools={len(tools)}, messages={len(messages)}")
+
+            # F20: prefix identity for the billing record.
+            from modules.llm.prefix_stamp import stamp_client
+            stamp_client(self, request_body)
 
             # Make the API request (longer timeout for tool calling)
             api_start = time.time()

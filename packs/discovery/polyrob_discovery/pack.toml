@@ -1,0 +1,48 @@
+# The data half of the discovery pack (067 P3a): read by core.packs.manifest
+# WITHOUT importing this package, registered in the loader's phase 1.
+id = "discovery"
+version = "1.2.0"
+summary = "Structured web data (AnySite) and web search (Perplexity)"
+pack_api = 1
+requires_core = "==1.2.*"
+requires_packs = []
+tier = "first-party"
+# 067 (one install): the core extra that carries this pack's SDKs. The pack
+# ships inside polyrob; without the extra it loads and names `polyrob[anysite]`.
+extra = "anysite"
+capabilities = ["tools", "high_impact", "egress"]
+
+# AnySite: outbound structured-data egress through the anysite CLI.
+[tools.anysite]
+# 067 (one install): without this module the tool is withheld and names the pack's extra.
+requires = ["anysite"]
+capabilities = ["high_impact", "writes_network"]
+untrusted_output = true
+cli = "static"
+permissions = ["network.read", "process.spawn"]
+
+[tools.anysite.verbs.anysite_schema_update]
+effect = "none"
+
+# P1-4: outbound egress whose query params are an exfil channel (parity with
+# web_fetch/browser, perplexity_search too).
+[tools.anysite.verbs.anysite_api]
+effect = "network"
+correspondent_blocked = true
+
+[tools.anysite.verbs.anysite_describe]
+
+# Perplexity: outbound search egress; server only (needs the server container's
+# rate_limit_manager and PERPLEXITY_API_KEY).
+[tools.perplexity]
+capabilities = ["high_impact"]
+untrusted_output = true
+cli = "incompatible"
+permissions = ["network.read"]
+
+[tools.perplexity.verbs.perplexity_search]
+correspondent_blocked = true
+
+[tools.perplexity.verbs.perplexity_analyze]
+
+[tools.perplexity.verbs.perplexity_sources]

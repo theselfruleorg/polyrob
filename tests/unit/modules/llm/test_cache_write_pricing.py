@@ -57,6 +57,65 @@ class TestCacheWritePricingG3:
         assert abs(cost_new - 0.105) < 1e-6
 
 
+class TestCacheWrite1hPricingF4:
+    """F4 (2026-09-22): a 1h cache write bills at 2.0x, measured from the
+    provider's own `usage.cache_creation` split — never inferred from a ttl."""
+
+    def test_1h_slice_billed_at_2x(self):
+        # claude-sonnet-4-5: input $3/M. 10k input, 4k written, 1k of it 1h.
+        #   regular 6000 * 3.00 = 0.018; 5m write 3000 * 3.75 = 0.01125;
+        #   1h write 1000 * 6.00 = 0.006; output 5000 * 15 = 0.075  => 0.11025
+        cost = calculate_cost("claude-sonnet-4-5", 10000, 5000, 0,
+                              cache_creation_tokens=4000, cache_creation_1h_tokens=1000)
+        assert abs(cost - 0.11025) < 1e-9, cost
+
+    def test_1h_slice_is_clamped_to_the_write(self):
+        a = calculate_cost("claude-sonnet-4-5", 10000, 5000, 0, 4000, 9000)
+        b = calculate_cost("claude-sonnet-4-5", 10000, 5000, 0, 4000, 4000)
+        assert abs(a - b) < 1e-12
+
+    def test_zero_1h_is_byte_identical_to_g3(self):
+        assert abs(calculate_cost("claude-sonnet-4-5", 10000, 5000, 0, 4000)
+                   - calculate_cost("claude-sonnet-4-5", 10000, 5000, 0, 4000, 0)) < 1e-12
+
+    def test_anthropic_rows_derive_the_1h_write_price(self):
+        cfg = get_model_config("claude-sonnet-4-5")
+        assert abs(cfg.pricing.cache_write_price_1h - cfg.pricing.input_price * 2.0) < 1e-9
+        assert get_model_config("gpt-5.5").pricing.cache_write_price_1h is None
+
+    def test_client_reads_the_split_from_usage_cache_creation(self):
+        from types import SimpleNamespace
+        from modules.llm.anthropic_client import AnthropicClient
+        import logging
+        c = AnthropicClient.__new__(AnthropicClient)
+        c.logger = logging.getLogger("f4-split")
+        c.last_response = SimpleNamespace(usage=SimpleNamespace(
+            input_tokens=100, output_tokens=10, cache_read_input_tokens=50,
+            cache_creation_input_tokens=40,
+            cache_creation=SimpleNamespace(ephemeral_5m_input_tokens=10,
+                                           ephemeral_1h_input_tokens=30)))
+        data = c._extract_usage_data()
+        assert data["cache_creation_tokens"] == 40
+        assert data["cache_creation_1h_tokens"] == 30
+
+    def test_extract_token_usage_carries_the_split(self):
+        from modules.llm.usage_extract import extract_token_usage
+        class _Resp:
+            usage_metadata = {"input_tokens": 100, "output_tokens": 10,
+                              "cache_creation_input_tokens": 40,
+                              "cache_creation_1h_tokens": 30}
+        assert extract_token_usage(_Resp(), "anthropic")["cache_creation_1h_tokens"] == 30
+
+    def test_compute_llm_cost_forwards_the_split(self):
+        from modules.credits.pricing import compute_llm_cost
+        a = compute_llm_cost("claude-sonnet-4-5", {"prompt_tokens": 10000, "completion_tokens": 5000,
+                                                   "cache_creation_tokens": 4000,
+                                                   "cache_creation_1h_tokens": 4000})
+        b = compute_llm_cost("claude-sonnet-4-5", {"prompt_tokens": 10000, "completion_tokens": 5000,
+                                                   "cache_creation_tokens": 4000})
+        assert a > b
+
+
 class TestCacheWriteThreadingG3:
     """The cache-creation count must travel from the response to the biller."""
 

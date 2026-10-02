@@ -5,7 +5,7 @@
 //
 //   * each tab renders from its OWN reader, so one failing store never blanks
 //     another;
-//   * the four posture axes render ONCE, as four plain sentences — never the
+//   * the posture axes render ONCE, as one plain sentence each — never the
 //     same axis twice in two vocabularies (the defect doctor and /autonomy have);
 //   * Advanced renders nothing until you ask (search-first over ~689 flags);
 //   * an unreadable section is a dashed entry with its reason, never a silent
@@ -55,46 +55,48 @@ const COPY = {
   ov_health_aside: "what Rob checks",
   ov_health_unreadable: "I could not run the health check.",
   ov_health_unreadable_why: "Why",
-  ov_health_ok_title: "Everything else checked out",
+  ov_health_ok_title: "Everything else is fine",
   ov_health_none: "Everything checked out",
-  ov_health_ok_body: "The rest answered.",
-  ov_report_link: "See the full report",
-  ov_unverified: "I could not check these: {sources}",
-  ov_identity_no_avatar: "Rob has no face yet.",
-  ov_identity_kept: "Kept. This face and this voice are permanent.",
-  ov_identity_draft: "A draft. Keep it under Identity to make it permanent.",
-  ov_identity_traits: "Traits: {traits}",
-  ov_identity_voice: "Voice: {voice}",
-  ov_identity_made: "Made {when}",
-  ov_identity_instance: "Instance {instance}",
-  ov_identity_unreadable: "There is a face here, but I could not read what it is made of.",
+  ov_report_link: "See the full health report",
+  ov_unverified: "I could not check: {sources}",
+  ov_identity_no_avatar: "No avatar set.",
+  ov_identity_default: "The default polyrob mark. Set your own with `polyrob avatar set <image>`.",
+  ov_identity_source: "Set from {source}",
+  ov_identity_made: "Set on {when}",
+  ov_identity_unreadable: "There is an avatar here, but I could not read its record.",
   ov_identity_unreadable_why: "Why",
-  ov_posture_title: "What Rob is allowed to do",
-  ov_posture_aside: "four rules",
-  ov_axis_local_title: "Treat this machine as yours alone",
+  ov_posture_title: "What Rob may do",
+  ov_posture_aside: "one rule per axis",
+  ov_axis_local_title: "Treat this computer as yours alone?",
   ov_axis_local_why: "A single owner's tools.",
-  ov_axis_mode_title: "Act, and tell you after",
+  ov_axis_mode_title: "Act without asking first?",
   ov_axis_mode_why: "Money still asks.",
-  ov_axis_loop_title: "Run background work on its own",
+  ov_axis_loop_title: "Start work on its own?",
   ov_axis_loop_why: "It starts its own goals.",
-  ov_axis_compute_title: "Reach the computer it runs on",
+  ov_axis_compute_title: "Use the computer it runs on?",
   ov_axis_compute_why: "Run a shell.",
   ov_axis_compute_locked: "Set at start, cannot change while it runs.",
+  ov_axis_builder_title: "Publish apps and pages?",
+  ov_axis_builder_why: "Build locally, publish only when shipping is configured.",
+  posture_builder: "Yes, pages only",
+  posture_builder_note: "Ship requested, but no domain is configured; using build.",
   ov_connected_title: "Connected to",
-  ov_models_label: "Models",
-  ov_memory_label: "Where memory is kept",
-  ov_change: "Change",
-  posture_local: "on",
-  posture_mode: "supervised",
-  posture_loop: "off",
-  posture_compute: "0",
+  ov_models_label: "AI model",
+  ov_memory_label: "Memory",
+  memory_backend_sqlite: "On this computer",
+  memory_backend_local_vector: "On this computer, with search",
+  memory_backend_none: "Off",
+  ov_change: "Change settings",
+  posture_local: "Yes",
+  posture_mode: "No, asks first",
+  posture_loop: "No",
+  posture_compute: "No, only in a sandbox",
   posture_compute_locked: "1",
   // Identity
   id_unreadable: "I could not read the identity.",
   id_unreadable_why: "Why",
   id_face_title: "Rob's face",
-  id_face_body: "Generated once and kept.",
-  id_reroll: "Make a new face",
+  id_face_body: "One image, used everywhere.",
   id_persona_title: "How Rob should behave",
   id_persona_aside: "written by you",
   id_persona_empty: "You have not written a persona yet.",
@@ -199,12 +201,12 @@ describe("the copy crosses on data attributes", () => {
   });
 });
 
-describe("the four posture axes render once, as four plain sentences", () => {
-  it("is exactly four entries, in order, each with a title and its consequence", () => {
+describe("the posture axes render once, as one plain sentence each", () => {
+  it("includes builder mode in order, each with a title and its consequence", () => {
     const entries = postureEntries(COPY);
-    expect(entries).toHaveLength(4);
+    expect(entries).toHaveLength(5);
     expect(entries.map((e) => e.dataset.axis)).toEqual(
-      ["local", "mode", "loop", "compute"]);
+      ["local", "mode", "loop", "compute", "builder"]);
     entries.forEach((e) => {
       expect(e.querySelector(".entry-title").textContent).toBeTruthy();
       expect(e.querySelector(".entry-body").textContent).toBeTruthy();
@@ -215,12 +217,15 @@ describe("the four posture axes render once, as four plain sentences", () => {
     const r = root();
     renderPosture(r, COPY);
     const axes = r.querySelectorAll("[data-axis]");
-    expect(axes).toHaveLength(4);
+    expect(axes).toHaveLength(5);
     // The state rides in the pill — one axis, one sentence, one state.
     const local = r.querySelector('[data-axis="local"] .pill');
-    expect(local.textContent).toContain("on");
+    expect(local.textContent).toContain("Yes");
     const mode = r.querySelector('[data-axis="mode"] .pill');
-    expect(mode.textContent).toContain("supervised");
+    expect(mode.textContent).toContain("No, asks first");
+    const builder = r.querySelector('[data-axis="builder"]');
+    expect(builder.querySelector(".pill").textContent).toBe("Yes, pages only");
+    expect(builder.querySelector(".unknown-why").textContent).toBe(COPY.posture_builder_note);
   });
 
   it("says the compute axis is frozen rather than offering a dead control", () => {
@@ -255,6 +260,31 @@ describe("Overview health leads and is honest", () => {
     expect(r.textContent).toContain("wallet");
   });
 
+  it("unverified names sections in words", () => {
+    const r = root();
+    renderHealth(r, { health: { overall: "ok", items: [],
+      unverified: ["work (FileNotFoundError: x)"], unverified_words: ["goals"] } }, COPY);
+    const meta = [...r.querySelectorAll(".entry-meta")].map((n) => n.textContent);
+    expect(meta).toContain("I could not check: goals");
+    expect(r.textContent).not.toContain("FileNotFoundError");
+  });
+
+  it("never says everything checked out while a section went unchecked", () => {
+    const r = root();
+    renderHealth(r, { health: { overall: "ok", items: [],
+      unverified: ["work (x)"], unverified_words: ["goals"] } }, COPY);
+    expect(r.textContent).not.toContain("Everything checked out");
+    expect(r.textContent).toContain("Everything else is fine");
+  });
+
+  it("an unverified section with no word drops its raw reason", () => {
+    const r = root();
+    renderHealth(r, { health: { overall: "ok", items: [],
+      unverified: ["work (FileNotFoundError: x)"] } }, COPY);
+    expect(r.textContent).toContain("I could not check: work");
+    expect(r.textContent).not.toContain("FileNotFoundError");
+  });
+
   it("no items reads as everything checked out, with the link to the report", () => {
     const r = root();
     renderHealth(r, { health: { overall: "ok", items: [] } }, COPY);
@@ -263,58 +293,74 @@ describe("Overview health leads and is honest", () => {
   });
 });
 
-describe("Overview face and connected read from the doctor + pfp", () => {
-  // A1 (2026-09-21 audit): the face used to be read from `description` /
-  // `tagline` — two keys `modules/pfp/store` has never written — so an
-  // instance WITH a face was told it had none, beside its own rendered face.
-  // These pin the record's REAL keys and, just as importantly, the three
-  // answers being different facts.
-  const RECORD = {
-    instance_id: "polyrob", created_at: "2026-07-19T10:00:00+00:00",
-    locked: false, traits: { tier: 2, eyes: "round" },
-    voice: { pitch: 1.0219, rate: 0.98 },
+describe("Overview face and connected read from the doctor + avatar slot", () => {
+  // The face is read from `/avatar.json` — the one avatar slot. Three answers,
+  // and they are different facts: none, unreadable, set.
+  const SLOT = {
+    state: "set", source: "nft:base:0xabc:7", content_type: "image/png",
+    sha256: "0123456789abcdef0123", set_at: "2026-10-02T10:00:00+00:00",
   };
 
-  it("draws the face from traits and voice, and says it is a draft", () => {
+  it("draws the face with where it came from and when", () => {
     const yes = root();
-    expect(renderFace(yes, RECORD, COPY)).toBe("face");
-    expect(yes.querySelector("img")).toBeTruthy();
-    expect(yes.textContent).toContain("A draft.");
-    expect(yes.textContent).toContain("tier 2, eyes round");
-    expect(yes.textContent).toContain("pitch 1.02");   // rounded, not 1.0219
-    expect(yes.textContent).toContain("2026-07-19");
-    expect(yes.textContent).toContain("polyrob");
-    expect(yes.textContent).not.toContain("no face yet");
+    expect(renderFace(yes, SLOT, COPY)).toBe("face");
+    const img = yes.querySelector("img");
+    expect(img.getAttribute("src")).toBe("/avatar.png?v=0123456789ab");
+    expect(yes.textContent).toContain("Set from nft:base:0xabc:7");
+    expect(yes.textContent).toContain("2026-10-02");
+    expect(yes.textContent).not.toContain("No avatar set.");
   });
 
-  it("says KEPT when the record is locked — the one-way state", () => {
+  it("no instance line", () => {
     const r = root();
-    expect(renderFace(r, { ...RECORD, locked: true }, COPY)).toBe("face");
-    expect(r.textContent).toContain("permanent");
-    expect(r.textContent).not.toContain("A draft.");
+    renderFace(r, SLOT, COPY);
+    expect(r.textContent).not.toContain("Instance");
+    expect(r.textContent).not.toContain("polyrob");
   });
 
-  it("only a 404 is 'no face yet'", () => {
+  it("Memory value is a word, and an unknown backend is a dash", () => {
+    const r = root();
+    renderConnected(r, { provider: "x", model: "y", memory_backend: "local_vector" }, COPY);
+    expect(r.textContent).toContain("On this computer, with search");
+    const odd = root();
+    renderConnected(odd, { provider: "x", model: "y", memory_backend: "weird" }, COPY);
+    expect(odd.textContent).not.toContain("weird");
+  });
+
+  it("the default mark says it is the default, with no source or date line", () => {
+    const d = root();
+    expect(renderFace(d, { state: "set", is_default: true, source: "default (the polyrob mark)",
+                           content_type: "image/png" }, COPY)).toBe("face");
+    expect(d.querySelector("img").getAttribute("src")).toBe("/avatar.png");
+    expect(d.textContent).toContain("The default polyrob mark.");
+    expect(d.textContent).not.toContain("Set from");
+  });
+
+  it("only the slot's `none` is 'no avatar set'", () => {
     const no = root();
-    expect(renderFace(no, { error: "404" }, COPY)).toBe("no_face");
+    expect(renderFace(no, { state: "none" }, COPY)).toBe("no_face");
     expect(no.querySelector("img")).toBeNull();
-    expect(no.textContent).toContain("Rob has no face yet.");
+    expect(no.textContent).toContain("No avatar set.");
   });
 
-  it("a failed read is UNREADABLE with its reason, never 'no face yet'", () => {
-    for (const bad of [{ error: "500" }, {}, null]) {
+  it("a failed read or a broken record is UNREADABLE, never 'no avatar set'", () => {
+    for (const bad of [{ error: "500" }, { state: "unreadable", detail: "avatar.json: JSONDecodeError" }, {}, null]) {
       const r = root();
       expect(renderFace(r, bad, COPY)).toBe("unreadable");
-      expect(r.textContent).not.toContain("Rob has no face yet.");
+      expect(r.textContent).not.toContain("No avatar set.");
       expect(r.querySelector("img")).toBeNull();
     }
+    const why = root();
+    renderFace(why, { state: "unreadable", detail: "avatar.json: JSONDecodeError" }, COPY);
+    expect(why.textContent).toContain("JSONDecodeError");
   });
 
   it("connected shows the models and where memory is kept, or a dash", () => {
     const r = root();
     renderConnected(r, { provider: "gemini", model: "flash", memory_backend: "sqlite" }, COPY);
     expect(r.textContent).toContain("gemini");
-    expect(r.textContent).toContain("sqlite");
+    expect(r.textContent).toContain("On this computer");
+    expect(r.textContent).not.toContain("sqlite");
     const bad = root();
     expect(renderConnected(bad, { error: "500" }, COPY)).toBe("unreadable");
   });

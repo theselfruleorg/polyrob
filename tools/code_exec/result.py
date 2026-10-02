@@ -24,6 +24,11 @@ class ExecutionRequest:
     # `python -I`) and sets HOME=/workspace + PIP_TARGET=/install so pip installs are
     # importable. False (default) = byte-identical hardened posture-0 path.
     dev_mode: bool = False
+    # Coding-agent review B2: a caller-owned foreground ceiling that may RAISE the
+    # backend's default cap (``run_tests`` passes SHELL_MAX_TIMEOUT_SEC, 300 s).
+    # None = the backend's own cap; an explicit CODE_EXEC_MAX_TIMEOUT_SEC always
+    # wins (tools/code_exec/limits.py::exec_timeout_cap).
+    ceiling: Optional[float] = None
 
 
 @dataclass

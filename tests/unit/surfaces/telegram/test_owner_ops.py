@@ -72,10 +72,11 @@ def test_cron_add_says_when_no_ticker_will_run_it(env, monkeypatch):
     monkeypatch.setenv("CRON_ENABLED", "false")
     out = owner_ops.cron_reply("u1", env, ["add", "30m", "|", "check the treasury"])
     assert "Scheduled" in out
-    # D41/D72: the note names what the owner can DO. A flag name is not
-    # something he can act on from a phone.
+    # D41/D72: the note names what the owner can DO from the chat he is in —
+    # a chat verb, never a server command he cannot reach from a phone.
     assert "scheduler is switched off" in out
-    assert "polyrob autonomy on" in out
+    assert "/config set CRON_ENABLED true" in out
+    assert "polyrob autonomy" not in out
 
 
 def test_cron_add_rejects_a_bad_schedule(env):
@@ -92,6 +93,60 @@ def test_cron_is_tenant_scoped(env, monkeypatch):
     monkeypatch.setenv("CRON_ENABLED", "true")
     owner_ops.cron_reply("u1", env, ["add", "30m", "|", "mine"])
     assert "No cron jobs" in owner_ops.cron_reply("other", env, [])
+
+
+_ADDR = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+
+
+def _only_job(env, user="u1"):
+    from cron.jobs import CronJobStore
+    from core.runtime_paths import cron_db_path
+    return CronJobStore(cron_db_path(env)).list(user_id=user)[0]
+
+
+def test_cron_add_carries_tools_and_target(env, monkeypatch):
+    """O13/A14: a money job made from chat carries its grant and its buy
+    target as DATA, stamped owner-authored — like the console and
+    cronjob_schedule on an owner turn."""
+    monkeypatch.setenv("CRON_ENABLED", "true")
+    out = owner_ops.cron_reply("u1", env, [
+        "add", "1d", "|", "buy", "back", f"target={_ADDR}", "chain=base",
+        "tools=defi_trade,defi_data"])
+    assert "Scheduled" in out and "Granted:" in out
+    job = _only_job(env)
+    assert job.task == "buy back"
+    assert job.payload["tools"] == ["defi_trade", "defi_data"]
+    assert job.payload["target_token"]["chain"] == "base"
+    assert job.payload["target_token"]["address"].lower() == _ADDR
+    assert job.payload["authored_by"] == "owner"
+
+
+@pytest.mark.parametrize("opts, needle", [
+    ([f"target={_ADDR}"], "chain="),
+    (["target=0xnothex", "chain=base"], ""),
+    (["chain=base"], "target="),
+])
+def test_cron_add_refuses_a_bad_target(env, opts, needle):
+    out = owner_ops.cron_reply("u1", env, ["add", "1d", "|", "buy"] + opts)
+    assert out.startswith("❌") and needle in out
+    from cron.jobs import CronJobStore
+    from core.runtime_paths import cron_db_path
+    assert CronJobStore(cron_db_path(env)).list(user_id="u1") == []
+
+
+def test_cron_edit_changes_one_field_and_keeps_the_payload(env, monkeypatch):
+    monkeypatch.setenv("CRON_ENABLED", "true")
+    owner_ops.cron_reply("u1", env, ["add", "1d", "|", "buy", "back",
+                                     "tools=defi_trade"])
+    job = _only_job(env)
+    out = owner_ops.cron_reply("u1", env, ["edit", job.id[:8], "schedule", "2h"])
+    assert "Edited" in out and "schedule" in out
+    out = owner_ops.cron_reply("u1", env, ["edit", job.id[:8], "task", "sell", "half"])
+    assert "Edited" in out and "task" in out
+    job = _only_job(env)
+    assert job.schedule_spec == "2h" and job.task == "sell half"
+    assert job.payload["tools"] == ["defi_trade"]
+    assert "Usage" in owner_ops.cron_reply("u1", env, ["edit", job.id[:8], "rig", "x"])
 
 
 # ---------------------------------------------------------------------------

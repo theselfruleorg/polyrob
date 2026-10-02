@@ -110,7 +110,7 @@ def test_legacy_duplicate_markdown_modules_are_gone():
 
 
 def test_html_flavor_keeps_every_streamed_prefix_balanced():
-    """Incremental streaming (TELEGRAM_INCREMENTAL_STREAM) re-renders a GROWING prefix
+    """Incremental streaming (the stream.telegram pref) re-renders a GROWING prefix
     into editMessageText. A half-open tag mid-stream would 400 the edit, so the
     converter must only ever emit complete pairs."""
     from html.parser import HTMLParser

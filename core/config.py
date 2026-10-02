@@ -187,24 +187,20 @@ class ServerConfig(AgentConfig):
     # blockchain, multi-tenant, Telegram/Twitter/Gmail). When rob-server is
     # extracted as a separate package, this class moves to polyrob-platform.
 
-    # Bot settings - Required fields with aliases
-    support_chat_id: Optional[int] = Field(None, alias='SUPPORT_CHAT_ID')
-    feedback_chat_id: Optional[int] = Field(None, alias='FEEDBACK_CHAT_ID')
-    auto_knowledge_retention_days: int = Field(default=7, alias='AUTO_KNOWLEDGE_RETENTION_DAYS')
-    auto_metrics_enabled: bool = Field(default=True, alias='AUTO_METRICS_ENABLED')
-    auto_safe_mode: bool = Field(default=True, alias='AUTO_SAFE_MODE')
-    
-    # HITL (Human-in-the-Loop) Configuration
-    hitl_mode: str = Field(default="chat", alias='HITL_MODE')  # "chat" | "block" | "off"
-    destructive_action_policy: str = Field(default="none", alias='DESTRUCTIVE_ACTION_POLICY')  # "confirm_phrase" | "soft_wait" | "none"
-    interrupt_window_seconds: int = Field(default=5, alias='INTERRUPT_WINDOW_SECONDS')
+    # 067 F4 (2026-09-24): 54 fields with ZERO consumers outside this file
+    # were deleted (support/feedback chat ids, auto_*/HITL/OCR knobs, api_host/
+    # port/auth_token, telemetry_app_*, ssl_verify, owner_id, whitelisted_chats,
+    # the x402/agent-wallet/ERC-8004 mirrors, ...). Their env names are still
+    # read where it matters — raw, through core.env, and documented in
+    # docs/CONFIGURATION.md. tests/unit/core/test_server_config_fields_consumed.py
+    # keeps a new field from arriving unread.
+    # WS-K2 (2026-09-22): `auto_knowledge_retention_days` lived here with a
+    # default of 7 and ZERO consumers — a retention setting that retained
+    # nothing while the session tree grew to 5.0 GB unswept. Session
+    # retention is now real and lives with the other two windows:
+    # `SESSION_RETENTION_DAYS` (core/session_retention.py).
 
-    # OCR Service Configuration
-    services_ocr_enabled: bool = Field(default=True, alias='SERVICES_OCR_ENABLED')
-    services_ocr_tesseract_path: str = Field(default="", alias='SERVICES_OCR_TESSERACT_PATH')
-    services_ocr_dpi: int = Field(default=300, alias='SERVICES_OCR_DPI')
-    services_ocr_languages: List[str] = Field(default_factory=lambda: ["eng"], alias='SERVICES_OCR_LANGUAGES')
-    services_ocr_use_llm_correction: bool = Field(default=True, alias='SERVICES_OCR_USE_LLM_CORRECTION')
+    # OCR scratch dir — no reader left, but _ensure_directories still creates it.
     services_ocr_temp_dir: str = Field(default="data/temp", alias='SERVICES_OCR_TEMP_DIR')
     
     # LLM API keys live on AgentConfig (parent) — see top of file.
@@ -219,8 +215,6 @@ class ServerConfig(AgentConfig):
     cache_ttl: int = Field(default=3600)
     
     # Browser Use Configuration
-    browser_use_logging_level: str = Field('info', description="Browser Use logging level", alias='BROWSER_USE_LOGGING_LEVEL')
-    anonymized_telemetry: bool = Field(True, description="Enable anonymized telemetry", alias='ANONYMIZED_TELEMETRY')
     max_browser_contexts: int = Field(default=25, alias='MAX_BROWSER_CONTEXTS', description="Maximum concurrent browser contexts")
     max_contexts_per_session: int = Field(default=2, alias='MAX_CONTEXTS_PER_SESSION', description="Maximum browser contexts per session")
     browser_headless: bool = Field(default=True, alias='BROWSER_HEADLESS', description="Run browser in headless mode")
@@ -230,7 +224,6 @@ class ServerConfig(AgentConfig):
     browser_wait_queue_backstop_interval: float = Field(default=15.0, alias='BROWSER_WAIT_QUEUE_BACKSTOP_INTERVAL', description="Poll interval (s) for the wait-queue backstop loop (primary path resolves waiters synchronously on release)")
 
     # log_level lives on AgentConfig (parent).
-    assistant_id: Optional[str] = Field(None, alias='ASSISTANT_ID')
     
     # Document processor settings
     doc_max_file_size: int = Field(default=20 * 1024 * 1024, description="Maximum file size for document processor (20MB)")
@@ -240,15 +233,6 @@ class ServerConfig(AgentConfig):
     
     # characters_dir, default_character live on AgentConfig (parent).
 
-    # Profile monitoring configuration
-    profiles_to_monitor: List[str] = Field(default_factory=list, description="List of Twitter profiles to monitor")
-    update_interval_seconds: int = Field(360, description="Interval between profile updates in seconds")
-    
-    # API configuration
-    api_host: str = Field('127.0.0.1', alias='API_HOST')
-    api_port: int = Field(9000, alias='API_PORT')
-    api_auth_token: Optional[str] = Field(None, alias='API_AUTH_TOKEN')
-    
     # Twitter configuration with correct env var names
     twitter_api_key: Optional[str] = Field(None, alias='TWITTER_API_KEY')
     twitter_api_secret_key: Optional[str] = Field(None, alias='TWITTER_API_SECRET_KEY')  # Match env var
@@ -263,8 +247,6 @@ class ServerConfig(AgentConfig):
         None, alias='TWITTER_CHAT_KEY_VERSION')
     twitter_chat_passphrase: Optional[str] = Field(
         None, alias='TWITTER_CHAT_PASSPHRASE')
-    twitter_bot_user_id: Optional[str] = Field(None, alias='TWITTER_BOT_USER_ID')
-    twitter_bot_username: Optional[str] = Field(None, alias='TWITTER_BOT_USERNAME')
     
     # Gmail configuration
     gmail_email: Optional[str] = Field(None, description="Gmail email address", alias='GMAIL_EMAIL')
@@ -301,20 +283,6 @@ class ServerConfig(AgentConfig):
         description="Bot goals and behavior configuration"
     )
     
-    # Telemetry
-    telemetry_app_url: str = "https://eu.i.posthog.com"
-    telemetry_app_port: int = Field(8080, alias='TELEMETRY_APP_PORT')
-
-    # Legacy fields - kept for compatibility but not used
-    # These can be removed in a future version
-
-    # SSL verification
-    ssl_verify: bool = Field(
-        True,
-        description="Whether to verify SSL certificates",
-        alias='SSL_VERIFY'
-    )
-
     # Memory feature flags — must be declared as real fields so pydantic-settings
     # reads the env var (getattr on an undeclared key always returns the default,
     # silently ignoring the environment — the Task 0.3 landmine).
@@ -327,16 +295,6 @@ class ServerConfig(AgentConfig):
     SEMANTIC_RETRIEVAL_ENABLED: bool = True
     REFLECTION_ENABLED: bool = True
     FORGETTING_ENABLED: bool = True
-
-    # New fields from the code block
-    owner_id: Optional[int] = Field(None, description="Admin user ID")
-    whitelisted_chats: List[int] = Field(default_factory=list, description="List of whitelisted chats")
-
-    # Add model configuration
-    model_cache_dir: Optional[str] = Field(
-        default=None,
-        description="Directory to cache model files"
-    )
 
     # Embedding Configuration
     embedding: Dict[str, Any] = Field(
@@ -371,23 +329,7 @@ class ServerConfig(AgentConfig):
         
         return config
 
-    def get_ocr_config(self) -> Dict[str, Any]:
-        """Get OCR service configuration."""
-        return {
-            'enabled': self.services_ocr_enabled,
-            'tesseract_path': self.services_ocr_tesseract_path,
-            'dpi': self.services_ocr_dpi,
-            'languages': self.services_ocr_languages,
-            'use_llm_correction': self.services_ocr_use_llm_correction,
-            'temp_dir': self.services_ocr_temp_dir
-        }
-
     # Add these new fields to model_config
-    embedding_model_name: str = Field(
-        default='sentence-transformers/all-MiniLM-L6-v2',
-        description="Name of the sentence transformer model to use",
-        alias='EMBEDDING_MODEL_NAME'
-    )
     
     embedding_dimension: int = Field(
         default=384,
@@ -395,11 +337,6 @@ class ServerConfig(AgentConfig):
         alias='EMBEDDING_DIMENSION'
     )
     
-    embedding_max_seq_length: int = Field(
-        default=128,
-        description="Maximum sequence length for embeddings",
-        alias='EMBEDDING_MAX_SEQ_LENGTH'
-    )
 
     # Add validators for new fields
     @field_validator('embedding_dimension')
@@ -409,19 +346,6 @@ class ServerConfig(AgentConfig):
             raise ValueError("Embedding dimension must be positive")
         return v
 
-    @field_validator('embedding_max_seq_length')
-    def validate_embedding_max_seq_length(cls, v: int) -> int:
-        """Validate max sequence length."""
-        if v <= 0:
-            raise ValueError("Max sequence length must be positive")
-        return v
-        
-    @field_validator('services_ocr_dpi')
-    def validate_ocr_dpi(cls, v: int) -> int:
-        """Validate OCR DPI setting."""
-        if v < 72:
-            raise ValueError("OCR DPI must be at least 72")
-        return v
 
     # Private attributes
     _env_path: Path = PrivateAttr()
@@ -572,13 +496,6 @@ class ServerConfig(AgentConfig):
         return self.environment.lower() == 'development'
 
     # Validators
-    @field_validator('api_port', 'telemetry_app_port')
-    def validate_port(cls, v: int) -> int:
-        """Validate port number is in valid range."""
-        if not 1 <= v <= 65535:
-            raise ValueError("Port must be between 1 and 65535")
-        return v
-
     @field_validator('twitter_api_key', 'twitter_api_secret_key', 
                     'twitter_access_token', 'twitter_access_token_secret',
                     'twitter_bearer_token', 'twitter_oauth2_access_token',
@@ -668,9 +585,6 @@ class ServerConfig(AgentConfig):
 
     # REMOVED: get_model_config() and validate_model_name() 
     # Use modules.llm.model_registry.get_model_config() instead
-
-    # Optional override for telemetry config
-    telemetry_config: Optional[Dict[str, Any]] = None
 
     # Browser settings
     browser: dict = {
@@ -762,10 +676,6 @@ class ServerConfig(AgentConfig):
     # JWT Configuration
     jwt_secret_key: Optional[str] = Field(None, alias='JWT_SECRET_KEY', description="Secret key for JWT signing")
 
-    # Beta Access Control
-    beta_mode_enabled: bool = Field(True, alias='BETA_MODE_ENABLED', description="Enable beta mode access restrictions")
-    require_den_token: bool = Field(True, alias='REQUIRE_DEN_TOKEN', description="Require DEN token ownership for access")
-    bypass_den_check_for_admins: bool = Field(True, alias='BYPASS_DEN_CHECK_FOR_ADMINS', description="Allow admins to bypass DEN token check")
     bypass_payment_for_admins: bool = Field(True, alias='BYPASS_PAYMENT_FOR_ADMINS', description="Allow admins to bypass payment checks")
 
     # x402 Protocol Configuration
@@ -774,36 +684,11 @@ class ServerConfig(AgentConfig):
         "",  # Empty = use direct signature verification (no external facilitator)
         alias='X402_FACILITATOR_URL'
     )
-    x402_facilitator_api_key: Optional[str] = Field(None, alias='X402_FACILITATOR_API_KEY')
-    x402_facilitator_api_secret: Optional[str] = Field(None, alias='X402_FACILITATOR_API_SECRET')
-    x402_default_chain: str = Field("base", alias='X402_DEFAULT_CHAIN')
-    x402_payment_recipient: Optional[str] = Field(None, alias='X402_PAYMENT_RECIPIENT')
-    x402_payment_deadline_seconds: int = Field(300, alias='X402_PAYMENT_DEADLINE')
 
-    # Agent personal wallet (core; distinct from x402 receive/tariffing gateway)
-    agent_wallet_enabled: bool = Field(False, alias='AGENT_WALLET_ENABLED')
-    agent_wallet_backend: str = Field("local_eoa", alias='AGENT_WALLET_BACKEND')
-    agent_wallet_network: str = Field("testnet", alias='AGENT_WALLET_NETWORK')
-    # H3 (2026-08-22): was 1000.0. NOTE this field is declarative only — the
-    # real, consumed default lives in core/wallet/config.py::DEFAULT_MAX_PER_TX_USD
-    # (load_wallet_config(), the actual PolicyGate SSOT); keep this in sync.
-    agent_wallet_max_per_tx_usd: float = Field(250.0, alias='AGENT_WALLET_MAX_PER_TX_USD')
-    x402_client_enabled: bool = Field(False, alias='X402_CLIENT_ENABLED')
-    x402_client_facilitator_url: str = Field("", alias='X402_CLIENT_FACILITATOR_URL')
-    # NOTE: AGENT_WALLET_MASTER_SEED is read directly by core/wallet/config.py and is
-    # intentionally NOT mirrored here (keep the secret out of the broad BotConfig surface).
-
-    # ERC-8004 Trustless Agents Configuration
-    # https://eips.ethereum.org/EIPS/eip-8004
-    eip8004_enabled: bool = Field(False, alias='EIP8004_ENABLED', description="Enable ERC-8004 Trustless Agents integration")
-    eip8004_chain_id: int = Field(8453, alias='EIP8004_CHAIN_ID', description="Chain ID for ERC-8004 registries (default: Base)")
-    eip8004_identity_registry: Optional[str] = Field(None, alias='EIP8004_IDENTITY_REGISTRY', description="Identity Registry contract address")
-    eip8004_reputation_registry: Optional[str] = Field(None, alias='EIP8004_REPUTATION_REGISTRY', description="Reputation Registry contract address")
-    eip8004_validation_registry: Optional[str] = Field(None, alias='EIP8004_VALIDATION_REGISTRY', description="Validation Registry contract address")
-    eip8004_agent_id: Optional[int] = Field(None, alias='EIP8004_AGENT_ID', description="On-chain agent ID (ERC-721 tokenId)")
-    eip8004_agent_wallet: Optional[str] = Field(None, alias='EIP8004_AGENT_WALLET', description="Agent wallet for signing")
-    eip8004_agent_private_key: Optional[str] = Field(None, alias='EIP8004_AGENT_PRIVATE_KEY', description="Agent private key for EIP-712 signatures - KEEP SECRET!")
-    eip8004_supported_trust: str = Field("reputation", alias='EIP8004_SUPPORTED_TRUST', description="Comma-separated trust models: reputation,crypto-economic,tee-attestation")
+    # The agent wallet (AGENT_WALLET_*, X402_CLIENT_*) and ERC-8004 (EIP8004_*)
+    # settings are NOT mirrored here: core/wallet/config.py::load_wallet_config
+    # and modules/eip8004/ read them from the env directly (067 F4 deleted the
+    # declarative copies, whose defaults could drift from the consumed ones).
 
 
 # Back-compat: existing `from core.config import BotConfig` call sites keep working.

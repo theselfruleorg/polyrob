@@ -52,4 +52,57 @@ def test_total_tokens_matches_contents_after_eviction():
 
     # The bug let total_tokens grow past the true content total; after the fix they match.
     assert mm.history.total_tokens == _sum_tokens(mm)
-    assert len(mm.history.messages) == 4
+    # F10: eviction is BATCHED, so the deque sits at or under its bound, not on it.
+    assert len(mm.history.messages) <= 4
+    assert mm.history.messages, "a trimmed history is not an empty one"
+
+
+def test_eviction_is_batched_and_logged_once(caplog):
+    """N appends after saturation must produce ONE eviction event, not N."""
+    import logging
+
+    mm = _mm()
+    maxlen = 40
+    mm.history.max_messages = maxlen
+    mm.history.messages = deque(list(mm.history.messages), maxlen=maxlen)
+    mm.history.total_tokens = _sum_tokens(mm)
+
+    for i in range(maxlen):
+        mm._add_message_with_tokens(HumanMessage(content=f"filler {i}"), _internal=True)
+    assert len(mm.history.messages) == maxlen  # saturated, nothing evicted yet
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        # batch = max(8, 40 // 10) = 8, so 8 further appends fit in the freed room.
+        for i in range(8):
+            mm._add_message_with_tokens(HumanMessage(content=f"after {i}"), _internal=True)
+
+    evictions = [r for r in caplog.records if "History saturated" in r.getMessage()]
+    assert len(evictions) == 1, f"expected exactly one eviction, saw {len(evictions)}"
+    assert mm.history.total_tokens == _sum_tokens(mm)
+
+
+def test_eviction_never_leaves_an_orphan_tool_message_at_the_head():
+    from modules.llm.messages import AIMessage, ToolMessage
+
+    mm = _mm()
+    maxlen = 20
+    mm.history.max_messages = maxlen
+    mm.history.messages = deque(list(mm.history.messages), maxlen=maxlen)
+    mm.history.total_tokens = _sum_tokens(mm)
+
+    # An AI(tool_calls) -> Tool pair every two messages; a naive batch of 8 with
+    # an odd offset would land the cut on a ToolMessage.
+    mm._add_message_with_tokens(HumanMessage(content="kick off"), _internal=True)
+    for i in range(maxlen):
+        mm._add_message_with_tokens(
+            AIMessage(content=f"call {i}",
+                      tool_calls=[{"id": f"c{i}", "name": "noop", "args": {}}]),
+            _internal=True)
+        mm._add_message_with_tokens(
+            ToolMessage(content=f"result {i}", tool_call_id=f"c{i}"), _internal=True)
+
+    head = mm.history.messages[0].message
+    assert not isinstance(head, ToolMessage), (
+        "the batch cut left an orphan ToolMessage at the head of the history"
+    )

@@ -84,6 +84,19 @@ def _owner_tenant() -> str:
     return _OWNER_TENANT
 
 
+def deployment_tenant() -> str:
+    """Public name of :func:`_owner_tenant` for the other perimeter emitters
+    (045 lane 4's limiter trips in ``core/rate_limit.py``) — one tenant rule for
+    every perimeter row, so the rollup's ``user_id = ?`` reads all of them."""
+    return _owner_tenant()
+
+
+def security_log_enabled() -> bool:
+    """Public name of :func:`_enabled` (``SECURITY_EVENT_LOG_ENABLED`` and the
+    event log both on) for the other perimeter emitters."""
+    return _enabled()
+
+
 def _write(kind: str, attrs: dict) -> None:
     clean = {k: v for k, v in attrs.items() if k in ROUTE_ATTRS}
     _log().record(kind, user_id=_owner_tenant(), source="perimeter", attrs=clean)

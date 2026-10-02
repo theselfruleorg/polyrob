@@ -51,9 +51,9 @@ def chat_verbs() -> FrozenSet[str]:
     command at all — it falls through to the agent as chat text — so a remedy
     naming it would be advice to type something that does nothing.
     """
-    from core.surfaces.dispatcher import _COMMANDS
+    from core.surfaces.dispatcher import command_names
 
-    return frozenset(_COMMANDS)
+    return command_names()
 
 
 #: Every registered ``polyrob`` subcommand NAME.
@@ -66,20 +66,34 @@ def chat_verbs() -> FrozenSet[str]:
 #: cross-tier fact. ``tests/unit/cli/test_cli_command_names_ssot.py`` asserts
 #: this set equals the live map, so a new subcommand cannot drift out of the
 #: remedy vocabulary without a red test.
+from core.surfaces.catalog import cli_commands as _surface_cli_commands  # noqa: E402
+
 CLI_COMMAND_NAMES: FrozenSet[str] = frozenset({
-    "approvals", "apps", "auth", "autonomy", "browser", "config", "cron",
-    "dashboard", "datagen", "discord", "doctor", "email", "finance",
+    "approvals", "apps", "auth", "autonomy", "avatar", "browser", "config", "cron",
+    "dashboard", "datagen", "doctor", "finance",
     "gateway", "goals", "identity", "init", "journey", "kb", "keys", "knowledge",
-    "model", "models", "owner", "persona", "pfp", "profile", "profiles",
-    "run", "serve", "session", "sessions", "signal", "skill", "skills",
-    "slack", "soul", "subagents", "surface", "telegram", "todos", "tools",
-    "update", "wallet", "webgate", "whatsapp", "x", "x-account",
+    "model", "models", "owner", "pack", "persona", "profile", "profiles",
+    "rails", "run", "serve", "session", "sessions", "skill", "skills",
+    "soul", "subagents", "surface", "surfaces", "todos", "tools",
+    "update", "wallet", "webgate", "workers",
+    # 062: the installer/first-run verbs.
+    "setup", "service", "uninstall",
+    # 064 F1: each CORE chat surface's standalone command comes from its catalog row.
+    *_surface_cli_commands(core_only=True),
 })
 
 
 def cli_commands() -> FrozenSet[str]:
-    """Every registered ``polyrob`` subcommand name."""
-    return CLI_COMMAND_NAMES
+    """Every registered ``polyrob`` subcommand name: the core names, plus (067
+    P3b, read at call time) every installed pack's ``[cli] commands`` and every
+    pack surface's command. The pack state is read only when a loader ran in
+    this process."""
+    import sys
+    names = set(CLI_COMMAND_NAMES) | set(_surface_cli_commands())
+    state = sys.modules.get("core.packs.state")
+    if state is not None:
+        names |= set(state.cli_command_owners())
+    return frozenset(names)
 
 
 def known_chat_verb(token: str) -> bool:

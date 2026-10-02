@@ -135,3 +135,137 @@ def test_staging_refuses_a_file_outside_the_allowed_root(store, tmp_path):
     """A publish must never be able to copy /etc/polyrob/polyrob.env out."""
     with pytest.raises(ValueError):
         store.stage("rob", "leak", ["/etc/passwd"], confine_to=str(tmp_path))
+
+
+# ---------------------------------------------------------------------------
+# Coding-agent review B8 (2026-09-24): a static build output is a directory,
+# and two same-name files must never overwrite each other silently.
+# ---------------------------------------------------------------------------
+
+def _build(ws):
+    dist = ws / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text("<h1>hi</h1>")
+    (dist / "assets" / "app.js").write_text("console.log(1)")
+    (dist / ".DS_Store").write_text("junk")
+    (dist / ".cache").mkdir()
+    (dist / ".cache" / "x").write_text("junk")
+    return dist
+
+
+def test_a_directory_publishes_its_tree(store, tmp_path):
+    ws = tmp_path / "ws"
+    dist = _build(ws)
+    pub = store.stage("u1", "site", [str(dist)], confine_to=str(ws))
+    staged = store.staging_dir_for("site")
+    assert (open(os.path.join(staged, "index.html")).read()) == "<h1>hi</h1>"
+    assert os.path.isfile(os.path.join(staged, "assets", "app.js"))
+    assert not os.path.exists(os.path.join(staged, ".DS_Store"))
+    assert not os.path.exists(os.path.join(staged, ".cache"))
+    assert pub.file_count == 2
+
+
+def test_two_sources_with_one_name_are_refused(store, tmp_path):
+    ws = tmp_path / "ws"
+    (ws / "a").mkdir(parents=True)
+    (ws / "b").mkdir()
+    (ws / "a" / "index.html").write_text("A")
+    (ws / "b" / "index.html").write_text("B")
+    with pytest.raises(ValueError, match="two sources publish as"):
+        store.stage("u1", "clash", [str(ws / "a" / "index.html"), str(ws / "b" / "index.html")],
+                    confine_to=str(ws))
+
+
+def test_a_directory_outside_the_workspace_is_refused(store, tmp_path):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    outside = _build(tmp_path / "elsewhere")
+    with pytest.raises(ValueError, match="outside"):
+        store.stage("u1", "leak", [str(outside)], confine_to=str(ws))
+
+
+def test_a_credential_inside_a_directory_refuses_the_publish(store, tmp_path):
+    ws = tmp_path / "ws"
+    dist = _build(ws)
+    (dist / "server.pem").write_text("-----BEGIN PRIVATE KEY-----")
+    with pytest.raises(ValueError, match="credential"):
+        store.stage("u1", "cred", [str(dist)], confine_to=str(ws))
+
+
+def test_a_symlink_escaping_the_workspace_inside_a_directory_is_refused(store, tmp_path):
+    ws = tmp_path / "ws"
+    dist = _build(ws)
+    secret = tmp_path / "secret.txt"
+    secret.write_text("s")
+    (dist / "link.txt").symlink_to(secret)
+    with pytest.raises(ValueError, match="outside"):
+        store.stage("u1", "sym", [str(dist)], confine_to=str(ws))
+
+
+# --- codex review 2026-09-25: vet-then-copy races ------------------------------
+
+def test_a_file_swapped_after_vetting_is_refused(store, tmp_path, monkeypatch):
+    import core.publish as publish_mod
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    page = ws / "index.html"
+    page.write_text("ok")
+    secret = tmp_path / "secret.txt"
+    secret.write_text("TOP SECRET")
+    real_copy = publish_mod._copy_vetted
+
+    def swap_then_copy(src, dest, ident, budget):
+        os.unlink(src)
+        os.symlink(secret, src)  # the leaf becomes an outside symlink
+        return real_copy(src, dest, ident, budget)
+    monkeypatch.setattr(publish_mod, "_copy_vetted", swap_then_copy)
+    with pytest.raises((ValueError, OSError)):
+        store.stage("u1", "race", [str(page)], confine_to=str(ws))
+
+
+def test_growth_after_vetting_cannot_beat_the_cap(store, tmp_path, monkeypatch):
+    import core.publish as publish_mod
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    page = ws / "index.html"
+    page.write_text("small")
+    monkeypatch.setattr(publish_mod, "MAX_PUBLISH_BYTES", 1000)
+    real_copy = publish_mod._copy_vetted
+
+    def grow_then_copy(src, dest, ident, budget):
+        with open(src, "a") as f:
+            f.write("x" * 5000)  # same inode, now past the cap
+        return real_copy(src, dest, ident, budget)
+    monkeypatch.setattr(publish_mod, "_copy_vetted", grow_then_copy)
+    with pytest.raises(ValueError, match="too large"):
+        store.stage("u1", "grow", [str(page)], confine_to=str(ws))
+
+
+def test_a_failed_update_leaves_the_live_version_served(store, tmp_path, monkeypatch):
+    # Codex review 2026-09-25: an update deleted the served tree BEFORE copying.
+    import core.publish as publish_mod
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "index.html").write_text("v1")
+    store.stage("u1", "live", [str(ws / "index.html")], confine_to=str(ws))
+    assert store.approve("u1", "live")
+    served = os.path.join(store.dir_for("live"), "index.html")
+    assert open(served).read() == "v1"
+
+    (ws / "index.html").write_text("v2")
+
+    def boom(*a, **k):
+        raise OSError("disk full")
+    monkeypatch.setattr(publish_mod, "_copy_vetted", boom)
+    with pytest.raises(OSError):
+        store.stage("u1", "live", [str(ws / "index.html")], confine_to=str(ws))
+    assert open(served).read() == "v1"
+    assert not [d for d in os.listdir(store.root) if d.startswith(".build-")]
+
+    monkeypatch.undo()
+    store.stage("u1", "live", [str(ws / "index.html")], confine_to=str(ws))
+    assert open(served).read() == "v2"
+    assert not [d for d in os.listdir(store.root) if d.startswith((".build-", ".old-"))]

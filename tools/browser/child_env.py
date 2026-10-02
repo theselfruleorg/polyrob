@@ -69,3 +69,61 @@ def build_browser_env(extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
         extra_allowlist=BROWSER_ENV_ALLOWLIST,
         allow_prefixes=BROWSER_ENV_PREFIXES,
     )
+
+
+#: Host vars the Playwright NODE DRIVER needs on top of the browser list: a box
+#: behind a TLS-intercepting proxy cannot reach anything without its CA bundle,
+#: and ``DEBUG=pw:*`` is how the driver is traced. None can hold a credential.
+DRIVER_ENV_ALLOWLIST = frozenset({
+    "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "SSL_CERT_DIR", "DEBUG", "DEBUG_FILE",
+})
+
+
+def build_driver_env(original: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    """066 P0.3: scrubbed environment for the Playwright Node driver.
+
+    ``original`` is what Playwright's own ``get_driver_env()`` built — a FULL
+    ``os.environ`` copy plus its ``PW_*`` markers (``PW_LANG_NAME`` …). Only
+    those markers are taken from it; everything else comes through the ONE
+    policy (:func:`tools.code_exec.env_policy.build_child_env`), which drops
+    every secret-named var last.
+    """
+    from tools.code_exec.env_policy import build_child_env
+    markers = {k: v for k, v in (original or {}).items() if k.startswith("PW_")}
+    return build_child_env(
+        markers,
+        extra_allowlist=BROWSER_ENV_ALLOWLIST | DRIVER_ENV_ALLOWLIST,
+        allow_prefixes=BROWSER_ENV_PREFIXES,
+    )
+
+
+def install_driver_env_scrub() -> bool:
+    """Make every Playwright driver this process starts get :func:`build_driver_env`.
+
+    ``async_playwright().start()`` spawns ``playwright/driver/node`` with
+    ``get_driver_env()`` = ``os.environ.copy()`` (prod 2026-09-23: the driver
+    held the seed and every API key). There is no ``env=`` parameter on
+    ``start()``, and swapping ``os.environ`` around an ``await`` would starve
+    every other coroutine of its keys — so the ONE function the transport calls
+    synchronously, right before its ``create_subprocess_exec``, is wrapped.
+
+    Idempotent. Returns False (and the caller logs it) when the installed
+    Playwright no longer has that seam — the driver then inherits the process
+    env, which after 066 P0.2 no longer holds the seed.
+    """
+    try:
+        from playwright._impl import _transport
+    except ImportError:
+        return False
+    original = getattr(_transport, "get_driver_env", None)
+    if original is None:
+        return False
+    if getattr(original, "_polyrob_scrubbed", False):
+        return True
+
+    def scrubbed_driver_env() -> Dict[str, str]:
+        return build_driver_env(original())
+
+    scrubbed_driver_env._polyrob_scrubbed = True  # type: ignore[attr-defined]
+    _transport.get_driver_env = scrubbed_driver_env
+    return True

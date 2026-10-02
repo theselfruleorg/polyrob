@@ -1,3 +1,4 @@
+from tests.support.owner_prefs import set_owner_pref
 import pytest
 
 import core.surfaces.inbound_webhook as wh
@@ -61,7 +62,7 @@ def _patch_pipeline(monkeypatch, *, transcript="hello from voice"):
 
 @pytest.mark.asyncio
 async def test_handle_post_echoes_transcript_before_route(monkeypatch, tmp_path):
-    monkeypatch.setenv("VOICE_TRANSCRIPT_ECHO", "true")
+    set_owner_pref(monkeypatch, "voice.transcript_echo", True)
     monkeypatch.setenv("VOICE_TRANSCRIPTION_ENABLED", "true")
     surf = _Echoable(IdempotencyStore(str(tmp_path / "i.db")), _voice_inbound())
     _patch_pipeline(monkeypatch)
@@ -79,7 +80,7 @@ async def test_handle_post_echoes_transcript_before_route(monkeypatch, tmp_path)
 
 @pytest.mark.asyncio
 async def test_handle_post_flag_off_no_echo(monkeypatch, tmp_path):
-    monkeypatch.setenv("VOICE_TRANSCRIPT_ECHO", "false")
+    set_owner_pref(monkeypatch, "voice.transcript_echo", False)
     monkeypatch.setenv("VOICE_TRANSCRIPTION_ENABLED", "true")
     surf = _Echoable(IdempotencyStore(str(tmp_path / "i.db")), _voice_inbound())
     _patch_pipeline(monkeypatch)

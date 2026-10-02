@@ -51,7 +51,9 @@ async def test_portfolio_values_solana_usdc_instead_of_calling_it_spam():
             "price_usd": 1.0, "confidence": "high", "pool_count": 9,
             "liquidity_usd": 1e7})(),
     )
-    tool._solana_tokens = lambda h: {SOL_USDC: 100000}
+    from core.wallet.solana_onchain import SplHolding, SplHoldings
+    # 071: portfolio reads the display enumeration (classic + Token-2022).
+    tool._solana_holdings = lambda h: SplHoldings(rows=[SplHolding(SOL_USDC, 100000, 6)])
     tool._solana_native = lambda h: 0
     res = await tool.portfolio(PortfolioParams(chain="solana"))
     text = res.extracted_content or ""

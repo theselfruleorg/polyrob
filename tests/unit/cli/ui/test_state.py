@@ -38,6 +38,17 @@ def _make_mm(
     mm.history.total_tokens = total_tokens
     mm.max_input_tokens = max_input_tokens
     mm._compaction_count = compaction_count
+    # F19: poll() reads the ONE gauge. A manager that predates it still works
+    # through the legacy per-attribute fallback (see the test below).
+    mm.context_usage.return_value = {
+        "total_tokens": total_tokens,
+        "limit": max_input_tokens,
+        "pct": ctx_percent,
+        "source": "local_estimate",
+        "slots": {"foundation": 0, "conversation": total_tokens,
+                  "ephemeral": 0, "hmem": 0, "tool_schemas": 0},
+        "last_call": {},
+    }
     return mm
 
 
@@ -326,3 +337,46 @@ def test_poll_usage_default_is_unthrottled(tmp_path):
     )
     state.poll_usage(tmp_path)  # same instant, no interval → still scans
     assert state.tokens_total == 4
+
+
+# ---------------------------------------------------------------------------
+# F18/F19: the cache split and the gauge fallback
+# ---------------------------------------------------------------------------
+
+
+def test_poll_falls_back_when_the_manager_has_no_gauge():
+    """A manager that predates context_usage() still feeds the bar."""
+    s = _make_state()
+    mm = _make_mm(ctx_percent=61.0, total_tokens=900, max_input_tokens=4096)
+    mm.context_usage.side_effect = AttributeError("no such gauge")
+    s.poll(_make_agent(mm))
+    assert s.ctx_percent == pytest.approx(61.0)
+    assert s.ctx_tokens == 900
+    assert s.ctx_max == 4096
+
+
+def test_poll_records_the_gauge_provenance():
+    s = _make_state()
+    mm = _make_mm()
+    mm.context_usage.return_value = dict(mm.context_usage.return_value,
+                                         source="provider_usage")
+    s.poll(_make_agent(mm))
+    assert s.ctx_source == "provider_usage"
+
+
+def test_cache_hit_percent_is_zero_until_the_provider_reports_it():
+    s = _make_state()
+    assert s.cache_hit_percent() == 0.0
+    s._apply_usage_record({"prompt_tokens": 1000, "completion_tokens": 10})
+    assert s.cache_hit_percent() == 0.0, "no cached field => unknown, not 0 %"
+
+
+def test_cache_hit_percent_reads_the_record():
+    s = _make_state()
+    s._apply_usage_record({
+        "prompt_tokens": 1000, "completion_tokens": 10,
+        "cached_tokens": 800, "cache_creation_tokens": 150,
+    })
+    assert s.tokens_cached == 800
+    assert s.tokens_cache_written == 150
+    assert s.cache_hit_percent() == pytest.approx(80.0)

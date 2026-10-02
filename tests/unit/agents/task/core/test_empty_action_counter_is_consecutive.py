@@ -52,6 +52,10 @@ class _MM:
     def inject_user_guidance(self, msgs, **k):
         self.injected.extend(msgs)
 
+    def inject_runtime_guidance(self, text, *, origin=None, source=None):
+        self.injected.append({"text": text, "origin": origin,
+                              "metadata": {"source": source}})
+
 
 class _Controller:
     def get_action_names(self):
@@ -145,3 +149,17 @@ def test_reset_for_continuation_clears_the_counter():
         "reset_for_continuation does not clear _empty_action_counter — an empty "
         "response in a previous turn still counts toward this turn's escalation"
     )
+
+
+def test_empty_action_texts_have_no_contradiction_and_no_absent_tools():
+    """F12: the empty-action texts no longer deny the planning allowance, no longer
+    point at "the functions below", and name only registered actions."""
+    a = _Agent()
+    for _ in range(4):
+        a._validate_and_intervene(_EMPTY)
+    texts = "\n".join(m["text"] for m in a.message_manager.injected)
+    assert "no 'thinking mode' or 'planning phase'" not in texts
+    assert "functions below" not in texts
+    assert "mcp_execute_tool" not in texts
+    assert "filesystem_write_file" not in texts
+    assert "done(" in texts

@@ -83,7 +83,15 @@ class ToolCatalogEntry:
 def build_tool_catalog(env: Optional[Dict[str, str]] = None) -> List[ToolCatalogEntry]:
     """Return catalog entries sorted by category and id."""
     env = os.environ if env is None else env
-    entries = [_entry_from_descriptor(name, desc, env) for name, desc in TOOL_DESCRIPTORS.items()]
+    descriptors = dict(TOOL_DESCRIPTORS)
+    # 067 P3: a pack's tool descriptors join the LIVE registry in the loader's
+    # phase 2 (anysite/perplexity from the discovery pack). Read it only when this
+    # process loaded it — never import the tool tier from here.
+    import sys
+    live = sys.modules.get("tools.descriptors")
+    for name, desc in (getattr(live, "TOOL_DESCRIPTORS", None) or {}).items():
+        descriptors.setdefault(name, desc)
+    entries = [_entry_from_descriptor(name, desc, env) for name, desc in descriptors.items()]
     return sorted(entries, key=lambda e: (e.category, e.id))
 
 
@@ -183,3 +191,37 @@ def _audit_events(name: str) -> List[str]:
     if any(p.endswith(".write") or p in {"social.post", "email.send", "trade.execute"} for p in permissions):
         events.append("external.write")
     return events
+
+
+# --- 062: which env flag turns a tool on ------------------------------------
+# NOT a new table. The candidate names are the naming CONVENTION every tool
+# flag already follows, and a candidate only counts when it is a real row in
+# the generated flag catalog (``core/flags_catalog.py``, extracted from
+# ``docs/CONFIGURATION.md``). A tool whose flag cannot be resolved that way
+# refuses instead of guessing, because writing an invented flag name into a
+# user's .env is silent breakage dressed as a feature.
+_FLAG_SUFFIXES = ("_ENABLED", "_TOOLS_ENABLED", "_TOOL_ENABLED")
+
+#: tool ids whose flag does not follow the convention.
+_FLAG_OVERRIDES = {
+    "twitter": "TWITTER_ENABLED",
+    "browser_manager": None,   # the browser rides its pip extra, not a flag
+    "browser": None,
+}
+
+
+def enable_flag_for(tool_id: str) -> Optional[str]:
+    """The env flag that enables *tool_id*, or None when there is no single one."""
+    if tool_id in _FLAG_OVERRIDES:
+        return _FLAG_OVERRIDES[tool_id]
+    try:
+        from core.flags_catalog import CATALOG
+        known = {row[0] for row in CATALOG}
+    except Exception:
+        return None
+    stem = str(tool_id).upper().strip()
+    if not stem:
+        return None
+    hits = [stem + suffix for suffix in _FLAG_SUFFIXES if (stem + suffix) in known]
+    # Exactly one candidate, or the answer is ambiguous and we say so.
+    return hits[0] if len(hits) == 1 else None

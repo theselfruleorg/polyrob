@@ -63,7 +63,9 @@ def test_catalog_also_in_get_messages_foundation():
     assert any("CATALOG_SENTINEL" in _text(m) for m in msgs)
 
 
-def test_live_refresh_replaces_catalog_after_tool_load():
+def test_live_refresh_replaces_catalog_after_tool_load(monkeypatch):
+    """The pre-F8 in-place rewrite, still reachable with TOOL_CATALOG_TAIL_UPDATES=false."""
+    monkeypatch.setenv("TOOL_CATALOG_TAIL_UPDATES", "false")
     from types import SimpleNamespace
     from agents.task.agent.core.runtime_catalog import refresh_tool_catalog
     mm = _mm()
@@ -77,7 +79,9 @@ def test_live_refresh_replaces_catalog_after_tool_load():
     assert mm._tool_catalog_message is pinned  # unchanged snapshot is not re-tokenized
 
 
-def test_refresh_failure_does_not_leave_a_stale_capability_claim():
+def test_refresh_failure_does_not_leave_a_stale_capability_claim(monkeypatch):
+    """Flag-off legacy path: a render exception substitutes the honest placeholder."""
+    monkeypatch.setenv("TOOL_CATALOG_TAIL_UPDATES", "false")
     from types import SimpleNamespace
     from agents.task.agent.core.runtime_catalog import refresh_tool_catalog
     mm = _mm()

@@ -26,21 +26,24 @@ import {
 } from "../static/app/chats.js";
 
 const COPY = {
-  loading: "Reading your chats.",
+  loading: "Loading your chats…",
   empty: "No chats yet.",
-  unreadable: "I could not read the list.",
-  untitled: "A chat with no first line",
+  unreadable: "I could not load your chats. Try again in a moment.",
+  untitled: "Untitled chat",
   creator_owner: "you",
-  creator_cli: "you, in a terminal",
-  creator_api: "a program",
-  creator_cron: "a schedule",
+  creator_cli: "you, in the terminal",
+  creator_api: "this console or an app",
+  creator_cron: "a scheduled job",
   creator_goal: "Rob, working on a goal",
   creator_correspondent: "someone Rob wrote to",
-  creator_unknown: "started by someone I cannot name",
-  status_running: "working",
-  status_done: "finished",
-  status_stopped: "stopped",
-  status_unknown: "state unknown",
+  creator_unknown: "not known",
+  status_running: "Working",
+  status_done: "Done",
+  status_stopped: "Stopped",
+  status_unknown: "Unknown",
+  status_waiting: "Waiting for you",
+  status_failed: "Did not finish",
+  part_missing: "Part of this chat is missing.",
 };
 
 const FIXTURE = [
@@ -70,9 +73,10 @@ describe("status", () => {
     expect(statusOf("initializing")).toBe("running");
     expect(statusOf("resumed")).toBe("running");
     expect(statusOf("completed")).toBe("done");
-    expect(statusOf("failed")).toBe("stopped");
+    expect(statusOf("failed")).toBe("failed");
+    expect(statusOf("error")).toBe("failed");
     expect(statusOf("cancelled")).toBe("stopped");
-    expect(statusOf("suspended")).toBe("stopped");
+    expect(statusOf("stopped")).toBe("stopped");
   });
 
   it("refuses to guess a status it has never seen", () => {
@@ -82,8 +86,8 @@ describe("status", () => {
   });
 
   it("uses only pill classes the design system defines", () => {
-    const allowed = new Set(["is-running", "is-stopped", "is-unknown"]);
-    ["running", "done", "stopped", "unknown", "nonsense"].forEach((s) => {
+    const allowed = new Set(["is-running", "is-done", "is-needs-you", "is-stopped", "is-unknown"]);
+    ["running", "waiting", "done", "failed", "stopped", "unknown", "nonsense"].forEach((s) => {
       expect(allowed.has(statusClass(s))).toBe(true);
     });
   });
@@ -92,7 +96,7 @@ describe("status", () => {
 describe("creator", () => {
   it("names who started the session", () => {
     expect(creatorLabel({ creator: "owner" }, COPY)).toBe("you");
-    expect(creatorLabel({ creator: "cron" }, COPY)).toBe("a schedule");
+    expect(creatorLabel({ creator: "cron" }, COPY)).toBe("a scheduled job");
     expect(creatorLabel({ creator: "goal" }, COPY)).toBe("Rob, working on a goal");
   });
 
@@ -112,13 +116,13 @@ describe("rows", () => {
     expect(rows.length).toBe(4);
     expect(rows[0].dataset.state).toBe("running");
     expect(rows[1].dataset.state).toBe("done");
-    expect(rows[2].dataset.state).toBe("stopped");
+    expect(rows[2].dataset.state).toBe("failed");
     expect(rows[3].dataset.state).toBe("unknown");
     const words = [...rows].map((r) => r.textContent);
-    expect(words[0]).toContain("working");
+    expect(words[0]).toContain("Working");
     expect(words[0]).toContain("you");
-    expect(words[1]).toContain("a schedule");
-    expect(words[3]).toContain("state unknown");
+    expect(words[1]).toContain("a scheduled job");
+    expect(words[3]).toContain("Unknown");
     expect(words[3]).toContain(COPY.creator_unknown);
   });
 
@@ -140,6 +144,55 @@ describe("rows", () => {
   it("gives a session with no first line a name rather than a blank", () => {
     const node = rowNode({ id: "x", status: "running" }, COPY);
     expect(node.querySelector(".entry-title").textContent).toBe(COPY.untitled);
+  });
+});
+
+describe("a row with an unreadable part (070 E.9)", () => {
+  it("shows the part line, not the raw text, and keeps the raw text in the tooltip", () => {
+    const raw = "[Errno 2] No such file or directory: '/x/status.json'";
+    const node = rowNode(
+      { id: "x", task: "t", status: null, unreadable: { status: raw } },
+      COPY,
+    );
+    expect(node.textContent).not.toContain("Errno");
+    const why = node.querySelector(".unknown-why");
+    expect(why.textContent).toBe(COPY.part_missing);
+    expect(why.title).toBe(raw);
+  });
+});
+
+describe("070 W0.11 — state, colour and time are true", () => {
+  it("failed is not stopped", () => {
+    expect(statusOf("failed")).not.toBe(statusOf("cancelled"));
+    const node = rowNode({ id: "x", task: "t", status: "failed" }, COPY);
+    expect(node.textContent).toContain("Did not finish");
+    expect(node.querySelector(".pill").className).toContain("is-stopped");
+  });
+
+  it("done uses the neutral pill", () => {
+    expect(statusClass("done")).toBe("is-done");
+    expect(statusClass("done")).not.toBe(statusClass("failed"));
+  });
+
+  it("suspended is waiting", () => {
+    expect(statusOf("suspended")).toBe("waiting");
+    expect(statusClass("waiting")).toBe("is-needs-you");
+    const node = rowNode({ id: "x", task: "t", status: "suspended" }, COPY);
+    expect(node.textContent).toContain("Waiting for you");
+  });
+
+  it("an unreadable row prints the copy line", () => {
+    const node = rowNode({ id: "x", task: "t", unreadable: { status: "unreadable" } }, COPY);
+    expect(node.querySelector(".unknown-why").textContent).toBe(COPY.part_missing);
+  });
+
+  it("the time is local", () => {
+    const iso = "2026-09-30T16:02:00+00:00";
+    const node = rowNode({ id: "x", task: "t", status: "running", created: "2026-09-30 16:02", created_iso: iso }, COPY);
+    const want = new Date(iso).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+    expect(node.querySelector("[data-created]").textContent).toBe(want);
+    const old = rowNode({ id: "x", task: "t", status: "running", created: "2026-09-30 16:02" }, COPY);
+    expect(old.querySelector("[data-created]").textContent).toBe("2026-09-30 16:02");
   });
 });
 
@@ -187,7 +240,7 @@ describe("the copy crosses from Python on data attributes", () => {
 });
 
 describe("the live@agent chip (043 A32)", () => {
-  const CHIP = { ...COPY, live_at_agent: "live in the agent" };
+  const CHIP = { ...COPY, live_at_agent: "Watch only" };
 
   it("renders the chip for a session live in Rob's own process", () => {
     const node = rowNode(
@@ -196,7 +249,7 @@ describe("the live@agent chip (043 A32)", () => {
     );
     const chip = node.querySelector("[data-runtime='agent']");
     expect(chip).not.toBe(null);
-    expect(chip.textContent).toBe("live in the agent");
+    expect(chip.textContent).toBe("Watch only");
     expect(chip.dataset.ownerPid).toBe("4242");
   });
 

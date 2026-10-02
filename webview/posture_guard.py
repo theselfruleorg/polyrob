@@ -42,6 +42,26 @@ ALLOW_FLAG = "WEBVIEW_ALLOW_LOCAL_POSTURE"
 _PROXY_ARGS = ("--proxy-headers", "--forwarded-allow-ips")
 
 
+#: A bind address that keeps the console on this machine (``""`` is NOT one:
+#: uvicorn reads an empty host as every interface).
+LOOPBACK_BINDS = frozenset({"127.0.0.1", "localhost", "::1", "[::1]"})
+
+
+def _argv_host(argv: Sequence[str]) -> Optional[str]:
+    """The ``--host`` value on a uvicorn-style argv, or None."""
+    for i, a in enumerate(argv):
+        if a == "--host" and i + 1 < len(argv):
+            return argv[i + 1]
+        if a.startswith("--host="):
+            return a.split("=", 1)[1]
+    return None
+
+
+def non_loopback_bind(host: Optional[str]) -> bool:
+    """True when *host* is set and is not a loopback bind."""
+    return host is not None and str(host).strip().lower() not in LOOPBACK_BINDS
+
+
 def _is_system_path(raw: str) -> bool:
     """True when *raw* is not under the current user's home (⇒ a service tree)."""
     try:
@@ -66,6 +86,15 @@ def server_signals(env: Optional[Mapping[str, str]] = None,
         if hits:
             signals.append(
                 "the process runs behind a reverse proxy (argv: " + " ".join(hits) + ")")
+        # Security review 2026-09-23 (Low): a `local` console bound to a
+        # non-loopback address is reachable from the network with no login.
+        bind = _argv_host(argv)
+        if non_loopback_bind(bind):
+            signals.append(f"the console binds {bind} (argv --host) — not loopback")
+        for key in ("WEBGATE_HOST", "WEBVIEW_HOST"):
+            val = str(env.get(key) or "").strip()
+            if val and non_loopback_bind(val):
+                signals.append(f"{key}={val} — the console binds a non-loopback address")
         data_dir = str(env.get("POLYROB_DATA_DIR") or "").strip()
         if data_dir and _is_system_path(data_dir):
             signals.append(

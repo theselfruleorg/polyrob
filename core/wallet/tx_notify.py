@@ -22,6 +22,18 @@ Two notices per transaction, and only two:
     still in flight. An in-flight bridge gets one too; silence would be the worst
     available answer about money between two chains.
 
+One transaction, ONE owner line when it settles fast (2026-09-22). The
+09-21 22:02Z exit of $1.60 produced six critical-lane DMs — SENT + CONFIRMED
+for each of approve / swap / revoke — because the EVM verbs settle inside the
+same call that broadcast, so both notices land together. BROADCAST is now HELD
+for `TX_NOTIFY_SENT_HOLD_SEC` (default 60): a settlement that arrives inside
+the hold collapses it, and the SETTLED line carries the SENT facts (amount,
+value, cap, lane) so nothing is lost; a transaction still pending after the
+hold gets its SENT line — that is exactly the "it is out there, not yet mined"
+case the line exists for. The durable `tx_broadcast` event is recorded at
+broadcast time regardless; only the owner's line waits. `=0` restores the
+two-notice rail byte for byte.
+
 Three rules:
 
 1. **Critical lane, never capped.** `source="tx_execution"` is in
@@ -78,6 +90,48 @@ _HEADLINE = {
 def enabled() -> bool:
     from core.env import bool_env
     return bool_env("TX_NOTIFY_ENABLED", True)
+
+
+def sent_hold_sec() -> float:
+    """Seconds a BROADCAST line waits for its settlement before going out alone."""
+    import os
+    try:
+        v = float(os.environ.get("TX_NOTIFY_SENT_HOLD_SEC", "60") or 0)
+    except (TypeError, ValueError):
+        return 60.0
+    return max(0.0, v)
+
+
+#: tx_ref -> the held BROADCAST notice (its facts ride on a settlement that
+#: arrives inside the hold). Bounded by `_HOLD_MAX`; oldest dropped first.
+_HELD: dict = {}
+#: tx_refs whose settlement went out while a broadcast was held.
+_SETTLED_REFS: dict = {}
+_HOLD_MAX = 256
+
+
+def _reset_hold_state() -> None:
+    _HELD.clear()
+    _SETTLED_REFS.clear()
+
+
+def _remember(d: dict, key: str, value: Any) -> None:
+    d[key] = value
+    while len(d) > _HOLD_MAX:
+        d.pop(next(iter(d)))
+
+
+def _merge_sent_facts(settled: "TxNotice", held: "TxNotice") -> "TxNotice":
+    """The settled notice, carrying whatever SENT facts it does not state itself."""
+    from dataclasses import replace
+    fill = {}
+    for f in ("amount_in", "amount_out", "usd", "lane", "cap_used_usd",
+              "cap_limit_usd", "chain"):
+        if getattr(settled, f) is None and getattr(held, f) is not None:
+            fill[f] = getattr(held, f)
+    if not held.extra_refs or settled.extra_refs:
+        return replace(settled, **fill) if fill else settled
+    return replace(settled, extra_refs=held.extra_refs, **fill)
 
 
 def _usd(value: Optional[float]) -> str:
@@ -185,6 +239,14 @@ def render_settled(n: TxNotice) -> str:
     icon = _ICON.get(state, "⏳")
     head = _HEADLINE.get(state, state.upper())
     lines = [f"{icon} {head} · {n.verb} {n.route}"]
+    if n.amount_in and (n.lane or n.cap_limit_usd is not None):
+        # A collapsed SENT: state what left and its value on the one line that
+        # goes out. (A plain settled notice keeps its old shape — the SENT line
+        # already carried these.)
+        sent = f"sent {n.amount_in} ({_usd(n.usd)})"
+        if n.amount_out:
+            sent += f" → {n.amount_out}"
+        lines.append(sent)
     if n.measured:
         lines.append(f"measured {n.measured}")
     elif n.amount_out:
@@ -201,6 +263,13 @@ def render_settled(n: TxNotice) -> str:
     if n.ledger_recorded is False:
         lines.append("⚠ ledger: NOT recorded — this spend is invisible to every "
                      "other money verb's cap")
+    tail = []
+    if n.cap_limit_usd is not None and n.cap_used_usd is not None:
+        tail.append(f"cap: {_usd(n.cap_used_usd)} of {_usd(n.cap_limit_usd)} daily")
+    if n.lane:
+        tail.append(f"lane {n.lane}")
+    if tail:
+        lines.append(" · ".join(tail))
     return "\n".join(lines)
 
 
@@ -221,7 +290,8 @@ def caps_from_gate(gate: Any, venue: str = "defi") -> tuple:
 
 
 async def notify(container: Any, user_id: Optional[str], notice: TxNotice, *,
-                 settled: bool, session_id: Optional[str] = None) -> str:
+                 settled: bool, session_id: Optional[str] = None,
+                 hold_sec: float = 0.0) -> str:
     """Deliver one notice. Never raises, never blocks a settled transaction.
 
     Returns the delivery outcome, or ``"skipped"``/``"error"``. The return value
@@ -230,8 +300,26 @@ async def notify(container: Any, user_id: Optional[str], notice: TxNotice, *,
     """
     if not enabled():
         return "skipped"
-    text = render_settled(notice) if settled else render_broadcast(notice)
+    # The durable record is immediate; only the owner's line may wait.
     _emit_event(user_id, notice, settled=settled, session_id=session_id)
+    ref = str(notice.tx_ref or "")
+    if settled and ref and ref in _HELD:
+        # The broadcast for this transaction is still held: carry its facts on
+        # this line and let the held task collapse.
+        notice = _merge_sent_facts(notice, _HELD.pop(ref))
+        _remember(_SETTLED_REFS, ref, True)
+    elif not settled and ref and hold_sec > 0:
+        import asyncio
+        _remember(_HELD, ref, notice)
+        try:
+            await asyncio.sleep(hold_sec)
+        finally:
+            _HELD.pop(ref, None)
+        if _SETTLED_REFS.pop(ref, None):
+            logger.info("tx_notify: SENT for %s collapsed into its settlement",
+                        short(ref))
+            return "collapsed"
+    text = render_settled(notice) if settled else render_broadcast(notice)
     if not user_id:
         # A tenantless notice has nowhere to go, and inventing an owner would
         # cross tenants. The event above still records it.
@@ -267,12 +355,16 @@ def notify_soon(container: Any, user_id: Optional[str], notice: TxNotice, *,
     coro = None
     try:
         import asyncio
-        coro = notify(container, user_id, notice, settled=settled,
-                      session_id=session_id)
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             loop = None
+        # The hold only rides a task on a live loop: the sync bridge below runs
+        # the coroutine to completion, and sleeping there would stall the
+        # caller for the whole hold.
+        coro = notify(container, user_id, notice, settled=settled,
+                      session_id=session_id,
+                      hold_sec=sent_hold_sec() if loop is not None else 0.0)
         if loop is not None:
             task = loop.create_task(coro)
             _PENDING.add(task)

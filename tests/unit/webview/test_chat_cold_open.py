@@ -223,19 +223,19 @@ def test_the_composer_posts_nothing_but_the_task(client, chat_open, monkeypatch)
 
 # --- the frame -------------------------------------------------------------- #
 
-def test_the_cold_open_carries_one_nav_and_one_sources_note(client, chat_open,
+def test_the_cold_open_carries_one_nav_and_no_sources_note(client, chat_open,
                                                             monkeypatch):
     _entries(monkeypatch, chat_open, [])
     soup = _soup(client)
     assert len(soup.select('nav[aria-label="Main"]')) == 1
-    assert len(soup.select("p.sources")) == 1
+    assert len(soup.select("p.sources")) == 0
 
 
 def test_new_is_the_current_destination(client, chat_open, monkeypatch):
     _entries(monkeypatch, chat_open, [])
     current = _soup(client).select('[aria-current="page"]')
     assert len(current) == 1
-    assert current[0].get_text(" ", strip=True).endswith("New")
+    assert current[0].get_text(" ", strip=True).endswith("Chat")
 
 
 # --- a bound session -------------------------------------------------------- #
@@ -476,3 +476,138 @@ def test_mount_removes_only_the_named_legacy_index(pages_new, monkeypatch):
 
     pages_new.mount(app)
     assert [getattr(r, "name", None) for r in _roots(app)] == ["something_else"]
+
+
+# --- 070 W0.12: a chat page opens with its first line ----------------------- #
+
+def _bound(monkeypatch, chat_open, tmp_path, task, creator=None, meta_creator=None):
+    import json
+    folder = tmp_path / "s1"
+    (folder / "feed").mkdir(parents=True)
+    body = {"task": task}
+    if creator:
+        body["creator"] = creator
+    (folder / "task.json").write_text(json.dumps(body))
+    if meta_creator:
+        (folder / "metadata.json").write_text(json.dumps({"creator": meta_creator}))
+    monkeypatch.setattr(chat_open, "_session_folder", lambda session_id: folder)
+    _entries(monkeypatch, chat_open, [])
+
+
+def test_bound_chat_title_is_chat_not_new(client, chat_open, monkeypatch, tmp_path):
+    _bound(monkeypatch, chat_open, tmp_path, "are u here?", creator="api")
+    soup = _soup(client, "/c/abc123")
+    assert soup.select('[aria-current="page"]') == []
+    assert soup.title.get_text().startswith("Chat")
+
+
+def test_cron_session_renders_a_run_head(client, chat_open, monkeypatch, tmp_path):
+    _bound(monkeypatch, chat_open, tmp_path, "SAFETY MONITOR: check the book",
+           meta_creator="cron")
+    soup = _soup(client, "/c/abc123")
+    body = soup.select_one("body")
+    assert body.get("data-run-kind") == "run"
+    assert body.get("data-first-line") == ""
+    head = soup.select_one(".run-head")
+    assert "A scheduled job started this run." in head.get_text(" ", strip=True)
+    details = soup.select_one("details.run-task")
+    assert details is not None and details.get("open") is None
+    assert "SAFETY MONITOR" in details.get_text(" ", strip=True)
+
+
+def test_owner_session_carries_its_first_line(client, chat_open, monkeypatch, tmp_path):
+    _bound(monkeypatch, chat_open, tmp_path, '<b>are u here?</b>', creator="api")
+    soup = _soup(client, "/c/abc123")
+    body = soup.select_one("body")
+    assert body.get("data-run-kind") == "chat"
+    assert body.get("data-first-line") == "<b>are u here?</b>"
+    assert soup.select_one(".run-head") is None
+
+
+def test_the_repl_stock_task_is_not_a_first_line(client, chat_open, monkeypatch, tmp_path):
+    _bound(monkeypatch, chat_open, tmp_path, "Interactive conversation session.",
+           creator="cli")
+    body = _soup(client, "/c/abc123").select_one("body")
+    assert body.get("data-run-kind") == "chat"
+    assert body.get("data-first-line") == ""
+
+
+def test_an_unreadable_session_invents_no_first_line(client, chat_open, monkeypatch):
+    monkeypatch.setattr(chat_open, "_session_folder", lambda session_id: None)
+    _entries(monkeypatch, chat_open, [])
+    body = _soup(client, "/c/abc123").select_one("body")
+    assert body.get("data-first-line") == ""
+    assert body.get("data-run-kind") == ""
+
+
+# --- 070 E.13: the page says whether a live process runs this session ------ #
+
+def test_the_page_carries_whether_the_run_is_live(client, chat_open, monkeypatch, tmp_path):
+    _bound(monkeypatch, chat_open, tmp_path, "are u here?", creator="api")
+    for value in ("true", "false", ""):
+        monkeypatch.setattr(chat_open, "run_live", lambda sid, v=value: v)
+        body = _soup(client, "/c/abc123").select_one("body")
+        assert body.get("data-run-live") == value
+
+
+def _registry(tmp_path, rows):
+    import sqlite3
+    db = tmp_path / "session_registry.db"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE active_sessions (session_id TEXT, worker_pid INTEGER, "
+                "created_at TEXT, last_seen_at TEXT)")
+    con.executemany("INSERT INTO active_sessions (session_id, worker_pid) VALUES (?, ?)", rows)
+    con.commit()
+    con.close()
+
+
+def test_run_live_reads_the_shared_registry(chat_open, monkeypatch, tmp_path):
+    import os
+    from webview import webgate
+    monkeypatch.setattr(webgate, "in_process_task_agent", lambda: None)
+    monkeypatch.setattr(webgate, "data_dir", lambda: str(tmp_path))
+    monkeypatch.setenv("SESSION_REGISTRY_BACKEND", "sqlite")
+    # No registry file: not known, never "ended".
+    assert chat_open.run_live("task_s1") == ""
+    _registry(tmp_path, [("task_s1", os.getpid())])
+    assert chat_open.run_live("task_s1") == "true"
+    # Absent from the registry: no process holds it — the run ended.
+    assert chat_open.run_live("task_s2") == "false"
+
+
+def test_run_live_is_unknown_on_the_in_process_registry(chat_open, monkeypatch, tmp_path):
+    from webview import webgate
+    monkeypatch.setattr(webgate, "in_process_task_agent", lambda: None)
+    monkeypatch.setattr(webgate, "data_dir", lambda: str(tmp_path))
+    monkeypatch.delenv("SESSION_REGISTRY_BACKEND", raising=False)
+    _registry(tmp_path, [])
+    # The memory backend cannot see the agent service's sessions: absence says nothing.
+    assert chat_open.run_live("task_s2") == ""
+
+
+# --- 070 W0.16: the chat layout is a grid ----------------------------------- #
+
+def test_bound_chat_has_the_grid_and_no_inline_style(client, chat_open, monkeypatch):
+    _entries(monkeypatch, chat_open, [])
+    soup = _soup(client, "/c/abc123")
+    body = soup.select_one(".chat-body")
+    assert body is not None
+    col = body.select_one(".chat-col")
+    assert col is not None
+    assert col.select_one("#chat-messages") is not None
+    assert col.select_one("#chat-composer") is not None
+    pane = body.select_one("aside.work-pane#work-pane")
+    assert pane is not None
+    assert col.select_one("#work-pane") is None
+    for node in (body, col, pane, col.select_one("#chat-messages")):
+        assert node.get("style") is None
+    toggle = col.select_one("#work-pane-toggle")
+    assert toggle.get("aria-controls") == "work-pane"
+    assert toggle.get_text(strip=True) == "Files and steps"
+
+
+def test_the_cold_open_keeps_its_own_markup(client, chat_open, monkeypatch):
+    _entries(monkeypatch, chat_open, [])
+    soup = _soup(client)
+    assert soup.select_one(".chat-body") is None
+    assert soup.select_one("#chat-composer") is not None

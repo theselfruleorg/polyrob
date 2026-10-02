@@ -19,6 +19,7 @@ pause and the same owner queue above the ceiling.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from typing import Any, Dict, Optional
@@ -36,7 +37,7 @@ async def guarded_send(tool, *, execution_context, verb: str, chain: str,
                        min_native_inflow_wei: Optional[int] = None,
                        is_claim: bool = False,
                        watch_spenders: tuple = (),
-                       on_receipt=None) -> Any:
+                       on_receipt=None, held=None) -> Any:
     """Authorize, size, send, confirm. Returns the tool's ActionResult.
 
     ``on_receipt(rail, tx_hash)``, when given, is called once the receipt has
@@ -57,8 +58,13 @@ async def guarded_send(tool, *, execution_context, verb: str, chain: str,
     idem = f"launchpad_{verb}:{chain}:{to}:{uuid.uuid4().hex[:8]}"
 
     rail = (tool._rail_factory or EvmRail)(chain=chain, signer=signer)
+    acct_state = None
     try:
         tx = rail.build_call(to=to, data=calldata, value=value_wei)
+        if held is not None:
+            # 069 v4 A3: the treasury signs account.execute(...) as the NFT's owner.
+            from tools.defi import account_mode
+            tx, acct_state = account_mode.wrap(rail, tx, held, getattr(tool, "_rpc", None))
     except Exception as exc:
         return tool._ar(error=f"could not build the transaction: {exc}")
 
@@ -74,21 +80,40 @@ async def guarded_send(tool, *, execution_context, verb: str, chain: str,
         min_inflow_raw=min_inflow_raw,
         min_native_inflow_wei=min_native_inflow_wei,
         is_claim=is_claim)
+    guard_kw = {}
+    if held is not None:
+        from tools.defi import account_mode
+        intent = account_mode.intent_for(intent, held, acct_state)
+        if getattr(tool, "_rpc", None) is not None:
+            guard_kw["account_rpc"] = tool._rpc
+        header += account_mode.header_line(held)
 
     authorize = tool._guard_fn or tx_guard.authorize
     async with gate.reserve():
         from tools.controller.action_registration import (
-            _is_forged_or_autonomous_turn)
+            _is_autonomous_goal_turn, _is_forged_or_autonomous_turn)
 
-        decision = authorize(intent, tx, holder=signer.address, gate=gate,
-                             execution_context=execution_context, tool_self=tool,
-                             price_fn=tool._price,
-                             fallback_price_fn=tool._fallback_price,
-                             forged_fn=_is_forged_or_autonomous_turn)
+        # CR-M10: simulation, signing RPC and receipt polling run off the
+        # event loop so the held reservation never freezes other sessions.
+        decision = await asyncio.to_thread(
+            authorize, intent, tx, holder=signer.address, gate=gate,
+            execution_context=execution_context, tool_self=tool,
+            price_fn=tool._price,
+            fallback_price_fn=tool._fallback_price,
+            forged_fn=_is_forged_or_autonomous_turn,
+            autonomous_ok_fn=_is_autonomous_goal_turn, **guard_kw)
 
+        usd = ('unknown' if decision.amount_usd is None
+               else f'${decision.amount_usd:.4f}')
+        if is_claim:
+            # A claim has no outflow, so the guard's amount is the gas fee. Called
+            # "value" it read as the price of what was claimed (live 2026-09-29:
+            # 0.3087 ETH reported to the owner as worth two cents).
+            header += (f"  cost:     {usd} — the claim's gas fee, NOT the value "
+                       f"of what is claimed\n")
+        else:
+            header += f"  value:    {usd}\n"
         header += (
-            f"  value:    "
-            f"{'unknown' if decision.amount_usd is None else f'${decision.amount_usd:.4f}'}\n"
             f"  guard:    {decision.reason}\n"
             f"  lane:     {decision.lane}\n")
 
@@ -110,9 +135,10 @@ async def guarded_send(tool, *, execution_context, verb: str, chain: str,
                 "was broadcast. Re-run with dry_run=false to send."))
 
         try:
-            tx_hash = rail.sign_and_send(tx)
+            tx_hash = await asyncio.to_thread(rail.sign_and_send, tx)
         except Exception as exc:
-            return tool._ar(error=f"broadcast failed: {exc} — nothing was sent")
+            from core.wallet.broadcast.evm import broadcast_failure_text
+            return tool._ar(error=broadcast_failure_text(exc))
 
         used, limit = tx_notify.caps_from_gate(gate)
         tool._notify_tx(execution_context, tx_notify.TxNotice(
@@ -121,7 +147,7 @@ async def guarded_send(tool, *, execution_context, verb: str, chain: str,
             lane=decision.lane, cap_used_usd=used, cap_limit_usd=limit),
             settled=False)
 
-        receipt = rail.await_receipt(tx_hash)
+        receipt = await asyncio.to_thread(rail.await_receipt, tx_hash)
 
     # The SETTLED notice is emitted below, after the record (043 T2). It used to
     # fire here, inside the reservation, carrying `ledger_recorded=True` — but
@@ -157,7 +183,7 @@ async def guarded_send(tool, *, execution_context, verb: str, chain: str,
     extra = ""
     if receipt.succeeded and on_receipt is not None:
         try:
-            result = on_receipt(rail, tx_hash)
+            result = await asyncio.to_thread(on_receipt, rail, tx_hash)
         except Exception as exc:
             logger.debug("launchpad: receipt read failed (%s)", exc)
             result = ("  ⚠️ the transaction confirmed but its receipt could "
@@ -168,6 +194,12 @@ async def guarded_send(tool, *, execution_context, verb: str, chain: str,
             extra = extra or ""
             if found and found.get("token"):
                 counterparty = found["token"]
+                if verb == "launch":
+                    # W0: a confirmed launch is our own token — recorded as
+                    # provenance so the owner never pins their own launch.
+                    from core.wallet.token_provenance import record_own_token
+                    record_own_token(chain, counterparty, kind="launchpad_launch",
+                                     evidence=f"tx {tx_hash}")
         else:
             extra = result or ""
 
@@ -189,11 +221,18 @@ async def guarded_send(tool, *, execution_context, verb: str, chain: str,
         async with gate.reserve():
             gate.record(venue="defi", action=f"launchpad_{verb}",
                         amount_usd=decision.amount_usd or 0.0, counterparty=counterparty,
-                        idempotency_key=idem, result_ref=tx_hash, chain=chain)
+                        idempotency_key=idem, result_ref=tx_hash, chain=chain,
+                        account=(held.account if held is not None else None))
         recorded = True
     finally:
         _settled_notice(recorded)
 
+    if held is not None:
+        from tools.defi import account_mode
+        extra += account_mode.journal_line(
+            held, signer, kind="tend",
+            text=f"launchpad {verb} on {chain} via {to}: tx {tx_hash} ({receipt.status})",
+            refs=(tx_hash,)).lstrip("\n") + "\n"
     if receipt.succeeded:
         return tool._ar(content=header + extra + (
             f"  RESULT: CONFIRMED\n  tx: {tx_hash}\n"

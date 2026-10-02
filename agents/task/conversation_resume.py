@@ -17,6 +17,7 @@ via ``self``.
 """
 
 import asyncio
+import contextlib
 import logging
 from typing import Any, Dict, Optional
 
@@ -25,6 +26,29 @@ logger = logging.getLogger(__name__)
 
 class ConversationResumeMixin:
     """Composed into ``TaskAgent`` — see module docstring."""
+
+    @contextlib.asynccontextmanager
+    async def _resume_lock_scope(self, dead_session_id: str):
+        """Hold the per-session resume lock; drop the entry when the last holder leaves.
+
+        ``_resume_locks`` maps session id -> [lock, users]. The entry stays while any
+        caller holds or waits for the lock (so single-flight holds), and goes away with
+        the last one, so the dict does not grow with every dead session ever seen.
+        """
+        if not hasattr(self, "_resume_locks"):
+            self._resume_locks = {}
+        entry = self._resume_locks.get(dead_session_id)
+        if entry is None:
+            entry = [asyncio.Lock(), 0]
+            self._resume_locks[dead_session_id] = entry
+        entry[1] += 1
+        try:
+            async with entry[0]:
+                yield
+        finally:
+            entry[1] -= 1
+            if entry[1] <= 0 and self._resume_locks.get(dead_session_id) is entry:
+                del self._resume_locks[dead_session_id]
 
     async def _try_conversation_resume(
         self,
@@ -65,10 +89,7 @@ class ConversationResumeMixin:
         if not _dec.allowed:
             logger.warning("conversation resume HELD for %s (%s)", dead_session_id, _dec.reason)
             return False
-        if not hasattr(self, "_resume_locks"):
-            self._resume_locks = {}
-        lock = self._resume_locks.setdefault(dead_session_id, asyncio.Lock())
-        async with lock:
+        async with self._resume_lock_scope(dead_session_id):
             try:
                 container = getattr(self, "container", None)
                 registry = (container.get_service("correspondent_registry")

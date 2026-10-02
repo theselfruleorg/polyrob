@@ -36,12 +36,32 @@ CREATE TABLE IF NOT EXISTS telemetry_events (
     user_id    TEXT NOT NULL DEFAULT '',
     session_id TEXT NOT NULL DEFAULT '',
     source     TEXT NOT NULL DEFAULT '',
-    attrs      TEXT NOT NULL DEFAULT '{}'
+    attrs      TEXT NOT NULL DEFAULT '{}',
+    effect     TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_te_ts   ON telemetry_events(ts);
 CREATE INDEX IF NOT EXISTS idx_te_kind ON telemetry_events(kind);
 CREATE INDEX IF NOT EXISTS idx_te_user ON telemetry_events(user_id);
 """
+
+
+def _migrate_effect_column(db_path: str) -> None:
+    """033: the effect class of an ``external_write`` row, promoted to an indexed
+    column because ``attrs`` is opaque JSON a reader cannot filter cheaply.
+    ``CREATE TABLE IF NOT EXISTS`` never alters an existing table, so an in-place
+    upgrade adds the column here. Old rows read ``effect=''``."""
+    conn = wal_connect(db_path)
+    try:
+        cols = {r[1] for r in conn.execute(
+            "PRAGMA table_info(telemetry_events)").fetchall()}
+        if "effect" not in cols:
+            conn.execute("ALTER TABLE telemetry_events "
+                         "ADD COLUMN effect TEXT NOT NULL DEFAULT ''")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_te_effect "
+                     "ON telemetry_events(effect)")
+        conn.commit()
+    finally:
+        conn.close()
 
 
 class TelemetryEventLog:
@@ -50,21 +70,36 @@ class TelemetryEventLog:
     def __init__(self, db_path: str):
         self.db_path = db_path
         self._ready = False
+        #: False only on a pre-033 file the migration could not alter (read-only
+        #: mount); reads then synthesize ``effect=''`` instead of failing.
+        self._has_effect = True
         try:
             init_schema(db_path, _SCHEMA, mkdir=True)
             self._ready = True
         except Exception as e:
             # Fail-open: a broken telemetry DB must never break the agent.
             logger.debug(f"event_log init failed ({db_path}): {e}")
+            return
+        try:
+            _migrate_effect_column(db_path)
+        except Exception as e:
+            # A read-only or contended file keeps working without the column;
+            # an effect-filtered read then fails open to "no rows".
+            logger.debug(f"event_log effect column migration skipped ({db_path}): {e}")
+            self._has_effect = False
 
     def record(self, kind: str, *, user_id: str = "", session_id: str = "",
                source: str = "", ts: Optional[float] = None,
-               attrs: Optional[Dict[str, Any]] = None, **kw: Any) -> None:
+               attrs: Optional[Dict[str, Any]] = None, effect: str = "",
+               **kw: Any) -> None:
         """Append one event. Extra kwargs are JSON-encoded into `attrs`.
 
         ``attrs`` also accepts an explicit dict — the escape hatch for attribute
         names that collide with this signature (e.g. a `kind` attribute on a
         self_modification event, T4-06). Explicit-dict keys win over kwargs.
+
+        ``effect`` (033) is written to its own indexed column, never into
+        ``attrs``; only ``external_write`` rows carry one.
         """
         if not self._ready:
             return
@@ -79,19 +114,33 @@ class TelemetryEventLog:
         except Exception:
             payload = "{}"
         try:
-            execute_retry(
-                self.db_path,
-                "INSERT INTO telemetry_events (ts, kind, user_id, session_id, source, attrs) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (float(ts if ts is not None else time.time()), str(kind),
-                 str(user_id or ""), str(session_id or ""), str(source or ""), payload),
-            )
+            row = (float(ts if ts is not None else time.time()), str(kind),
+                   str(user_id or ""), str(session_id or ""), str(source or ""), payload)
+            if effect and self._has_effect:
+                execute_retry(
+                    self.db_path,
+                    "INSERT INTO telemetry_events (ts, kind, user_id, session_id, source, "
+                    "attrs, effect) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    row + (str(effect),),
+                )
+            else:
+                execute_retry(
+                    self.db_path,
+                    "INSERT INTO telemetry_events (ts, kind, user_id, session_id, source, attrs) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    row,
+                )
         except Exception as e:
             logger.debug(f"event_log record failed: {e}")
 
     def query(self, *, since_ts: Optional[float] = None, kind: Optional[str] = None,
-              user_id: Optional[str] = None, limit: int = 500) -> List[Dict[str, Any]]:
-        """Return events most-recent-first, with optional filters."""
+              user_id: Optional[str] = None, limit: int = 500,
+              effect: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Return events most-recent-first, with optional filters.
+
+        Every row carries ``effect`` (``''`` for a row that is not an
+        ``external_write``, or one written before the column existed).
+        """
         if not self._ready:
             return []
         clauses, params = [], []
@@ -101,8 +150,13 @@ class TelemetryEventLog:
             clauses.append("kind = ?"); params.append(str(kind))
         if user_id is not None:
             clauses.append("user_id = ?"); params.append(str(user_id))
+        if effect is not None:
+            if not self._has_effect:
+                return []
+            clauses.append("effect = ?"); params.append(str(effect))
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
-        sql = (f"SELECT ts, kind, user_id, session_id, source, attrs "
+        eff_col = "effect" if self._has_effect else "'' AS effect"
+        sql = (f"SELECT ts, kind, user_id, session_id, source, attrs, {eff_col} "
                f"FROM telemetry_events{where} ORDER BY ts DESC, id DESC LIMIT ?")
         params.append(int(limit))
         try:
@@ -117,8 +171,46 @@ class TelemetryEventLog:
             except Exception:
                 attrs = {}
             out.append({"ts": r["ts"], "kind": r["kind"], "user_id": r["user_id"],
-                        "session_id": r["session_id"], "source": r["source"], "attrs": attrs})
+                        "session_id": r["session_id"], "source": r["source"],
+                        "attrs": attrs, "effect": r["effect"] or ""})
         return out
+
+    def count_by_effect(self, *, since_ts: Optional[float] = None,
+                        user_id: Optional[str] = None,
+                        attrs_in: Optional[Dict[str, Any]] = None
+                        ) -> Optional[Dict[str, int]]:
+        """``{effect: n}`` over ``external_write`` rows — a ``GROUP BY``, never a
+        row fetch, so a busy window cannot truncate the count.
+
+        ``attrs_in`` filters on envelope attributes, e.g.
+        ``{"autonomous": (1,), "outcome": ("ok",)}`` (a JSON boolean compares as
+        1/0). Returns ``None`` when the store is unavailable, so a reader can tell
+        "nothing happened" from "I could not look".
+        """
+        if not self._ready or not self._has_effect:
+            return None
+        from core.event_kinds import EXTERNAL_WRITE
+        clauses: List[str] = ["kind = ?"]
+        params: List[Any] = [EXTERNAL_WRITE]
+        if since_ts is not None:
+            clauses.append("ts >= ?"); params.append(float(since_ts))
+        if user_id is not None:
+            clauses.append("user_id = ?"); params.append(str(user_id))
+        for name, values in (attrs_in or {}).items():
+            vals = list(values)
+            if not vals:
+                continue
+            clauses.append(f"json_extract(attrs, '$.{name}') IN "
+                           f"({', '.join('?' for _ in vals)})")
+            params.extend(vals)
+        sql = (f"SELECT effect, COUNT(*) AS n FROM telemetry_events "
+               f"WHERE {' AND '.join(clauses)} GROUP BY effect")
+        try:
+            rows = execute_retry(self.db_path, sql, tuple(params), fetch="all") or []
+        except Exception as e:
+            logger.warning("event_log count_by_effect failed: %s", e, exc_info=True)
+            return None
+        return {str(r["effect"]): int(r["n"]) for r in rows if r["effect"]}
 
     def count_where(self, *, kind: Optional[str] = None,
                     user_id: Optional[str] = None,

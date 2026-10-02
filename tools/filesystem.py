@@ -15,9 +15,6 @@ import json
 from pathlib import Path
 import re
 import os
-import tempfile
-import shutil
-import time
 from pydantic import BaseModel, Field
 
 from tools.base_tool import BaseTool
@@ -169,7 +166,8 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
                               exc_info=True)
             return None
 
-    async def _verify_file_write(self, file_path: str, expected_content: str, original_path: str) -> dict:
+    async def _verify_file_write(self, file_path: str, expected_content: str, original_path: str,
+                                 root: Optional[str] = None) -> dict:
         """Verify file was written correctly (OPTIMIZATION: Task 6 - Nov 14, 2025)"""
         # 043 A18: the artifact id is captured here (the ONE write-time choke
         # point) and merged into whichever verification dict below fires, so
@@ -180,9 +178,8 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
 
         async def _verify() -> dict:
             try:
-                # Read back the file
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    actual_content = f.read()
+                # Read back the file (H09: descriptor-anchored, no symlink follow)
+                actual_content = self._safe_read_text(file_path, root or self._workspace_root())
 
                 # For JSON files, verify structure and provide item counts
                 if file_path.endswith('.json'):
@@ -350,7 +347,7 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
     # ---------------------------------------------------------------------------
 
     @BaseTool.action(
-        'Read a file from the workspace. For large files (>25K tokens), use offset and limit parameters to read specific line ranges, or use grep to search for content.',
+        'Read a file from the workspace. For large files (>25K tokens), use offset and limit parameters to read specific line ranges (or coding_grep to search for content, when the coding tool is loaded).',
         param_model=ReadFileAction
     )
     async def read_file(self, params: ReadFileAction, execution_context=None) -> str:
@@ -377,15 +374,16 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
             # Normalize file path
             file_path = self._normalize_path(file_path)
 
-            # Secret-content guard (read): see _reject_credential_path.
-            self._reject_credential_path(file_path, params.file_path)
+            # Secret-content guard (read): see _reject_credential_path / _guard_path.
+            root = self._guard_path(file_path, params.file_path, write=False)
 
             if not os.path.exists(file_path):
                 raise ServiceError(f"File not found: {params.file_path}")
 
-            # Read file with offset/limit support
-            with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
-                lines = f.readlines()
+            # Read file with offset/limit support. H09: through the descriptor
+            # walk (O_NOFOLLOW after the realpath check), not a plain open().
+            import io
+            lines = io.StringIO(self._safe_read_text(file_path, root), newline='\n').readlines()
 
             # Handle character-based chunking (for JSON/dense files)
             if params.char_offset is not None or params.char_limit is not None:
@@ -596,7 +594,14 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
                 raise ServiceError(f"Path normalization failed: {str(norm_error)}")
 
             # Secret-content guard (write): symmetric with read_file/coding._confine.
-            self._reject_credential_path(normalized_path, file_path)
+            root = self._guard_path(normalized_path, file_path, write=True)
+            # Only a newly created target becomes this session's own draft.
+            target_existed = os.path.lexists(normalized_path)
+            # 060 WS-3: a RECORD document (undeclared = record) is never rewritten.
+            from tools.filesystem_doc_kind import mark_written, record_refusal
+            _refusal = record_refusal(self, normalized_path, file_path, root, content)
+            if _refusal:
+                raise ServiceError(_refusal)
 
             # Store paths for reporting
             original_path = file_path
@@ -626,101 +631,30 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
             # exactly what was requested.
             processed_content = content
 
-            # Write using a temporary file first for atomic operation
+            # H09: atomic write through core.security.workspace_io — a RANDOM
+            # sibling temp opened O_CREAT|O_EXCL|O_NOFOLLOW, then os.replace at
+            # the parent's descriptor (the old `<file>.<ms>.tmp` name was
+            # predictable, and its plain open() followed a planted symlink).
+            # The old "direct write" last resort (a plain open(file, 'w')) is
+            # gone: it was the unsafe path this replaces.
+            from core.security.workspace_io import write_text as _safe_write_text
             max_retries = 3
-            retry_count = 0
-            success = False
-
-            while retry_count < max_retries and not success:
+            last_error = None
+            for retry_count in range(max_retries):
                 try:
-                    # Create a unique temporary file name based on timestamp
-                    timestamp = int(time.time() * 1000)
-                    temp_path = f"{file_path}.{timestamp}.tmp"
-
-                    # Write content to temporary file with explicit encoding
-                    with open(temp_path, 'w', encoding='utf-8') as temp_file:
-                        temp_file.write(processed_content)
-
-                    # Ensure the temp file was written successfully
-                    if not os.path.exists(temp_path):
-                        raise ServiceError(f"Temp file {temp_path} was not created")
-
-                    # Verify temp file content before moving
-                    verify_size = os.path.getsize(temp_path)
-                    expected_size = len(processed_content.encode('utf-8'))
-
-                    if abs(verify_size - expected_size) > 10:  # Allow small difference due to encoding
-                        raise ServiceError(f"Temp file size verification failed: expected ~{expected_size} bytes, got {verify_size}")
-
-                    # Atomically move the temp file to the target location
-                    # Use different methods for different platforms
-                    if os.name == 'nt':  # Windows
-                        # Windows needs special handling for replace
-                        if os.path.exists(file_path):
-                            os.replace(temp_path, file_path)
-                        else:
-                            os.rename(temp_path, file_path)
-                    else:  # Unix/Linux/MacOS
-                        shutil.move(temp_path, file_path)
-
-                    # Verify file was written successfully and has expected content
-                    if not os.path.exists(file_path):
-                        raise ServiceError(f"File {file_path} does not exist after write operation")
-
-                    actual_size = os.path.getsize(file_path)
-                    if abs(actual_size - expected_size) > 10:  # Allow small difference due to encoding
-                        raise ServiceError(f"File size verification failed: expected ~{expected_size} bytes, got {actual_size}")
-
-                    # Mark as successful
-                    success = True
-
-                    # Log success
+                    _safe_write_text(file_path, root, processed_content)
+                    if not target_existed:
+                        mark_written(getattr(self, "session_id", None), file_path)
                     self.logger.info(f"Successfully wrote {len(processed_content)} chars to {file_path}")
-
-                    # OPTIMIZATION: Add verification (Task 6 - Nov 14, 2025)
-                    verification = await self._verify_file_write(file_path, processed_content, original_path)
-
-                    # Return success message with verification
+                    verification = await self._verify_file_write(file_path, processed_content, original_path,
+                                                                  root=root)
                     return self._write_success_result(original_path, verification)
-
-                except Exception as write_error:
+                except OSError as write_error:
+                    last_error = write_error
                     self.logger.warning(f"Write attempt {retry_count+1}/{max_retries} failed: {str(write_error)}")
-                    retry_count += 1
-
-                    # Clean up temp file if it exists
-                    try:
-                        if 'temp_path' in locals() and os.path.exists(temp_path):
-                            os.unlink(temp_path)
-                    except Exception as cleanup_error:
-                        self.logger.debug(f"Failed to clean up temp file: {cleanup_error}")
-
-                    # Wait before retrying with increasing backoff
-                    if retry_count < max_retries:
-                        await asyncio.sleep(0.5 * retry_count)
-
-            # All retries failed - try direct write method as last resort
-            if not success:
-                self.logger.warning(f"Atomic file operations failed after {max_retries} attempts. Trying direct write...")
-
-                try:
-                    # Try direct write mode as a last resort
-                    with open(file_path, 'w', encoding='utf-8') as f:
-                        f.write(processed_content)
-
-                    # Verify the file was written
-                    if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
-                        self.logger.info(f"Successfully wrote {len(processed_content)} chars to {file_path} using direct write")
-
-                        # OPTIMIZATION: Add verification (Task 6 - Nov 14, 2025)
-                        verification = await self._verify_file_write(file_path, processed_content, original_path)
-
-                        # Return success message with verification
-                        return self._write_success_result(original_path, verification)
-                    else:
-                        raise ServiceError("Direct write verification failed: file is empty or missing")
-                except Exception as direct_error:
-                    self.logger.error(f"Direct write failed: {str(direct_error)}")
-                    raise ServiceError(f"Failed to write to file after all recovery attempts: {str(direct_error)}")
+                    if retry_count + 1 < max_retries:
+                        await asyncio.sleep(0.5 * (retry_count + 1))
+            raise ServiceError(f"Failed to write to file after {max_retries} attempts: {last_error}")
 
         except ServiceError:
             # Re-raise ServiceError without wrapping
@@ -734,7 +668,11 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
     # ---------------------------------------------------------------------------
 
     @BaseTool.action(
-        'Append content to a file in the workspace',
+        'Append content to a file in the workspace. Pass after_anchor to insert '
+        'immediately AFTER the first line containing that exact text instead of at '
+        'the end — use it to add a row to the TOP of a newest-first table (anchor on '
+        'the table\'s |---|---| separator) without rewriting the file. An anchor that '
+        'matches nothing, or matches more than one line, refuses and writes nothing.',
         param_model=AppendFileAction
     )
     async def append_file(self, params: AppendFileAction, execution_context=None) -> str:
@@ -771,7 +709,7 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
                 raise ServiceError(f"Path normalization failed: {str(norm_error)}")
 
             # Secret-content guard (append): symmetric with read_file/coding._confine.
-            self._reject_credential_path(normalized_path, file_path)
+            root = self._guard_path(normalized_path, file_path, write=True)
 
             # Store paths for reporting
             original_path = file_path
@@ -798,43 +736,20 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
             # would strip indentation from authored code/markdown.
             processed_content = content
 
-            # Read existing file content with multiple attempts and encodings
+            # H09: read the existing content and write the result through
+            # core.security.workspace_io (no symlink follow; random O_EXCL temp).
+            from core.security.workspace_io import write_text as _safe_write_text
             existing_content = ""
-            read_success = False
-            read_retries = 3
+            if os.path.lexists(file_path):
+                existing_content = self._safe_read_text(file_path, root)
 
-            for attempt in range(read_retries):
-                try:
-                    if os.path.exists(file_path):
-                        # Try different encodings in order of likelihood
-                        encodings = ['utf-8', 'latin-1', 'cp1252']
-                        for encoding in encodings:
-                            try:
-                                with open(file_path, 'r', encoding=encoding, errors='replace') as f:
-                                    existing_content = f.read()
-                                self.logger.debug(f"Read {len(existing_content)} chars from existing file {file_path} using {encoding} encoding (attempt {attempt+1})")
-                                read_success = True
-                                break
-                            except UnicodeDecodeError:
-                                self.logger.debug(f"Failed to read with {encoding} encoding, trying next")
-                                continue
-
-                        if read_success:
-                            break
-                    else:
-                        self.logger.debug(f"File {file_path} does not exist, will create new file")
-                        read_success = True
-                        break
-                except Exception as read_error:
-                    self.logger.warning(f"Failed to read existing file (attempt {attempt+1}): {str(read_error)}")
-                    await asyncio.sleep(0.3 * (attempt + 1))  # Increasing backoff
-
-            if not read_success:
-                self.logger.warning(f"Could not read existing file after {read_retries} attempts, assuming empty file")
-                existing_content = ""
-
+            anchor = getattr(params, "after_anchor", None)
+            if anchor:
+                combined_content = self._insert_after_anchor(
+                    existing_content, processed_content, anchor,
+                    exists=os.path.lexists(file_path), display_path=original_path)
             # Combine existing content with new content, ensuring proper spacing
-            if existing_content:
+            elif existing_content:
                 if not existing_content.endswith('\n'):
                     combined_content = existing_content + '\n' + processed_content
                 else:
@@ -842,103 +757,18 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
             else:
                 combined_content = processed_content
 
-            # Write using a temporary file first for atomic operation
-            max_retries = 3
-            retry_count = 0
-            success = False
-
-            while retry_count < max_retries and not success:
-                try:
-                    # Create a unique temporary file name based on timestamp
-                    timestamp = int(time.time() * 1000)
-                    temp_path = f"{file_path}.{timestamp}.tmp"
-
-                    # Write content to temporary file with explicit encoding
-                    with open(temp_path, 'w', encoding='utf-8') as temp_file:
-                        temp_file.write(combined_content)
-
-                    # Ensure the temp file was written successfully
-                    if not os.path.exists(temp_path):
-                        raise ServiceError(f"Temp file {temp_path} was not created")
-
-                    # Verify temp file content before moving
-                    verify_size = os.path.getsize(temp_path)
-                    expected_size = len(combined_content.encode('utf-8'))
-
-                    if abs(verify_size - expected_size) > 10:  # Allow small difference due to encoding
-                        raise ServiceError(f"Temp file size verification failed: expected ~{expected_size} bytes, got {verify_size}")
-
-                    # Atomically move the temp file to the target location
-                    # Use different methods for different platforms
-                    if os.name == 'nt':  # Windows
-                        # Windows needs special handling for replace
-                        if os.path.exists(file_path):
-                            os.replace(temp_path, file_path)
-                        else:
-                            os.rename(temp_path, file_path)
-                    else:  # Unix/Linux/MacOS
-                        shutil.move(temp_path, file_path)
-
-                    # Verify file was written successfully and has expected content
-                    if not os.path.exists(file_path):
-                        raise ServiceError(f"File {file_path} does not exist after append operation")
-
-                    actual_size = os.path.getsize(file_path)
-                    if abs(actual_size - expected_size) > 10:  # Allow small difference due to encoding
-                        raise ServiceError(f"File size verification failed: expected ~{expected_size} bytes, got {actual_size}")
-
-                    # Mark as successful
-                    success = True
-
-                    # Log success
-                    self.logger.info(f"Successfully appended {len(processed_content)} chars to {file_path}")
-
-                    # 057 WS-B: name WHAT was appended (bytes + digest), never
-                    # the content — and never nothing, which is what this said.
-                    _r = self._content_receipt(processed_content)
-                    return (f"Content appended to {original_path} "
-                            f"({_r['size_bytes']} bytes, sha256:{_r['sha256']}; "
-                            f"file now {os.path.getsize(file_path)} bytes)")
-
-                except Exception as write_error:
-                    self.logger.warning(f"Append attempt {retry_count+1}/{max_retries} failed: {str(write_error)}")
-                    retry_count += 1
-
-                    # Clean up temp file if it exists
-                    try:
-                        if 'temp_path' in locals() and os.path.exists(temp_path):
-                            os.unlink(temp_path)
-                    except Exception as cleanup_error:
-                        self.logger.debug(f"Failed to clean up temp file: {cleanup_error}")
-
-                    # Wait before retrying with increasing backoff
-                    if retry_count < max_retries:
-                        await asyncio.sleep(0.5 * retry_count)
-
-            # All retries failed - try direct append method as last resort
-            if not success:
-                self.logger.warning(f"Atomic file operations failed after {max_retries} attempts. Trying direct append...")
-
-                try:
-                    # Try direct append mode as a last resort
-                    with open(file_path, 'a', encoding='utf-8') as f:
-                        if not existing_content.endswith('\n') and existing_content:
-                            f.write('\n')
-                        f.write(processed_content)
-
-                    # Verify the file size increased
-                    new_size = os.path.getsize(file_path)
-                    if new_size <= len(existing_content.encode('utf-8')):
-                        raise ServiceError(f"Direct append verification failed: file size did not increase")
-
-                    self.logger.info(f"Successfully appended {len(processed_content)} chars to {file_path} using direct append")
-                    _r = self._content_receipt(processed_content)
-                    return (f"Content appended to {original_path} "
-                            f"({_r['size_bytes']} bytes, sha256:{_r['sha256']}; "
-                            f"file now {new_size} bytes)")
-                except Exception as direct_error:
-                    self.logger.error(f"Direct append failed: {str(direct_error)}")
-                    raise ServiceError(f"Failed to append to file after all recovery attempts")
+            _safe_write_text(file_path, root, combined_content)
+            if not existing_content:
+                # 060 WS-3: a file this session CREATED is its own draft.
+                from tools.filesystem_doc_kind import mark_written
+                mark_written(getattr(self, "session_id", None), file_path)
+            self.logger.info(f"Successfully appended {len(processed_content)} chars to {file_path}")
+            # 057 WS-B: name WHAT was appended (bytes + digest), never
+            # the content — and never nothing, which is what this said.
+            _r = self._content_receipt(processed_content)
+            return (f"Content appended to {original_path} "
+                    f"({_r['size_bytes']} bytes, sha256:{_r['sha256']}; "
+                    f"file now {len(combined_content.encode('utf-8'))} bytes)")
 
         except ServiceError:
             # Re-raise ServiceError without wrapping
@@ -946,6 +776,40 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
         except Exception as e:
             self.logger.error(f"Error appending to file: {str(e)}")
             raise ServiceError(f"Failed to append to file: {str(e)}")
+
+    @staticmethod
+    def _insert_after_anchor(existing: str, addition: str, anchor: str,
+                             *, exists: bool, display_path: str) -> str:
+        """``existing`` with ``addition`` inserted after the anchor's line.
+
+        ⚠️ Both failure modes REFUSE rather than fall back to appending at the
+        end. A newest-first table is the reason this exists (2026-09-23: the
+        SAFETY rail's history stopped gaining rows for eight hours, and the
+        gap reached a money rail's rate reference), and a row written 2,700
+        lines below the table is the same failure wearing a success message.
+        Ambiguity refuses too: choosing between two candidate tables is not a
+        guess a money rail should make.
+        """
+        if not exists:
+            raise ServiceError(
+                f"Cannot insert after {anchor!r}: {display_path} does not exist. "
+                "An anchored insert expects something to insert INTO — create the "
+                "file first, or append without an anchor.")
+        lines = existing.splitlines()
+        hits = [i for i, line in enumerate(lines) if anchor in line]
+        if not hits:
+            raise ServiceError(
+                f"Cannot insert after {anchor!r}: no line in {display_path} contains it. "
+                "Nothing was written — appending at the end instead would put this "
+                "content where the anchor says it does not belong.")
+        if len(hits) > 1:
+            raise ServiceError(
+                f"Cannot insert after {anchor!r}: {len(hits)} lines in {display_path} "
+                f"contain it (first at line {hits[0] + 1}, last at line {hits[-1] + 1}). "
+                "Nothing was written — use a longer, unique anchor.")
+        at = hits[0] + 1
+        out = lines[:at] + addition.splitlines() + lines[at:]
+        return "\n".join(out) + ("\n" if existing.endswith("\n") else "")
 
     # ---------------------------------------------------------------------------
     # Path normalization helper
@@ -1001,6 +865,55 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
             raise
         except Exception:
             pass
+
+    def _workspace_root(self) -> str:
+        """The confinement root (the session workspace), resolved the same way
+        _normalize_path resolves it."""
+        from agents.task.path import pm
+        session_id = (getattr(self, "session_id", None)
+                      or getattr(getattr(self, "container", None), "session_id", None)
+                      or getattr(self, "_current_session_id", None))
+        if not session_id:
+            raise ServiceError("No session_id available for path normalization")
+        user_id = (getattr(self, "user_id", None)
+                   or getattr(getattr(self, "container", None), "user_id", None))
+        clean_id = pm().clean_session_id(session_id)
+        return os.path.abspath(str(pm().get_workspace_dir(clean_id, user_id)))
+
+    def _guard_path(self, normalized_path: str, display_path: str, *, write: bool,
+                    root: Optional[str] = None) -> str:
+        """Every refusal a file verb applies, in one call; returns the root.
+
+        Credential/identity/cross-profile names (_reject_credential_path) plus
+        the shared agent-file deny seam (core.path_safety.agent_file_refusal):
+        `.git`, and for writes the auto-loaded skill dirs and project-context
+        files (H11); the data-home subtree outside the workspace (H12)."""
+        self._reject_credential_path(normalized_path, display_path)
+        root = root or self._workspace_root()
+        from core.path_safety import agent_file_refusal
+        extra_homes = []
+        try:
+            cfg = getattr(getattr(self, "container", None), "config", None)
+            if getattr(cfg, "data_dir", None):
+                extra_homes.append(str(cfg.data_dir))
+        except Exception:
+            pass
+        reason = agent_file_refusal(normalized_path, root, write=write,
+                                    extra_homes=extra_homes)
+        if reason:
+            raise ServiceError(f"Refusing to {'write' if write else 'read'} "
+                               f"{reason}: {display_path}")
+        return root
+
+    @staticmethod
+    def _safe_read_text(path: str, root: str) -> str:
+        """H09: read through core.security.workspace_io (O_NOFOLLOW walk after the
+        realpath check) with the universal-newline decoding a text-mode open() did."""
+        import io
+        from core.security.workspace_io import read_bytes
+        stream = io.TextIOWrapper(io.BytesIO(read_bytes(path, root)),
+                                  encoding='utf-8', errors='replace')
+        return stream.read()
 
     def _normalize_path(self, file_path: str) -> str:
         """Normalize a file path to be within the workspace directory."""
@@ -1123,6 +1036,7 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
 
             # Normalize the directory path
             directory = self._normalize_path(directory)
+            self._guard_path(directory, params.directory or ".", write=False)
 
             if not os.path.exists(directory):
                 # Create directory if it doesn't exist
@@ -1181,13 +1095,23 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
 
             # Normalize file path
             file_path = self._normalize_path(file_path)
+            # A delete is a write: credential files, .git, skills, project
+            # context and the data home are refused here too (H11/H12).
+            root = self._guard_path(file_path, params.file_path, write=True)
 
             # Check if file exists
-            if not os.path.exists(file_path):
+            if not os.path.lexists(file_path):
                 return f"File {params.file_path} does not exist"
+            # 060 WS-3: deleting a RECORD document falsifies history too.
+            from tools.filesystem_doc_kind import record_refusal
+            _refusal = record_refusal(self, file_path, params.file_path, root, None)
+            if _refusal:
+                raise ServiceError(_refusal)
 
-            # Delete the file
-            os.remove(file_path)
+            # Delete the ENTRY at the descriptor-anchored parent (H09): a symlink
+            # is removed itself, a swapped parent component fails the walk.
+            from core.security.workspace_io import unlink as _safe_unlink
+            _safe_unlink(file_path, root)
 
             return f"Deleted file {params.file_path}"
 
@@ -1223,6 +1147,10 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
             # Both ends confined by the ONE gate every filesystem verb uses.
             src = self._normalize_path(params.source_path)
             dst = self._normalize_path(params.dest_path)
+            # The copy had NO name guard: copying `.env` to `notes.txt` and then
+            # reading the copy walked round the credential refusal.
+            root = self._guard_path(src, params.source_path, write=False)
+            self._guard_path(dst, params.dest_path, write=True, root=root)
 
             if not os.path.isfile(src):
                 raise ServiceError(f"source is not a file: {params.source_path}")
@@ -1234,13 +1162,23 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
             if os.path.realpath(src) == os.path.realpath(dst):
                 raise ServiceError("source and destination are the same file")
 
+            from core.security.workspace_io import read_bytes, write_bytes
+            data = read_bytes(src, root)
+            target_existed = os.path.lexists(dst)
+            # 060 WS-3: an overwrite of a RECORD document is a rewrite.
+            from tools.filesystem_doc_kind import mark_written, record_refusal
+            _refusal = record_refusal(self, dst, params.dest_path, root,
+                                      data.decode("utf-8", errors="replace"))
+            if _refusal:
+                raise ServiceError(_refusal)
             os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
-            # Copy to a sibling temp name, then atomic replace — a reader never sees
-            # a half-written destination.
-            tmp = f"{dst}.copy-tmp"
-            shutil.copyfile(src, tmp)
-            os.replace(tmp, dst)
-            size = os.path.getsize(dst)
+            # Copy through a random O_EXCL|O_NOFOLLOW sibling temp, then atomic
+            # replace (H09) — a reader never sees a half-written destination and
+            # a planted symlink at a predictable temp name redirects nothing.
+            write_bytes(dst, root, data)
+            if not target_existed:
+                mark_written(getattr(self, "session_id", None), dst)
+            size = len(data)
             return f"Copied {params.source_path} -> {params.dest_path} ({size} bytes)"
 
         except ServiceError:
@@ -1262,23 +1200,34 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
             self.workspace_dir = execution_context.workspace_dir
 
     @staticmethod
-    def _jsonl_scan(path: str):
-        """(total_lines, records[(lineno, obj)], bad[(lineno, err)]) — one pass, verbatim lines."""
+    def _jsonl_scan(path: str, root: Optional[str] = None, *, text: Optional[str] = None):
+        """(total_lines, records[(lineno, obj)], bad[(lineno, err)]) — one pass, verbatim lines.
+
+        Reads through the descriptor-anchored helper when *root* is given (H09);
+        *text* scans an in-memory rewrite instead of a file."""
         total, recs, bad = 0, [], []
-        with open(path, 'r', encoding='utf-8', errors='replace') as f:
-            for n, line in enumerate(f, 1):
-                if not line.strip():
-                    continue
-                total += 1
-                try:
-                    obj = json.loads(line)
-                except ValueError as e:
-                    bad.append((n, str(e)[:60]))
-                    continue
-                if not isinstance(obj, dict):
-                    bad.append((n, "not a JSON object"))
-                    continue
-                recs.append((n, obj, line))
+        if text is None:
+            if root is not None:
+                text = FileSystem._safe_read_text(path, root)
+            else:
+                with open(path, 'r', encoding='utf-8', errors='replace') as f:
+                    text = f.read()
+        import io
+        # Split on '\n' only, like iterating a text-mode file (splitlines would
+        # also break on U+2028 inside an ensure_ascii=False record).
+        for n, line in enumerate(io.StringIO(text, newline='\n'), 1):
+            if not line.strip():
+                continue
+            total += 1
+            try:
+                obj = json.loads(line)
+            except ValueError as e:
+                bad.append((n, str(e)[:60]))
+                continue
+            if not isinstance(obj, dict):
+                bad.append((n, "not a JSON object"))
+                continue
+            recs.append((n, obj, line))
         return total, recs, bad
 
     @BaseTool.action(
@@ -1297,22 +1246,19 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
             if not items or not all(isinstance(i, dict) for i in items):
                 raise ServiceError("jsonl_append: record must be a JSON object or a list of JSON objects")
             path = self._normalize_path(params.file_path)
+            root = self._guard_path(path, params.file_path, write=True)
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            from core.security.workspace_io import append_bytes, read_bytes
             # A file that does not end in a newline gets one first, so the new
             # record never glues onto the previous line.
             needs_nl = False
-            if os.path.exists(path) and os.path.getsize(path) > 0:
-                with open(path, 'rb') as f:
-                    f.seek(-1, os.SEEK_END)
-                    needs_nl = f.read(1) != b"\n"
-            with open(path, 'a', encoding='utf-8') as f:
-                if needs_nl:
-                    f.write("\n")
-                for i in items:
-                    f.write(json.dumps(i, ensure_ascii=False, separators=(",", ":")) + "\n")
-                f.flush()
-                os.fsync(f.fileno())
-            total, _, bad = self._jsonl_scan(path)
+            if os.path.lexists(path):
+                existing = read_bytes(path, root)
+                needs_nl = bool(existing) and not existing.endswith(b"\n")
+            payload = ("\n" if needs_nl else "") + "".join(
+                json.dumps(i, ensure_ascii=False, separators=(",", ":")) + "\n" for i in items)
+            append_bytes(path, root, payload.encode("utf-8"))
+            total, _, bad = self._jsonl_scan(path, root)
             note = f"; WARNING {len(bad)} pre-existing bad line(s) (first: {bad[0][0]})" if bad else ""
             return (f"Appended {len(items)} record(s) to {params.file_path} "
                     f"({total} line(s) now{note})")
@@ -1336,9 +1282,10 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
         try:
             self._adopt_context(execution_context)
             path = self._normalize_path(params.file_path)
+            root = self._guard_path(path, params.file_path, write=True)
             if not os.path.isfile(path):
                 raise ServiceError(f"not a file: {params.file_path}")
-            total, recs, bad = self._jsonl_scan(path)
+            total, recs, bad = self._jsonl_scan(path, root)
             if bad:
                 raise ServiceError(
                     f"jsonl_remove refused: {len(bad)} line(s) do not parse (first: line "
@@ -1355,17 +1302,16 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
             if len(keep) + len(removed_vals) != total:
                 raise ServiceError("jsonl_remove refused: count check failed; file left untouched")
             bak = path + ".bak"
-            shutil.copyfile(path, bak)
-            tmp = path + ".rewrite-tmp"
-            with open(tmp, 'w', encoding='utf-8') as f:
-                f.writelines(keep)
-                f.flush()
-                os.fsync(f.fileno())
-            t2, r2, b2 = self._jsonl_scan(tmp)
+            rewritten = "".join(keep)
+            t2, r2, b2 = self._jsonl_scan(path, text=rewritten)
             if b2 or t2 != len(keep):
-                os.unlink(tmp)
                 raise ServiceError("jsonl_remove refused: rewrite did not verify; file left untouched")
-            os.replace(tmp, path)
+            # H09: backup and rewrite through random O_EXCL|O_NOFOLLOW temps +
+            # os.replace (the fixed `.rewrite-tmp` name followed a planted link).
+            from core.security.workspace_io import read_bytes, write_bytes, write_text
+            self._guard_path(bak, os.path.basename(bak), write=True, root=root)
+            write_bytes(bak, root, read_bytes(path, root))
+            write_text(path, root, rewritten)
             missing = sorted(wanted - set(removed_vals))
             out = (f"{params.file_path}: removed {len(removed_vals)} line(s) where {params.key} in "
                    f"{sorted(set(removed_vals))}; {total} -> {len(keep)} lines; backup {os.path.basename(bak)}")
@@ -1390,9 +1336,10 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
         try:
             self._adopt_context(execution_context)
             path = self._normalize_path(params.file_path)
+            root = self._guard_path(path, params.file_path, write=False)
             if not os.path.isfile(path):
                 raise ServiceError(f"not a file: {params.file_path}")
-            total, recs, bad = self._jsonl_scan(path)
+            total, recs, bad = self._jsonl_scan(path, root)
             parts = [f"{params.file_path}: {total} lines, {len(recs)} valid, {len(bad)} bad"]
             for n, err in bad[:5]:
                 parts.append(f"bad line {n}: {err}")
@@ -1446,6 +1393,7 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
 
             # Normalize directory path
             directory_path = self._normalize_path(directory_path)
+            self._guard_path(directory_path, params.directory_path, write=True)
 
             # Create the directory
             os.makedirs(directory_path, exist_ok=True)

@@ -34,7 +34,10 @@ logger = logging.getLogger(__name__)
 _DEFAULT_CHAIN = "base"
 
 USAGE = (
-    "Usage: /nft list [on <chain>] [address <0x…>]\n"
+    "Usage: /nft — the agent NFTs I own (pinned collections), their accounts and holdings\n"
+    "/nft send <id|collection#id> <to> [on <chain>] [go] — give one away (its account goes "
+    "with it; its approvals must be cleared first)\n"
+    "/nft list [on <chain>] [address <0x…>]\n"
     "/nft info <contract> <token-id> [on <chain>]\n"
     "/nft transfer <contract> <token-id> <to> [on <chain>] "
     "[std erc721|erc1155] [amount <n>] [go]\n"
@@ -74,12 +77,12 @@ async def nft_reply(user_id: Optional[str], args: List[str]) -> str:
         return "Only the owner can use /nft."
     tokens = [str(a) for a in (args or []) if str(a).strip()]
     if not tokens:
-        return USAGE
+        return await agent_nft_overview()
 
     verb = tokens.pop(0).lower()
     if verb in ("ls", "holdings"):
         verb = "list"
-    if verb not in ("list", "info", "transfer", "revoke"):
+    if verb not in ("list", "info", "transfer", "revoke", "send"):
         return f"Unknown /nft verb {verb!r}.\n{USAGE}"
 
     execute = False
@@ -87,7 +90,8 @@ async def nft_reply(user_id: Optional[str], args: List[str]) -> str:
         execute = True
         tokens.pop()
 
-    chain = _pull(tokens, "on") or _DEFAULT_CHAIN
+    named_chain = _pull(tokens, "on")
+    chain = named_chain or _DEFAULT_CHAIN
     from surfaces.telegram.token_ops import _owner_ctx
     ctx = _owner_ctx(user_id)
 
@@ -105,6 +109,12 @@ async def nft_reply(user_id: Optional[str], args: List[str]) -> str:
             result = await DefiDataTool().nft_holdings(
                 NftHoldingsParams(chain=chain, address=address), ctx)
             return _render(result)
+
+        if verb == "send":
+            if len(tokens) < 2:
+                return "Usage: /nft send <id|collection#id> <to> [on <chain>] [go]"
+            return await _agent_nft_send(ctx, tokens[0], tokens[1],
+                                         chain=named_chain or _AGENT_NFT_CHAIN, execute=execute)
 
         if verb == "info":
             if len(tokens) < 2:
@@ -158,4 +168,46 @@ async def nft_reply(user_id: Optional[str], args: List[str]) -> str:
         return f"The NFT verb did not run: {exc}"
 
 
-__all__ = ["USAGE", "nft_reply"]
+#: The chain of the agent-NFT verbs when the owner names none (the collection's chain).
+_AGENT_NFT_CHAIN = "robinhood"
+
+
+async def agent_nft_overview() -> str:
+    """``/nft`` with no words (069 v4 A4): the NFTs of pinned collections the treasury owns,
+    each with its account, the account's native balance, its open approvals and its book rows.
+    Reads only; an arrival or a loss found here is reported here."""
+    from core.env import bool_env
+    if not bool_env("AGENT_NFT_ENABLED", False):
+        return "Agent NFTs are off (AGENT_NFT_ENABLED).\n\n" + USAGE
+    try:
+        import asyncio
+
+        from core.wallet import nft_holdings
+        from core.wallet.factory import get_agent_wallet
+        wallet = get_agent_wallet()
+        if wallet is None:
+            return "No agent wallet is configured, so I own no NFT.\n\n" + USAGE
+        treasury = wallet.operational_signer().address
+        text = await asyncio.to_thread(nft_holdings.overview, treasury=treasury)
+    except Exception as exc:
+        logger.warning("/nft overview failed", exc_info=True)
+        return f"The agent-NFT view did not run: {exc}"
+    return text + "\n\n" + USAGE
+
+
+async def _agent_nft_send(ctx, target: str, to: str, *, chain: str, execute: bool) -> str:
+    """``/nft send <id> <to> [go]`` — ``agent_nft_withdraw_token`` from the owner's seat."""
+    from tools.agent_nft.tool import AgentNftTool, TakeParams
+    try:
+        params = TakeParams(to=to, nft=target, chain=chain, dry_run=not execute)
+    except Exception as exc:
+        return f"❌ {exc}"
+    result = await AgentNftTool().agent_nft_withdraw_token(params, ctx)
+    body = _render(result)
+    if not execute and not body.startswith("❌"):
+        body += (f"\n\nAdd `go` to send it: /nft send {target} {to} on {chain} go\n"
+                 "⚠️ It is irreversible: the NFT and its account leave this treasury.")
+    return body
+
+
+__all__ = ["USAGE", "agent_nft_overview", "nft_reply"]

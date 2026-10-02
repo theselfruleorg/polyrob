@@ -1,9 +1,16 @@
 """X402PayTool — the agent pays for paid resources during a job (gated OFF).
 
 Consumes the AgentWallet x402 signer + an X402PaymentClient boundary. Enforces:
-the per-call max_amount_usd cap, the wallet's catastrophic PolicyGate ceiling,
-payTo-binding (pays only the resource it called), idempotency, and the
-LLM-never-sees-key invariant (returns body/tx_hash/address only).
+the per-call max_amount_usd cap, the wallet's catastrophic PolicyGate ceiling
+(re-checked on the SDK-selected amount), the asset pin (canonical USDC) and the
+network pin, a capped authorization window (CR-L26), turn origin, the owner
+pause, idempotency, and the LLM-never-sees-key invariant (returns
+body/tx_hash/address only).
+
+⚠️ There is NO payTo binding (CR-L27): the recipient is whatever address the
+resource's own 402 challenge names. Nothing ties that address to the URL's
+host, so a paid fetch trusts the server for WHO receives the money; the caps
+above bound HOW MUCH.
 """
 from __future__ import annotations  # safe: @BaseTool.action uses explicit param_model
 
@@ -37,6 +44,30 @@ class FetchParams(BaseModel):
             "resource's price WITHOUT paying, call x402_quote first instead."
         ),
     )
+    request_id: Optional[str] = Field(None, max_length=128, description=(
+        "Name THIS paid call. A retry of the same call MUST reuse its id (so it "
+        "can never pay twice); a new, deliberate call to the same metered URL "
+        "needs a new id. Omitted = one payment per exact (method, url, body, "
+        "max_amount_usd)."))
+
+
+def x402_idempotency_key(params: "FetchParams") -> str:
+    """The replay-guard key of one x402_fetch.
+
+    068 X3: the key was ``x402:{url}:{cap}`` and the replay set is durable, so a
+    metered URL was payable ONCE, ever — every later call was refused as a
+    replay. The method, the body and an optional caller-named ``request_id`` now
+    separate deliberate calls; a retry that reuses them maps to the same key and
+    is still refused. A plain GET with no id keeps the old key byte for byte.
+    """
+    import hashlib
+    body_fp = (hashlib.sha256(params.body.encode("utf-8")).hexdigest()[:16]
+               if params.body else "")
+    method = (params.method or "GET").upper()
+    rid = (params.request_id or "").strip()
+    return (f"x402:{params.url}:{params.max_amount_usd}"
+            + (f":{method}:{body_fp}" if (method != "GET" or body_fp) else "")
+            + (f":rid={rid}" if rid else ""))
 
 
 def _render_probe(row: dict) -> str:
@@ -139,7 +170,15 @@ class X402PayTool(BaseTool):
         if refusal:
             return self._ar(error=f"x402_quote refused: {refusal}")
         try:
-            price = await self._get_client().quote(params.url, pinned_ip=pinned_ip)
+            # 068 B8: with a wallet, price the entry it would pay; without one
+            # (an invoice-only deployment) the first entry, as before.
+            try:
+                _wallet = self._get_wallet()
+                _net = getattr(getattr(_wallet, "config", None), "network", None)
+            except Exception:
+                _net = None
+            price = await self._get_client().quote(params.url, pinned_ip=pinned_ip,
+                                                   network=_net)
             if price is None:
                 return self._ar(content=(
                     f"{params.url}: no x402 price found on a plain GET. This is NOT "
@@ -200,7 +239,8 @@ class X402PayTool(BaseTool):
         # to an attacker-named payTo. Asset-pin and network-pin bind the asset and
         # chain, never the recipient.
         from tools.x402.spend_gate import x402_spend_refusal
-        refusal = x402_spend_refusal(execution_context, self)
+        refusal = x402_spend_refusal(execution_context, self,
+                                     max_amount_usd=params.max_amount_usd)
         if refusal:
             return self._ar(error=refusal)
         # H1b: the paying verb takes a model-supplied URL and returns the response
@@ -212,13 +252,27 @@ class X402PayTool(BaseTool):
         # Owner kill-switch: refuse ALL spend while autonomy is halted (defence beyond caps).
         # G-11: fail CLOSED. An import/probe failure must never silently disable the
         # halt check on a money path — refuse the payment and name the failure.
+        # A genuine owner turn is the owner paying; the pause bounds the agent's
+        # own work only (tx_guard step 0). A missing context is never the owner.
+        from core.money.authority import owner_direct_turn
+        from tools.controller.turn_origin import _is_forged_or_autonomous_turn
+        owner_direct = owner_direct_turn(execution_context,
+                                         _is_forged_or_autonomous_turn, self)
         try:
             from core.config_policy import AutonomyConfig
-            halted = AutonomyConfig.autonomy_halted()
+            halted = (not owner_direct) and AutonomyConfig.autonomy_halted()
         except Exception as e:
-            return self._ar(error=f"payment refused: kill-switch probe failed ({e}); failing closed")
+            return self._ar(error=f"payment refused: pause probe failed ({e}); failing closed")
         if halted:
-            return self._ar(error="payment refused: autonomy is HALTED (owner kill-switch)")
+            # O20: name the owner pause and its chat remedy (text only).
+            try:
+                from core.autonomy_control import pause_refusal_text
+                _txt = pause_refusal_text("dispatch", what="this payment", force=True)
+            except Exception:
+                _txt = None
+            return self._ar(error="payment " + (_txt or (
+                "refused: paused by the owner's autonomy pause — the owner lifts "
+                "it with /resume. Nothing was paid.")))
         cfg = wallet.config
         # Sign with the OPERATIONAL venue (default 'treasury') so payment draws from the
         # funded address (== wallet.address). The policy venue label below stays "x402"
@@ -234,7 +288,9 @@ class X402PayTool(BaseTool):
         # When the probe can't price it, fail closed to the agent's authorized
         # ceiling (max_amount_usd) as the worst-case spend — never skip the gate.
         try:
-            price = await self._get_client().quote(params.url, pinned_ip=pinned_ip)
+            # 068 B8: price the entry the payer will actually pay.
+            price = await self._get_client().quote(params.url, pinned_ip=pinned_ip,
+                                                   network=cfg.network)
         except Exception as e:
             return self._ar(error=f"x402 quote failed: {e}")
         if price is not None and price > params.max_amount_usd:
@@ -258,7 +314,7 @@ class X402PayTool(BaseTool):
         # Trade-off (deliberate): check() is NOT a reservation — a checked-but-
         # failed fetch must stay retryable, so we do not mark the key "seen" here;
         # only record() (after an actual payment) adds it to the replay-guard set.
-        idem = f"x402:{params.url}:{params.max_amount_usd}"
+        idem = x402_idempotency_key(params)
         # M4 (2026-07-15): PolicyGate.check() -> (network pay leg) -> record() is
         # the value-moving critical section. Without holding the gate's reserve
         # lock across it, two concurrent x402_fetch calls can both check() a
@@ -269,62 +325,68 @@ class X402PayTool(BaseTool):
         # (RealX402Client._abort_if_invalid_requirement -> policy.check(), fired
         # from inside the awaited fetch_with_payment below) cannot deadlock
         # against it.
-        async with wallet.policy.reserve():
-            decision = wallet.policy.check(venue="x402", amount_usd=check_amount, idempotency_key=idem)
-            if not decision.allowed:
-                return self._ar(error=f"payment blocked: {decision.reason}")
-            try:
-                res = await self._get_client().fetch_with_payment(
-                    url=params.url, method=params.method, body=params.body,
-                    signer=signer, network=cfg.network,
-                    max_amount_usd=params.max_amount_usd,
-                    pinned_ip=pinned_ip,
-                )
-            except Exception as e:
-                logging.getLogger(__name__).error(f"x402_fetch failed: {e}")
-                return self._ar(error=f"x402_fetch failed: {e}")
-            if res.paid:
-                # Reuse the same idem key check() used so replay-protection correlates.
-                # `X402Result` carries no settled network/chain field (only
-                # `pay_to`/`tx_hash`/`amount_usd`) — `cfg.network` is the wallet's
-                # "mainnet"/"testnet" MODE, not a chain id, and mapping it to the
-                # actual settled chain (base/base-sepolia) belongs to a future
-                # X402Result field, not a guess here. chain=None until then.
-                # A merchant-controlled settlement header cannot discount the
-                # amount of the authorization we actually signed.
-                cap_charge = max(res.amount_usd, getattr(res, "authorized_amount_usd", None) or 0.0)
-                wallet.policy.record(venue="x402", action="pay", amount_usd=cap_charge,
-                                     counterparty=res.pay_to, idempotency_key=idem,
-                                     result_ref=res.tx_hash, chain=None,
-                                     submission_ref=getattr(res, "submission_ref", None))
-                # Finding 2 (Task 4 review, cheap-related): amount_is_estimate was
-                # captured on X402Result but never surfaced — the audit/user trail
-                # couldn't tell a confirmed-settled figure from a pre-settlement
-                # estimate. Mark it in the header so that distinction is visible.
-                estimate_marker = " (estimated)" if res.amount_is_estimate else ""
-                header = f"[paid ${res.amount_usd:.4f}{estimate_marker} to {res.pay_to}, tx {res.tx_hash}]\n"
-                if cap_charge > res.amount_usd:
-                    header += f"[Spend cap charged ${cap_charge:.4f}, the signed authorization ceiling.]\n"
-            else:
-                if getattr(res, "submission_ref", None):
-                    return self._ar(error=(
-                        "Payment authorization was prepared but settlement is unconfirmed; "
-                        "reconcile the pending submission before retrying. "
-                        f"Reference: {res.submission_ref}"))
-                # 2026-07-19 fabrication incident: this branch used to emit an
-                # EMPTY header, so an unpaid fetch was indistinguishable from a
-                # paid one — and when the body was empty too, the whole content
-                # was "", which the framework's fallback rewrites to the literal
-                # "Action completed successfully" (result_processing.py). The
-                # agent read that as payment confirmation and published
-                # "First x402 micro-transaction completed!" to X and to the
-                # owner, having never moved a cent. A money verb must state
-                # NON-action as loudly as action: the absence of a marker is not
-                # something a model reliably notices.
-                header = ("[NO PAYMENT MADE: the resource returned no x402 "
-                          "challenge (free/unpriced), so nothing was charged and "
-                          "no transaction exists. Do NOT report this as a "
-                          "completed payment.]\n")
+        # The owner-direct pay passes the ledger's pause read too (one answer).
+        from core.money.ledger import pause_probe
+        with pause_probe((lambda: False) if owner_direct else AutonomyConfig.autonomy_halted):
+            async with wallet.policy.reserve():
+                decision = wallet.policy.check(venue="x402", amount_usd=check_amount, idempotency_key=idem)
+                if not decision.allowed:
+                    return self._ar(error=f"payment blocked: {decision.reason}")
+                try:
+                    res = await self._get_client().fetch_with_payment(
+                        url=params.url, method=params.method, body=params.body,
+                        signer=signer, network=cfg.network,
+                        max_amount_usd=params.max_amount_usd,
+                        pinned_ip=pinned_ip,
+                        idempotency_key=idem,
+                    )
+                except Exception as e:
+                    logging.getLogger(__name__).error(f"x402_fetch failed: {e}")
+                    return self._ar(error=f"x402_fetch failed: {e}")
+                if res.paid:
+                    # Reuse the same idem key check() used so replay-protection correlates.
+                    # `X402Result` carries no settled network/chain field (only
+                    # `pay_to`/`tx_hash`/`amount_usd`) — `cfg.network` is the wallet's
+                    # "mainnet"/"testnet" MODE, not a chain id, and mapping it to the
+                    # actual settled chain (base/base-sepolia) belongs to a future
+                    # X402Result field, not a guess here. chain=None until then.
+                    # A merchant-controlled settlement header cannot discount the
+                    # amount of the authorization we actually signed.
+                    cap_charge = max(res.amount_usd, getattr(res, "authorized_amount_usd", None) or 0.0)
+                    if owner_direct and hasattr(wallet.policy, "note_lane"):
+                        wallet.policy.note_lane(idem, "owner_direct")
+                    wallet.policy.record(venue="x402", action="pay", amount_usd=cap_charge,
+                                         counterparty=res.pay_to, idempotency_key=idem,
+                                         result_ref=res.tx_hash, chain=None,
+                                         submission_ref=getattr(res, "submission_ref", None))
+                    # Finding 2 (Task 4 review, cheap-related): amount_is_estimate was
+                    # captured on X402Result but never surfaced — the audit/user trail
+                    # couldn't tell a confirmed-settled figure from a pre-settlement
+                    # estimate. Mark it in the header so that distinction is visible.
+                    estimate_marker = " (estimated)" if res.amount_is_estimate else ""
+                    header = f"[paid ${res.amount_usd:.4f}{estimate_marker} to {res.pay_to}, tx {res.tx_hash}]\n"
+                    if cap_charge > res.amount_usd:
+                        header += f"[Spend cap charged ${cap_charge:.4f}, the signed authorization ceiling.]\n"
+                else:
+                    if getattr(res, "submission_ref", None):
+                        return self._ar(error=(
+                            "Payment authorization was prepared but settlement is unconfirmed; "
+                            "reconcile the pending submission before retrying. "
+                            f"Reference: {res.submission_ref}"))
+                    # 2026-07-19 fabrication incident: this branch used to emit an
+                    # EMPTY header, so an unpaid fetch was indistinguishable from a
+                    # paid one — and when the body was empty too, the whole content
+                    # was "", which the framework's fallback rewrites to the literal
+                    # "Action completed successfully" (result_processing.py). The
+                    # agent read that as payment confirmation and published
+                    # "First x402 micro-transaction completed!" to X and to the
+                    # owner, having never moved a cent. A money verb must state
+                    # NON-action as loudly as action: the absence of a marker is not
+                    # something a model reliably notices.
+                    header = ("[NO PAYMENT MADE: the resource returned no x402 "
+                              "challenge (free/unpriced), so nothing was charged and "
+                              "no transaction exists. Do NOT report this as a "
+                              "completed payment.]\n")
         return self._ar(content=f"{header}{res.body}")
 
     @BaseTool.action("Show the agent wallet: address, ON-CHAIN USDC/gas balance, spend caps, and payment audit", param_model=EmptyWalletParams)

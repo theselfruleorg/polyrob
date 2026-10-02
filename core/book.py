@@ -37,6 +37,11 @@ class BookVerdict(str, Enum):
 NO_ENTRY_RECORDED_REASON = (
     "no entry recorded for this position — the ledger holds it, but no trade "
     "wrote its cost basis")
+#: 071 W3: the rail tracks the position but its cost basis is UNKNOWN (NULL) —
+#: an unvalued buy, or a holding an adopted account already had. Not $0.
+BASIS_UNKNOWN_REASON = (
+    "basis unknown — the rail tracks this position but no trade recorded what "
+    "it cost, so no profit or loss can be computed")
 
 #: Why "Since entry" reads `—` even when the cost basis IS known: profit/loss is
 #: ``worth_now − entry_usd``, and without a current worth there is nothing to
@@ -67,6 +72,11 @@ class BookRow:
     entry_reason: Optional[str] = None
     since_entry: Optional[float] = None
     since_entry_reason: Optional[str] = None
+    #: The tracked position's lifecycle (W0, ``core.open_positions``):
+    #: ``open`` | ``quarantined`` (a look-alike of a trusted token) |
+    #: ``written_off``. ``None`` when the store has no row for it.
+    lifecycle: Optional[str] = None
+    lifecycle_reason: Optional[str] = None
 
     def to_dict(self) -> Dict[str, object]:
         """The JSON row the Money Book renders (043 §3.4): symbol, chain,
@@ -84,6 +94,8 @@ class BookRow:
             "entry_reason": self.entry_reason,
             "since_entry": self.since_entry,
             "since_entry_reason": self.since_entry_reason,
+            "lifecycle": self.lifecycle,
+            "lifecycle_reason": self.lifecycle_reason,
             "state": self.state,
         }
 

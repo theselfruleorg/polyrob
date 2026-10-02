@@ -45,11 +45,21 @@
           <h2 class="entry-title">{{ item.title }}</h2>
 {%- if item.unreadable %}
           <p class="entry-body">{{ t('inbox.unreadable.body') }}</p>
+{%- elif item.extra and item.extra.card %}
+          {# CR-M01: the FULL grant card — every money, asset and target field —
+             the same card the chat push carries. A money grant is never
+             approved here from a one-line preview. #}
+          <pre class="entry-body entry-card">{{ item.extra.card }}</pre>
 {%- elif item.body %}
           <p class="entry-body">{{ item.body }}</p>
 {%- endif %}
 {%- if item.meta %}
           <p class="entry-meta">{{ item.meta }}</p>
+{%- endif %}
+{%- if item.waiting %}
+          <p class="entry-meta">{{ item.waiting }}{% if item.expires %} {{ item.expires }}{% endif %}</p>
+{%- elif item.expires %}
+          <p class="entry-meta">{{ item.expires }}</p>
 {%- endif %}
 {%- if item.decide_elsewhere and not read_only %}
           {# An app decision is instance-wide; a multitenant seat may not take
@@ -99,6 +109,21 @@
       </div>
 {%- endif %}
 
+      {# Action cards (core/surfaces/cards.py): money quotes to confirm, the
+         agent's proposals and questions. Filled by cards.js from
+         /api/webgate/cards; hidden until there is one. #}
+      <div class="section" id="inbox-cards" hidden
+           data-read-only="{{ 'true' if read_only else 'false' }}"
+           data-unreachable="{{ t('inbox.unreachable') }}"
+           data-unreadable="{{ t('inbox.cards.unreadable') }}">
+        <div class="section-head">
+          <h2 class="section-title">{{ t('inbox.cards.title') }}</h2>
+          <span class="section-aside">{{ t('inbox.cards.aside') }}</span>
+        </div>
+        <div class="ledger" data-cards-list></div>
+      </div>
+      <script src="/static/app/cards.js" type="module"></script>
+
 {%- if not_blocking %}
       <div class="section">
         <div class="section-head">
@@ -126,7 +151,7 @@
       <p class="composer-note">{{ t('inbox.read_only.decide') }}</p>
 {%- endif %}
 
-      <p class="sources">{{ sources_note }} {{ t('inbox.sources.cites')|safe }}</p>
+      <p class="entry-meta" id="inbox-checked">{{ checked_note }}</p>
     </div>
 {%- if not read_only %}
     {# The buttons above carry only data; this is what makes them decide. No

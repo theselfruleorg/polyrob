@@ -1,7 +1,7 @@
 """043 W4 — every console write records who did it, ratcheted.
 
 Before W4 the console mutated state (config, prefs, pending decisions, goal
-verbs, cron cancel, invoice settle, pfp, inbox) with no durable actor trail;
+verbs, cron cancel, invoice settle, inbox) with no durable actor trail;
 only the pause/resume verbs (``core.autonomy_control``) and the app verbs
 (``core.app_service.owner_ops``) recorded downstream, both already stamping
 ``via="webview"``.
@@ -248,79 +248,3 @@ def test_cron_cancel_writes_an_audit_row_naming_the_actor(monkeypatch, tmp_path)
     assert rows[0]["source"] == "webview"
     assert rows[0]["attrs"]["via"] == "webview"
     assert rows[0]["attrs"]["job_id"] == job.id
-
-
-# --- pfp records the OUTCOME, not the attempt -------------------------------- #
-# A no-op / refused pfp op must not write a completed-action row (honest states).
-
-def _pfp_client(monkeypatch, tmp_path, user_id="u1"):
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-
-    import webview.pages as pages
-    monkeypatch.setattr(pages, "_pfp_owner_required", lambda req: None)
-    monkeypatch.setattr(pages, "_effective_user_id", lambda req: user_id)
-    monkeypatch.setattr(pages, "_pfp_data_dir", lambda: str(tmp_path))
-    app = FastAPI()
-    app.include_router(pages.router)
-    return TestClient(app), pages
-
-
-def test_successful_pfp_generate_logs_a_row(monkeypatch, tmp_path):
-    monkeypatch.setenv("TELEMETRY_EVENT_LOG_PATH",
-                       str(tmp_path / "telemetry_events.db"))
-    monkeypatch.delenv("TELEMETRY_EVENT_LOG_ENABLED", raising=False)
-    from core.event_kinds import CONSOLE_PFP_WRITE
-    from core.event_log import get_event_log
-
-    client, pages = _pfp_client(monkeypatch, tmp_path)
-    monkeypatch.setattr(pages, "load_pfp_meta", lambda home, iid: None)
-    monkeypatch.setattr("modules.pfp.store.generate_pfp",
-                        lambda *a, **k: {"seed": "Rob"})
-
-    r = client.post("/api/pfp/generate")
-    assert r.status_code == 200 and r.json()["ok"] is True
-    rows = get_event_log().query(kind=CONSOLE_PFP_WRITE)
-    assert len(rows) == 1
-    assert rows[0]["user_id"] == "u1"
-    assert rows[0]["attrs"]["via"] == "webview"
-    assert rows[0]["attrs"]["action"] == "generate"
-    assert rows[0]["attrs"]["outcome"] == "created"
-
-
-def test_noop_pfp_generate_logs_no_completed_action_row(monkeypatch, tmp_path):
-    """An avatar already exists → the generate is a no-op; nothing changed, so
-    no completed-action row (the confident-wrong record this fix closes)."""
-    monkeypatch.setenv("TELEMETRY_EVENT_LOG_PATH",
-                       str(tmp_path / "telemetry_events.db"))
-    monkeypatch.delenv("TELEMETRY_EVENT_LOG_ENABLED", raising=False)
-    from core.event_kinds import CONSOLE_PFP_WRITE
-    from core.event_log import get_event_log
-
-    client, pages = _pfp_client(monkeypatch, tmp_path)
-    monkeypatch.setattr(pages, "load_pfp_meta", lambda home, iid: {"seed": "Rob"})
-
-    r = client.post("/api/pfp/generate")
-    assert r.status_code == 200 and "already exists" in r.json()["message"]
-    assert get_event_log().query(kind=CONSOLE_PFP_WRITE) == []
-
-
-def test_refused_pfp_keep_logs_no_completed_action_row(monkeypatch, tmp_path):
-    """`keep` with no draft raises FileNotFoundError → {ok:false}; the refusal
-    must not read as a locked identity in the audit."""
-    monkeypatch.setenv("TELEMETRY_EVENT_LOG_PATH",
-                       str(tmp_path / "telemetry_events.db"))
-    monkeypatch.delenv("TELEMETRY_EVENT_LOG_ENABLED", raising=False)
-    from core.event_kinds import CONSOLE_PFP_WRITE
-    from core.event_log import get_event_log
-
-    client, _ = _pfp_client(monkeypatch, tmp_path)
-
-    def _no_draft(*a, **k):
-        raise FileNotFoundError("no draft")
-
-    monkeypatch.setattr("modules.pfp.store.keep_pfp", _no_draft)
-    r = client.post("/api/pfp/keep")
-    # 043 A19: a refusal is a 409, not a 200 with a false flag.
-    assert r.status_code == 409 and r.json()["ok"] is False
-    assert get_event_log().query(kind=CONSOLE_PFP_WRITE) == []

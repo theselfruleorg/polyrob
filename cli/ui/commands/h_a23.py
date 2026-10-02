@@ -28,6 +28,8 @@ def register(reg, Command) -> None:
     h_attach.register(reg, Command)
     h_steer.register(reg, Command)         # /steer (new on every seat)
     h_goal_one.register(reg, Command)      # /goal
+    from cli.ui.commands import h_rail
+    h_rail.register(reg, Command)          # /rail (036)
     h_reject.register(reg, Command)        # /reject
     h_money_verbs.register(reg, Command)   # /wallet /trade /bridge /dev
     h_mode.register(reg, Command)          # /mode
@@ -40,3 +42,9 @@ def register(reg, Command) -> None:
     # capabilities that were agent-only until the interface audit.
     from cli.ui.commands import h_owner_reach
     h_owner_reach.register(reg, Command)
+    # 041 phase 2: /workers (REPL-local — Stop/Steer act on this session).
+    from cli.ui.commands import h_workers
+    h_workers.register(reg, Command)
+    # 2026-09-27: /cards (action cards) + the folded tap tokens.
+    from cli.ui.commands import h_cards
+    h_cards.register(reg, Command)

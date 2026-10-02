@@ -28,6 +28,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from core.action_names import bare_action_name
 from core.copy import t
 
 __all__ = ["narrate"]
@@ -44,7 +45,9 @@ def narrate(event: Any) -> str:
         return t("chat.act.did_work")
 
     tool = _name(_pick(event, "tool_name"))
-    action = _name(_pick(event, "action_name"))
+    # The feed carries the REGISTERED key (``coding_run_tests``); the routing
+    # below names methods, so strip the tool's namespace (review B1).
+    action = bare_action_name(tool, _name(_pick(event, "action_name")))
     success = _pick(event, "success")
 
     if success is False:

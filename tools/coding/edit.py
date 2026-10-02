@@ -242,65 +242,116 @@ def _strip_leading_ws(line: str, n: int) -> str:
     return line[remove:]
 
 
-_HUNK_RE = _re.compile(r"^@@ -(\d+)(?:,\d+)? \+\d+(?:,\d+)? @@")
+_HUNK_RE = _re.compile(r"^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@")
+
+# Coding-agent review B5 (2026-09-24): a hunk used to apply ONLY at the exact
+# ``@@`` line and a bare ``""`` context line (models drop the leading space on
+# a blank line) was skipped, so LLM-written patches failed. A hunk now applies
+# at the NEAREST position its context matches, strictest rung first.
+_PATCH_RUNGS = (
+    ("exact", lambda line: line),
+    ("trailing-whitespace", lambda line: line.rstrip()),
+    ("whitespace", lambda line: line.strip()),
+)
+
+
+def _parse_hunks(patch: str) -> list:
+    """``[(hint, ops)]`` — *hint* is the 0-based ``@@ -start`` line; *ops* is a
+    list of ``(" "|"-"|"+", text)``. A bare ``""`` inside a hunk is a blank
+    context line; trailing ones (the patch's own line ends) are dropped."""
+    hunks = []
+    ops = None
+    for line in patch.split("\n"):
+        header = _HUNK_RE.match(line)
+        if header:
+            ops = []
+            start = int(header.group(1))
+            # Unified-diff convention: "-N,0" (an insert-only hunk) means AFTER
+            # line N, so its 0-based insert point is N, not N-1.
+            if header.group(2) == "0":
+                hunks.append((start, ops))
+            else:
+                hunks.append((max(start - 1, 0), ops))
+            continue
+        if ops is None or line.startswith("\\"):  # preamble / "\ No newline"
+            continue
+        if line.startswith("--- ") and ops and any(op != " " for op, _ in ops):
+            raise EditError("the patch touches more than one file; send one file per call")
+        if line == "":
+            ops.append((" ", ""))
+        elif line[0] in " -+":
+            ops.append((line[0], line[1:]))
+        else:
+            raise EditError(f"unrecognised patch line: {line!r}")
+    for _, hunk_ops in hunks:
+        while hunk_ops and hunk_ops[-1] == (" ", ""):
+            hunk_ops.pop()
+    return hunks
+
+
+def _locate(original: list, old: list, lo: int, hint: int):
+    """``(position, rung)`` for *old* at or after *lo*.
+
+    The ``@@`` position wins when the context matches there exactly. Otherwise
+    the hunk RELOCATES only to a UNIQUE match (strictest rung first): a
+    relocation between two candidates is a guess, and a guessed edit in the
+    wrong place is worse than a refused one (review B5 follow-up).
+    """
+    if not old:
+        return max(lo, min(hint, len(original))), "exact"
+    if hint >= lo and original[hint:hint + len(old)] == old:
+        return hint, "exact"
+    for rung, norm in _PATCH_RUNGS:
+        want = [norm(x) for x in old]
+        normed = [norm(x) for x in original]
+        hits = [pos for pos in range(lo, len(original) - len(old) + 1)
+                if normed[pos:pos + len(old)] == want]
+        if len(hits) == 1:
+            return hits[0], rung
+        if len(hits) > 1:
+            lines = ", ".join(str(h + 1) for h in hits[:5])
+            raise EditError(
+                f"hunk context matches {len(hits)} places (lines {lines}) and not at its "
+                f"@@ line {hint + 1}; add context lines or fix the @@ line")
+    head = next((x for x in old if x.strip()), old[0])
+    raise EditError(
+        f"context mismatch: the hunk does not match near line {hint + 1} (first line {head!r}); "
+        "re-read the file and regenerate the patch")
 
 
 def apply_patch(content: str, patch: str) -> str:
     """Apply a unified-diff ``patch`` to ``content`` and return the new text.
 
-    Reject-on-context-mismatch: every context (' ') and removed ('-') line must
-    match the source at the hunk location, or :class:`EditError` is raised. The
-    ``@@ -start,len +start,len @@`` header locates the apply point (1-based).
-    Lines starting with '+' are inserted; '\\ No newline...' and blank trailing
-    lines are ignored. Single-file only (the tool layer owns one file per call).
+    Each hunk's context (' ') and removed ('-') lines must match the source —
+    at the ``@@ -start`` line or, failing that, at the ONE other place they
+    match, trying exact, then trailing-whitespace, then whitespace-insensitive
+    comparison. More than one candidate is refused, never guessed.
+    Context lines keep the FILE's text (a fuzzy match never rewrites them).
+    Hunks apply in order and may not overlap. Lines starting with '+' are
+    inserted; '\\ No newline...' lines are ignored. Single-file only (the
+    tool layer owns one file per call).
     """
+    hunks = _parse_hunks(patch)
+    if not hunks:
+        raise EditError("no @@ hunk header found in patch")
     original = content.split("\n")
-    patch_lines = patch.split("\n")
     result: list[str] = []
     src_idx = 0
-    i = 0
-    saw_hunk = False
-    while i < len(patch_lines):
-        header = _HUNK_RE.match(patch_lines[i])
-        if not header:
-            i += 1
-            continue
-        saw_hunk = True
-        start = int(header.group(1)) - 1  # 0-based
-        if start < src_idx:
-            raise EditError("overlapping or out-of-order hunks")
-        if start > len(original):
-            raise EditError(f"hunk start {start + 1} is beyond end of file")
-        result.extend(original[src_idx:start])
-        src_idx = start
-        i += 1
-        while i < len(patch_lines) and not _HUNK_RE.match(patch_lines[i]):
-            pl = patch_lines[i]
-            if pl.startswith("\\"):  # "\ No newline at end of file"
-                i += 1
-                continue
-            if pl.startswith(" "):
-                if src_idx >= len(original) or original[src_idx] != pl[1:]:
-                    found = original[src_idx] if src_idx < len(original) else "<EOF>"
-                    raise EditError(
-                        f"context mismatch at line {src_idx + 1}: "
-                        f"expected {pl[1:]!r}, found {found!r}"
-                    )
-                result.append(original[src_idx])
-                src_idx += 1
-            elif pl.startswith("-"):
-                if src_idx >= len(original) or original[src_idx] != pl[1:]:
-                    found = original[src_idx] if src_idx < len(original) else "<EOF>"
-                    raise EditError(
-                        f"removed-line mismatch at line {src_idx + 1}: "
-                        f"expected {pl[1:]!r}, found {found!r}"
-                    )
-                src_idx += 1
-            elif pl.startswith("+"):
-                result.append(pl[1:])
-            # bare "" (patch tail) and any other line: ignore
-            i += 1
-    if not saw_hunk:
-        raise EditError("no @@ hunk header found in patch")
+    delta = 0  # how far earlier hunks moved the file (applied offset)
+    for hint, ops in hunks:
+        old = [text for op, text in ops if op in " -"]
+        pos, _rung = _locate(original, old, src_idx, hint + delta)
+        delta = pos - hint
+        result.extend(original[src_idx:pos])
+        cursor = pos
+        for op, text in ops:
+            if op == " ":
+                result.append(original[cursor])
+                cursor += 1
+            elif op == "-":
+                cursor += 1
+            else:
+                result.append(text)
+        src_idx = cursor
     result.extend(original[src_idx:])
     return "\n".join(result)

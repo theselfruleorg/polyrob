@@ -159,6 +159,41 @@ def get_default_model(provider: str) -> str:
     return DEFAULT_MODELS.get(provider, DEFAULT_MODELS['openai'])
 
 # This function will be imported by llm_manager.py
+#: client_class_name -> (module, lazy_deps feature or None). PROVIDER_CONFIG
+#: stores NAMES (not class objects) to stay free of circular imports at
+#: definition time; this is the one place a name becomes a class, and the
+#: SDK-bearing rows go through core.lazy_deps first so a missing extra either
+#: installs itself (local) or refuses naming the extra (server).
+_CLIENT_MODULES = {
+    'AnthropicClient': ('modules.llm.anthropic_client', 'provider.anthropic'),
+    'OpenAIClient': ('modules.llm.openai_client', None),
+    'DeepSeekClient': ('modules.llm.deepseek_client', None),
+    'GeminiClient': ('modules.llm.gemini_client', 'provider.gemini'),
+    'OpenRouterClient': ('modules.llm.openrouter_client', None),
+    'NvidiaClient': ('modules.llm.nvidia_client', None),
+    # Proposal 024 generic clients — serve any ProviderSpec whose transport
+    # is OpenAI- or Anthropic-compatible (user-declared providers.yaml rows).
+    'OpenAICompatClient': ('modules.llm.compat_clients', None),
+    'AnthropicCompatClient': ('modules.llm.compat_anthropic', 'provider.anthropic'),
+    'ResponsesCompatClient': ('modules.llm.responses_client', None),
+}
+
+
+def resolve_client_class(class_name: str):
+    """Import and return the client class for a PROVIDER_CONFIG ``client_class_name``.
+    Raises ``core.lazy_deps.FeatureUnavailable`` (with the remedy) when the
+    provider's SDK is an absent extra that may not be installed here."""
+    import importlib
+    try:
+        module_name, feature = _CLIENT_MODULES[class_name]
+    except KeyError:
+        raise ValueError(f"Unknown LLM client class: {class_name}")
+    if feature:
+        from core.lazy_deps import ensure_provider
+        ensure_provider(feature)
+    return getattr(importlib.import_module(module_name), class_name)
+
+
 def create_llm_client(name: str, config, container=None, model_type=None):
     """Create LLM client based on configuration.
 
@@ -171,34 +206,12 @@ def create_llm_client(name: str, config, container=None, model_type=None):
     Returns:
         Initialized LLM client instance
     """
-    # Resolve the client class from PROVIDER_CONFIG (single source of truth).
-    # Import client classes here to avoid circular imports at module level.
-    from modules.llm.anthropic_client import AnthropicClient
-    from modules.llm.openai_client import OpenAIClient
-    from modules.llm.deepseek_client import DeepSeekClient
-    from modules.llm.gemini_client import GeminiClient
-    from modules.llm.openrouter_client import OpenRouterClient
-    from modules.llm.nvidia_client import NvidiaClient
-    from modules.llm.compat_clients import AnthropicCompatClient, OpenAICompatClient
-    from modules.llm.responses_client import ResponsesCompatClient
+    # Resolve the client class from PROVIDER_CONFIG (single source of truth),
+    # importing ONLY the module the provider names. ⚠️ 058 T7.2: this used to
+    # import all eight client classes eagerly, so with the Gemini / Anthropic
+    # SDKs behind extras an OpenRouter deployment (prod) would have died at its
+    # first client build with an ImportError for an SDK it never uses.
     from modules.llm.model_registry import PROVIDER_CONFIG
-
-    # Map client_class_name strings from PROVIDER_CONFIG to actual classes.
-    # This indirection is required because PROVIDER_CONFIG stores names (not
-    # class objects) to stay free of circular imports at definition time.
-    _client_class_map = {
-        'AnthropicClient': AnthropicClient,
-        'OpenAIClient': OpenAIClient,
-        'DeepSeekClient': DeepSeekClient,
-        'GeminiClient': GeminiClient,
-        'OpenRouterClient': OpenRouterClient,
-        'NvidiaClient': NvidiaClient,
-        # Proposal 024 generic clients — serve any ProviderSpec whose transport
-        # is OpenAI- or Anthropic-compatible (user-declared providers.yaml rows).
-        'OpenAICompatClient': OpenAICompatClient,
-        'AnthropicCompatClient': AnthropicCompatClient,
-        'ResponsesCompatClient': ResponsesCompatClient,
-    }
 
     if name not in PROVIDER_CONFIG:
         # Distinguish "no such provider" from "this provider is declared but its
@@ -221,7 +234,7 @@ def create_llm_client(name: str, config, container=None, model_type=None):
         raise ValueError(f"Unknown LLM client type: {name}")
 
     entry = PROVIDER_CONFIG[name]
-    client_class = _client_class_map[entry.client_class_name]
+    client_class = resolve_client_class(entry.client_class_name)
     
     # Get LLM config for this client
     llm_config = config.get_llm_config()

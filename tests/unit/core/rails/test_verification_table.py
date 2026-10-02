@@ -105,7 +105,7 @@ def test_every_call_site_uses_a_key_that_exists():
     """`verification_line` returns "" for an unknown rail, so a typo would be a
     SILENT drop. Pin the literals each producer passes."""
     from tools.controller import message_send, room_read_action
-    from tools.x_browser import tool as x_tool
+    x_tool = pytest.importorskip("polyrob_x.x_browser.tool")  # the X pack (067 P3b)
     from tools import email_tool
     sources = {
         "message_send": inspect.getsource(message_send),

@@ -327,8 +327,9 @@ def _make_chat_agent_stub(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_chat_once_expands_when_flag_on(tmp_path, monkeypatch):
-    """A @file ref in chat_once input is expanded before reaching create_session."""
+async def test_chat_once_new_session_refuses_filesystem_refs(tmp_path, monkeypatch):
+    """M05: a brand-new chat has no workspace; the process CWD (the install tree on
+    a server) must never be the root, so filesystem refs are refused outright."""
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
     monkeypatch.setenv("CONTEXT_REFERENCES_ENABLED", "true")
 
@@ -337,14 +338,50 @@ async def test_chat_once_expands_when_flag_on(tmp_path, monkeypatch):
 
     agent, captured = _make_chat_agent_stub(tmp_path)
 
-    # New session → no session_id yet → expansion roots at CWD; point CWD at tmp_path.
     with patch("os.getcwd", return_value=str(tmp_path)):
         reply = await agent._chat_once_locked("user-1", "@file:doc.txt", "key-1")
 
     assert reply == "reply"
-    assert content in captured.get("task", ""), (
-        f"Expected expanded file content in task: {captured.get('task')!r}"
-    )
+    task = captured.get("task", "")
+    assert content not in task
+    assert "filesystem references disabled; refused" in task
+
+
+@pytest.mark.asyncio
+async def test_chat_once_existing_session_roots_at_its_workspace(tmp_path, monkeypatch):
+    """An existing chat session expands @file against ITS workspace, not CWD."""
+    monkeypatch.delenv("POLYROB_LOCAL", raising=False)
+    monkeypatch.setenv("CONTEXT_REFERENCES_ENABLED", "true")
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "doc.txt").write_text("workspace content")
+    cwd = tmp_path / "install"
+    cwd.mkdir()
+    (cwd / "doc.txt").write_text("install tree content")
+
+    agent, _captured = _make_chat_agent_stub(tmp_path)
+    agent._chat_sessions = {"key-1": "sess-1"}
+    agent.session_manager.get_session_info.return_value = {"id": "sess-1"}
+    orch = MagicMock()
+    seen = {}
+
+    async def _submit(agent_id=None, text="", kind=""):
+        seen["text"] = text
+    orch.submit_user_message = _submit
+    agent._registry.get.return_value = orch
+
+    fake_pm = MagicMock()
+    fake_pm.get_workspace_dir.return_value = workspace
+    with patch("os.getcwd", return_value=str(cwd)), \
+            patch("agents.task.path.pm", return_value=fake_pm):
+        try:
+            await agent._chat_once_locked("user-1", "@file:doc.txt", "key-1")
+        except Exception:
+            pass  # only the expansion seam matters here
+
+    assert "workspace content" in seen.get("text", "")
+    assert "install tree content" not in seen.get("text", "")
 
 
 @pytest.mark.asyncio

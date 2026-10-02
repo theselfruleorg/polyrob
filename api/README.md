@@ -102,8 +102,8 @@ review the application mounts:
 | KB (`kb/endpoints.py`) | `/api/kb` | knowledge-base ingest/search — gated by `KB_API_ENABLED` (default OFF) |
 | Admin (`admin_endpoints.py`) | `/api` | admin/user management |
 | MCP (`mcp_routes.py`) | `/api/mcp` | MCP server management |
-| Polymarket | `/api/polymarket` | market data |
-| Hyperliquid | `/api/hyperliquid` | market data |
+| Polymarket (pack `markets`) | `/api/packs/markets/polymarket` | venue config, market data, gated execution |
+| Hyperliquid (pack `markets`) | `/api/packs/markets/hyperliquid` | venue config, market data, gated execution |
 | Skills (`skill_endpoints.py`) | `/api/skills` | skill management |
 | Pricing (`pricing_endpoints.py`) | `/api/pricing` | model pricing |
 | A2A discovery / endpoints / streaming (`api/a2a/*`) | various | Agent-to-Agent protocol (`/.well-known/agent.json`, `/a2a/agent-card`, `/a2a/extended-card`, `/a2a/*`) |

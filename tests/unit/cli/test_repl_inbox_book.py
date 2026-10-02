@@ -308,7 +308,7 @@ def test_a_clean_book_says_so_and_names_the_chains():
     assert max(_widths(out)) <= 80
 
 
-def test_a_disagreement_names_the_rows_and_refuses_to_trade():
+def test_a_disagreement_names_the_rows_and_says_what_it_does_not_stop():
     body = {"verdict": "disagreement", "checked_at": NOW,
             "chains": {"base": {"verdict": "disagreement", "report": {
                 "unbacked": ["BOTS 850,000 — written down, the chain holds 0"],
@@ -316,7 +316,10 @@ def test_a_disagreement_names_the_rows_and_refuses_to_trade():
     out = render_book(body, now=NOW)
     assert "DISAGREE" in out
     assert "BOTS" in out and "BASECAT" in out
-    assert "will not trade" in out
+    # W1 (defcd6ccc): no trade verb reads the verdict, so the note no longer
+    # promises "I will not trade" — it says the verdict does not stop a trade.
+    assert "will not trade" not in out
+    assert "does not stop a trade" in out
     assert max(_widths(out)) <= 80
 
 

@@ -43,7 +43,7 @@ def test_min_tokens_constant():
 
 
 def test_tools_breakpoint_noop_when_flag_off(monkeypatch):
-    monkeypatch.delenv("OPENROUTER_PROMPT_CACHE", raising=False)
+    monkeypatch.setenv("OPENROUTER_PROMPT_CACHE", "false")
     tools = [{"type": "function", "function": {"name": "a"}}]
     out = cache_hints.apply_openrouter_tools_cache_control(tools, "anthropic/claude-3.5")
     assert "cache_control" not in out[-1]

@@ -29,3 +29,26 @@ def test_x402_security_scheme_header_matches_middleware():
     # the card literally sends the wrong header and gets silently ignored.
     card = build_agent_card()
     assert card.securitySchemes["x402"].name == "X-PAYMENT"
+
+
+def test_card_renders_without_the_x402_modules(monkeypatch):
+    """067 P0.9: the PUBLIC card must render when the x402 rail cannot import.
+    It then omits the x402 security scheme and price, and keeps the rest."""
+    import sys
+
+    from api import x402_advertisement
+
+    x402_advertisement.reset_treasury_cache()
+    for mod in [m for m in sys.modules if m == "modules.x402" or m.startswith("modules.x402.")]:
+        monkeypatch.delitem(sys.modules, mod)
+    # A None entry makes every import of the package raise ImportError.
+    monkeypatch.setitem(sys.modules, "modules.x402", None)
+    try:
+        card = build_agent_card()
+    finally:
+        x402_advertisement.reset_treasury_cache()
+    assert "x402" not in card.securitySchemes
+    assert {"x402": []} not in card.security
+    assert "x402" not in card.pricing["authentication_options"]
+    assert set(card.securitySchemes) == {"apiKey", "bearer"}
+    assert card.pricing["authentication_options"]["api_key"]["header"].startswith("X-API-KEY")

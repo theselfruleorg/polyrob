@@ -33,6 +33,7 @@ async def test_siwe_full_round_trip_nonce_sign_verify(tmp_path):
     ok = await auth.verify_signature(
         wallet_address=acct.address, message=result["message"],
         signature=signed.signature.hex(), nonce=result["nonce"],
+        expected_domain="app.example.com",
     )
     assert ok is True
 
@@ -40,6 +41,7 @@ async def test_siwe_full_round_trip_nonce_sign_verify(tmp_path):
     replay_ok = await auth.verify_signature(
         wallet_address=acct.address, message=result["message"],
         signature=signed.signature.hex(), nonce=result["nonce"],
+        expected_domain="app.example.com",
     )
     assert replay_ok is False
 
@@ -60,5 +62,6 @@ async def test_siwe_rejects_wrong_signer(tmp_path):
     ok = await auth.verify_signature(
         wallet_address=real_acct.address, message=result["message"],
         signature=signed.signature.hex(), nonce=result["nonce"],
+        expected_domain="app.example.com",
     )
     assert ok is False

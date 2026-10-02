@@ -57,6 +57,26 @@ def register_hf_deploy_tool(force: bool = False) -> bool:
     )
 
 
+async def _boot_reconcile() -> int:
+    """Cold-start sweep for ``core/autonomy_runtime`` (proposal §3.5).
+
+    Imports stay inside so a monkeypatched ``reconcile_deployed_apps`` applies.
+    """
+    from tools.hf_deploy.reconcile import reconcile_deployed_apps
+    from tools.hf_deploy.registry import default_deployed_apps_db
+    return await reconcile_deployed_apps(db_path=default_deployed_apps_db())
+
+
+# core/agents read the gate and the boot sweep through core's registries, never
+# by importing this package (067 P0.11). The gate lambda resolves the module
+# attribute at call time, so a patched ``hf_deploy_enabled`` still applies.
+from core.boot_reconcilers import register_boot_reconciler as _register_reconciler  # noqa: E402
+from core.tool_gates import register_gate as _register_gate  # noqa: E402
+
+_register_gate("hf_deploy", lambda: hf_deploy_enabled())
+_register_reconciler("hf_deploy", _boot_reconcile)
+
+
 __all__ = [
     "hf_deploy_enabled", "hf_deploy_daily_max", "hf_deploy_min_interval_sec",
     "register_hf_deploy_tool",

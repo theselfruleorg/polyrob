@@ -51,7 +51,10 @@ modules/
 │   ├── llm_factory.py          # Native chat-model factory
 │   ├── messages.py             # Native message types (System/Human/AI/Tool, no third-party framework)
 │   ├── token_counter.py        # Token counting utilities
-│   ├── cache_hints.py          # Per-provider prompt-cache strategy
+│   ├── cache_hints.py          # THE prompt-cache seam: per-provider strategy, Anthropic ttl + breakpoint placement, OpenRouter breakpoints
+│   ├── deferred_tools.py       # Late-tool mode (grow | deferred | bridge) + the Anthropic deferred-tool wire shape
+│   ├── usage_extract.py        # Provider usage → prompt/cached/written tokens, billed cost
+│   ├── prefix_stamp.py         # prefix_sha / tools_sha stamped on every real provider call
 │   ├── brain_scrubber.py       # Strips leaked brain-state JSON from the user-facing stream
 │   ├── think_scrubber.py       # Strips leaked <think>/<reasoning> blocks at the content seam
 │   ├── anthropic_client.py     # Anthropic Claude integration
@@ -66,17 +69,20 @@ modules/
 │   ├── __init__.py
 │   ├── memory_manager.py       # Memory orchestration + conversation context
 │   ├── cache_manager.py        # Caching system
-│   ├── user_profile_manager.py # User profile memory
 │   ├── models.py               # Data models and schemas
 │   ├── provider.py             # MemoryProvider ABC + NullMemoryProvider
 │   ├── registry.py             # MemoryProviderRegistry (one-external-provider seam)
+│   ├── recall_consolidation.py # Distils repeated recall into one curated note (MEMORY_CONSOLIDATE)
+│   ├── episodic.py             # Fail-open episode-write facade
+│   ├── sqlite_curated_store.py # Curated-notes mixin
+│   ├── sqlite_kb_store.py      # KB chunks + sources mixin
+│   ├── sqlite_episodes_store.py # Episodic activity ledger mixin
 │   ├── backend_factory.py      # Selects the memory backend (MEMORY_BACKEND)
 │   ├── sqlite_memory_provider.py        # Local SQLite FTS5 keyword recall (default)
-│   ├── local_vector_memory_provider.py  # Optional local vector recall (sqlite-vec)
+│   ├── local_vector_memory_provider.py  # Optional local vector recall (sqlite-vec, the [memory-vector] extra)
 │   └── task/                   # Task-specific memory
 │       ├── task_context_manager.py  # Task-agent context (H-MEM) management
 │       ├── null_context_manager.py  # No-op context manager for sub-agents
-│       ├── compaction_manager.py
 │       ├── context_retriever.py
 │       ├── hierarchical_memory.py
 │       ├── phase_manager.py
@@ -194,7 +200,7 @@ Memory system managing conversation context, user profiles, and cross-session re
 > Recall is now provided by a **local SQLite** backend selected via `MEMORY_BACKEND` (default
 > `sqlite`):
 > - `sqlite_memory_provider.py` — SQLite FTS5 keyword recall (tenant-scoped, default).
-> - `local_vector_memory_provider.py` — optional local vector recall (sqlite-vec) for hybrid
+> - `local_vector_memory_provider.py` — optional local vector recall (sqlite-vec, `[memory-vector]`) for hybrid
 >   keyword+vector search, kept inside the same `memory.db` (no external vector service).
 >
 > These plug in behind the `MemoryProvider` seam (`provider.py` / `registry.py` /
@@ -205,8 +211,7 @@ Memory system managing conversation context, user profiles, and cross-session re
 **Subsystems**:
 - **Conversation context**: history and context preservation (handled in `memory_manager.py`;
   task-agent context lives in `memory/task/task_context_manager.py`)
-- **CacheManager**: High-performance in-memory caching
-- **UserProfileManager**: User preference and behavior tracking
+- **CacheManager**: In-memory LRU cache. `set(key, value, *, ttl=None)` — an entry with a `ttl` expires on read; the keyword was added in 2026-09 because the MCP resource cache and the document processor had always passed it.
 - **MemoryProvider backends**: local SQLite FTS / optional local vector (see note above)
 
 #### Task Memory (`memory/task/`)
@@ -215,7 +220,6 @@ Specialized memory components for task agents:
 - **TaskContextManager**: Task-agent context / H-MEM management (`null_context_manager.py`
   is the no-op variant used by sub-agents)
 - **HierarchicalMemory**: Multi-level memory organization
-- **CompactionManager**: Memory compaction for long sessions
 - **SemanticRetriever** / **LexicalRetriever**: cross-phase recall — embedder-based and
   no-embedder (term-frequency) variants respectively
 - **ReflectionService**: aux-model phase consolidation (`REFLECTION_LLM_ENABLED`)

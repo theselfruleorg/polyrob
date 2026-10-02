@@ -44,6 +44,8 @@ class MessageOrigin:
     SKILL = "skill"               # injected skills (kept out of the system prompt)
     TOOL_CATALOG = "tool_catalog" # S1 dynamic tool rig: honest <tool-catalog> block
                                   # (loaded/loadable/gated per tool), foundation-pinned
+    WORKER_CATALOG = "worker_catalog"   # 041 phase 2: the approved named workers the
+                                        # orchestrator may dispatch, foundation-pinned
     SELF_CONTEXT = "self_context"       # frozen SOUL/identity doc pinned in the foundation
     PROJECT_CONTEXT = "project_context" # auto-loaded CLAUDE.md/AGENTS.md for CLI mode
     SYSTEM_NOTE = "system_note"         # other system-generated notice
@@ -62,6 +64,13 @@ class MessageOrigin:
     SESSION_BRIDGE = "session_bridge"      # cross-session continuity bridge (Task 6)
     GROUP_CONTEXT = "group_context"        # 044 T14: the room's recent lines shown to
                                         # ONE turn (API-only; never stored as user turns)
+    OWNER_THREAD = "owner_thread"          # 061: the owner's ONE conversation across
+                                        # sessions/rails (tail, delta, referent, rail slice)
+    TOOL_ADDITION = "tool_addition"        # F9 (063 WS-4): the late actions this step
+                                        # surfaces. Body is ONE action name per line and
+                                        # nothing else — the Anthropic wire layer parses
+                                        # it back into `tool_addition` blocks
+                                        # (modules/llm/deferred_tools.py)
 
 
 # Origin -> XML-ish envelope tag used to wrap injected (non-user) content so the
@@ -74,6 +83,7 @@ _ORIGIN_ENVELOPE = {
     MessageOrigin.RECALL: "recalled-from-past-sessions",
     MessageOrigin.SKILL: "available-skills",
     MessageOrigin.TOOL_CATALOG: "available-tools",
+    MessageOrigin.WORKER_CATALOG: "worker-catalog",
     MessageOrigin.SELF_CONTEXT: "self-context",
     MessageOrigin.PROJECT_CONTEXT: "project-context",
     MessageOrigin.SYSTEM_NOTE: "system-note",
@@ -82,6 +92,7 @@ _ORIGIN_ENVELOPE = {
     MessageOrigin.COMPACTION_SUMMARY: "compacted-history",
     MessageOrigin.SELF_WAKE: "self-wake",
     MessageOrigin.RUNTIME_IDENTITY: "runtime-identity",
+    MessageOrigin.TOOL_ADDITION: "tool-addition",
     # NOTE: GROUP_CONTEXT is deliberately absent (like ENVIRONMENT /
     # EPISODIC_DIGEST / SESSION_BRIDGE). 044 T14's content ALREADY arrives framed
     # twice — `<untrusted_tool_result source="group-context">` around the
@@ -89,6 +100,9 @@ _ORIGIN_ENVELOPE = {
     # would make a THIRD fence, two of them named `group-context`. The model
     # would then meet `</group-context>` twice and the first close is the INNER
     # one: exactly the delimiter ambiguity the untrusted wrap exists to prevent.
+    # OWNER_THREAD is absent for the same reason: ``core.surfaces.owner_thread.
+    # render_block`` emits its own ``<owner-thread kind="…">`` fence (the kind
+    # attribute is the point) and defangs every body inside it.
 }
 
 

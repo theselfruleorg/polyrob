@@ -111,6 +111,7 @@ class _FakeDB:
     def __init__(self):
         self.executed = []
         self._crypto_payments = []  # list of dicts: user_id/chain/amount/token_symbol
+        self._marks = {}  # (user_id, chain, token_symbol) -> balance (CR-H08)
         self.connection = _FakeConnection()
 
     async def execute(self, sql, params=None):
@@ -124,18 +125,23 @@ class _FakeDB:
                 "amount": amount,
                 "token_symbol": token_symbol,
             })
+        if "INSERT INTO deposit_balance_marks" in sql and params:
+            user_id, chain, token_symbol, balance = params
+            self._marks[(user_id, chain, token_symbol)] = balance
 
     async def fetch_one(self, sql, params=None):
+        if "FROM deposit_balance_marks" in sql and params:
+            bal = self._marks.get(tuple(params))
+            return {"balance": bal} if bal is not None else None
         if "FROM crypto_payments" in sql and params:
-            user_id, chain, amount, token_symbol = params
-            for row in self._crypto_payments:
+            user_id, chain, token_symbol = params
+            for row in reversed(self._crypto_payments):
                 if (
                     row["user_id"] == user_id
                     and row["chain"] == chain
-                    and row["amount"] == amount
                     and row["token_symbol"] == token_symbol
                 ):
-                    return {"id": row["id"]}
+                    return {"id": row["id"], "amount": row["amount"]}
         return None  # "not already processed"
 
 
@@ -167,6 +173,7 @@ class _TxFakeDB:
         self.credit_transactions = []
         self.crypto_payments = []
         self.user_notifications = []
+        self.marks = {}
         self.connection = self       # .connection.begin_transaction() etc.
         self._snapshot = None
         self.fail_crypto_payments_insert = False
@@ -180,6 +187,7 @@ class _TxFakeDB:
             copy.deepcopy(self.user_credits),
             copy.deepcopy(self.credit_transactions),
             copy.deepcopy(self.crypto_payments),
+            copy.deepcopy(self.marks),
         )
 
     async def commit(self):
@@ -187,7 +195,8 @@ class _TxFakeDB:
 
     async def rollback(self):
         if self._snapshot is not None:
-            self.user_credits, self.credit_transactions, self.crypto_payments = self._snapshot
+            (self.user_credits, self.credit_transactions,
+             self.crypto_payments, self.marks) = self._snapshot
         self._snapshot = None
 
     # -- query surface used by CreditBalanceManager + DepositMonitor --
@@ -196,16 +205,18 @@ class _TxFakeDB:
         if "FROM user_credits" in sql:
             row = self.user_credits.get(params[0])
             return dict(row) if row else None
+        if "FROM deposit_balance_marks" in sql:
+            bal = self.marks.get(tuple(params))
+            return {"balance": bal} if bal is not None else None
         if "FROM crypto_payments" in sql:
-            user_id, chain, amount, token_symbol = params
-            for row in self.crypto_payments:
+            user_id, chain, token_symbol = params
+            for row in reversed(self.crypto_payments):
                 if (
                     row["user_id"] == user_id
                     and row["chain"] == chain
-                    and row["amount"] == amount
                     and row["token_symbol"] == token_symbol
                 ):
-                    return {"id": row["id"]}
+                    return {"id": row["id"], "amount": row["amount"]}
         return None
 
     async def execute(self, sql, params=None):
@@ -243,6 +254,10 @@ class _TxFakeDB:
             return
         if "INSERT INTO user_notifications" in sql:
             self.user_notifications.append(params)
+            return
+        if "INSERT INTO deposit_balance_marks" in sql:
+            user_id, chain, token_symbol, balance = params
+            self.marks[(user_id, chain, token_symbol)] = balance
             return
 
 

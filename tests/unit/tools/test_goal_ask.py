@@ -64,3 +64,21 @@ def test_blocks_goal_ids_are_recorded(tmp_path):
     assert not r.error
     a = t._goal_board.asks(user_id="rob", status="open")[0]
     assert g.id in (a.payload.get("blocks_goal_ids") or [])
+
+
+def test_the_description_names_owner_ask_and_no_cli_command():
+    """Review B3: goal_ask pointed at the CLI `owner pending` and competed with owner_ask."""
+    from tools.goal_tools import GoalTool
+    desc = GoalTool.goal_ask.__doc__ or ""
+    import inspect
+    src = inspect.getsource(GoalTool)
+    assert "`owner pending`" not in src
+    assert "use owner_ask" in src
+
+
+def test_an_option_question_carries_tap_options(tmp_path):
+    t = _tool(tmp_path)
+    asyncio.run(t.goal_ask(GoalAskAction(what="Which reference: A) the 24h high or B) the 2h reading?"),
+                           _ctx()))
+    a = t._goal_board.asks(user_id="rob", status="open")[0]
+    assert set((a.payload.get("options") or {}).keys()) == {"A", "B"}

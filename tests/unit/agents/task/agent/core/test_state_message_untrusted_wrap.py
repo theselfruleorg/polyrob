@@ -49,8 +49,12 @@ class _State:
 
 
 def _render(results, state=None, wrap=True):
+    # F14: `results_in_tool_messages=False` is the LEGACY no-native-tools path, the
+    # one where this render is the results' only appearance. Stated explicitly —
+    # on the native path the wrap that matters is the ToolMessage's.
     with patch("agents.task.constants.UNTRUSTED_TOOL_RESULT_WRAP", wrap):
-        msg = AgentMessagePrompt(state=state or _State(), result=results)
+        msg = AgentMessagePrompt(state=state or _State(), result=results,
+                                 results_in_tool_messages=False)
         return msg.get_user_message(use_vision=False).content
 
 
@@ -169,3 +173,73 @@ def test_pairing_without_a_resolver_stamps_nothing():
     _pair_results_to_calls([r], [{"id": "a", "name": "browser_extract_content"}])
     assert not (r.metadata or {})
     assert "untrusted_tool_result" not in _render([r])
+
+
+# --- C5: the non-native path stamps from the step's action names --------------
+
+class _Action:
+    def __init__(self, name):
+        self._name = name
+
+    def model_dump(self, exclude_unset=True):
+        return {self._name: {}}
+
+
+class _Host:
+    """Just enough of the Agent for ResultProcessingMixin._stamp_result_sources."""
+
+    def __init__(self, tools):
+        import logging
+        import types
+        from agents.task.agent.core.result_processing import ResultProcessingMixin
+        self._stamp = ResultProcessingMixin._stamp_result_sources.__get__(self)
+        self.logger = logging.getLogger("c5")
+        self.controller = types.SimpleNamespace(
+            get_action_details=lambda n: types.SimpleNamespace(tool=tools.get(n)))
+
+
+def _stamp(actions, results, tools, tool_calls=None, wrap=True):
+    import types
+    with patch("agents.task.constants.UNTRUSTED_TOOL_RESULT_WRAP", wrap):
+        _Host(tools)._stamp(results, types.SimpleNamespace(
+            action=[_Action(a) for a in actions]), tool_calls or [])
+
+
+def test_non_native_browser_result_is_stamped_and_rendered_wrapped():
+    ar = ActionResult(extracted_content=PAYLOAD)  # no tool_call_id: non-native
+    _stamp(["browser_extract_content"], [ar], {"browser_extract_content": "browser"})
+    text = _render([ar])
+    assert '<untrusted_tool_result source="browser_extract_content">' in text
+
+
+def test_non_native_unpairable_results_over_wrap_when_any_action_is_untrusted():
+    a1, a2 = ActionResult(extracted_content="ok"), ActionResult(extracted_content=PAYLOAD)
+    _stamp(["filesystem_read_file", "mcp_execute_tool"], [a1, a2],
+           {"filesystem_read_file": "filesystem", "mcp_execute_tool": "mcp"})
+    assert (a2.metadata or {}).get("untrusted_source")
+    assert (a1.metadata or {}).get("untrusted_source")  # harmless over-wrap
+
+
+def test_non_native_trusted_step_stays_unstamped():
+    ar = ActionResult(extracted_content="42 lines")
+    _stamp(["filesystem_read_file"], [ar], {"filesystem_read_file": "filesystem"})
+    assert not (ar.metadata or {}).get("untrusted_source")
+    assert "untrusted_tool_result" not in _render([ar])
+
+
+def test_id_paired_result_uses_its_own_call():
+    a1 = ActionResult(extracted_content="ok", tool_call_id="c1")
+    a2 = ActionResult(extracted_content=PAYLOAD, tool_call_id="c2")
+    _stamp(["filesystem_read_file", "web_fetch"], [a1, a2],
+           {"filesystem_read_file": "filesystem", "web_fetch": "web"},
+           tool_calls=[{"id": "c1", "name": "filesystem_read_file"},
+                       {"id": "c2", "name": "web_fetch"}])
+    assert not (a1.metadata or {}).get("untrusted_source")
+    assert a2.metadata["untrusted_source"]["action"] == "web_fetch"
+
+
+def test_stamping_off_when_flag_off():
+    ar = ActionResult(extracted_content=PAYLOAD)
+    _stamp(["browser_extract_content"], [ar], {"browser_extract_content": "browser"},
+           wrap=False)
+    assert not (ar.metadata or {}).get("untrusted_source")

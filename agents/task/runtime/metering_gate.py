@@ -19,9 +19,10 @@ logger = logging.getLogger(__name__)
 # the gate is a safety invariant, not a tuning knob. WS-2: derived from the ONE
 # per-tool capability table (core/tool_capabilities.py) — classify a new money tool
 # there, not here. Parity-pinned by tests/unit/core/test_tool_capabilities.py.
-from core.tool_capabilities import ids_with as _ids_with
+# 067 P1b: a derived view of the ONE money classification (core.money.classify).
+from core.money.classify import money_tool_ids as _money_tool_ids
 
-MONEY_TOOLS = _ids_with("money")
+MONEY_TOOLS = _money_tool_ids()
 
 
 def metering_available(task_agent: Any) -> bool:

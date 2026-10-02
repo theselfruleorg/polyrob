@@ -231,6 +231,11 @@ class CommandRegistry:
         ctx.raw = body
 
         if command is None:
+            # A folded tap token (`/card_<id>_ok`, `/approve_p_<hex>`,
+            # `/fulfill_<ask>_<letter>`) is what every seat prints to act on.
+            from cli.ui.commands.h_cards import dispatch_token
+            if await dispatch_token(self, line, ctx):
+                return True
             ctx.emit(f"Unknown command: /{name} — type /help")
             return True
 
@@ -239,9 +244,17 @@ class CommandRegistry:
         # everything else becomes a styled "command error" line and the loop
         # continues (the command is still "handled" → not routed as a turn).
         try:
-            result = command.handler(ctx)
-            if _is_awaitable(result):
-                await result
+            from cli.ui.commands.h_cards import wrap_quote
+            wrap = wrap_quote(command.name, ctx)
+            if wrap is None:
+                result = command.handler(ctx)
+                if _is_awaitable(result):
+                    await result
+            else:
+                with wrap:   # a money quote comes back as an action card
+                    result = command.handler(ctx)
+                    if _is_awaitable(result):
+                        await result
         except ReplExit:
             raise
         except Exception as exc:

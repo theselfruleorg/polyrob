@@ -46,6 +46,15 @@ def _workspace_lock_path() -> Optional[str]:
             os.makedirs(root, exist_ok=True)
         except OSError:
             return None
+    else:
+        # The configured lock dir must exist too: without the `filelock` package
+        # SafeFileLock's O_EXCL fallback raised FileNotFoundError on a fresh dir,
+        # and the cron tick read that as "lock held" and deferred every due job.
+        # An uncreatable dir keeps the path (the acquire then fails loud, as before).
+        try:
+            os.makedirs(root, exist_ok=True)
+        except OSError:
+            pass
     return os.path.join(root, "workspace.turn.lock")
 
 

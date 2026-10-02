@@ -96,11 +96,36 @@ class ModelRegistry:
                         model = self._models.get('gpt-4o')
                         if model:
                             logger.info(f"Fallback: '{name}' -> 'gpt-4o' (tertiary)")
-            # Claude variants fallback to claude-sonnet-4-5
+            # Claude variants: a TIERED chain like the GLM/DeepSeek families
+            # (F31, 2026-09-22). The old single target was claude-sonnet-4-5 —
+            # a 200K row — so every unknown claude id (a model newer than this
+            # tree, or any id carrying the `[1m]` long-context suffix) silently
+            # lost 800K of window and was sized, budgeted and truncated against
+            # a context it does not have. Match the FAMILY, keep the tier, and
+            # default a bare `claude` to a 1M row.
             elif 'claude' in model_lower:
-                model = self._models.get('claude-sonnet-4-5')
+                # `claude-opus-5[1m]` is the 1M variant of an opus id — strip the
+                # suffix before matching so it lands on the opus row, not the default.
+                family = model_lower.split('[')[0]
+                if 'opus' in family:
+                    target = 'claude-opus-5'
+                elif 'sonnet' in family:
+                    target = 'claude-sonnet-4-6'
+                elif 'fable' in family:
+                    target = 'claude-fable-5'
+                elif 'haiku' in family:
+                    # Haiku is a 200K tier — sizing it as 1M would be the same
+                    # error in the other direction.
+                    target = 'claude-haiku-4-5'
+                else:
+                    target = 'claude-sonnet-4-6'
+                model = self._models.get(target)
                 if model:
-                    logger.info(f"Fallback: '{name}' -> 'claude-sonnet-4-5'")
+                    logger.info(f"Fallback: '{name}' -> '{target}'")
+                else:
+                    model = self._models.get('claude-sonnet-4-5')
+                    if model:
+                        logger.info(f"Fallback: '{name}' -> 'claude-sonnet-4-5' (last resort)")
             # Gemini variants fallback chain: 2.5-flash (stable) -> 3-pro-preview -> 2.5-pro
             elif 'gemini' in model_lower:
                 # Check if user wants a specific series

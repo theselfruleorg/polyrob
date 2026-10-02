@@ -777,6 +777,10 @@ async def verify_user_token(
     previous_tier = user['tier']
     previous_count = user['den_token_count'] or 0
 
+    # require_service above established the container; the remaining services
+    # still come from that same registered runtime.
+    from api.dependencies import optional_container
+    container = optional_container()
     # Try to get AlchemyTool from container services
     alchemy_tool = container.get_service('alchemy_tool')
     if not alchemy_tool:
@@ -1430,18 +1434,17 @@ async def resolve_billing_failure(
 
     # If resolution is "charged", try to actually deduct credits
     if resolution == "charged":
-        balance_mgr = container.get_service('balance_manager')
-        if balance_mgr:
-            success = await balance_mgr.deduct_credits(
-                user_id=failure['user_id'],
-                amount=failure['credits_owed'],
-                reason=f"Billing reconciliation (resolved by admin {admin_id})"
+        balance_mgr = require_service('balance_manager', missing="Balance service unavailable")
+        success = await balance_mgr.deduct_credits(
+            user_id=failure['user_id'],
+            amount=failure['credits_owed'],
+            reason=f"Billing reconciliation (resolved by admin {admin_id})"
+        )
+        if not success:
+            raise HTTPException(
+                status_code=400,
+                detail="Failed to deduct credits - user may still have insufficient balance"
             )
-            if not success:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Failed to deduct credits - user may still have insufficient balance"
-                )
 
     # Update failure record
     await db.execute("""

@@ -138,7 +138,7 @@ class DatabaseVersionManager:
         results = await self.db.fetch_all("""
             SELECT version, description, applied_at, execution_time_ms
             FROM schema_versions
-            ORDER BY applied_at ASC
+            ORDER BY id ASC
         """)
 
         return [dict(row) for row in results]

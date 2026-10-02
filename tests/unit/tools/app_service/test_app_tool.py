@@ -41,7 +41,7 @@ def test_new_slug_is_pending_and_names_the_approval_seats(tmp_path, owner_ctx, a
     res = run_deploy(tool, owner_ctx)
     assert not res.error, res.error
     assert "PENDING owner approval" in res.extracted_content
-    assert "polyrob apps approve rob-status" in res.extracted_content
+    assert "/apps approve rob-status" in res.extracted_content
     assert "/apps approve rob-status" in res.extracted_content
     assert "Do not report this as shipped" in res.extracted_content
     row = tool._registry.get("rob-status", "owner-1")
@@ -96,7 +96,7 @@ def test_changed_config_returns_to_pending(tmp_path, owner_ctx, app_env, green_o
     assert row["status"] == "pending", over
     assert "NEW owner approval" in res.extracted_content
     assert field in res.extracted_content
-    assert "polyrob apps approve rob-status" in res.extracted_content
+    assert "/apps approve rob-status" in res.extracted_content
     # reverting to exactly the approved configuration is unattended again
     res = run_deploy(tool, owner_ctx)
     assert tool._registry.get("rob-status", "owner-1")["status"] == "approved"
@@ -193,7 +193,7 @@ def test_cross_tenant_slug_refused(tmp_path, owner_ctx, app_env, green_orch, mon
     tool = make_tool(tmp_path, orch=green_orch)
     tool._registry.upsert_request("rob-status", "other", source_dir="x", cmd=["x"],
                                   container_port=1, health_path="/", egress="none",
-                                  egress_allow=[], env={}, workspace_digest="d")
+                                  egress_allow=[], env={}, workspace_digest="d" * 12)
     tool._registry.mark_approved("rob-status", "other")
     res = run_deploy(tool, owner_ctx)
     assert res.error and "another tenant" in res.error
@@ -204,7 +204,7 @@ def test_stop_list_and_logs(tmp_path, owner_ctx, app_env, green_orch, events):
     tool = make_tool(tmp_path, orch=green_orch)
     run_deploy(tool, owner_ctx)
     res = asyncio.run(tool.list_apps(ListAppsParams(), execution_context=owner_ctx))
-    assert "rob-status [pending]" in res.extracted_content and "polyrob apps approve" in res.extracted_content
+    assert "rob-status [pending]" in res.extracted_content and "/apps approve rob-status" in res.extracted_content
     res = asyncio.run(tool.logs(LogsParams(slug="rob-status"), execution_context=owner_ctx))
     assert "No logs yet" in res.extracted_content
     from core.app_service.config import logs_path

@@ -131,7 +131,9 @@ class CodeExecutionTool(BaseTool):
         return compute_posture_allows_safe(execution_context, 1)
 
     @BaseTool.action(
-        "Execute python or bash code in a local subprocess (timeout + output cap + env allowlist)",
+        "Execute python or bash code on the configured execution backend (CODE_EXEC_BACKEND: "
+        "local subprocess by default, or docker/ssh), with a timeout, an output cap and an "
+        "env allowlist. On a server it is refused unless the backend is a sandbox.",
         param_model=RunCodeParams,
     )
     async def run_code(self, params: RunCodeParams, execution_context=None):

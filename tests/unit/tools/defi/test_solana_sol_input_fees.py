@@ -51,7 +51,7 @@ def _armed(monkeypatch):
 async def test_a_sol_input_swap_is_not_refused_for_its_own_fees():
     """The exact prod shape: 0.93 SOL declared, fees+rent on top."""
     deltas = SolanaDeltas(
-        ok=True,
+        ok=True, fee_lamports=5_000,
         native_delta=-(930_000_000 + PROD_FEE_AND_RENT),
         token_deltas={USDC: 186_000_000})
     res = await _sol_tool(deltas).solana_swap(_sol_params(amount=0.93))
@@ -68,7 +68,7 @@ async def test_a_small_sol_ticket_is_not_refused_for_its_own_fees():
     refused — and the one the sizing ladder depends on.
     """
     deltas = SolanaDeltas(
-        ok=True,
+        ok=True, fee_lamports=5_000,
         native_delta=-(10_000_000 + PROD_FEE_AND_RENT),
         token_deltas={USDC: 2_000_000})
     res = await _sol_tool(deltas).solana_swap(_sol_params(amount=0.01))
@@ -81,7 +81,7 @@ async def test_an_excess_beyond_plausible_fees_still_refuses():
     """The bound must still bind. Anything past a plausible rent+fee allowance
     is the drain this check exists to catch, and must refuse as before."""
     deltas = SolanaDeltas(
-        ok=True,
+        ok=True, fee_lamports=5_000,
         native_delta=-(930_000_000 + MAX_PLAUSIBLE_RENT_LAMPORTS + 1_000_000),
         token_deltas={USDC: 186_000_000})
     res = await _sol_tool(deltas).solana_swap(_sol_params(amount=0.93))
@@ -93,7 +93,7 @@ async def test_an_excess_beyond_plausible_fees_still_refuses():
 async def test_a_gross_overspend_still_refuses():
     """The pre-existing guarantee, unchanged: declaring 0.93 SOL while 2 SOL
     leaves is a drain, not a fee, and the fee allowance must not launder it."""
-    deltas = SolanaDeltas(ok=True,
+    deltas = SolanaDeltas(ok=True, fee_lamports=5_000,
                           native_delta=-2_000_000_000,
                           token_deltas={USDC: 400_000_000})
     res = await _sol_tool(deltas).solana_swap(_sol_params(amount=0.93))
@@ -112,7 +112,7 @@ async def test_a_non_sol_swap_gets_no_fee_allowance():
     """
     MEME = "HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk"
     deltas = SolanaDeltas(
-        ok=True,
+        ok=True, fee_lamports=5_000,
         native_delta=-5_000,                       # ordinary fee, classified
         token_deltas={MEME: -(1_000_000 + 500_000), USDC: 2_000_000})
     tool = _sol_tool(deltas, solana_decimals_fn=lambda m: 9 if m == WSOL else 6)

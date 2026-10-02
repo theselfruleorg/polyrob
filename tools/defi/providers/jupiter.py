@@ -83,6 +83,11 @@ def parse_quote(payload: Any, *, chain: str) -> Optional[JupiterQuote]:
     if floor is None or floor <= 0:
         # An unverifiable floor is not a floor — same rule as the EVM seam.
         return None
+    # CR-H03: in ExactOut mode `otherAmountThreshold` is the MAXIMUM input, not
+    # the minimum output — reading it as a floor would invert the bound.
+    mode = payload.get("swapMode")
+    if mode is not None and str(mode) != "ExactIn":
+        return None
     labels = []
     for hop in (payload.get("routePlan") or []):
         label = ((hop or {}).get("swapInfo") or {}).get("label")
@@ -150,7 +155,16 @@ def quote(token_in: str, token_out: str, amount_in_raw: int, *,
         # Fails OPEN: an outage is unknown, not "this token is unreachable".
         logger.info("jupiter: no quote for %s->%s (%s)", token_in, token_out, exc)
         return None
-    return parse_quote(payload, chain="solana")
+    q = parse_quote(payload, chain="solana")
+    # CR-H03: the mints and the amount come from the payload, so a response for
+    # a DIFFERENT trade would otherwise be accepted as this one's quote.
+    if q is not None and (q.token_in != token_in or q.token_out != token_out
+                          or q.amount_in_raw != int(amount_in_raw)):
+        logger.error("jupiter: quote %s->%s for %s does not match the request "
+                     "%s->%s for %s — REFUSED", q.token_in, q.token_out,
+                     q.amount_in_raw, token_in, token_out, amount_in_raw)
+        return None
+    return q
 
 
 def build_swap(quote_payload: Dict[str, Any], user_public_key: str,

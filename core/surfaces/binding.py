@@ -188,6 +188,12 @@ def surface_profile(orchestrator: Any) -> Optional[dict]:
             "chat_name": _name,
             "chat_instructions": _instructions,
             "chat_paid_actions": _paid,
+            # C2 (2026-09-29): a DM driven by a correspondent is NOT the owner's
+            # chat. Same stamps as agents.task.session_class.correspondent_facing
+            # (core may not import agents; a parity test pins the two together).
+            "correspondent": bool(
+                getattr(orchestrator, "_correspondent_session", False)
+                or getattr(orchestrator, "_correspondent_tainted", False)),
         }
     except Exception as e:  # fail-open: unknown -> no surface block
         logger.debug("surface_profile failed: %s", e)

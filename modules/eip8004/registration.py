@@ -90,23 +90,31 @@ def _agent_identity() -> tuple:
 
 
 def _avatar(base_url: str) -> tuple:
-    """``(image_url_or_None, avatar_metadata_or_None)`` for the frozen Mindprint.
+    """``(image_url_or_None, avatar_metadata_or_None)`` for the instance avatar slot.
 
-    ⚠️ Returns ``None`` for the image rather than a guess. With no public base
-    URL there is nowhere to serve the PNG from, and a link that does not resolve
-    is worse than an absent field. The seed goes out instead, so the face stays
-    exactly reproducible.
+    ``image`` is this box's ``/avatar.png`` when the base URL is public, else
+    the public https URL the image was set from, else ``None``.
+
+    ⚠️ Returns ``None`` for the image rather than a guess. A link that does not
+    resolve is worse than an absent field. ``metadata.avatar`` carries the
+    source and the image's sha256, so a consumer can check that whatever it
+    fetched is the image the agent declared.
     """
     try:
-        from core.instance import load_pfp_meta, pfp_path, resolve_instance_id
+        from core.avatar import load_avatar
+        from core.instance import resolve_instance_id
         from core.runtime_paths import resolve_data_home
-        home, instance_id = resolve_data_home(), resolve_instance_id()
-        if not pfp_path(home, instance_id).is_file():
+        st = load_avatar(resolve_data_home(), resolve_instance_id())
+        if not st.is_set:
             return None, None
-        meta = load_pfp_meta(home, instance_id) or {}
-        avatar = {k: meta[k] for k in ("generator", "seed", "variant", "seed_hex")
-                  if meta.get(k)}
-        image = f"{base_url.rstrip('/')}/pfp.png" if _is_public(base_url) else None
+        avatar = {k: v for k, v in (("source", st.source), ("sha256", st.sha256))
+                  if v}
+        if _is_public(base_url):
+            image = f"{base_url.rstrip('/')}/avatar.png"
+        elif (st.source or "").startswith("url:https://"):
+            image = st.source[len("url:"):]
+        else:
+            image = None
         return image, (avatar or None)
     except Exception:
         logger.debug("eip8004: could not resolve the instance avatar", exc_info=True)

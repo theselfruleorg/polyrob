@@ -60,7 +60,7 @@
     <div class="face" aria-hidden="true"></div>
     <span class="mark">{{ wordmark }}</span>
     <p class="head-truth">{% if pause_headline %}{{ pause_headline }} {% endif %}{{ waiting_line }}</p>
-    <button class="icon-btn" id="chats-open" type="button" aria-haspopup="dialog" aria-label="{{ t('shell.search') }}"><span class="glyph" aria-hidden="true">&#8981;</span><span class="kbd">&#8984;K</span></button>
+    <button class="icon-btn chats-btn" id="chats-open" type="button" aria-haspopup="dialog" aria-label="{{ t('shell.search') }}"><span class="glyph" aria-hidden="true">&#8981;</span><span class="btn-label">{{ t('shell.chats') }}</span><span class="kbd">&#8984;K</span></button>
 {%- if not read_only and owner_console %}
     {# A2 (2026-09-21 audit): the pause headline above has always named "the
        Pause button" / "the Resume button", and no such control existed on any
@@ -133,7 +133,10 @@
      data-status_done="{{ t('chats.status_done') }}"
      data-status_stopped="{{ t('chats.status_stopped') }}"
      data-status_unknown="{{ t('chats.status_unknown') }}"
-     data-live_at_agent="{{ t('chats.live_at_agent') }}"></div>
+     data-status_waiting="{{ t('chats.status_waiting') }}"
+     data-status_failed="{{ t('chats.status_failed') }}"
+     data-live_at_agent="{{ t('chats.live_at_agent') }}"
+     data-part_missing="{{ t('chats.part_missing') }}"></div>
 <script src="/static/app/chats.js" type="module"></script>
 {#
   The command palette (043 A23). A second native <dialog>, for the same reasons
@@ -188,7 +191,9 @@
      data-resume="{{ t('shell.resume') }}"
      data-pause_label="{{ t('shell.pause_label') }}"
      data-pause_unreachable="{{ t('shell.pause_unreachable') }}"
-     data-live_refused="{{ t('shell.live_refused') }}"></div>
+     data-live_refused="{{ t('shell.live_refused') }}"
+     data-live_busy="{{ t('shell.live_busy') }}"
+     data-busy="{{ t('shell.busy') }}"></div>
 <script src="/static/app/pause.js" type="module"></script>
 </body>
 </html>

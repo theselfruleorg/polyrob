@@ -479,8 +479,15 @@ class X402PaymentMiddleware(BaseHTTPMiddleware):
                 f"(tx: {settle_response.transaction[:16] if settle_response.transaction else 'none'}...)"
             )
 
-            # Process request
-            response = await call_next(request)
+            # Process request. CR-M15: billing downstream reads THIS flag
+            # (per-request, settled), never the stored 'x402' profile tier.
+            from modules.x402.x402_integration import (
+                mark_x402_paid_request, reset_x402_paid_request)
+            _paid_token = mark_x402_paid_request()
+            try:
+                response = await call_next(request)
+            finally:
+                reset_x402_paid_request(_paid_token)
 
             # N4: payment already settled before this point. If the downstream
             # failed (5xx), the customer paid for nothing — flag for refund.

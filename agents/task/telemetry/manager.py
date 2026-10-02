@@ -293,6 +293,7 @@ class TelemetryManager:
         prompt_tokens: Optional[int] = None,
         completion_tokens: Optional[int] = None,
         cached_tokens: Optional[int] = None,
+        cache_creation_tokens: Optional[int] = None,
         parameters: Optional[Dict[str, Any]] = None,
         agent_id: Optional[str] = None,
         provider: Optional[str] = None
@@ -310,7 +311,8 @@ class TelemetryManager:
             token_count: Total token count
             prompt_tokens: Prompt token count
             completion_tokens: Completion token count
-            cached_tokens: Cached token count (for prompt caching)
+            cached_tokens: Cached token count (cache READS)
+            cache_creation_tokens: Cache-WRITE token count (F17)
             parameters: Additional parameters
             agent_id: Optional agent ID override
 
@@ -329,6 +331,7 @@ class TelemetryManager:
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 cached_tokens=cached_tokens,
+                cache_creation_tokens=cache_creation_tokens,
                 parameters=parameters,
                 provider=provider,
                 agent_id=agent_id or self._agent_id

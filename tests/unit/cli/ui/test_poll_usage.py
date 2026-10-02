@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from cli.ui.events import AgentEnd, AgentRegistration, normalize
 from cli.ui.state import SessionState
 
@@ -20,6 +22,11 @@ def _write_usage(usage_dir: Path, name: str, **fields) -> None:
         "token_count": fields.get("token_count", 0),
         "cost_estimate": fields.get("cost_estimate", 0.0),
     }
+    # F18: the cache split has always been in the record; the bar just never
+    # read it. Written only when supplied, so the "unknown" case stays testable.
+    for key in ("cached_tokens", "cache_creation_tokens"):
+        if key in fields:
+            record[key] = fields[key]
     (usage_dir / name).write_text(json.dumps(record), encoding="utf-8")
 
 
@@ -130,3 +137,51 @@ def test_agent_end_counts_errors():
     assert isinstance(end, AgentEnd)
     state.update(end)
     assert state.errors == 2
+
+
+# ---------------------------------------------------------------------------
+# F18: the cache split
+# ---------------------------------------------------------------------------
+
+
+def test_poll_usage_reads_the_cache_split(tmp_path: Path):
+    usage = tmp_path / "data" / "llm_usage"
+    _write_usage(usage, "llm_usage_1.json", prompt_tokens=10_000,
+                 completion_tokens=200, token_count=10_200, cost_estimate=0.01,
+                 cached_tokens=8_000, cache_creation_tokens=1_200)
+
+    state = SessionState()
+    state.poll_usage(tmp_path)
+
+    assert state.tokens_cached == 8_000
+    assert state.tokens_cache_written == 1_200
+    assert state.cache_hit_percent() == pytest.approx(80.0)
+
+
+def test_poll_usage_leaves_cache_unknown_when_absent(tmp_path: Path):
+    usage = tmp_path / "data" / "llm_usage"
+    _write_usage(usage, "llm_usage_1.json", prompt_tokens=10_000,
+                 completion_tokens=200, token_count=10_200, cost_estimate=0.01)
+
+    state = SessionState()
+    state.poll_usage(tmp_path)
+
+    assert state.tokens_cached == 0
+    assert state.cache_hit_percent() == 0.0
+
+
+def test_poll_usage_accumulates_the_cache_split(tmp_path: Path):
+    usage = tmp_path / "data" / "llm_usage"
+    _write_usage(usage, "llm_usage_1.json", prompt_tokens=1_000,
+                 completion_tokens=10, token_count=1_010, cost_estimate=0.0,
+                 cached_tokens=500)
+    _write_usage(usage, "llm_usage_2.json", prompt_tokens=1_000,
+                 completion_tokens=10, token_count=1_010, cost_estimate=0.0,
+                 cached_tokens=900)
+
+    state = SessionState()
+    state.poll_usage(tmp_path)
+
+    assert state.tokens_in == 2_000
+    assert state.tokens_cached == 1_400
+    assert state.cache_hit_percent() == pytest.approx(70.0)

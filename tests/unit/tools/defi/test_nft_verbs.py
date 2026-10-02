@@ -204,5 +204,7 @@ def test_a_transfer_intent_is_accepted_by_the_real_guard():
         execution_context=None, simulate_fn=lambda **_: deltas,
         price_fn=lambda chain, addr: 3000.0,
         rpc_is_pinned_fn=lambda chain: True, halted_fn=lambda: False,
-        entry_paused_fn=lambda: False, forged_fn=lambda ctx, tool: False)
+        entry_paused_fn=lambda: False, forged_fn=lambda ctx, tool: False,
+        # every destination is an EOA (W2 reads its code)
+        account_rpc=lambda m, p: "0x")
     assert d.allowed is True, d.reason

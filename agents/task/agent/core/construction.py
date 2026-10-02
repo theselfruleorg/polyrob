@@ -206,6 +206,37 @@ def resolve_profile_overrides(updated_config, *, tool_calling_method,
     )
 
 
+
+def rail_skill_ids(agent) -> list:
+	"""060 WS-5: the skill ids this session's RAIL pins, in order, deduplicated —
+	the orchestrator stamp (cron/goal ``payload.skills`` via the session request)
+	plus ``TaskSessionConfig.skills``. Only string ids; [] when none."""
+	ids = list(getattr(getattr(agent, "orchestrator", None), "_rail_skill_ids", None) or [])
+	cfg = getattr(agent, "session_config", None)
+	ids += list(getattr(cfg, "skills", None) or [])
+	return [str(i).strip() for i in dict.fromkeys(ids) if isinstance(i, str) and i.strip()]
+
+
+def report_missing_rail_skills(agent, pinned: list, matched) -> list:
+	"""A skill the rail NAMED that did not load says so (060 WS-7 fail-loud):
+	a WARNING in the journal and a ``rail_skill_missing`` event the ``rules``
+	status section renders. The run continues on keyword matching."""
+	loaded = {getattr(s, "skill_id", None) for s in (matched or [])}
+	missing = [sid for sid in pinned if sid not in loaded]
+	if not missing:
+		return []
+	orch = getattr(agent, "orchestrator", None)
+	agent.logger.warning(
+		"rail pinned skill(s) %s but they did not load (unknown id or no SKILL.md) — "
+		"running on keyword-matched skills only", missing)
+	from core.event_kinds import RAIL_SKILL_MISSING
+	from core.event_log import emit
+	emit(RAIL_SKILL_MISSING, source="construction",
+	     user_id=str(getattr(orch, "user_id", "") or ""),
+	     session_id=str(getattr(orch, "session_id", "") or ""),
+	     attrs={"missing": missing, "pinned": list(pinned)})
+	return missing
+
 class AgentConstructionMixin:
 	"""Agent.__init__ (the ~660L constructor) split whole out of the Agent class so
 	service.py drops under 700L (P9). Agent inherits __init__ from this mixin; from_params
@@ -293,8 +324,10 @@ class AgentConstructionMixin:
 	def _resolve_verbosity(self):
 		"""The reply-length budget for the <message-shape> block (C2).
 
-		In a ROOM the room's own ``chat.verbosity`` decides; everywhere else the
-		owner's ``style.verbosity`` pref does. ``core.prefs`` is the SSOT for the
+		In a ROOM the room's own ``chat.verbosity`` decides — and a room with none
+		set gets the prompt default, NEVER the owner's private ``style.verbosity``
+		(that pref describes his DM, not a room; see ``_room_policy``). Everywhere
+		else the owner's ``style.verbosity`` pref decides. ``core.prefs`` is the SSOT for the
 		VALUE in both cases; the prompt owns how it is spoken to the model.
 		Resolved once here (session-stable) so the system prompt stays
 		byte-identical across steps and the prompt cache holds. Returns None when
@@ -302,9 +335,12 @@ class AgentConstructionMixin:
 		is unchanged. Fail-open: a prefs fault must never break agent construction.
 		"""
 		try:
-			room = self._room_policy()
-			if room is not None and room.verbosity:
-				return str(room.verbosity)
+			from core.surfaces.room_policy import is_public_session
+			if is_public_session(getattr(self, "orchestrator", None)):
+				room = self._room_policy()
+				if room is not None and room.verbosity:
+					return str(room.verbosity)
+				return None
 			from core.instance import resolve_instance_id
 			from core.prefs import load_preferences
 			from core.runtime_paths import data_dir_or_home
@@ -346,13 +382,28 @@ class AgentConstructionMixin:
 					))
 				except Exception:
 					_workspace_dir = None
+			# F25: the cap follows the MODEL WINDOW (4 % of it, clamped to 4 K–40 K)
+			# instead of a fixed 20 000 tokens — 20 K was 10 % of a 200 K window and
+			# 2 % of a 1 M one. An operator who PINNED PROJECT_CONTEXT_MAX_TOKENS to
+			# anything other than the default still wins: we only offer the window
+			# when the flag is at its default.
+			from agents.task.agent.core.project_context import (
+				DEFAULT_PROJECT_CONTEXT_CAP_TOKENS,
+			)
+			_cap_tokens = AutonomyConfig.project_context_max_tokens()
+			_context_window = None
+			if _cap_tokens == DEFAULT_PROJECT_CONTEXT_CAP_TOKENS:
+				_window = getattr(self.message_manager, "max_input_tokens", None)
+				if isinstance(_window, int) and _window > 0:
+					_context_window = _window
 			_proj_ctx = build_project_context_message(
 				local=_local,
 				autoload=AutonomyConfig.project_context_autoload(),
 				server_mode=AutonomyConfig.project_context_server_mode(),
 				cwd=os.getcwd(),
 				workspace_dir=_workspace_dir,
-				cap_tokens=AutonomyConfig.project_context_max_tokens(),
+				cap_tokens=_cap_tokens,
+				context_window=_context_window,
 			)
 			self.message_manager.set_project_context_message(_proj_ctx)
 		except Exception as e:
@@ -998,6 +1049,11 @@ class AgentConstructionMixin:
 			user_id = self.orchestrator.user_id if hasattr(self.orchestrator, 'user_id') else None
 			from agents.task.templates import seeded_skills_for
 			_seeded = seeded_skills_for(os.environ.get("POLYROB_PERSONA"))
+			# 060 WS-5: a rail pins its doctrine (`payload.skills` on a cron job or
+			# goal, or TaskSessionConfig.skills) through the SAME seed seam a
+			# persona uses — seeds bypass keyword matching and max_skills.
+			_rail_skills = rail_skill_ids(self)
+			_seeded = list(dict.fromkeys(list(_seeded or []) + _rail_skills))
 			matched_skills = skill_manager.get_skills_for_session(
 				tool_ids=tool_ids,
 				task=self.task,
@@ -1005,6 +1061,11 @@ class AgentConstructionMixin:
 				user_id=user_id,
 				seeded_skill_ids=_seeded or None,
 			)
+			if _rail_skills:
+				report_missing_rail_skills(self, _rail_skills, matched_skills)
+			# D5: the skills THIS session matched (triggers, seeds, `requires`
+			# prerequisites) — before the catalog extras are appended below.
+			_session_matched = list(matched_skills)
 
 			# S9 fix (default OFF -> byte-identical): with progressive disclosure, optionally
 			# expose ALL available skills in the catalog so the agent can discover + load_skill
@@ -1035,12 +1096,24 @@ class AgentConstructionMixin:
 				# so load_skill can serve them without re-reading disk.
 				from agents.task.constants import skill_progressive_disclosure
 				if skill_progressive_disclosure():
-					skill_content = skill_manager.format_skill_catalog(matched_skills)
+					# D5: a matched skill must reach the model, not only rank first
+					# in a catalog it may never act on. Pin the matched bodies that
+					# fit a bounded budget (safety prerequisites first); mark the
+					# rest LOAD FIRST in the catalog.
+					_eager, _load_first = skill_manager.split_progressive(_session_matched)
+					skill_content = skill_manager.format_progressive(
+						_eager, matched_skills, _load_first)
 					if self.controller is not None:
 						self.controller._session_skills = {s.skill_id: s for s in matched_skills}
+						_act = getattr(self.controller, '_activated_skills', None)
+						if isinstance(_act, set):
+							_act.update(s.skill_id for s in _eager)
+					if _eager:
+						_bump_eager_skill_usage(_eager, user_id, self.logger)
 					self.logger.info(
 						f"✨ Skill catalog ({len(matched_skills)}) for session "
-						f"[progressive disclosure]: {[s.skill_id for s in matched_skills]}"
+						f"[progressive disclosure]: {[s.skill_id for s in matched_skills]}; "
+						f"pinned {[s.skill_id for s in _eager]}; load first {sorted(_load_first)}"
 					)
 				else:
 					skill_content = skill_manager.format_skills_for_prompt(matched_skills)
@@ -1159,6 +1232,18 @@ class AgentConstructionMixin:
 		# prompt. get_messages_for_llm() injects this; the system prompt stays stable.
 		self.message_manager.set_skill_message(skill_content)
 
+		# 041 phase 2: the approved named workers the orchestrator may dispatch.
+		# Only a delegating (non-leaf) owner-side agent reads it; a room session
+		# never does. None (flag OFF / no approved worker) leaves it unset.
+		try:
+			from core.surfaces.room_policy import is_public_session
+			if self._role != "leaf" and not is_public_session(getattr(self, "orchestrator", None)):
+				from agents.task.agent.profile_store import render_worker_catalog
+				self.message_manager.set_worker_catalog_message(render_worker_catalog(
+					getattr(self.orchestrator, "user_id", None)))
+		except Exception as _wc_err:
+			self.logger.debug(f"worker-catalog render skipped (non-fatal): {_wc_err}")
+
 		# S1 (dynamic tool rig, 2026-07-19): pin the honest <tool-catalog> as a
 		# foundation block — every known tool with loaded/loadable/gated:<reason>
 		# status — so the agent asks/loads instead of researching around a missing
@@ -1256,10 +1341,13 @@ class AgentConstructionMixin:
 				_awareness = owner_awareness_line(include_correspondent_frame=_corr_on)
 			except Exception:
 				_awareness = ""
-			_combined = "\n\n".join(
-				p for p in (_awareness, _soul, _owner_doc, _contract_block, _self_doc) if p
-			)
-			self.message_manager.set_self_context_message(_combined)
+			# 060 WS-1: the declared blocks, in foundation_layers.SELF_CONTEXT_BLOCKS
+			# order. Unwelded (default) each is its own foundation message; with
+			# SELF_CONTEXT_COMBINED=true the manager re-joins them byte-identically.
+			self.message_manager.set_self_context_blocks((
+				("awareness", _awareness), ("soul", _soul), ("owner_rules", _owner_doc),
+				("contract", _contract_block), ("self_doc", _self_doc),
+			))
 		except Exception as e:
 			self.logger.debug(f"Could not load self-context (non-fatal): {e}")
 

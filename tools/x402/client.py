@@ -30,10 +30,12 @@ class X402Result:
 
 
 class X402PaymentClient(Protocol):
-    async def quote(self, url: str, *, pinned_ip: Optional[str] = None) -> Optional[float]: ...
+    async def quote(self, url: str, *, pinned_ip: Optional[str] = None,
+                    network: Optional[str] = None) -> Optional[float]: ...
     async def fetch_with_payment(
         self, *, url: str, method: str, body: Optional[str], signer: Signer,
         network: str, max_amount_usd: float, pinned_ip: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
     ) -> X402Result: ...
 
 

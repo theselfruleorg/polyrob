@@ -37,3 +37,18 @@ def liquidity_section(user_id, data_dir, enumerate_fn=None):
     sec.lines.append('Collect USD is the gas charge, not chain income; fee revenue is not counted as treasury income.')
     sec.lines.append('LP remaining cost basis is unavailable; liquidity operations do not adjust the token-keyed book.')
     return sec
+
+
+def _liquidity_slot(ctx):
+    """067 P5a: the ``liquidity`` slot. The chain read happens ONLY when the
+    caller handed a reader in (``build_status_snapshot(liquidity_enumerate_fn=)``)."""
+    from core.status_snapshot import _guarded
+    if ctx.liquidity_reader is None:
+        return _guarded("liquidity", liquidity_section, ctx.uid, ctx.data_dir)
+    return _guarded("liquidity", liquidity_section, ctx.uid, ctx.data_dir,
+                    ctx.liquidity_reader)
+
+
+from core.status_sections import register_status_section  # noqa: E402
+
+register_status_section("liquidity", _liquidity_slot)

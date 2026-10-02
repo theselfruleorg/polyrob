@@ -80,9 +80,20 @@ async function requestJson(method, url, payload, { fetcher, headers } = {}) {
   return { ok: Boolean(resp.ok), status: resp.status, body };
 }
 
+/** The console's own words for a refusal the server sends only as a code
+ *  (070 E.31): a busy 429 (`code: "busy"`) reads "Rob is busy. …", from
+ *  `#shell-copy`. `null` when the code has no console words. */
+export function codeAnswer(body, doc = (typeof document !== 'undefined' ? document : null)) {
+  if (!body || body.code !== 'busy') return null;
+  const node = doc && doc.getElementById('shell-copy');
+  return (node && node.dataset && node.dataset.busy) || null;
+}
+
 /** Preserve the server refusal and its actionable detail. */
 export function serverAnswer(body, fallback = '') {
   if (!body) return fallback;
+  const coded = codeAnswer(body);
+  if (coded) return coded;
   if (body.message || body.error) {
     const message = String(body.message || body.error);
     return typeof body.detail === 'string' && body.detail !== message ? `${message} ${body.detail}` : message;

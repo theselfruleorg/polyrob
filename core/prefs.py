@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import difflib
 import logging
+import math
 import re
 from dataclasses import dataclass
 
@@ -69,6 +70,11 @@ class PrefSpec:
     default_display: object = None
     # 018 P0.4: enforced (a runtime path consumes it) | advisory (prompt-only).
     enforcement: str = ENFORCEMENT_ENFORCED
+
+
+def _digest_channels() -> tuple:
+    from core.surfaces.catalog import cron_target_ids
+    return cron_target_ids()
 
 
 def _spec(key: str, type: str, sensitivity: str, merge: str, applies: str,
@@ -129,6 +135,28 @@ PREF_SCHEMA: dict[str, PrefSpec] = dict((
           "GOAL_NOTIFY_ON_DONE",
           description="Notify owner when a goal completes (consumed by the goal "
                       "dispatcher's completion push, 018 P0.2)"),
+    _spec("voice.replies", "bool", SENSITIVITY_SAFE, "override", "live",
+          default_display=False,
+          description="Also answer the owner with a voice note (064 F5; Telegram; "
+                      "needs OPENAI_API_KEY or espeak-ng + ffmpeg; costs a speech "
+                      "call per reply)"),
+    # 060 WS-8 (2026-09-23): three owner-communication knobs promoted from env
+    # flags (VOICE_TRANSCRIPT_ECHO, TELEGRAM_INCREMENTAL_STREAM,
+    # USER_DELIVERY_LIFECYCLE_DAILY_CAP — retired in the same commit), so the
+    # owner sets them from chat with `/config set`. No env fallback: the
+    # default below IS the old env default, so an unset pref is byte-identical.
+    _spec("voice.transcript_echo", "bool", SENSITIVITY_SAFE, "override", "live",
+          default_display=True,
+          description="Echo a voice note's transcript back into the chat before "
+                      "the answer (Telegram + WhatsApp)"),
+    _spec("stream.telegram", "bool", SENSITIVITY_SAFE, "override", "live",
+          default_display=False,
+          description="Stream the reply live into ONE Telegram message (edits as it "
+                      "is written) instead of sending it once when finished"),
+    _spec("delivery.lifecycle_daily_cap", "int", SENSITIVITY_SAFE, "override", "live",
+          min_value=0, max_value=200, default_display=10,
+          description="Framework status pings (learned-something, lifecycle) per "
+                      "day; 0 = no separate bucket (the shared daily cap still applies)"),
     _spec("progress.telegram", "bool", SENSITIVITY_SAFE, "override", "live",
           "TELEGRAM_PROGRESS_EDITS",
           description="Live Telegram progress bubble: throttled edits showing the "
@@ -136,18 +164,16 @@ PREF_SCHEMA: dict[str, PrefSpec] = dict((
                       "by the telegram harness per-turn tracker)"),
     _spec("digest.enabled", "bool", SENSITIVITY_SAFE, "override", "live",
           "OWNER_DIGEST_ENABLED", description="Daily owner digest on/off"),
+    # 064 F1: every cron delivery target of the surface catalog (the digest is
+    # delivered by cron/delivery.py, which serves them all) — not a hand list.
     _spec("digest.channel", "enum", SENSITIVITY_SAFE, "override", "live",
-          enum_values=("telegram", "email"), default_display="telegram",
-          description="Digest delivery channel"),
+          enum_values=_digest_channels(), default_display="telegram",
+          description="Digest delivery channel (any chat surface cron can deliver to)"),
     _spec("digest.quiet_hours", "str", SENSITIVITY_SAFE, "override", "live",
           description="No proactive delivery window as HH-HH, hours 0-23 "
                       "(local time), e.g. '23-08'. Enforced on the user-delivery "
                       "rail: sends inside the window are held and released at "
                       "window-end (018 P0.3)"),
-    _spec("pause.phrases", "list", SENSITIVITY_SAFE, "union", "live",
-          description="Extra object-free WORDS for the deterministic owner stop gate "
-                      "(031): 'stop <these words>' still means stop EVERYTHING, e.g. "
-                      "['ghosts', 'bots'] (a multi-word entry is split into words)"),
     _spec("delivery.rate_per_hour", "int", SENSITIVITY_SAFE, "min", "live",
           "USER_DELIVERY_RATE_PER_HOUR", min_value=1,
           description="Proactive messages/hour; the pref WINS unless the operator "
@@ -161,7 +187,9 @@ PREF_SCHEMA: dict[str, PrefSpec] = dict((
     _spec("style.verbosity", "enum", SENSITIVITY_SAFE, "override", "next-turn",
           enum_values=("terse", "normal", "detailed"),
           enforcement=ENFORCEMENT_ADVISORY,
-          description="Reply verbosity (rendered into the SELF_CONTEXT style line)"),
+          description="Reply verbosity (rendered into the SELF_CONTEXT style line; "
+                      "'detailed' also appends the run's done() record to "
+                      "goal/cron reports)"),
     _spec("style.language", "str", SENSITIVITY_SAFE, "override", "next-turn",
           enforcement=ENFORCEMENT_ADVISORY,
           description="Preferred reply language name/tag (letters/hyphens, "
@@ -406,8 +434,13 @@ def _coerce(spec: PrefSpec, value: object) -> tuple[bool, object, str]:
     if spec.type in ("int", "float"):
         try:
             num = int(value) if spec.type == "int" else float(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return False, None, f"{spec.key}: expected a {spec.type}, got {_redacted_repr(value)}"
+        # M09 (security analysis 2026-09-23): NaN compares False against every
+        # bound, so it passed min/max here and then disabled the ceiling it
+        # set (tx_guard's `amount > NaN` never fires). inf is no better.
+        if isinstance(num, float) and not math.isfinite(num):
+            return False, None, f"{spec.key}: must be a finite number"
         if spec.min_value is not None and num < spec.min_value:
             return False, None, f"{spec.key}: must be at least {spec.min_value}"
         if spec.max_value is not None and num > spec.max_value:
@@ -745,6 +778,24 @@ _VERBOSITY_GUIDANCE: dict[str, str] = {
 }
 
 
+#: Owner rule (2026-09-29): the agent speaks with ``send_message`` only; its
+#: ``done(text)`` is a run RECORD. A goal/cron report shows that record to the
+#: owner only at the most verbose ``style.verbosity`` value.
+DONE_RECORDS_VERBOSITY = "detailed"
+
+
+def done_records_visible(user_id: Optional[str], home_dir: Path | str) -> bool:
+    """Whether owner-bound goal/cron reports append the run's done() record.
+
+    Fail-closed: an unreadable pref shows no record (the record is bookkeeping,
+    never the answer, so hiding it loses nothing the owner was promised)."""
+    try:
+        value = resolve("style.verbosity", user_id, home_dir, default="normal")
+        return str(value or "").strip().lower() == DONE_RECORDS_VERBOSITY
+    except Exception:
+        return False
+
+
 def render_style_line(prefs: dict[str, object]) -> str:
     """Deterministic one-line style summary from typed prefs.
 
@@ -877,6 +928,21 @@ def resolve_with_source(key: str, user_id: Optional[str], home_dir: Path | str,
                   POLICY_LADDER.index(pref) if pref in POLICY_LADDER else 0)
         return POLICY_LADDER[idx], "merged(stricter)"
     return base, base_src  # unreachable: schema test pins merge values
+
+
+def owner_pref_scope() -> tuple:
+    """060 WS-8: ``(owner user_id, prefs home)`` for an instance-wide knob the
+    OWNER sets from chat. ``(None, "")`` when either cannot be resolved (logged):
+    :func:`resolve` then returns the knob's default — an unreadable scope must
+    never turn a voice echo or a stream into an error."""
+    try:
+        from core.instance import resolve_owner_principal
+        from core.runtime_paths import prefs_home_dir
+        return resolve_owner_principal(), prefs_home_dir()
+    except Exception:
+        logger.warning("owner pref scope unresolvable; knobs use their defaults",
+                       exc_info=True)
+        return None, ""
 
 
 def resolve(key: str, user_id: Optional[str], home_dir: Path | str, *,

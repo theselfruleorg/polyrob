@@ -25,7 +25,7 @@ from core.flags import is_secret_flag
 from core.flags_catalog import CATALOG
 
 # Concrete-name rows only; a dynamic "<...>" pattern row is not a writable key.
-FLAG_NAMES = sorted({n for n, _g, _d, _desc in CATALOG if "<" not in n})
+FLAG_NAMES = sorted({n for n, *_ in CATALOG if "<" not in n})
 
 
 def _segs(name):

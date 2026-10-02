@@ -20,6 +20,7 @@ the agent brings bytes it already has, or it uses the template.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from typing import Optional, Sequence, Tuple
@@ -37,15 +38,28 @@ def deploy_enabled() -> bool:
 
 def _refuse_non_owner_turn(execution_context, verb: str) -> Optional[str]:
     """A delegated sub-agent never deploys — it reports back. Fails closed.
-    ONE shape for every money verb: ``core.wallet.authority.leaf_refusal``."""
-    from core.wallet.authority import leaf_refusal
-    return leaf_refusal(execution_context, verb)
+    ONE shape for every money verb: the kernel's leaf + principal steps
+    (``core.money.authorize.authorize_spend``)."""
+    from core.money.authorize import SpendIntent, authorize_spend
+    verdict = authorize_spend(SpendIntent(what=verb, pause=False), execution_context)
+    return verdict.reason if verdict.refused else None
 
 
-def _refuse_paused() -> Optional[str]:
-    """The 031 owner pause — ``core.wallet.authority.spend_pause_refusal``."""
-    from core.wallet.authority import spend_pause_refusal
-    return spend_pause_refusal()
+def _refuse_paused(*, entry: bool = False, execution_context=None) -> Optional[str]:
+    """The 031 owner pause — the kernel's pause step.
+
+    CR-L21: ``entry=True`` also honours the scoped `/pause trading`. A deploy
+    is always an entry (a new contract is never an exit); ``contract_call``
+    shares this helper and keeps the default because a generic write may be
+    an exit."""
+    from core.money.authorize import SpendIntent, authorize_spend
+    # A genuine owner turn is the owner acting; the pause bounds the agent only.
+    from tools.controller.turn_origin import (
+        _is_autonomous_goal_turn, _is_forged_or_autonomous_turn)
+    verdict = authorize_spend(SpendIntent(principal=False, leaf=False, entry=entry),
+                              execution_context, forged_fn=_is_forged_or_autonomous_turn,
+                              autonomous_ok_fn=_is_autonomous_goal_turn)
+    return verdict.reason if verdict.refused else None
 
 
 
@@ -128,9 +142,16 @@ async def perform_deploy_token(tool, params, execution_context=None):
     except token_template.TokenTemplateError as exc:
         return tool._ar(error=f"refused: {exc}")
 
-    plan, plan_err = _resolve_create2(tool, params, init_code)
-    if plan_err:
-        return tool._ar(error=plan_err)
+    if ((getattr(params, "salt", "") or "").strip()
+            or (getattr(params, "vanity", "") or "").strip()):
+        # CR-H07: the template mints the supply to msg.sender; through the
+        # CREATE2 factory that is the factory, and the supply is stranded.
+        return tool._ar(error=(
+            "refused: a salt / vanity address is not available for deploy_token. "
+            "The token's constructor mints the whole supply to the deployer, and "
+            "on the deterministic path the deployer is the CREATE2 factory, not "
+            "the wallet — the supply would be lost. Deploy without salt/vanity. "
+            "Nothing was broadcast."))
 
     describe = (
         f"deploy token {params.symbol} ({params.name}) on {params.chain}\n"
@@ -142,9 +163,10 @@ async def perform_deploy_token(tool, params, execution_context=None):
         tool, execution_context=execution_context, verb="deploy_token",
         chain=params.chain, init_code=init_code, value_wei=0,
         max_spend_usd=params.max_spend_usd, dry_run=params.dry_run,
-        describe=describe, create2=plan,
+        describe=describe, create2=None,
         expected_runtime=token_template.RUNTIME,
         immutable_slots=token_template.IMMUTABLE_SLOTS,
+        expected_holder_mint_raw=supply_raw,
         success_note=(
             "  The whole supply is now held by the wallet. The token has no "
             "mint function, so this is the supply forever.\n"))
@@ -220,7 +242,8 @@ async def _perform_deploy(tool, *, execution_context, verb: str, chain: str,
                           expected_runtime: Optional[str],
                           immutable_slots: Sequence[Tuple[int, int]],
                           success_note: str = "",
-                          create2: Optional[dict] = None):
+                          create2: Optional[dict] = None,
+                          expected_holder_mint_raw: Optional[int] = None):
     """The shared body. Mirrors ``wrap``: reserve -> authorize -> size -> send."""
     from core.wallet import deploy_guard, tx_guard, tx_notify
     from core.wallet.broadcast.evm import EvmRail
@@ -234,7 +257,7 @@ async def _perform_deploy(tool, *, execution_context, verb: str, chain: str,
     if turn_err:
         return tool._ar(error=turn_err)
     if not dry_run:
-        paused = _refuse_paused()
+        paused = _refuse_paused(entry=True, execution_context=execution_context)
         if paused:
             return tool._ar(error=paused + " RESULT: NOT SENT.")
 
@@ -274,16 +297,22 @@ async def _perform_deploy(tool, *, execution_context, verb: str, chain: str,
         max_spend_usd=max_spend_usd, idempotency_key=idem,
         is_deploy=True, init_code=init_code,
         expected_runtime=expected_runtime, immutable_slots=tuple(immutable_slots),
-        create2_salt=(create2["salt"] if create2 is not None else None))
+        create2_salt=(create2["salt"] if create2 is not None else None),
+        expected_holder_mint_raw=expected_holder_mint_raw)
 
     authorize = tool._guard_fn or tx_guard.authorize
     async with gate.reserve():
-        from tools.controller.action_registration import _is_forged_or_autonomous_turn
+        from tools.controller.action_registration import (
+            _is_autonomous_goal_turn, _is_forged_or_autonomous_turn)
 
-        decision = authorize(intent, tx, holder=signer.address, gate=gate,
-                             execution_context=execution_context, tool_self=tool,
-                             price_fn=tool._price,
-                             forged_fn=_is_forged_or_autonomous_turn)
+        # CR-M10: the simulation, the signing RPC and the receipt poll run off
+        # the event loop, so the held reservation never freezes other sessions.
+        decision = await asyncio.to_thread(
+            authorize, intent, tx, holder=signer.address, gate=gate,
+            execution_context=execution_context, tool_self=tool,
+            price_fn=tool._price,
+            forged_fn=_is_forged_or_autonomous_turn,
+            autonomous_ok_fn=_is_autonomous_goal_turn)
 
         facts = decision.deploy
         header = describe
@@ -313,7 +342,7 @@ async def _perform_deploy(tool, *, execution_context, verb: str, chain: str,
 
         if decision.sim_gas_used:
             try:
-                tx = rail.size_gas(tx, decision.sim_gas_used)
+                tx = await asyncio.to_thread(rail.size_gas, tx, decision.sim_gas_used)
             except Exception as exc:
                 return tool._ar(error=(
                     f"refused at gas sizing: {exc} — nothing was broadcast"))
@@ -334,9 +363,10 @@ async def _perform_deploy(tool, *, execution_context, verb: str, chain: str,
                 "broadcast. Re-run with dry_run=false to deploy."))
 
         try:
-            tx_hash = rail.sign_and_send(tx)
+            tx_hash = await asyncio.to_thread(rail.sign_and_send, tx)
         except Exception as exc:
-            return tool._ar(error=f"broadcast failed: {exc} — nothing was deployed")
+            from core.wallet.broadcast.evm import broadcast_failure_text
+            return tool._ar(error=broadcast_failure_text(exc, nothing="nothing was deployed"))
 
         _used, _limit = tx_notify.caps_from_gate(gate)
         tool._notify_tx(execution_context, tx_notify.TxNotice(
@@ -345,7 +375,7 @@ async def _perform_deploy(tool, *, execution_context, verb: str, chain: str,
             usd=decision.amount_usd, tx_ref=tx_hash, lane=decision.lane,
             cap_used_usd=_used, cap_limit_usd=_limit), settled=False)
 
-        receipt = rail.await_receipt(tx_hash)
+        receipt = await asyncio.to_thread(rail.await_receipt, tx_hash)
 
     # The SETTLED notice is emitted by `_record_spend` below and NOWHERE else
     # (043 T2). It used to fire here, inside the reservation, carrying
@@ -391,6 +421,12 @@ async def _perform_deploy(tool, *, execution_context, verb: str, chain: str,
         # record still propagates — an unrecorded spend stays a loud failure —
         # but the owner learns of it in the same notice that reports the
         # transaction, rather than reading a clean line over an invisible spend.
+        if verb == "deploy_token" and counterparty and receipt.succeeded:
+            # W0: a deployed-and-landed token is our own — provenance, so the
+            # owner never has to pin a token this instance created.
+            from core.wallet.token_provenance import record_own_token
+            record_own_token(chain, counterparty, kind="deploy_token",
+                             evidence=f"tx {tx_hash}")
         recorded = False
         try:
             async with gate.reserve():

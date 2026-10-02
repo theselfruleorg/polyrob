@@ -65,6 +65,33 @@ class SignalClient:
             raise RuntimeError(f"signal send failed: {payload['error']}")
         return payload.get("result")
 
+    async def get_attachment(self, attachment_id: str, *, recipient: Optional[str] = None,
+                             group_id: Optional[str] = None) -> Optional[bytes]:
+        """JSON-RPC ``getAttachment`` (064 F3) → the file's bytes, or None.
+        The daemon is local; the size cap applies after decode."""
+        import base64
+        self._rpc_id += 1
+        params: dict = {"id": attachment_id}
+        if self.account:
+            params["account"] = self.account
+        if group_id:
+            params["groupId"] = group_id
+        elif recipient:
+            params["recipient"] = recipient
+        body = {"jsonrpc": "2.0", "id": self._rpc_id, "method": "getAttachment",
+                "params": params}
+        session = await self._http()
+        async with session.post(f"{self.daemon_url}/api/v1/rpc", json=body) as resp:
+            payload = await resp.json(content_type=None)
+        if payload.get("error"):
+            logger.warning("signal getAttachment failed: %s", payload["error"])
+            return None
+        result = payload.get("result")
+        data = result.get("data") if isinstance(result, dict) else result
+        if not data:
+            return None
+        return base64.b64decode(data)
+
     async def close(self) -> None:
         if self._session is not None and not self._session.closed:
             await self._session.close()

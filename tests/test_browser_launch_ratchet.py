@@ -13,7 +13,8 @@ import re
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-PACKAGES = ("agents", "api", "cli", "core", "cron", "modules", "surfaces", "tools", "webview", "utils")
+PACKAGES = ("agents", "api", "cli", "core", "cron", "modules", "surfaces", "tools", "webview", "utils",
+            "packs")
 # A real call has a receiver (`pw.chromium.launch(`); prose in a docstring or
 # comment writes `playwright.chromium.launch(env=…)` too, so require a code line
 # that is not a comment and contains an assignment/await/return shape.
@@ -22,8 +23,7 @@ LAUNCH_RE = re.compile(r"^(?!\s*#).*(?:await\s+|=\s*|return\s+)\w+\.chromium\.la
 # Files that may call the launcher. Each MUST reference the policy in the same file.
 ALLOWED = {
     "tools/browser/browser.py": "launch_security",
-    "cli/commands/x_account.py": "desktop_launch_kwargs",
-    "modules/pfp/renderer.py": "browser_rail_status",
+    "packs/x/polyrob_x/commands/x_account.py": "desktop_launch_kwargs",
 }
 
 

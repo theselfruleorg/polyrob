@@ -77,7 +77,13 @@ _FORBIDDEN_FRAGMENTS = (os.sep + "sessions" + os.sep, os.sep + "workspace" + os.
 
 
 def shipped_manifest_path() -> str:
-    """The manifest that SHIPS with the code: ``<install>/data/streams/streams.yaml``.
+    """Where a shipped manifest WOULD live: ``<install>/data/streams/streams.yaml``.
+
+    ⚠️ No manifest ships today (071 T7): ``data/streams/`` is not in the tree,
+    so this path does not exist on a fresh install and every reader treats it
+    as absent (the capability-claim tests that read it skip). An operator who
+    wants standing streams writes the manifest at :func:`home_manifest_path`
+    (or points ``POLYROB_STREAMS_MANIFEST`` at one).
 
     Lives under ``data/`` rather than ``config/`` because ``scripts/deploy_prod.sh``
     syncs ``data/prompts`` and ``data/characters`` as bundled content and does NOT
@@ -592,6 +598,12 @@ def stream_is_due(board, user_id: str, stream: Dict[str, Any],
     _obj_status = stream_objective_status(board, user_id, stream)
     if _obj_status is not None and _obj_status != _OBJ_ACTIVE:
         return False, f"objective is {_obj_status} by the owner (/goal objective activate to re-arm)"
+    # 034 §3.5 read site 1: what the owner switched OFF is not seeded. A cancel
+    # used to LOWER this throttle (cancelled is not live), so a stopped leg was
+    # re-seeded on the next cadence.
+    _off = _suppressed_reason(board, user_id, stream)
+    if _off:
+        return False, _off
     # `is None`, not `or`: an explicit `max_live_goals: 0` means the operator
     # wants the stream disabled (0 ever live), which is a real, meaningful
     # value — `or len(...)` would treat it as falsy/"unset" and silently
@@ -610,6 +622,31 @@ def stream_is_due(board, user_id: str, stream: Dict[str, Any],
         waited_h = (now - last) / 3600.0
         return False, f"inside the cadence window ({waited_h:.1f}h of {cadence_h}h)"
     return True, "due"
+
+
+def _leg_suppressed(board, user_id: str, title: str) -> bool:
+    """True when the owner switched this leg's title OFF (034). A board without
+    a db path (a test fake) has no suppression store."""
+    db = getattr(board, "db_path", None)
+    if not db:
+        return False
+    from core.goal_suppressions import SCOPE_TITLE, find
+    return find(db, user_id=user_id, scope=SCOPE_TITLE, value=title) is not None
+
+
+def _suppressed_reason(board, user_id: str, stream: Dict[str, Any]) -> str:
+    """Why this stream must not seed because of an owner switch-off, or ""."""
+    db = getattr(board, "db_path", None)
+    if not db:
+        return ""
+    from core.goal_suppressions import SCOPE_STREAM, find
+    sid = str(stream["id"])
+    if find(db, user_id=user_id, scope=SCOPE_STREAM, value=sid) is not None:
+        return f"stream {sid} is switched off by the owner (/goal allow to turn it on)"
+    titles = [str(g.get("title") or "") for g in stream.get("goals") or []]
+    if titles and all(_leg_suppressed(board, user_id, t) for t in titles):
+        return "every leg of this stream is switched off by the owner (/goal allow)"
+    return ""
 
 
 def _effective_window_sec(cadence_h: float) -> float:
@@ -695,6 +732,11 @@ def seed_stream(board, user_id: str, stream: Dict[str, Any],
     previous_id: Optional[str] = None
     try:
         for spec in stream["goals"]:
+            # 034: a leg the owner switched OFF is skipped, and the chain runs on
+            # from the last leg that WAS written (create() would refuse it anyway,
+            # and a refusal here would roll back the whole cycle).
+            if _leg_suppressed(board, user_id, str(spec["title"])):
+                continue
             payload = {
                 # Verbatim operator grant — see the module docstring. Never inferred,
                 # never filtered.
@@ -708,7 +750,10 @@ def seed_stream(board, user_id: str, stream: Dict[str, Any],
                 user_id=user_id, title=str(spec["title"]), body=str(spec["body"]),
                 priority=int(spec.get("priority") or 5), parent_id=objective_id,
                 payload=payload, force=True,
-                depends_on=[previous_id] if previous_id else None)
+                depends_on=[previous_id] if previous_id else None,
+                # An operator-supplied manifest is an owner act (036 §4.4 keeps
+                # it as the import path); the grant is the file's author.
+                actor="owner_seat")
             previous_id = goal.id
             created.append(goal)
     except BaseException:

@@ -29,6 +29,17 @@ def test_web_fetch_source_is_playwright_free():
 
 
 def test_requirements_has_no_top_level_playwright():
+	# 066 P1: requirements.txt is the GENERATED hashed closure of PROD_EXTRAS.
+	# Playwright may appear there only because the server set names `browser`;
+	# the base install (pyproject dependencies) never carries it.
+	import re
+	import tomllib
 	with open("requirements.txt", "r", encoding="utf-8") as fh:
-		lines = [l.strip() for l in fh if l.strip() and not l.strip().startswith("#")]
-	assert not any(l.lower().startswith("playwright") for l in lines)
+		text = fh.read()
+	extras = re.search(r"^# extras: ([a-z0-9,\-]+)", text, re.M).group(1).split(",")
+	lines = [l.strip() for l in text.splitlines() if l.strip() and not l.strip().startswith("#")]
+	if any(l.lower().startswith("playwright") for l in lines):
+		assert "browser" in extras
+	with open("pyproject.toml", "rb") as fh:
+		base = tomllib.load(fh)["project"]["dependencies"]
+	assert not any(d.lower().startswith("playwright") for d in base)

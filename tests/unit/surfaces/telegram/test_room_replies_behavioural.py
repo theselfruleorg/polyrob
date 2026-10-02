@@ -86,9 +86,11 @@ def _patch(monkeypatch, *, result):
 
 
 @pytest.mark.asyncio
-async def test_owner_stop_everything_in_a_room_goes_to_owner_dm_not_the_room(monkeypatch, tmp_path):
-    """Finding 1 (round 1 review): the owner-intent gate's own reply must never
-    post into the room — it is owner-only confirmation text."""
+async def test_owner_plain_stop_in_a_room_is_chat_not_a_pause(monkeypatch, tmp_path):
+    """2026-09-24: plain chat text is never a command. The owner's "stop
+    everything" in a room writes NO pause and sends NO gate confirmation —
+    the deterministic stop is /pause."""
+    from core.autonomy_control import read_state
     monkeypatch.setenv("POLYROB_OWNER_USER_ID", _OWNER_UID)
     monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", _OWNER_DM_ID)
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
@@ -104,12 +106,8 @@ async def test_owner_stop_everything_in_a_room_goes_to_owner_dm_not_the_room(mon
     await harness.handle_update(_group_update())
     await _drain()
 
-    sent = bot.calls  # (op, chat_id, text, n)
-    room_sends = [c for c in sent if c[0] == "send" and c[1] == _ROOM_CHAT_ID]
-    owner_sends = [c for c in sent if c[0] == "send" and c[1] == _OWNER_DM_ID]
-    assert room_sends == [], f"owner-intent gate reply leaked into the room: {room_sends}"
-    assert len(owner_sends) == 1, f"expected exactly one owner-DM send, got {owner_sends}"
-    assert "paused" in owner_sends[0][2].lower()
+    assert not read_state(str(tmp_path)).paused
+    assert not any("paused" in str(c[2]).lower() for c in bot.calls if c[0] == "send")
 
 
 @pytest.mark.asyncio

@@ -62,10 +62,30 @@ def set_job_deliver(store: Any, job_id: str, target: Optional[str], *,
     ``[SILENT]``. Returns False for a target outside the delivery allowlist,
     an unknown job or another tenant's job.
     """
-    from cron.delivery import ALLOWED_TARGETS
+    from cron.delivery import allowed_targets
     clearing = target is None or str(target).strip().lower() in ("", "none", "-")
-    if not clearing and str(target).strip().lower() not in ALLOWED_TARGETS:
+    if not clearing and str(target).strip().lower() not in allowed_targets():
         return False
     return set_job_payload_key(store, job_id, "deliver",
                                None if clearing else str(target).strip().lower(),
                                user_id=user_id)
+
+
+def set_job_preflight_slot_cap(store: Any, job_id: str, max_open_rows: Optional[int], *,
+                               user_id: Optional[str] = None) -> bool:
+    """Set (or, with ``None``, DROP) ``payload.preflight`` as the slot-cap
+    precondition ``{"kind": "slot_cap", "max_open_rows": N}`` — the $0 skip
+    ``cron/preflight.py`` evaluates before any model call (2026-09-22: the
+    SCOUT rail ran 24×/day closing "NO ENTRY — slot cap (7 rows vs 6)").
+    Returns False for a non-positive cap, an unknown job or another tenant's job.
+    """
+    if max_open_rows is None:
+        return set_job_payload_key(store, job_id, "preflight", None, user_id=user_id)
+    try:
+        cap = int(max_open_rows)
+    except (TypeError, ValueError):
+        return False
+    if cap <= 0:
+        return False
+    return set_job_payload_key(store, job_id, "preflight",
+                               {"kind": "slot_cap", "max_open_rows": cap}, user_id=user_id)

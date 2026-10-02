@@ -52,6 +52,9 @@ from tools.controller.approval import ApprovalProvider, register_approval_provid
 logger = logging.getLogger(__name__)
 
 TOOL_APPROVAL_ASK_KIND = "tool_approval"
+#: W1: the buy identity gate's "which contract is real?" ask
+#: (``tools/defi/token_identity_ask.py``) — listed and decided with the rest.
+TOKEN_IDENTITY_ASK_KIND = "token_identity"
 TAP_PREFIX = "tap-"
 DEFAULT_POLL_INTERVAL_SEC = 2.0
 
@@ -105,6 +108,44 @@ def _params_summary(params: Dict[str, Any], *, max_len: int = 300) -> str:
     return text[:max_len]
 
 
+#: The biggest params blob an ask row carries for its card. Above this the row
+#: keeps only ``params_summary`` and the web card says the full card is in chat.
+_CARD_PARAMS_MAX_CHARS = 64_000
+
+
+def _card_params(params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """*params* made JSON-safe for the ask row, or ``None`` when too big."""
+    try:
+        blob = json.dumps(params, sort_keys=True, default=str)
+    except Exception:
+        return None
+    if len(blob) > _CARD_PARAMS_MAX_CHARS:
+        return None
+    return json.loads(blob)
+
+
+def pending_grant_card(payload: Dict[str, Any], display_id: str) -> str:
+    """The full grant card for one open ``tool_approval`` ask, or ``""``.
+
+    This is ``render_grant_card`` — the card the chat push carries (CR-M01:
+    every money, asset and target field in full) — without the chat reply
+    lines, because the seat that shows it has its own buttons. ``""`` when the
+    row predates the stored params or its params were too big to keep; the
+    caller then shows the preview and must not present it as the whole card.
+    """
+    params = payload.get("params")
+    if not isinstance(params, dict):
+        return ""
+    try:
+        from tools.controller.grant_card import render_grant_card
+        return render_grant_card(
+            str(payload.get("tool_name") or ""), params, display_id,
+            reply_lines=False)
+    except Exception:
+        logger.debug("pending_grant_card: render failed", exc_info=True)
+        return ""
+
+
 def _goals_db_path(home_dir: Any) -> str:
     # WS-3: one shared resolver — {home_dir}/goals.db, else the data home (never a
     # relative "data" under the cwd).
@@ -137,6 +178,11 @@ def list_pending_tool_approvals(board: Any, user_id: str) -> List[Dict[str, Any]
             "id": tap_display_id(a.id),
             "chars": len(preview),
             "preview": preview,
+            # M08: the action name, so a bulk approve can tell a money ask apart.
+            "tool": str(payload.get("tool_name") or a.title or ""),
+            # The full grant card (every money field) for a seat that can show
+            # more than one line; "" for a row without stored params.
+            "card": pending_grant_card(payload, tap_display_id(a.id)),
         })
     return out
 
@@ -216,6 +262,16 @@ def all_pending(*, user_id: str, home_dir: Any, instance_id: str,
         logger.warning("all_pending: tool approvals unreadable", exc_info=True)
         unavailable.append("queued tool + spend approvals")
 
+    # W1: "which contract is the real token?" — one item per undecided
+    # candidate, raised by the buy identity gate, decided right here.
+    try:
+        if board is not None:
+            from tools.defi.token_identity_ask import list_pending_items
+            items += list_pending_items(board, user_id)
+    except Exception:
+        logger.warning("all_pending: token identity asks unreadable", exc_info=True)
+        unavailable.append("token identity questions")
+
     try:
         from core.surfaces.owner_admin import pending_correspondent_items
         if correspondent_registry is None:
@@ -226,6 +282,17 @@ def all_pending(*, user_id: str, home_dir: Any, instance_id: str,
     except Exception:
         logger.warning("all_pending: correspondent bindings unreadable", exc_info=True)
         unavailable.append("pending contacts")
+
+    # 066 P2 (D5): requests above polyrob-signer's hard cap. Only when a signer
+    # is in play; decided by the SAME decider below, as root on the box.
+    try:
+        from core.signer import MODE_LOCAL, signer_mode
+        if signer_mode() != MODE_LOCAL:
+            from core.signer.approvals import pending_items
+            items += pending_items()
+    except Exception:
+        logger.warning("all_pending: signer approvals unreadable", exc_info=True)
+        unavailable.append("signer approvals")
 
     return PendingSet(items, unavailable)
 
@@ -273,6 +340,16 @@ def decide_pending(kind: str, item_id: Any, *, approve: bool, user_id: str,
     from core import self_evolution
 
     item_id = str(item_id or "")
+    if kind == "signer_approval":
+        # 066 D5: the signer accepts this only from uid 0 (the CLI on the box).
+        from core.signer.approvals import decide
+        return decide(item_id, approve=approve)
+    if kind == TOKEN_IDENTITY_ASK_KIND:
+        if board is None:
+            from agents.task.goals.board import GoalBoard
+            board = GoalBoard(_goals_db_path(home_dir))
+        from tools.defi.token_identity_ask import decide_item
+        return decide_item(board, item_id, approve=approve, user_id=user_id)
     if kind == TOOL_APPROVAL_ASK_KIND:
         if board is None:
             from agents.task.goals.board import GoalBoard
@@ -309,6 +386,67 @@ def decide_pending(kind: str, item_id: Any, *, approve: bool, user_id: str,
               instance_id=instance_id)
 
 
+def _is_money_action(action_name: str) -> bool:
+    """True for an action that can move money. Fail-CLOSED: an unknown or
+    unreadable classification counts as money (it is then decided one by one).
+
+    ONE predicate: ``core.money.classify.money_action`` (longest tool-id
+    match, so ``polymarket_data_*`` reads are not money). Every
+    ``PAYMENT_APPROVAL_TOOLS`` name is a money action by that predicate."""
+    name = str(action_name or "").strip()
+    if not name:
+        return True
+    # The settlement watcher files this financial ask outside a Controller.
+    if name == "subscription_renewal":
+        return True
+    try:
+        from core.money.classify import money_action
+        return bool(money_action(name))
+    except Exception:
+        return True
+
+
+#: Tool asks that are never money but must still be tapped one by one: the 064
+#: release tap (``scripts/release_train.py`` ``TAP_TOOL``) publishes a public OSS
+#: release, and the owner's D1 is "every release waits for THE owner's tap".
+_INDIVIDUAL_TAP_TOOLS = frozenset({"release_publish"})
+
+
+def needs_individual_decision(item: Dict[str, Any]) -> Optional[str]:
+    """M08 (security analysis 2026-09-23): why ``item`` may NOT ride a bulk
+    APPROVE, or None. A guarded preference proposal (``budget.*`` raises the
+    spend ceilings; ``approvals.*`` / ``outbound.*`` loosen a gate) and a
+    money-verb ask each need the owner to look at THAT item: a bulk approve is
+    exactly what a forwarded or injected ``/approve all`` would exploit."""
+    kind = str(item.get("kind") or "")
+    if kind == "signer_approval":
+        return "a money ask above the signer's hard cap"
+    if kind == TOKEN_IDENTITY_ASK_KIND:
+        return "a decision about which token is real"
+    if kind == TOOL_APPROVAL_ASK_KIND:
+        tool = item.get("tool")
+        if tool is not None and str(tool).strip() in _INDIVIDUAL_TAP_TOOLS:
+            return "a public release publish"
+        if tool is None or _is_money_action(tool):
+            return "a money ask"
+        return None
+    try:
+        from core.self_evolution import KIND_PREF_CHANGE
+    except Exception:
+        KIND_PREF_CHANGE = "pref_change"
+    if kind == KIND_PREF_CHANGE:
+        key = str(item.get("id") or "")
+        try:
+            from core.prefs import PREF_SCHEMA, SENSITIVITY_GUARDED
+            spec = PREF_SCHEMA.get(key)
+            guarded = spec is None or spec.sensitivity == SENSITIVITY_GUARDED
+        except Exception:
+            guarded = True
+        if guarded or key.startswith("budget."):
+            return "a guarded setting change"
+    return None
+
+
 def decide_all_pending(*, approve: bool, user_id: str, home_dir: Any,
                        instance_id: str, board: Any = None,
                        correspondent_registry: Any = None,
@@ -326,8 +464,19 @@ def decide_all_pending(*, approve: bool, user_id: str, home_dir: Any,
                           correspondent_registry=correspondent_registry)
     msgs: List[str] = []
     ok_n = fail_n = 0
+    held: List[str] = []
     for it in list(pending.items):
         kind, item_id = it.get("kind", ""), it.get("id")
+        # M08: a bulk APPROVE skips a money ask or a guarded setting change. A
+        # bulk REJECT may take everything EXCEPT a token-identity question:
+        # rejecting one untrusts each candidate, the real contract included
+        # (validation, 2026-09-27) — denying there is not the safe direction.
+        why = (needs_individual_decision(it) if approve
+               else needs_individual_decision(it) if kind == TOKEN_IDENTITY_ASK_KIND
+               else None)
+        if why:
+            held.append(f"{kind}:{item_id} ({why})")
+            continue
         try:
             ok, msg = decide_pending(kind, item_id, approve=approve, user_id=user_id,
                                      home_dir=home_dir, instance_id=instance_id,
@@ -342,6 +491,11 @@ def decide_all_pending(*, approve: bool, user_id: str, home_dir: Any,
         # this project at 3.11.
         mark = "\u2713" if ok else "\u2717"
         msgs.append(f"{mark} {kind}:{item_id} \u2014 {msg}")
+    if held:
+        msgs.append(
+            f"\u26a0 NOT {'approved' if approve else 'rejected'} \u2014 these need "
+            "your individual decision "
+            "(decide each one by its id): " + "; ".join(held))
     if pending.unavailable:
         msgs.append(pending.degraded_line())
     return ok_n, fail_n, msgs
@@ -744,6 +898,29 @@ def make_tool_auto_notify_hook(container: Any, tools: Iterable[str],
     return _hook
 
 
+def _goal_run_can_sign(action_name: str) -> bool:
+    """False when *action_name* is signed through ``tx_guard`` and a goal/cron
+    run may not sign at all (``DEFI_AUTONOMOUS_TURN_TRADING`` off: step 2
+    refuses every such turn). An ask there is a dead end — the owner taps, reads
+    "running it now; the result follows", and the run is refused again
+    (validation, 2026-09-27). Any doubt answers True: keep asking."""
+    try:
+        from core.config_policy.payment_tools import (
+            PAYMENT_APPROVAL_TOOLS, VERB_OWNED_APPROVAL_GATES)
+        from core.config_policy.spend_lane import DEFI_SPEND_VERBS
+        signed = (set(DEFI_SPEND_VERBS) | set(VERB_OWNED_APPROVAL_GATES)
+                  | {n for n in PAYMENT_APPROVAL_TOOLS if n.startswith("defi_trade_")})
+        if action_name not in signed:
+            return True
+        from core.wallet.tx_guard import (
+            autonomous_turn_trading_enabled, monitor_exits_enabled)
+        # The exit carve-out (DEFI_MONITOR_EXITS) can still sign a SELL from such
+        # a run; whether this call is exit-shaped is not known here, so ask.
+        return bool(autonomous_turn_trading_enabled() or monitor_exits_enabled())
+    except Exception:
+        return True
+
+
 class OwnerQueueApprover(ApprovalProvider):
     """Durable, remote-capable owner approval queue (Task 9 / G-2).
 
@@ -752,6 +929,10 @@ class OwnerQueueApprover(ApprovalProvider):
     after a timeout re-polls the SAME ask instead of spamming a new one/a new
     notification.
     """
+
+    #: Its True is the owner's tap (or the redemption of one): the approval
+    #: hook may carry it to the guard as an owner grant.
+    decides_as_owner = True
 
     def __init__(self, *, user_id: Optional[str] = None, home_dir: Any = None,
                  container: Any = None, poll_interval: float = DEFAULT_POLL_INTERVAL_SEC,
@@ -853,7 +1034,8 @@ class OwnerQueueApprover(ApprovalProvider):
         execution, and the grant itself expires (``approval_grant_ttl_hours``).
         """
         user_id = getattr(context, "user_id", None) or self._default_user_id or ""
-        from core.wallet.authority import money_action, owner_refusal
+        from core.money.authority import owner_refusal
+        from core.money.classify import money_action
         if money_action(action_name) and owner_refusal(user_id):
             return False
         session_id = getattr(context, "session_id", None) or ""
@@ -885,7 +1067,8 @@ class OwnerQueueApprover(ApprovalProvider):
             # agent, orchestrator role, not a sub-agent, not a self-wake or
             # delegation-result re-entry, live autonomy marker, fail-closed on any
             # raise. Leaf, self-wake and tainted turns are untouched below.
-            goal_turn = bool(forged and _is_autonomous_goal_turn(context, None))
+            goal_turn = bool(forged and _is_autonomous_goal_turn(context, None)
+                             and _goal_run_can_sign(action_name))
         except Exception:
             logger.debug(
                 "owner_queue: forged-turn probe raised — treating as forged "
@@ -949,7 +1132,8 @@ class OwnerQueueApprover(ApprovalProvider):
             # `_consume_grant` is single-winner), but the owner should see it fire.
             await _push_owner_notification(
                 self._resolve_container(), user_id,
-                f"✅ Approved & executed: {action_name} [{req_hash[:10]}]")
+                f"✅ Approved: {action_name} [{req_hash[:10]}] — running it now; "
+                f"the result follows.")
             return True
 
         ask = self._find_open_ask(board, user_id, req_hash)
@@ -970,6 +1154,10 @@ class OwnerQueueApprover(ApprovalProvider):
                     "ask_kind": TOOL_APPROVAL_ASK_KIND,
                     "tool_name": action_name,
                     "params_summary": summary,
+                    # The full params, so a seat that renders the ask later (the
+                    # web Inbox) can show the SAME grant card the chat push
+                    # carries — every money field, not a 160-char preview.
+                    "params": _card_params(norm_params),
                     "request_hash": req_hash,
                     "session_id": session_id,
                     "grant_consumed": False,
@@ -1005,9 +1193,12 @@ class OwnerQueueApprover(ApprovalProvider):
                     timeout_sec=approval_wait_timeout_sec("owner_queue"),
                     grant_ttl_hours=_ttl)
             except Exception:
+                # ONE token per verb (core.surfaces.tappable): the spaced
+                # `/approve tap-…` form gets no Telegram tap on its argument.
+                _one_tap = tap_display_id(ask.id).replace("-", "_")
                 card = (f"🔐 Approval needed: {action_name}\n"
-                        f"Reply /approve {tap_display_id(ask.id)} or "
-                        f"/reject {tap_display_id(ask.id)}")
+                        f"✅ Approve: /approve_{_one_tap}\n"
+                        f"🚫 Reject:  /reject_{_one_tap}")
             await _push_owner_notification(self._resolve_container(), user_id, card)
 
         if goal_turn:
@@ -1058,8 +1249,8 @@ class OwnerQueueApprover(ApprovalProvider):
                             "for %s (hash=%s)", action_name, req_hash)
                         await _push_owner_notification(
                             self._resolve_container(), user_id,
-                            f"✅ Approved & executed: {action_name} "
-                            f"[{req_hash[:10]}]")
+                            f"✅ Approved: {action_name} [{req_hash[:10]}] — "
+                            f"running it now; the result follows.")
                         return True
                     # Lost the CAS: a concurrent identical request already redeemed
                     # this single grant and is the one authorized execution — never

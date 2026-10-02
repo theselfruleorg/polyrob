@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
+from core.wallet.tokens import clean_name, clean_symbol
 from tools.defi.providers.base import Candidate, PriceInfo, confidence_for
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,15 @@ def _f(value: Any) -> Optional[float]:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _price(value: Any) -> Optional[float]:
+    """CR-L04: a USD price is a finite POSITIVE number, otherwise UNPRICED.
+    ``priceUsd: "0"`` is an indexer artifact, and a zero price values a holding
+    at nothing (or divides by zero) rather than saying "we do not know"."""
+    import math
+    out = _f(value)
+    return out if (out is not None and math.isfinite(out) and out > 0) else None
 
 
 def _our_chain(dexscreener_id: str) -> Optional[str]:
@@ -115,8 +125,9 @@ def parse_search(payload: Optional[Dict[str, Any]],
         if prior is None or liq > prior.liquidity_usd:
             best[key] = Candidate(
                 chain=chain, address=addr,
-                symbol=base.get("symbol"), name=base.get("name"),
-                liquidity_usd=liq, price_usd=_f(pair.get("priceUsd")))
+                symbol=clean_symbol(base.get("symbol")),
+                name=clean_name(base.get("name")),
+                liquidity_usd=liq, price_usd=_price(pair.get("priceUsd")))
     return sorted(best.values(), key=lambda c: c.liquidity_usd, reverse=True)
 
 
@@ -151,10 +162,23 @@ def parse_pair(payload: Optional[Dict[str, Any]], address: str) -> PriceInfo:
         total_liq += liq
         if liq > deepest_liq:
             deepest_liq, deepest = liq, pair
-    price = _f((deepest or {}).get("priceUsd"))
+    price = _price((deepest or {}).get("priceUsd"))
+    # ⚠️ The grade is made on the PRICED pool's depth, not the sum. `price` comes
+    # from one pool, so that pool's liquidity is what an attacker must move;
+    # depth sitting in pools we are not quoting does not protect this number.
+    # `confidence` gates real behaviour — data_tool EXCLUDES a holding's value
+    # from a total unless it is "high", and trade_tool refuses to use the price —
+    # so grading on the total admitted a thin-pool price into both. Priced ≤ total
+    # by construction, so this can only ever demote (2026-09-23).
+    priced_liq = max(deepest_liq, 0.0)
+    # The venue behind `price`. A blank or missing `pairAddress` stays None —
+    # inventing attribution is worse than admitting the provider did not say.
+    priced_pool = str((deepest or {}).get("pairAddress") or "").strip() or None
     return PriceInfo(price_usd=price, liquidity_usd=total_liq,
                      pool_count=len(mine),
-                     confidence=confidence_for(price, total_liq, len(mine)))
+                     confidence=confidence_for(price, priced_liq, len(mine)),
+                     priced_liquidity_usd=priced_liq,
+                     priced_pool_address=priced_pool)
 
 
 # --------------------------------------------------------------------------
@@ -163,8 +187,10 @@ def parse_pair(payload: Optional[Dict[str, Any]], address: str) -> PriceInfo:
 
 def _get(url: str, timeout: float = 8.0) -> Optional[Dict[str, Any]]:
     try:
-        import httpx
-        r = httpx.get(url, timeout=timeout, headers={"user-agent": "polyrob-defi/1.0"})
+        from tools.defi.providers import _http
+        # The POOLED client — a fresh one pays ~6 s of connection setup on this
+        # box (broken outbound IPv6); see the note in _http.
+        r = _http.client().get(url, timeout=timeout)
         if r.status_code != 200:
             return None
         return r.json()
@@ -195,10 +221,68 @@ def token(chain: str, address: str, timeout: float = 8.0) -> PriceInfo:
         return PriceInfo(price_usd=None, liquidity_usd=None, pool_count=0,
                          confidence="unknown")
     payload = _get(f"{TOKEN_URL}/{address}", timeout)
+    if payload is None:
+        # 071 R5: the indexer did not answer — not the same fact as "no pool".
+        return PriceInfo(price_usd=None, liquidity_usd=None, pool_count=0,
+                         confidence="unknown", error="dexscreener did not answer")
     if payload and payload.get("pairs"):
         payload = {"pairs": [p for p in payload["pairs"]
                              if p.get("chainId") == provider_chain]}
     return parse_pair(payload, address)
+
+
+#: ``/tokens/v1/{chainId}/{a,b,...}`` — up to 30 addresses per call (measured
+#: 2026-10-02). ⚠️ It returns ONE pair per token (not the deepest, not all of
+#: them), so it can say whether a token HAS a pool and give an indicative price,
+#: but it cannot grade "high" (that needs the pool count). Callers use it to
+#: skip the per-token call for tokens with no pool at all.
+BATCH_URL = "https://api.dexscreener.com/tokens/v1"
+BATCH_MAX = 30
+
+
+def parse_batch(payload: Any, addresses) -> Dict[str, PriceInfo]:
+    """``{address: PriceInfo}`` for every requested token that is the BASE of a
+    returned pair (``priceUsd`` is always the base token's price). A token
+    absent from the result has no pair on this indexer."""
+    wanted = {str(a).lower(): a for a in addresses}
+    out: Dict[str, PriceInfo] = {}
+    for pair in (payload if isinstance(payload, list) else []):
+        if not isinstance(pair, dict):
+            continue
+        base = str((pair.get("baseToken") or {}).get("address") or "")
+        orig = wanted.get(base.lower())
+        if orig is None:
+            continue
+        liq = _f((pair.get("liquidity") or {}).get("usd"))
+        price = _price(pair.get("priceUsd"))
+        prior = out.get(orig)
+        if prior is not None and (prior.liquidity_usd or 0.0) >= (liq or 0.0):
+            continue
+        out[orig] = PriceInfo(
+            price_usd=price, liquidity_usd=liq, pool_count=1,
+            confidence=confidence_for(price, liq, 1),
+            priced_liquidity_usd=liq,
+            priced_pool_address=str(pair.get("pairAddress") or "").strip() or None)
+    return out
+
+
+def tokens_batch(chain: str, addresses, timeout: float = 8.0) -> Optional[Dict[str, PriceInfo]]:
+    """Batched presence + indicative price, or ``None`` when ANY chunk failed
+    (a partial presence map would read a missing chunk as "no pool")."""
+    from core.wallet import chains
+    row = chains.get(chain)
+    provider_chain = row.dexscreener_id if row else None
+    if not provider_chain:
+        return None
+    addrs = [a for a in dict.fromkeys(addresses) if a]
+    out: Dict[str, PriceInfo] = {}
+    for i in range(0, len(addrs), BATCH_MAX):
+        chunk = addrs[i:i + BATCH_MAX]
+        payload = _get(f"{BATCH_URL}/{provider_chain}/{','.join(chunk)}", timeout)
+        if payload is None:
+            return None
+        out.update(parse_batch(payload, chunk))
+    return out
 
 
 def health() -> bool:

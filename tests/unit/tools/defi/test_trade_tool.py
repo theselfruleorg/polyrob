@@ -105,6 +105,19 @@ async def test_owner_queue_lane_does_not_execute():
 
 
 @pytest.mark.asyncio
+async def test_owner_queue_refusal_says_nothing_was_queued():
+    """O5/O6: an owner_queue refusal is not a staged request — the text says so."""
+    tool, gate = _tool(Decision(False, "owner approval required", "owner_queue", 50.0))
+    res = await tool.transfer(_p(dry_run=True))
+    assert "nothing was queued" in res.extracted_content
+    assert "no approval request exists" in res.extracted_content
+    tool, gate = _tool(Decision(False, "refused", "refuse", 50.0))
+    res = await tool.transfer(_p(dry_run=True))
+    assert "NOT SENT" in res.extracted_content
+    assert "nothing was queued" not in res.extracted_content
+
+
+@pytest.mark.asyncio
 async def test_authorized_non_dry_run_broadcasts_and_records():
     tool, gate = _tool(Decision(True, "authorized", "autonomous", 0.25))
     res = await tool.transfer(_p(dry_run=False))
@@ -148,3 +161,67 @@ async def test_spend_is_recorded_even_on_a_reverted_tx():
                        receipt="failed")
     await tool.transfer(_p(dry_run=False))
     assert len(gate.recorded) == 1
+
+
+# -- native gas-asset sends (2026-09-26: the owner asked for 0.9976 ETH to be
+# sent and the verb had no way to say "ETH" — 'native' was not an address, the
+# 0xEeee sentinel reports no decimals, and `call` with empty calldata says "that
+# is transfer"). The guard has asserted native sends since 039 B1; the verb now
+# declares one with `token=None`.
+
+class _NativeRail(_Rail):
+    def build_native_transfer(self, *, to, amount_wei):
+        self.built = {"to": to, "data": "0x", "value": amount_wei, "chainId": 1}
+        return self.built
+
+    def build_erc20_transfer(self, **kw):  # pragma: no cover - must not be used
+        raise AssertionError("a native send must not build an ERC-20 transfer")
+
+
+def _native_tool(decision, *, receipt="success"):
+    _Rail.receipt_status = receipt
+    gate = _Gate()
+    seen = {}
+
+    def _guard(intent, tx, **kw):
+        seen["intent"] = intent
+        seen["tx"] = tx
+        return decision
+
+    return DefiTradeTool(wallet=_Wallet(gate), rail_factory=_NativeRail,
+                         guard_fn=_guard, price_fn=lambda c, a: 1.0), gate, seen
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("token", ["native", "NATIVE", "ETH", "eth",
+                                   "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"])
+async def test_native_send_declares_token_none_and_builds_a_value_transfer(token):
+    tool, gate, seen = _native_tool(Decision(True, "authorized", "autonomous", 2700.0))
+    res = await tool.transfer(_p(chain="ethereum", token=token, amount=0.997596,
+                                 max_spend_usd=2800.0, dry_run=False))
+    assert not res.error, res.error
+    assert seen["intent"].token is None, "a native send is declared with token=None"
+    assert seen["intent"].amount_raw == 997596000000000000
+    assert seen["tx"]["value"] == 997596000000000000
+    assert seen["tx"]["data"] == "0x"
+    assert "SENT AND CONFIRMED" in res.extracted_content
+    assert "ETH" in res.extracted_content
+    assert gate.recorded and gate.recorded[0]["action"] == "transfer"
+
+
+@pytest.mark.asyncio
+async def test_native_send_dry_run_broadcasts_nothing():
+    tool, gate, _ = _native_tool(Decision(True, "authorized", "autonomous", 1.0))
+    res = await tool.transfer(_p(chain="ethereum", token="native"))
+    assert "DRY RUN" in res.extracted_content
+    assert _Rail.last.sent is False
+    assert gate.recorded == []
+
+
+@pytest.mark.asyncio
+async def test_other_chain_gas_symbol_is_not_native_on_ethereum():
+    """'POL' is polygon's gas asset; on ethereum it is a ticker, and a ticker
+    is still refused."""
+    tool, _, _ = _native_tool(Decision(True, "authorized", "autonomous", 1.0))
+    res = await tool.transfer(_p(chain="ethereum", token="POL"))
+    assert res.error

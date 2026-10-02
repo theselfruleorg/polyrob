@@ -85,7 +85,7 @@ class IntrospectionMixin:
 		except Exception:
 			return 0
 
-	def get_all_actions_for_provider(self, provider: str):
+	def get_all_actions_for_provider(self, provider: str, preferred_order=None):
 		"""Get all action schemas formatted for a specific LLM provider.
 
 		Returns schemas for all registered actions (native tools like browser, filesystem,
@@ -97,12 +97,14 @@ class IntrospectionMixin:
 
 		Args:
 			provider: The LLM provider name (openai, anthropic, gemini, etc.)
+			preferred_order: F13 — the tool-name order a restored session emitted
+				before the restart; known names first, then the rest.
 
 		Returns:
 			List of action schemas in the provider's expected format
 		"""
 		# Get all registered actions from Registry
-		actions = self.registry.get_all_actions_for_provider(provider)
+		actions = self.registry.get_all_actions_for_provider(provider, preferred_order)
 		
 		# Log summary without duplicating MCP tools
 		mcp_count = sum(1 for name in self.registry.list_action_names() if self.registry.get_action(name) and self.registry.get_action(name).tool == 'mcp')

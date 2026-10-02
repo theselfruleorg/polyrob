@@ -46,7 +46,7 @@ import os
 from pathlib import Path
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -63,12 +63,13 @@ SEVERITY_WARN = "warn"
 
 # Goal-board literals — the ONE spelling (core.goal_vocab; the board imports
 # the same names, and the contract test still pins them equal).
+from core.remedy import flag_command as _flag_command  # noqa: E402
 from core.goal_vocab import (  # noqa: E402
     KIND_GOAL as _KIND_GOAL, KIND_OBJECTIVE as _KIND_OBJECTIVE, KIND_ASK as _KIND_ASK,
     STATUS_READY as _ST_READY, STATUS_RUNNING as _ST_RUNNING,
     STATUS_BLOCKED as _ST_BLOCKED, STATUS_WAITING as _ST_WAITING,
-    STATUS_TRIAGE as _ST_TRIAGE, STATUS_DONE as _ST_DONE,
-    STATUS_CANCELLED as _ST_CANCELLED, ASK_OPEN as _ASK_OPEN, OBJ_ACTIVE as _OBJ_ACTIVE,
+    ASK_OPEN as _ASK_OPEN, OBJ_ACTIVE as _OBJ_ACTIVE,
+    ASK_KIND_TOKEN_IDENTITY, has_own_surface,
 )
 _TOOL_APPROVAL_ASK_KIND = "tool_approval"
 # Telemetry kinds (pinned to core/event_kinds.py by the contract test).
@@ -76,21 +77,34 @@ _K_USER_DELIVERY, _K_OWNER_NOTICE = "user_delivery", "owner_notice"
 _K_CREDIT_SENTINEL, _K_CRON_RUN, _K_GOAL_RUN = "credit_sentinel", "cron_run", "goal_run"
 _K_SELF_WAKE, _K_TOOL_TIMEOUT, _K_TOOL_DENIED = "self_wake", "tool_timeout", "tool_denied"
 _K_RUN_DEGRADED, _K_AUTONOMY_TICK = "run_outcome_degraded", "autonomy_tick"
-_K_SOCIAL_WRITE, _K_WALLET_SPEND = "social_write", "wallet_spend"
+_K_WALLET_SPEND = "wallet_spend"
 _K_AUTONOMY_STARTED = "autonomy_started"
 _K_SURFACE_POLL_ERROR = "surface_poll_error"
+_K_RAIL_PRECONDITION_FAILED = "rail_precondition_failed"
 #: 031: outcomes that mean "the starter honoured the pause" (not a violation)
 _PAUSE_HONOURED_OUTCOMES = frozenset({"paused", "skipped", "held", "dropped"})
 _SUPPRESSED_PREFIX = "[suppressed by daily proactive-message cap"
+
+#: How many undelivered owner-message BODIES the snapshot carries. The rail
+#: promises every suppressed message is "rolled into the digest", and prod's
+#: digest is the LLM cron job, which reads this snapshot — so a count alone
+#: ("16 suppressed, all self_evolution", 2026-09-19) could never surface the one
+#: report the owner needed. Bounded because a digest that quotes two hundred
+#: bodies is not a digest; whatever is left out is COUNTED in `missed_more`.
+MISSED_IN_SNAPSHOT = 8
+
+#: Per-entry cap. Long enough to be quotable, short enough that eight of them
+#: cannot bloat every status read.
+MISSED_TEXT_CHARS = 400
 
 #: ⚠️ The aggregation gate, not just a display order. `_assemble` iterates THIS
 #: tuple, so a section missing from it contributes NO health item and reports no
 #: unavailability — it is present in `sections` and silent everywhere that
 #: matters. A new section belongs here in the same commit that adds it.
 SECTION_ORDER = ("session", "providers", "work", "approvals", "loops",
-                 "delivery", "posture", "security", "identity", "apps",
-                 "groups", "room_actions", "creations", "collectibles", "liquidity",
-                 "wallet", "money", "economics")
+                 "tools", "knowledge", "delivery", "posture", "security", "identity",
+                 "rules", "apps", "groups", "room_actions", "creations", "collectibles",
+                 "liquidity", "wallet", "custody", "packs", "money", "economics")
 
 
 @dataclass
@@ -275,7 +289,7 @@ def _read_telemetry(user_id: str, data_dir: str, since_ts: float) -> Section:
     path = _telemetry_db_path(data_dir)
     rows = _rows(
         path,
-        "SELECT ts, kind, user_id, source, attrs FROM telemetry_events "
+        "SELECT ts, kind, user_id, session_id, source, attrs FROM telemetry_events "
         "WHERE ts >= ? AND kind NOT IN "
         "('memory_write','memory_recall','inbound_routed','access_denied') "
         "AND (user_id = ? OR user_id = '') ORDER BY ts DESC LIMIT 20000",
@@ -448,7 +462,7 @@ def _work_section(user_id: str, goals_db: str, tele: Section, now: float) -> Sec
                              "WHERE kind=? AND status=? AND user_id=? ORDER BY created_at",
                    (_KIND_ASK, _ASK_OPEN, user_id)):
         p = _payload(r)
-        if p.get("ask_kind") == _TOOL_APPROVAL_ASK_KIND:
+        if has_own_surface(p):
             continue
         asks.append({"id": r["id"], "title": r["title"], "created_at": r["created_at"],
                      "blocks": list(p.get("blocks_goal_ids") or [])})
@@ -519,8 +533,9 @@ def _work_section(user_id: str, goals_db: str, tele: Section, now: float) -> Sec
                     key="yields_not_resumed", severity=SEVERITY_WARN,
                     text=f"{len(yielded)} goal yields in 24h and no resume — each restart "
                          f"re-reads the world from scratch",
-                    remedy="set GOAL_RESUME_SAME_SESSION=true and GOAL_YIELD_GRACE_SEC=90; "
-                           "mark read-only rails `polyrob cron edit <id> --no-preempts`"))
+                    remedy=(_flag_command("GOAL_RESUME_SAME_SESSION")
+                            + " and " + _flag_command("GOAL_YIELD_GRACE_SEC", "90")
+                            + "; mark read-only rails `polyrob cron edit <id> --no-preempts`")))
     else:
         sec.lines.append(f"24h goal-run counts unavailable ({tele.reason})")
     for a in asks:
@@ -547,13 +562,18 @@ def _work_section(user_id: str, goals_db: str, tele: Section, now: float) -> Sec
 def _approvals_section(user_id: str, data_dir: str, goals_db: str) -> Section:
     sec = Section(name="approvals")
     items: List[Dict[str, Any]] = []
-    tool_asks = [r for r in _rows(goals_db, "SELECT id, title, payload FROM goals WHERE kind=? "
-                                            "AND status=? AND user_id=?",
-                                  (_KIND_ASK, _ASK_OPEN, user_id))
-                 if _payload(r).get("ask_kind") == _TOOL_APPROVAL_ASK_KIND]
-    for r in tool_asks:
-        items.append({"kind": _TOOL_APPROVAL_ASK_KIND, "id": f"tap-{r['id']}",
-                      "preview": (_payload(r).get("tool_name") or r["title"] or "")[:80]})
+    open_asks = _rows(goals_db, "SELECT id, title, payload FROM goals WHERE kind=? "
+                                "AND status=? AND user_id=?",
+                      (_KIND_ASK, _ASK_OPEN, user_id))
+    for r in open_asks:
+        kind = _payload(r).get("ask_kind")
+        if kind == _TOOL_APPROVAL_ASK_KIND:
+            items.append({"kind": _TOOL_APPROVAL_ASK_KIND, "id": f"tap-{r['id']}",
+                          "preview": (_payload(r).get("tool_name") or r["title"] or "")[:80]})
+        elif kind == ASK_KIND_TOKEN_IDENTITY:
+            # W1: which contract is the real token — decided on /pending.
+            items.append({"kind": ASK_KIND_TOKEN_IDENTITY, "id": r["id"],
+                          "preview": (r["title"] or "")[:80]})
     from core import self_evolution
     from core.instance import resolve_instance_id
     for it in self_evolution.list_pending(user_id, home_dir=data_dir,
@@ -568,7 +588,15 @@ def _approvals_section(user_id: str, data_dir: str, goals_db: str) -> Section:
             items.append({"kind": it.get("kind"), "id": it.get("id"),
                           "preview": (it.get("preview") or "")[:80]})
     sec.data["items"] = items
-    sec.lines.append(f"{len(items)} pending approval(s)" if items else "no pending approvals")
+    # O18: the owner's open asks (owner_ask / goal asks) are decisions too; they
+    # are answered on /asks, not /pending, so they are counted beside the
+    # approvals rather than folded into ``items``. Same rows, no second read.
+    asks_open = sum(1 for r in open_asks if not has_own_surface(_payload(r)))
+    sec.data["open_asks"] = asks_open
+    line = f"{len(items)} pending approval(s)" if items else "no pending approvals"
+    if asks_open:
+        line += f"; {asks_open} open ask(s) — /asks"
+    sec.lines.append(line)
     if items:
         kinds = sorted({str(i.get("kind")) for i in items})
         sec.health.append(HealthItem(
@@ -620,7 +648,7 @@ def _email_tool_drop_note() -> str:
         return ""  # cannot tell => claim nothing
     if provider != "smtp":
         return " — the agent's mail rides AgentMail, so sending is unaffected"
-    if bool_env("STABLE_AUTONOMOUS_TOOLSET", False):
+    if bool_env("STABLE_AUTONOMOUS_TOOLSET", True):  # default mirrors agents/task/constants.py
         return (" — autonomous runs still load the email tool (the toolset is "
                 "frozen); every send refuses with this reason")
     return " — autonomous runs no longer request the email tool"
@@ -656,11 +684,81 @@ def _rail_verdict_line(v):
         return (f"x api: {v.code or '402'} since {since}, {n} call(s) refused — "
                 f"browser rail (x_browser) needs no API credits",
                 SEVERITY_WARN, "x_api_rejected")
+    if v.kind == "x_oauth2":
+        return (_x_oauth2_relogin_text(v), SEVERITY_WARN, "x_oauth2_relogin")
     if v.kind == "missing_key":
         return (f"{v.key}: no API key since {since} (optional tool, not loaded)", None,
                 f"missing_key:{v.key}")
     return (f"{v.kind} {v.key}: {v.code or 'rejected'} since {since}, {n}×",
             SEVERITY_WARN, f"rail_{v.kind}")
+
+
+def _rail_cost_bits(slot: Optional[Dict[str, Any]]) -> List[str]:
+    """``["$0.15 over 3 runs today"]`` — or nothing when the rail did not run.
+
+    Any run whose cost was not recorded is named, never averaged away: the
+    figure a reader acts on has to say how much of the window it covers.
+    """
+    if not slot or not slot.get("runs"):
+        return []
+    runs = int(slot["runs"])
+    plural = "s" if runs != 1 else ""
+    usd = float(slot.get("usd") or 0.0)
+    unpriced = int(slot.get("unpriced") or 0)
+    if usd <= 0 and unpriced >= runs:
+        # NOTHING was priced. "$0.00" here would be a confident zero for a rail
+        # that may well have spent money — the exact failure `$0.00` is banned
+        # for elsewhere in this file. Say what is true: the cost is unknown.
+        return [f"cost not recorded for {runs} run{plural} today"]
+    bits = [f"${usd:.2f}" if usd > 0 else "$0"]
+    bits[0] += f" over {runs} run{plural} today"
+    if unpriced:
+        bits.append(f"{unpriced} unpriced")
+    return bits
+
+
+def _effect_violations(user_id: str, data_dir: Optional[str], st: Any) -> List[str]:
+    """033: every AUTONOMOUS outward act (``external_write``) that went out after
+    the pause — by effect class, whichever tool, surface or MCP server made it,
+    so a new writer can never walk past a closed kind list. Only a write the
+    pause COVERS counts (a ``/pause social`` does not make a swap a violation),
+    and a refused write (``outcome=denied``) is the pause working, not a breach.
+    An unreadable store is named, never read as "no violation"."""
+    from core.autonomy_control import KIND_SCOPES
+    from core.effects import GATED_EFFECTS, outward_counts, pause_kind_for
+    counts = outward_counts(user_id, float(st.since), data_dir=data_dir,
+                            autonomous_only=True, outcomes=("ok", "error"))
+    if counts is None:
+        return ["outward writes unreadable (effect record)"]
+    out = []
+    for eff in sorted(counts):
+        kind = pause_kind_for(eff) if eff in GATED_EFFECTS else None
+        if kind is None:
+            continue  # observe-only classes are not gated, so not a breach
+        if not any(sc in KIND_SCOPES.get(kind, ()) for sc in st.scopes):
+            continue
+        out.append(f"{eff} write ×{counts[eff]}")
+    return out
+
+
+def _distinct_runs(rows: List[Dict[str, Any]]) -> int:
+    """Count RUNS, not telemetry rows.
+
+    `started` and `done` are two rows for one run: on 2026-09-23 a single X post
+    was reported to the owner as "cron_run ×2" during a pause it had not even
+    breached. A row carrying no id counts on its own — unknown identity means
+    "count it", never "merge it", because merging would hide real activity
+    behind one tally.
+    """
+    ids, anon = set(), 0
+    for r in rows:
+        attrs = r.get("attrs") or {}
+        rid = attrs.get("job_id") or attrs.get("goal_id") or attrs.get("run_id")
+        if rid:
+            ids.add(str(rid))
+        else:
+            anon += 1
+    return len(ids) + anon
 
 
 def _loops_section(user_id: str, cron_db: str, tele: Section, now: float,
@@ -681,15 +779,33 @@ def _loops_section(user_id: str, cron_db: str, tele: Section, now: float,
             text=f"autonomy PAUSED ({', '.join(st.scopes)}) since {_hhmm(st.since)} by {who}",
             remedy="/resume when you want it back"))
         if tele.available and st.since:
+            # Social posting is judged by the effect scan below: the retired
+            # `social_write` kind carried no autonomy flag, so it flagged the
+            # OWNER's own post after a pause as a violation.
             kinds = {_K_GOAL_RUN: "goal_run", _K_CRON_RUN: "cron_run", _K_SELF_WAKE: "self_wake",
-                     _K_SOCIAL_WRITE: "social_write", _K_WALLET_SPEND: "wallet_spend"}
+                     _K_WALLET_SPEND: "wallet_spend"}
+            from core.autonomy_control import KIND_SCOPES
             seen = []
             for k, label in kinds.items():
+                # 2026-09-23: a `trading` pause flagged a read-only monitor and an
+                # X post as CRITICAL, because this loop did no scope test while
+                # `_effect_violations` below it does. Narrow ONLY the kinds the
+                # KIND_SCOPES table already describes. `goal_run` and
+                # `wallet_spend` have no entry, and inventing one would be
+                # guessing in the PERMISSIVE direction on the alarm that guards
+                # the owner's pause — so they stay unconditional.
+                scopes = KIND_SCOPES.get(k)
+                if scopes is not None and not any(sc in scopes for sc in st.scopes):
+                    continue
+                # An owner-direct spend is the owner acting through the agent,
+                # which the pause does not bind (tx_guard step 0) — not a breach.
                 rows = [r for r in _tele_rows(tele, k)
                         if float(r.get("ts") or 0) > float(st.since)
-                        and (r.get("attrs") or {}).get("outcome") not in _PAUSE_HONOURED_OUTCOMES]
+                        and (r.get("attrs") or {}).get("outcome") not in _PAUSE_HONOURED_OUTCOMES
+                        and (r.get("attrs") or {}).get("lane") != "owner_direct"]
                 if rows:
-                    seen.append(f"{label} ×{len(rows)} (last {_hhmm(rows[0].get('ts'))})")
+                    seen.append(f"{label} ×{_distinct_runs(rows)} (last {_hhmm(rows[0].get('ts'))})")
+            seen.extend(_effect_violations(user_id, data_dir, st))
             if seen:
                 sec.health.append(HealthItem(
                     key="pause_violation", severity=SEVERITY_CRIT,
@@ -785,6 +901,35 @@ def _loops_section(user_id: str, cron_db: str, tele: Section, now: float,
             if o == "started" and "last_started" not in slot:
                 slot["last_started"] = r.get("ts")
         sec.data["rails"] = rails
+        # What each rail COST in the window. The events have always carried
+        # `spend_usd`; nothing rendered it, so "which rail should I thin?" had
+        # no answer but a hand-written sqlite query (2026-09-22, the OpenRouter
+        # sub-$3 note). ⚠️ A run with NO figure recorded is counted as UNPRICED
+        # rather than as $0 — folding it into the total would understate the
+        # bill, and a total that is quietly too small is worse than one that
+        # admits what it could not price. A `skipped` run really did cost
+        # nothing, so it prices as a true zero.
+        spend_by_job: Dict[str, Dict[str, Any]] = {}
+        for r in _tele_rows(tele, _K_CRON_RUN):
+            a = r["attrs"] or {}
+            jid = str(a.get("job_id") or "")
+            if not jid or a.get("outcome") == "started":
+                continue
+            slot = spend_by_job.setdefault(jid, {"usd": 0.0, "runs": 0, "unpriced": 0})
+            slot["runs"] += 1
+            raw = a.get("spend_usd")
+            if raw is None:
+                if a.get("outcome") == "skipped":
+                    continue  # a $0 skip is a real zero, not an unknown
+                slot["unpriced"] += 1
+                continue
+            try:
+                slot["usd"] += float(raw)
+            except (TypeError, ValueError):
+                slot["unpriced"] += 1
+        sec.data["rails_spend_24h"] = spend_by_job
+        sec.data["rails_spend_24h_total_usd"] = round(
+            sum(v["usd"] for v in spend_by_job.values()), 4)
         cut = []
         # 057 WS-C: a job cut TWICE in the window is not a fluke — name the cap
         # it needs (its own longest completed run) rather than the last cut.
@@ -811,6 +956,7 @@ def _loops_section(user_id: str, cron_db: str, tele: Section, now: float,
                     bits.append(f"{last['steps']} steps")
                 if last.get("duration_s") is not None:
                     bits.append(f"{int(float(last['duration_s']) // 60)}m")
+                bits.extend(_rail_cost_bits(spend_by_job.get(str(j.get("id") or ""))))
                 sec.lines.append("rail " + " · ".join(bits))
                 if last["outcome"] in ("cut_by_cap", "cut_by_restart"):
                     cut.append(f"{name} {last['outcome']} at {_hhmm(last['ts'])}")
@@ -842,6 +988,7 @@ def _loops_section(user_id: str, cron_db: str, tele: Section, now: float,
         # event (core cannot import tools); the autonomous toolset already stops
         # requesting `email` while the rejection is fresh.
         _external_rail_health(sec, tele)
+        _rail_gate_health(sec, tele)
         # Loop liveness from the supervisor heartbeat (autonomy_tick). A loop
         # that should run but has no fresh heartbeat is reported as such — a
         # dead ticker must never render identically to a healthy one.
@@ -1044,8 +1191,76 @@ def _digest_health(user_id: str, data_dir: str) -> List[HealthItem]:
         remedy="`polyrob cron digest 'every day 08:00'`")]
 
 
+#: `recent_notices` window: sends by OTHER sessions this recent are "you were
+#: just told …" context for a chat turn (2026-09-21: the owner's correction
+#: landed 28 s after an autonomous run's notice and was matched to the wrong
+#: act). Ten minutes, not three: on 2026-09-22 06:07Z "Explin better" landed
+#: 210 s after the EXIT rail's R6 escalation — an owner reads the notice, then
+#: types — and the 180 s window missed it, so the chat asked "explain what?".
+RECENT_NOTICE_WINDOW_SEC = 600
+
+
+def _recent_notices(rows: List[Dict[str, Any]], *, session_id: Optional[str],
+                    now: float) -> List[Dict[str, Any]]:
+    """The last few minutes of DELIVERED owner messages from sessions other than
+    *session_id* (newest first, ≤3). Empty without a session — the owner's
+    /status has no "you" to tell."""
+    if not session_id:
+        return []
+    out: List[Dict[str, Any]] = []
+    for r in rows:  # newest-first
+        a = r.get("attrs") or {}
+        if a.get("outcome") != "sent":
+            continue
+        if str(r.get("session_id") or "") == str(session_id):
+            continue
+        ts = float(r.get("ts") or 0)
+        if now - ts > RECENT_NOTICE_WINDOW_SEC:
+            continue
+        out.append({"ts": ts, "session_id": str(r.get("session_id") or ""),
+                    "source": str(r.get("source") or "?"),
+                    "text": str(a.get("text") or "").strip()[:240]})
+        if len(out) >= 3:
+            break
+    return out
+
+
+def _missed_bodies(user_id: str, data_dir: str, suppressed: int):
+    """``(entries, left_out, unavailable_reason)`` for the undelivered owner
+    messages — the BODIES, not just the count.
+
+    Reads the ONE query every `/missed` seat uses
+    (``core.surfaces.missed.missed_notices``) rather than carrying a second
+    marker list; a marker the rail adds shows up here for free.
+
+    ⚠️ That reader RAISES on an unreadable telemetry store precisely so a
+    caller cannot conflate it with "nothing was missed". Here that becomes a
+    NAMED reason next to an empty list — a digest told "you missed nothing" by
+    a failed read is the confident-wrong class this file exists to prevent.
+    The independent `suppressed` count is computed from rows already in hand
+    and is unaffected either way.
+    """
+    try:
+        from core.surfaces import missed as missed_mod
+        rows = missed_mod.missed_notices(user_id, data_dir, n=MISSED_IN_SNAPSHOT)
+    except Exception as e:
+        return [], 0, f"{type(e).__name__}: {e}"[:200]
+    entries = []
+    for r in rows[:MISSED_IN_SNAPSHOT]:
+        text = str(r.get("text") or "")
+        if len(text) > MISSED_TEXT_CHARS:
+            text = text[:MISSED_TEXT_CHARS] + "…"
+        entries.append({"ts": float(r.get("ts") or 0.0),
+                        "kind": str(r.get("kind") or "capped"),
+                        "text": text})
+    # The reader is bounded by n, so the remainder is derived from the 24h
+    # count rather than from the (already truncated) row list.
+    left_out = max(0, int(suppressed) - len(entries))
+    return entries, left_out, None
+
+
 def _delivery_section(user_id: str, data_dir: str, tele: Section, container: Any,
-                      now: float) -> Section:
+                      now: float, session_id: Optional[str] = None) -> Section:
     sec = Section(name="delivery")
     from core.runtime_paths import prefs_home_dir
     from core.surfaces.user_delivery import _reserved_slots, effective_daily_cap
@@ -1081,16 +1296,32 @@ def _delivery_section(user_id: str, data_dir: str, tele: Section, container: Any
     suppressed_notices = sum(
         1 for r in _tele_rows(tele, _K_OWNER_NOTICE)
         if str((r["attrs"] or {}).get("text") or "").startswith(_SUPPRESSED_PREFIX))
+    missed, missed_more, missed_unavailable = _missed_bodies(user_id, data_dir,
+                                                             suppressed_notices)
     sec.data.update({"outcomes": outcomes, "consumed": consumed, "capped": capped,
                      "uncounted": uncounted,
                      "capped_by_source": by_source, "suppressed_notices": suppressed_notices,
-                     "reserved_slots": _reserved_slots()})
+                     "missed": missed, "missed_more": missed_more,
+                     "missed_unavailable": missed_unavailable,
+                     "reserved_slots": _reserved_slots(),
+                     "recent_notices": _recent_notices(rows, session_id=session_id, now=now)})
     sec.lines.append(
         f"owner messages 24h: {consumed}/{cap} cap used, {capped} suppressed, "
         f"{outcomes.get('fallback', 0)} fallback, {outcomes.get('no_sink', 0)} no sink, "
         f"{outcomes.get('paused', 0)} paused, "
         f"{outcomes.get('deduped', 0)} deduped, {outcomes.get('rate_limited', 0)} rate-limited, "
         f"{outcomes.get('quiet_held', 0)} held (quiet hours)")
+    # 061: "am I recording the conversation" — checkable on every seat. A
+    # missing store is an honest line, never a zero; it is never created here.
+    try:
+        from core.surfaces.owner_thread import thread_counts
+        _tc = thread_counts(container, user_id, hours=24.0, data_dir=data_dir)
+    except Exception:
+        _tc = None
+    sec.data["owner_thread_24h"] = _tc
+    sec.lines.append(
+        f"owner thread 24h: {_tc['out']} lines to you, {_tc['in']} from you" if _tc
+        else "owner thread: nothing recorded yet")
     if uncounted:
         # D46: its OWN line, never folded into "cap used". These landed and are
         # exempt from the cap by design; hiding them would make the delivered
@@ -1098,6 +1329,24 @@ def _delivery_section(user_id: str, data_dir: str, tele: Section, container: Any
         sec.lines.append(
             f"plus {uncounted} delivered on an uncapped lane (critical / the "
             f"message tool) — these do not spend the cap")
+    # The BODIES, on their own lines. ⚠️ Rendered, not merely stored: the LLM
+    # digest job reads `agent_status`, which renders LINES and never touches
+    # `section.data`, so a data-only field would have changed nothing for the
+    # owner — the "built but not wired" trap this item was filed about.
+    if missed_unavailable:
+        sec.lines.append(
+            f"missed owner messages: could not read them ({missed_unavailable}) "
+            f"— do not report this as 'nothing missed'")
+    elif missed:
+        sec.lines.append(f"missed owner messages ({len(missed) + missed_more}), newest first:")
+        for entry in missed:
+            body = entry["text"].replace("\n", " ")
+            if len(body) > 160:
+                body = body[:160] + "…"
+            sec.lines.append(
+                f"  {_hhmm(entry['ts'])} [{entry['kind']}] {body}")
+        if missed_more:
+            sec.lines.append(f"  … and {missed_more} more — `/missed` for the full list")
     if capped:
         top = ", ".join(f"{k}={v}" for k, v in sorted(by_source.items(), key=lambda kv: -kv[1])[:3])
         sec.health.append(HealthItem(
@@ -1252,7 +1501,7 @@ def _apps_section(user_id: str, data_dir: str) -> Section:
         sec.health.append(HealthItem(
             key="apps_pending", severity=SEVERITY_CRIT,
             text=f"{len(pending)} app(s) waiting on your approval ({', '.join(pending)})",
-            remedy="/apps approve <slug> · polyrob apps approve <slug>"))
+            remedy="/apps approve <slug> · console → Apps"))
     failed = [r for r in rows if r["status"] == "failed"]
     if failed:
         sec.health.append(HealthItem(
@@ -1263,51 +1512,6 @@ def _apps_section(user_id: str, data_dir: str) -> Section:
     return sec
 
 
-def _room_actions_section(user_id: str, data_dir: str) -> Section:
-    """046: paid room actions — what is awaiting payment, and what is OWED.
-
-    ⚠️ A CREDIT is money we HOLD against a service that was never delivered, so
-    it leads as CRIT. Read-only and existence-guarded: an absent store is "no
-    paid actions", never CREATED by a status read.
-    """
-    sec = Section(name="room_actions")
-    db = os.path.join(data_dir, "room_actions.db")
-    if not os.path.exists(db):
-        sec.lines.append("no paid actions")
-        sec.data.update(pending=0, credits_owed=0, applied=0, credits=[])
-        return sec
-    rows = _rows(db, "SELECT offer_id, surface, chat_id, verb, price_usd, "
-                     "status, reason FROM room_action_offers "
-                     "ORDER BY created_at DESC LIMIT 200")
-    by = {}
-    for r in rows:
-        by[r["status"]] = by.get(r["status"], 0) + 1
-    credits = [r for r in rows if r["status"] == "credited"]
-    sec.data.update(
-        pending=by.get("pending", 0), paid=by.get("paid", 0),
-        applied=by.get("applied", 0), credits_owed=len(credits),
-        credits=[{"offer_id": r["offer_id"], "verb": r["verb"],
-                  "chat_id": r["chat_id"], "price_usd": r["price_usd"],
-                  "reason": r["reason"]} for r in credits[:10]])
-    if not rows:
-        sec.lines.append("no paid actions")
-        return sec
-    sec.lines.append(", ".join(f"{n} {st}" for st, n in sorted(by.items())))
-    # A PAID offer whose effect has not landed is an obligation in flight, not a
-    # failure yet — named, but not escalated.
-    in_flight = by.get("paid", 0)
-    if in_flight:
-        sec.lines.append(f"{in_flight} paid action(s) awaiting the effect")
-    if credits:
-        owed = sum(float(r.get("price_usd") or 0) for r in credits)
-        sec.health.append(HealthItem(
-            key="room_action_credits_owed", severity=SEVERITY_CRIT,
-            text=(f"{len(credits)} paid room action(s) took money and could not "
-                  f"be applied (${owed:.2f}): "
-                  + "; ".join(f"{r['offer_id']} ({str(r.get('reason') or '')[:50]})"
-                              for r in credits[:3])),
-            remedy="/paid offers · polyrob owner paid list"))
-    return sec
 
 
 def _groups_section(user_id: str, data_dir: str) -> Section:
@@ -1399,58 +1603,6 @@ def _groups_section(user_id: str, data_dir: str) -> Section:
     return sec
 
 
-def _wallet_section(data_dir: Optional[str]) -> Section:
-    """What the agent is holding, from the cache — NEVER a network read (039 D).
-
-    Deliberately separate from `money`. That section is CASH FLOW: income minus
-    spend, which cannot see a held bag and is not a balance. This one is the bag.
-    Summing or conflating them is how a treasury report describes a position it
-    does not have.
-
-    Cache-only is what keeps `include_balances=False` honest and what lets the
-    per-turn `<live-health>` note carry a wallet line without a turn ever waiting
-    on four JSON-RPC round trips.
-    """
-    from core.env import bool_env
-    from core.wallet import balance_cache
-    if not bool_env("AGENT_WALLET_ENABLED", False):
-        # A deployment with no wallet has nothing to report, and reporting that as
-        # `unavailable` would mark every status PARTIAL forever over a feature
-        # nobody turned on. A status must degrade for real conditions only.
-        return Section(name="wallet", state=STATE_OK,
-                       lines=["wallet: not enabled (AGENT_WALLET_ENABLED)"],
-                       data={"enabled": False})
-    snap = balance_cache.read(data_dir)
-    if snap is None:
-        # The wallet IS on and no snapshot exists, so the reader has not run. That
-        # is a real gap: the agent would answer a balance question from context.
-        return Section(name="wallet", state=STATE_UNAVAILABLE,
-                       reason="no balance snapshot yet")
-    lines = balance_cache.render_lines(snap)
-    totals = balance_cache.total_native_by_symbol(snap)
-    unknown = [c.chain for c in snap.chains if c.native is None]
-    sec = Section(name="wallet",
-                  state=STATE_DEGRADED if (unknown or snap.stale) else STATE_OK,
-                  lines=lines,
-                  data={"address": snap.address, "age_sec": snap.age_sec,
-                        "stale": snap.stale, "totals": totals,
-                        "unknown_chains": unknown})
-    if snap.stale:
-        sec.reason = f"snapshot is {int(snap.age_sec // 60)}m old"
-        sec.health.append(HealthItem(
-            key="wallet_stale",
-            text=f"wallet balances are {int(snap.age_sec // 60)}m old — do not "
-                 f"quote them as current",
-            remedy="the balance reader runs on the autonomy runtime; check it is up"))
-    if unknown:
-        # A chain that could not be read is NOT a chain with nothing on it, and the
-        # difference is the whole point of carrying `None` through.
-        sec.health.append(HealthItem(
-            key="wallet_unreadable",
-            text=f"balance unreadable on {', '.join(unknown)} — treat as UNKNOWN, "
-                 f"never as zero",
-            remedy="check the pinned RPC for those chains"))
-    return sec
 
 
 def _posture_section() -> Section:
@@ -1475,12 +1627,14 @@ def _security_section(user_id: str, data_dir: str, now: float,
     sec.data.update({
         "inbound": r.inbound, "denied": r.denied, "refused": r.refused,
         "flagged": r.flagged, "rate_limited": r.rate_limited,
+        "scan": getattr(r, "scan", "not run"),
         "top_senders": r.top_senders,
         "top_denial_reasons": r.top_denial_reasons,
         "top_refusal_reasons": r.top_refusal_reasons,
     })
     sec.lines.append(f"{r.inbound} inbound / {r.denied} denied · "
-                     f"{r.refused} refused · {r.flagged} flagged")
+                     f"{r.refused} refused · {r.flagged} flagged · "
+                     f"{r.rate_limited} rate-limited · scan {getattr(r, 'scan', 'not run')}")
     if r.flagged:
         sec.health.append(HealthItem(
             key="injection_flagged", severity=SEVERITY_WARN,
@@ -1514,21 +1668,22 @@ def _security_section(user_id: str, data_dir: str, now: float,
 
 
 def _identity_section(instance_id: str, data_dir: Optional[str]) -> Section:
-    """WHO the agent is: its instance and the frozen Mindprint face + voice.
+    """WHO the agent is: its instance, on-chain identity, reach and avatar image.
 
-    The avatar system has been complete since 2026-07-19 and reached no status
-    surface at all, and ``core.instance.voice_signature()`` had zero callers
-    outside ``polyrob pfp say``. On 2026-09-15 prod had no avatar and no seat
-    said so.
+    The avatar is ONE image slot (``core.avatar``): set (and from where), not
+    set, or unreadable. Core generates no face, so no generator, trait or voice
+    is reported.
 
     ⚠️ An absent avatar is ``ok``, not ``degraded``, and raises NO health item.
     Setup is optional; a permanent WARN for an optional step is the noise that
-    teaches an owner to skip the health block.
+    teaches an owner to skip the health block. An UNREADABLE slot is different —
+    an unreadable store is not an empty one — so it raises one WARN.
 
     ⚠️ Read-only, and it never CREATES the identity directory — a status surface
     that writes is how an empty store becomes a real one.
     """
-    from core.instance import load_erc8004_record, load_pfp_meta, pfp_dir
+    from core.avatar import describe, load_avatar
+    from core.instance import load_erc8004_record
 
     sec = Section(name="identity")
     if not data_dir:
@@ -1551,6 +1706,19 @@ def _identity_section(instance_id: str, data_dir: Optional[str]) -> Section:
         # teaches an owner to skip the health block.
         sec.lines.append("erc-8004: not registered (optional)")
 
+    # 062: HOW this instance was installed. The record lives in the per-user
+    # config home, not the (per-project) data home, so it reads the same from
+    # every directory; an absent one says "not recorded", never a guess.
+    try:
+        from core.bootstrap_marker import describe as _describe_bootstrap
+        from core.bootstrap_marker import read_marker as _read_marker
+        _status, _record = _read_marker()
+        sec.data["install"] = _record or {"status": _status}
+        sec.lines.append(_describe_bootstrap().replace("bootstrap: ", "install: ", 1))
+    except Exception as exc:
+        sec.data["install"] = {"status": "unreadable"}
+        sec.lines.append(f"install: unreadable ({type(exc).__name__})")
+
     # 2026-09-17: the agent's OWN reachable identities — the address it sends
     # mail AS and the X account it posts AS. Until now no seat could answer
     # "do I have an email / an X account", so a bootstrap skill had to guess.
@@ -1558,56 +1726,22 @@ def _identity_section(instance_id: str, data_dir: Optional[str]) -> Section:
     # the tools tier and is checked by the agent's own `x_login_check` verb.
     _identity_reach_lines(sec, data_dir)
 
-    d = pfp_dir(data_dir, instance_id)
-    png = d / "pfp.png"
-    if not png.is_file():
-        sec.data["avatar"] = "none"
-        sec.lines.append(f"{instance_id} — avatar not set up "
-                         f"(optional: `polyrob pfp generate`, then `keep`)")
-        return sec
-
-    meta = load_pfp_meta(data_dir, instance_id)
-    if not isinstance(meta, dict):
-        # The face exists but its record does not parse. Reporting "kept" would
-        # claim traits we cannot read; reporting "none" would deny a file that
-        # is right there. Both are confident lies, so say the true third thing.
-        sec.data["avatar"] = "unreadable"
-        sec.lines.append(f"{instance_id} — avatar present but its record is "
-                         f"unreadable ({d / 'pfp.json'})")
-        return sec
-
-    kept = bool(meta.get("locked", True))
-    traits = meta.get("traits") if isinstance(meta.get("traits"), dict) else {}
-    voice = meta.get("voice") if isinstance(meta.get("voice"), dict) else {}
-    sec.data.update({
-        "avatar": "kept" if kept else "draft",
-        "seed_hex": meta.get("seed_hex"),
-        "tier": traits.get("tier"),
-        "traits": traits,
-        "voice": voice,
-        "generator": meta.get("generator"),
-        "rendered_by": meta.get("rendered_by"),
-        "path": str(png),
-    })
-
-    head = f"{instance_id} — avatar {'kept' if kept else 'DRAFT (not kept yet)'}"
-    if meta.get("seed_hex"):
-        head += f", seed {meta['seed_hex']}"
-    if traits.get("tier"):
-        head += f", {traits['tier']}"
-    sec.lines.append(head)
-    shown = [f"{k} {traits[k]}" for k in ("head", "eyes", "mouth", "antenna", "aura")
-             if traits.get(k)]
-    if shown:
-        sec.lines.append("face: " + ", ".join(shown))
-    if voice:
-        sec.lines.append(
-            "voice: pitch {p} · rate {r} · timbre {t}".format(
-                p=voice.get("pitch", "?"), r=voice.get("rate", "?"),
-                t=voice.get("timbre", "?")))
-    if not kept:
-        sec.lines.append("re-roll with `polyrob pfp randomize`, accept with "
-                         "`polyrob pfp keep` (permanent)")
+    st = load_avatar(data_dir, instance_id)
+    sec.data["avatar"] = st.state
+    sec.data["avatar_default"] = st.is_default
+    if st.is_set:
+        sec.data.update({"avatar_source": st.source, "path": str(st.path),
+                         "avatar_set_at": st.set_at})
+    line = f"{instance_id} — avatar {describe(st)}"
+    if st.state == "none":
+        line += " (optional: `polyrob avatar set <image>`)"
+    sec.lines.append(line)
+    if st.state == "unreadable":
+        sec.health.append(HealthItem(
+            key="avatar_unreadable",
+            text=f"the avatar slot is unreadable: {st.detail or 'unknown'}",
+            remedy="set it again with `polyrob avatar set <image>`, or "
+                   "`polyrob avatar clear`"))
     return sec
 
 
@@ -1662,6 +1796,76 @@ def _identity_reach_lines(sec: Section, data_dir: Optional[str]) -> None:
                          "X login session: x_login_check")
     _browser_rail_line(sec)
     _x_session_line(sec, data_dir)
+    line, state = x_oauth2_line(data_dir)
+    sec.data["x_oauth2"] = state
+    sec.lines.append(line)
+
+
+#: What the owner runs when the X OAuth 2.0 login is dead and the verdict
+#: carries no remedy of its own (the verdict's remedy wins when present).
+X_OAUTH2_RELOGIN_REMEDY = "/x login (or `polyrob x-account oauth-login` from an owner shell)"
+
+
+def _x_oauth2_relogin_text(v) -> str:
+    from core.credential_verdicts import since_text
+    return (f"X login (OAuth 2.0, DMs): re-login needed since {since_text(v)} — "
+            f"{v.remedy or X_OAUTH2_RELOGIN_REMEDY}")
+
+
+def x_oauth2_store_changed_since(v, data_dir: Optional[str]) -> bool:
+    """Was the X token store written AFTER verdict *v*'s last refusal?
+
+    The pack treats a record obtained after the verdict as a re-login that
+    could not clear it (another process or home). Core cannot decrypt the
+    record's ``obtained_at``, so it reads only what it can see: the store
+    file's mtime. Shared by this line and the cron credential preflight."""
+    if not data_dir:
+        return False
+    try:
+        return os.path.getmtime(os.path.join(str(data_dir), ".x_session.json")) > float(v.last_seen)
+    except (OSError, TypeError, ValueError):
+        return False
+
+
+def x_oauth2_line(data_dir: Optional[str]) -> Tuple[str, str]:
+    """The X OAuth 2.0 user login (the DM read/send rail) as ONE honest line and
+    a state: ``relogin_needed`` | ``stored`` | ``env_token`` | ``none`` |
+    ``unreadable``.
+
+    The pack's refresher records an ``x_oauth2`` credential verdict when the
+    login dies and clears it on a successful login/refresh — an OPEN verdict
+    is the only signal this tier trusts for "dead". Otherwise the encrypted
+    token store's KEY set is read (``<data home>/.x_session.json``, keys
+    ``<instance>|x_oauth2``); the Fernet record is never decrypted here, so
+    "stored" means a login exists, not that its token is fresh (the pack's
+    status section carries the expiry). An unparseable store is reported as
+    unreadable, never as absent. Shared by ``/status`` and ``polyrob doctor``."""
+    from core.credential_verdicts import active
+    opened = active("x_oauth2")
+    path = os.path.join(str(data_dir), ".x_session.json") if data_dir else None
+    if opened:
+        v = min(opened, key=lambda x: x.first_seen)
+        text = _x_oauth2_relogin_text(v)
+        if x_oauth2_store_changed_since(v, data_dir):
+            text += " (the token store changed since — the next X call re-checks)"
+        return text, "relogin_needed"
+    stored = False
+    if path and os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                keys = json.load(f)
+        except (OSError, ValueError) as e:
+            return (f"X login (OAuth 2.0, DMs): unreadable ({type(e).__name__}: store "
+                    f"file present but not parseable)", "unreadable")
+        stored = isinstance(keys, dict) and any(str(k).endswith("|x_oauth2") for k in keys)
+    if stored:
+        return ("X login (OAuth 2.0, DMs): stored (no dead-login verdict; the token "
+                "refreshes itself)", "stored")
+    if (os.environ.get("TWITTER_OAUTH2_ACCESS_TOKEN") or "").strip():
+        return ("X login (OAuth 2.0, DMs): static env token only (TWITTER_OAUTH2_ACCESS_TOKEN "
+                f"expires ~2h after mint) — {X_OAUTH2_RELOGIN_REMEDY}", "env_token")
+    return (f"X login (OAuth 2.0, DMs): none — DM reads need it; {X_OAUTH2_RELOGIN_REMEDY}",
+            "none")
 
 
 def _x_session_line(sec: Section, data_dir: Optional[str]) -> None:
@@ -1725,6 +1929,37 @@ def _external_rail_health(sec: Section, tele: Section) -> None:
                    "the search/posts and /user endpoints were unaffected last time"))
 
 
+def _rail_gate_health(sec: Section, tele: Section) -> None:
+    """2026-09-21: a money rail's PRECONDITION verb (`defi_data.reconcile`, the
+    rails' step-1 "ledger vs chain — if a real row disagrees, STOP") refused
+    every call for 9 h (ledger > 1 MB) while six rails traded without it and
+    every seat read healthy. A refusal is a `rail_precondition_failed` event;
+    ONE such event in the window is a CRIT — a rail running with its gate down
+    must never read healthy, and the count + first time + reason say how long."""
+    if not tele.available:
+        return
+    rows = _tele_rows(tele, _K_RAIL_PRECONDITION_FAILED)  # newest-first
+    if not rows:
+        return
+    by_tool: Dict[str, List[Dict[str, Any]]] = {}
+    for r in rows:
+        by_tool.setdefault(str((r.get("attrs") or {}).get("tool") or "?"), []).append(r)
+    sec.data["rail_gate_refused"] = {k: len(v) for k, v in by_tool.items()}
+    parts = []
+    for tool, trs in by_tool.items():
+        first, last = trs[-1], trs[0]
+        reason = str((last.get("attrs") or {}).get("reason") or "").strip()[:90]
+        parts.append(f"{tool} refused {len(trs)}× since {_hhmm(first.get('ts'))} "
+                     f"(latest {_hhmm(last.get('ts'))}: {reason})")
+    sec.health.append(HealthItem(
+        key="rail_gate_refused", severity=SEVERITY_CRIT,
+        text="money-rail gate down — " + "; ".join(parts[:3])
+             + " — rails are running without their step-1 check",
+        remedy="fix the named cause (a ledger over 1 MB: move its run logs to the "
+               "runlog archive as the service user; a bad path: repoint the job); the "
+               "rails' RECONCILE GATE rule skips every spend/sell step while it refuses"))
+
+
 def _browser_rail_line(sec: Section) -> None:
     """Append `browser:` — the ONE rail line (core/security/browser_rail.py).
 
@@ -1753,93 +1988,6 @@ def _browser_rail_line(sec: Section) -> None:
             rail.remedy, SEVERITY_WARN))
 
 
-def _positions_line(data_dir: Optional[str]) -> str:
-    """One line naming how many positions the LEDGER records as open.
-
-    The treasury figure is cash flow; it cannot see a held bag. Saying only
-    "open positions NOT included" leaves the owner unable to tell an empty book
-    from two unsellable positions — on 2026-08-28 it was two, and on 2026-08-25
-    that same blind spot was published to X as "book flat". This is the cheap
-    half of the fix (a file read, no network); verifying the count against chain
-    stays with the `reconcile` verb, which is what the remedy points at.
-
-    UNKNOWN is never zero: an unreadable/absent ledger says so.
-    """
-    from core.position_ledger import read_open_positions
-    rows, err = read_open_positions(data_dir)
-    if err:
-        return f"open positions: UNKNOWN — {err} (not the same as none)"
-    if not rows:
-        return "open positions: none recorded in the ledger"
-    syms = ", ".join(r.symbol for r in rows[:5]) + ("…" if len(rows) > 5 else "")
-    return (f"open positions: {len(rows)} recorded in the ledger ({syms}) — "
-            f"ledger-recorded, NOT verified against chain; run `reconcile`")
-
-
-def _money_section(user_id: str, ledger: Any, data_dir: Optional[str] = None) -> Section:
-    """``ledger`` is the ``build_ledger`` dict, or the exception it raised."""
-    if isinstance(ledger, BaseException):
-        raise ledger
-    if not isinstance(ledger, dict) or not ledger:
-        raise RuntimeError("ledger returned no data")
-    sec = Section(name="money", data={"ledger": ledger})
-    r = ledger.get("runtime") or {}
-    t = ledger.get("treasury") or {}
-    # 2026-09-21: a leg that did NOT read renders `unavailable`, never `$0.00`
-    # — the availability note below already marks the section degraded, but
-    # the figure line above it read as a confident zero on a fresh home.
-    if r.get("available") is False:
-        line = "runtime cost (owner's compute bill): unavailable (usage records not readable)"
-    else:
-        spend = float(r.get("spend_window_usd") or 0.0)
-        total = float(r.get("spend_total_usd") or 0.0)
-        line = f"runtime cost (owner's compute bill): ${spend:.2f} last 24h · ${total:.2f} total"
-        if r.get("provider_balance_usd") is not None:
-            line += f" · provider balance ${float(r['provider_balance_usd']):.2f}"
-    sec.lines.append(line)
-    if t.get("available") is False:
-        line = ("treasury cash flow (income − spend; open positions NOT included): "
-                "unavailable (invoice or wallet ledger not readable)")
-    else:
-        net = float(t.get("net_usd") or 0.0)
-        line = (f"treasury cash flow (income − spend; open positions NOT included): "
-                f"net ${net:+.2f}")
-    if t.get("balance_usd") is not None:
-        line += f" · USDC balance ${float(t['balance_usd']):.2f}"
-    if int(t.get("pending_count") or 0):
-        line += f" · {int(t['pending_count'])} pending invoice(s) ${float(t.get('pending_usd') or 0):.2f}"
-    sec.lines.append(line)
-    # A settled machine payment whose work then failed downstream
-    # (`modules/x402/x402_integration.py::mark_payment_refund_due`). ⚠️ Its OWN
-    # line and its own health item: it is money the agent TOOK and owes back,
-    # so folding it into the net figure would net a debt against income and
-    # show a healthier treasury the more the agent owes. The obligation only
-    # grows while nobody acts on it, and `refund_due` is a status no invoice
-    # listing showed until 2026-09-21, so no seat could name it at all.
-    _refund_n = int(t.get("refund_due_count") or 0)
-    if _refund_n:
-        _refund_usd = float(t.get("refund_due_usd") or 0.0)
-        sec.lines.append(
-            f"⚠ refund owed: ${_refund_usd:.2f} across {_refund_n} settled "
-            f"payment(s) we did not deliver on (NOT netted above)")
-        sec.health.append(HealthItem(
-            key="payment_refund_due", severity=SEVERITY_WARN,
-            text=(f"{_refund_n} settled payment(s) worth ${_refund_usd:.2f} are "
-                  f"owed back — the work failed after the money arrived"),
-            remedy="`/invoices refund_due` to see them, then refund each payer"))
-    # Positions are read separately and must never take the money section down:
-    # a missing ledger is a fact about the ledger, not about the treasury.
-    try:
-        sec.lines.append(_positions_line(data_dir))
-    except Exception as e:
-        sec.lines.append(f"open positions: UNKNOWN ({type(e).__name__}: {e})")
-    from core.activity_evidence import ledger_note
-    note = ledger_note(ledger)
-    if note:
-        sec.state = STATE_DEGRADED
-        sec.reason = note
-        sec.lines.append(f"⚠ {note}")
-    return sec
 
 
 # --- assembly ----------------------------------------------------------------
@@ -1859,8 +2007,13 @@ def _assemble(user_id: str, now: float, window_sec: int, sections: Dict[str, Sec
 
 def _build_core(user_id: str, *, data_dir: Optional[str], task_agent: Any,
                 session_id: Optional[str], container: Any, window_hours: int):
+    """The sections the snapshot builds ITSELF (every SECTION_ORDER name that
+    is not a ``core.status_sections`` slot)."""
     from core.instance import resolve_instance_id
-    from core.status_liquidity import liquidity_section
+    from core.status_knowledge import knowledge_section
+    from core.status_tools import tools_section
+    from core.status_packs import packs_section
+    from core.status_rules import rules_section
     from core.runtime_paths import cron_db_path, data_dir_or_home, goals_db_path
     data_dir = data_dir_or_home(data_dir)
     now = time.time()
@@ -1876,303 +2029,29 @@ def _build_core(user_id: str, *, data_dir: Optional[str], task_agent: Any,
         "work": _guarded("work", _work_section, uid, goals_db, tele, now),
         "approvals": _guarded("approvals", _approvals_section, uid, data_dir, goals_db),
         "loops": _guarded("loops", _loops_section, uid, cron_db, tele, now, goals_db, data_dir),
-        "delivery": _guarded("delivery", _delivery_section, uid, data_dir, tele, container, now),
+        "tools": _guarded("tools", tools_section, uid, data_dir, now),
+        # What it KNOWS, beside what it can DO (the 2026-09-22 knowledge
+        # review: nineteen sections and none of them was this one).
+        "knowledge": _guarded("knowledge", knowledge_section, uid, data_dir, now),
+        "delivery": _guarded("delivery", _delivery_section, uid, data_dir, tele, container, now,
+                             session_id),
         "posture": _guarded("posture", _posture_section),
-        # ⚠️ Insertion order IS the render order — `test_every_section_is_always_present`
-        # asserts `tuple(snap.sections) == SECTION_ORDER`. Keep the two in step.
         "security": _guarded("security", _security_section, uid, data_dir, now, window_sec),
         "identity": _guarded("identity", _identity_section,
                              resolve_instance_id(), data_dir),
+        # 060 WS-7: is a written rule IN EFFECT? (per instruction surface)
+        "rules": _guarded("rules", rules_section, uid, data_dir, cron_db, tele),
         "apps": _guarded("apps", _apps_section, uid, data_dir),
         "groups": _guarded("groups", _groups_section, uid, data_dir),
-        "room_actions": _guarded("room_actions", _room_actions_section, uid,
-                                 data_dir),
-        "creations": _guarded("creations", _creations_section, uid, data_dir),
-        "collectibles": _guarded("collectibles", _collectibles_section, uid, data_dir),
-        "liquidity": _guarded("liquidity", liquidity_section, uid, data_dir),
-        "wallet": _guarded("wallet", _wallet_section, data_dir),
+        # 067 P2: installed / loaded / disabled / refused packs, with reasons.
+        "packs": _guarded("packs", packs_section),
     }
     if not uid:
-        for name in ("work", "approvals", "loops", "delivery", "apps",
-                     "creations", "collectibles", "liquidity", "security"):
+        for name in ("work", "approvals", "loops", "tools", "knowledge", "delivery", "rules",
+                     "apps", "security"):
             sections[name] = Section(name=name, state=STATE_UNAVAILABLE,
                                      reason="no tenant (empty user_id)")
-    return uid, now, window_sec, sections
-
-
-
-#: The verbs that CREATE something the owner will later be asked about. Derived
-#: from the spend ledger rather than a second store: every one of them already
-#: calls `gate.record(counterparty=<the address it made>, result_ref=<the tx>)`,
-#: so the record exists and nothing new has to be written to read it back.
-CREATION_VERBS = ("deploy_token", "deploy_contract", "solana_deploy_token",
-                  "launchpad_launch")
-
-
-def _creations_section(user_id: str, data_dir: str) -> Section:
-    """What this agent has CREATED on-chain (042b).
-
-    The gap this closes is the one the 2026-08-25 ledger incident is the famous
-    instance of: the agent did something durable and no surface could show it
-    back. A token it deployed last week existed only in a transaction hash in a
-    chat message.
-
-    Read-only over `telemetry_events`, tenant-scoped, newest first. An absent or
-    unreadable store renders its reason — never an empty list, because "I have
-    created nothing" and "I cannot see what I created" are different facts and
-    only one of them is reassuring.
-    """
-    from core.wallet.chains import explorer_url
-
-    sec = Section(name="creations")
-    db = _telemetry_db_path(data_dir)
-    rows = _rows(
-        db,
-        "SELECT ts, attrs FROM telemetry_events WHERE kind='wallet_spend' "
-        "AND user_id=? ORDER BY ts DESC LIMIT 400",
-        (user_id,))
-
-    made = []
-    unreadable = 0
-    for row in rows:
-        try:
-            attrs = json.loads(row.get("attrs") or "{}")
-        except Exception:
-            # NOT silent: a row we cannot parse might be a creation, so it is
-            # counted and surfaced. A status view that quietly drops rows is how
-            # "I have created nothing" comes to mean "I could not tell".
-            unreadable += 1
-            continue
-        action = str(attrs.get("action") or "")
-        if action not in CREATION_VERBS:
-            continue
-        chain = attrs.get("chain")
-        address = attrs.get("counterparty")
-        url = None
-        if chain and address:
-            kind = "token" if action in (
-                "deploy_token", "solana_deploy_token", "launchpad_launch") else "address"
-            url = explorer_url(chain, kind, str(address))
-        made.append({
-            "action": action,
-            "address": address,
-            "chain": chain,
-            "tx": attrs.get("result_ref"),
-            "usd": attrs.get("amount_usd"),
-            "ts": row.get("ts"),
-            "url": url,
-        })
-
-    sec.data["creations"] = made
-    sec.data["unreadable_rows"] = unreadable
-    if unreadable:
-        sec.lines.append(f"⚠ {unreadable} spend row(s) could not be read — this "
-                         f"list may be incomplete")
-        sec.health.append(HealthItem(
-            key="creations_unreadable", severity=SEVERITY_WARN,
-            text=(f"{unreadable} wallet_spend row(s) did not parse, so what I "
-                  f"have created cannot be listed in full"),
-            remedy="check telemetry_events for malformed attrs"))
-    if not made:
-        sec.lines.append("nothing deployed or launched"
-                         + (" (that could be read)" if unreadable else ""))
-        return sec
-
-    by = {}
-    for item in made:
-        by[item["action"]] = by.get(item["action"], 0) + 1
-    sec.lines.append(", ".join(f"{n} {a}" for a, n in sorted(by.items())))
-    for item in made[:5]:
-        action = item["action"]
-        addr = item.get("address") or "address unknown"
-        chain = item.get("chain")
-        ts_part = f" ({_hhmm(item['ts'])})" if item.get("ts") else ""
-        url = item.get("url")
-        url_part = f" — {url}" if url else ""
-        if chain:
-            sec.lines.append(f"{action}: {addr} on {chain}{ts_part}{url_part}")
-        else:
-            sec.lines.append(f"{action}: {addr}{ts_part}{url_part}")
-    if len(made) > 5:
-        sec.lines.append(f"…and {len(made) - 5} more")
-    return sec
-
-
-def moves_section(user_id: str, data_dir: str, *, limit: int = 20) -> Section:
-    """Every MOVE the wallet made — the generic sibling of ``_creations_section``.
-
-    PUBLIC because the console renders it directly (E24 lists ``moves`` among
-    the rows no seat had). Same source and same discipline as creations:
-    read-only over ``wallet_spend`` telemetry, tenant-scoped, newest first,
-    never CREATING the store.
-
-    ⚠️ Derived from the SPEND ledger, so it answers "what did I send" and never
-    "what do I hold" — a row exists only for an outflow the guard authorized.
-    An unparseable row is COUNTED and surfaced rather than dropped: "nothing
-    moved" must never come to mean "I could not tell".
-
-    Each move carries ``url`` — a block-explorer link, exactly as
-    ``_creations_section`` does — when the row recorded BOTH a chain and a
-    transaction reference, and ``None`` otherwise. The console renders it as
-    the row's one action, so building it here keeps the link and the row that
-    justifies it in one place instead of two readers deriving it apart.
-    """
-    from core.wallet.chains import explorer_url
-    sec = Section(name="moves")
-    rows = _rows(
-        _telemetry_db_path(data_dir),
-        "SELECT ts, attrs FROM telemetry_events WHERE kind='wallet_spend' "
-        "AND user_id=? ORDER BY ts DESC LIMIT 400",
-        (user_id,))
-    moves: List[Dict[str, Any]] = []
-    unreadable = 0
-    total_usd = 0.0
-    priced = 0
-    for row in rows:
-        try:
-            attrs = json.loads(row.get("attrs") or "{}")
-        except Exception:
-            unreadable += 1
-            continue
-        usd = attrs.get("amount_usd")
-        try:
-            if usd is not None:
-                total_usd += float(usd)
-                priced += 1
-        except (TypeError, ValueError):
-            usd = None
-        chain = attrs.get("chain")
-        tx = attrs.get("result_ref")
-        moves.append({
-            "action": str(attrs.get("action") or ""),
-            "asset": attrs.get("asset"),
-            "to": attrs.get("counterparty"),
-            "chain": chain,
-            "tx": tx,
-            "url": explorer_url(chain, "tx", str(tx)) if (chain and tx) else None,
-            "usd": usd,
-            "ts": row.get("ts"),
-        })
-    sec.data["moves"] = moves[:limit]
-    sec.data["total"] = len(moves)
-    sec.data["unreadable_rows"] = unreadable
-    #: ``None``, never 0.0, when NO row carried a price — an unpriced move is
-    #: not a free one.
-    sec.data["total_usd"] = round(total_usd, 4) if priced else None
-    if unreadable:
-        sec.lines.append(f"⚠ {unreadable} spend row(s) could not be read — this "
-                         f"list may be incomplete")
-        sec.health.append(HealthItem(
-            key="moves_unreadable", severity=SEVERITY_WARN,
-            text=(f"{unreadable} wallet_spend row(s) did not parse, so what the "
-                  f"wallet moved cannot be listed in full"),
-            remedy="check telemetry_events for malformed attrs"))
-    if not moves:
-        sec.lines.append("nothing moved"
-                         + (" (that could be read)" if unreadable else ""))
-        return sec
-    priced_note = (f", ${sec.data['total_usd']:,.2f} total" if priced
-                   else ", none priced")
-    sec.lines.append(f"{len(moves)} move(s){priced_note}")
-    for item in moves[:5]:
-        amount = (f"${item['usd']:,.2f}" if item.get("usd") is not None
-                  else "amount unrecorded")
-        sec.lines.append(
-            f"{item['action'] or 'move'}: {amount} "
-            f"{item.get('asset') or ''} -> {item.get('to') or 'unrecorded'}"
-            f"{(' on ' + str(item['chain'])) if item.get('chain') else ''} "
-            f"({_hhmm(item.get('ts'))})".replace("  ", " "))
-    if len(moves) > 5:
-        sec.lines.append(f"…and {len(moves) - 5} more")
-    return sec
-
-
-#: NFT move verbs, by their `gate.record(action=...)` name. Derived from the
-#: spend ledger for the same reason CREATION_VERBS is: the record already
-#: exists, so nothing new has to be written to read it back.
-NFT_MOVE_VERBS = ("nft_transfer",)
-
-
-def _collectibles_section(user_id: str, data_dir: str,
-                          enumerate_fn=None) -> Section:
-    """Non-fungibles: what the chain says is HELD, and what the guard MOVED.
-
-    ⚠️ These are two different questions and the section never merges them. A
-    `wallet_spend` row exists only for a SPEND, so an AIRDROPPED token has no
-    row at all — telemetry can say what left, never what arrived unasked. Only
-    a chain read answers "held".
-
-    ⚠️ `held is None` means NOT READ (no provider, a failed read, or simply not
-    asked for), and renders as such. `held == []` means a working read returned
-    nothing. Collapsing the two would turn "I could not look" into "you own
-    nothing", which is the exact confident-zero class the status SSOT exists to
-    prevent.
-
-    ⚠️ No network read unless `enumerate_fn` is supplied — status is cheap by
-    default, the same contract `include_balances` carries for the ledger.
-    """
-    sec = Section(name="collectibles")
-
-    # --- held (a chain read, opt-in) ---------------------------------------
-    sec.data["held"] = None
-    if enumerate_fn is not None:
-        try:
-            sec.data["held"] = list(enumerate_fn(user_id=user_id))
-        except Exception as e:
-            sec.lines.append(f"held: could not be read ({type(e).__name__}: "
-                             f"{str(e)[:120]})")
-    else:
-        sec.lines.append("held: not read (a chain read is opt-in here; ask for "
-                         "it explicitly, or run the nft_holdings verb)")
-
-    held = sec.data["held"]
-    if held is not None:
-        if not held:
-            sec.lines.append("held: none — this IS an answer from a working "
-                             "read, not a failed one")
-        else:
-            sec.lines.append(f"held: {len(held)} NFT(s)")
-            for item in held[:5]:
-                name = item.get("name") or "(unnamed)"
-                sec.lines.append(f"  {name} — {item.get('contract')} "
-                                 f"#{item.get('token_id')}")
-            if len(held) > 5:
-                sec.lines.append(f"  …and {len(held) - 5} more")
-
-    # --- moved (derived from the spend ledger) -----------------------------
-    rows = _rows(
-        _telemetry_db_path(data_dir),
-        "SELECT ts, attrs FROM telemetry_events WHERE kind='wallet_spend' "
-        "AND user_id=? ORDER BY ts DESC LIMIT 400",
-        (user_id,))
-    moved = []
-    unreadable = 0
-    for row in rows:
-        try:
-            attrs = json.loads(row.get("attrs") or "{}")
-        except Exception:
-            # NOT silent: an unparseable row might BE a move, so it is counted
-            # and surfaced rather than quietly dropped.
-            unreadable += 1
-            continue
-        if str(attrs.get("action") or "") not in NFT_MOVE_VERBS:
-            continue
-        moved.append({"asset": attrs.get("asset"), "to": attrs.get("counterparty"),
-                      "chain": attrs.get("chain"), "tx": attrs.get("result_ref"),
-                      "ts": row.get("ts")})
-    sec.data["moved"] = moved
-    sec.data["unreadable_rows"] = unreadable
-    if unreadable:
-        sec.lines.append(f"⚠ {unreadable} spend row(s) could not be read — the "
-                         f"move list may be incomplete")
-    if moved:
-        sec.lines.append(f"moved out: {len(moved)}")
-        for item in moved[:5]:
-            sec.lines.append(f"  {item.get('asset') or 'asset unrecorded'} -> "
-                             f"{item.get('to')} ({_hhmm(item.get('ts'))})")
-    else:
-        sec.lines.append("moved out: none recorded")
-    return sec
+    return uid, data_dir, now, window_sec, sections
 
 
 def build_status_snapshot(user_id: str, *, data_dir: Optional[str] = None,
@@ -2186,54 +2065,49 @@ def build_status_snapshot(user_id: str, *, data_dir: Optional[str] = None,
     money section is read through the sync bridge (``core.activity_evidence``)
     — a network balance probe only when ``include_balances``; ``ledger`` lets a
     caller that already holds a ``build_ledger`` result (or the exception it
-    raised) pass it in."""
-    uid, now, window_sec, sections = _build_core(
+    raised) pass it in.
+
+    067 P5a: the SLOTS (``core.status_sections.CONTRIBUTED_SLOTS``: wallet,
+    custody, money, economics, liquidity, collectibles, creations,
+    room_actions) come from their registered providers, built in SECTION_ORDER
+    (money before economics: the runway line reads the ledger money read); an
+    empty slot is one ``not installed`` line."""
+    from core.status_sections import CONTRIBUTED_SLOTS, SectionContext, build_slot
+    uid, resolved_dir, now, window_sec, core_sections = _build_core(
         user_id, data_dir=data_dir, task_agent=task_agent, session_id=session_id,
         container=container, window_hours=window_hours)
-    if liquidity_enumerate_fn is not None and uid:
-        from core.status_liquidity import liquidity_section
-        from core.runtime_paths import data_dir_or_home
-        sections["liquidity"] = _guarded("liquidity", liquidity_section, uid,
-                                        data_dir_or_home(data_dir), liquidity_enumerate_fn)
-    if not include_money:
-        sections["money"] = Section(name="money", state=STATE_UNAVAILABLE,
-                                    reason="not requested on this path")
-    else:
-        if ledger is None and uid:
-            try:
-                from core.activity_evidence import ledger_rollup_strict
-                ledger = ledger_rollup_strict(uid, max(1, window_sec // 86400),
-                                              include_balances=include_balances)
-            except Exception as e:
-                ledger = e
-        elif ledger is None:
-            ledger = ValueError("no tenant (empty user_id)")
-        from core.runtime_paths import data_dir_or_home
-        sections["money"] = _guarded("money", _money_section, uid, ledger,
-                                     data_dir_or_home(data_dir))
-    _attach_economics(uid, now, window_sec, sections, data_dir, ledger)
+    ctx = SectionContext(uid=uid, data_dir=resolved_dir, now=now, window_sec=window_sec,
+                         include_money=include_money, include_balances=include_balances,
+                         ledger=ledger, liquidity_reader=liquidity_enumerate_fn)
+    sections: Dict[str, Section] = {}
+    # ⚠️ Insertion order IS the render order — `test_every_section_is_always_present`
+    # asserts `tuple(snap.sections) == SECTION_ORDER`.
+    for name in SECTION_ORDER:
+        sections[name] = (build_slot(name, ctx) if name in CONTRIBUTED_SLOTS
+                          else core_sections[name])
     return _assemble(uid, now, window_sec, sections)
 
 
-def _attach_economics(uid: str, now: float, window_sec: int,
-                      sections: Dict[str, Section], data_dir: Optional[str],
-                      ledger: Any) -> None:
-    """057 WS-I: the per-call cost/latency section, built from ``usage_records``.
-    The runway item needs a READ balance; the ledger carries one only when the
-    caller asked for ``include_balances`` — otherwise the section still renders
-    burn and the runway line is simply absent (never a guessed number)."""
-    from core.runtime_paths import data_dir_or_home
-    from core.status_economics import economics_section, runway_health
-    if not uid:
-        sections["economics"] = Section(name="economics", state=STATE_UNAVAILABLE,
-                                        reason="no tenant (empty user_id)")
-        return
-    sec = _guarded("economics", economics_section, uid, data_dir_or_home(data_dir),
-                   now=now, window_sec=window_sec)
-    sections["economics"] = sec
-    if sec.available and isinstance(ledger, dict):
-        bal = (ledger.get("runtime") or {}).get("provider_balance_usd")
-        try:
-            runway_health(sec, bal)
-        except Exception as e:  # never take the section down over the runway line
-            sec.lines.append(f"budget runway: UNKNOWN ({type(e).__name__}: {e})")
+#: 067 P5a: the builders that moved to the slot provider modules, still
+#: importable from here (callers and monkeypatch targets keep working).
+_MOVED = {
+    "_room_actions_section": "core.status_room_actions",
+    "_wallet_section": "core.status_money",
+    "_positions_line": "core.status_money",
+    "_money_section": "core.status_money",
+    "CREATION_VERBS": "core.status_money",
+    "_creations_section": "core.status_money",
+    "moves_section": "core.status_money",
+    "NFT_MOVE_VERBS": "core.status_money",
+    "_collectibles_section": "core.status_money",
+}
+
+
+def __getattr__(name: str):
+    module = _MOVED.get(name)
+    if module is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    import importlib
+    value = getattr(importlib.import_module(module), name)
+    globals()[name] = value
+    return value

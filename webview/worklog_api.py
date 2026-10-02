@@ -124,7 +124,7 @@ async def api_log(
         if diagnostic and not want_diagnostics:
             filtered_out += 1
             continue
-        client_class = classify(kind)
+        client_class = classify(kind, effect=event.get("effect"))
         if class_filter and client_class != class_filter:
             filtered_out += 1
             continue

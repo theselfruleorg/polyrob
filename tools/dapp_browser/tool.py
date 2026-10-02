@@ -98,14 +98,57 @@ class DappBrowserTool(WalletHolderMixin, BaseTool):
     def _price(self, chain, addr):
         if self._price_fn:
             return self._price_fn(chain, addr)
-        from tools.defi.providers import dexscreener
-        return dexscreener.token(chain, addr).price_usd
+        # 071: the one read layer; a DISPUTED quote yields None.
+        from tools.defi.price_sources import indexer_price
+        return indexer_price(chain, addr)
 
     def _key(self, execution_context) -> str:
         return str(getattr(execution_context, "session_id", None) or "default")
 
     def _uid(self, execution_context) -> str:
         return str(getattr(execution_context, "user_id", None) or "")
+
+    def _taint_probe_for(self, execution_context):
+        """A probe for "is this session correspondent-tainted NOW?" (H03b).
+
+        Reads the SAME orchestrator flag the correspondent gate reads
+        (``_correspondent_tainted``), resolved per call because the page asks
+        long after the arming turn. When no orchestrator can be resolved the
+        probe answers TAINTED (CR-L18): a session whose state cannot be read
+        cannot be proven clean, and the page is not the owner.
+        """
+        session_id = self._key(execution_context)
+
+        def _probe() -> bool:
+            from tools.ship_common import resolve_orchestrator
+            orch = resolve_orchestrator(lambda: self.container, session_id)
+            if orch is None:
+                return True
+            return bool(getattr(orch, "_correspondent_tainted", False))
+        return _probe
+
+    def _turn_kind_probe_for(self, execution_context):
+        """The session's LIVE turn kind, read per page request (CR-L18).
+
+        The same derivation ``step_execution._build_execution_context`` stamps
+        into ``metadata["turn_kind"]``: the orchestrator's ``_forged_turn_kind``,
+        else ``"group"`` for a public room. Raises when no orchestrator can be
+        resolved, which the bridge turns into a refusal.
+        """
+        session_id = self._key(execution_context)
+
+        def _probe():
+            from tools.ship_common import resolve_orchestrator
+            orch = resolve_orchestrator(lambda: self.container, session_id)
+            if orch is None:
+                raise RuntimeError("the session's orchestrator cannot be resolved")
+            kind = getattr(orch, "_forged_turn_kind", None)
+            if kind is None:
+                from core.surfaces.room_policy import is_public_session
+                if is_public_session(orch):
+                    kind = "group"
+            return kind
+        return _probe
 
     def _get_store(self):
         """The durable dapp-session store, or None. Fail-open + LOUD — a broken
@@ -192,24 +235,37 @@ class DappBrowserTool(WalletHolderMixin, BaseTool):
     async def dapp_connect(self, params: ConnectParams, execution_context=None):
         from core.wallet import chains
         from tools.dapp_browser import bridge as bridge_mod
-        from tools.dapp_browser.js import BINDING, provider_script
+        from tools.dapp_browser.js import new_binding_name, provider_script
 
         if not dapp_browser_enabled():
             return self._ar(error=(
                 f"the dapp wallet is off — set {FLAG}=true to arm it. Nothing "
                 f"was connected."))
 
-        from core.wallet.authority import leaf_refusal, spend_pause_refusal
-        turn_err = leaf_refusal(execution_context, "connect a wallet to a dapp")
-        if turn_err:
-            return self._ar(error=turn_err)
-        paused = spend_pause_refusal()
-        if paused:
-            return self._ar(error=paused + " Nothing was connected.")
+        # 067 P1b: the kernel's leaf + principal, then the pause. CR-L21:
+        # arming a spend envelope opens exposure — an entry.
+        from core.money.authorize import SpendIntent, authorize_spend
+        from tools.controller.turn_origin import (
+            _is_forged_or_autonomous_turn as _owner_turn_probe)
+        verdict = authorize_spend(
+            SpendIntent(tool="dapp_browser", what="connect a wallet to a dapp",
+                        entry=True), execution_context,
+            forged_fn=_owner_turn_probe)
+        if verdict.refused:
+            suffix = " Nothing was connected." if verdict.step == "pause" else ""
+            return self._ar(error=verdict.reason + suffix)
 
         ok, why = chains.money_capable(params.chain)
         if not ok:
             return self._ar(error=why)
+
+        # H03b: the envelope is armed for ONE origin — the page's main frame
+        # on the origin named here. Everything else is refused at the binding.
+        armed_origin = bridge_mod.origin_of(params.url)
+        if armed_origin is None:
+            return self._ar(error=(
+                f"{params.url!r} is not an http(s) page a wallet can be armed "
+                f"for. Nothing was connected."))
 
         browser_context = getattr(execution_context, "browser_context", None)
         if browser_context is None:
@@ -240,7 +296,11 @@ class DappBrowserTool(WalletHolderMixin, BaseTool):
             container=getattr(self, "container", None),
             rail_factory=self._rail_factory, guard_fn=self._guard_fn,
             price_fn=self._price, rpc_fn=self._rpc_fn,
-            approver=self._approver, persist_fn=self._persist_bridge)
+            approver=self._approver, persist_fn=self._persist_bridge,
+            armed_origin=armed_origin,
+            taint_probe=self._taint_probe_for(execution_context),
+            turn_kind_probe=self._turn_kind_probe_for(execution_context))
+        wallet_bridge.require_attached_page = True
 
         key = self._key(execution_context)
         previous = self._bridges.get(key)
@@ -254,13 +314,18 @@ class DappBrowserTool(WalletHolderMixin, BaseTool):
         try:
             session = await browser_context.get_session()
             raw_context = session.context
-            if not getattr(raw_context, "_polyrob_wallet_binding", False):
-                await raw_context.expose_binding(BINDING, wallet_bridge.handle)
-                raw_context._polyrob_wallet_binding = True
+            # A FRESH random binding per arming: a page cannot guess the entry
+            # point, and a binding left from an earlier arming answers only for
+            # its own (now revoked) envelope. Playwright cannot remove a
+            # binding, which is why the name — not a flag — changes.
+            binding = new_binding_name()
+            await raw_context.expose_binding(binding, wallet_bridge.handle)
             await raw_context.add_init_script(provider_script(
                 address=wallet_bridge.address,
-                chain_id_hex=wallet_bridge.chain_id_hex()))
+                chain_id_hex=wallet_bridge.chain_id_hex(),
+                binding=binding, origin=armed_origin))
         except Exception as exc:
+            wallet_bridge.envelope.revoked = True
             self._bridges.pop(key, None)
             return self._ar(error=(
                 f"could not install the wallet into the browser context: {exc}"))
@@ -278,6 +343,27 @@ class DappBrowserTool(WalletHolderMixin, BaseTool):
             return self._ar(error=(
                 f"the wallet is installed but the page could not be opened: "
                 f"{exc}. Navigate with browser_go_to_url and it will be there."))
+
+        # Bind the envelope to THIS tab and revoke it the moment the tab leaves
+        # the armed origin. A redirect that already left it (e.g. example.com ->
+        # app.example.com) is refused now rather than armed for the wrong site.
+        try:
+            page = await browser_context.get_current_page()
+            landed = bridge_mod.origin_of(page.main_frame.url)
+            if landed != armed_origin:
+                wallet_bridge.envelope.revoked = True
+                self._persist_bridge(wallet_bridge)
+                return self._ar(error=(
+                    f"the page redirected from {armed_origin} to "
+                    f"{landed or 'a non-web page'}, so the wallet was revoked. "
+                    f"Connect again with url set to the page it lands on."))
+            wallet_bridge.attach_page(page)
+        except Exception as exc:
+            wallet_bridge.envelope.revoked = True
+            self._persist_bridge(wallet_bridge)
+            return self._ar(error=(
+                f"could not bind the wallet to the opened page ({exc}); it was "
+                f"revoked. Nothing can be signed."))
 
         return self._ar(content=(
             f"wallet connected to {params.url}\n"

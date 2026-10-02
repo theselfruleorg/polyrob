@@ -25,6 +25,7 @@ from core.surfaces.poll_health import record_poll_error
 from core.surfaces.dispatcher import RouteKind
 from core.surfaces import voice_guard as _core_vg
 from core.surfaces.serialize import KeyedLock
+from core.surfaces.tappable import parse_ask_option as _parse_ask_option
 from core.surfaces.tappable import parse_tappable as _parse_tappable
 from surfaces.telegram.inbound import InboundResult
 from surfaces.telegram.media import (
@@ -48,16 +49,67 @@ except Exception:  # pragma: no cover - aiogram always present in prod
     _TelegramConflictError = None
 
 
-async def _send_telegram_text(bot, chat_id, text: str) -> None:
+async def _send_telegram_text(bot, chat_id, text: str, actions=None):
     """Deliver ``text`` to ``chat_id`` through the ONE outbound seam.
 
     The post-run reply, the out-of-band sink and the surface's own send() all render
     and chunk identically because they all end up in ``TelegramSurface.send_text``
     (markdown -> Telegram HTML, split at the message cap, plain-text retry on a markup
     rejection). This wrapper exists only because the sink holds a raw bot, not a surface.
+    Returns the last Telegram ``message_id`` (061: the owner thread's referent key).
     """
     from surfaces.telegram.surface import TelegramSurface
-    await TelegramSurface(bot).send_text(chat_id, text)
+    return await TelegramSurface(bot).send_text(chat_id, text, actions=actions)
+
+
+#: Exception type names that mean "the network hiccuped", not "something is wrong
+#: with us". A long poll held open for ~30 s is reset by an intermediary now and
+#: then; the next iteration reconnects and no update is lost (Telegram replays
+#: from the same offset).
+_TRANSIENT_POLL_ERROR_NAMES = frozenset({
+    "ClientOSError", "ClientConnectorError", "ClientConnectionResetError",
+    "ClientPayloadError", "ServerDisconnectedError", "ServerTimeoutError",
+    "ConnectionResetError", "ConnectionAbortedError", "TimeoutError",
+    "TelegramNetworkError",
+    # ⚠️ Telegram's OWN 5xx. Live 2026-09-23 01:10:44→01:10:54: nine consecutive
+    # `TelegramServerError: Bad Gateway` in ten seconds, each logged ERROR with a
+    # full traceback because this name was missing here — so the streak logic
+    # below, which exists for exactly this, never engaged, and each failure reset
+    # the count to zero. Polling recovered by 01:11:56 with nothing lost
+    # (Telegram replays from the same offset). A 502 from the far end is weather,
+    # not a fault in us.
+    # ⚠️ NOT included: `TelegramRetryAfter` (flood control). It is transient too,
+    # but it carries a `retry_after` the caller must honour, and treating it as an
+    # ordinary blip would retry after the flat 1 s sleep below and deepen the
+    # limit. It needs its own branch, not this set.
+    "TelegramServerError",
+})
+
+#: How many CONSECUTIVE transient failures stop being weather and become an
+#: outage. A success resets the count, so isolated hourly blips never escalate.
+_TRANSIENT_ESCALATE_AFTER = 3
+
+
+def _is_transient_poll_error(exc: BaseException) -> bool:
+    """True if *exc* is a network hiccup on the long poll rather than a fault.
+
+    Prod logged ~24 of these a day (`ClientOSError: [Errno 104] Connection reset
+    by peer`), each an ERROR with a full traceback that polling recovered from a
+    second later. A traceback that is always noise is how a real one gets
+    skipped, so these get one concise line until a STREAK says polling is
+    genuinely down (:data:`_TRANSIENT_ESCALATE_AFTER`). aiogram wraps the socket
+    error, so the ``__cause__``/``__context__`` chain is walked too.
+    """
+    seen = 0
+    cur: BaseException | None = exc
+    while cur is not None and seen < 5:
+        if type(cur).__name__ in _TRANSIENT_POLL_ERROR_NAMES:
+            return True
+        cur = cur.__cause__ or cur.__context__
+        seen += 1
+    # aiogram's message keeps the wrapped type's name when nothing is chained.
+    text = str(exc)
+    return any(name in text for name in _TRANSIENT_POLL_ERROR_NAMES)
 
 
 def _is_conflict_error(exc: Exception) -> bool:
@@ -102,28 +154,37 @@ _USAGE = {
     "/pause": "[word…] [for 6h]",
     "/resume": "[word…]",
     "/missed": "[n]",
+    "/run": "[pause|resume|stop <n>]",
     "/inbox": "[n]",
     "/fulfill": "<id> [what you want to tell the run]",
-    "/cron": "[list|show|add|cancel]",
-    "/goal": "<show|ready|pause|resume|retry|cancel> <id>",
+    "/cron": "[list|show|add|edit|cancel]",
+    "/goal": "<show|ready|pause|resume|retry|cancel [--once]|allow> <id>",
+    "/rail": "[show|new|edit|on|off|drop|grant|revoke|grants|templates|proposals|accept|dismiss] [name]",
     "/apps": "[list|show|approve|reject|kill|logs <slug>]",
     "/mcp": "[add <id> <url>|remove <id>|test <id>]",
     "/recap": "[window]",
     "/journey": "[window]",
-    "/wallet": "[balances]",
+    "/wallet": "[balances|tokens]",
+    "/writeoff": "<chain> <address> [go] [reason]",
+    "/unquarantine": "<chain> <address> [go]",
     "/invoices": "[status]",
     "/settle": "<id> [tx]",
     "/trade": "<what to do>",
     "/bridge": "<from> <to> <amount> [as <asset>] [go]",
     "/lp": "positions|pool|quote|add|remove|collect",
     "/launch": "<SYMBOL> <name…> [logo <url>] [desc <text>] [buy <amount>] [go]",
-    "/deploy": "<SYMBOL> <supply> <name…> [on <chain>] [decimals <n>] "
-               "[vanity <hex>] [salt <hex>] [go]",
+    "/deploy": "<SYMBOL> <supply> <name…> [on <chain>] [decimals <n>] [go]",
     "/claim": "<token> [go]",
-    "/nft": "list|info <contract> <id>|transfer <contract> <id> <to> [go]|"
+    "/pay": "<url> [max_usd] [go] [id=<name>]",
+    "/send": "<amount> <native|token-address> to <address> on <chain> [max <usd>] [go]",
+    "/swap": "<amount> <native|token> to <token> on <chain> [slippage <bps>] [max <usd>] [go]",
+    "/cards": "[<id> ok|no|re|1-6]",
+    "/nft": "[send <id> <to> [go]]|list|info <contract> <id>|transfer <contract> <id> <to> [go]|"
             "revoke <contract> <operator> [go]",
     "/dapp": "list|revoke <id>",
     "/contacts": "[<surface> <address>]",
+    "/why": "[n]",
+    "/thread": "[n | <hours>h]",
     "/identity": "register|set-uri [go]",
     "/allow": "<surface> <target>",
     "/deny": "<surface> <target>",
@@ -157,12 +218,14 @@ _DETAIL = {
                 "/pending review",),
     "/mcp": ("   https only; loads in every new session",),
     "/recap": ("   default 24h, e.g. 30m/24h/7d",),
-    "/bridge": ("   within your caps it runs and reports; above the line it "
-                "asks you first (quote only without `go`)",),
+    "/bridge": ("   quote only without `go`; your own `/bridge … go` passes the "
+                "autonomous ceiling and the pause — the per-tx and daily caps "
+                "still bind. A bridge I start above the ceiling asks you first",),
     "/launch": ("   quote only without `go`; a launch with no logo and no "
                 "description looks abandoned",),
     "/deploy": ("   quote only without `go`; no mint function, no owner",),
     "/claim": ("   collects creator fees the launchpad escrow already owes me",),
+    "/pay": ("   price only without `go`; pays in USDC on Base, never above max_usd",),
     "/identity": ("   mints THIS instance's ERC-8004 identity from my own "
                   "wallet; refuses if one already exists",),
     "/dev": ("   bare /dev = rail status",),
@@ -172,7 +235,9 @@ _DETAIL = {
 #: ``_COMMANDS`` row, so it has no table entry and its words live here.
 _SUBVERBS = {
     "/goal": ("/goal objective <list|pause|activate|drop> [id] — steer a whole stream",),
-    "/wallet": ("/wallet autonomous <usd> — how much runs without asking you",),
+    "/wallet": ("/wallet autonomous <usd> — how much runs without asking you",
+                "/wallet tokens — which tokens I trust, and what is quarantined",
+                "/wallet trust|untrust <chain> <address> [go] — your word on one token"),
 }
 
 #: The two verbs DELIBERATELY absent from the table (``core.verbs.
@@ -202,10 +267,13 @@ def _build_help_body() -> str:
     `/meter`) never reaches a Telegram message at all, so listing it here would
     answer "unknown command" to anyone who tried it.
     """
-    from core.verbs import grouped
+    from core.verbs import GROUP_ORDER, empty_group_hints, grouped
+    body = dict(grouped(_SEAT))
+    hints = dict(empty_group_hints(_SEAT))    # 067 P5a: "install the wallet pack"
     lines = []
-    for group, verbs in grouped(_SEAT):
-        rows = []
+    for group in GROUP_ORDER:
+        verbs = body.get(group, ())
+        rows = [f"  {hints[group]}"] if group in hints else []
         for verb in verbs:
             rows.append(_help_line(verb.name, _USAGE.get(verb.name, ""),
                                    verb.help))
@@ -311,14 +379,16 @@ _OWNER_ADMIN_COMMANDS = ("/inbox", "/book",
                          "/groups", "/mute",  # 044 T18: room presence admin
                          "/paid",             # 046: paid room actions
                          "/unmute", "/ban", "/unban",   # 046 phase 2
-                         "/halt", "/resume", "/pause",
-                         "/cron", "/goal", "/wallet", "/invoices", "/settle",
+                         "/halt", "/resume", "/pause", "/run",
+                         "/cron", "/goal", "/rail", "/wallet", "/invoices", "/settle",
                          "/trade", "/bridge", "/launch", "/deploy", "/lp",
-                         "/claim", "/nft", "/dapp", "/identity", "/contacts",
+                         "/claim", "/pay", "/nft", "/dapp", "/identity", "/contacts", "/thread",
+                         "/why",
                          "/status", "/mode", "/recap", "/journey", "/goals", "/prefs", "/config",
                          "/avatar", "/cwd",
                          "/missed", "/apps", "/mcp",
-                         "/kb", "/files", "/dev")
+                         "/kb", "/files", "/dev",
+                         "/cards")  # 2026-09-27: action cards (core/surfaces/cards.py)
 
 #: 044 I10 (spec §6.1 P9/P10): owner verbs that may NOT execute from inside a
 #: room, whoever is watching. Money (`/trade /wallet /bridge /deploy /launch
@@ -350,22 +420,36 @@ _OWNER_ADMIN_COMMANDS = ("/inbox", "/book",
 #: join `/trade` and the rest for the same reason they did.
 _ROOM_REFUSED_COMMANDS = frozenset({
     "/trade", "/wallet", "/deploy", "/lp", "/launch", "/bridge", "/dev",
-    "/claim", "/nft", "/dapp", "/identity",
+    "/claim", "/pay", "/nft", "/dapp", "/identity",
     "/pause", "/halt", "/resume", "/approve", "/reject",
+    "/run",       # 070: pauses or stops one run — autonomy control, never from a room
     "/allow", "/deny", "/config", "/prefs", "/mcp", "/apps",
     "/invoices", "/settle",
     "/cron", "/goal", "/fulfill",
+    "/rail",      # 036: grants a tool to standing work — never from a room
     "/contacts",
+    "/thread",    # 061: the ONE owner transcript, every rail and seat
+    "/why",       # O10: refusal details name tools, amounts and addresses
+    "/send",      # the owner's wallet send — never from a room
+    "/swap",      # the owner's wallet swap — never from a room
+    "/writeoff", "/unquarantine",  # W1: a holding's lifecycle, owner seat
+    "/cards",     # a card confirm runs a money line — never from a room
+    "/check",     # 071: an owner read; in a room the agent answers via wallet_holdings
 })
 
-#: 044 T1: the owner stop gate runs ONLY on a routed turn. DENIED (a silent
-#: group denial), COMMAND (its own path) and CORRESPONDENT_DATA never qualify.
-#: GROUP_TURN does (044 T14): the owner's steer in a ROOM routes GROUP_TURN
-#: instead of STEER, and the deterministic stop gate must still run before any
-#: model call. It is owner-gated at the call site, so a member's GROUP_TURN
-#: never reaches it.
-_INTENT_GATE_KINDS = frozenset({RouteKind.STEER, RouteKind.TASK_AGENT,
-                                RouteKind.GROUP_TURN})
+
+def _owner_verbs() -> frozenset:
+    """The owner verbs this seat runs: its own tuple plus every verb a pack
+    contributed (``core.verbs.register_verbs``, 067 P5a)."""
+    from core.verbs import routed_names
+    return frozenset(_OWNER_ADMIN_COMMANDS) | routed_names()
+
+
+def _room_refused(cmd: str) -> bool:
+    """044 I10 over the union: this seat's set, plus every contributed verb
+    its contributor did not declare room-safe."""
+    from core.verbs import room_refused
+    return cmd in _ROOM_REFUSED_COMMANDS or room_refused(cmd)
 
 _TURN_KINDS = frozenset({RouteKind.STEER, RouteKind.TASK_AGENT,
                          RouteKind.CHAT_FASTPATH, RouteKind.CORRESPONDENT_DATA,
@@ -378,38 +462,15 @@ def _route_is_turn(decision) -> bool:
 
 
 def help_commands() -> list:
-    """``(command, description)`` pairs parsed from the ``_HELP_BODY`` SSOT.
+    """``(command, description)`` pairs for Telegram's ``setMyCommands`` "/" menu.
 
-    Feeds Telegram's ``setMyCommands`` so the phone gets a real "/" menu with
-    autocomplete instead of the owner having to remember every verb. Sourced from
-    the help text rather than a second list, so the menu can never drift from it
-    (chat-first review 2026-08-22, G12).
+    064 F2: rendered by the ONE pure menu function, ``core.verbs.menu_entries``,
+    from the same table and local rows as ``/help`` — so the menu can never drift
+    from it, and a duplicate name (which makes ``setMyCommands`` reject the WHOLE
+    menu) is dropped there, first occurrence kept.
     """
-    out = []
-    seen = set()
-    for line in _HELP_BODY.splitlines():
-        if not line.startswith("/"):
-            continue
-        head, _, desc = line.partition(" — ")
-        name = head.split()[0].lstrip("/").strip()
-        desc = desc.strip()
-        if not name or not desc:
-            continue
-        # Telegram: lowercase a-z/0-9/_ only, and a 256-char description cap.
-        if not name.replace("_", "").isalnum() or not name.islower():
-            continue
-        # A help line for a SUBVERB of an existing top-level command (e.g.
-        # "/goal objective ..." under "/goal ...") parses to the same command
-        # name. Telegram's setMyCommands rejects a duplicate name in the whole
-        # call, and _publish_command_menu wraps that call in a broad
-        # `except Exception: logger.debug(...)` — so one duplicate would
-        # silently stop the ENTIRE menu from refreshing, not just this entry.
-        # Keep the first (top-level) occurrence; do not "simplify" this away.
-        if name in seen:
-            continue
-        seen.add(name)
-        out.append((name, desc[:256]))
-    return out
+    from core.verbs import menu_entries
+    return menu_entries(_SEAT, _LOCAL_ROWS)
 
 
 #: How many chats the "/" menu is published to at start. An allowlist is a
@@ -771,6 +832,122 @@ from surfaces.telegram.room_turn import (  # noqa: E402
 )
 
 
+#: Commands that DECIDE something and so belong in the owner thread. A read-only
+#: verb (`/status`, `/help`, `/recap`) is a display, not a line of conversation.
+_THREAD_COMMANDS = frozenset({
+    "/approve", "/reject", "/fulfill", "/pause", "/resume", "/halt", "/cancel",
+    "/new", "/task", "/trade", "/deploy", "/launch", "/claim", "/bridge", "/pay",
+    "/send", "/swap",
+})
+
+
+#: 061: how many owner-thread hooks failed in this process, by hook — the
+#: honest residue of a fail-open write (the status silence ratchet forbids a
+#: handler that only logs; a counter is something a seat can render).
+_THREAD_SKIPS: dict = {"inbound": 0, "referent": 0}
+
+
+def _note_thread_skip(hook: str) -> None:
+    _THREAD_SKIPS[hook] = _THREAD_SKIPS.get(hook, 0) + 1
+    logger.warning("telegram: owner thread %s hook skipped (fail-open, %d so far)",
+                   hook, _THREAD_SKIPS[hook], exc_info=True)
+
+
+def _inbound_mid(result: InboundResult) -> str:
+    try:
+        raw = result.inbound.raw or {}
+        mid = ((raw.get("message") or {}).get("message_id")) if isinstance(raw, dict) else None
+        return str(mid) if mid is not None else ""
+    except Exception:
+        return ""
+
+
+def _record_owner_line(task_agent: Any, result: InboundResult, *, session_id: str,
+                       kind: str) -> None:
+    """061: record an accepted owner DM line in the ONE owner thread. Fail-open."""
+    try:
+        inbound = result.inbound
+        if (inbound.identity.source.chat_type or "dm") != "dm":
+            return
+        tier = getattr(result.decision, "tier", None)
+        if tier not in (None, "owner"):
+            return
+        text = (inbound.text or "").strip()
+        if kind == "command":
+            _c = (result.decision.command or "").lower()
+            # An action-card tap (/card_<id>_<act>) is a decision too: a Confirm
+            # runs a money line, a pick answers the agent.
+            if _c not in _THREAD_COMMANDS and not _c.startswith("/card_"):
+                return
+        elif not text:
+            # An attachment-only turn is still a line: name the media.
+            names = [getattr(m, "filename", None) or getattr(m, "kind", "file")
+                     for m in (inbound.media or [])]
+            text = " ".join(f"[{n}]" for n in names) if names else ""
+            if not text:
+                return
+        from core.surfaces.owner_thread import record_owner_in
+        # `via` is the surface the line ACTUALLY travelled on — this harness
+        # serves several chat surfaces, so "telegram" would be a lie elsewhere.
+        via = str(getattr(getattr(inbound.identity, "source", None), "surface_id", "") or "telegram")
+        via = "console" if via == "webview" else via
+        record_owner_in(getattr(task_agent, "container", None),
+                        inbound.identity.user_id, text, via=via,
+                        session_id=session_id or "", mid=_inbound_mid(result),
+                        reply_to_mid=inbound.reply_to or None, kind=kind)
+    except Exception:
+        _note_thread_skip("inbound")
+
+
+def _stamp_fresh_referent(task_agent: Any, result: InboundResult, session_id: str) -> None:
+    """061: a quote-reply that opens a FRESH session carries its referent onto
+    the orchestrator; the first-step injector renders it. Fail-open."""
+    try:
+        if not result.inbound.reply_to:
+            return
+        orch = task_agent.get_orchestrator(session_id) if hasattr(task_agent, "get_orchestrator") else None
+        if orch is not None:
+            via = result.inbound.identity.source.surface_id or "telegram"
+            orch._owner_thread_reply_to = (via, str(result.inbound.reply_to))
+    except Exception:
+        _note_thread_skip("referent")
+
+
+def _with_forwarded(result: Any, metadata: Optional[dict]) -> Optional[dict]:
+    """CR-L22: a FORWARDED body taints the turn it lands in.
+
+    `inbound.py` frames the body as quoted data (H06); the frame alone left the
+    money / high-impact verbs open on a turn whose words are a third party's.
+    The flag rides the QUEUED message's own metadata so the drain
+    (``agents/task/agent/core/user_ingress.py::_update_forged_turn_marker``)
+    taints exactly the batch that carries it — never a rejected submission.
+    """
+    if not getattr(getattr(result, "inbound", None), "forwarded", False):
+        return metadata
+    return {**(metadata or {}), "forwarded": True}
+
+
+def _taint_forwarded_seed(task_agent: Any, result: Any, session_id: str) -> None:
+    """CR-L22: turn 1's seed task bypasses the queue, so a forwarded cold start
+    taints the fresh orchestrator directly. The initial drain cannot clear it:
+    every message the harness queues for this turn carries ``forwarded`` too."""
+    if not getattr(getattr(result, "inbound", None), "forwarded", False):
+        return
+    get_orch = getattr(task_agent, "get_orchestrator", None)
+    orch = get_orch(session_id) if callable(get_orch) else None
+    if orch is None:
+        logger.warning("telegram: forwarded cold start %s has no resident "
+                       "orchestrator to taint", session_id)
+        return
+    try:
+        orch._set_correspondent_taint("telegram", "forwarded")
+    except Exception as e:
+        # Fail closed: the flag alone is what the capability gate reads.
+        orch._correspondent_tainted = True
+        logger.warning("telegram: forwarded cold start %s tainted without its "
+                       "source record: %s", session_id, e)
+
+
 async def _start_task_session(task_agent: Any, result: InboundResult, spawn, deliver=None,
                               fetch_media=None) -> None:
     """create_session with the binding kwargs, then run it AND deliver its reply."""
@@ -806,6 +983,10 @@ async def _start_task_session(task_agent: Any, result: InboundResult, spawn, del
     )
     session_id = info.get("id") if isinstance(info, dict) else getattr(info, "id", None)
     if session_id:
+        _taint_forwarded_seed(task_agent, result, str(session_id))
+        if room_turn is None:
+            _record_owner_line(task_agent, result, session_id=str(session_id), kind="comment")
+            _stamp_fresh_referent(task_agent, result, str(session_id))
         if room_turn is not None:
             # The SAME rail the warm turn uses, so turn 1 is neither unframed nor
             # durably stored. ⚠️ `create_session` builds and initializes the
@@ -861,7 +1042,8 @@ async def _start_task_session(task_agent: Any, result: InboundResult, spawn, del
         if _room_absorbs_media(result):
             await queue_attachments_for_new_session(
                 task_agent, result, session_id, fetch_media,
-                extra_metadata=({"reply_to": _anchor} if _anchor is not None else None),
+                extra_metadata=_with_forwarded(
+                    result, {"reply_to": _anchor} if _anchor is not None else None),
             )
         _spawn(_run_and_deliver(task_agent, session_user_id, session_id, deliver,
                                 notice_key=result.decision.session_key), spawn)
@@ -887,8 +1069,10 @@ async def _send_photo_best_effort(task_agent: Any, result: Any, path: str) -> bo
                           "chat_id", None)
         if not chat_id:
             return False
+        # An SVG avatar is not a Telegram photo; it goes as a file.
+        kind = "document" if str(path).lower().endswith(".svg") else "image"
         await router.send_message(str(chat_id), "", surface_id="telegram",
-                                  media=[{"kind": "image", "path": str(path),
+                                  media=[{"kind": kind, "path": str(path),
                                           "caption": None}])
         return True
     except Exception:
@@ -1307,7 +1491,10 @@ def _config_reply(user_id: str, data_dir: str, instance_id: str, args: list) -> 
         return (f"'{key}' is guarded — queued for review (not written yet).\n"
                 "See /pending, approve with /approve <id> (or /reject <id>).")
     applies = f" (applies: {res.applies})" if res.applies else ""
-    return f"✅ Set {key} = {value}{applies}."
+    # The honesty notes (where the write applies, a shadowing value, a clamp)
+    # are the part of the answer the owner cannot see any other way.
+    notes = "".join(f"\n{n}" for n in (getattr(res, "notes", None) or ()))
+    return f"✅ Set {key} = {value}{applies}.{notes}"
 
 
 async def _kb_reply(user_id: str, query: str) -> str:
@@ -1414,14 +1601,21 @@ def _pause_reply(data_dir: str, cmd: str, args: list) -> str:
     return render_pause_result(res, resume_hint="/resume")
 
 
+#: A16/O17: what `/cancel` reaches. It stops the task bound to THIS chat; the
+#: goal and cron loops are separate runs and keep going. Shared by the REPL.
+CANCEL_REACH = ("This stops this chat's task only; goals and scheduled runs keep "
+                "going — /pause stops those.")
+
+
 def _mode_reply() -> str:
     """`/mode` — JUST the effective-posture card + how to change it (030 WS-E4,
     read-only v1).
 
     `/status` already embeds the card inside a long snapshot; `/mode` answers
     the single question "what may this instance do right now, and why" with
-    nothing else around it. Writes stay on the CLI seat: `/config set` is
-    prefs-only from chat, and mode/posture are env flags.
+    nothing else around it. `/config set` writes preferences AND the flag keys
+    the config oracle allows from chat (the master switch); mode and posture
+    are refused remotely, so the copy says they need the server.
     """
     lines = ["Effective posture (all axes):"]
     try:
@@ -1432,9 +1626,14 @@ def _mode_reply() -> str:
         return ("I could not read my own posture card. Ask me again in a "
                 "moment, or run `polyrob autonomy status` on my box.")
     lines.append("")
-    lines.append("To change: `/config set` is prefs-only; mode/posture are env "
-                 "flags — `polyrob autonomy on|off [--mode supervised|autonomous]` "
-                 "(restart applies). Live pause: /pause and /resume.")
+    # A11: `/config set` is NOT prefs-only — it writes the flag keys the
+    # oracle (core.config_service.set_value, surface="telegram") allows. The
+    # master switch is one of them; the capability mode and the postures are
+    # refused on every remote surface, so they need the server.
+    lines.append("To change: `/config set AUTONOMY_ENABLED true|false` turns the "
+                 "master on or off from here (applies on the next restart). The "
+                 "capability mode and the postures need the server. Live pause: "
+                 "/pause and /resume.")
     return "\n".join(lines)
 
 
@@ -1536,42 +1735,14 @@ async def _decide_pending_item(task_agent: Any, item: dict, *, approve: bool,
                           board=board, task_agent=task_agent)
 
 
-async def _handle_plain_pending_decision(task_agent: Any,
-                                         result: InboundResult) -> Optional[str]:
-    """The owner replied "approve" / "reject" in words. Decide, or return None.
-
-    Returns ``None`` — the message goes to the agent untouched — whenever the
-    text is not unambiguously a decision, the chat is a room, or nothing is
-    waiting. A decision word with an empty queue is just a word.
-    """
-    from core.surfaces.owner_admin import parse_pending_decision
-    from core.surfaces.room_keys import is_group_session_key
-
-    if is_group_session_key(getattr(result.decision, "session_key", "")):
-        return None
-    parsed = parse_pending_decision(getattr(result.inbound, "text", "") or "")
-    if parsed is None:
-        return None
-    verb, target = parsed
-    user_id = result.inbound.identity.user_id
-    data_dir = _admin_data_dir(task_agent)
-    from core.instance import resolve_instance_id
-    from agents.task.goals.board import GoalBoard
-    board = GoalBoard(os.path.join(data_dir, "goals.db"))
-    pending = _pending_set(user_id, data_dir, resolve_instance_id(), board)
-    if not pending.items:
-        # Nothing to decide, so this was conversation. Say nothing and let the
-        # agent answer — a bare "approve" over an empty queue must not become a
-        # confident "nothing is waiting on you" that ends the turn.
-        return None
-    # Reuse the ONE handler, so the word and the tap take the identical path.
-    # On a COPY: the owner's real words stay intact for the session record and
-    # for anything downstream that reads them.
-    import copy as _copy
-    as_command = _copy.copy(result)
-    as_command.inbound = _copy.copy(result.inbound)
-    as_command.inbound.text = f"{verb} {target}" if target else verb
-    return await _handle_owner_admin(task_agent, as_command, verb)
+async def _run_contributed(ref: str, **call) -> str:
+    """Resolve a contributed ``module:attr`` handler and run it (awaiting a
+    coroutine result)."""
+    import importlib
+    import inspect
+    mod, _, attr = ref.partition(":")
+    out = getattr(importlib.import_module(mod), attr)(**call)
+    return await out if inspect.isawaitable(out) else out
 
 
 async def _handle_owner_admin(task_agent: Any, result: InboundResult, cmd: str) -> str:
@@ -1635,6 +1806,15 @@ async def _handle_owner_admin(task_agent: Any, result: InboundResult, cmd: str) 
         args = [_tap]
     board = GoalBoard(os.path.join(data_dir, "goals.db"))
 
+    # 067 P5a: a verb a pack contributed WITH a Telegram handler runs here, after
+    # the owner gate (convention: ``core.verbs`` KNOWN_SEATS). Today's money
+    # verbs carry no reference, so their branches below still run them.
+    from core.verbs import handler_ref
+    _ref = handler_ref(_SEAT, cmd)
+    if _ref is not None:
+        return await _run_contributed(_ref, user_id=user_id, data_dir=data_dir, args=args,
+                                      task_agent=task_agent, result=result, board=board)
+
     if cmd == "/status":
         return await _status_reply(task_agent, user_id, result.decision.session_id,
                                    data_dir, board=board)
@@ -1648,19 +1828,30 @@ async def _handle_owner_admin(task_agent: Any, result: InboundResult, cmd: str) 
         return "\n".join(header) + "\n" + _recap_reply(user_id, data_dir, args)
 
     if cmd == "/avatar":
-        # Read-only. The photo rides the SAME media rail the invoice card uses
-        # (MessageRouter), best-effort: if no router is reachable the text still
-        # answers, naming the file, rather than failing the verb.
+        # show / set <url|nft:…> / clear. The image rides the SAME media rail the
+        # invoice card uses (MessageRouter), best-effort: if no router is
+        # reachable the text still answers rather than failing the verb.
+        # `/avatar set` fetches over the network, so it runs off the poll loop
+        # (`_runs_in_background`).
         # ⚠️ `owner_ops` is imported LAZILY further down this function, after
         # this branch, so it must be imported here rather than assumed.
         from surfaces.telegram import owner_ops as _owner_ops
-        text, png = _owner_ops.avatar_reply(data_dir, args)
-        if png:
-            await _send_photo_best_effort(task_agent, result, png)
+        if args and args[0].lower() in ("set", "clear"):
+            text, img = await _owner_ops.avatar_change(data_dir, args)
+        else:
+            text, img = _owner_ops.avatar_reply(data_dir, args)
+        if img:
+            await _send_photo_best_effort(task_agent, result, img)
         return text
 
     if cmd == "/missed":
         return _missed_reply(user_id, data_dir, args)
+
+    if cmd == "/run":  # 070: one background run — the core.run_control SSOT
+        from agents.task.path import pm
+        from core.run_control import run_reply
+        return await run_reply(user_id, data_dir, str(pm().data_root), args,
+                               exclude=(result.decision.session_id,))
 
     if cmd == "/goals":
         return _pause_line(data_dir) + "\n" + _goals_reply(user_id, data_dir, board=board)
@@ -1703,6 +1894,13 @@ async def _handle_owner_admin(task_agent: Any, result: InboundResult, cmd: str) 
     if cmd == "/claim":
         from surfaces.telegram.claim_ops import claim_reply
         return await claim_reply(user_id, args)
+    if cmd == "/pay":
+        from surfaces.telegram.pay_ops import pay_reply
+        # 068 B9: the update_id names this command — stable across a
+        # re-delivery, new for every new /pay message.
+        _key = getattr(result.inbound, "idempotency_key", None)
+        return await pay_reply(user_id, args,
+                               request_id=(f"tg:{_key}" if _key else None))
     if cmd == "/nft":
         from surfaces.telegram.nft_ops import nft_reply
         return await nft_reply(user_id, args)
@@ -1712,12 +1910,26 @@ async def _handle_owner_admin(task_agent: Any, result: InboundResult, cmd: str) 
     if cmd == "/identity":
         from surfaces.telegram.identity_ops import identity_reply
         return await identity_reply(user_id, data_dir, args)
+    if cmd == "/why":
+        from surfaces.telegram.why_ops import why_reply
+        return why_reply(user_id, data_dir, args)
     if cmd == "/contacts":
         from surfaces.telegram.contacts_ops import contacts_reply
         return contacts_reply(user_id, data_dir, args,
                               container=getattr(task_agent, "container", None))
+    if cmd == "/thread":
+        # 061: the ONE owner transcript (every rail, every seat).
+        from surfaces.telegram.history_ops import history_reply
+        return history_reply(user_id, data_dir, args,
+                             container=getattr(task_agent, "container", None))
     if cmd == "/cwd":
         return _cwd_reply()
+    if cmd == "/rail":
+        # 036: standing work is configuration the owner sets up from here.
+        from surfaces.telegram.rail_ops import rail_reply
+        _src = getattr(getattr(result.inbound, "identity", None), "source", None)
+        return rail_reply(user_id, data_dir, args, board=board,
+                          seat=str(getattr(_src, "surface_id", "") or "telegram"))
 
     if cmd in ("/cron", "/goal", "/wallet", "/invoices", "/settle", "/trade",
                "/bridge", "/mcp", "/launch", "/deploy", "/lp"):
@@ -1874,8 +2086,9 @@ async def _handle_owner_admin(task_agent: Any, result: InboundResult, cmd: str) 
         # Tool-approval asks have their OWN dedicated surface (/pending +
         # /approve /reject, tap-<id>) — excluded here so a payment request
         # doesn't show twice under two different id shapes.
+        from core.goal_vocab import has_own_surface
         rows = [a for a in board.asks(user_id=user_id, status=ASK_OPEN)
-                if (a.payload or {}).get("ask_kind") != "tool_approval"]
+                if not has_own_surface(a.payload or {})]
         if not rows:
             return "No open asks — nothing is blocked on you."
         lines = [f"{len(rows)} open ask(s):"]
@@ -1890,6 +2103,16 @@ async def _handle_owner_admin(task_agent: Any, result: InboundResult, cmd: str) 
         return "\n".join(lines)
 
     if cmd == "/fulfill":
+        _opt_ask, _opt_letter = _parse_ask_option(result.inbound.text)
+        if _opt_ask:
+            # O14/A4: a tapped option is the owner's TYPED answer: the text is
+            # the option the ask stored when it was raised, never a paraphrase.
+            _ask = board.get(_opt_ask)
+            _opts = ((_ask.payload or {}).get("options") or {}) if (
+                _ask is not None and _ask.user_id == user_id) else {}
+            if _opt_letter not in _opts:
+                return f"No open ask '{_opt_ask}' with option {_opt_letter} — see /asks."
+            args = [_opt_ask, f"{_opt_letter}) {_opts[_opt_letter]}"]
         if not args:
             return "Usage: /fulfill <ask-id> [your answer]  (see /asks)"
         # A27/D-followup: the owner's written ANSWER rides with the decision.
@@ -1978,6 +2201,23 @@ def _room_member_help(task_agent: Any, result: InboundResult):
     return CommandReply(text, to_room=True)
 
 
+#: Strong refs for owner commands running off the poll loop (see _handle_command).
+_BACKGROUND_COMMANDS: set = set()
+
+
+def _runs_in_background(cmd: str, result: InboundResult) -> bool:
+    """An owner verb that may wait minutes: an EXECUTING `/bridge` (it may wait
+    on the owner's tap) or `/send` (it waits up to 120 s for a receipt). Only
+    with a trailing `go`: the bare form is a quote and answers inline. Also
+    `/avatar set`, which fetches an image (or an NFT's metadata) off the box."""
+    words = (result.inbound.text or "").split()
+    if cmd == "/avatar":  # `/avatar set <url|nft:…>` fetches over the network
+        return len(words) > 1 and words[1].lower() == "set"
+    if cmd not in ("/bridge", "/send", "/swap"):
+        return False
+    return bool(words) and words[-1].lower() in ("go", "execute", "confirm")
+
+
 async def _handle_command(task_agent: Any, result: InboundResult, spawn, deliver=None,
                           fetch_media=None) -> Optional[str]:
     cmd = (result.decision.command or "").lower()
@@ -1996,26 +2236,61 @@ async def _handle_command(task_agent: Any, result: InboundResult, spawn, deliver
         return _help_text()
     if cmd == "/start":
         return _welcome_text()
-    if cmd not in _OWNER_ADMIN_COMMANDS:
+    if cmd not in _owner_verbs():
         # `/approve_tap_<hex>` arrives as its own command token, not as
         # `/approve` + an argument, so it must be mapped back before dispatch.
         _verb, _tap = normalize_tappable_command(result.inbound.text)
         if _verb and _tap:
             cmd = _verb
+        elif _parse_ask_option(result.inbound.text)[0]:
+            cmd = "/fulfill"   # O14: an owner-ask answer button (/fulfill_<id>_<letter>)
+    from surfaces.telegram import card_ops
+    if card_ops.is_card_command(result.inbound.text):
+        cmd = "/cards"     # a card tap (/card_<id>_<act>) or the /cards list
     # 044 I10 (spec §6.1 P9/P10): the owner's money, host and control verbs are
     # not room verbs. They EXECUTED from inside a room — the reply was redirected
     # to his DM, but the ACTION ran, so a member who talked the owner into typing
     # `/trade …` got it. The room is also the one place a shoulder-surfer or a
     # screen-share is guaranteed. One sentence, to the DM, naming where to do it.
     from core.surfaces.room_keys import is_group_session_key
-    if is_group_session_key(result.decision.session_key) and cmd in _ROOM_REFUSED_COMMANDS:
+    if is_group_session_key(result.decision.session_key) and _room_refused(cmd):
         logger.info("telegram: %s refused from room %s", cmd,
                     result.decision.session_key)
         return (f"🔒 `{cmd}` is not available from a group chat — do this in our "
                 f"private chat.")
-    if cmd in _OWNER_ADMIN_COMMANDS:
+    if cmd in _owner_verbs() and deliver is not None and _runs_in_background(cmd, result):
+        # An EXECUTING bridge can wait minutes for the owner's /approve tap, and
+        # this runs on the poll loop: awaiting it here means the tap is never
+        # read (2026-09-25: the whole bot froze on `/bridge … go`). Run it off
+        # the loop and deliver the report when it lands.
+        async def _run_and_report():
+            try:
+                text = await _handle_owner_admin(task_agent, result, cmd)
+            except Exception as e:
+                logger.error("owner admin command %s failed: %s", cmd, e, exc_info=True)
+                text = f"Command failed: {str(e)[:200]} (details in the server log)"
+            if text:
+                await deliver(text)
+
+        from core.async_bridge import spawn_retained
+        spawn_retained(_run_and_report(), _BACKGROUND_COMMANDS)
+        # Name the verb that is running: `/send … go` got "Bridge started" and
+        # the owner asked what was going on (2026-09-26). An owner's own `go` is
+        # not held by the autonomous ceiling, so there is nothing to approve.
+        if cmd == "/avatar":
+            return "⏳ Fetching the image — I will send the result here."
+        what = {"/send": "Send", "/swap": "Swap"}.get(cmd, "Bridge")
+        return (f"⏳ {what} started — I will send the result here "
+                f"(it can take up to two minutes to confirm).")
+    if cmd == "/cards":
+        # Owner-gated inside; a confirm re-enters this function with the line
+        # the card carries, so it meets every gate above and below again.
+        return await card_ops.handle(task_agent, result, spawn, deliver, fetch_media)
+    if cmd in _owner_verbs():
         try:
-            return await _handle_owner_admin(task_agent, result, cmd)
+            return card_ops.carded(result.inbound.identity.user_id, cmd,
+                                   result.inbound.text,
+                                   await _handle_owner_admin(task_agent, result, cmd))
         except Exception as e:
             logger.error("owner admin command %s failed: %s", cmd, e, exc_info=True)
             # 030 C-14: cap + soften — raw exception text can carry absolute
@@ -2026,12 +2301,17 @@ async def _handle_command(task_agent: Any, result: InboundResult, spawn, deliver
             return _UNAUTHORIZED_TEXT
         sid = result.decision.session_id
         if sid:
+            # A16/O17: name the reach, and never claim a stop that did not happen.
             try:
-                await task_agent.cancel_session_by_id(sid, force=True)
+                stopped = await task_agent.cancel_session_by_id(sid, force=True)
             except Exception as e:
-                logger.debug("telegram /cancel failed: %s", e)
-            return "Task cancelled."
-        return "No active task to cancel."
+                logger.warning("telegram /cancel failed: %s", e, exc_info=True)
+                return (f"I could not stop the task ({type(e).__name__}); it may still "
+                        f"be running. {CANCEL_REACH}")
+            if stopped is False:
+                return f"Nothing was running in this chat to stop. {CANCEL_REACH}"
+            return f"Task cancelled. {CANCEL_REACH}"
+        return f"No active task to cancel. {CANCEL_REACH}"
     if cmd == "/new":
         if not _lifecycle_permitted(result):
             return _UNAUTHORIZED_TEXT
@@ -2107,6 +2387,16 @@ async def _act_on_inbound_locked(
     decision = result.decision
     kind = decision.kind
 
+    # 061: an accepted OWNER line in a DM joins the owner thread BEFORE the
+    # session sees it. A fresh session's line is recorded by
+    # `_start_task_session` (it needs the session id it mints); a room line is
+    # never the owner thread's (044); a command is recorded only when it DECIDES
+    # something (`/approve`, `/pause`…), never a read-only `/status`.
+    if kind in (RouteKind.STEER, RouteKind.COMMAND):
+        _record_owner_line(task_agent, result,
+                           session_id=decision.session_id if kind == RouteKind.STEER else "",
+                           kind="command" if kind == RouteKind.COMMAND else "comment")
+
     if kind == RouteKind.DENIED:
         # Ingress blocked (pairing required / not paired). NEVER run the agent on a
         # denied message — return a user-facing message (with the pairing code, if any)
@@ -2169,6 +2459,7 @@ async def _act_on_inbound_locked(
             _extra, _metadata = await absorb_for_session(
                 task_agent, result, decision.session_id, fetch_media, base_text="")
             turn = _with_attachment(turn, _extra)
+        _metadata = _with_forwarded(result, _metadata)
         status = "gone"
         try:
             status = await task_agent.deliver_group_turn(
@@ -2231,6 +2522,13 @@ async def _act_on_inbound_locked(
         _anchor = _room_reply_anchor(result)
         if _anchor is not None:
             _metadata = {**(_metadata or {}), "reply_to": _anchor}
+        # 061: a DM quote-reply names the exact line it answers; the drain
+        # resolves it against the owner thread (`_inject_owner_thread_referent`).
+        if result.inbound.reply_to and (result.inbound.identity.source.chat_type or "dm") == "dm":
+            _metadata = {**(_metadata or {}),
+                         "owner_thread_reply_to": [result.inbound.identity.source.surface_id or "telegram",
+                                                   str(result.inbound.reply_to)]}
+        _metadata = _with_forwarded(result, _metadata)
         try:
             status = await task_agent.ensure_session_and_deliver(
                 result.inbound.identity.user_id, decision.session_id,
@@ -2262,22 +2560,6 @@ async def _act_on_inbound_locked(
             # The queue is full, so THIS message was rejected (not enqueued) — be honest
             # rather than implying it'll be handled next. Don't double-spawn run_session
             # (one is already draining) and don't mint a fresh amnesiac session.
-            # 031: a SCOPED stop ("stop trading") that could not even be queued must
-            # not evaporate — pause everything as the safe default and say so.
-            if _is_admin_owner(result.inbound.identity.user_id):
-                from core.surfaces.owner_intent import owner_stop_intent
-                from surfaces.telegram.owner_intent_gate import handle_owner_intent
-                _intent = owner_stop_intent(result.inbound.text)
-                if _intent is not None and _intent.kind == "scoped":
-                    try:
-                        _reply = await handle_owner_intent(
-                            task_agent, result, _intent, _admin_data_dir(task_agent), busy=True)
-                        if _reply:
-                            return _reply
-                    except Exception as e:
-                        logger.error("telegram busy-branch pause failed: %s", e, exc_info=True)
-                        return (f"⚠️ Busy, and the safe-default pause failed "
-                                f"({type(e).__name__}: {str(e)[:120]}). Send /pause to force it.")
             return ("⏳ I'm still working through your earlier messages and can't take this "
                     "one yet — please send it again in a moment.")
         # status == "gone": truly gone (no on-disk metadata) -> a fresh session.
@@ -2320,6 +2602,9 @@ def _is_owner_groups_line(update: dict) -> bool:
     """
     try:
         msg = _tg_message(update)
+        from surfaces.telegram.inbound import is_forwarded
+        if is_forwarded(msg):  # H06: a forwarded `/groups` is not the owner's verb
+            return False
         text = str(msg.get("text") or "").strip()
         if not text:
             return False
@@ -2618,9 +2903,11 @@ class TelegramHarness:
         import asyncio
         self._running = True
         offset = None
+        transient_streak = 0
         while self._running:
             try:
                 updates = await self.bot.get_updates(offset=offset, timeout=self.poll_timeout)
+                transient_streak = 0
             except asyncio.CancelledError:
                 break
             except Exception as e:  # fail-open: a transient getUpdates error must not kill the loop
@@ -2636,7 +2923,24 @@ class TelegramHarness:
                         _CONFLICT_BACKOFF_SEC,
                     )
                     await asyncio.sleep(_CONFLICT_BACKOFF_SEC)
+                elif _is_transient_poll_error(e):
+                    # Weather until it is a streak: one concise line while the
+                    # next poll keeps recovering, the full traceback once
+                    # polling has stayed down (see _is_transient_poll_error).
+                    transient_streak += 1
+                    if transient_streak < _TRANSIENT_ESCALATE_AFTER:
+                        logger.warning(
+                            "telegram get_updates network blip (%s/%s): %s — retrying",
+                            transient_streak, _TRANSIENT_ESCALATE_AFTER, e)
+                    else:
+                        logger.error(
+                            "telegram get_updates failed %s times in a row — polling "
+                            "is down, not blipping: %s",
+                            transient_streak, e, exc_info=True)
+                    record_poll_error("telegram", e)
+                    await asyncio.sleep(1)
                 else:
+                    transient_streak = 0
                     logger.error("telegram get_updates failed: %s", e, exc_info=True)
                     record_poll_error("telegram", e)
                     await asyncio.sleep(1)
@@ -2845,6 +3149,11 @@ class TelegramHarness:
         """Process one raw Telegram update. Always returns {"ok": True} so a webhook
         gets a fast 200; errors are swallowed (fail-open)."""
         try:
+            if "callback_query" in update:  # 064 F2: a button press = the presser typing it
+                from surfaces.telegram.actions import accept_callback
+                update = await accept_callback(self.bot, update)
+                if update is None:
+                    return {"ok": True}
             # Owner-allowlist gate (raw Telegram id), BEFORE any side-effecting step.
             tg_id = _tg_user_id(update)
             if tg_id is None and _tg_chat_type(update) != "private" and not _is_channel_post(update):
@@ -3016,68 +3325,9 @@ class TelegramHarness:
                 await reporter.finish()
                 return {"ok": True}
 
-            # 031: deterministic owner stop/resume — BEFORE any model call, any
-            # queue, any tool. A full stop/resume is applied here from the text
-            # alone (voice included) and confirmed from the read-back state.
-            if (_is_admin_owner(result.inbound.identity.user_id)
-                    and getattr(result.decision, "kind", None) in _INTENT_GATE_KINDS):
-                from core.surfaces.owner_admin import owner_pause_phrases
-                from core.surfaces.owner_intent import owner_stop_intent
-                from surfaces.telegram.owner_intent_gate import handle_owner_intent
-                _dd = _admin_data_dir(self.task_agent)
-                _intent = owner_stop_intent(
-                    result.inbound.text,
-                    extra_phrases=owner_pause_phrases(result.inbound.identity.user_id, _dd))
-                _gate_reply = None
-                if _intent is not None:
-                    try:
-                        _gate_reply = await handle_owner_intent(self.task_agent, result, _intent, _dd)
-                    except Exception as e:
-                        # Never fall through to the model on a stop: say it failed.
-                        logger.error("telegram owner intent gate failed: %s", e, exc_info=True)
-                        _gate_reply = (f"⚠️ I could not apply that automatically "
-                                       f"({type(e).__name__}: {str(e)[:120]}). Send /pause to force it.")
-                if _gate_reply:
-                    await reporter.finish()
-                    # fix-1 (round 1 review): the gate's own confirmation/failure text
-                    # is owner-only output too — a room redirects it to the owner DM
-                    # instead of posting it publicly (this fires only for STEER /
-                    # TASK_AGENT / GROUP_TURN per _INTENT_GATE_KINDS — 044 T14 made
-                    # GROUP_TURN the owner's warm room kind — so it is never DENIED
-                    # here).
-                    from core.surfaces.room_keys import owner_only_reply_target
-                    _gate_target = owner_only_reply_target(result.decision.session_key, chat_id)
-                    if _gate_target is None:
-                        logger.warning("owner-only reply dropped: room key %s and no owner "
-                                       "telegram id", result.decision.session_key)
-                    else:
-                        await _send_telegram_text(self.bot, _gate_target, _gate_reply)
-                    return {"ok": True}
-
-            # 2026-09-15: the plain-word pending decision, on the same rail and
-            # for the same reason as the stop gate above — the pending notice
-            # asks the owner to "reply approve", and until now nothing read the
-            # reply. Owner-only, private chat only, and only while something is
-            # actually waiting; otherwise the word is ordinary chat and goes to
-            # the agent untouched.
-            if (_is_admin_owner(result.inbound.identity.user_id)
-                    and getattr(result.decision, "kind", None) in _INTENT_GATE_KINDS):
-                try:
-                    _decision_reply = await _handle_plain_pending_decision(
-                        self.task_agent, result)
-                except Exception as e:
-                    logger.error("telegram pending-decision gate failed: %s", e,
-                                 exc_info=True)
-                    _decision_reply = None
-                if _decision_reply:
-                    await reporter.finish()
-                    if chat_id:
-                        await _send_telegram_text(self.bot, chat_id, _decision_reply)
-                    return {"ok": True}
-
             # Persistent transcript echo (voice only): post '🎙️ Transcript: …' quoting the
             # voice note so the user sees what ROB heard, BEFORE the answer. Fail-open —
-            # never blocks the turn. Gated VOICE_TRANSCRIPT_ECHO (default ON).
+            # never blocks the turn. Gated by the owner pref voice.transcript_echo (default ON).
             from core.surfaces.voice_echo import voice_transcript, voice_echo_message
             from core.surfaces.config import SurfaceConfig
             if SurfaceConfig.voice_transcript_echo_enabled() and _is_turn:
@@ -3232,8 +3482,21 @@ class TelegramHarness:
                 if reply_to_room(reply) and _room_chat_id:
                     reply_chat_id = _room_chat_id
                 if reply_chat_id:
-                    await _send_telegram_text(self.bot, reply_chat_id,
-                                              reply_text(reply))
+                    from core.surfaces.actions import (DECISION_LIST_COMMANDS,
+                                                       actions_from_text)
+                    from surfaces.telegram import card_ops
+                    _cmd = getattr(result.decision, "command", None)
+                    _mid = await _send_telegram_text(  # 064 F2: /pending's own tokens as buttons
+                        self.bot, reply_chat_id, reply_text(reply),
+                        actions=(card_ops.reply_actions(reply)
+                                 or (actions_from_text(reply_text(reply))
+                                     if _cmd in DECISION_LIST_COMMANDS else None)))
+                    card_ops.record_ref(reply, reply_chat_id, _mid)
+                    # A tapped decision button is spent: take the keyboard off the
+                    # message it sat on, so it cannot be tapped again (064 F2
+                    # set `callback_of` for exactly this; nothing read it).
+                    await card_ops.retire_tapped_buttons(self.bot, update,
+                                                         reply_text(reply))
                     _media_failed = 0
                     for entry in reply_media(reply):
                         # Fail-open per entry, exactly like every other media
@@ -3281,17 +3544,24 @@ class TelegramBotSink:
     def __init__(self, bot):
         self._bot = bot
 
-    async def send_message(self, chat_id, text, media=None) -> bool:
+    async def send_message(self, chat_id, text, media=None, actions=None) -> bool:
+        res = await self.send_message_ex(chat_id, text, media=media, actions=actions)
+        return res.get("outcome") == "sent"
+
+    async def send_message_ex(self, chat_id, text, media=None, actions=None) -> dict:
+        """``{"outcome": "sent"|"failed", "message_id": <str|None>}`` — the shape
+        ``deliver_user_message`` reads so the owner thread can store the
+        Telegram message id a later quote-reply refers to (061)."""
         try:
             cid = int(chat_id) if str(chat_id).isdigit() else chat_id
-            await _send_telegram_text(self._bot, cid, text)
+            mid = await _send_telegram_text(self._bot, cid, text, actions=actions)
         except Exception:  # fail-open: delivery must never crash the caller
             logger.warning("TelegramBotSink.send_message failed for chat %s", chat_id,
                            exc_info=True)
-            return False
+            return {"outcome": "failed", "message_id": None}
         if media:
             await self._send_media(cid, media)
-        return True
+        return {"outcome": "sent", "message_id": str(mid) if mid is not None else None}
 
     async def _send_media(self, chat_id, media: list) -> None:
         try:
@@ -3350,6 +3620,12 @@ def build_telegram_harness(container, task_agent, *, token, webhook_base=None, b
             container.register_service("telegram_sink", TelegramBotSink(bot))
     except Exception:
         pass
+    # Action cards: a decided card is edited in place (no live stale buttons).
+    try:
+        from surfaces.telegram.card_ops import install_editor
+        install_editor(bot)
+    except Exception:
+        logger.debug("telegram: card editor not installed", exc_info=True)
 
     harness = TelegramHarness(
         bot, container, task_agent,

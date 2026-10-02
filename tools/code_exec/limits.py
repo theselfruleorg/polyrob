@@ -14,6 +14,7 @@ No imports beyond the stdlib — both the shell tool and the code-exec backends
 import this, and ``tools.shell`` already depends on ``tools.code_exec``.
 """
 import os
+from typing import Optional
 
 _DEFAULT_DEV_EXEC_MAX_TIMEOUT_SEC = 300.0
 
@@ -31,3 +32,21 @@ def dev_exec_max_timeout_sec() -> float:
         return max(1.0, float(raw))
     except ValueError:
         return _DEFAULT_DEV_EXEC_MAX_TIMEOUT_SEC
+
+
+def exec_timeout_cap(backend_max: float, ceiling: Optional[float]) -> float:
+    """The cap a backend clamps one request to.
+
+    A caller-owned ``ceiling`` (``ExecutionRequest.ceiling`` — ``run_tests``
+    passes :func:`dev_exec_max_timeout_sec`) may RAISE the backend's default
+    cap, never lower it. An explicit ``CODE_EXEC_MAX_TIMEOUT_SEC`` always wins,
+    so an operator's hard cap stays hard (coding-agent review B2: a real test
+    suite was cut at the 30 s ``run_code`` default).
+    """
+    raw = os.getenv("CODE_EXEC_MAX_TIMEOUT_SEC")
+    if ceiling is None or (raw is not None and raw.strip()):
+        return backend_max
+    try:
+        return max(backend_max, float(ceiling))
+    except (TypeError, ValueError):
+        return backend_max

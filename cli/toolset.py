@@ -31,6 +31,11 @@ def resolve_tool_list(
     caller does the echoing). ``user_id``/``home_dir`` default to None, so every
     pre-existing positional call (no pref file involved) stays byte-identical.
     """
+    # 067 P2 phase 2 before the default toolset reads the live gates (a pack tool's
+    # gate — e.g. the discovery pack's anysite — registers there): the CLI resolves
+    # its tool list before bootstrap registers the container tools. Once per process.
+    from core.packs.loader import load_packs
+    load_packs()
     from agents.task.tool_defaults import cli_default_tools, resolve_toolset
     from core.bootstrap import cli_unavailable_tools
 

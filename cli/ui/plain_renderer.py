@@ -376,6 +376,10 @@ class PlainRenderer(Renderer):
         )
         ctx = self._state.ctx_percent
         ctx_str = f" ctx={ctx:.0f}%" if ctx else ""
+        from cli.ui.statusbar import _cache_hit
+        cache_pct = _cache_hit(self._state)
+        # F18: only when the provider reported it; unknown stays off the line.
+        ctx_str += f" cache={cache_pct:.0f}%" if cache_pct > 0 else ""
         self._write(
             f"[status] {self._state.status}"
             f" step={self._state.step}"

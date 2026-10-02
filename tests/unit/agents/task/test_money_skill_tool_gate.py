@@ -140,8 +140,14 @@ def test_the_shipped_library_routes_the_queries_that_returned_nothing(monkeypatc
     sm = SkillManager()
     granted = ["defi_trade", "defi_data", "task"]
     for task in ("should I hunt on robinhood chain today",
-                 "reconcile the ledger",
+                 # 068 A1: bare "reconcile the ledger" is an accounting task too
+                 # ("reconcile the inventory ledger"); the trading form is named.
+                 "reconcile the trading ledger",
                  "bridge SOL to robinhood",
                  "check a solana memecoin"):
         ids = {m.skill_id for m in sm.get_skills_for_session(task=task, tool_ids=granted)}
-        assert "treasury-trading" in ids, f"{task!r} reaches no trading doctrine"
+        # 068 N4: the specific procedure (defi-bridge, robinhood-chain,
+        # position-journal, memecoin-scouting) outranks the generic playbook.
+        doctrine = {"treasury-trading", "defi-bridge", "robinhood-chain",
+                    "position-journal", "memecoin-scouting"}
+        assert ids & doctrine, f"{task!r} reaches no trading doctrine: {ids}"

@@ -3,8 +3,7 @@
 Single source of truth for the visual vocabulary of the Rich renderer:
 glyphs (icons), Rich style strings, and box styles.  Honours ``NO_COLOR``
 (https://no-color.org/) so the renderer can degrade gracefully on poorer
-terminals.  (Truecolor detection lives in ``cli/ui/terminal_render.py`` —
-the env-injectable ``supports_truecolor``.)
+terminals.
 
 No I/O beyond reading environment variables; no Rich rendering here — this
 module only provides the constants and small predicates ``blocks.py`` /

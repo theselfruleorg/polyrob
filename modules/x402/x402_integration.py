@@ -30,6 +30,34 @@ logger = logging.getLogger(__name__)
 from core.identity import generate_user_id_from_wallet  # noqa: F401
 
 
+# CR-M15: prepaid (per-request) billing is decided by THIS request having
+# settled an x402 payment, never by the stored profile tier. A wallet that paid
+# once is stored with tier='x402'; keying billing off that tier gave every later
+# SIWE login free per-token usage. The middleware sets this flag around the
+# downstream call of a SETTLED request only; asyncio tasks spawned inside that
+# call (the session run) inherit it through contextvars.
+#
+# 067 P1b: the ContextVar is rail-neutral and lives in ``core.billing_context``
+# (the usage tracker reads it there); these names stay as thin wrappers.
+
+
+def mark_x402_paid_request():
+    """Mark the current context as an x402-settled request. Returns the reset token."""
+    from core.billing_context import mark_prepaid
+    return mark_prepaid()
+
+
+def reset_x402_paid_request(token) -> None:
+    from core.billing_context import reset_prepaid
+    reset_prepaid(token)
+
+
+def is_x402_paid_request() -> bool:
+    """True only inside a request whose x402 payment settled (CR-M15)."""
+    from core.billing_context import is_prepaid
+    return is_prepaid()
+
+
 async def ensure_user_profile_for_payer(wallet_address: str, user_id: str) -> bool:
     """Ensure a user_profiles record exists for x402 payer.
 
@@ -242,12 +270,10 @@ def get_x402_max_tokens_per_request() -> int:
     SSOT for BOTH the price (get_x402_price_usd) AND the runtime cap enforced in
     LLMUsageTracker — they MUST read the same value so the caller can never consume
     more (or less) tokens than the price covers. Config via X402_MAX_TOKENS_PER_REQUEST.
+    067 P1b: the one reader is ``core.billing_context.prepaid_token_budget``.
     """
-    try:
-        v = int(os.getenv("X402_MAX_TOKENS_PER_REQUEST", "200000"))
-        return v if v > 0 else 200000
-    except (TypeError, ValueError):
-        return 200000
+    from core.billing_context import prepaid_token_budget
+    return prepaid_token_budget()
 
 
 def _max_output_price_per_token() -> float:

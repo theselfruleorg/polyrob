@@ -31,6 +31,24 @@ def test_system_prompt_contract_block_for_autonomous_sessions():
     assert "never claim delivered work" in text.lower()
 
 
+def test_contract_names_send_message_as_the_only_voice():
+    """Owner rule 2026-09-29: done(text) is the run record; a cron delivery
+    target gets the last send_message; nothing sent = nothing delivered."""
+    from agents.task.agent.prompts import SystemPrompt
+    text = SystemPrompt("a", autonomous=True)._get_communication_contract_content()
+    assert "send_message is\nthe ONLY way you speak" in text
+    assert "LAST\nsend_message" in text
+    assert "done(text) is\nthe run record" in text
+
+
+def test_contract_names_goal_tools_only_when_loaded():
+    from agents.task.agent.prompts import SystemPrompt
+    without = SystemPrompt("a", autonomous=True, tool_ids=["email"])
+    assert "goal_list" not in without._get_communication_contract_content()
+    withg = SystemPrompt("a", autonomous=True, tool_ids=["goal"])
+    assert "goal_list" in withg._get_communication_contract_content()
+
+
 def test_system_prompt_no_contract_block_for_interactive_sessions():
     from agents.task.agent.prompts import SystemPrompt
     p = SystemPrompt("actions...")

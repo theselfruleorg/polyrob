@@ -150,6 +150,16 @@ class TreasurySweeper:
             if submission_journal.unresolved():
                 raise RuntimeError('Unaccounted submission; reconcile before sweeping')
 
+            if getattr(self.wallet_gen, 'remote', False):
+                # 066 §5.5: the deposit seed lives in polyrob-signer, which
+                # sweeps to the destination pinned in signer.toml.
+                tx_hash = await asyncio.to_thread(
+                    self.wallet_gen.sweep, user_id=deposit['user_id'], chain=chain_name,
+                    token_symbol=deposit['token_symbol'],
+                    deposit_address=deposit['deposit_address'])
+                await self._record_sweep(deposit, tx_hash, chain_name)
+                return
+
             w3 = Web3(Web3.HTTPProvider(
                 chain_config['rpc_url'], request_kwargs={'timeout': 15}))
             if w3.eth.chain_id != chain_config['chain_id']:
@@ -175,26 +185,29 @@ class TreasurySweeper:
                 )
 
             if tx_hash:
-                # Record the sweep
-                cursor = await self.db.execute("""
-                    UPDATE crypto_payments
-                    SET swept_at = datetime('now'),
-                        sweep_tx_hash = ?
-                    WHERE id = ?
-                """, (tx_hash, deposit['id']))
-
-                if cursor.rowcount != 1:
-                    raise RuntimeError('Sweep bookkeeping did not update exactly one deposit')
+                await self._record_sweep(deposit, tx_hash, chain_name)
                 submission_journal.mark_booked(tx_hash)
-
-                self.logger.info(
-                    f"✅ Swept deposit {deposit['id']}: "
-                    f"{deposit['amount_usd']:.2f} USD in {token_symbol} on {chain_name} "
-                    f"(tx: {tx_hash[:10]}...)"
-                )
 
         except Exception as e:
             self.logger.error(f"Error sweeping deposit {deposit['id']}: {e}", exc_info=True)
+
+    async def _record_sweep(self, deposit: Dict, tx_hash: str, chain_name: str) -> None:
+        """Book one sweep against its deposit row (exactly one row, or raise)."""
+        cursor = await self.db.execute("""
+            UPDATE crypto_payments
+            SET swept_at = datetime('now'),
+                sweep_tx_hash = ?
+            WHERE id = ?
+        """, (tx_hash, deposit['id']))
+
+        if cursor.rowcount != 1:
+            raise RuntimeError('Sweep bookkeeping did not update exactly one deposit')
+
+        self.logger.info(
+            f"✅ Swept deposit {deposit['id']}: "
+            f"{deposit['amount_usd']:.2f} USD in {deposit['token_symbol']} on {chain_name} "
+            f"(tx: {tx_hash[:10]}...)"
+        )
 
     async def _sweep_eth(
         self,

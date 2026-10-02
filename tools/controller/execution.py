@@ -34,7 +34,19 @@ def _dedup_action_error(action_name: str, e: Exception, tb: str) -> str:
     dup = f"Error executing action {action_name}: "
     if detail.startswith(dup):
         detail = detail[len(dup):]
-    return f"Error executing action {action_name}: {detail}\n{tb}"
+    return _scrub_error(f"Error executing action {action_name}: {detail}\n{tb}")
+
+
+def _scrub_error(text: str) -> str:
+    """CR-M08: an action error carries a traceback into ``ActionResult.error`` (agent
+    memory, message history, the LLM provider) and the log — redact credential
+    shapes and the loaded wallet seed before either sees it. Fails closed to a
+    placeholder rather than returning the raw text."""
+    try:
+        from core.secret_scrub import scrub_secret_shapes
+        return scrub_secret_shapes(text)
+    except Exception:
+        return "Error executing action (details withheld: secret scrub failed)"
 
 
 # 043 A16: extensions that make a recorded artifact an image render, independent of
@@ -57,6 +69,40 @@ class ExecutionMixin:
 									source="tool", **attrs)
 		except Exception:
 			pass
+
+	def _record_invocation(self, action_type, result, execution_context=None, started_ns=None):
+		"""058 T4.1: ONE ``tool_invoked`` row per tool action, success or error —
+		the only cross-session signal for "is this tool used?" (the per-session
+		feed JSON is a write-only archive). Called from the success path in
+		``multi_act`` and from ``_observe_error_result`` (every error path of a
+		DISPATCHED action funnels through it) — one helper, so a rule cannot land
+		on one branch of the set. An action that never dispatched — an empty
+		action, a ``pre_tool_call`` veto (visible as ``tool_denied``), or the
+		outer critical-error catch — writes no row. Error rows carry ``ms=None``.
+		The tool id resolves through the EXISTING ``get_action_details`` resolver
+		(the same one ``untrusted_wrap`` reads); ``attrs`` is an explicit dict
+		because ``record()`` has reserved keyword names. Fail-open: telemetry must
+		never break tool execution."""
+		try:
+			from core.config_policy.capability_toggles import tool_usage_telemetry
+			if not tool_usage_telemetry():
+				return
+			try:
+				details = self.get_action_details(action_type)
+				tool = str(getattr(details, "tool", "") or "") or "unknown"
+			except Exception:
+				tool = "unknown"
+			ms = None
+			if started_ns is not None:
+				ms = int((time.monotonic_ns() - started_ns) / 1_000_000)
+			from core.event_kinds import TOOL_INVOKED
+			from core.event_log import emit
+			emit(TOOL_INVOKED, source="tool",
+				 user_id=getattr(execution_context, "user_id", None) or "",
+				 session_id=getattr(execution_context, "session_id", "") or "",
+				 attrs={"tool": tool, "action": str(action_type), "ok": not getattr(result, "error", None), "ms": ms})
+		except Exception:
+			self.logger.debug("tool_invoked emit skipped", exc_info=True)
 
 	@observe(name='controller.multi_act')
 	@time_execution_async('--multi-act')
@@ -178,12 +224,21 @@ class ExecutionMixin:
 					action_type = list(action_dump.keys())[0] if action_dump.keys() else "unknown_action"
 					action_params = action_dump.get(action_type, {})
 
+					# An owner grant belongs to ONE action: drop any left by the previous
+					# action before this one's hooks run (the approval hook re-stamps it
+					# only when the owner approved THIS call — tx_guard OWNER_GRANT_KEY).
+					_meta = getattr(execution_context, "metadata", None)
+					if isinstance(_meta, dict):
+						_meta.pop("owner_grant", None)
 					# pre_tool_call hooks: allow a hook to veto this action before execution.
 					deny_reason = await self._run_pre_tool_call_hooks(action_type, action_params, execution_context)
 					if deny_reason:
 						self.logger.warning(f"⛔ Action '{action_type}' blocked by pre_tool_call hook: {deny_reason}")
 						self._emit_governance_event("tool_denied", execution_context,
 													action=action_type, reason=str(deny_reason)[:200])
+						# A vetoed money verb never reaches the post hooks: taint its run here.
+						from tools.controller.refusal_taint_gate import note_denied_action
+						note_denied_action(self, action_type, execution_context, deny_reason)
 						results.append(ActionResult(
 							error=f"Action '{action_type}' blocked: {deny_reason}",
 							include_in_memory=True,
@@ -292,6 +347,7 @@ class ExecutionMixin:
 					stamp_receipt(result, started_ns=started_ns, context=execution_context)
 					await self._run_post_tool_call_hooks(action_type, action_params, result, execution_context)
 					result.tool_call_id = getattr(action, "_tool_call_id", None)
+					self._record_invocation(action_type, result, execution_context, started_ns=started_ns)
 					results.append(result)
 
 					# Log the result with detailed information
@@ -312,6 +368,19 @@ class ExecutionMixin:
 						error=f"Action {i+1}/{action_count} ({action_type}) timed out after {action_timeout} seconds",
 						include_in_memory=True,
 						tool_call_id=getattr(action, "_tool_call_id", None)
+					)
+					# act() was cancelled before it could record the completion:
+					# close the tool_started span here, same call_id.
+					self._capture_tool_telemetry(
+						action_name=action_type,
+						tool_name=tool_name,
+						params=action_params,
+						duration=(time.monotonic_ns() - started_ns) / 1e9,
+						success=False,
+						result=err,
+						execution_context=execution_context,
+						error=err.error,
+						call_id=span_id,
 					)
 					results.append(await self._observe_error_result(action_type, action_params, err, execution_context))
 					# Log timeout for visibility
@@ -398,6 +467,7 @@ class ExecutionMixin:
 			self.logger.error(
 				f"hook.error during error-result observation for {action_type}: {hook_error}"
 			)
+		self._record_invocation(action_type, result, execution_context)
 		return result
 
 	@time_execution_sync('--act')
@@ -444,6 +514,8 @@ class ExecutionMixin:
 				# Get tool-specific retry limit or default
 				max_retries = self._get_retry_limit_for_tool(tool_name)
 
+				call_id = getattr(action, "_tool_call_id", None) or getattr(action, "_run_span_id", None)
+
 				if attempt_count >= max_retries:
 					error_msg = (
 						f"⚠️ Maximum retries ({max_retries}) exceeded for {action_name}. "
@@ -451,102 +523,99 @@ class ExecutionMixin:
 						f"Try a different approach or parameters."
 					)
 					self.logger.error(error_msg)
-					return ActionResult(
+					action_result = ActionResult(
 						error=error_msg,
 						include_in_memory=True
 					)
+					# multi_act already wrote tool_started: close the span.
+					self._capture_tool_telemetry(
+						action_name=action_name,
+						tool_name=tool_name,
+						params=params,
+						duration=0.0,
+						success=False,
+						result=action_result,
+						execution_context=execution_context,
+						error=error_msg,
+						call_id=call_id,
+					)
+					return action_result
 
 				# Increment attempt counter
 				self._operation_attempts[operation_key] = attempt_count + 1
-
 				try:
-					laminar_available = False
-					try:
-						from laminar import Laminar
-						laminar_available = True
-					except ImportError:
-						pass
-						
-					if laminar_available:
-						with Laminar.start_as_current_span(
-							name=action_name,
-							input={
-								'action': action_name,
-								'params': params,
-							},
-							span_type='TOOL',
-						) as span:
-							try:
-								# Execute the action through Registry (handles all tools uniformly)
-								result = await self.registry.execute_action(
-									action_name,
-									params,
-									execution_context=execution_context,
-									# Also pass legacy params for backward compatibility
-									browser=execution_context.browser_context,
-									page_extraction_llm=page_extraction_llm,
-									sensitive_data=execution_context.sensitive_data,
-									available_file_paths=execution_context.available_file_paths,
-									session_id=execution_context.session_id,
-								)
-								
-								# Handle case where result might be another coroutine
-								import inspect
-								if inspect.iscoroutine(result):
-									result = await result
-								
-								# Set the span output for telemetry
-								Laminar.set_span_output(result)
+					if execution_context:
+						# Use execution context if available
+						result = await self.registry.execute_action(
+							action_name,
+							params,
+							execution_context=execution_context,
+							# Also pass legacy params for backward compatibility
+							browser=execution_context.browser_context,
+							page_extraction_llm=page_extraction_llm,
+							sensitive_data=execution_context.sensitive_data,
+							available_file_paths=execution_context.available_file_paths,
+							session_id=execution_context.session_id,
+						)
+					else:
+						# Fall back to legacy parameters
+						result = await self.registry.execute_action(
+							action_name,
+							params,
+							browser=browser_context,
+							page_extraction_llm=page_extraction_llm,
+							sensitive_data=sensitive_data,
+							available_file_paths=available_file_paths,
+							session_id=self.session_id,
+						)
 
-								# Reset retry counter only on GENUINE success. An action that
-								# fails by RETURNING ActionResult(error=...) (the dominant
-								# convention — most tools don't raise) must still count toward
-								# max_retries, else the guard never fires and it retries unbounded.
-								if operation_key in self._operation_attempts and not getattr(result, "error", None):
-									self._operation_attempts[operation_key] = 0
+					# Handle case where result might be another coroutine
+					import inspect
+					if inspect.iscoroutine(result):
+						result = await result
 
-								# Calculate execution time
-								duration = time.time() - start_time
+					# Reset retry counter only on GENUINE success. An action that
+					# fails by RETURNING ActionResult(error=...) (the dominant
+					# convention — most tools don't raise) must still count toward
+					# max_retries, else the guard never fires and it retries unbounded.
+					if operation_key in self._operation_attempts and not getattr(result, "error", None):
+						self._operation_attempts[operation_key] = 0
 
-								# Convert result to ActionResult
-								action_result = None
-								if isinstance(result, str):
-									action_result = ActionResult(extracted_content=result)
-								elif isinstance(result, ActionResult):
-									action_result = result
-								elif result is None:
-									action_result = ActionResult()
-								elif isinstance(result, dict) and "is_done" in result:
-									action_result = ActionResult(
-										extracted_content=result.get("content", ""),
-										is_done=result["is_done"],
-										include_in_memory=True
-									)
-								else:
-									action_result = ActionResult(extracted_content=str(result))
+					# Normalise the result to an ActionResult
+					if isinstance(result, str):
+						action_result = ActionResult(extracted_content=result)
+					elif isinstance(result, ActionResult):
+						action_result = result
+					elif result is None:
+						action_result = ActionResult()
+					elif isinstance(result, dict) and "is_done" in result:
+						action_result = ActionResult(
+							extracted_content=result.get("content", ""),
+							is_done=result["is_done"],
+							include_in_memory=True
+						)
+					else:
+						action_result = ActionResult(extracted_content=str(result))
 
-								# Capture tool execution telemetry
-								self._capture_tool_telemetry(
-									action_name=action_name,
-									tool_name=tool_name,  # ← Pass tool directly (no lookup needed)
-									params=params,
-									duration=duration,
-									success=True,
-									result=action_result,
-									execution_context=execution_context,
-									call_id=getattr(action, "_tool_call_id", None) or getattr(action, "_run_span_id", None)
-								)
-
-								return action_result
-								
-							except NotImplementedError as e:
-								# Special handling for NotImplementedError
-								duration = time.time() - start_time
-								error_msg = f"Action {action_name} not fully implemented: {str(e)}"
-								self.logger.error(error_msg)
-								
-								# Create a detailed error message with action info
-								detailed_error = f"""
+					# W1.1: record the completion (tool_execution + tool_result) on
+					# the ONE execution path, success or returned error.
+					self._capture_tool_telemetry(
+						action_name=action_name,
+						tool_name=tool_name,
+						params=params,
+						duration=time.time() - start_time,
+						success=not bool(action_result.error),
+						result=action_result,
+						execution_context=execution_context,
+						error=action_result.error,
+						call_id=call_id,
+					)
+					return action_result
+				except NotImplementedError as e:
+					# Special handling for NotImplementedError
+					self.logger.error(f"Action {action_name} not fully implemented: {str(e)}")
+					# Create a detailed error message with action info
+					detailed_error = f"""
 NotImplementedError in action {action_name}:
 Parameters: {params}
 Error: {str(e)}
@@ -554,141 +623,47 @@ Error: {str(e)}
 This usually indicates a method was called that's not fully implemented.
 Check the controller registry and action implementations.
 """
-								# Add error details to span for telemetry
-								if span is not None:
-									span.set_status(span.Status.ERROR)
-									span.record_exception(e)
-
-								# Capture tool execution telemetry for error
-								action_result = ActionResult(error=detailed_error, include_in_memory=True)
-								self._capture_tool_telemetry(
-									action_name=action_name,
-									tool_name=tool_name,  # ← Pass tool directly (no lookup needed)
-									params=params,
-									duration=duration,
-									success=False,
-									result=action_result,
-									execution_context=execution_context,
-									error=str(e),
-									call_id=getattr(action, "_tool_call_id", None) or getattr(action, "_run_span_id", None)
-								)
-
-								# Return informative action result
-								return action_result
-
-							except Exception as e:
-								# Enhanced general exception handling
-								import traceback
-								duration = time.time() - start_time
-								error_msg = _dedup_action_error(action_name, e, traceback.format_exc())
-								self.logger.error(error_msg)
-								
-								# Add error details to span for telemetry
-								if span is not None:
-									span.set_status(span.Status.ERROR)
-									span.record_exception(e)
-
-								# Capture tool execution telemetry for error
-								action_result = ActionResult(error=error_msg, include_in_memory=True)
-								self._capture_tool_telemetry(
-									action_name=action_name,
-									tool_name=tool_name,  # ← Pass tool directly (no lookup needed)
-									params=params,
-									duration=duration,
-									success=False,
-									result=action_result,
-									execution_context=execution_context,
-									error=str(e),
-									call_id=getattr(action, "_tool_call_id", None) or getattr(action, "_run_span_id", None)
-								)
-								
-								# Return informative action result
-								return action_result
-					else:
-						# If Laminar not available, run without span tracking
-						if execution_context:
-							# Use execution context if available
-							result = await self.registry.execute_action(
-								action_name,
-								params,
-								execution_context=execution_context,
-								# Also pass legacy params for backward compatibility
-								browser=execution_context.browser_context,
-								page_extraction_llm=page_extraction_llm,
-								sensitive_data=execution_context.sensitive_data,
-								available_file_paths=execution_context.available_file_paths,
-								session_id=execution_context.session_id,
-							)
-						else:
-							# Fall back to legacy parameters
-							result = await self.registry.execute_action(
-								action_name,
-								params,
-								browser=browser_context,
-								page_extraction_llm=page_extraction_llm,
-								sensitive_data=sensitive_data,
-								available_file_paths=available_file_paths,
-								session_id=self.session_id,
-							)
-						
-						# Handle case where result might be another coroutine
-						import inspect
-						if inspect.iscoroutine(result):
-							result = await result
-
-						# Reset retry counter only on GENUINE success — an action that fails
-						# by RETURNING ActionResult(error=...) must still count toward
-						# max_retries (see the Laminar path above).
-						if operation_key in self._operation_attempts and not getattr(result, "error", None):
-							self._operation_attempts[operation_key] = 0
-
-						# Handle result types
-						if isinstance(result, str):
-							return ActionResult(extracted_content=result)
-						elif isinstance(result, ActionResult):
-							return result
-						elif result is None:
-							return ActionResult()
-						elif isinstance(result, dict) and "is_done" in result:
-							return ActionResult(
-								extracted_content=result.get("content", ""),
-								is_done=result["is_done"],
-								include_in_memory=True
-							)
-						else:
-							return ActionResult(extracted_content=str(result))
+					action_result = ActionResult(error=_scrub_error(detailed_error), include_in_memory=True)
+					self._capture_tool_telemetry(
+						action_name=action_name,
+						tool_name=tool_name,
+						params=params,
+						duration=time.time() - start_time,
+						success=False,
+						result=action_result,
+						execution_context=execution_context,
+						error=_scrub_error(str(e)),
+						call_id=call_id,
+					)
+					return action_result
 				except Exception as e:
 					import traceback
 					error_msg = _dedup_action_error(action_name, e, traceback.format_exc())
 					self.logger.error(error_msg)
-					return ActionResult(
+					action_result = ActionResult(
 						error=error_msg,
 						include_in_memory=True
 					)
+					self._capture_tool_telemetry(
+						action_name=action_name,
+						tool_name=tool_name,
+						params=params,
+						duration=time.time() - start_time,
+						success=False,
+						result=action_result,
+						execution_context=execution_context,
+						error=_scrub_error(str(e)),
+						call_id=call_id,
+					)
+					return action_result
 			
 			# If no action was executed, return an empty result
 			return ActionResult()
 		except Exception as e:
 			# Catch-all for any unexpected exceptions
 			import traceback
-			
-			# Get the current span from Laminar if it exists
-			current_span = None
-			try:
-				from laminar import Laminar
-				current_span = getattr(Laminar, 'current_span', None)
-			except ImportError:
-				pass
-			
-			# Record error in span if it exists
-			if current_span is not None:
-				try:
-					current_span.set_status(current_span.Status.ERROR)
-					current_span.record_exception(e)
-				except Exception as span_err:
-					self.logger.error(f"Could not record error in span: {str(span_err)}")
-			
-			error_msg = f"Unexpected error in Controller.act: {str(e)}\n{traceback.format_exc()}"
+
+			error_msg = _scrub_error(f"Unexpected error in Controller.act: {str(e)}\n{traceback.format_exc()}")
 			self.logger.error(error_msg)
 			return ActionResult(
 				error=error_msg,
@@ -799,7 +774,7 @@ Check the controller registry and action implementations.
 				total_in_batch=total_in_batch,
 			)
 		except Exception as e:
-			self.logger.debug(f"Failed to capture tool started: {e}")
+			self.logger.warning(f"tool telemetry: {action_name} {type(e).__name__}")
 
 	def _capture_tool_telemetry(
 		self,
@@ -938,10 +913,10 @@ Check the controller registry and action implementations.
 						},
 					)
 			except Exception as e:
-				self.logger.debug(f"Failed to emit tool_result feed event: {e}")
+				self.logger.warning(f"tool telemetry: {action_name} {type(e).__name__}")
 		except Exception as e:
 			# Don't let telemetry failures affect execution
-			self.logger.debug(f"Failed to capture tool telemetry: {e}")
+			self.logger.warning(f"tool telemetry: {action_name} {type(e).__name__}")
 
 	def _build_tool_result_render(
 		self,

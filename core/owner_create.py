@@ -61,6 +61,18 @@ def _clean_tools(tools: Optional[Sequence[Any]]) -> List[str]:
     return out
 
 
+def _normalize_target_in(payload: Dict[str, Any]) -> None:
+    """068 G2: validate + normalize ``payload.target_token`` in place, so a bad
+    target is refused at CREATE time (ValueError), not discovered by a run."""
+    from core.wallet.buy_target import PAYLOAD_KEY, normalize_target
+    if PAYLOAD_KEY in payload:
+        target = normalize_target(payload.get(PAYLOAD_KEY))
+        if target:
+            payload[PAYLOAD_KEY] = target
+        else:
+            payload.pop(PAYLOAD_KEY, None)
+
+
 def create_goal(board: Any, *, user_id: str, title: str, body: str = "",
                 priority: int = 5, tools: Optional[Sequence[Any]] = None,
                 acceptance: Optional[str] = None, status: str = _STATUS_READY,
@@ -86,6 +98,10 @@ def create_goal(board: Any, *, user_id: str, title: str, body: str = "",
         raise ValueError("goal create requires a real (non-anonymous) tenant")
 
     payload: Dict[str, Any] = dict(extra_payload or {})
+    _normalize_target_in(payload)
+    # 034 §7 stamp gap: an owner-seat create carried no provenance, so origin()
+    # read it as LEGACY. The owner seat IS the author.
+    payload.setdefault("authored_by", "owner")
     named_tools = _clean_tools(tools)
     if named_tools:
         payload["tools"] = named_tools
@@ -97,6 +113,7 @@ def create_goal(board: Any, *, user_id: str, title: str, body: str = "",
         priority=priority, status=status, parent_id=parent_id,
         payload=payload or None, force=force,
         depends_on=list(depends_on) if depends_on else None,
+        actor="owner_seat",   # 036 §3.3: the owner seat IS the grant
     )
 
 
@@ -105,7 +122,7 @@ def create_cron(service: Any, *, task: str, schedule_spec: str, user_id: str,
                 deliver: Optional[str] = None,
                 deliver_target: Optional[str] = None,
                 wake_agent: bool = True,
-                max_duration_seconds: int = 600,
+                max_duration_seconds: Optional[int] = None,
                 via: str = "",
                 extra_payload: Optional[Dict[str, Any]] = None) -> Any:
     """Schedule one durable cron job on *service* with the OWNER's grant.
@@ -121,6 +138,17 @@ def create_cron(service: Any, *, task: str, schedule_spec: str, user_id: str,
     clean_task = (task or "").strip()
     if not clean_task:
         raise ValueError("a scheduled task needs something to do")
+    if max_duration_seconds is None:
+        # The operator's CRON_DEFAULT_MAX_DURATION_SEC, the value every other
+        # creator reads (``cron.jobs.default_max_duration_sec``; core cannot
+        # import cron, so the accessor is read here). Fail-open to 600.
+        try:
+            from core.config_policy import AutonomyConfig
+            max_duration_seconds = int(AutonomyConfig.cron_default_max_duration_sec()) or 600
+        except Exception:
+            max_duration_seconds = 600
+        if max_duration_seconds <= 0:
+            max_duration_seconds = 600
     clean_spec = (schedule_spec or "").strip()
     if not clean_spec:
         raise ValueError("a scheduled task needs a schedule")
@@ -128,6 +156,7 @@ def create_cron(service: Any, *, task: str, schedule_spec: str, user_id: str,
         raise ValueError("cron create requires a real (non-anonymous) tenant")
 
     payload: Dict[str, Any] = dict(extra_payload or {})
+    _normalize_target_in(payload)
     named_tools = _clean_tools(tools)
     if named_tools:
         payload["tools"] = named_tools
@@ -143,3 +172,72 @@ def create_cron(service: Any, *, task: str, schedule_spec: str, user_id: str,
         payload=payload or None, max_duration_seconds=max_duration_seconds,
         via=via,
     )
+
+
+#: O13/A14: the ``key=value`` tokens a chat seat's ``/cron add`` accepts — the
+#: SAME grant the console's ``POST /api/webgate/cron`` carries (``tools``), plus
+#: the declared buy target ``cronjob_schedule`` stores (``target`` + ``chain``).
+CRON_OPTION_KEYS = ("target", "chain", "tools")
+
+
+def split_cron_options(tokens: Sequence[str]):
+    """``(other_tokens, options)``: pull every whole ``target=…`` / ``chain=…`` /
+    ``tools=…`` token out of a chat line. The ONE parser for the Telegram and
+    REPL ``/cron add``. A repeated key is refused (``ValueError``) rather than
+    silently taking one of the two values."""
+    rest: List[str] = []
+    options: Dict[str, str] = {}
+    for tok in tokens:
+        key, sep, value = str(tok).partition("=")
+        key = key.strip().lower()
+        if sep and key in CRON_OPTION_KEYS and value.strip():
+            if key in options:
+                raise ValueError(f"{key}= given twice")
+            options[key] = value.strip()
+        else:
+            rest.append(tok)
+    return rest, options
+
+
+def cron_options_payload(options: Dict[str, str]):
+    """``(tools, extra_payload)`` for :func:`create_cron` from parsed options.
+
+    The payload is stamped ``authored_by: owner`` — a chat seat IS the owner,
+    the same stamp ``cronjob_schedule`` writes on an owner turn. A target needs
+    its chain and a valid address for that chain (``ValueError`` otherwise), so
+    a bad address is refused at create time, never stored.
+    """
+    from core.config_policy.rigs import AUTHORED_BY_KEY, OWNER_AUTHOR
+    from core.wallet.buy_target import PAYLOAD_KEY, normalize_target
+    extra: Dict[str, Any] = {AUTHORED_BY_KEY: OWNER_AUTHOR}
+    target, chain = options.get("target"), options.get("chain")
+    if chain and not target:
+        raise ValueError("chain= goes with target=0x… (the token the job may buy)")
+    if target:
+        if not chain:
+            raise ValueError("target= needs chain=<name> too, e.g. chain=base")
+        extra[PAYLOAD_KEY] = normalize_target({"chain": chain, "address": target})
+    tools = [t for t in (options.get("tools") or "").split(",") if t.strip()] or None
+    return tools, extra
+
+
+#: The job fields a chat seat's ``/cron edit`` changes.
+CRON_EDIT_FIELDS = ("schedule", "task")
+
+
+def edit_cron(service: Any, job: Any, *, user_id: str, field: str, value: str,
+              via: str = "") -> List[str]:
+    """O13: ``/cron edit <id> schedule|task <value>`` through the SAME
+    ``CronService.edit`` ``cronjob_edit`` uses, so the payload (tools, target,
+    rig, delivery) survives. ``task`` replaces the whole task text (the owner
+    typed it); ``schedule`` recomputes the next run. Raises ``ValueError`` on an
+    unknown field or empty value; re-raises ``ScheduleError``."""
+    field = (field or "").strip().lower()
+    value = (value or "").strip()
+    if field not in CRON_EDIT_FIELDS:
+        raise ValueError(f"edit one of: {', '.join(CRON_EDIT_FIELDS)}")
+    if not value:
+        raise ValueError(f"a new {field} is required")
+    if field == "schedule":
+        return service.edit(job.id, user_id=user_id, via=via, schedule_spec=value)
+    return service.edit(job.id, user_id=user_id, via=via, old_text=job.task, new_text=value)

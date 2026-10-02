@@ -187,3 +187,16 @@ def test_bullet_documented_flags_are_registered():
     # got a table row, the _SAFE_LOCAL_FLAGS member list) must not be invisible.
     for name in ("SELF_WAKE_ENABLED", "WEB_FETCH_ALLOW_PRIVATE_URLS", "KB_ENABLED"):
         assert name in REGISTRY, name
+
+
+def test_pattern_only_flag_is_describable():
+    """067 F2 folded OWNER_*_ID into one pattern row; a concrete member must
+    still resolve and explain instead of raising 'unknown key'."""
+    from core import config_service
+    from core.flags import flag_for, resolve_flag
+    assert flag_for("OWNER_SLACK_ID") is not None
+    assert flag_for("OWNER_SLACK_ID").name == "OWNER_SLACK_ID"
+    assert flag_for("NOT_A_REAL_FLAG_XYZ") is None
+    assert resolve_flag("OWNER_SLACK_ID", {"OWNER_SLACK_ID": "U1"}).source == "env"
+    info = config_service.explain("OWNER_SLACK_ID")
+    assert info.namespace == "flag" and info.key == "OWNER_SLACK_ID"

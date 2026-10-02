@@ -16,6 +16,7 @@ from typing import Optional
 
 # NATIVE base type (POLYROB's own ABC)
 from modules.llm.adapters import BaseChatModel
+from core.lazy_deps import FeatureUnavailable
 from modules.llm.llm_client import LLMClient
 from modules.llm.model_registry import get_model_config, PROVIDER_CONFIG, openai_reasoning_model
 
@@ -158,6 +159,8 @@ def create_chat_model(
             return OpenAIAdapter(client=llm_client, model_name=model, **sanitized_params)
 
         elif provider_l == "anthropic":
+            from core.lazy_deps import ensure_provider
+            ensure_provider("provider.anthropic")          # no-op when present (058 T7.2)
             from modules.llm.adapters import AnthropicAdapter
             from modules.llm.anthropic_client import AnthropicClient
             if not isinstance(llm_client, AnthropicClient):
@@ -207,6 +210,8 @@ def create_chat_model(
             return OpenRouterAdapter(client=llm_client, model_name=model, **sanitized_params)
 
         elif provider_l == "gemini":
+            from core.lazy_deps import ensure_provider
+            ensure_provider("provider.gemini")             # no-op when present (058 T7.2)
             from modules.llm.adapters import GeminiAdapter
             from modules.llm.gemini_client import GeminiClient
             if not isinstance(llm_client, GeminiClient):
@@ -282,6 +287,11 @@ def create_chat_model(
             )
 
     except ValueError:
+        raise
+    except FeatureUnavailable:
+        # 058 T7.2: an absent provider SDK carries its own remedy (the extra to
+        # install / add to PROD_EXTRAS); wrapping it below would bury that in a
+        # generic "Failed to create chat model" string.
         raise
     except Exception as e:
         logger.error(f"Error creating native chat model for provider {provider}: {str(e)}")

@@ -28,6 +28,7 @@ def test_kill_switch_either_var(monkeypatch, var):
     ("openai/gpt-5.5", "automatic"),
     ("deepseek/deepseek-chat", "automatic"),
     ("x-ai/grok-4.1-fast", "automatic"),
+    ("qwen/qwen3-coder", "automatic"),
     ("some/unknown-model", "none"),
     ("", "none"),
     (None, "none"),
@@ -37,10 +38,18 @@ def test_openrouter_strategy(model, expected):
 
 
 def test_apply_noop_when_passthrough_disabled(monkeypatch):
-    monkeypatch.delenv("OPENROUTER_PROMPT_CACHE", raising=False)
+    monkeypatch.setenv("OPENROUTER_PROMPT_CACHE", "false")
     msgs = [{"role": "system", "content": "big stable prefix"}]
     out = apply_openrouter_cache_control(msgs, "anthropic/claude-opus-4")
     assert out[0]["content"] == "big stable prefix"  # unchanged (string)
+
+
+def test_apply_marks_system_by_default(monkeypatch):
+    """2026-09-22 harness/cache review F5: the passthrough is on by default."""
+    monkeypatch.delenv("OPENROUTER_PROMPT_CACHE", raising=False)
+    msgs = [{"role": "system", "content": "big stable prefix"}]
+    out = apply_openrouter_cache_control(msgs, "anthropic/claude-opus-4")
+    assert out[0]["content"][-1]["cache_control"]["type"] == "ephemeral"
 
 
 def test_apply_adds_breakpoint_when_enabled(monkeypatch):

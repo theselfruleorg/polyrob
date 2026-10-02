@@ -119,9 +119,9 @@ def _is_llm_provider_exhausted(err: Any) -> bool:
 # Deliberately excludes money/social/trading tools (wallet, x402, hyperliquid,
 # polymarket, twitter) so the agent can't self-grant spend/post capability by
 # spawning a child goal. Server-side allowlist, NOT agent-controllable.
-CHILD_INHERITABLE_TOOLS = frozenset(
-    {"filesystem", "task", "browser", "perplexity", "mcp", "anysite", "coding"}
-)
+# The ids live in core/config_policy/profiles.py as `inherit:child_goal` (067 P1).
+from core.config_policy.profiles import profile as _profile
+CHILD_INHERITABLE_TOOLS = frozenset(_profile("inherit:child_goal"))
 
 # Safe default toolset when a goal sets no tools and has nothing inheritable (SSOT).
 from agents.task.constants import BASE_DEFAULT_TOOLS as _BASE_DEFAULT_TOOLS
@@ -155,11 +155,8 @@ def _hf_deploy_goal_tool_enabled() -> bool:
     toolset would be a dead entry when HF_DEPLOY_ENABLED is off."""
     if not _compute_posture_at_least_2():
         return False
-    try:
-        from tools.hf_deploy import hf_deploy_enabled
-        return hf_deploy_enabled()
-    except Exception:
-        return False
+    from core.tool_gates import gate_on
+    return gate_on("hf_deploy")
 
 
 def default_goal_tools() -> list:
@@ -565,6 +562,16 @@ class GoalDispatcher:
 
         # §6.3 provider-credit sentinel: while tripped (recent 402/credit-death),
         # burning more paid runs is pointless — pause dispatch until auto-release.
+        # A latched seat whose balance can be read for free is re-checked first:
+        # on 2026-10-02 a funded OpenRouter sat latched for 35 min after a top-up.
+        try:
+            from modules.llm.seat_probe import release_funded_latches
+            released = await asyncio.to_thread(release_funded_latches)
+            if released:
+                logger.warning("credit latch released — balance is funded again: %s",
+                               ", ".join(released))
+        except Exception:
+            logger.debug("funded-latch recovery check failed", exc_info=True)
         try:
             # Ask "can ANYTHING serve?", not "is the default alive?". Asking only
             # about the default is why prod dispatched zero goals for 37 hours from
@@ -1150,6 +1157,27 @@ class GoalDispatcher:
                 "temperature": 0.0,
                 "goal_id": goal.id,
             }
+            # 025: the run's memory scope (goal:<root>) + regime; {} = shared.
+            from agents.task.goals.memory_scope import goal_request_fields
+            request.update(goal_request_fields(self.board, goal))
+            # 060 WS-5: a goal pins its doctrine (`payload.skills`) — seeded into
+            # the run, never left to keyword matching. Absent = byte-identical.
+            from core.config_policy.rigs import pinned_skills
+            _pinned_skills = pinned_skills(payload)
+            if _pinned_skills:
+                request["skills"] = _pinned_skills
+            # 068 G2: a declared buy target rides the run as DATA; a malformed
+            # one fails the run rather than silently lifting the restriction.
+            from core.wallet.buy_target import PAYLOAD_KEY, normalize_target
+            try:
+                _target = normalize_target(payload.get(PAYLOAD_KEY))
+            except ValueError as exc:
+                self.board.record_failure(goal.id, error=f"invalid {PAYLOAD_KEY}: {exc}")
+                return
+            if _target:
+                # W0: an owner-authored goal's target is trust for this run.
+                from core.wallet.buy_target import with_authorship
+                request["money_target"] = with_authorship(_target, payload)
             if _resume_note:
                 # Consume it: a note left on the payload would tell a LATER,
                 # un-pre-empted run that it had been cut short.
@@ -1474,6 +1502,12 @@ class GoalDispatcher:
                 refreshed = None
             if refreshed is not None and refreshed.status != STATUS_DONE:
                 return
+            # 025: a ROOT goal's quarantined findings graduate to shared recall only
+            # now — after the owner-wins re-read, and only when verified.
+            from agents.task.goals.memory_scope import promote_after_success
+            _promoted = await asyncio.to_thread(  # sqlite: never on the shared loop
+                promote_after_success, self.board, goal,
+                verified=run.verified if judge_on else "verified")
             try:
                 from modules.memory.episodic import finalize_episode
                 # Provenance was collected into the envelope while the
@@ -1495,7 +1529,7 @@ class GoalDispatcher:
                          duration_sec=self._elapsed(goal.id),
                          artifacts=len(run.artifacts),
                          user_messages=len(run.user_messages),
-                         verified=run.verified)
+                         verified=run.verified, promoted=_promoted)
             except Exception:
                 logger.warning("goal episodic write failed", exc_info=True)
             if outcome:
@@ -1516,7 +1550,7 @@ class GoalDispatcher:
                     and not run.user_messages:
                 await self._notify_owner_done(goal, session_id, result_record,
                                               verified=run.verified if judge_on else "verified",
-                                              artifacts=run.artifacts)
+                                              artifacts=run.artifacts, promoted=_promoted)
             # §4.3: an UNVERIFIED completion earns nothing downstream — no
             # self-wake re-entry. With the judge disabled, legacy behavior holds.
             if AutonomyConfig.goal_self_wake_enabled() and \
@@ -1739,7 +1773,11 @@ class GoalDispatcher:
         # the default; an explicit payload.tools above still wins verbatim.
         try:
             from core.config_policy.rigs import resolve_rig_tools
-            rigged = resolve_rig_tools(payload, base)
+            from tools.goal_tools import allowed_self_goal_tools
+            # H05: an agent-authored rig never widens past what goal_create
+            # would have granted as `tools=`.
+            rigged = resolve_rig_tools(payload, base,
+                                       agent_ceiling=sorted(allowed_self_goal_tools()))
             if rigged is not None and list(rigged) != list(base):
                 logger.info("goal %s: rig narrows the toolset to %s", goal.id, rigged)
                 return list(rigged)
@@ -1846,14 +1884,21 @@ class GoalDispatcher:
 
     def _completion_text(self, goal: Goal, final: str, verified: str = "verified",
                          deliverable_lines: Optional[list] = None,
-                         session_link: Optional[str] = None) -> str:
+                         session_link: Optional[str] = None, promoted: int = 0) -> str:
         # §4.3: the ✅ is EARNED — an unverified completion is labeled honestly,
         # never pushed as a green checkmark on an unchecked claim.
         if verified == "verified":
             head = f"✅ Background goal '{goal.title}' completed."
         else:
             head = f"Background goal '{goal.title}' finished — done (unverified)."
-        parts = [f"{head}\nResult:\n{str(final)[:1500]}"]
+        # Owner rule (2026-09-29): the agent speaks with send_message only; its
+        # done() text is a RECORD, shown here only when the owner's verbosity
+        # asks for records. This notice is the framework's safety net for a run
+        # that said nothing, so without a record it carries the head alone.
+        from agents.task.runtime.run_outcome import with_done_record
+        from core.prefs import done_records_visible
+        parts = [with_done_record(
+            head, final, done_records_visible(goal.user_id, self._home_dir()))]
         # QW-1 (proposal 021): every artifact the run produced is accounted for
         # — attached (rail media) or listed server-only — never a bare filename.
         if deliverable_lines:
@@ -1870,6 +1915,9 @@ class GoalDispatcher:
                 parts.append(note)
         if session_link:
             parts.append(f"Console: {session_link}")
+        from agents.task.goals.memory_scope import promotion_line
+        if promotion_line(promoted):
+            parts.append(promotion_line(promoted))
         return "\n".join(parts)
 
     def _mark_episode_surfaced(self, goal: Goal, session_id: str) -> None:
@@ -1887,7 +1935,7 @@ class GoalDispatcher:
 
     async def _notify_owner_done(self, goal: Goal, session_id: str, final: str,
                                  verified: str = "verified",
-                                 artifacts: Optional[list] = None) -> bool:
+                                 artifacts: Optional[list] = None, promoted: int = 0) -> bool:
         """Tell the OWNER a background goal COMPLETED — surface-independent + durable.
 
         This is the completion-communication rail, DECOUPLED from the self-wake
@@ -1937,7 +1985,7 @@ class GoalDispatcher:
                 pass
             text = self._completion_text(goal, final, verified=verified,
                                          deliverable_lines=deliverable_lines,
-                                         session_link=session_link)
+                                         session_link=session_link, promoted=promoted)
             container = getattr(self.task_agent, "container", None)
             if attachments:
                 owner_told = await push_owner_message(container, text,
@@ -2167,10 +2215,23 @@ class GoalDispatcher:
             # whether the owner PUSH lands — the durable ask below is the owner-visible
             # artifact and must be created even under the silent posture.
             self.board.mark_stall_escalated(user_id=user_id)
+            try:
+                stall_number = self.board.stall_escalation_count(user_id=user_id)
+            except Exception:
+                stall_number = None
+            # The planner's done() text is a bookkeeping record: the owner sees
+            # it only at style.verbosity == detailed (core.prefs, fail-closed).
+            try:
+                from core.prefs import done_records_visible
+                planner_word_visible = done_records_visible(user_id, self._home_dir())
+            except Exception:
+                planner_word_visible = False
             from agents.task.goals.escalation import maybe_escalate_empty_pipeline
             await maybe_escalate_empty_pipeline(
                 self.task_agent, objective_title=objective_title,
-                planner_summary=planner_summary)
+                planner_summary=planner_summary,
+                planner_word_visible=planner_word_visible,
+                stall_number=stall_number, stalled_since=streak_started)
             # §7.2b: track the stall as an ask so it is fulfillable regardless of push.
             try:
                 self.board.create_ask(
@@ -2221,6 +2282,8 @@ class GoalDispatcher:
             by_id = {str(st.get("id")): st for st in (streams or [])}
             servable = []
             for o in objectives:
+                if (o.payload or {}).get("recurrence"):
+                    continue  # 036: a rail's own schedule covers it (rails.py)
                 sid = (o.payload or {}).get("stream_id")
                 if sid:
                     st = by_id.get(str(sid))
@@ -2270,6 +2333,13 @@ class GoalTicker:
             is_active=is_active,
             max_interval_seconds=max_interval,
         ).run_forever(stop_event=stop_event)
+
+
+def build_rails_ticker(*, data_dir: str):
+    """036: the in-process rails loop, reached through this module so the autonomy
+    runtime adds no new core -> agents edge (``tests/test_layering_ratchet.py``)."""
+    from agents.task.goals.rails import build_rails_ticker as _build
+    return _build(data_dir=data_dir)
 
 
 def build_goal_ticker(task_agent: Any, *, data_dir: str = "data",

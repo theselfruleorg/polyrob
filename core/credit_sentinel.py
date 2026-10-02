@@ -274,6 +274,50 @@ def _write_latch(path: str, entries: dict, reason: str = "") -> None:
         logger.warning("credit sentinel: latch write failed", exc_info=True)
 
 
+def release(provider: Optional[str] = None) -> bool:
+    """Drop the latch for *provider* (or every provider) and say whether it did.
+
+    ⚠️ The window exists so an unattended night costs one paid probe per
+    release window instead of a permanent halt. It is NOT a penalty: the moment
+    the account is topped up the reason is gone, and waiting out the remaining
+    hours keeps Rob dead for nothing (2026-09-24, a 06:22Z trip against a
+    12:22Z auto-release).
+
+    Per provider, because the latch is. The documented remedy used to be
+    ``rm <data>/CREDIT_SENTINEL``, which also releases an account that is still
+    dry — the next dispatch then spends a paid probe rediscovering that.
+
+    Returns True only when something was actually released. Releasing
+    ``"openrouter"`` while a GLOBAL trip is in force returns False: that trip
+    still pauses openrouter, and a True there would tell the caller the
+    provider is free when the next dispatch still refuses.
+    """
+    if not credit_sentinel_enabled():
+        return False
+    path = _sentinel_path()
+    try:
+        if not os.path.exists(path):
+            return False
+        entries = _read_latch(path)
+        if provider is None:
+            if not entries:
+                return False
+            remaining = {}
+        else:
+            if str(provider) not in entries:
+                return False
+            remaining = {k: v for k, v in entries.items() if k != str(provider)}
+        if remaining:
+            _write_latch(path, remaining)
+        else:
+            os.remove(path)
+        logger.info("credit sentinel released for %s", provider or "every provider")
+        return True
+    except Exception:
+        logger.warning("credit sentinel: release failed", exc_info=True)
+        return False  # fail-open: a release we could not do is not a claim we made
+
+
 async def trip_credit_sentinel(reason: str, *, provider: Optional[str] = None,
                                container: Any = None,
                                user_id: str = "",

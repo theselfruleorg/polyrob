@@ -38,7 +38,7 @@ from webview import webgate
 from webview.audit import console_write
 from core.event_kinds import (
     CONSOLE_CONFIG_WRITE, CONSOLE_CRON_CANCEL, CONSOLE_GOAL_VERB,
-    CONSOLE_INVOICE_SETTLE, CONSOLE_PENDING_DECIDE, CONSOLE_PFP_WRITE,
+    CONSOLE_INVOICE_SETTLE, CONSOLE_PENDING_DECIDE,
     CONSOLE_PREF_WRITE,
 )
 
@@ -48,10 +48,8 @@ from agents.task.constants import AutonomyConfig
 from agents.task.goals.board import GoalBoard
 from cli.commands.doctor import doctor_report, local_flag_on, resolve_memory_backend
 from core.instance import (
-    load_pfp_meta,
     load_self_context,
     load_self_doc,
-    pfp_path,
     resolve_instance_id,
 )
 from core import self_evolution
@@ -79,6 +77,14 @@ from surfaces.telegram import owner_ops
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+#: 067 P5a: the Money destination's data routes (wallet, ledger, positions,
+#: liquidity, book, invoices, settle) ride their OWN router, contributed to the
+#: console through ``webview.contributions`` (registered at the bottom of this
+#: module) and mounted by ``pages_new.mount``. P5b moves them into the wallet
+#: pack, which contributes the router instead; without it the Money page renders
+#: the install hint.
+money_router = APIRouter()
 
 
 # --- template resolution (same asset base as server.py) --------------------- #
@@ -467,19 +473,17 @@ async def api_identity(request: Request):
     })
 
 
-# --- avatar (pfp) — the instance's face rendered LIVE in the console ---------- #
-# The engine is served same-origin so the console runs the EXACT avatar/mindprint.js
-# on a canvas (animated), driven by the instance's frozen /pfp.json. All fail-open:
-# no avatar yet -> 404 -> the identity page just shows a neutral fallback.
-_AVATAR_DIR = Path(__file__).resolve().parents[1] / "avatar"
+# --- avatar — the instance's image slot (core/avatar.py) -------------------- #
+# Read-only here: the console SHOWS the face; it is set from the CLI
+# (`polyrob avatar set`), Telegram, or the agent. Core generates nothing.
 
 
-def _pfp_data_dir() -> str:
+def _avatar_data_dir() -> str:
     """Data home to read the avatar from.
 
-    The avatar is WRITTEN by the CLI (`pfp generate`), whose data home defaults to
+    The avatar is usually SET from the CLI, whose data home defaults to
     ``cwd/.polyrob`` when ``POLYROB_DATA_DIR`` is unset (``core.bootstrap.
-    _resolve_cli_data_home``). Mirror that so generate↔serve agree in local dev; in
+    _resolve_cli_data_home``). Mirror that so set↔serve agree in local dev; in
     prod (``POLYROB_DATA_DIR`` set) this is identical to :func:`_data_dir`.
     """
     env = os.environ.get("POLYROB_DATA_DIR")
@@ -489,144 +493,35 @@ def _pfp_data_dir() -> str:
     return str(local) if local.exists() else _data_dir()
 
 
-@router.get("/pfp.json")
-async def api_pfp_json():
-    """The instance avatar identity blob (traits + engine-agnostic voice), or 404."""
-    meta = load_pfp_meta(_pfp_data_dir(), resolve_instance_id())
-    if not meta:
-        return JSONResponse({"detail": "no avatar"}, status_code=404)
-    return JSONResponse(meta)
+@router.get("/avatar.json")
+async def api_avatar_json():
+    """The slot's state: ``{state, is_default, source, content_type, sha256, set_at}``.
+    An instance that never set one shows the default (the polyrob mark).
+
+    ⚠️ ``unreadable`` is reported with its detail, never folded into ``none`` —
+    an image with a broken record is not an absent avatar."""
+    from core.avatar import load_avatar
+    st = load_avatar(_avatar_data_dir(), resolve_instance_id())
+    return JSONResponse({"state": st.state, "is_default": st.is_default, "source": st.source,
+                         "content_type": st.content_type, "sha256": st.sha256,
+                         "set_at": st.set_at, "detail": st.detail})
 
 
-@router.get("/pfp.png")
-async def pfp_png():
-    """The instance avatar still PNG (progressive fallback / OG image), or 404."""
-    p = pfp_path(_pfp_data_dir(), resolve_instance_id())
-    if not p.is_file():
+@router.api_route("/avatar.png", methods=["GET", "HEAD"])
+async def avatar_image():
+    """The slot image with its stored content type (the name stays ``.png`` for
+    every format), or 404 when no avatar is set."""
+    from core.avatar import CONTENT_TYPES, load_avatar
+    st = load_avatar(_avatar_data_dir(), resolve_instance_id())
+    if not st.is_set or st.path is None:
         return Response(status_code=404)
-    return FileResponse(str(p), media_type="image/png")
-
-
-@router.get("/avatar/mindprint.js")
-async def avatar_engine():
-    """Serve the EXACT engine same-origin (classic script; sets window.Mindprint)."""
-    p = _AVATAR_DIR / "mindprint.js"
-    if not p.is_file():
-        return Response(status_code=404)
-    return FileResponse(str(p), media_type="application/javascript")
-
-
-@router.get("/avatar/avatar-live.js")
-async def avatar_live():
-    """Serve the read-only live embed (fetch /pfp.json -> animate the canvas)."""
-    p = _AVATAR_DIR / "webview" / "avatar-live.js"
-    if not p.is_file():
-        return Response(status_code=404)
-    return FileResponse(str(p), media_type="application/javascript")
-
-
-def _pfp_owner_required(request: Request) -> None:
-    """W13: avatar setup is an INSTANCE-identity write, and ``keep`` is one-way.
-
-    It carried no principal check at all — any authenticated multitenant tenant
-    could re-roll the instance's face and voice, or lock them forever. The gate
-    is the same pair every other instance-wide control uses: the OWNER console
-    (local/own_ops posture) plus the fail-closed tenant resolution.
-    """
-    _owner_console_required(what="avatar setup")
-    _effective_user_id(request)  # 403 in multitenant without identity
-
-
-# --- avatar SETUP (web) — the same one-time draft→randomize→keep contract the CLI
-# enforces. All three routes carry the ONE read-only guard (W3) via
-# ``webgate.MUTATION_DEPS``, and the lock contract is enforced by
-# modules/pfp/store (PfpLockedError) regardless of the caller — these routes
-# surface it as {ok:false} rather than a 500.
-@router.post("/api/pfp/generate", dependencies=webgate.MUTATION_DEPS)
-async def api_pfp_generate(request: Request):
-    """Start setup: mint a RANDOM draft identity (no-op if an avatar already exists)."""
-    _pfp_owner_required(request)
-    from modules.pfp import store
-    from modules.pfp.identity import random_config
-    home, instance_id = _pfp_data_dir(), resolve_instance_id()
-    try:
-        existing = load_pfp_meta(home, instance_id)
-        if existing is not None:
-            # A no-op — nothing changed, so no completed-action audit row.
-            return JSONResponse({"ok": True, "meta": existing,
-                                 "message": "avatar already exists"})
-        meta = store.generate_pfp(home, instance_id, config=random_config())
-        console_write(CONSOLE_PFP_WRITE, user_id=_effective_user_id(request),
-                      attrs={"action": "generate", "outcome": "created"})
-        return JSONResponse({"ok": True, "meta": meta})
-    except Exception as e:
-        return _pfp_refusal(str(e))
-
-
-@router.post("/api/pfp/randomize", dependencies=webgate.MUTATION_DEPS)
-async def api_pfp_randomize(request: Request):
-    """Re-roll the DRAFT (body: {"what": "all"|"face"|"voice"}). Refused once kept."""
-    _pfp_owner_required(request)
-    from modules.pfp import store
-    from modules.pfp.config import load_frozen_config
-    from modules.pfp.identity import core_config, default_config, shuffle_face, shuffle_voice
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-    what = body.get("what") if body.get("what") in ("all", "face", "voice") else "all"
-    home, instance_id = _pfp_data_dir(), resolve_instance_id()
-    try:
-        meta = load_pfp_meta(home, instance_id)
-        if meta is not None and store.is_locked(meta):
-            return _pfp_refusal("the identity is kept — setup happens once")
-        try:
-            current = core_config(load_frozen_config(meta)) if meta else default_config()
-        except Exception:
-            current = default_config()
-        if what == "voice":
-            config = shuffle_voice(current)
-        elif what == "face":
-            config = shuffle_face(current)
-        else:
-            config = shuffle_face(current)
-            config["override"].pop("voice", None)
-        new_meta = store.generate_pfp(home, instance_id, config=config, force=True)
-        console_write(CONSOLE_PFP_WRITE, user_id=_effective_user_id(request),
-                      attrs={"action": "randomize", "what": what})
-        return JSONResponse({"ok": True, "meta": new_meta})
-    except Exception as e:
-        return _pfp_refusal(str(e))
-
-
-def _pfp_refusal(message: str) -> JSONResponse:
-    """A refused avatar write, as a REFUSAL (043 A19).
-
-    These three routes answered every refusal with HTTP 200 and ``ok: false``,
-    and the one caller derived success from the status code — so "the identity
-    is kept, setup happens once" rendered as a successful re-roll. A 409 is the
-    honest shape (the request conflicts with a state that is one-way), and the
-    body carries both ``ok`` and ``error`` so a caller reading either is right.
-    """
-    return JSONResponse({"ok": False, "error": message, "message": message},
-                        status_code=409)
-
-
-@router.post("/api/pfp/keep", dependencies=webgate.MUTATION_DEPS)
-async def api_pfp_keep(request: Request):
-    """Accept the draft — lock the identity PERMANENTLY (one-way)."""
-    _pfp_owner_required(request)
-    from modules.pfp import store
-    home, instance_id = _pfp_data_dir(), resolve_instance_id()
-    try:
-        meta = store.keep_pfp(home, instance_id)
-        console_write(CONSOLE_PFP_WRITE, user_id=_effective_user_id(request),
-                      attrs={"action": "keep", "outcome": "locked"})
-        return JSONResponse({"ok": True, "meta": meta})
-    except FileNotFoundError:
-        return _pfp_refusal("no avatar to keep — generate one first")
-    except Exception as e:
-        return _pfp_refusal(str(e))
+    ext = st.path.suffix.lstrip(".")
+    headers = {"X-Content-Type-Options": "nosniff", "Cache-Control": "no-cache"}
+    if ext == "svg":
+        # An SVG can carry script; served same-origin it must not run any.
+        headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+    return FileResponse(str(st.path), media_type=CONTENT_TYPES.get(ext, "application/octet-stream"),
+                        headers=headers)
 
 
 def _empty_ledger(user_id: str, days: int) -> dict:
@@ -759,10 +654,10 @@ def _wallet_owner_id(request: Request) -> str:
 
 
 from webview.wallet_reader import api_wallet
-router.add_api_route("/api/webgate/wallet", api_wallet, methods=["GET"])
+money_router.add_api_route("/api/webgate/wallet", api_wallet, methods=["GET"])
 
 
-@router.get("/api/webgate/ledger")
+@money_router.get("/api/webgate/ledger")
 async def api_ledger(request: Request, days: int = 7):
     """Unified financial ledger for the effective tenant — reuse ``build_ledger``.
 
@@ -772,13 +667,24 @@ async def api_ledger(request: Request, days: int = 7):
     (``include_balances=True``). Read-only, tenant-scoped (``_effective_user_id``
     raises 403 outside the try — must not be fail-open-swallowed). All-zero-
     tolerant: a ledger error degrades to zeros (``_empty_ledger``, shape-
-    identical to a real read)."""
+    identical to a real read).
+
+    ⚠️ An unreadable store is not an empty one. The fallback's zeros are a
+    SHAPE, not a reading, so the error path also carries ``readable: False``
+    and ``error`` (the reason); money.js draws "could not read" on Cash and
+    Limits from that and never the zeros. A real read carries
+    ``readable: True``."""
     days = max(1, min(int(days), 365))
     user_id = _wallet_owner_id(request)  # 403 in multitenant if no tenant identity
     try:
         ledger = await build_ledger(user_id, days=days, include_balances=True)
-    except Exception:
+        ledger["readable"] = True
+    except Exception as exc:
+        logger.warning("api_ledger: the ledger read failed for %s", user_id,
+                       exc_info=True)
         ledger = _empty_ledger(user_id, days)
+        ledger["readable"] = False
+        ledger["error"] = f"the ledger read failed ({type(exc).__name__})"
     # Merge, don't overwrite: ledger["caps"] already carries the raw
     # PolicyGate reads (daily_cap_usd/per_tx_cap_usd) from build_ledger —
     # _ledger_caps() adds the legacy display keys (wallet_daily_cap_usd/
@@ -799,7 +705,7 @@ async def api_ledger(request: Request, days: int = 7):
     return JSONResponse(ledger)
 
 
-@router.get("/api/webgate/positions")
+@money_router.get("/api/webgate/positions")
 async def api_positions(request: Request, chain: str = "base", ledger: str = ""):
     """The agent's on-chain BOOK — portfolio + ledger⟷chain reconcile (2026-08-27).
 
@@ -881,7 +787,7 @@ async def api_positions(request: Request, chain: str = "base", ledger: str = "")
     return JSONResponse(out)
 
 
-@router.get("/api/webgate/liquidity")
+@money_router.get("/api/webgate/liquidity")
 async def api_liquidity(request: Request, chain: str = "robinhood", onchain: bool = False):
     """Read the shared liquidity snapshot section; chain enumeration is opt-in."""
     from dataclasses import asdict
@@ -909,7 +815,7 @@ async def api_liquidity(request: Request, chain: str = "robinhood", onchain: boo
     return JSONResponse(asdict(section))
 
 
-@router.get("/api/webgate/book")
+@money_router.get("/api/webgate/book")
 async def api_book(request: Request):
     """One reader over EVERY money chain (043 A34) — worst-chain-wins, not a
     single chain at a time. ``/api/webgate/positions`` above answers "how does
@@ -1250,6 +1156,11 @@ def _decide_pending(kind: str, item_id: str, kw: dict, *, approved: bool) -> tup
                                     task_agent=_console_task_agent())
     if kind == "correspondent":
         return _decide_correspondent(item_id, kw["user_id"], approved=approved)
+    if kind == "token_identity":
+        # W1: which contract is the real token — the SAME decider every seat uses.
+        from tools.defi.token_identity_ask import decide_item
+        return decide_item(_webgate_goal_board(), item_id, approve=approved,
+                           user_id=kw["user_id"])
     fn = self_evolution.promote if approved else self_evolution.reject
     return fn(kind, item_id, **kw)
 
@@ -1595,7 +1506,7 @@ def _invoicing_off_note():
     return invoicing_off_note() or None
 
 
-@router.get("/api/webgate/invoices")
+@money_router.get("/api/webgate/invoices")
 async def api_invoices(request: Request, status: str = ""):
     """Tenant-scoped invoice listing — reuse ``modules.x402.invoicing.
     list_payment_requests`` (the exact seam `polyrob owner invoices --user`
@@ -1653,7 +1564,7 @@ async def api_invoices(request: Request, status: str = ""):
     })
 
 
-@router.post("/api/webgate/invoices/{request_id}/settle", dependencies=webgate.MUTATION_DEPS)
+@money_router.post("/api/webgate/invoices/{request_id}/settle", dependencies=webgate.MUTATION_DEPS)
 async def api_invoice_settle(request: Request, request_id: str):
     """Attest an invoice as PAID (pending → completed) — owner attestation,
     not a payment. Same primitive as `polyrob owner settle <id> [--tx-hash]`
@@ -1715,7 +1626,8 @@ async def api_doctor(request: Request):
     ``modules.memory.backend_factory`` actually does at runtime). One shared
     resolution, so the page can never contradict itself again (P0-4).
     """
-    env = dict(os.environ)
+    from core.security.custody_env import custody_environ
+    env = custody_environ()  # 066 P0.2: a loaded seed is held, not in os.environ
     checks_error = None
     try:
         checks = doctor_report(env, local_absent_means_on=False)
@@ -1771,6 +1683,7 @@ async def api_doctor(request: Request):
                   "items": [{"key": h.key, "severity": h.severity, "text": h.text,
                              "remedy": h.remedy} for h in snap.health],
                   "unverified": list(snap.unavailable_sources),
+                  "unverified_words": _section_words(snap.unavailable_sources),
                   "lines": render_health_lines(snap, prefix="")}
         status_lines = render_status_lines(snap, prefix="")
     except Exception as e:
@@ -1779,6 +1692,19 @@ async def api_doctor(request: Request):
     return JSONResponse(_doctor_payload(
         checks, health, status_lines, env, provider, model, rob_local,
         checks_error=checks_error))
+
+
+def _section_words(unavailable) -> list:
+    """070 E.23: each ``"<section> (<reason>)"`` as the owner word for the
+    section (``status.section.<id>`` in core copy); the reason stays in
+    ``unverified`` for the full report. An id with no word shows the id."""
+    from core.copy import has as _has_core, t as _t_core
+    out = []
+    for entry in unavailable or ():
+        sid = str(entry).split(" (", 1)[0].strip()
+        key = f"status.section.{sid}"
+        out.append(_t_core(key) if _has_core(key) else sid)
+    return out
 
 
 def _doctor_payload(checks, health, status_lines, env, provider, model, rob_local,
@@ -1821,3 +1747,9 @@ def _doctor_payload(checks, health, status_lines, env, provider, model, rob_loca
 
 
 __all__ = ["router"]
+
+
+# 067 P5a: the Money data routes, contributed to the console (see money_router).
+from webview.contributions import register_console_router  # noqa: E402
+
+register_console_router(money_router, destination="money", source="webview.pages")

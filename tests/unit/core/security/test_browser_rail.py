@@ -53,11 +53,75 @@ def test_configured_but_refused_is_unreachable_with_service_remedy(monkeypatch):
     monkeypatch.setenv("AGENT_WALLET_ENABLED", "true")
     monkeypatch.setenv("BROWSER_CDP_URL", "http://127.0.0.1:9222")
     monkeypatch.setattr(br, "_probe_cdp", lambda url: (False, "connection refused", ""))
+    monkeypatch.setattr(br, "_local_unit_active", lambda: False)
     st = br.browser_rail_status()
     assert st.state == "unreachable" and not st.usable
     assert "configured but not reachable (connection refused)" in st.refusal()
     assert "polyrob-browser.service" in st.refusal()
     assert "Configure a separately isolated" not in st.refusal()
+
+
+def test_refused_by_uid_rule_while_unit_active_is_configured_not_a_fault(monkeypatch):
+    """The CDP port is closed to the console UID (server assessment M1): the
+    console's refused probe must not raise a false browser_rail_unreachable."""
+    monkeypatch.setenv("AGENT_WALLET_ENABLED", "true")
+    monkeypatch.setenv("BROWSER_CDP_URL", "http://127.0.0.1:9222")
+    monkeypatch.setattr(br, "_probe_cdp", lambda url: (False, "connection refused", ""))
+    monkeypatch.setattr(br, "_local_unit_active", lambda: True)
+    monkeypatch.setattr(br, "_uid_rule_closes", lambda url: True)
+    st = br.browser_rail_status()
+    assert st.state == "configured" and st.usable and st.remedy == ""
+    assert st.line() == "remote cdp configured (" + br.UID_CLOSED_REASON + ")"
+
+
+def _write_rule(tmp_path, monkeypatch, port):
+    from cli.commands.browser import render_egress_script
+    path = tmp_path / "egress.sh"
+    path.write_text(render_egress_script(port=port))
+    monkeypatch.setattr(br, "EGRESS_SCRIPT", str(path))
+    for name in ("POLYROB_BROWSER_CDP_PORT", "POLYROB_BROWSER_CDP_CLIENTS", "POLYROB_BROWSER_USER"):
+        monkeypatch.delenv(name, raising=False)
+
+
+def _me():
+    import os
+    import pwd
+    return pwd.getpwuid(os.geteuid()).pw_name
+
+
+def test_egress_script_path_matches_the_installer():
+    from cli.commands.browser import EGRESS_SCRIPT_PATH
+    assert br.EGRESS_SCRIPT == str(EGRESS_SCRIPT_PATH)
+
+
+def test_no_installed_rule_means_no_uid_claim(tmp_path, monkeypatch):
+    monkeypatch.setattr(br, "EGRESS_SCRIPT", str(tmp_path / "absent.sh"))
+    assert br._uid_rule_closes("http://127.0.0.1:9222") is False
+
+
+@pytest.mark.parametrize("port", [9222, 9333])
+def test_uid_rule_reads_the_installed_port(tmp_path, monkeypatch, port):
+    """Codex 2026-09-25 #5 (recheck): a custom --port host must read ITS port."""
+    _write_rule(tmp_path, monkeypatch, port)
+    outside = _me() not in ("root", "polyrob-browser", "polyrob-agent")
+    assert br._uid_rule_closes(f"http://127.0.0.1:{port}") is outside
+    other = 9222 if port != 9222 else 9333
+    assert br._uid_rule_closes(f"http://127.0.0.1:{other}") is False
+
+
+def test_allowed_client_is_never_claimed_closed(tmp_path, monkeypatch):
+    _write_rule(tmp_path, monkeypatch, 9222)
+    monkeypatch.setenv("POLYROB_BROWSER_CDP_CLIENTS", _me())
+    assert br._uid_rule_closes("http://127.0.0.1:9222") is False
+
+
+def test_refused_on_another_port_stays_unreachable(tmp_path, monkeypatch):
+    _write_rule(tmp_path, monkeypatch, 9222)
+    monkeypatch.setenv("AGENT_WALLET_ENABLED", "true")
+    monkeypatch.setattr(br, "_probe_cdp", lambda url: (False, "connection refused", ""))
+    monkeypatch.setattr(br, "_local_unit_active", lambda: True)
+    monkeypatch.setenv("BROWSER_CDP_URL", "http://127.0.0.1:19999")
+    assert br.browser_rail_status(refresh=True).state == "unreachable"
 
 
 def test_endpoint_value_never_rendered(monkeypatch):

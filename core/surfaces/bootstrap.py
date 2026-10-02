@@ -32,6 +32,24 @@ def _ensure_conversation_store(container, db_path: str) -> None:
         logger.debug("conversation store unavailable: %s", e)
 
 
+def _ensure_owner_thread(container, db_path: str) -> None:
+    """061: register the ONE owner-thread store beside the bus. Idempotent +
+    fail-open; every writer and reader resolves it through
+    ``core.surfaces.owner_thread.resolve_store`` and tolerates its absence."""
+    try:
+        if container.get_service("owner_thread") is not None:
+            return
+        import os as _os
+        from core.surfaces.owner_thread import DB_NAME, OwnerThreadStore, owner_thread_enabled
+        if not owner_thread_enabled():
+            return
+        path = _os.path.join(_os.path.dirname(db_path) or ".", DB_NAME)
+        container.register_service("owner_thread", OwnerThreadStore(path))
+        logger.info("surface bus: owner thread installed (%s)", path)
+    except Exception as e:
+        logger.debug("owner thread unavailable: %s", e)
+
+
 def _ensure_dead_targets(container, db_path: str):
     """T1.5 Task 4: register the dead-target registry alongside the bus.
 
@@ -170,6 +188,7 @@ def install_surface_bus(container, db_path: str = None) -> bool:
     existing = container.get_service("message_router")
     if existing is not None:
         _ensure_conversation_store(container, db_path)
+        _ensure_owner_thread(container, db_path)
         _ensure_correspondent_registry(container, db_path)
         dt = _ensure_dead_targets(container, db_path)
         if dt is not None:
@@ -207,6 +226,7 @@ def install_surface_bus(container, db_path: str = None) -> bool:
         container.register_service("outbound_allowlist", OutboundAllowlist(db_path))
 
         _ensure_conversation_store(container, db_path)
+        _ensure_owner_thread(container, db_path)
         _ensure_correspondent_registry(container, db_path)
 
         dt = _ensure_dead_targets(container, db_path)

@@ -254,6 +254,10 @@ class ResponsesCompatClient(OpenAICompatClient):
         if max_tokens:
             params["max_output_tokens"] = max_tokens
 
+        # F20: the Responses API names the system prompt `instructions`; pass it
+        # explicitly so this path stamps a real prefix instead of nothing.
+        from modules.llm.prefix_stamp import stamp_client
+        stamp_client(self, params, system=instructions)
         response = await self._client.responses.create(**params)
         self.last_response = response
         content, tool_calls = from_responses_output(response)

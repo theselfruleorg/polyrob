@@ -46,11 +46,17 @@ def audit_path(data_dir: Optional[str] = None) -> str:
 
 
 def own_trade_tx_refs(data_dir: Optional[str] = None,
-                      path: Optional[str] = None) -> Set[str]:
+                      path: Optional[str] = None,
+                      account: Optional[str] = None) -> Set[str]:
     """Lower-cased broadcast references of our own recorded trades.
 
     An empty set is the honest answer for a missing/unreadable ledger: it means
     "nothing is confirmed as ours", never "nothing is ours".
+
+    ``account`` (050 §7.4): ``None`` = every holder (the pre-050 answer);
+    ``""`` = the treasury only (entries with no ``account``); an address = that
+    token-bound account only. An account's sell lands its proceeds in the ACCOUNT, so the
+    treasury's settlement watcher must not count it as the treasury's own.
     """
     ledger = path or audit_path(data_dir)
     refs: Set[str] = set()
@@ -70,6 +76,9 @@ def own_trade_tx_refs(data_dir: Optional[str] = None,
                     continue
                 if entry.get("venue") != TRADE_VENUE:
                     continue
+                if account is not None and \
+                        str(entry.get("account") or "").lower() != str(account).lower():
+                    continue
                 ref = entry.get("result_ref")
                 if ref:
                     refs.add(str(ref).strip().lower())
@@ -83,9 +92,9 @@ def own_trade_tx_refs(data_dir: Optional[str] = None,
 
 
 def is_own_trade_tx(tx_hash: Optional[str], data_dir: Optional[str] = None,
-                    path: Optional[str] = None) -> bool:
+                    path: Optional[str] = None, account: Optional[str] = None) -> bool:
     """Did WE broadcast *tx_hash*? Case-insensitive (an EVM hash reaches the
     ledger from web3 and the scanner from `eth_getLogs`, in different cases)."""
     if not tx_hash:
         return False
-    return str(tx_hash).strip().lower() in own_trade_tx_refs(data_dir, path)
+    return str(tx_hash).strip().lower() in own_trade_tx_refs(data_dir, path, account)

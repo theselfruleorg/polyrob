@@ -11,6 +11,7 @@ construction is unit-testable and the real commands are auditable in one place.
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -23,12 +24,12 @@ RunFn = Callable[[List[str], Optional[Path]], None]
 CaptureFn = Callable[[List[str], Optional[Path]], str]
 
 #: Post-install asset check — run in the UPDATED interpreter, so it resolves the
-#: files exactly the way the runtime will (off the installed `modules.pfp` /
+#: files exactly the way the runtime will (off the installed `modules.cards` /
 #: `webview` packages, never off the source tree the updater happens to sit in).
 #:
-#: These four are load-bearing, not decoration: `mindprint.js` IS the avatar
-#: engine, `rob.png` is the last-resort face, and the two DejaVu faces are what
-#: keep an invoice card from rendering in PIL's default bitmap font. Pinned
+#: These three are load-bearing, not decoration: the brand mark is the invoice
+#: card's header when the instance has no avatar, and the two DejaVu faces are
+#: what keep an invoice card from rendering in PIL's default bitmap font. Pinned
 #: alongside `tests/test_shipped_assets_ratchet.py`, which enforces the same
 #: files at the declaration level.
 #: ⚠️ `sys.exit(...) if missing else None`, NOT `raise ... if missing else None`
@@ -36,10 +37,10 @@ CaptureFn = Callable[[List[str], Optional[Path]], str]
 #: which is a TypeError on the HEALTHY path. Found by executing the probe;
 #: the string-matching unit test was perfectly happy with it.
 _ASSET_PROBE = (
-    "import pathlib, sys, modules.pfp as p; "
+    "import pathlib, sys, modules.cards as p; "
     "r = pathlib.Path(p.__file__).resolve().parents[2]; "
     "missing = [str(x) for x in ("
-    "r / 'avatar' / 'mindprint.js', r / 'avatar' / 'renders' / 'rob.png', "
+    "r / 'assets' / 'brand' / 'polyrob-mark-256.png', "
     "r / 'assets' / 'fonts' / 'dejavu' / 'DejaVuSans.ttf', "
     "r / 'assets' / 'fonts' / 'dejavu' / 'DejaVuSans-Bold.ttf') "
     "if not x.is_file()]; "
@@ -95,6 +96,8 @@ def build_runners(
     python: Optional[str] = None,
     run: Optional[RunFn] = None,
     capture: Optional[CaptureFn] = None,
+    extras: Optional[List[str]] = None,
+    packs: Optional[List[str]] = None,
 ) -> Optional[UpdateRunners]:
     """Build real runners for a self-updatable git/editable install, else ``None``.
 
@@ -116,8 +119,59 @@ def build_runners(
     _run: RunFn = run or _checked_run
     _capture: CaptureFn = capture or _checked_capture
     editable = install_ctx.method == EDITABLE_GIT
-    pip_install = [py, "-m", "pip", "install", "-e", "."] if editable \
-        else [py, "-m", "pip", "install", "."]
+    # 058: reinstall the SAME shape this install has — `.[<extras present>]`,
+    # constrained by requirements.lock when the tree carries it. A bare
+    # `pip install -e .` dropped every extra (a new dependency an extra gained
+    # never arrived) and could move a pinned core package. `extras` is
+    # injectable; None = detect from what is installed.
+    # 066 P1 / D2: hash-checked against requirements.lock — the closure of the
+    # carried extras, then the project --no-deps (see extras.install_commands).
+    from cli.update.extras import install_commands, installed_extras, lock_path
+    from cli.update import packs as pk
+    import tempfile
+    carried = list(extras) if extras is not None else installed_extras(repo)
+    # 067 (one install): the packs this install carries — a retired separate
+    # pack dist (its pack now ships inside polyrob) and, for a rollback target
+    # with the old layout, that tree's own first-party packs. Read on the FIRST
+    # pip install — AFTER the checkout moved, BEFORE anything is uninstalled —
+    # and reused by the rollback. `packs` is injectable; None = detect.
+    wanted: List[List[str]] = [list(packs)] if packs is not None else []
+    retired: List[list] = []
+
+    def _wanted_packs() -> List[str]:
+        if not wanted:
+            wanted.append(pk.carried_packs(repo))
+        if not retired:
+            retired.append(pk.retired_installed())
+        return wanted[0]
+    deps_file = Path(tempfile.gettempdir()) / f"polyrob-update-deps-{os.getpid()}.txt"
+
+    def _pip_install() -> None:
+        notes: List[str] = []
+        ids = _wanted_packs()
+        hashed = lock_path(repo) is not None
+        if pk.tree_bundles_packs(repo):
+            # The packs ship inside polyrob: carry each pack as its extra, then
+            # retire the separate dists' METADATA (never a pack file) and verify
+            # one provider per pack — all before the update's verify step.
+            cmds = install_commands(py, repo, sorted(set(carried) | set(pk.bundled_extras(repo, ids))),
+                                    editable=editable, deps_file=deps_file)
+            cmds += pk.retire_commands(py, repo, retired[0])
+        else:
+            rows = pk.resolve_install(py, repo, ids, _capture, notes)
+            cmds = install_commands(py, repo, carried, editable=editable, deps_file=deps_file,
+                                    packs=[r[0] for r in rows] if hashed else None)
+            cmds += pk.pack_commands(py, rows, editable=editable, hashed=hashed)
+        for note in notes:
+            print(f"polyrob update: {note}", file=sys.stderr)
+        try:
+            for cmd in cmds:
+                _run(cmd, repo)
+        finally:
+            try:
+                deps_file.unlink()
+            except OSError:
+                pass
 
     old_sha = None
     old_branch = None
@@ -148,7 +202,7 @@ def build_runners(
             mutated = True
             _run(["git", "pull", "--ff-only"], repo)
         pip_attempted = True
-        _run(pip_install, repo)
+        _pip_install()
 
     def migrate() -> None:
         _run([py, "-I", "-m", "migrations.migrate", "upgrade"], repo)
@@ -156,13 +210,17 @@ def build_runners(
     def verify() -> None:
         # New code must at least import cleanly (the release smoke check).
         _run([py, "-m", "pip", "check"], repo)
-        _run([py, "-I", "-c", "import core, cli.polyrob"], repo)
+        # 058: the import probe covers the surfaces whose dependency moved to an
+        # extra — a bare `import core, cli.polyrob` passed happily on an install
+        # that had lost one of them.
+        _run([py, "-I", "-c", "import core, core.avatar, cli.polyrob, modules.llm.llm_factory, tools.filesystem, "
+                              "modules.memory.task, modules.cards.cards, utils.gif_utils, "
+                              "tools.document_parser, core.lazy_deps"], repo)
         # …and the runtime ASSETS must have landed with it. An import-only check
-        # passes happily on an install that lost a package-data glob: the agent
-        # then has no face (the avatar engine and the committed reference PNG
-        # are gone) and every invoice card silently degrades to PIL's default
-        # font. Raising here is what makes engine.apply_update roll back —
-        # `avatar/` and `assets/` shipped in NO deploy script at all until
+        # passes happily on an install that lost a package-data glob: the
+        # invoice card loses its brand-mark header and silently degrades to
+        # PIL's default font. Raising here is what makes engine.apply_update roll back —
+        # `assets/` shipped in NO deploy script at all until
         # 2026-09-15, which is the class this closes.
         _run([py, "-I", "-c", _ASSET_PROBE], repo)
 
@@ -177,7 +235,7 @@ def build_runners(
         if pip_attempted:
             # No `pip check` here: a pre-existing, unrelated dependency conflict
             # must not make the ROLLBACK itself report as failed.
-            _run(pip_install, repo)
+            _pip_install()
 
     return UpdateRunners(install=install, migrate=migrate,
                          verify=verify, rollback_code=rollback_code)

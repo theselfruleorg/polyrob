@@ -54,4 +54,33 @@ STRINGS = {
 
     # A tool that did not finish. Never the raw error, which can carry a repr.
     "chat.act.failed": "An action did not finish",
+
+    # ------------------------------------------------------------- 070 E.23
+    # A status-snapshot section id in words, for "I could not check: …" on any
+    # seat. The id is ``core.status_snapshot.SECTION_ORDER``; a section with no
+    # key here shows its id (tests/unit/webview/test_agent_posture_axes.py
+    # pins one key per section).
+    "status.section.session": "this chat",
+    "status.section.providers": "AI providers",
+    "status.section.work": "goals",
+    "status.section.approvals": "approvals",
+    "status.section.loops": "background loops",
+    "status.section.tools": "abilities",
+    "status.section.knowledge": "memory and documents",
+    "status.section.delivery": "messages to you",
+    "status.section.posture": "permissions",
+    "status.section.security": "security checks",
+    "status.section.identity": "identity",
+    "status.section.rules": "your rules",
+    "status.section.apps": "apps",
+    "status.section.groups": "group chats",
+    "status.section.room_actions": "paid actions in group chats",
+    "status.section.creations": "tokens Rob created",
+    "status.section.collectibles": "NFTs",
+    "status.section.liquidity": "pool deposits",
+    "status.section.wallet": "wallet",
+    "status.section.custody": "wallet key safety",
+    "status.section.packs": "add-ons",
+    "status.section.money": "money records",
+    "status.section.economics": "AI credit",
 }

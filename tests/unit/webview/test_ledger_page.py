@@ -26,6 +26,7 @@ def _router_client():
     import webview.pages as pages
     app = FastAPI()
     app.include_router(pages.router)
+    app.include_router(pages.money_router)  # 067 P5a: Money readers
     return TestClient(app), pages
 
 
@@ -142,6 +143,41 @@ def test_ledger_endpoint_all_zero_on_error(monkeypatch):
         "calls_window": 0, "calls_total": 0,
         "provider_balance_usd": None, "available": False,
     }
+
+
+def test_a_failed_ledger_read_is_marked_unreadable_not_empty(monkeypatch):
+    """An unreadable store is not an empty one: the fallback's zeros are a
+    shape, so the body says ``readable: False`` and names the reason."""
+    client, pages = _router_client()
+    monkeypatch.setattr(pages, "_effective_user_id", lambda req: "u1")
+
+    async def _boom(user_id, *, days=7, db=None, include_balances=False):
+        raise RuntimeError("ledger down")
+
+    monkeypatch.setattr(pages, "build_ledger", _boom)
+    body = _get_ledger(client)
+    assert body["readable"] is False
+    assert "RuntimeError" in body["error"]
+
+
+def test_a_real_ledger_read_is_marked_readable(monkeypatch):
+    client, pages = _router_client()
+    monkeypatch.setattr(pages, "_effective_user_id", lambda req: "u1")
+    monkeypatch.setattr(pages, "build_ledger", _fake_ledger)
+    body = _get_ledger(client)
+    assert body["readable"] is True
+    assert "error" not in body
+
+
+def test_the_ledger_tenant_refusal_is_still_403(monkeypatch):
+    """The 403 stays OUTSIDE the fail-open: a refused tenant never gets the
+    unreadable body."""
+    client, pages = _router_client()
+    monkeypatch.setattr(pages, "_effective_user_id", lambda req: "u1")
+    import core.wallet.authority as authority
+    monkeypatch.setattr(authority, "owner_refusal", lambda uid: "not the owner")
+    r = client.get("/api/webgate/ledger?days=7")
+    assert r.status_code == 403
 
 
 def test_ledger_endpoint_note_absent_when_fully_available(monkeypatch):

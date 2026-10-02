@@ -20,15 +20,21 @@ class DoneAction(BaseModel):
 class SendMessageAction(BaseModel):
 	"""Send a message to the user."""
 	model_config = ConfigDict(extra='forbid')
+
+	@model_validator(mode="before")
+	@classmethod
+	def _drop_retired_timeout(cls, data):
+		# `timeout_seconds` was in the schema but nothing ever read it (review
+		# F13, 2026-09-29). It left the schema; a call that still passes it is
+		# accepted and the value is ignored, as it always was.
+		if isinstance(data, dict) and "timeout_seconds" in data:
+			data = {k: v for k, v in data.items() if k != "timeout_seconds"}
+		return data
 	
 	text: str = Field(description="Message to send to user")
 	wait_for_response: bool = Field(
 		default=False,
 		description="If True, pause and wait for user to respond"
-	)
-	timeout_seconds: int = Field(
-		default=300,
-		description="How long to wait for response (if wait_for_response=True)"
 	)
 	reply_to: Optional[str] = Field(
 		default=None,
@@ -62,15 +68,16 @@ class MessageTargetAction(BaseModel):
 	surface: Optional[str] = Field(
 		default=None,
 		description=("Surface id, e.g. 'telegram', 'email', 'whatsapp'. Omit to use the "
-		             "owner's primary surface."))
+		             "owner's primary surface. 'email' sets a fixed subject line (a reply keeps "
+		             "the thread); to choose the subject use email_send."))
 	target: Optional[str] = Field(
 		default=None,
 		description=("Recipient/chat id on that surface (chat id, @user, or email address). "
 		             "Omit, or pass 'owner', to message the owner."))
 	text: str = Field(description="Message body to send")
-	action: str = Field(default="send", description="send | reply | edit | delete | react")
+	action: str = Field(default="send", description="send | reply (edit/delete/react are not supported)")
 	reply_to: Optional[str] = Field(default=None, description="Message id to reply to")
-	message_id: Optional[str] = Field(default=None, description="Target message id for edit/delete/react")
+	message_id: Optional[str] = Field(default=None, description="Unused (edit/delete/react are not supported)")
 	media_paths: Optional[List[str]] = Field(
 		default=None,
 		description=(
@@ -81,46 +88,13 @@ class MessageTargetAction(BaseModel):
 			"other surfaces still get the text, plus an honest note that media wasn't sent."))
 
 
-# Twitter specific actions
-class TwitterSearchAction(BaseModel):
-	"""Model for searching tweets"""
-	query: str
-	max_results: Optional[int] = 10
-	include_replies: Optional[bool] = False
-
-
-class TwitterGetUserAction(BaseModel):
-	"""Model for getting Twitter user information"""
-	username: str
-
-
-class TwitterGetTweetsAction(BaseModel):
-	"""Model for getting tweets from a user"""
-	user_id: str
-	max_results: Optional[int] = 10
-
-
 # Web fetch (stateless page reader)
 class WebFetchAction(BaseModel):
 	"""Model for fetching and reading a single web page as markdown."""
 	url: str
-	max_chars: int = 40000
-
-
-# Perplexity specific actions
-class PerplexitySearchAction(BaseModel):
-	"""Model for searching using Perplexity AI"""
-	query: str
-
-
-class PerplexityAnalyzeAction(BaseModel):
-	"""Model for getting detailed analysis on a topic"""
-	topic: str
-
-
-class PerplexitySourcesAction(BaseModel):
-	"""Model for getting trusted sources on a topic"""
-	topic: str
+	# M14: bounded so an untrusted page cannot be pulled whole into the context
+	# and the downstream preview/regex passes.
+	max_chars: int = Field(default=40000, ge=1, le=200_000)
 
 
 # FileSystem specific actions
@@ -192,6 +166,22 @@ class AppendFileAction(BaseModel):
 
 	file_path: str = Field(alias='filePath')
 	content: str
+	#: Insert immediately AFTER the first line containing this exact text,
+	#: instead of at the end of the file. Added 2026-09-23: a newest-first
+	#: table could not gain a row, because append-at-end and whole-file write
+	#: were the only primitives and rewriting a 2,718-line file to prepend one
+	#: line is not a reasonable move. Absent anchor => refuse, never a silent
+	#: append at the end. None/blank = ordinary append.
+	after_anchor: Optional[str] = Field(default=None, alias='afterAnchor')
+
+	@field_validator('after_anchor', mode='before')
+	@classmethod
+	def _blank_anchor_is_absent(cls, v):
+		# '' is a substring of every line; treating it as an anchor would
+		# insert at line 1 and call it a match.
+		if isinstance(v, str) and not v.strip():
+			return None
+		return v
 
 	@field_validator('file_path')
 	@classmethod
@@ -378,12 +368,12 @@ class SubtaskAction(BaseModel):
 
 	task: str = Field(
 		...,
-		description="Detailed subtask description (>80 chars). Include all context the sub-agent needs.",
+		description="Detailed subtask description (at least 20 chars). Include all context the sub-agent needs.",
 		min_length=20
 	)
 	profile: str = Field(
 		default="executor",
-		description="Sub-agent profile (only 'executor' is implemented; other values fall back to it)"
+		description="Sub-agent profile: 'executor' (default), or — when WORKERS_ENABLED is on — the id of an APPROVED worker (worker_manage action='list'); an unknown or pending worker is then refused. With WORKERS_ENABLED off, any value runs as executor."
 	)
 	max_steps: int = Field(
 		default=30,
@@ -406,7 +396,7 @@ class SubtaskAction(BaseModel):
 
 
 class ParallelSubtasksAction(BaseModel):
-	"""Run 2-4 independent subtasks in parallel using sub-agents.
+	"""Run 2-5 independent subtasks in parallel using sub-agents.
 
 	⚠️ WARNING: Very expensive - spawns multiple full agent conversations.
 
@@ -442,14 +432,14 @@ class DelegateTaskAction(BaseModel):
 	ACROSS THE TURN but NOT across a process restart — for long-running or scheduled
 	durable work use the scheduler (cron), not background delegation.
 
-	``role`` sets the role of the spawned sub-agent(s): 'leaf' (default) cannot
-	delegate further; 'orchestrator' may, subject to the depth limit.
+	``role``: every spawned sub-agent runs as a leaf today (it cannot delegate
+	further); 'orchestrator' is accepted for compatibility and changes nothing.
 	"""
 	model_config = ConfigDict(extra='forbid')
 
 	goal: Optional[str] = Field(
 		default=None,
-		description="Single delegated goal (>20 chars). Use this OR 'tasks'.",
+		description="Single delegated goal (at least 20 chars). Use this OR 'tasks'.",
 		min_length=20,
 	)
 	tasks: Optional[List[SubtaskAction]] = Field(
@@ -460,7 +450,7 @@ class DelegateTaskAction(BaseModel):
 	)
 	profile: str = Field(
 		default="executor",
-		description="Sub-agent profile when 'goal' is used (only 'executor' is implemented; other values fall back to it)",
+		description="Sub-agent profile when 'goal' is used: 'executor' (default), or — when WORKERS_ENABLED is on — the id of an APPROVED worker (worker_manage action='list'); an unknown or pending worker is then refused. With WORKERS_ENABLED off, any value runs as executor.",
 	)
 	max_steps: int = Field(
 		default=30,
@@ -469,7 +459,8 @@ class DelegateTaskAction(BaseModel):
 	)
 	role: Literal["leaf", "orchestrator"] = Field(
 		default="leaf",
-		description="Role for spawned sub-agent(s): 'leaf' cannot delegate further; 'orchestrator' may (subject to depth limits).",
+		description=("Accepted for compatibility: every spawned sub-agent runs as a leaf today "
+		             "(it cannot delegate further), so 'orchestrator' changes nothing."),
 	)
 	background: bool = Field(
 		default=False,

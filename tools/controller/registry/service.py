@@ -1,8 +1,9 @@
 import asyncio
 import os
 import threading
+from collections import OrderedDict
 from inspect import iscoroutinefunction, signature
-from typing import Any, Callable, Dict, List, Optional, Type, TYPE_CHECKING
+from typing import Any, Callable, Dict, List, Optional, Sequence, Type, TYPE_CHECKING
 import logging
 
 # Native types
@@ -56,6 +57,59 @@ except ImportError:
 			pass
 
 
+#: F24: how many distinct (provider, action-set, exclusions) keys the tool-schema
+#: memo keeps. Each entry is a full emitted schema list, so an unbounded dict grows
+#: with every action set the process ever saw. 8 is the same bound a reference agent uses for
+#: its tool-defs cache.
+SCHEMA_CACHE_MAX_ENTRIES = 8
+
+
+def _cache_put(cache, key, value, max_entries: int = SCHEMA_CACHE_MAX_ENTRIES):
+	"""Insert *key* into the LRU-ordered *cache*, evicting the oldest over *max_entries*."""
+	if key in cache:
+		cache.pop(key)
+	cache[key] = value
+	while len(cache) > max_entries:
+		cache.popitem(last=False)
+
+
+def build_validation_hint(param_model, args) -> str:
+	"""The schema hint appended to a validation failure — about THIS call's args.
+
+	Live 2026-09-01: ``twitter_get_timeline`` failed a ``greater_than_equal``
+	constraint on ``max_results`` and the hint said "Required params: ['user']"
+	— the schema's whole required list, printed regardless of what actually
+	failed. ``user`` HAD been supplied, so the agent read the hint as "you forgot
+	user", re-sent the identical call and failed again 38 seconds later. A hint
+	that names a supplied parameter as missing is worse than no hint: it points
+	the reader away from the real cause with the full authority of the error
+	message.
+
+	So the hint is computed against the args of THIS call. Missing required
+	params are named as missing; when none are missing it SAYS so, which leaves
+	the pydantic constraint message (already in the error) as the only live
+	lead. Fail-open: an unreadable schema yields an empty hint rather than a
+	wrong one.
+	"""
+	try:
+		schema = param_model.model_json_schema()
+	except Exception:
+		return ""
+	required = list(schema.get('required', []) or [])
+	props = list((schema.get('properties', {}) or {}).keys())
+	supplied = set(args.keys()) if isinstance(args, dict) else set()
+	missing = [r for r in required if r not in supplied]
+	if missing:
+		lead = f"Missing required: {missing}."
+	elif required:
+		lead = (f"All required params were supplied ({required}) — this is a VALUE "
+				"constraint, not a missing field; re-read the error above and change "
+				"the value, not the field set.")
+	else:
+		lead = "This action has no required params — the failure is a value constraint."
+	return f" {lead} All params: {props}."
+
+
 class Registry:
 	"""Service for registering and managing actions"""
 
@@ -90,9 +144,22 @@ class Registry:
 		# worth of work + re-send per call). Cache them keyed on (provider, action-set,
 		# exclusions); the key changes whenever actions are added/removed, so it
 		# self-invalidates without explicit bumping.
-		self._provider_schema_cache: dict = {}
+		#
+		# F24 (2026-09-22 cache review): the key is correct but the dict was
+		# UNBOUNDED — every distinct action set ever seen (lazy `load_tool`, a
+		# credential TTL flipping a tool in and out, each delegated rig) accretes a
+		# FULL schema list (~58 K tokens' worth of dicts) that is never dropped.
+		# Bound both dicts to the 8 most recently used keys, oldest evicted.
+		self._provider_schema_cache: "OrderedDict[tuple, tuple]" = OrderedDict()
 		# P4: token estimate of each memoized schema list, same key discipline.
-		self._provider_schema_tokens: dict = {}
+		self._provider_schema_tokens: "OrderedDict[tuple, int]" = OrderedDict()
+
+		# F9 (063 WS-4): the action-name set the EMITTED provider schema list is
+		# pinned to for this session. None = not frozen (the flag is off, or the
+		# `tool_call` bridge is absent, or nothing has been emitted yet). Armed on
+		# the first emit for the provider call — never on the gauge's estimate, so
+		# reading the token cost cannot freeze a session before its rig is loaded.
+		self._frozen_schema_actions: Optional[frozenset] = None
 
 		# Track action registration for logging only
 		self._action_registration_logged = set()  # Track logged actions
@@ -931,28 +998,142 @@ class Registry:
 	# Metadata repairs should require explicit @action/metadata; no auto-repair scans
 
 
-	def get_all_actions_for_provider(self, provider: str) -> List[Dict[str, Any]]:
+	def _late_tool_mode(self, provider: str) -> str:
+		"""F9: ``grow`` | ``bridge`` | ``deferred`` for *provider* — the ONE resolver.
+
+		Lives in ``modules/llm/deferred_tools.py`` so the wire layer, the Registry
+		and the agent tier can never disagree about which shape a session is in.
+		"""
+		try:
+			from modules.llm.deferred_tools import late_tool_mode
+			return late_tool_mode(provider)
+		except Exception:  # pragma: no cover - defensive
+			return "grow"
+
+	def _resolve_frozen_actions(self, arm: bool, mode: str = "grow") -> Optional[frozenset]:
+		"""F9: the action-name set recorded at this session's first emit, or None.
+
+		``load_tool`` (and an MCP connect) registers new actions mid-session, which
+		changes the memo key and sends a LARGER ``tools[]``. On Anthropic the wire
+		order is ``tools -> system -> messages``, so a grown tool array colds the
+		ENTIRE request; under ``POLYROB_LOCAL`` progressive disclosure is on, so the
+		first ``load_tool`` of every local session was a full miss.
+
+		The set is recorded in BOTH non-``grow`` modes and means different things:
+
+		* ``bridge`` — a late action is NOT emitted at all; the model reaches it by
+		  name through ``tool_call(name, arguments)``. Freezing without the bridge
+		  would strand every late tool, so this mode only arms when ``tool_call``
+		  is registered.
+		* ``deferred`` — a late action IS emitted, carrying ``defer_loading``, and
+		  is surfaced by a ``tool_addition`` message. Nothing can be stranded, so
+		  this mode arms unconditionally.
+
+		``grow`` records nothing: the emitted list grows, as it did before
+		2026-09-23. Caller holds the lock.
+		"""
+		if mode == "grow":
+			return None
+		if self._frozen_schema_actions is None and arm:
+			if mode == "bridge":
+				from tools.controller.tool_call_bridge import TOOL_CALL_ACTION
+				if TOOL_CALL_ACTION not in self.registry.actions:
+					return None
+			self._frozen_schema_actions = frozenset(self.registry.actions.keys())
+			reach = ("reachable via tool_call(name, arguments)" if mode == "bridge"
+					 else "emitted with defer_loading and surfaced by tool_addition")
+			self.logger.info(
+				f"F9 ({mode}): tool schemas pinned at "
+				f"{len(self._frozen_schema_actions)} actions for this session; "
+				f"later registrations are {reach}")
+		return self._frozen_schema_actions
+
+	def schemas_frozen(self) -> bool:
+		"""True once this session's emitted ``tools[]`` is pinned (F9)."""
+		return self._frozen_schema_actions is not None
+
+	def late_action_names(self) -> tuple:
+		"""F9: the actions registered AFTER the freeze, in a stable order.
+
+		Excluded actions and aliases are left out (an alias shares its
+		``RegisteredAction`` object with the canonical name, so it would be the
+		same tool named twice). Empty in ``grow`` mode — nothing is pinned there.
+		"""
+		with self._registry_lock:
+			frozen = self._frozen_schema_actions
+			if not frozen:
+				return ()
+			seen = set()
+			out = []
+			for name, action in self.registry.actions.items():
+				if name in self.exclude_actions:
+					continue
+				canonical = getattr(action, "name", "") or name
+				if name in frozen or canonical in frozen:
+					continue
+				if id(action) in seen:
+					continue
+				seen.add(id(action))
+				out.append(canonical)
+			return tuple(sorted(out))
+
+	def get_all_actions_for_provider(
+		self, provider: str, preferred_order: Optional[Sequence[str]] = None
+	) -> List[Dict[str, Any]]:
 		"""Generate provider-specific schemas for ALL actions (core + tools)
 
 		This is what the LLM actually uses - both core actions and tool actions.
 
 		Args:
 			provider: The LLM provider name (openai, anthropic, gemini, etc.)
+			preferred_order: F13 — the tool-name order a restored session emitted
+				BEFORE the restart. Known names come first in exactly that order,
+				then everything else in the F1 sorted order. None (the default)
+				is the plain F1 order.
 
 		Returns:
-			List of all action schemas in the provider's expected format
+			List of all action schemas in the provider's expected format. The list is
+			a fresh shallow copy on every call — the memo itself holds an immutable
+			tuple, so a caller that appends to (or re-orders) the result can never
+			poison the shared schema list for the next step (F24).
 		"""
+		# F24: the whole read — the registry scan AND the cache get/set — runs under
+		# the registry RLock. It used to iterate `self.registry.actions` while another
+		# thread could be registering into it (RuntimeError: dict changed size) and
+		# could write a cache entry built from a half-mutated action set.
+		with self._registry_lock:
+			return self._build_actions_for_provider(provider, preferred_order, arm_freeze=True)
+
+	def _build_actions_for_provider(
+		self, provider: str, preferred_order: Optional[Sequence[str]] = None,
+		arm_freeze: bool = False,
+	) -> List[Dict[str, Any]]:
+		"""Body of :meth:`get_all_actions_for_provider`; caller holds the lock."""
+		# F9: the frozen action set is part of the key — a late registration must
+		# not alias onto the pre-freeze entry (or vice versa). So is the MODE: the
+		# same action set emits different bytes in `bridge` (late tools skipped)
+		# and `deferred` (late tools carry `defer_loading`), so a flag flip must
+		# never be served the other mode's memo entry.
+		mode = self._late_tool_mode(provider)
+		frozen = self._resolve_frozen_actions(arm_freeze, mode)
 		# Memoization: if the registered-action set and exclusions are unchanged,
 		# return the previously generated schema list for this provider. The cache
 		# key embeds the full action-name set so any registration/removal busts it.
+		# F13: the preferred order is part of the key — two orders over the same
+		# action set are DIFFERENT emitted bytes, so they must not alias.
 		cache_key = (
 			provider,
 			frozenset(self.registry.actions.keys()),
 			frozenset(self.exclude_actions),
+			tuple(preferred_order) if preferred_order else None,
+			frozen,
+			mode,
 		)
 		cached = self._provider_schema_cache.get(cache_key)
 		if cached is not None:
-			return cached
+			# Touch for LRU, then hand out a COPY (never the live object).
+			self._provider_schema_cache.move_to_end(cache_key)
+			return list(cached)
 
 		# Get all non-excluded actions, deduplicated by object identity
 		# This is necessary because create_alias() adds the same RegisteredAction
@@ -961,9 +1142,24 @@ class Registry:
 		seen_actions = set()  # Track by object id
 		all_actions = []
 
+		skipped_late = []
+		deferred_names = set()
 		for name, action in self.registry.actions.items():
 			if name in self.exclude_actions:
 				continue
+			# F9: an action registered AFTER the freeze point is real (it validates,
+			# it is gated, tool_describe renders it). In `bridge` mode it is not
+			# emitted at all — the model calls it through the tool_call bridge, so
+			# tools[] stays byte-identical for the whole session. In `deferred`
+			# mode it IS emitted, marked `defer_loading` so the provider keeps it
+			# out of the model's context (and out of the cached prefix) until a
+			# tool_addition message surfaces it.
+			if frozen is not None and name not in frozen and (
+					getattr(action, "name", "") or "") not in frozen:
+				if mode == "bridge":
+					skipped_late.append(name)
+					continue
+				deferred_names.add(getattr(action, "name", "") or name)
 			# Deduplicate by RegisteredAction object identity
 			action_id = id(action)
 			if action_id in seen_actions:
@@ -983,16 +1179,29 @@ class Registry:
 		# hold the SAME tools. A different prefix is a cold cache at 50x the
 		# cached input price. Sorting by action name makes two registries with
 		# the same ids emit identical bytes. Gated TOOL_SCHEMA_STABLE_ORDER
-		# (default OFF => pre-057 order, byte-identical).
+		# (default ON since 2026-09-22 — the harness/cache review found every
+		# new process was a cold prefix on ~58 K schema tokens; `false` is the
+		# pre-057 registration-order escape).
 		from core.env import bool_env as _bool_env
-		if _bool_env("TOOL_SCHEMA_STABLE_ORDER", False):
+		if _bool_env("TOOL_SCHEMA_STABLE_ORDER", True):
 			all_actions.sort(key=lambda a: getattr(a, "name", "") or "")
+
+		# F13 (restart continuity): a restored session emits the order it emitted
+		# BEFORE the restart, so the tools block — the largest cached bytes in the
+		# request — comes back identical. Known names first, in the persisted
+		# order; everything the persisted order does not name keeps the sorted
+		# order above and follows. Never drops an action.
+		if preferred_order:
+			rank = {name: i for i, name in enumerate(preferred_order)}
+			all_actions.sort(
+				key=lambda a: rank.get(getattr(a, "name", "") or "", len(rank)))
 
 		# Get the appropriate schema generator
 		generator = get_schema_generator(provider)
 
 		# Generate and return all action schemas
-		actions = generator.generate_tools_list(all_actions)
+		actions = generator.generate_tools_list(
+			all_actions, deferred_names=frozenset(deferred_names))
 
 		# UP-10 2.5: sanitize the emitted tools list for broad backend compatibility
 		# (nullable-union collapse, $ref-sibling strip, top-level combinator strip,
@@ -1006,6 +1215,11 @@ class Registry:
 			except Exception as e:
 				self.logger.warning(f"schema sanitizer skipped (fail-open): {e}")
 
+		if skipped_late:
+			self.logger.debug(
+				f"F9: {len(skipped_late)} action(s) registered after the freeze are not "
+				f"emitted; reachable via tool_call: {sorted(skipped_late)[:8]}")
+
 		# Log breakdown of action types
 		core_count = sum(1 for a in all_actions if a.tool is None)
 		tool_count = sum(1 for a in all_actions if a.tool is not None)
@@ -1015,16 +1229,19 @@ class Registry:
 			f"({core_count} core, {tool_count} tool, {alias_count} aliases deduplicated)"
 		)
 
-		self._provider_schema_cache[cache_key] = actions
+		_cache_put(self._provider_schema_cache, cache_key, tuple(actions))
 		# P4 (context-usage audit): memoize the emitted schema list's token cost
 		# alongside the schemas so the gauge can include it without per-step JSON
 		# serialization. chars/4 estimate — same order the providers bill.
 		try:
 			import json as _json
-			self._provider_schema_tokens[cache_key] = len(
-				_json.dumps(actions, default=str)) // 4
+			_cache_put(
+				self._provider_schema_tokens,
+				cache_key,
+				len(_json.dumps(actions, default=str)) // 4,
+			)
 		except Exception:
-			self._provider_schema_tokens[cache_key] = 0
+			_cache_put(self._provider_schema_tokens, cache_key, 0)
 		return actions
 
 	def get_schema_token_estimate(self, provider: str) -> int:
@@ -1034,14 +1251,19 @@ class Registry:
 		been requested yet. Returns 0 for an empty registry or on any error.
 		"""
 		try:
-			cache_key = (
-				provider,
-				frozenset(self.registry.actions.keys()),
-				frozenset(self.exclude_actions),
-			)
-			if cache_key not in self._provider_schema_tokens:
-				self.get_all_actions_for_provider(provider)
-			return self._provider_schema_tokens.get(cache_key, 0)
+			with self._registry_lock:
+				cache_key = (
+					provider,
+					frozenset(self.registry.actions.keys()),
+					frozenset(self.exclude_actions),
+					None,   # F13: the plain (un-preferred) order's key
+					self._resolve_frozen_actions(
+						False, self._late_tool_mode(provider)),  # F9: never arms
+					self._late_tool_mode(provider),
+				)
+				if cache_key not in self._provider_schema_tokens:
+					self._build_actions_for_provider(provider)
+				return self._provider_schema_tokens.get(cache_key, 0)
 		except Exception:
 			return 0
 
@@ -1275,19 +1497,15 @@ class Registry:
 					self.logger.error(f"   Error: {e}")
 					error_msg = f"Validation failed for '{tool_name}': {error_str}"
 
-					# Show expected schema for the tool
+					# Show expected schema for the tool — computed against THIS call's
+					# args, so a supplied param is never reported as missing.
 					if tool_name in self.registry.actions:
 						action_info = self.registry.actions[tool_name]
 						if action_info.param_model:
-							try:
-								schema = action_info.param_model.model_json_schema()
-								required = schema.get('required', [])
-								props = list(schema.get('properties', {}).keys())
-								self.logger.error(f"   Required params: {required}")
-								self.logger.error(f"   All params: {props}")
-								error_msg += f" Required: {required}. All params: {props}."
-							except Exception:
-								pass
+							hint = build_validation_hint(action_info.param_model, args)
+							if hint:
+								self.logger.error(f"  {hint.strip()}")
+								error_msg += hint
 
 				# FIXED: Track error for caller instead of appending None
 				if tool_call_id:

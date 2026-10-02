@@ -32,7 +32,17 @@ def _status_db_path() -> Path:
     if explicit:
         return Path(explicit).expanduser().resolve()
     from core.runtime_paths import resolve_data_home
-    return resolve_data_home() / "database" / "bot.db"
+    home_db = resolve_data_home() / "database" / "bot.db"
+    # ``upgrade`` opens bot.db through BotConfig, which anchors its relative
+    # ``data_dir="data"`` on POLYROB_DATA_DIR — so a server home keeps the db at
+    # ``$POLYROB_DATA_DIR/data/database/bot.db``. Read that one when it exists,
+    # or status reports "needs baseline" right after a successful upgrade.
+    data_dir = (os.environ.get("POLYROB_DATA_DIR") or "").strip()
+    if data_dir:
+        upgraded = Path(data_dir).expanduser() / "data" / "database" / "bot.db"
+        if upgraded.is_file() or not home_db.is_file():
+            return upgraded.resolve()
+    return home_db
 
 
 def display_status_readonly() -> bool:
@@ -60,7 +70,7 @@ def display_status_readonly() -> bool:
                 if exists:
                     history = con.execute(
                         "SELECT version, description, applied_at, execution_time_ms "
-                        "FROM schema_versions ORDER BY applied_at ASC"
+                        "FROM schema_versions ORDER BY id ASC"
                     ).fetchall()
                     if history:
                         current = history[-1]["version"]
@@ -236,7 +246,36 @@ async def run_migrations(command: str = 'upgrade'):
         return False
 
 
-if __name__ == "__main__":
-    command = sys.argv[1] if len(sys.argv) > 1 else 'upgrade'
+def cli_main(argv=None) -> int:
+    """``python -m migrations.migrate [status|baseline|upgrade]``.
+
+    067 (one install): ``upgrade`` first uninstalls the retired separate
+    first-party pack distributions (``core.packs.retire``). This is the one step
+    a ``polyrob update`` started from an OLDER updater runs from the TARGET tree
+    before its ``pip check`` verify — whose old dists pin ``polyrob==1.1.*``.
+    Only this command line does it; the in-process boot migration never runs pip.
+    A failed uninstall is named and the verify step reports it."""
+    argv = list(sys.argv[1:] if argv is None else argv)
+    command = argv[0] if argv else 'upgrade'
+    if command == 'upgrade':
+        try:
+            from core.packs import retire
+            rc = retire.main([])
+        except Exception as exc:  # noqa: BLE001 — named, never silent
+            logger.error("retired pack distributions: the check failed: %s", exc)
+            rc = 1
+        if rc == 2:
+            # A pack id with two entry-point providers breaks pack loading: the
+            # upgrade fails, so an update's verify step rolls it back.
+            logger.error("retired pack distributions: a pack entry point is still provided "
+                         "twice; upgrade refused (see the remedy above)")
+            return 1
+        if rc:
+            logger.error("retired pack distributions: retirement incomplete (see the remedy "
+                         "above); the schema migration continues")
     success = asyncio.run(run_migrations(command))
-    sys.exit(0 if success else 1)
+    return 0 if success else 1
+
+
+if __name__ == "__main__":
+    sys.exit(cli_main())

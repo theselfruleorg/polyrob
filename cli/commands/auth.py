@@ -354,10 +354,10 @@ def add_cmd(provider, validate_opt):
             f"{spec.name} needs no credential (keyless endpoint) — nothing to connect"
         )
 
+    from core.remedy import flag_remedy
     if not oauth_enabled():
         raise click.ClickException(
-            "OAuth connect is disabled. Set LLM_OAUTH_ENABLED=true to enable it "
-            "(`polyrob config set LLM_OAUTH_ENABLED true`). It is off by default "
+            f"OAuth connect is disabled — {flag_remedy('LLM_OAUTH_ENABLED')}. It is off by default "
             "on every deployment including local — connecting a subscription "
             "seat is a deliberate act with a terms-of-service dimension."
         )

@@ -93,11 +93,31 @@ def _bridge(*, allow=True, lane="autonomous", budget=100.0, per_tx=50.0,
         envelope=envelope, wallet=_Wallet(gate), execution_context=None,
         rail_factory=_Rail, guard_fn=_guard, price_fn=lambda c, a: 2500.0,
         rpc_fn=lambda chain, method, params: "0xdeadbeef",
-        approver=approver), gate
+        approver=approver, armed_origin="https://app.example"), gate
+
+
+class _Frame:
+    def __init__(self, url):
+        self.url = url
+
+
+class _Page:
+    def __init__(self, url="https://app.example"):
+        self.main_frame = _Frame(url)
+        self.handlers = {}
+
+    def on(self, event, fn):
+        self.handlers.setdefault(event, []).append(fn)
+
+
+def _source(page=None):
+    """What Playwright hands a binding: the calling page and frame."""
+    page = page or _Page()
+    return {"page": page, "frame": page.main_frame, "context": None}
 
 
 async def _ask(bridge, method, params=None):
-    raw = await bridge.handle(None, json.dumps({"method": method,
+    raw = await bridge.handle(_source(), json.dumps({"method": method,
                                                 "params": params or []}))
     return json.loads(raw)
 
@@ -321,7 +341,7 @@ async def test_malformed_calldata_is_refused_not_coerced():
 @pytest.mark.asyncio
 async def test_the_bridge_never_raises_into_the_page():
     bridge, _ = _bridge()
-    out = json.loads(await bridge.handle(None, "not json at all"))
+    out = json.loads(await bridge.handle(_source(), "not json at all"))
     assert "error" in out
 
 
@@ -430,7 +450,7 @@ async def test_a_reprice_above_what_the_owner_APPROVED_is_refused():
         envelope=envelope, wallet=_Wallet(gate), execution_context=None,
         rail_factory=_Rail, guard_fn=_guard, price_fn=lambda c, a: 2500.0,
         rpc_fn=lambda chain, method, params: "0x",
-        approver=_Approver(True))
+        approver=_Approver(True), armed_origin="https://app.example")
     _Rail.last = None
     out = await _ask(bridge, "eth_sendTransaction", [{"to": POOL, "data": "0x01"}])
     assert "not what he approved" in out["error"]["message"]
@@ -452,7 +472,7 @@ async def test_a_reprice_WITHIN_tolerance_proceeds():
         envelope=envelope, wallet=_Wallet(gate), execution_context=None,
         rail_factory=_Rail, guard_fn=_guard, price_fn=lambda c, a: 2500.0,
         rpc_fn=lambda chain, method, params: "0x",
-        approver=_Approver(True))
+        approver=_Approver(True), armed_origin="https://app.example")
     out = await _ask(bridge, "eth_sendTransaction", [{"to": POOL, "data": "0x01"}])
     assert out["result"] == "0x" + "ee" * 32
     assert bridge.envelope.spent_usd == 2.1
@@ -476,7 +496,8 @@ async def test_a_guard_refusal_AFTER_approval_still_refuses():
         envelope=envelope, wallet=_Wallet(gate), execution_context=None,
         rail_factory=_Rail, guard_fn=lambda i, t, **k: next(decisions),
         price_fn=lambda c, a: 2500.0,
-        rpc_fn=lambda chain, method, params: "0x", approver=_Approver(True))
+        rpc_fn=lambda chain, method, params: "0x", approver=_Approver(True),
+            armed_origin="https://app.example")
     _Rail.last = None
     out = await _ask(bridge, "eth_sendTransaction", [{"to": POOL, "data": "0x01"}])
     assert "UNDECLARED allowance grant" in out["error"]["message"]

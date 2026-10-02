@@ -56,6 +56,23 @@ def test_owner_login_wrong_password_401(own_ops_owner_client):
     assert resp.status_code == 401
 
 
+def test_the_page_says_sign_in_to_rob(own_ops_owner_client):
+    """070 E.32: the page speaks through the copy layer."""
+    text = own_ops_owner_client.get("/owner-login").text
+    assert "<title>Sign in – Rob" in text
+    assert "Sign in to Rob" in text
+    assert ">Sign in</button>" in text
+    assert "Owner Login" not in text
+    assert "Log in" not in text
+
+
+def test_a_wrong_password_says_so_in_plain_words(own_ops_owner_client):
+    resp = _login_post(own_ops_owner_client, "op", "wrong")
+    assert resp.status_code == 401
+    assert "That username or password is not right." in resp.text
+    assert "Invalid username or password" not in resp.text
+
+
 def test_owner_login_success_sets_cookie_and_redirects(own_ops_owner_client):
     resp = _login_post(own_ops_owner_client, "op", "s3cret", follow_redirects=False)
     assert resp.status_code in (302, 303)

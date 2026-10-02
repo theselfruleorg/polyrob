@@ -257,6 +257,22 @@ async def cancel_subscription(subscription_id: str, *, user_id: str, db=None) ->
     )
     ok = bool(getattr(cur, "rowcount", 0))
     if ok:
+        # CR-M18: an open renewal invoice must not stay payable after a
+        # cancel — paying it would take money for a subscription that no
+        # longer exists. Expire it; mark it notified so the expiry does not
+        # wake anyone about an invoice the owner just withdrew.
+        try:
+            await database.execute(
+                """UPDATE x402_payment_requests
+                   SET status = 'expired', updated_at = datetime('now'),
+                       metadata = json_set(metadata, '$.wake_delivered', json('true'))
+                   WHERE status = 'pending'
+                     AND json_extract(metadata, '$.subscription_id') = ?""",
+                (subscription_id,),
+            )
+        except Exception:
+            logger.warning("subscriptions: could not expire the pending renewal "
+                           "invoice(s) of canceled %s", subscription_id, exc_info=True)
         _emit("subscription_canceled", user_id=user_id,
               attrs={"subscription_id": subscription_id})
     return ok
@@ -400,11 +416,23 @@ async def apply_settlement(subscription_id: str, request_id: str, *, db=None) ->
     period_seconds = max(1, int(sub.get("period_days") or 30)) * 86400
     now_epoch = int(time.time())
     try:
-        await database.execute(
+        # CR-M18: a CANCELED subscription is terminal. Paying a renewal
+        # invoice that was already open never reactivates it — the status
+        # guard makes the UPDATE a no-op and the settlement is REFUSED (the
+        # caller raises the owner notice: money arrived, nothing extended).
+        upd = await database.execute(
             "UPDATE subscriptions SET paid_through = COALESCE(paid_through, ?) + ?, "
-            "status = ?, updated_at = datetime('now') WHERE id = ?",
-            (now_epoch, period_seconds, STATUS_ACTIVE, subscription_id),
+            "status = ?, updated_at = datetime('now') WHERE id = ? AND status != ?",
+            (now_epoch, period_seconds, STATUS_ACTIVE, subscription_id,
+             STATUS_CANCELED),
         )
+        if not getattr(upd, "rowcount", 0):
+            await database.rollback()
+            logger.warning(
+                "subscriptions: apply_settlement REFUSED — subscription %s is "
+                "canceled; invoice %s does not reactivate it", subscription_id,
+                request_id)
+            return SettlementResult.REFUSED
     except (asyncio.CancelledError, Exception):
         # Retryable: rolling back here undoes the ledger INSERT too, so the
         # NEXT call re-runs cleanly with no stale ledger row — this is the

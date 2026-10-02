@@ -38,6 +38,12 @@ def test_a_scoped_pause_names_its_scope(headline):
     assert "paused for trading" in headline(scopes=["trading"])
 
 
+def test_a_pause_of_everything_says_since_when(headline, monkeypatch):
+    import webview.pages_new as mod
+    monkeypatch.setattr(mod, "_when", lambda ts: "14:02")
+    assert headline(scopes=["all"], since=1_700_000_000.0) == "Rob is paused since 14:02."
+
+
 def test_a_pause_of_everything_does_not_say_for(headline):
     text = headline(scopes=["all"])
     assert "paused" in text
@@ -67,7 +73,7 @@ def test_an_unreadable_record_says_paused_and_why(monkeypatch, tmp_path):
     monkeypatch.setattr(webgate, "data_dir", lambda: str(tmp_path))
     (tmp_path / PAUSE_FILENAME).write_text("{not json")
     text = mod._pause_headline()
-    assert "paused" in text and "could not read" in text
+    assert text == "Rob is paused to be safe. It could not read its pause setting."
 
 
 def test_the_words_are_the_terminals_own(headline):

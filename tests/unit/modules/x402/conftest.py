@@ -53,3 +53,12 @@ def _reset_treasury_cache():
     reset_treasury_cache()
     yield
     reset_treasury_cache()
+
+
+@pytest.fixture(autouse=True)
+def _no_random_invoice_tail(monkeypatch):
+    """CR-M16 adds a random sub-cent tail to every EVM invoice. The suites
+    here assert exact, deterministic amounts, so the tail is off; a test of
+    the tail itself sets ``invoice_jitter.TAIL_ENABLED`` back to True."""
+    from modules.x402 import invoice_jitter
+    monkeypatch.setattr(invoice_jitter, "TAIL_ENABLED", False)

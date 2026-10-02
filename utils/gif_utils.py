@@ -145,6 +145,14 @@ def create_gif_with_retry(
         logger.warning("No screenshots provided for GIF creation")
         return create_text_only_gif(output_path, caption_texts or ["No screenshots available"], user_id=user_id)
 
+    # 058: imageio rides the [media] extra — under local mode the first use
+    # installs it (core/lazy_deps); on a server the ImportError branch below
+    # names the extra and ships a text-only GIF. Fail-open either way.
+    try:
+        from core.lazy_deps import ensure
+        ensure("media.gif", prompt=False)
+    except Exception as e:
+        logger.debug(f"media.gif not installable here: {e}")
     # First try to use imageio
     for attempt in range(max_retries):
         try:
@@ -188,7 +196,14 @@ def create_gif_with_retry(
                 logger.warning("No valid images to create GIF")
                 return create_text_only_gif(output_path, caption_texts or ["No valid screenshots"], user_id=user_id)
 
-        except (ImportError, Exception) as e:
+        except ImportError as e:
+            # 058 T1.6: imageio rides the [media] extra. Not retried — a missing
+            # package does not appear between attempts; go straight to text-only.
+            logger.warning(
+                f"GIF creation needs imageio, which is not installed ({e}). Remedy: "
+                f"pip install 'polyrob[media]'. Creating a text-only GIF instead.")
+            return create_text_only_gif(output_path, caption_texts or ["GIF creation failed"], user_id=user_id)
+        except Exception as e:
             logger.warning(f"GIF creation attempt {attempt+1} failed: {e}")
 
             if attempt == max_retries - 1:

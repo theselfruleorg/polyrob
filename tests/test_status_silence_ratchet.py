@@ -21,7 +21,14 @@ REPO = Path(__file__).resolve().parent.parent
 # file -> max allowed SILENT except-handlers. Shrink-only.
 CEILINGS = {
     "core/status_snapshot.py": 0,
+    "core/status_knowledge.py": 0,
     "core/status_render.py": 0,
+    "core/status_custody.py": 0,  # 066 P0
+    "core/status_packs.py": 0,  # 067 P2
+    "core/status_rules.py": 0,  # 060 WS-7
+    "core/status_sections.py": 0,  # 067 P5a slot registry
+    "core/status_money.py": 0,  # 067 P5a (moved from status_snapshot.py)
+    "core/status_room_actions.py": 0,  # 067 P5a (moved from status_snapshot.py)
     "tools/controller/agent_status_action.py": 0,
     # the ONE outer fail-open guard around the injection itself (protects the
     # agent loop; the note it would carry is the thing that failed)

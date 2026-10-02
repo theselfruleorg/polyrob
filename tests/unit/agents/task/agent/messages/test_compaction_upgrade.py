@@ -138,7 +138,10 @@ def test_a4_existing_compacted_block_detected_and_not_re_summarized():
     )
     _fill(h, 19)
     asyncio.run(h.llm_compact_history())
-    sent_prompt = h.llm.calls[0][0].content
+    # F11: the summariser now sends [foundation + the messages + ONE instruction],
+    # so the prompt is the LAST message of the request, not the only one. The
+    # prior summary still rides that instruction — it is fed back to be UPDATED.
+    sent_prompt = h.llm.calls[0][-1].content
     assert "OLD_SUMMARY_TEXT" in sent_prompt
     assert "PRIOR SUMMARY" in sent_prompt
 
@@ -249,7 +252,13 @@ def test_b2_short_identical_confirmations_are_kept_verbatim():
     assert [str(m.content) for m in out if isinstance(m, ToolMessage)] == [short] * 3
 
 
-def test_b3_keeps_latest_image_strips_older():
+def test_b3_keeps_latest_image_strips_older(monkeypatch):
+    # F7 turned B3 into a step function: nothing is retired while the history
+    # holds <= MEDIA_KEEP_MAX image turns. Squeeze the ceiling to 1 (floor 1) so
+    # the original B3 intent — older stripped, latest kept — is what is exercised.
+    monkeypatch.setenv("MEDIA_KEEP_MAX", "1")
+    monkeypatch.setenv("MEDIA_KEEP_FLOOR", "1")
+    monkeypatch.setenv("MEDIA_RETIRE_BATCH", "1")
     from agents.task.agent.messages.filters import strip_historical_media
 
     def img():

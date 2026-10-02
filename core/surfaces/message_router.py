@@ -149,6 +149,39 @@ class MessageRouter:
             logger.warning("message_router: room %s:%s marked LEFT (%s)",
                            surface_id, chat_id, reason)
 
+    def _record_effect(self, action: str, surface_id, chat_id, text: str) -> None:
+        """033: the router seam of the ONE effect recorder — a DELIVERED send that
+        no Controller action made (a reply to a correspondent or a room, a cron
+        report into a room, a proactive send from a loop).
+
+        Skipped, deliberately, twice: inside an action batch the Controller
+        post-hook already records the act under the action that caused it; and
+        an owner-bound send is the owner lane, which ``user_delivery`` records.
+        Fail-open: a telemetry fault never touches the delivery it observes.
+        """
+        try:
+            from core.exec_identity import in_action_batch
+            if in_action_batch():
+                return
+            target = "unknown"
+            if self._is_room(surface_id, chat_id):
+                target = "allowlisted"
+            else:
+                from core.surfaces.owner_address import owner_address
+                from core.surfaces.outbound_target import canonical_owner_addr
+                owner = owner_address(None, str(surface_id or ""))
+                if owner and canonical_owner_addr(surface_id, chat_id) == \
+                        canonical_owner_addr(surface_id, owner):
+                    return  # the owner lane
+            from core.effects import record_external_write
+            record_external_write(
+                effect="comms", tool="", action=action, target=target,
+                surface=str(surface_id or ""), autonomous=True,
+                confidence="action", outcome="ok",
+                fingerprint=f"{surface_id}:{chat_id}:{text or ''}"[:400])
+        except Exception:
+            logger.debug("message_router: effect record skipped", exc_info=True)
+
     def subscribe(self, surface_id: str, surface) -> None:
         self._surfaces[surface_id] = surface
 
@@ -281,6 +314,7 @@ class MessageRouter:
                     if _room_gated:
                         self._room_caps.record_reply(surface_id, chat_id)
                     self._record_room_reply(msg, surface_id, chat_id, scrubbed)
+                    self._record_effect("router_publish", surface_id, chat_id, scrubbed)
                     return True  # durable acceptance IS delivery (dispatcher retries)
                 # D5: the enqueue was a no-op AND no live row stands behind the
                 # key — the previous row was dead-lettered. Reporting that as
@@ -306,6 +340,7 @@ class MessageRouter:
                     self._room_caps.record_reply(surface_id, chat_id)
                 if ok:
                     self._record_room_reply(msg, surface_id, chat_id, scrubbed)
+                    self._record_effect("router_publish", surface_id, chat_id, scrubbed)
                 if self._dt is not None and dead_target_registry_enabled():
                     if not ok:
                         reason = classify_dead_error(surface_id, getattr(result, "error", None))
@@ -425,6 +460,7 @@ class MessageRouter:
                         logger.info(
                             "send_message: surface %s not local — enqueued for "
                             "cross-process delivery", surface_id)
+                        self._record_effect("router_send_message", surface_id, chat_id, text)
                         return "queued"
                     # D5: no live row stands behind the key (it dead-lettered),
                     # and there is no local surface to fall through to.
@@ -467,4 +503,5 @@ class MessageRouter:
                     if reason in ROOM_DEATH_REASONS and self._is_room(surface_id, chat_id):
                         self._mark_room_left(surface_id, chat_id, reason)
             return "failed"
+        self._record_effect("router_send_message", surface_id, chat_id, text)
         return "sent"

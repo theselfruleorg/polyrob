@@ -15,6 +15,7 @@ def _client():
     import webview.pages as pages
     app = FastAPI()
     app.include_router(pages.router)
+    app.include_router(pages.money_router)  # 067 P5a: Money readers
     return TestClient(app), pages
 
 
@@ -36,7 +37,7 @@ class _FakeTool:
 
 
 def test_positions_off_is_labeled_not_500(monkeypatch):
-    monkeypatch.delenv("DEFI_DATA_ENABLED", raising=False)
+    monkeypatch.setenv("DEFI_DATA_ENABLED", "false")
     client, _ = _client()
     res = client.get("/api/webgate/positions")
     assert res.status_code == 200

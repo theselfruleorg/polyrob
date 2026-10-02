@@ -69,8 +69,13 @@ def _notice_kwargs_containing(source: str, marker: str) -> str:
     raise AssertionError(f"no TxNotice call contains {marker!r}")
 
 
-@pytest.mark.parametrize("marker", ["amount_in=amount_in_label",
-                                    "amount_out=amount_out_label,\n            usd="])
+#: ⚠️ The markers only LOCATE the two calls; the assertions below are the point.
+#: The settled one used to be anchored on `amount_out=amount_out_label,\n usd=`
+#: — the incidental line adjacency of two kwargs — which broke the moment a third
+#: kwarg (`measured=`, 2026-09-22) was inserted between them, reporting a wiring
+#: regression where none existed. `state=_state` is unique to the settled call and
+#: is part of what makes it the settled call, so it survives ordinary edits.
+@pytest.mark.parametrize("marker", ["amount_in=amount_in_label", "state=_state"])
 def test_the_swap_broadcast_and_settled_notices_carry_their_chain(marker):
     """The two notices an owner gets for every EVM swap — the broadcast and the
     settlement — are the ones this link was built for."""

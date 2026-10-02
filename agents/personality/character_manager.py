@@ -1,6 +1,7 @@
 """Character management system."""
 
 import json
+import os
 from typing import Optional, Dict, List
 from pathlib import Path
 
@@ -32,6 +33,21 @@ class CharacterManager:
         self.logger = get_component_logger(f"CharacterManager.{name}")
         self._initialized = False
         
+    def _default_character_name(self) -> str:
+        """The persona to load: ``PERSONALITY_DEFAULT_CHARACTER`` first — the SAME
+        env the prompt's persona resolver reads (``persona_resolver.py``) — then
+        the config's ``personality.default_character``, then the packaged
+        default. Before 2026-09-29 this read only the config, so a chat seat
+        rendered the packaged name while the CLI rendered the configured one."""
+        name = (os.environ.get("PERSONALITY_DEFAULT_CHARACTER") or "").strip()
+        if name:
+            return name
+        try:
+            name = str(self.config.get('personality.default_character', '') or '').strip()
+        except Exception:
+            name = ""
+        return name or DEFAULT_CHARACTER_NAME
+
     async def initialize(self) -> None:
         """Initialize character manager."""
         if self._initialized:
@@ -49,8 +65,7 @@ class CharacterManager:
                 raise ConfigurationError(f"Characters directory not found: {self.characters_dir}")
             
             # Create default character first
-            default_name = self.config.get('personality.default_character',
-                                           DEFAULT_CHARACTER_NAME)
+            default_name = self._default_character_name()
             self.logger.debug(f"Using default character name: {default_name}")
 
             # Load character from JSON file. A missing NAMED character degrades
@@ -238,8 +253,7 @@ class CharacterManager:
         """Get default character."""
         try:
             if not self._default_character:
-                default_name = getattr(self.config, 'default_character',
-                                       DEFAULT_CHARACTER_NAME)
+                default_name = self._default_character_name()
                 char_file = self.characters_dir / f"{default_name}.character.json"
 
                 if not char_file.exists():

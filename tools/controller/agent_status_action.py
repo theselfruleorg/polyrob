@@ -184,9 +184,16 @@ def register_agent_status_action(controller) -> None:
 				lines.append("context_tokens: unavailable (no message manager)")
 		except Exception as e:
 			lines.append(_unavail("context_tokens", e))
-		# 4) wallet — the agent's own (operator-owned singleton) wallet
+		# 4) wallet — the agent's own (operator-owned singleton) wallet.
+		#    CR-M07: its balances and addresses are the OWNER's facts; a
+		#    non-owner tenant's turn is told they are withheld (never hidden).
 		try:
-			lines.extend(await _wallet_lines())
+			from core.wallet.authority import owner_refusal
+			_refusal = owner_refusal(user_id)
+			if _refusal:
+				lines.append(f"wallet: withheld ({_refusal})")
+			else:
+				lines.extend(await _wallet_lines())
 		except Exception as e:
 			lines.append(_unavail("wallet", e))
 		# 5) the detailed two-statement ledger (never summed)

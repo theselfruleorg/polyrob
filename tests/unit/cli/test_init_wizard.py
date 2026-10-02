@@ -114,6 +114,7 @@ def test_interactive_piped_input_writes_toolset(tmp_path, monkeypatch):
         "",         # 5/5 guardrails: autonomy budget (blank = skip)
         "",         # 5/5 guardrails: approval preset (default No)
         "",         # 5/5 guardrails: digest channel (blank = off)
+        "",         # 7/7 reach me: chat surface (blank = terminal only, 062)
         "n",        # optional wallet opt-in (Task 7, default No)
     ]) + "\n"
     res = _invoke([], home, monkeypatch, input_text=piped)
@@ -127,9 +128,10 @@ def test_interactive_piped_default_toolset(tmp_path, monkeypatch):
     home = _make_home(tmp_path)
     # 16 prompts on the all-defaults interactive path: 6 provider keys (OpenRouter-first)
     # + model + toolset + template + owner-pairing (instance id + owner id)
-    # + Section 6/6 guardrails (local mode + budget + approval preset + digest)
-    # + the wallet opt-in confirm (Task 7, blank = default No). (+1 safety.)
-    piped = "\n" * 17  # all blanks / defaults
+    # + Section 6/7 guardrails (local mode + budget + approval preset + digest)
+    # + Section 7/7 "Reach me" (062) + the wallet opt-in confirm (Task 7,
+    # blank = default No). (+1 safety.)
+    piped = "\n" * 18  # all blanks / defaults
     res = _invoke([], home, monkeypatch, input_text=piped)
     assert res.exit_code == 0, res.output
     env = (home / ".polyrob" / ".env").read_text()
@@ -191,6 +193,7 @@ def test_default_provider_inferred_interactive(tmp_path, monkeypatch):
         "",           # 5/5 guardrails: autonomy budget (blank = skip)
         "",           # 5/5 guardrails: approval preset (default No)
         "",           # 5/5 guardrails: digest channel (blank = off)
+        "",           # 7/7 reach me: chat surface (blank, 062)
         "n",          # optional wallet opt-in (Task 7, default No)
     ]) + "\n"
     res = _invoke([], home, monkeypatch, input_text=piped)

@@ -25,8 +25,9 @@ from typing import List, Optional
 from cli.ui import candy
 from cli.ui.commands.registry import CommandContext
 
-_USAGE = ("usage: /cron [list] | /cron add <schedule> <task…> | "
-          "/cron cancel <id>\n"
+_USAGE = ("usage: /cron [list] | /cron show <id> | /cron add <schedule> <task…> "
+          "[tools=a,b] [target=<token address> chain=<chain>] | "
+          "/cron edit <id> schedule|task <value> | /cron cancel <id>\n"
           "  schedule: 30m · every monday 09:00 · '0 9 * * *' · 2026-10-01T09:00")
 
 
@@ -105,6 +106,13 @@ def _list(ctx: CommandContext) -> str:
 
 
 def _add(ctx: CommandContext, rest: List[str]) -> str:
+    # O13/A14: the SAME option parser and owner-create helper Telegram uses.
+    from core.owner_create import create_cron, cron_options_payload, split_cron_options
+    try:
+        rest, options = split_cron_options(rest)
+        tools, extra = cron_options_payload(options)
+    except ValueError as exc:
+        return f"{candy.GUTTER}{exc}\n{_USAGE}"
     if len(rest) < 2:
         return _USAGE
     from cron.schedule import ScheduleError
@@ -113,12 +121,21 @@ def _add(ctx: CommandContext, rest: List[str]) -> str:
     if not task:
         return _USAGE
     try:
-        job = _service(write=True).schedule(
-            task=task, schedule_spec=spec, user_id=_tenant(ctx), via="repl")
+        job = create_cron(_service(write=True), task=task, schedule_spec=spec,
+                          user_id=_tenant(ctx), tools=tools, via="repl",
+                          extra_payload=extra)
     except ScheduleError as exc:
         return f"{candy.GUTTER}I could not read that schedule: {exc}\n{_USAGE}"
+    except ValueError as exc:
+        return f"{candy.GUTTER}{exc}"
     when = job.next_run_at.isoformat() if job.next_run_at else "—"
     lines = [f"scheduled {job.id[:8]} — {job.schedule_spec}, next run {when}"]
+    payload = job.payload or {}
+    if payload.get("tools"):
+        lines.append(f"{candy.GUTTER}granted tools: {', '.join(payload['tools'])}")
+    if payload.get("target_token"):
+        t = payload["target_token"]
+        lines.append(f"{candy.GUTTER}target: {t['address']} on {t['chain']}")
     note = _ticker_note()
     if note:
         lines.append(note)
@@ -146,6 +163,49 @@ def _cancel(ctx: CommandContext, rest: List[str]) -> str:
     return f"no scheduled job '{job_id}' for tenant {tenant} — see /cron"
 
 
+def _edit(ctx: CommandContext, rest: List[str]) -> str:
+    """O13: ``/cron edit <id> schedule|task <value>`` — in place, payload kept."""
+    if len(rest) < 3:
+        return "usage: /cron edit <id> schedule <schedule> | /cron edit <id> task <new task>"
+    from core.owner_create import edit_cron
+    from cron.schedule import ScheduleError
+    service = _service(write=True)
+    tenant = _tenant(ctx)
+    jobs = [j for j in service.list_jobs(user_id=tenant) if j.id.startswith(rest[0])]
+    if len(jobs) != 1:
+        return (f"{candy.GUTTER}'{rest[0]}' matches {len(jobs)} jobs — "
+                "use a longer id (see /cron).")
+    try:
+        changed = edit_cron(service, jobs[0], user_id=tenant, field=rest[1],
+                            value=" ".join(rest[2:]), via="repl")
+    except (ScheduleError, ValueError) as exc:
+        return f"{candy.GUTTER}{exc}"
+    if not changed:
+        return f"nothing changed on {jobs[0].id[:8]}"
+    return f"edited {jobs[0].id[:8]}: {', '.join(changed)} (the rest of the job is kept)"
+
+
+def _show(ctx: CommandContext, rest: List[str]) -> str:
+    """``/cron show <id>`` — one job, its prose rendered as the instruction it is
+    (060 WS-4: the SCOPED tier — a later owner rule outranks it)."""
+    if not rest:
+        return "usage: /cron show <id>   (see /cron)"
+    if not os.path.exists(_db_path()):
+        return candy.empty("cron jobs scheduled", "add one with `/cron add 30m <task>`")
+    jobs = [j for j in _service(write=False).list_jobs(user_id=_tenant(ctx))
+            if j.id.startswith(rest[0])]
+    if len(jobs) != 1:
+        return (f"{candy.GUTTER}'{rest[0]}' matches {len(jobs)} jobs — "
+                "use a longer id (see /cron).")
+    job = jobs[0]
+    from core.rules_sweep import rail_instruction_lines
+    when = job.next_run_at.isoformat() if job.next_run_at else "—"
+    lines = [f"{job.id} [{job.status}] {job.schedule_spec} -> {when}",
+             f"last run {job.last_run_at or '—'} · max duration {job.max_duration_seconds}s"]
+    lines += rail_instruction_lines(job.task, job.payload)
+    return "\n".join(lines)
+
+
 def h_cron(ctx: CommandContext) -> None:
     """``/cron [list] | add <schedule> <task…> | cancel <id>``."""
     args = list(getattr(ctx, "args", None) or [])
@@ -153,8 +213,12 @@ def h_cron(ctx: CommandContext) -> None:
     try:
         if verb in ("list", ""):
             ctx.emit(_list(ctx), title="cron")
+        elif verb == "show":
+            ctx.emit(_show(ctx, args[1:]), title="cron")
         elif verb in ("add", "schedule"):
             ctx.emit(_add(ctx, args[1:]), title="cron")
+        elif verb == "edit":
+            ctx.emit(_edit(ctx, args[1:]), title="cron")
         elif verb in ("cancel", "remove", "rm"):
             ctx.emit(_cancel(ctx, args[1:]), title="cron")
         else:
@@ -168,9 +232,14 @@ HELP_CRON = (
     "  delegation. Each job runs as its own session on its own clock.\n"
     "\n"
     "    /cron                       what is scheduled\n"
+    "    /cron show <id>             one job and the instruction it runs\n"
     "    /cron add 30m <task>        every 30 minutes\n"
     "    /cron add 'every monday 09:00' <task>\n"
     "    /cron add '0 9 * * *' <task>    5-field cron\n"
+    "    /cron add 1d <task> tools=defi_trade,defi_data target=0x… chain=base\n"
+    "                                grant tools; name the one token it may buy\n"
+    "    /cron edit <id> schedule 2h  change one field; the rest is kept\n"
+    "    /cron edit <id> task <text>\n"
     "    /cron cancel <id>           stop one\n"
     "\n"
     "  A stored job only runs when scheduled runs are on; if they are not, I\n"

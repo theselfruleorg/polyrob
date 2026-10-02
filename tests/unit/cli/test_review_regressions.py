@@ -72,14 +72,14 @@ async def test_prompt_approval_uses_app_input_and_cleans_up_on_timeout():
 
 
 @pytest.mark.asyncio
-async def test_owner_gate_never_calls_model():
+async def test_plain_stop_words_are_chat_and_reach_the_model(monkeypatch):
+    """2026-09-24: no plain sentence is a command — "stop everything" is chat;
+    the deterministic stop is `/pause`."""
     from cli.ui.persistent_loop import run_turn
-    convo = SimpleNamespace(respond=AsyncMock())
-    output = []
-    await run_turn(convo, "stop everything", SimpleNamespace(print_block=output.append),
-                   owner_gate=lambda text: "Paused.")
-    convo.respond.assert_not_called()
-    assert output == ["Paused."]
+    monkeypatch.setattr("cli.ui.input_policy.prepare_text", lambda text: text)
+    convo = SimpleNamespace(respond=AsyncMock(return_value="ok"))
+    await run_turn(convo, "stop everything", None)
+    convo.respond.assert_awaited_once_with("stop everything")
 
 
 @pytest.mark.asyncio

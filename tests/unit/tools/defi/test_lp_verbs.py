@@ -100,9 +100,73 @@ async def test_missing_price_and_allowance_remedy(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_v4_refuses():
+async def test_v4_builds_a_full_range_mint_only():
+    # 048 phase 3 (core handoff W6): v4 exits are not built (090 R5).
     t, _ = tool()
-    assert 'Permit2' in (await t.lp_add(add(protocol='v4'))).error
+    assert 'lp_add' in (await t.lp_remove(LpRemoveParams(token_id=42, protocol='v4'))).error
+    assert 'lp_add' in (await t.lp_collect(LpCollectParams(token_id=42, protocol='v4'))).error
+    assert 'unknown protocol' in (await t.lp_add(add(protocol='v5'))).error
+
+
+def _v4_reads(monkeypatch, t):
+    from tools.defi import lp_v4 as V4
+    key = R.pons_pool_key({'token': T1, 'pairToken': ZERO, 'poolFee': 0, 'tickSpacing': 200})
+    monkeypatch.setattr(V4, 'resolve_pons_pair', lambda rpc, a, b: (key, R.pool_id(key), False))
+    monkeypatch.setattr(dex_registry, 'verify_hook', lambda *a: None)
+    monkeypatch.setattr(V4, 'pool_state', lambda *a: V4.V4PoolState(
+        R.pool_id(key), 2 ** 96, 0, 0, 0, 10 ** 22, 'state_view'))
+    monkeypatch.setattr(V4, 'permit2_allowance', lambda *a: (10 ** 30, 2 ** 40))
+    t._lp_rpc = lambda m, p: hex(10 ** 20) if m == 'eth_getBalance' else mint_receipt()
+    t._fallback_price = lambda *a: None
+    t._price = lambda *a: None
+    return key
+
+
+def v4add(**kw):
+    return add(**(dict(chain='robinhood', protocol='v4', token_a='native', token_b=T1,
+                       amount_a=0.01, amount_b=1000, initial_price=None) | kw))
+
+
+@pytest.mark.asyncio
+async def test_v4_dry_run_intent_is_the_guarded_mint(monkeypatch):
+    captured = []
+    t, gate = tool(captured)
+    _v4_reads(monkeypatch, t)
+    res = await t.lp_add(v4add())
+    assert 'DRY RUN' in res.extracted_content, res.error
+    assert 'LP caps: LP_ETH_CAP is 0' in res.extracted_content
+    i = captured[0]
+    row = dex_registry.row_for('robinhood', 'v4')
+    assert i.to == row.position_manager and i.lp_position == (row.position_manager, None)
+    assert i.watch_spenders == (row.permit2,)
+    from tools.defi.lp_v4 import TOPIC_MODIFY_LIQUIDITY
+    assert i.expected_events == ((row.pool_manager, TOPIC_MODIFY_LIQUIDITY),)
+    assert dict(i.lp_outflows)[None] == _Rail.last.built['value']
+    assert _Rail.last.built['data'].startswith(abi.selector('modifyLiquidities(bytes,uint256)'))
+    from core.wallet import liquidity_guard
+    liquidity_guard.structural(i, dict(_Rail.last.built, chainId=4663))
+
+
+@pytest.mark.asyncio
+async def test_v4_caps_refuse_before_the_guard(monkeypatch):
+    captured = []
+    t, gate = tool(captured)
+    gate.audit_log = []
+    gate._sync_shared_ledger = lambda: True
+    _v4_reads(monkeypatch, t)
+    monkeypatch.delenv('LP_ETH_CAP', raising=False)
+    res = await t.lp_add(v4add(dry_run=False))
+    assert 'LP_ETH_CAP is 0' in res.error and not captured and not gate.recorded
+
+
+@pytest.mark.asyncio
+async def test_v4_missing_permit2_grant_names_the_remedy(monkeypatch):
+    from tools.defi import lp_v4 as V4
+    t, _ = tool()
+    _v4_reads(monkeypatch, t)
+    monkeypatch.setattr(V4, 'permit2_allowance', lambda *a: (0, 0))
+    err = (await t.lp_add(v4add())).error
+    assert "via='permit2'" in err
 
 
 def test_increase_retains_range_and_checks_pair(monkeypatch):

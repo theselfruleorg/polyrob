@@ -49,6 +49,14 @@ KIND_REPORT = "report"
 KIND_DATA = "data"
 KIND_FILE = "file"      # default: something produced, kind not asserted
 
+#: Suffixes that make a produced file a TEXT DOCUMENT — something that could be
+#: read back, indexed or quoted. The ONE set: `tools/kb_autoingest.py` imports it
+#: to decide what to ingest and `core/status_knowledge.py` imports it to count
+#: the denominator of "how much of what I wrote is indexed". Without a shared
+#: set the ratio compares markdown against screenshots and reports a gap that
+#: no ingest could ever close.
+TEXT_DOCUMENT_SUFFIXES = frozenset({".md", ".markdown", ".txt", ".rst"})
+
 _HASH_CHUNK = 1024 * 1024
 
 _SCHEMA = """
@@ -314,6 +322,38 @@ def kind_for_path(path: str) -> str:
     return _KIND_BY_EXT.get(os.path.splitext(path)[1].lower(), KIND_FILE)
 
 
+#: Observers of "a document was produced". The registry is the ONE place that
+#: knows every produced file, so it is where an interested subsystem listens —
+#: but the LAYERING runs downward (core <- modules <- agents <- tools), so core
+#: may not reach up and call one. A higher tier registers itself instead; the
+#: KB auto-ingest (WS-K3) is the first and is installed from ``tools/__init__``.
+_ARTIFACT_HOOKS: List[Any] = []
+
+
+def register_artifact_hook(fn) -> None:
+    """Register ``fn(user_id, path, session_id)``, called after every record.
+
+    Idempotent by identity, so a module that is imported twice registers once.
+    A hook MUST be cheap and non-raising; the caller's write has already
+    happened and bookkeeping may never undo it.
+    """
+    if fn is not None and fn not in _ARTIFACT_HOOKS:
+        _ARTIFACT_HOOKS.append(fn)
+
+
+def clear_artifact_hooks() -> None:
+    """Drop every hook (tests)."""
+    _ARTIFACT_HOOKS.clear()
+
+
+def _run_artifact_hooks(user_id: str, path: str, session_id: str) -> None:
+    for fn in list(_ARTIFACT_HOOKS):
+        try:
+            fn(user_id, path, session_id=session_id)
+        except Exception:
+            logger.debug("artifact hook %r skipped for %s", fn, path, exc_info=True)
+
+
 def record_artifact(user_id: Optional[str], path: str, *,
                     session_id: str = "", kind: Optional[str] = None) -> Optional[str]:
     """Tool-agnostic write-time record into the ledger. Fail-open by construction.
@@ -336,6 +376,8 @@ def record_artifact(user_id: Optional[str], path: str, *,
         artifact = get_artifact_ledger().record(
             str(user_id), path, session_id=str(session_id or ""),
             kind=kind or kind_for_path(path))
+        if artifact is not None:
+            _run_artifact_hooks(str(user_id), path, str(session_id or ""))
         return artifact.id if artifact is not None else None
     except Exception:
         logger.debug("artifact record skipped for %s", path, exc_info=True)

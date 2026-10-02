@@ -10,7 +10,9 @@ from core.surfaces.idempotency import IdempotencyStore
 from core.surfaces.inbound_webhook import WebhookSurface
 from core.surfaces.media import Media
 
-import surfaces.telegram.harness  # noqa: F401 — registers the shared inbound actor (core.surfaces.act)
+from surfaces._actor import ensure_registered as _ensure_actor
+
+_ensure_actor()  # registers the shared inbound actor (core.surfaces.act)
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +84,8 @@ class WhatsAppInbound(WebhookSurface):
     def verify_challenge(self, params: dict) -> Optional[str]:
         from core.surfaces.config import SurfaceConfig
         token = SurfaceConfig.webhook_verify_token("whatsapp")
-        if token and params.get("hub.verify_token") == token:
+        got = str(params.get("hub.verify_token") or "")
+        if token and hmac.compare_digest(got.encode("utf-8"), str(token).encode("utf-8")):
             return params.get("hub.challenge")
         return None
 

@@ -188,7 +188,7 @@ def test_every_class_the_console_uses_is_defined_in_the_family():
 
 def test_the_scan_is_not_vacuous():
     used = _used_classes()
-    assert {"nav-item", "entry", "pill", "unknown", "sources", "composer"} <= used
+    assert {"nav-item", "entry", "pill", "unknown", "entry-meta", "composer"} <= used
 
 
 # --- 5. it is not the mockup ------------------------------------------------- #

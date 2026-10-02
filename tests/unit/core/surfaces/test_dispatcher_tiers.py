@@ -181,3 +181,37 @@ async def test_inbound_revive_fail_open_when_store_raises(tmp_path):
     msg = _inbound("hello", user="u_stranger", surface="telegram", chat="c1")
     d = await route_inbound(c, msg)
     assert d.kind == RouteKind.TASK_AGENT  # routing proceeds despite the store fault
+
+
+@pytest.mark.asyncio
+async def test_denied_inbound_does_not_revive(tmp_path, monkeypatch):
+    """Security review 2026-09-23: a DENIED message never clears a dead target."""
+    from core.surfaces.dead_targets import DeadTargetStore
+
+    dt = DeadTargetStore(str(tmp_path / "dead.db"))
+    dt.mark("telegram", "c1", "blocked")
+    dt.mark("telegram", "u_stranger", "blocked")
+    monkeypatch.setenv("CORRESPONDENT_ACCESS_ENABLED", "true")
+    c = _Container(tmp_path, chat_reg=SessionChatRegistry(str(tmp_path / "chat.db")),
+                   corr_reg=CorrespondentRegistry(str(tmp_path / "corr.db")),
+                   dead_targets=dt)
+    d = await route_inbound(c, _inbound("hi", user="u_stranger", surface="telegram",
+                                        chat="c1"))
+    assert d.kind == RouteKind.DENIED
+    assert dt.is_dead("telegram", "c1") is True
+    assert dt.is_dead("telegram", "u_stranger") is True
+
+
+@pytest.mark.asyncio
+async def test_email_inbound_never_revives(tmp_path, monkeypatch):
+    """A forged email `From:` must not revive the address, even when routed."""
+    from core.surfaces.dead_targets import DeadTargetStore
+
+    dt = DeadTargetStore(str(tmp_path / "dead.db"))
+    dt.mark("email", "bob@x.test", "bounced")
+    dt.mark("email", "c1", "bounced")
+    c = _Container(tmp_path, chat_reg=SessionChatRegistry(str(tmp_path / "chat.db")),
+                   dead_targets=dt)
+    await route_inbound(c, _inbound("hi", user="bob@x.test", surface="email", chat="c1"))
+    assert dt.is_dead("email", "bob@x.test") is True
+    assert dt.is_dead("email", "c1") is True

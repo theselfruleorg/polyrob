@@ -465,11 +465,11 @@ def test_lifecycle_pings_have_their_own_smaller_bucket(monkeypatch):
     """2026-08-28 forensics: goal start/done pings (source=self_evolution) filled
     the shared 30/day cap and the agent's own reports were capped — on 08-27 the
     owner got 3 of 171 attempted agent messages. Lifecycle traffic now stops at
-    USER_DELIVERY_LIFECYCLE_DAILY_CAP while the agent keeps the rest of the cap."""
+    the delivery.lifecycle_daily_cap pref while the agent keeps the rest of the cap."""
     monkeypatch.setenv("USER_DELIVERY_RATE_PER_HOUR", "100")
     monkeypatch.setenv("USER_DELIVERY_DAILY_CAP", "10")
     monkeypatch.setenv("USER_DELIVERY_RESERVED_SLOTS", "0")
-    monkeypatch.setenv("USER_DELIVERY_LIFECYCLE_DAILY_CAP", "2")
+    monkeypatch.setattr("core.surfaces.user_delivery._lifecycle_daily_cap", lambda *a, **k: 2)
     sink, ev = _Sink(), _EvLog()
     c = _Container({"telegram_sink": sink})
     assert _deliver(c, "1", "▶ goal started: a", event_log=ev, source="self_evolution") == "sent"
@@ -497,7 +497,7 @@ def test_lifecycle_bucket_zero_disables_it(monkeypatch):
     monkeypatch.setenv("USER_DELIVERY_RATE_PER_HOUR", "100")
     monkeypatch.setenv("USER_DELIVERY_DAILY_CAP", "5")
     monkeypatch.setenv("USER_DELIVERY_RESERVED_SLOTS", "0")
-    monkeypatch.setenv("USER_DELIVERY_LIFECYCLE_DAILY_CAP", "0")
+    monkeypatch.setattr("core.surfaces.user_delivery._lifecycle_daily_cap", lambda *a, **k: 0)
     sink, ev = _Sink(), _EvLog()
     c = _Container({"telegram_sink": sink})
     for i in range(5):

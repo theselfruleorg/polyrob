@@ -1,10 +1,8 @@
 """The `identity` status section — who the agent IS, on every status seat.
 
-The Mindprint avatar system (`avatar/`, `modules/pfp/`) has been complete and
-well-tested since 2026-07-19 and reached almost nothing: no status surface
-reported it, and `core.instance.voice_signature()` had ZERO callers outside
-`polyrob pfp say`. Verified on prod 2026-09-15: Rob #1 had no avatar at all and
-no seat said so.
+The avatar is ONE image slot (`core/avatar.py`): set (and from where), not
+set, or unreadable. Core generates no face, so the section reports no
+generator, trait or voice.
 
 Adding it to the ONE snapshot (rather than to a seventh renderer) is what puts
 it on Telegram `/status` and `/mode`, `polyrob doctor`, `polyrob autonomy
@@ -22,58 +20,42 @@ import pytest
 from core.status_snapshot import STATE_OK, STATE_UNAVAILABLE, _identity_section
 
 
-def _write_pfp(tmp_path, instance="rob", *, locked=True, **over):
-    d = tmp_path / "identity" / instance / "pfp"
-    d.mkdir(parents=True, exist_ok=True)
-    (d / "pfp.png").write_bytes(b"\x89PNG\r\n\x1a\n")
-    meta = {
-        "generator": "mindprint@v2", "seed": "POLYROB", "variant": "#a1b2",
-        "instance_id": instance, "seed_hex": "0x1546", "locked": locked,
-        "traits": {"tier": "rare", "eyes": "square", "mouth": "grin",
-                   "head": "orb", "antenna": "single", "aura": "none",
-                   "brow": "none", "mode": "solid"},
-        "voice": {"pitch": 1.29, "rate": 1.02, "timbre": 0.78},
-        "rendered_by": "pillow-mesh",
-    }
-    meta.update(over)
-    (d / "pfp.json").write_text(json.dumps(meta))
-    return d
+def _write_pfp(tmp_path, instance="rob"):
+    from core.avatar import set_avatar
+    return set_avatar(tmp_path, instance, b"\x89PNG\r\n\x1a\n" + b"x" * 8,
+                      source="nft:base:0xabc:7").path
 
 
-def test_a_kept_avatar_reports_its_identity(tmp_path):
+def test_a_set_avatar_reports_its_source(tmp_path):
     _write_pfp(tmp_path)
+    sec = _identity_section("rob", str(tmp_path))
+    assert sec.state == STATE_OK and sec.health == []
+    assert sec.data["avatar"] == "set"
+    assert sec.data["avatar_source"] == "nft:base:0xabc:7"
+    blob = " ".join(sec.lines)
+    assert "rob — avatar set (nft:base:0xabc:7)" in blob
+    for gone in ("seed", "traits", "voice", "generator"):
+        assert gone not in sec.data
+
+
+def test_an_unset_slot_shows_the_default_and_is_OK(tmp_path):
     sec = _identity_section("rob", str(tmp_path))
     assert sec.state == STATE_OK
-    assert sec.data["avatar"] == "kept"
-    assert sec.data["seed_hex"] == "0x1546"
-    assert sec.data["tier"] == "rare"
-    blob = " ".join(sec.lines)
-    assert "rob" in blob and "0x1546" in blob and "rare" in blob
+    assert sec.health == [], "the default avatar must not raise a health item"
+    assert sec.data["avatar"] == "set" and sec.data["avatar_default"] is True
+    assert "the default" in " ".join(sec.lines).lower()
+    assert "polyrob avatar set" in " ".join(sec.lines)
 
 
-def test_the_voice_signature_is_surfaced(tmp_path):
-    """Its first consumer outside `pfp say`. A voice the agent cannot report is
-    a voice nothing can use."""
-    _write_pfp(tmp_path)
-    sec = _identity_section("rob", str(tmp_path))
-    assert sec.data["voice"] == {"pitch": 1.29, "rate": 1.02, "timbre": 0.78}
-    assert "1.29" in " ".join(sec.lines)
-
-
-def test_a_draft_avatar_says_it_is_not_kept_yet(tmp_path):
-    _write_pfp(tmp_path, locked=False)
-    sec = _identity_section("rob", str(tmp_path))
-    assert sec.data["avatar"] == "draft"
-    assert "draft" in " ".join(sec.lines).lower()
-
-
-def test_no_avatar_is_OK_and_says_so_rather_than_warning(tmp_path):
-    """Prod's actual state on 2026-09-15."""
+def test_no_avatar_at_all_is_OK_and_says_so_rather_than_warning(tmp_path, monkeypatch):
+    """No default shipped (a broken install): still optional, still honest."""
+    monkeypatch.setattr("core.avatar.DEFAULT_AVATAR", tmp_path / "missing.png")
     sec = _identity_section("rob", str(tmp_path))
     assert sec.state == STATE_OK
     assert sec.health == [], "an optional setup step must not raise a health item"
     assert sec.data["avatar"] == "none"
-    assert "not set up" in " ".join(sec.lines).lower()
+    assert "not set" in " ".join(sec.lines).lower()
+    assert "polyrob avatar set" in " ".join(sec.lines)
 
 
 def test_no_avatar_still_names_the_instance(tmp_path):
@@ -83,16 +65,15 @@ def test_no_avatar_still_names_the_instance(tmp_path):
     assert "polyrob" in " ".join(sec.lines)
 
 
-def test_an_unreadable_meta_is_reported_not_swallowed(tmp_path):
-    d = tmp_path / "identity" / "rob" / "pfp"
-    d.mkdir(parents=True)
-    (d / "pfp.png").write_bytes(b"\x89PNG\r\n\x1a\n")
-    (d / "pfp.json").write_text("{ not json")
+def test_an_unreadable_slot_is_reported_not_swallowed(tmp_path):
+    from core.avatar import avatar_dir
+    _write_pfp(tmp_path)
+    (avatar_dir(tmp_path, "rob") / "avatar.json").write_text("{ not json")
     sec = _identity_section("rob", str(tmp_path))
-    # The PNG exists but its record does not parse: that is neither "kept" nor
-    # "none", and reporting either one would be a confident lie.
+    # An unreadable store is not an empty one: neither "set" nor "none".
     assert sec.data["avatar"] == "unreadable"
     assert "unreadable" in " ".join(sec.lines).lower()
+    assert [h.key for h in sec.health] == ["avatar_unreadable"]
 
 
 def test_the_section_never_creates_the_identity_directory(tmp_path):

@@ -123,7 +123,7 @@ def test_check_refuses_while_autonomy_halted(monkeypatch):
     gate = PolicyGate(max_per_tx_usd=100.0)
     d = gate.check(venue="hyperliquid", amount_usd=1.0, idempotency_key="k")
     assert d.allowed is False
-    assert "halt" in d.reason.lower() or "kill" in d.reason.lower()
+    assert "paused" in d.reason.lower() and "/resume" in d.reason
 
 
 def test_check_fails_closed_when_halt_probe_raises(monkeypatch):

@@ -117,7 +117,8 @@ async def test_nft_usage_says_a_transfer_always_needs_approval():
     The seat must not imply his caps are the protection here."""
     from surfaces.telegram.nft_ops import USAGE, nft_reply
     out = await nft_reply("rob", [])
-    assert out == USAGE
+    # 069 v4 A4: no words = the agent NFTs this treasury owns (off here), then the usage
+    assert out.endswith(USAGE) and "AGENT_NFT_ENABLED" in out
     assert "ALWAYS comes to you for approval" in out
     # There is deliberately no verb that GRANTS an approval.
     assert "revoke" in out and "grant" not in out.lower().split("revoke")[0]

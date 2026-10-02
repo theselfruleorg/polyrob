@@ -349,7 +349,19 @@ class PathManager:
         # WHITELIST: Allow alphanumeric, underscore, dash, and period (for wallet addresses)
         # Also allow 'x' prefix for hex addresses (0x...)
         import re
+        import hashlib
         clean_id = re.sub(r'[^a-zA-Z0-9_\-\.]', '', user_id)
+        # Security analysis 2026-09-23 (low): stripping alone collapsed distinct
+        # ids onto ONE tenant dir ("a:b" and "ab"). When a character other than
+        # '+' was stripped, append a digest of the ORIGINAL id so the two can
+        # never meet. '+' keeps the legacy strip: the Signal fallback id
+        # `u_signal_+49…` already lives on disk as `u_signal_49…` and a
+        # platform-assigned E.164 number cannot collide with another sender.
+        # Every id already inside the allowlist (u_{digest}, u_discord_123,
+        # numeric Telegram ids, 0x… addresses, _anonymous_) is unchanged.
+        if re.sub(r'[^a-zA-Z0-9_\-\.+]', '', user_id) != user_id and clean_id:
+            digest = hashlib.sha256(original_id.encode()).hexdigest()[:10]
+            clean_id = f"{clean_id[:100]}-h{digest}"
 
         # Remove any double separators
         clean_id = re.sub(r'_{2,}', '_', clean_id)
@@ -364,9 +376,9 @@ class PathManager:
         if len(clean_id) > MAX_USER_ID_LENGTH:
             clean_id = clean_id[:MAX_USER_ID_LENGTH]
 
-        # Ensure the cleaned ID is still valid
-        if not clean_id or len(clean_id) < 1:
-            import hashlib
+        # Ensure the cleaned ID is still valid. An id made only of dots ("." →
+        # the sessions root itself) is not a tenant directory.
+        if not clean_id or len(clean_id) < 1 or not clean_id.strip('.'):
             safe_hash = hashlib.sha256(original_id.encode()).hexdigest()[:12]
             clean_id = f"user_{safe_hash}"
             self.logger.warning(f"Generated safe user ID from invalid input: {original_id} -> {clean_id}")
@@ -762,6 +774,20 @@ class PathManager:
         
         # Create the file path
         file_path = (subdir / filename).resolve(strict=False)
+
+        # Security analysis 2026-09-23 (H09): the session dirs are writable by a
+        # sandbox that shares the workspace, so `filename` (or a planted
+        # symlink at it) must not resolve outside the intended subdir.
+        # resolve() above already followed any link; refuse the escape.
+        subdir_real = Path(os.path.realpath(subdir))
+        try:
+            file_path.relative_to(subdir_real)
+        except ValueError:
+            raise ValueError(
+                f"Security violation: file path escapes the session subdir "
+                f"'{subdir_name}': {filename}")
+        if file_path == subdir_real:
+            raise ValueError(f"Security violation: not a file name: {filename!r}")
         
         # Ensure parent directory exists if requested
         if ensure_dir:

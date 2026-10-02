@@ -51,5 +51,16 @@ def test_forged_reentry_and_leaf_turns_are_not_origins(tmp_path, monkeypatch):
     tool = _tool(tmp_path)
     g = _create(tool, _Ctx("chat-2", metadata={"turn_kind": "self_wake"}), "from a self-wake")
     assert "origin_session_id" not in g.payload
-    g = _create(tool, _Ctx("chat-3", role="leaf"), "from a leaf worker")
-    assert "origin_session_id" not in g.payload
+    r = asyncio.run(tool.goal_create(GoalCreateAction(title="from a leaf worker", body="b"),
+                                     _Ctx("chat-3", role="leaf")))
+    assert r.error and "leaf" in r.error
+
+
+def test_a_leaf_or_sub_agent_cannot_create_a_durable_goal(tmp_path):
+    """Review E2: cronjob is delegate_blocked and goal_ask / rail_propose refuse a
+    leaf; goal_create let a delegated leaf queue durable autonomous work."""
+    tool = _tool(tmp_path)
+    for ctx in (_Ctx("leaf-1", role="leaf"), _Ctx("sub-1", is_sub_agent=True)):
+        r = asyncio.run(tool.goal_create(GoalCreateAction(title="durable work", body="b"), ctx))
+        assert r.error and "leaf/sub-agent" in r.error
+    assert tool._goal_board.list(user_id="tester", limit=5) == []

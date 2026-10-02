@@ -129,7 +129,7 @@ class OfferResult:
     must branch; ``text`` is the one sentence a human reads.
 
     ``invoice`` carries the minted row so a SEAT can render a payment card from
-    it (`modules.x402.artifact` + `modules.pfp.cards` — both above core's
+    it (`modules.x402.artifact` + `modules.cards.cards` — both above core's
     layer). Core still renders every payable value in the TEXT; the seat only
     turns the same facts into a picture.
     """

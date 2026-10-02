@@ -90,9 +90,17 @@ async def test_record_llm_usage_halts_x402_over_budget(monkeypatch):
     t._calculate_costs = _costs
 
     kw = dict(user_id="usr_x", session_id="s1", agent_id="a", model="m", provider="p")
-    await t.record_llm_usage(input_tokens=400, output_tokens=200, **kw)   # 600 total, ok
-    with pytest.raises(InsufficientCreditsError):
-        await t.record_llm_usage(input_tokens=400, output_tokens=200, **kw)  # 1200 > 1000
+    # CR-M15: prepaid billing is per request — this runs inside a SETTLED
+    # x402 request's context (the middleware's flag), not off the stored tier.
+    from modules.x402.x402_integration import (
+        mark_x402_paid_request, reset_x402_paid_request)
+    token = mark_x402_paid_request()
+    try:
+        await t.record_llm_usage(input_tokens=400, output_tokens=200, **kw)   # 600 total, ok
+        with pytest.raises(InsufficientCreditsError):
+            await t.record_llm_usage(input_tokens=400, output_tokens=200, **kw)  # 1200 > 1000
+    finally:
+        reset_x402_paid_request(token)
 
 
 @pytest.mark.asyncio

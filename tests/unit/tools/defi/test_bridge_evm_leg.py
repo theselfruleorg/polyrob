@@ -8,7 +8,7 @@ import pytest
 from tools.defi.bridge_evm_leg import (EvmOriginLeg, PreparedLeg,
                                        assert_order_matches_request)
 
-RELAY_DEPOSITORY = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+RELAY_DEPOSITORY = "0x4cd00e387622c35bddb9b4c962c136462338bc31"
 HOLDER = "0x2222222222222222222222222222222222222222"
 BASE = 8453
 AMOUNT = 3 * 10 ** 16          # 0.03 ETH — the owner's real Base -> Robinhood leg
@@ -28,6 +28,20 @@ def _tx_data(**kw):
 def test_a_matching_order_passes():
     assert assert_order_matches_request(
         _tx_data(), origin_chain_id=BASE, amount_in_raw=AMOUNT) is None
+
+
+def test_a_deposit_to_an_unpinned_address_refuses():
+    """A tampered quote names an attacker EOA as the deposit `to` with our exact
+    value: the outflow matches the declaration, so only the pin catches it."""
+    problem = assert_order_matches_request(
+        _tx_data(to="0x" + "ab" * 20), origin_chain_id=BASE, amount_in_raw=AMOUNT)
+    assert problem and "not a pinned Relay deposit contract" in problem
+
+
+def test_the_pin_is_case_insensitive():
+    assert assert_order_matches_request(
+        _tx_data(to=RELAY_DEPOSITORY.upper().replace("0X", "0x")),
+        origin_chain_id=BASE, amount_in_raw=AMOUNT) is None
 
 
 def test_a_different_value_refuses():

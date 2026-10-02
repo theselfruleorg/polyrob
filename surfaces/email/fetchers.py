@@ -77,13 +77,7 @@ class ImapFetcher:
         ensure = getattr(tool, "ensure_imap", None) or tool.ensure_initialized
         try:
             await ensure()
-            if not getattr(tool, "imap_connection", None):
-                await tool._connect_imap()
-            conn = tool.imap_connection
-            if conn is None:
-                raise MailFetchError("IMAP connection unavailable after connect")
-            conn.select("INBOX")
-            _, nums = conn.search(None, "UNSEEN")
+            conn, nums = await self._select_unread(tool)
         except MailFetchError:
             raise
         except Exception as e:
@@ -107,6 +101,47 @@ class ImapFetcher:
             except Exception as e:
                 logger.warning("email fetch %s failed: %s", num, e, exc_info=True)
         return out
+
+    async def _select_unread(self, tool):
+        """``(connection, search result)`` for INBOX, reconnecting ONCE if the
+        cached handle turns out to be dead.
+
+        ⚠️ The guard used to be ``if not tool.imap_connection: connect()``. Gmail
+        closes an idle IMAP socket but the ``IMAP4_SSL`` OBJECT survives and
+        stays truthy, so the guard never fired: every poll reused the corpse and
+        raised ``socket error: EOF`` once a minute forever. Observed on prod
+        2026-09-23 — ten consecutive failures, zero recoveries, while three
+        manual logins from the same host with the same credential all succeeded.
+        The rail's own message says "no new mail cannot be distinguished from
+        this", which is exactly why silent permanent blindness is the bad outcome.
+
+        Exactly ONE retry. An auth failure is not a stale socket — the credential
+        is wrong, retrying only hammers the mailbox, and ``_connect_imap`` raising
+        here propagates so the durable verdict still gets recorded.
+        """
+        for attempt in (0, 1):
+            if not getattr(tool, "imap_connection", None):
+                await tool._connect_imap()
+            conn = tool.imap_connection
+            if conn is None:
+                raise MailFetchError("IMAP connection unavailable after connect")
+            try:
+                conn.select("INBOX")
+                _, nums = conn.search(None, "UNSEEN")
+                return conn, nums
+            except Exception as exc:
+                if attempt or self._is_auth_error(exc):
+                    raise
+                logger.info("email inbound: stale IMAP handle (%s) — reconnecting",
+                            type(exc).__name__)
+                # Drop the corpse so the next pass reconnects. `logout()` on a
+                # dead socket raises, and that failure is not news here.
+                try:
+                    conn.logout()
+                except Exception:
+                    pass
+                tool.imap_connection = None
+        raise MailFetchError("IMAP connection unavailable after connect")
 
     @staticmethod
     def _is_auth_error(exc: BaseException) -> bool:

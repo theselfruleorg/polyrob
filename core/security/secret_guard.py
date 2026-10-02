@@ -40,6 +40,13 @@ SECRET_NAME_GLOBS: tuple[str, ...] = (
     ".pypirc",
     ".pgpass",
     "bot.db",
+    # Security analysis 2026-09-23 (low): sidecar stores that hold tokens,
+    # session state or the refusal lists themselves (see CREDENTIAL_NAME_GLOBS).
+    "app_services.db",
+    "memory.db",
+    "dapp_sessions.db",
+    "session_registry.db",
+    "token_denylist.db",
     # M1 (2026-09-14): concrete credential files POLYROB itself writes. None of
     # them matched a glob above — `.mcp_encryption_key` ends in `_key`, not
     # `.key`, and the three JSON stores have ordinary names. They were caught
@@ -117,6 +124,16 @@ CREDENTIAL_NAME_GLOBS: tuple[str, ...] = (
     # project data dir — over-denying an editable source file is a different
     # failure, not a smaller one.
     "bot.db",                 # sessions, users, API keys, billing rows
+    # Security analysis 2026-09-23 (low): the dapp wallet-session store holds
+    # live pairing material. The OTHER sidecar DBs (memory.db, goals.db,
+    # token_denylist.db, …) are deliberately NOT here: this list also decides
+    # what `polyrob profile export` leaves out of a backup, and dropping the
+    # owner's memory or the revoked-token list from a restore is a worse
+    # failure. The file tools reach none of them anyway — the data-home deny
+    # seam (core.path_safety.agent_file_refusal, H12) refuses the whole data
+    # home outside the session workspace, and is_secret_path (ingestion)
+    # carries the names + the data-home *.db location rule.
+    "dapp_sessions.db",
     ".mcp_encryption_key*",   # the Fernet master key — decrypts the three below
     ".mcp_oauth_tokens.*",    # live OAuth access/refresh tokens (+ .tmp writes)
     ".x_session.*",           # the X login (cookies + localStorage) (+ .tmp)
@@ -134,6 +151,11 @@ CREDENTIAL_NAME_GLOBS: tuple[str, ...] = (
     # `wallet/` dir appears (data-home is CWD-relative in local mode).
     "wallet/meta.json",
     "wallet/submissions.sqlite*",
+    # W0 (token management): the stores that make a token VERIFIED — the owner
+    # pins and the own-launch provenance. A write the agent could make here is a
+    # verification it could grant itself.
+    "wallet/token_pins.db*",
+    "wallet/token_provenance.db*",
     # Minor #6 (2026-07-16): trailing `*` also catches the `.hwm` (high-water-mark)
     # sidecar `wallet/audit.jsonl.hwm` written alongside the audit log itself —
     # same money-policy-state rationale as the exact-match audit file.
@@ -335,6 +357,72 @@ def _is_env_template(name: str) -> bool:
     return False
 
 
+# Kernel pseudo-filesystems: /proc/<pid>/environ holds the process env (every
+# API key), /proc/<pid>/cmdline and /sys expose host state. Location rule,
+# matched on the path AND its realpath (/proc/self resolves to /proc/<pid>).
+_PSEUDO_FS_ROOTS: tuple[str, ...] = ("/proc", "/sys")
+
+_DB_SUFFIXES: tuple[str, ...] = (".db", ".sqlite", ".sqlite3", ".db-wal", ".db-shm",
+                                 ".db-journal", ".sqlite-wal", ".sqlite-shm",
+                                 ".sqlite-journal")
+
+
+def _real_and_lexical(path: Path) -> "list[str]":
+    import os
+    out = [str(path).replace("\\", "/")]
+    try:
+        real = os.path.realpath(str(path))
+        if real not in out:
+            out.append(real)
+    except Exception:
+        pass
+    return out
+
+
+def _is_pseudo_fs(path: Path) -> bool:
+    for s in _real_and_lexical(path):
+        for root in _PSEUDO_FS_ROOTS:
+            if s == root or s.startswith(root + "/"):
+                return True
+    return False
+
+
+def _data_home_realpaths() -> "tuple[str, ...]":
+    """Realpaths of the configured data home(s). Fail-open to ()."""
+    import os
+    homes = []
+    try:
+        from core.runtime_paths import effective_data_home, resolve_data_home
+        for fn in (resolve_data_home, effective_data_home):
+            try:
+                real = os.path.realpath(str(fn()))
+            except Exception:
+                continue
+            if real not in homes:
+                homes.append(real)
+    except Exception:
+        pass
+    return tuple(homes)
+
+
+def _is_data_home_db(path: Path) -> bool:
+    """A ``*.db`` / ``*.sqlite*`` file DIRECTLY in the configured data home
+    (goals.db, cron.db, pairing.db, surface_state.db …) — anchored by realpath,
+    so it follows the data home wherever POLYROB_DATA_DIR puts it and never
+    touches a project's own database elsewhere in the workspace."""
+    import os
+    if not path.name.lower().endswith(_DB_SUFFIXES):
+        return False
+    homes = _data_home_realpaths()
+    if not homes:
+        return False
+    try:
+        parent = os.path.realpath(str(path.parent))
+    except Exception:
+        return False
+    return parent in homes
+
+
 def is_credential_file(path: Path) -> bool:
     """Return *True* if *path*'s NAME looks like a credential/secret file.
 
@@ -349,6 +437,8 @@ def is_credential_file(path: Path) -> bool:
     them, matched by realpath.
     """
     name = path.name
+    if _is_pseudo_fs(path):
+        return True
     if _is_env_template(name):
         return False
     for glob in CREDENTIAL_NAME_GLOBS:
@@ -448,6 +538,10 @@ def is_secret_path(path: Path, *, root: Path) -> bool:  # noqa: ARG001
     ``root`` is accepted for callers that want to pass it (future: relative-path
     normalisation), but is not required for the current checks.
     """
+    # 0. Location rules: kernel pseudo-filesystems, data-home databases.
+    if _is_pseudo_fs(path) or _is_data_home_db(path):
+        return True
+
     # 1. Parent-directory check
     if _dir_part_match(path, SECRET_DIR_PARTS):
         return True

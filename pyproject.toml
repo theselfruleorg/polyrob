@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "polyrob"
-version = "1.1.0"
+version = "1.2.0"
 description = "POLYROB — autonomous AI agent framework"
 requires-python = ">=3.11"
 license = "MIT"
@@ -18,23 +18,41 @@ classifiers = [
 ]
 dependencies = [
   "pydantic>=2.0.0", "pydantic-settings>=2.0.0", "python-dotenv>=1.0.0",
-  "openai>=1.26.0", "anthropic>=0.20.0", "google-generativeai>=0.8.0",
+  # ⚠️ ONE provider SDK in base (058 T1.3/T1.4): `openai` serves openai +
+  # openrouter + nvidia + every OpenAI-compatible row; deepseek uses requests.
+  # `anthropic` and `google-generativeai` are extras that core/lazy_deps.py
+  # installs on first use (local) or names in a refusal (server).
+  "openai>=1.26.0",
   "tiktoken>=0.7.0", "aiohttp>=3.14.3", "aiofiles>=23.0.0", "aiosqlite>=0.19.0",
   "requests>=2.30.0", "certifi>=2024.0.0", "cryptography>=50.0.0", "pyjwt>=2.8.0",
-  "numpy>=1.24.0", "pandas>=2.0.0",
-  "apsw>=3.46", "sqlite-vec>=0.1.6",
   "rich>=13.0.0", "prompt_toolkit>=3.0.43", "click>=8.0", "colorama>=0.4.6",
-  "python-docx>=0.8.0", "pypdf>=6.16.1", "markdown>=3.5.0", "markdownify>=0.11.0",
-  "pillow>=12.3.0", "imageio>=2.37.0", "python-magic>=0.4.27", "qrcode>=7.4",
+  "markdown>=3.5.0", "markdownify>=0.11.0",
+  "pillow>=12.3.0",
   # Security floors for transitive parsers/HTTP clients; see the system security review.
   "httplib2>=0.32.0", "pyasn1>=0.6.4",
-  "anysite-cli>=0.3", "pyyaml>=6", "packaging>=23.2", "h2>=4.4.1",
+  "pyyaml>=6", "packaging>=23.2", "h2>=4.4.1",
 ]
 
 [project.optional-dependencies]
-server = ["fastapi==0.141.1", "starlette==1.6.0", "uvicorn[standard]==0.38.0", "Jinja2==3.1.6", "python-socketio>=5.11.0", "python-multipart>=0.0.6", "watchfiles>=1.0.0", "argon2-cffi>=23.1.0"]
-browser = ["playwright>=1.40.0"]
-memory-vector = ["sentence-transformers>=3.0.0"]
+# Provider SDKs behind extras (058 T1.3/T1.4). The Gemini SDK alone pulled 12
+# exclusive packages (128.6 MB) into every install for one provider.
+gemini = ["google-generativeai>=0.8.0"]
+anthropic = ["anthropic>=0.20.0"]
+# python-magic (058 T1.6): the upload MIME sniffer; a server without it REFUSES uploads.
+server = ["fastapi==0.141.1", "starlette==1.6.0", "uvicorn[standard]==0.38.0", "Jinja2==3.1.6", "python-socketio>=5.11.0", "python-multipart>=0.0.6", "watchfiles>=1.0.0", "argon2-cffi>=23.1.0", "python-magic>=0.4.27"]
+# 058 T1.6: document parsing (PDF / DOCX) — the filesystem tool refuses with the remedy without it.
+docs = ["pypdf>=6.16.1", "python-docx>=0.8.0"]
+# 058 T1.6: the AnySite console script — the SDK of the discovery pack
+# (packs/discovery, shipped inside this dist; its pack.toml names this extra).
+anysite = ["anysite-cli>=0.3"]
+# psutil: the orphaned-browser-process reaper (tools/browser/browser_manager.py).
+browser = ["playwright>=1.40.0", "psutil>=5.9.0"]
+# 058 T1.5: the vector backend's native deps ride with the embedder; H-MEM
+# degrades to lexical recall (and local_vector to FTS5) without them.
+memory-vector = ["sentence-transformers>=3.0.0", "apsw>=3.46", "sqlite-vec>=0.1.6", "numpy>=1.24.0"]
+# 058 T1.5/T1.6: imageio the run-history GIF (numpy is its array dependency); qrcode
+# the invoice card's QR block. Each degrades and says so.
+media = ["numpy>=1.24.0", "imageio>=2.37.0", "qrcode>=7.4"]
 crypto = ["web3>=6.0.0", "eth-account>=0.10.0", "x402>=2.13.0", "fastapi-x402>=0.1.8", "hyperliquid-python-sdk>=0.21.0", "py-clob-client-v2>=0.1.0"]
 # Solana is its own extra, not part of `crypto`: it is a second curve and a
 # second transaction model, and a deployment that only trades EVM should not
@@ -53,10 +71,17 @@ crypto = ["web3>=6.0.0", "eth-account>=0.10.0", "x402>=2.13.0", "fastapi-x402>=0
 # Cythonize on current toolchains (public CI, 0.13.0).
 solana = ["solders>=0.21", "x402[svm]>=2.16.0", "solana>=0.36,<0.40", "httpx2>=2.12.0", "httpcore2>=2.10.0"]
 telegram = ["aiogram>=3.17.0"]
+# The SDKs of the X pack (packs/x, shipped inside this dist; its pack.toml
+# names this extra). Without them the pack loads and names this extra as the remedy.
 twitter = ["tweepy>=4.14.0", "chatxdk>=0.5.0"]
 voice = ["faster-whisper>=1.0.0"]
+# 064 W1: the Feishu / Lark WS long connection is protobuf (pbbp2) — the one
+# surface transport that rides a vendor SDK. Imported only in surfaces/feishu/ws.py.
+feishu = ["lark-oapi>=1.4,<2"]
+# 067 P0.4: the HF Spaces deploy broker (tools/hf_deploy/broker.py, lazy import).
+hf = ["huggingface_hub>=0.20.0"]
 dev = ["pytest>=7.0.0", "pytest-asyncio>=0.23.0", "ruff>=0.6", "build", "twine"]
-all = ["polyrob[server,browser,memory-vector,crypto,solana,telegram,twitter,voice]"]
+all = ["polyrob[gemini,anthropic,server,browser,memory-vector,media,docs,anysite,crypto,solana,telegram,twitter,voice,feishu,hf]"]
 
 [project.urls]
 Homepage = "https://github.com/theselfruleorg/polyrob"
@@ -66,8 +91,23 @@ Issues = "https://github.com/theselfruleorg/polyrob/issues"
 [project.scripts]
 polyrob = "cli.polyrob:main"
 
+# 067 (owner decision 2026-09-25, "one install"): the first-party packs ship
+# INSIDE this distribution. Their identity is (dist "polyrob", this entry point)
+# — core/packs/index.json. Their SDKs stay optional through the extras each
+# pack.toml names (`extra =`): x -> twitter, discovery -> anysite, markets -> crypto.
+# A new first-party pack = a packs/<dir>/<package>/ with a pack.toml, a row here,
+# its root in `where` and its package in `include` below.
+[project.entry-points."polyrob.packs"]
+discovery = "polyrob_discovery:pack"
+markets = "polyrob_markets:pack"
+x = "polyrob_x:pack"
+
 [tool.setuptools.packages.find]
-include = ["cli*","core*","agents*","modules*","tools*","api*","utils*","cron*","surfaces*","webview*","avatar*","datagen*","data","assets*","migrations*"]
+# The first-party pack roots (067, one install): each packs/<dir> holds one
+# top-level package (polyrob_x, ...), found beside core's.
+where = [".", "packs/discovery", "packs/markets", "packs/x"]
+include = ["cli*","core*","agents*","modules*","tools*","api*","utils*","cron*","surfaces*","webview*","datagen*","data","assets*","migrations*",
+           "polyrob_discovery*","polyrob_markets*","polyrob_x*"]
 exclude = ["*.node_modules", "*.node_modules.*", "*.__pycache__", "*.__pycache__.*"]
 
 [tool.setuptools.package-data]
@@ -93,18 +133,20 @@ exclude = ["*.node_modules", "*.node_modules.*", "*.__pycache__", "*.__pycache__
 # .js, so without this the installed wheel silently fell back to a broken
 # minimal DOM-tree builder.
 "tools" = ["dom/*.js"]
-# Avatar engine + brand/render assets (mindprint.js, studio.html, config/rob.json,
-# renders/rob.png, webview/avatar-live.js) — the renderer/store/webview read these by
-# path, so they MUST ship in the wheel (mirrors the webview asset handling above).
-"avatar" = ["**/*.js", "**/*.html", "**/*.json", "**/*.png"]
 # Built webgate bundle (produced by doc 03). Matches nothing until the bundle is
 # built, so it's inert today — no behavior change. core/assets.py resolves it.
 "polyrob" = ["web_dist/**/*"]
-# Bundled fonts (DejaVu, permissive Bitstream Vera license) — modules/pfp/cards.py
-# reads assets/fonts/dejavu/*.ttf by path at runtime to render invoice/PFP cards
+# Bundled fonts (DejaVu, permissive Bitstream Vera license) — modules/cards/cards.py
+# reads assets/fonts/dejavu/*.ttf by path at runtime to render invoice cards
 # in Pillow (no headless browser). Without this the wheel omits them and card
-# rendering silently degrades to PIL's default font. Ship the TTFs + LICENSE.
-"assets" = ["fonts/**/*"]
+# rendering silently degrades to PIL's default font. Ship the TTFs + LICENSE,
+# and the brand mark the card shows when the instance has no avatar.
+"assets" = ["fonts/**/*", "brand/*.png"]
+# 067: each first-party pack's manifest (pack.toml, read WITHOUT importing the
+# pack) and its skills tree (SKILL.md, references/, rules.json).
+"polyrob_discovery" = ["pack.toml", "skills/**/*"]
+"polyrob_markets" = ["pack.toml", "skills/**/*"]
+"polyrob_x" = ["pack.toml", "skills/**/*"]
 
 [tool.setuptools.exclude-package-data]
 "*" = ["**/__pycache__/*", "**/*.pyc", "**/*.pyo"]

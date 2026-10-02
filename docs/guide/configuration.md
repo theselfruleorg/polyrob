@@ -1,7 +1,8 @@
 # Configuring the agent
 
 This page explains how POLYROB is configured and walks you through the settings
-you will actually touch. It does not list every flag. The complete reference —
+you will actually touch. It leads with the six axes that decide what the agent is;
+individual flags are an appendix. The complete reference —
 every environment flag, its default, and the code that reads it — is
 [`docs/CONFIGURATION.md`](../CONFIGURATION.md). When this page and that file
 disagree, that file wins; it is generated from the code and contract-tested.
@@ -11,7 +12,86 @@ Read this page top to bottom once. After that, `polyrob doctor` and
 
 ---
 
-## 1. How configuration works
+## 1. The six axes
+
+Six environment flags decide what the agent IS on this box. Everything else is a
+knob on top of them. Each axis is read when the process starts, and all six are
+shown on ONE card, the same one every seat renders:
+
+```bash
+polyrob autonomy status     # the posture card: every axis, its effective value, its source
+polyrob doctor              # the same card, then health
+```
+
+(`/status` on Telegram, the console's Agent → Overview, and the agent's own
+`agent_status` action render the same card.) Each axis below says what it moves,
+what it never moves, and how it can be clamped.
+
+| # | Axis | Values | Default |
+|---|---|---|---|
+| 1 | `POLYROB_LOCAL` — trust profile | on / off | off (the CLI sets it on) |
+| 2 | `AUTONOMY_ENABLED` — autonomy master | on / off | off (on when axis 3 or 4 asks) |
+| 3 | `AUTONOMY_MODE` — capability mode | `supervised` / `autonomous` | `supervised` |
+| 4 | `AUTONOMY_POSTURE` — loop posture | `silent` / `owner-visible` / `full` | `silent` |
+| 5 | `AGENT_COMPUTE_POSTURE` — compute posture | `0`–`3` | `0` |
+| 6 | `AGENT_BUILDER_MODE` — builder mode | `off` / `build` / `ship` | `off` |
+
+**1. `POLYROB_LOCAL` — treat this machine as one owner's.** Moves: the
+interactive tool group on (coding, git, knowledge base, context references,
+project context, the message tool, agent status, verify-before-done,
+preferences, invoice cards, the dynamic tool rig), the memory default to
+`local_vector`, and on-demand installs of optional extras (`LAZY_DEPS_ENABLED`).
+Never moves: the self-directed loops (axis 2), money, host access. The CLI sets
+it for you; never set it on a shared server.
+
+**2. `AUTONOMY_ENABLED` — let it work on its own.** Moves, as one group and only
+under axis 1: self-wake, the goal board and planner, the curator, background
+review, episodic continuity, writable skills and self-context, attached
+deliverables. Defaults on when you choose axis 3 `autonomous` or an
+`owner-visible` / `full` posture, so a deliberate choice is never left inert.
+Never moves: money, host access, secrets.
+
+**3. `AUTONOMY_MODE` — act, and tell you after.** `autonomous` moves the
+defaults of a fixed capability group on (Twitter, MCP, groups, the email
+surface, invoicing receive-side, allowlisted autonomous messaging, correspondent
+access and reply), widens the autonomous toolset, turns approvals into
+allow-audit-notify, opens the outbound policy under a daily cap, and raises axis
+4's default to `full`. Never moves: money-SPEND and self-modification verbs
+(they stay on the owner queue), host access, secrets. Clamp: it is effective
+only on a single-owner box — axis 1 on and an owner bound; otherwise the card
+shows `supervised` with the reason.
+
+**4. `AUTONOMY_POSTURE` — how visible the background work is.** `owner-visible`
+adds completion judging, blocker escalation and the continuity trio (episodic
+memory, the session-start digest, reflection on close); `full` adds time-based
+initiative (cron by default) and the no-change wake gate. Never moves:
+capabilities (axis 3), money, host access.
+
+**5. `AGENT_COMPUTE_POSTURE` — how much of the host it may use.** `0` is a
+confined, ephemeral sandbox. `1` adds a persistent dev container with a `shell`
+and pip installs. `2` adds the approval-gated `self_env` verbs that patch and
+restart the agent itself. `3` is the host and requires axis 1. Frozen when the
+process starts: a running agent cannot widen its own host access. Never moves:
+money; every `self_env` verb still asks.
+
+**6. `AGENT_BUILDER_MODE` — build and ship software.** `build` turns on
+publishing and the GitHub tool and puts `publish` in the goal toolset; `ship`
+adds the durable app service (`app_service`) so an app it built stays up behind
+a public address. Clamp: `ship` runs as `build` without `APP_SERVICE_BASE_DOMAIN`
+and its certificate, and the card names the clamp. Never moves: money, host
+access, secrets.
+
+**What no axis moves.** Spending money (`WALLET_DAILY_CAP_USD`,
+`AGENT_WALLET_MAX_PER_TX_USD`, `DEFI_AUTONOMOUS_MAX_USD`, the approval lane —
+§10), host access beyond axis 5, secrets, and the owner pause (§6). Each keeps
+its own gate under every combination of the six.
+
+An explicit per-flag value always beats an axis default. The full flag list is
+an appendix (§14); you should not need it to run the agent.
+
+---
+
+## 2. Where a setting lives
 
 POLYROB has three kinds of settings. Each has one home and one command.
 
@@ -36,6 +116,28 @@ flags (`PAYMENT_APPROVAL_MODE`, `APPROVAL_GRANT_TTL_HOURS`,
 changing them inside a live process is ignored on purpose — a running agent
 cannot widen its own host access or approval lane. A **preference** needs no
 restart at all.
+
+**One exception: the REPL applies the autonomy flags live.** `/config set` in the
+REPL is the same process that reads the flag, so a flag of the autonomy loop or
+posture groups (`AUTONOMY_ENABLED`, `AUTONOMY_POSTURE`, `GOALS_ENABLED`,
+`CRON_ENABLED`, …) applies to that session at once and is also written for the
+next start; the reply says `applies: live`. A money, approval, inbound-access or
+frozen flag never applies live — its reply says `takes effect: restart`.
+`polyrob config set`, the REPL `/config set` and the console all use one write
+path, so they validate a value and report a problem in the same words.
+
+**Which file does my process read?**
+
+| Process | Reads |
+|---|---|
+| `polyrob` CLI and REPL | shell env, then `./.polyrob/.env`, then `~/.polyrob/.env` (the list below) |
+| `polyrob serve` / `python main.py` | the same, then `config/.env.<env>`, which wins |
+| a systemd unit | its `EnvironmentFile` (for example `/etc/polyrob/polyrob.env`) only |
+| the console's settings page | writes `./.polyrob/.env` of the process that serves it; under a server posture its reply says the value applies to CLI runs only |
+
+When a feature is off, every hint names the fix the same way:
+`enable: `polyrob config set KEY true --global` (takes effect: restart)`, or the
+feature's own verb where it has one (`polyrob autonomy on`).
 
 ### Files and precedence
 
@@ -84,31 +186,37 @@ polyrob config search "quiet"      # find a setting by name or description
 
 ---
 
-## 2. First run
+## 3. First run
 
 ```bash
-polyrob init
+curl -fsSL https://polyrob.dev/install.sh | bash   # installs AND runs the wizard
+polyrob setup                                      # or run the wizard on its own
 ```
 
-The wizard connects a provider key, picks a default model, chooses a starter
-template (`general`, `research`, `coding`, `social`, `trading`, `blank`) and
-writes `~/.polyrob/.env`. Scripts use `polyrob init --no-prompt` with `--anthropic-key`
-/ `--openai-key`, `--default-provider`, `--default-model`, `--toolset`, `--template`.
+The wizard has seven sections: a provider key, a default model, a toolset, a
+starter template (`general`, `research`, `coding`, `social`, `trading`,
+`blank`), owner pairing, autonomy and guardrails, and the chat surface you want
+to reach the agent on. It writes `~/.polyrob/.env`, seeds the identity docs when
+there are none, creates `~/.agents/skills`, and records the install in
+`~/.polyrob/.polyrob-bootstrap.json` (which `polyrob doctor` reads back).
+`polyrob init` is the same command. Scripts use `polyrob setup --no-prompt` with
+`--anthropic-key` / `--openai-key`, `--default-provider`, `--default-model`,
+`--toolset`, `--template`.
 
 Two options matter beyond keys:
 
 - `--owner <user id>` binds the instance to you as its owner. Owner binding is
-  what lets chat surfaces tell you apart from strangers (§7).
+  what lets chat surfaces tell you apart from strangers (§8).
 - `--instance-id <name>` names the instance; the default is `polyrob`. The
   instance id is the tenant key for memory, goals and identity. Change it only
   before the first real session.
 
 To give the instance its own character at init time use `--character <slug>`
-or `--character-from <name>`; see §8.
+or `--character-from <name>`; see §9.
 
 ---
 
-## 3. Providers and models
+## 4. Providers and models
 
 ### Keys
 
@@ -200,6 +308,14 @@ support it (off by default because it changes cost and latency).
 the run halts honestly when it is reached, and the remaining budget is shown to
 the model so it can pace itself.
 
+Prompt caching is on by default and needs no configuration. If you want to
+change it: `ANTHROPIC_CACHE_TTL` (`auto` | `5m` | `1h`) sets the cache window
+Anthropic holds your prompt for — `auto` gives an interactive chat 1 hour and
+an autonomous cron or goal run 5 minutes, which is the right trade in each
+case. `OPENROUTER_PROMPT_CACHE`, `ANTHROPIC_PROMPT_CACHE` and
+`GEMINI_PROMPT_CACHE` turn a provider's caching off. Everything about caching
+that costs or saves money shows up in `polyrob doctor` and in `/context`.
+
 ### Your own endpoint (`providers.yaml`)
 
 Any OpenAI-compatible or Anthropic-compatible endpoint can be declared with no
@@ -244,7 +360,7 @@ Any OAuth provider can be declared in the same file with an `oauth:` block
 
 ---
 
-## 4. Memory
+## 5. Memory
 
 Cross-session memory is on by default and tenant-scoped.
 
@@ -255,9 +371,10 @@ Cross-session memory is on by default and tenant-scoped.
 | `none` | no cross-session memory |
 
 Vector recall loads the `sqlite-vec` extension through `apsw`, because the
-standard-library `sqlite3` is often built without extension loading. If the
-extension or the embedder is missing, the agent logs one warning and degrades
-to keyword recall. It keeps working.
+standard-library `sqlite3` is often built without extension loading. Both ride
+the `memory-vector` extra; on your own machine the first use installs it. If the
+extra, the extension or the embedder is missing, the agent logs one warning
+naming the extra and degrades to keyword recall. It keeps working.
 
 `MEMORY_REQUIRE_USER_ID` (default on) refuses memory for anonymous sessions;
 set it to `false` only on a single-user box that wants one shared bucket.
@@ -268,11 +385,11 @@ Inspect the active provider from the REPL with `/memory`.
 
 ---
 
-## 5. The autonomy dial
+## 6. The autonomy dial
 
 Out of the box the agent is **interactive**: it acts on your messages and on
-nothing else. Autonomy is a set of loops you opt into, governed by four axes.
-Set them in this order and stop when you have what you want.
+nothing else. Autonomy is a set of loops you opt into, governed by four of
+the six axes in §1. Set them in this order and stop when you have what you want.
 
 | Axis | Default | What it moves |
 |---|---|---|
@@ -288,13 +405,23 @@ polyrob autonomy on --mode autonomous
 polyrob autonomy off
 ```
 
+In the REPL, `/autonomy on` and `/autonomy off` write the same flag, apply it to
+the session at once, and start or stop that session's loops — no restart.
+
+**`AUTONOMY_MODE=autonomous` needs a bound owner.** Without `POLYROB_LOCAL` and an
+owner binding (`POLYROB_OWNER_USER_ID`, or pair one with `polyrob init` /
+`polyrob owner invite`), the mode clamps back to `supervised`, and so do the two
+axes it would have raised. The write says so at once
+(`note: autonomous will CLAMP to supervised — …`), and `polyrob autonomy status`
+shows the clamp on the mode row.
+
 **If you set axis 3 or 4, skip axis 2 — they turn it on.** Choosing
 `AUTONOMY_MODE=autonomous` or an `owner-visible`/`full` posture flips
 `AUTONOMY_ENABLED` on for you, so a deliberate choice is never left inert. An
 explicit per-flag value always wins over any group default.
 
 **What never moves with the dial:** spending money, host access and secrets.
-Each keeps its own gate (§9, §6) under every mode.
+Each keeps its own gate (§10, §7) under every mode — see §1.
 
 ### Stopping it
 
@@ -306,8 +433,8 @@ polyrob autonomy pause trading --for 6h  # one scope, timed
 polyrob autonomy resume
 ```
 
-The same words work in chat ("stop", "halt", "pause", "freeze", "standby";
-"resume", "unpause", "unfreeze"). `polyrob owner …` and the console expose the
+In chat the verbs are `/pause`, `/halt` and `/resume`; a plain sentence such as
+"stop" is a message to the agent, never a switch. `polyrob owner …` and the console expose the
 same record. Details: [owner-controls.md](owner-controls.md).
 
 ### Compute posture
@@ -321,7 +448,7 @@ building software with the agent. See [security-model.md](security-model.md).
 
 ---
 
-## 6. Tools and capabilities
+## 7. Tools and capabilities
 
 ### Toolsets
 
@@ -344,6 +471,22 @@ polyrob tools status      # the same rows plus WHY each disabled one is disabled
 Under the dynamic tool rig (`TOOL_PROGRESSIVE_DISCLOSURE`, on under
 `POLYROB_LOCAL`) the agent sees every loadable tool and pulls one in mid-session
 with `load_tool`; money tools are never loadable that way.
+
+#### Tools loaded mid-session
+
+A tool loaded mid-session has to reach the model somehow, and every way of
+doing that touches the prompt cache. The default is the simplest one: its
+actions join the schema list and are available from the next step. On a Claude
+model that supports deferred tools (`ANTHROPIC_DEFERRED_TOOLS`, on by default)
+the new actions are declared as deferred and surfaced with a small addition
+note, so the cached prefix is kept; if the API declines, POLYROB falls back to
+the plain list once and says so in the log. `TOOL_SCHEMAS_FROZEN=true` is the
+opt-in third shape for any provider: the schema list is pinned for the whole
+session and the model calls a late tool by name through
+`tool_call(name, arguments)`. Every permission, gate and approval fires against
+the real tool exactly as if it had been called directly; the one thing a late
+tool loses there is the provider's own argument validation, so a bad argument
+comes back as an ordinary tool-result error.
 
 ### Code execution
 
@@ -382,9 +525,19 @@ repository (`polyrob.md`, then `POLYROB.md`, `AGENTS.md`, `CLAUDE.md`,
 to steer POLYROB without touching the file your other coding agents read.
 Switch with `PROJECT_CONTEXT_AUTOLOAD`.
 
+A large file is capped rather than refused. The cap follows your model's
+context window — 4 % of it, never below 4 000 tokens and never above 40 000 —
+so the same `AGENTS.md` costs proportionally the same on a 200 K model and a
+1 M one. Over the cap the agent keeps the first 70 % and the last 20 % and marks
+the cut with the file's path, so it knows what it is missing and how to read
+it. If a lower-precedence file sits next to the winner (an `AGENTS.md` beside
+your `polyrob.md`), the agent is told it was skipped — the files are never
+concatenated. `PROJECT_CONTEXT_MAX_TOKENS` pins the cap if you would rather set
+it yourself.
+
 ---
 
-## 7. Surfaces and who may talk to it
+## 8. Surfaces and who may talk to it
 
 Every chat surface runs the same agent. Start one with `polyrob telegram`,
 `polyrob email`, `polyrob discord`, `polyrob slack`, `polyrob signal`,
@@ -436,7 +589,7 @@ runaway loop cannot fill your chat:
 | messages per day | 30 | `USER_DELIVERY_DAILY_CAP`, pref `delivery.daily_cap` |
 | messages per hour | 10 | `USER_DELIVERY_RATE_PER_HOUR`, pref `delivery.rate_per_hour` |
 | identical text suppressed for | 24h | `USER_DELIVERY_DEDUP_HOURS` |
-| framework status pings per day | 10 | `USER_DELIVERY_LIFECYCLE_DAILY_CAP` |
+| framework status pings per day | 10 | the owner pref `delivery.lifecycle_daily_cap` (`/config set`) |
 | slots reserved from low-priority traffic | 8 | `USER_DELIVERY_RESERVED_SLOTS` |
 | gap before the agent repeats the same text to you | 2h | `OWNER_MESSAGE_COOLDOWN_SEC` |
 
@@ -462,7 +615,7 @@ Quiet hours (`digest.quiet_hours`) defer rather than drop. Framework run pings
 
 ---
 
-## 8. Identity, character and profiles
+## 9. Identity, character and profiles
 
 - **Instance id** (`POLYROB_INSTANCE_ID`, default `polyrob`): the name of this
   deployment and the tenant key. See [instances.md](instances.md).
@@ -473,14 +626,14 @@ Quiet hours (`digest.quiet_hours`) defer rather than drop. Framework run pings
   `polyrob` character plus six curated ones — `default`, `writer`, `researcher`,
   `analyst`, `coder`, `ops` — and your own go in your data or profile dir, which
   wins over both.
-- **Avatar** (`polyrob identity avatar`): the generated face used on cards
-  and profiles.
+- **Avatar** (`polyrob identity avatar set <image>`): the image used on cards,
+  the console, Telegram and profiles.
 - **Profiles** (`polyrob profile create|use|export|install`): whole isolated
   homes for running several bots on one machine. See [profiles.md](profiles.md).
 
 ---
 
-## 9. Money
+## 10. Money
 
 Everything that touches money is off by default and has its own gates that
 no autonomy setting moves: the wallet daily and per-transaction caps, the
@@ -503,7 +656,7 @@ wallet, invoicing, x402, trading and token deployment.
 
 ---
 
-## 10. Preferences you set from chat or the CLI
+## 11. Preferences you set from chat or the CLI
 
 Preferences apply live or on the next turn and never need a restart. They are
 per owner (and per room for `chat.*`). `polyrob config list` prints them all
@@ -517,7 +670,7 @@ with their current value; from chat, `/config set KEY VALUE`.
 | Budget | `budget.wallet_daily_usd`, `budget.wallet_per_tx_usd`, `budget.defi_autonomous_usd` | daily = min(pref, env); per-tx and autonomous = your approved value, clamped to the daily cap |
 | Goals | `goals.daily_quota`, `goals.max_concurrent`, `goals.notify_on_done` | |
 | Autonomy | `autonomy.self_wake`, `autonomy.background_review` | |
-| Delivery | `delivery.rate_per_hour`, `delivery.daily_cap`, `digest.enabled`, `digest.channel`, `digest.quiet_hours`, `progress.telegram`, `pause.phrases` | owner notices and the daily digest |
+| Delivery | `delivery.rate_per_hour`, `delivery.daily_cap`, `digest.enabled`, `digest.channel`, `digest.quiet_hours`, `progress.telegram`, `voice.replies` | owner notices and the daily digest; `voice.replies` also answers you with a voice note on Telegram (needs `OPENAI_API_KEY`, or espeak-ng + ffmpeg) |
 | Outbound | `outbound.policy`, `outbound.domains`, `outbound.max_new_recipients_per_day`, `outbound.daily_send_cap` | |
 | Rooms | `chat.mode`, `chat.name`, `chat.instructions`, `chat.wake_words`, `chat.reply_cap_per_hour`, `chat.member_cooldown_sec`, `chat.context_lines`, `chat.quiet_hours`, `chat.mute_until`, `chat.tone`, `chat.verbosity`, `chat.language` | per room; set with `/groups set here KEY VALUE` |
 | UI | `ui.show_avatar` | |
@@ -528,7 +681,7 @@ allows. The agent may propose a preference change itself; proposals wait in
 
 ---
 
-## 11. Server and console
+## 12. Server and console
 
 A server (`polyrob serve`) and the console (`polyrob dashboard`) derive their
 posture from how you bind them: `local` on loopback with no auth, `own_ops`
@@ -545,9 +698,27 @@ or resume a session another process owns. See
 [deployment-postures.md](deployment-postures.md),
 [self-hosting.md](self-hosting.md) and [console.md](console.md).
 
+### When the context window fills
+
+You do not have to manage this, but it helps to know what happens. At 70 % of
+the model's input window POLYROB logs a note. At 85 % it first ages old tool
+results — anything outside the newest six and longer than
+`TOOL_RESULT_AGE_CHARS` (2 000 characters) is demoted to its first line plus a
+pointer to the file the full text was written to — and re-measures; if that was
+enough, no model call happens at all. If it was not, it compacts the
+conversation through the model. At 95 % a non-LLM prune runs as the safety net.
+
+Compaction is deliberately reluctant: rebuilding the conversation is the one
+moment the prompt cache goes cold, so `COMPACTION_COOLDOWN_STEPS` (8) is the
+minimum gap between two model-driven compactions — unless the last one actually
+freed 5 % or more, in which case it may run again straight away.
+
+`/context` tells you where the tokens are, and `/compact` runs the whole ladder
+by hand.
+
 ---
 
-## 12. Troubleshooting
+## 13. Troubleshooting
 
 Two reliability defaults you can leave alone, before the table:
 `DEAD_TARGET_REGISTRY` skips sends to a chat that has blocked or deleted the
@@ -562,7 +733,37 @@ context-compaction step so old adversarial text cannot hijack it. Both are on.
 | Autonomy "does nothing" | `polyrob autonomy status` — check the master switch, the posture and whether a pause is active. |
 | A flag has no effect | `polyrob doctor --flags --search NAME` shows the resolved value and its source; `polyrob config check` finds a mistyped name. |
 | The agent will not run a tool | `polyrob tools status` names the gate — `disabled (missing config: KEY)` or `disabled (gated by FLAG=false)`. |
+| The session got expensive, or slow | `/context` — the `last request (provider-reported)` line splits the prompt into cached and uncached. A low cached share on a long session usually means the prefix is being rewritten; `polyrob doctor` shows the same thing over the last 24 h. |
 
-The complete flag reference: [`docs/CONFIGURATION.md`](../CONFIGURATION.md).
-The CLI reference: [cli.md](cli.md). What actually stops the agent from doing
-something harmful: [security-model.md](security-model.md).
+---
+
+## 14. Appendix — every flag
+
+There are about 780 catalogued flags in three tiers. About 85 are **public**:
+the posture axes, paths, provider and model selectors, keys, caps and the main
+feature switches. The rest are **advanced** (tuning an operator rarely needs) or
+**internal** (reverts, aliases and debug knobs that are scheduled for removal).
+A bare `--flags` shows the public tier plus every flag you set; you ask for the
+others when you need them:
+
+```bash
+polyrob doctor --flags                    # the public tier, plus what you set
+polyrob doctor --flags --all              # every tier
+polyrob doctor --flags --changed          # only what you set away from its default
+polyrob doctor --flags --group memory     # one group (substring match)
+polyrob doctor --flags --search CAP       # by name
+polyrob config explain KEY                # every layer that sets KEY, and which won
+polyrob config search "quiet"             # by description
+```
+
+The groups, largest first: tools / code-exec / cron / approvals · identity /
+local profile · misc runtime knobs · autonomy loops · billing / x402 / wallet ·
+LLM / providers · API / server / sessions · DeFi · memory · console ·
+delegation · skills · crypto trading · preferences · avatar · self-update ·
+web fetch.
+
+The complete reference — every flag, its default, and the code that reads it —
+is [`docs/CONFIGURATION.md`](../CONFIGURATION.md); it is generated from the
+code and contract-tested, and it wins over this page. The CLI reference:
+[cli.md](cli.md). What actually stops the agent from doing something harmful:
+[security-model.md](security-model.md).

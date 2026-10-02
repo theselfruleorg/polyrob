@@ -38,8 +38,23 @@ def resolve_cron_tools(payload: Optional[dict]) -> list:
     owner-grant contract) > ``payload.rig`` > ``AUTONOMOUS_RIG_DEFAULT`` >
     :func:`default_cron_tools`. Byte-identical while the env is unset, which is
     the shipped default (``full``)."""
-    from core.config_policy.rigs import resolve_rig_tools
-    return resolve_rig_tools(payload, default_cron_tools())
+    from core.config_policy.rigs import is_agent_authored, resolve_rig_tools
+    from tools.goal_tools import allowed_self_goal_tools
+    # H05: a rig the AGENT wrote (cronjob_schedule stamps authored_by=agent)
+    # is intersected with the self-goal ceiling; an owner-set rig is not.
+    ceiling = sorted(allowed_self_goal_tools())
+    tools = resolve_rig_tools(payload, default_cron_tools(), agent_ceiling=ceiling)
+    # 036 §3.3: `payload.tools` is read VERBATIM here, which made it a grant
+    # channel with no writer. The ONE predicate runs on an agent-authored row;
+    # a refused id is dropped (the run still starts, narrower) and said.
+    if isinstance(payload, dict) and payload.get("tools") and is_agent_authored(payload):
+        from core.tool_grants import ACTOR_AGENT, split_grantable
+        kept, refused, why = split_grantable(tools, actor=ACTOR_AGENT, ceiling=ceiling)
+        if refused:
+            logger.warning("cron payload.tools on an agent-authored job: %s NOT granted "
+                           "(%s)", ", ".join(refused), why)
+            tools = kept
+    return tools
 
 
 def resolve_job_provider(payload: Optional[dict]) -> tuple:
@@ -169,6 +184,14 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
     """
     async def runner(job: CronJob) -> bool:
         payload = dict(job.payload or {})
+        # W9 (090 R5, D45): a per-job pause window — e.g. the buyback held from
+        # T-1 h to 24 h after the mint window. A $0 skip for every job kind.
+        from cron.read_job import active_pause_window
+        _window = active_pause_window(payload)
+        if _window is not None:
+            logger.info("cron job %s: inside its pause window %s — $0 skip", job.id, _window)
+            _cron_ev(job, "skipped", "pause_window", window_end=_window[1])
+            return True
         # Owner daily digest: a deterministic $0 tick composed from evidence and
         # pushed via the delivery rail — never invokes the model. Routed here
         # BEFORE the wake/change gates. Fail-open (a compose/deliver error is a
@@ -225,6 +248,25 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
             except Exception:
                 logger.warning("cron job %s: subscription gate check failed — "
                               "running tick", job.id, exc_info=True)
+        # Impl handoff E: a deterministic WRITE job — the one allowlisted write
+        # verb (agent_nft.agent_nft_collection_reveal), no session, no model turn (cron/write_job.py).
+        # Held by the owner pause above and the pause window at the top; OFF
+        # unless CRON_WRITE_JOBS_ENABLED; owner-authored jobs only.
+        if payload.get("write_verb"):
+            from cron.write_job import run_write_job
+            ok, why = await run_write_job(task_agent, job)
+            _cron_ev(job, "done" if ok else (
+                "skipped" if why in ("write_jobs_disabled", "write_job_not_owner") else "failed"),
+                why, verb=str((payload.get("write_verb") or {}).get("verb") or ""))
+            return True
+        # W9: a deterministic READ job — one allowlisted read verb, no session,
+        # no model turn (cron/read_job.py). Held by the same owner pause above.
+        if payload.get("read_verb"):
+            from cron.read_job import run_read_job
+            ok, why = await run_read_job(task_agent, job)
+            _cron_ev(job, "done" if ok else "failed", why,
+                     verb=str((payload.get("read_verb") or {}).get("verb") or ""))
+            return True
         if not payload.get("wake_agent", True):
             logger.info("cron job %s: wake_agent=False — $0 tick, agent not invoked", job.id)
             _cron_ev(job, "skipped", "wake_agent_false")
@@ -245,6 +287,33 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
                 return True
         except Exception:
             logger.warning("cron job %s: wake gate error — running tick", job.id, exc_info=True)
+        # Rail preflight (2026-09-21): a job that declares a DETERMINISTIC
+        # precondition (`payload.preflight`, e.g. the SCOUT rail's slot cap
+        # against the ledger's open-row count) is a $0 tick when that
+        # precondition is already false — the SCOUT rail ran 24×/day closing
+        # "NO ENTRY — slot cap (7 rows vs 6)" at $1.07/day. Unlike the wake
+        # gate this is MEANT for money rails; it fails OPEN on any read error.
+        try:
+            from cron.preflight import preflight_skip
+            _pf = preflight_skip(job, data_dir=data_dir)
+            if _pf is not None:
+                logger.info("cron job %s: preflight %s — $0 tick, agent not invoked (%s)",
+                            job.id, _pf.reason, _pf.attrs)
+                _cron_ev(job, "skipped", _pf.reason, **_pf.attrs)
+                if _pf.notice:
+                    # ONCE per verdict episode (the preflight claimed it). The
+                    # one owner rail: dedup, caps, durable fallback.
+                    try:
+                        from core.surfaces.user_delivery import deliver_user_message
+                        await deliver_user_message(
+                            getattr(task_agent, "container", None), job.user_id,
+                            _pf.notice, source="cron_preflight")
+                    except Exception:
+                        logger.warning("cron job %s: preflight owner notice not sent",
+                                       job.id, exc_info=True)
+                return True
+        except Exception:
+            logger.warning("cron job %s: preflight error — running tick", job.id, exc_info=True)
         # §6.3 provider-credit sentinel: an LLM-invoking tick while credits are
         # dead is a guaranteed paid failure — skip as a $0 tick until the latch
         # auto-releases. Digest/wake_agent=false ticks already returned above.
@@ -348,8 +417,22 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
                 model = get_default_model(provider)
             except Exception:
                 model = None
+        # 061 WS-3: the owner's answer to what THIS job asked last time rides
+        # into this run, once (`agents/task/goals/rail_answers.py`). Fail-open.
+        _task_text = job.task
+        try:
+            from agents.task.goals.board import GoalBoard
+            from agents.task.goals.rail_answers import consume_rail_answers
+            from core.runtime_paths import goals_db_path
+            _answers = consume_rail_answers(
+                GoalBoard(goals_db_path(data_dir)), job.user_id, f"cron:{job.id}",
+                run_id=f"cron_run:{job.id}:{int(time.time())}")
+            if _answers:
+                _task_text = f"{_answers}\n\n{job.task}"
+        except Exception:
+            logger.debug("cron %s: rail answers skipped (fail-open)", job.id, exc_info=True)
         request = {
-            "task": job.task,
+            "task": _task_text,
             "provider": provider,
             "model": model,
             "tools": resolve_cron_tools(payload),
@@ -357,6 +440,32 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
             "temperature": 0.0,
             "cron": True,
         }
+        # 025: a job's memory scope is cron:<job_id>, regime payload.memory_regime >
+        # AUTONOMY_MEMORY_REGIME. {} while scopes are OFF. Cron never promotes: it has
+        # no completion judge (the owner promotes via `polyrob owner memory scopes`).
+        from modules.memory.scope import cron_label, request_fields
+        request.update(request_fields(cron_label(job.id), payload))
+        # 060 WS-5: a job pins its doctrine (`payload.skills`) — the daily-X run
+        # used to keyword-match ['self-deploy','polyrob-user-guide'] while the
+        # posting skills it needed stayed unloaded. Absent = byte-identical.
+        from core.config_policy.rigs import pinned_skills
+        _pinned_skills = pinned_skills(payload)
+        if _pinned_skills:
+            request["skills"] = _pinned_skills
+        # 068 G2: a declared buy target rides the run as DATA. A malformed one
+        # stops the run — silently dropping it would turn a restricted money
+        # job into an unrestricted one.
+        from core.wallet.buy_target import PAYLOAD_KEY, normalize_target
+        try:
+            _target = normalize_target(payload.get(PAYLOAD_KEY))
+        except ValueError as exc:
+            logger.error("cron job %s: invalid %s — run refused: %s", job.id, PAYLOAD_KEY, exc)
+            _cron_ev(job, "skipped", "invalid_target_token")
+            return False
+        if _target:
+            # W0: an owner-authored job's target is trust for this run.
+            from core.wallet.buy_target import with_authorship
+            request["money_target"] = with_authorship(_target, payload)
         if _room is not None:
             # The room's own toolset wins: a room session is PUBLIC and
             # `payload.tools` must not be able to widen it.
@@ -486,26 +595,48 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
             except Exception:
                 logger.warning("cron episodic write failed", exc_info=True)
 
+            # The same owner-only remedy on N runs in a row raises ONE owner ask
+            # (cron/remedy_streak.py). Fail-open; never changes the run's outcome.
+            try:
+                from cron.remedy_streak import observe_and_notify
+                await observe_and_notify(job, final, data_dir=data_dir,
+                                         container=getattr(task_agent, "container", None))
+            except Exception:
+                logger.debug("cron %s: remedy streak skipped", job.id, exc_info=True)
+
             # Out-of-band delivery (gated CRON_DELIVERY_ENABLED, default OFF). Runs
             # inside the scheduler's wait_for budget; fail-open — never fails the job.
+            # Owner rule (2026-09-29): the report body is what the run SAID with
+            # send_message; done() text is the run's record, delivered only when
+            # the owner's verbosity asks for records (owner-bound sinks only —
+            # cron/delivery.py decides that). A run that sent nothing delivers
+            # nothing, as an empty result always did. A [SILENT] record still
+            # opts the run out.
             deliver = payload.get("deliver")
-            if AutonomyConfig.cron_delivery_enabled() and deliver and final:
+            body = run.sent_text()
+            from cron.delivery import SILENT_MARKER, is_silent
+            if is_silent(run.done_text):
+                body = SILENT_MARKER
+            if AutonomyConfig.cron_delivery_enabled() and deliver and body:
                 try:
                     from cron.delivery import deliver_result_ex, delivery_outcome
+                    from core.prefs import done_records_visible
                     # D45 (2026-09-21): the typed result — a quiet-hours hold, a
                     # dedup, a cap or a pause is `deferred` (recorded, not lost),
                     # never logged as a send FAILURE.
                     state = await deliver_result_ex(
-                        task_agent, job, final,
+                        task_agent, job, body,
                         target=deliver, deliver_target=payload.get("deliver_target"),
                         session_id=session_id,
+                        record=(run.done_text
+                                if done_records_visible(job.user_id, data_dir) else None),
                     )
                     # Observability: make proactive delivery verifiable in the journal.
                     # outcome distinguishes a [SILENT] opt-out (suppressed) from a real
                     # send failure (failed) — they used to both log as ok=False.
                     logger.info("cron job %s out-of-band delivery target=%s outcome=%s",
-                                job.id, deliver, delivery_outcome(final, state))
-                    _delivery_ev(job, delivery_outcome(final, state), str(deliver))
+                                job.id, deliver, delivery_outcome(body, state))
+                    _delivery_ev(job, delivery_outcome(body, state), str(deliver))
                 except Exception as e:  # belt-and-suspenders; delivery is best-effort
                     logger.error("cron job %s delivery error: %s", job.id, e, exc_info=True)
 

@@ -14,10 +14,10 @@ Three commands sit under one umbrella, `polyrob identity`:
 ```bash
 polyrob identity soul      # the operator-authored, frozen identity documents
 polyrob identity persona   # the character (voice)
-polyrob identity avatar    # the generated face
+polyrob identity avatar    # the avatar image (set from a file, a URL or an NFT)
 ```
 
-`polyrob soul`, `polyrob persona` and `polyrob pfp` remain invocable at those
+`polyrob soul`, `polyrob persona` and `polyrob avatar` remain invocable at those
 names; they are folded onto one row in `polyrob --help`.
 
 ---

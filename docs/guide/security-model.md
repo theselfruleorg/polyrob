@@ -108,16 +108,23 @@ remembered to put in `APPROVAL_REQUIRED_TOOLS` (or the posture-derived defaults)
 More is enforced here than caps. The full set, composed (every one fail-closed
 on a probe error):
 
-- **The owner pause** (`polyrob autonomy pause` / `/pause` / a plain "stop" from the
+- **The owner pause** (`polyrob autonomy pause` / `/pause` / `/halt` from the
   owner; the legacy `AUTONOMY_HALT` file/env is a facet of it) refuses
-  ALL money movement — it is structurally inside `PolicyGate.check`
-  (`core/wallet/policy.py`), so every money verb inherits it, and it is probed
-  again at the top of `tx_guard.authorize`, the x402 pay path, and the venue
-  trade gate.
+  every money movement the agent starts on its own — it is structurally inside
+  `PolicyGate.check` (`core/wallet/policy.py`), so every money verb inherits it,
+  and it is probed again at the top of `tx_guard.authorize` and the x402 pay
+  path. A genuine owner turn (an owner chat turn, or an owner verb such as
+  `/send … go`, `/swap … go`, `/bridge … go`, `/pay … go`, or Confirm on an action
+  card) passes it
+  (`core/money/authority.py::owner_direct_turn`, `tx_guard` step 0); a call with
+  no execution context is never the owner. The venue trade gate
+  (`polyrob_markets/trade_gate.py`, the markets pack) still refuses every order
+  while paused, whoever asks; only the owner's own by-hand cancel of a
+  protective order passes it.
 - **Turn-origin refusal**: a forged self-wake, delegation-result, leaf, or
   autonomous turn cannot reach a money verb — enforced independently at
   `core/wallet/tx_guard.py` step 2 (on-chain), `tools/x402/spend_gate.py`
-  (x402 pay), `tools/crypto_trade_gate.py::trade_turn_refusal` (venue orders),
+  (x402 pay), `polyrob_markets/trade_gate.py::trade_turn_refusal` (venue orders, the markets pack),
   and the owner-queue approver. Two deliberate, flag-gated narrowings exist:
   `DEFI_AUTONOMOUS_TURN_TRADING` admits goal/cron-dispatched runs, and
   `DEFI_MONITOR_EXITS` admits EXIT-shaped operations only (close a held
@@ -125,8 +132,11 @@ on a probe error):
   main-agent turn. Both default OFF; both still ride every cap.
 - **Caps as a ladder**: `AGENT_WALLET_MAX_PER_TX_USD` (catastrophic ceiling),
   `WALLET_DAILY_CAP_USD` (rolling 24h), per-venue caps, the
-  `DEFI_AUTONOMOUS_MAX_USD` autonomous ceiling (above it → the durable
-  `owner_queue` lane, never auto-execute), and a daily-cap-REQUIRED bar for
+  `DEFI_AUTONOMOUS_MAX_USD` autonomous ceiling (a spend the agent starts above
+  it → the durable `owner_queue` lane, never auto-execute; once the owner
+  approves that call it is sent, lane `owner_approved`; an owner verb passes the
+  ceiling, lane `owner_direct` — the per-tx cap, the daily cap, the simulation
+  and the declared `max_spend_usd` still bind everyone), and a daily-cap-REQUIRED bar for
   any unattended origin. An idempotency replay guard sits in the same gate.
 - **`PAYMENT_APPROVAL_MODE`** (`approve` default routes every outward payment
   through `owner_queue`; `auto` auto-approves within caps and notifies after),
@@ -167,7 +177,7 @@ refuse) standing in for the allowance check.
 
 There are two money-gate architectures, split by mechanism, and the split is
 deliberate: `tx_guard`-style **simulate-and-assert** governs everything that
-signs a raw transaction; the PolicyGate/`crypto_trade_gate` **declared-amount**
+signs a raw transaction; the PolicyGate/venue `trade_gate` (markets pack) **declared-amount**
 model governs venue orders and x402 payments, where there is no local
 transaction to simulate. The risk is a NEW money verb picking the weaker gate
 out of convenience — the bidirectional money-verb ratchet
@@ -381,6 +391,40 @@ tenant add or edit `config/mcp_config.json`; if the box hosts genuinely mutually
 distrusting tenants, treat "one shared server process" as itself a software
 boundary and prefer per-tenant instances/containers over relying solely on the
 `user_id` scoping (§4).
+
+---
+
+## 6. What the agent records, and the daily scan
+
+The gates above decide. The security ledger makes each decision visible. Every
+lane writes a typed row to `telemetry_events.db` (no message text — a length and
+an 8-character hash at most), and `core/security_digest.py` is the ONE rollup that
+the `security` status section and the daily brief's `SEC` line both read:
+
+- **Perimeter** — every inbound routing decision, allowed (`inbound_routed`) and
+  refused (`access_denied`, with a reason slug).
+- **Refusals** — gate refusals (`tool_denied`, `source=gate`): correspondent
+  taint, approvals, forged turns, money gates, the room toolset.
+- **Threat flags** — content the threat scanner flagged (`injection_flagged`).
+- **Limiter trips** — a named perimeter limiter (the API middleware, the public
+  x402 invoice endpoints, the console's connection and event throttles) records
+  one `rate_limited` row per limiter and key per window, so a flood writes one
+  row, not thousands. Pacing limiters (outbound delivery, the X post budget) stay
+  silent.
+- **Cost per chat** — model spend from `usage_records`, joined to the chat that
+  owns the session through `session_chat_map`. Spend is per chat: a group room
+  is one shared session, and no store records one member's share of it.
+
+The daily security scan (run by the maintenance loop on the box) is the deep check: `pip-audit` over
+`requirements.lock`, `gitleaks` over the full history with `.gitleaks.toml`, and
+read-only host checks on the box (modes under `/etc/polyrob/`, non-root units,
+`WEBVIEW_READ_ONLY` and `POLYROB_POSTURE` actually set, TLS certificate expiry).
+It writes a dated report for the operator and a verdict in
+`<data>/ops/security_scan.json`, which the `SEC` line shows as `scan clean`,
+`scan findings N`, `scan incomplete (<checks> not run)`, `scan stale (...)` or
+`scan not run`. A check that could not run — a missing tool, no network, an
+unreadable file, off the box — is named as not run and is never a pass. Exit
+codes: `0` clean, `1` findings, `2` incomplete, `3` the scan itself failed.
 
 ---
 

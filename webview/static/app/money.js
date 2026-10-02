@@ -28,6 +28,8 @@
  * the other four panes of this one page, each drawn from its own reader.
  */
 import { postJson } from "./http.js";
+import { bindTokenActions, lifecycleWords, loadTokens, tokensSection,
+         trackedSection } from "./money-tokens.js";
 
 const DASH = "—"; // — : an unknown value, never $0.00 or a blank.
 
@@ -223,6 +225,9 @@ export function positionsSection(data, copy) {
     } else if (row.worth_now_reason) {
       why = row.worth_now_reason;
     }
+    // W1: a quarantined or written-off position says so, before its price.
+    const state = lifecycleWords(row, copy);
+    if (state) why = why ? `${state}; ${why}` : state;
     if (why) what.appendChild(el("span", "why", why));
     tr.appendChild(what);
 
@@ -389,6 +394,7 @@ export function render(root, data, copy, opts = {}) {
   }
   root.appendChild(verdictBanner(data, copy, opts));
   root.appendChild(positionsSection(data, copy));
+  root.appendChild(trackedSection(data, copy, opts.readOnly));
   root.appendChild(chainsSection(data, copy, opts.nowMs));
   root.appendChild(runSection(copy));
   return "book";
@@ -658,10 +664,10 @@ export function renderMoves(root, bridges, moves, creations, copy, opts = {}) {
   root.appendChild(madeSection(creations, copy, nowMs));
   // A25: Money has exactly ONE mutation (settle an invoice), and this pane
   // reports bridges, launches and deployments it cannot start. Say where those
-  // verbs live rather than leaving a page that looks like a trading desk with
-  // its buttons missing. The reach decision is recorded: the terminal and
+  // verbs live rather than leaving a page that looks like a trading console
+  // with its buttons missing. The reach decision is recorded: the terminal and
   // Telegram own the money verbs; the console reports them.
-  root.appendChild(el("p", "sources", (copy && copy.mv_reach) || ""));
+  root.appendChild(el("p", "entry-meta", (copy && copy.mv_reach) || ""));
   return "moves";
 }
 
@@ -831,6 +837,22 @@ function runtimeRow(label, value, reason, aside) {
 }
 
 /**
+ * True when the /api/webgate/ledger body is NOT a reading: no body, an
+ * `error`, or `readable === false`. The server's fallback on a failed read
+ * keeps the ledger's shape with zero figures — those zeros are a shape, never
+ * a balance, so no screen may draw them. An unreadable store is not an empty
+ * one.
+ */
+export function ledgerUnreadable(ledger) {
+  return !ledger || Boolean(ledger.error) || ledger.readable === false;
+}
+
+/** The reason an unreadable ledger carries, or `""`. */
+function ledgerReason(ledger) {
+  return (ledger && ledger.error) || "";
+}
+
+/**
  * Draw Cash. `ledger` is the /api/webgate/ledger body. TWO blocks that are
  * NEVER summed: treasury (Rob's cash flow) and runtime (the owner's compute
  * bill). The `no-sum` line sits exactly where a naive design would put a total.
@@ -841,8 +863,8 @@ export function renderCash(root, ledger, copy, opts = {}) {
   if (Object.prototype.hasOwnProperty.call(opts, "wallet")) {
     root.appendChild(walletSection(opts.wallet, copy));
   }
-  if (!ledger || ledger.error) {
-    root.appendChild(dashedEntry((ledger && ledger.error) || "",
+  if (ledgerUnreadable(ledger)) {
+    root.appendChild(dashedEntry(ledgerReason(ledger),
       copy, "cash_unreadable", "cash_unreadable_why"));
     return "unreadable";
   }
@@ -1074,9 +1096,9 @@ export function renderLimits(root, ledger, copy) {
   const ledgerBody = el("div", "ledger");
   const entry = el("div", "entry");
   let answer = "limits";
-  if (!ledger || ledger.error) {
+  if (ledgerUnreadable(ledger)) {
     answer = "unreadable";
-    ledgerBody.appendChild(dashedEntry((ledger && ledger.error) || "",
+    ledgerBody.appendChild(dashedEntry(ledgerReason(ledger),
       copy, "lim_unknown", "lim_unknown_why"));
   } else {
     const caps = ledger.caps || {};
@@ -1191,8 +1213,21 @@ function bind() {
   const bookState = byId("money-book-state");
   function drawBook(data) {
     if (bookState) bookState.hidden = true;
-    if (bookPane) render(bookPane, data, copy, { onRecheck: reloadBook });
+    if (bookPane) render(bookPane, data, copy, { onRecheck: reloadBook, readOnly });
   }
+  // W1: the tokens Rob trusts, under the book; its buttons and the book's
+  // Write off / Undo buttons redraw both after the server answers.
+  const tokensPane = byId("money-tokens");
+  function reloadTokens() {
+    if (!tokensPane) return;
+    loadTokens()
+      .then((view) => tokensPane.replaceChildren(tokensSection(view, copy, readOnly)))
+      .catch((err) => tokensPane.replaceChildren(
+        tokensSection({ error: String((err && err.message) || err) }, copy, readOnly)));
+  }
+  const redrawAll = () => { reloadBook(); reloadTokens(); };
+  bindTokenActions(bookPane, copy, redrawAll);
+  bindTokenActions(tokensPane, copy, redrawAll);
   function reloadBook() {
     if (!bookPane) return;
     if (bookState) { bookState.textContent = copy.loading || ""; bookState.hidden = false; }
@@ -1330,6 +1365,7 @@ function bind() {
 
   bindTabs(ensure);
   reloadBook();
+  reloadTokens();
 
   // Honour an initial hash pointing at a non-Book tab (a bookmarked #cash).
   const initial = (location.hash || "").replace(/^#/, "");

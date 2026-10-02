@@ -11,16 +11,40 @@ dapp discovers wallets by listening for that event, and a provider that only
 sets the legacy global is invisible to half the ecosystem.
 """
 
-#: The page-side binding Playwright exposes. Deliberately obscure — a dapp that
-#: calls it directly gets exactly the same guarded path as one going through the
-#: provider, so the only cost of it being reachable is that it is ugly.
+import re
+import secrets
+
+#: The legacy/default binding name. ``dapp_connect`` never uses it: every
+#: arming gets a FRESH random name (``new_binding_name``) so a page cannot
+#: guess the entry point, and a binding left over from an earlier arming
+#: answers only for its own, revoked, envelope.
 BINDING = "__polyrobWalletRequest"
+BINDING_PREFIX = "__polyrobWallet_"
+_BINDING_RE = re.compile(r"^[A-Za-z_$][A-Za-z0-9_$]*$")
 
 
-def provider_script(*, address: str, chain_id_hex: str, binding: str = BINDING) -> str:
-    """The init script for one armed session."""
+def new_binding_name() -> str:
+    """A random, JS-identifier-safe binding name for one arming."""
+    return BINDING_PREFIX + secrets.token_hex(12)
+
+
+def provider_script(*, address: str, chain_id_hex: str, binding: str = BINDING,
+                    origin: str = "") -> str:
+    """The init script for one armed session.
+
+    ``origin`` (``location.origin`` form) limits the provider to the TOP frame
+    of that origin. This is defence in depth only — Python refuses any other
+    frame at the binding (``WalletBridge._source_refusal``) — but it keeps the
+    wallet invisible to an embedded or later page.
+    """
+    if not _BINDING_RE.match(binding or ""):
+        raise ValueError("binding name must be a JS identifier")
     return """
 (() => {
+  const ORIGIN = %(origin)s;
+  try {
+    if (ORIGIN && (window.top !== window || window.location.origin !== ORIGIN)) return;
+  } catch (e) { return; }
   const ADDRESS = %(address)s;
   const CHAIN_ID = %(chain)s;
   const listeners = {};
@@ -118,6 +142,7 @@ def provider_script(*, address: str, chain_id_hex: str, binding: str = BINDING) 
         "address": _js_string(address),
         "chain": _js_string(chain_id_hex),
         "binding": binding,
+        "origin": _js_string(origin or ""),
     }
 
 

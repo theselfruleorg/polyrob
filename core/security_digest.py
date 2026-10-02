@@ -41,6 +41,52 @@ class SecurityRollup:
     top_senders: List[Tuple[str, int]] = field(default_factory=list)
     top_denial_reasons: List[Tuple[str, int]] = field(default_factory=list)
     top_refusal_reasons: List[Tuple[str, int]] = field(default_factory=list)
+    # -- lane 4 (per-speaker cost and abuse) ----------------------------------
+    top_chats_by_volume: List[Tuple[str, int]] = field(default_factory=list)
+    top_chats_by_spend: List[Tuple[str, float]] = field(default_factory=list)
+    top_limiters: List[Tuple[str, int]] = field(default_factory=list)
+    top_limited_keys: List[Tuple[str, int]] = field(default_factory=list)
+    spend_unavailable: str = ""
+    # -- lane 5 (the scanner's verdict, scripts/security_scan.py) --------------
+    #: One phrase: ``clean`` · ``findings <n>`` · ``incomplete (<checks> not
+    #: run)`` · ``not run`` (no verdict on this box) · ``stale (<ts>)`` ·
+    #: ``unavailable(<reason>)``. Never ``clean`` unless every check ran.
+    scan: str = "not run"
+
+
+#: A verdict older than this reads ``stale`` — the scan runs once a day.
+SCAN_STALE_HOURS = 36
+
+
+def scan_verdict_path(data_dir: str) -> str:
+    """Where ``scripts/security_scan.py`` writes its verdict: ``<data>/ops/``,
+    beside the live-proof and release-train state the brief already reads."""
+    return os.path.join(str(data_dir), "ops", "security_scan.json")
+
+
+def read_scan_verdict(data_dir: str, now: float) -> str:
+    """The scan phrase for the rollup. Never raises."""
+    import json
+    path = scan_verdict_path(data_dir)
+    if not os.path.exists(path):
+        return "not run"
+    try:
+        with open(path, encoding="utf-8") as fh:
+            v = json.load(fh)
+        ts = float(v["epoch"])
+        verdict = str(v["verdict"])
+    except Exception as e:
+        return f"unavailable({type(e).__name__}: {str(e)[:80]})"
+    if now - ts > SCAN_STALE_HOURS * 3600:
+        return f"stale ({v.get('ts', ts)})"
+    if verdict == "findings":
+        return f"findings {int(v.get('findings') or 0)}"
+    if verdict == "incomplete":
+        missing = ", ".join(str(n) for n in (v.get("not_run") or [])) or "some checks"
+        return f"incomplete ({missing} not run)"
+    if verdict == "clean":
+        return "clean"
+    return f"unavailable(unknown verdict {verdict!r})"
 
 
 def _db_path(data_dir: str) -> str:
@@ -134,7 +180,7 @@ def build_security_rollup(user_id: str, *, data_dir: str, since_ts: float,
     varies per refusal. Every other lane counts every row of its kind.
     """
     from core.event_kinds import (ACCESS_DENIED, INBOUND_ROUTED,
-                                  INJECTION_FLAGGED, TOOL_DENIED)
+                                  INJECTION_FLAGGED, RATE_LIMITED, TOOL_DENIED)
     db = _db_path(data_dir)
     uid = str(user_id or "")
     by_kind = _counts_by_kind(db, uid, since_ts)
@@ -144,15 +190,53 @@ def build_security_rollup(user_id: str, *, data_dir: str, since_ts: float,
         denied=by_kind.get(ACCESS_DENIED, 0),
         refused=_count_kind(db, uid, since_ts, TOOL_DENIED, GATE_SOURCE),
         flagged=by_kind.get(INJECTION_FLAGGED, 0),
-        # rate_limited stays 0 in Phase 1: lane 4 (per-speaker cost and abuse)
-        # is Phase 6 and nothing emits a limiter trip yet. The field exists so
-        # the consumers do not change shape later; 0 here means NOT MEASURED,
-        # not "no trips" — ruling R-1.
-        rate_limited=0,
+        # Lane 4: the NAMED perimeter limiters (core/rate_limit.py
+        # ::report_trip) — one row per (limiter, key) per window, so this
+        # counts distinct trip episodes, not denied calls.
+        rate_limited=by_kind.get(RATE_LIMITED, 0),
     )
     r.top_denial_reasons = _top_attr(db, uid, since_ts, ACCESS_DENIED, "reason")
     r.top_refusal_reasons = _top_attr(db, uid, since_ts, TOOL_DENIED, "reason",
                                       source=GATE_SOURCE)
     r.top_senders = _top_senders(
         db, uid, since_ts, (ACCESS_DENIED, INBOUND_ROUTED), "sender")
+    from core.security_speakers import build_speaker_rollup
+    sp = build_speaker_rollup(db, uid, data_dir=data_dir, since_ts=since_ts)
+    r.top_chats_by_volume = sp.top_chats_by_volume
+    r.top_chats_by_spend = sp.top_chats_by_spend
+    r.top_limiters = sp.top_limiters
+    r.top_limited_keys = sp.top_limited_keys
+    r.spend_unavailable = sp.spend_unavailable
+    import time as _time
+    r.scan = read_scan_verdict(data_dir, _time.time())
     return r
+
+
+def recent_gate_refusals(user_id: str, *, data_dir: str, limit: int = 5) -> List[dict]:
+    """O10: the last *limit* typed gate refusals (``source='gate'``, the
+    ``core/security/refusals.py`` emit), newest first — for the owner's ``/why``.
+
+    Rows the gate recorded with no tenant (a guard call with no execution
+    context) are the instance's own and are included beside the owner's.
+    Raises when the store is absent, like :func:`build_security_rollup`: "no
+    store" must never read as "no refusals". A read never creates the store.
+    """
+    import json
+    from core.event_kinds import TOOL_DENIED
+    rows = _query(
+        _db_path(data_dir),
+        "SELECT ts, session_id, attrs FROM telemetry_events "
+        "WHERE kind = ? AND source = ? AND user_id IN (?, '') "
+        "ORDER BY ts DESC, id DESC LIMIT ?",
+        (TOOL_DENIED, GATE_SOURCE, str(user_id or ""), max(1, int(limit))))
+    out = []
+    for r in rows:
+        try:
+            attrs = json.loads(r.get("attrs") or "{}") or {}
+        except Exception:
+            attrs = {}
+        out.append({"ts": float(r.get("ts") or 0.0), "session_id": r.get("session_id") or "",
+                    "reason": str(attrs.get("reason") or ""),
+                    "tool": str(attrs.get("tool") or ""),
+                    "detail": str(attrs.get("detail") or "")})
+    return out

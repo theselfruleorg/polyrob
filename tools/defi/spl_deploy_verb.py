@@ -69,7 +69,7 @@ def _refuse_shape(tx, *, payer: str, mint: str) -> Optional[str]:
 async def perform_solana_deploy_token(tool, params, execution_context=None):
     from core.wallet import solana_onchain, spl_token
     from core.wallet.solana_rail import SolanaRail, confirmation_outcome
-    from core.wallet.authority import leaf_refusal, spend_pause_refusal
+    from core.money.authorize import SpendIntent, authorize_spend
     from tools.defi.deploy_verb import FLAG, deploy_enabled
 
     if not deploy_enabled():
@@ -82,13 +82,28 @@ async def perform_solana_deploy_token(tool, params, execution_context=None):
             "the Solana money rail is off — set SOLANA_TRADE_ENABLED=true. "
             "Nothing was broadcast."))
 
-    turn_err = leaf_refusal(execution_context, "deploy a token")
-    if turn_err:
-        return tool._ar(error=turn_err)
+    # 067 P1b: the kernel's leaf + principal, then (real runs only) the pause —
+    # CR-L21: a new token is an entry.
+    from tools.controller.turn_origin import (
+        _is_forged_or_autonomous_turn as _owner_turn_probe)
+    verdict = authorize_spend(SpendIntent(what="deploy a token", entry=True,
+                                          dry_run=bool(params.dry_run)),
+                              execution_context, forged_fn=_owner_turn_probe)
+    if verdict.refused:
+        suffix = " RESULT: NOT SENT." if verdict.step == "pause" else ""
+        return tool._ar(error=verdict.reason + suffix)
+    autonomous_origin = False
     if not params.dry_run:
-        paused = spend_pause_refusal()
-        if paused:
-            return tool._ar(error=paused + " RESULT: NOT SENT.")
+        # CR-M02 / CR-L09: the SAME Solana turn gate `solana_swap` and the
+        # Solana-origin bridge run — forged turns refuse, a goal turn needs
+        # DEFI_AUTONOMOUS_TURN_TRADING, and the owner entry pause holds (a new
+        # token is never an exit). `leaf_refusal` alone let a self-wake or
+        # delegation-result turn spend.
+        from tools.defi.bridge_verb import _solana_turn_refusal
+        turn_err, autonomous_origin = _solana_turn_refusal(
+            tool, execution_context)
+        if turn_err:
+            return tool._ar(error=turn_err)
 
     try:
         supply_raw = _supply_to_raw(params.supply, params.decimals)
@@ -136,17 +151,20 @@ async def perform_solana_deploy_token(tool, params, execution_context=None):
     if shape_err:
         return tool._ar(error=shape_err)
 
-    # Simulate with mints=() on purpose: `atas_for_mint` spends TWO of the five
-    # observable-account slots deriving speculative ATAs under both token
-    # programs for a mint that does not exist yet, and one of them never will.
-    # The tx's own account keys carry the mint and the real ATA anyway.
+    # Simulate with mints=() on purpose: `atas_for_mint` would derive
+    # speculative ATAs under both token programs for a mint that does not exist
+    # yet, and one of them never will. The simulation observes the accounts the
+    # transaction CREATES with our lamports (the mint and the real ATA) on its
+    # own, and splits the observation across calls rather than truncating it,
+    # so a wallet holding several token accounts no longer pushes the new ATA
+    # out of view (CR-L09).
     try:
         deltas = tool._solana_simulate(raw_tx=bytes(tx), owner=payer, mints=())
     except Exception as exc:
         return tool._ar(error=f"refused: simulation raised ({exc})")
     if not deltas.ok:
         return tool._ar(error=(
-            f"refused: simulation not trustworthy — {deltas.error}"))
+            f"refused: simulation not trustworthy — {deltas.reason}"))
 
     refusal = _assert_deltas(deltas, mint=mint, supply_raw=supply_raw)
     if refusal:
@@ -188,6 +206,21 @@ async def perform_solana_deploy_token(tool, params, execution_context=None):
         if not verdict.allowed:
             return tool._ar(content=header + (
                 f"  RESULT: NOT SENT — refused by PolicyGate: {verdict.reason}"))
+
+        # CR-L09: tx_guard step 9, as `solana_swap` mirrors it — the autonomous
+        # ceiling, and the daily-cap-required bar for an unattended origin.
+        from core.wallet import tx_guard
+        ceiling = tx_guard.autonomous_max_usd(
+            *tx_guard.ceiling_scope(execution_context))
+        if amount_usd > ceiling:
+            return tool._ar(content=header + (
+                f"  RESULT: NOT SENT — owner approval required: "
+                f"${amount_usd:.2f} is above the autonomous ceiling "
+                f"${ceiling:.2f}."))
+        if autonomous_origin and not getattr(gate, "has_daily_cap", False):
+            return tool._ar(content=header + (
+                "  RESULT: NOT SENT — unattended spending needs an aggregate "
+                "damage bound; set WALLET_DAILY_CAP_USD."))
 
         if params.dry_run:
             return tool._ar(content=header + (

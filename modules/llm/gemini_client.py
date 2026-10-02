@@ -1093,6 +1093,9 @@ class GeminiClient(LLMClient):
             # We use start_chat with history for multi-turn conversations.
             # See: https://ai.google.dev/gemini-api/docs/function-calling
             use_chat_session = self._is_gemini_3_model() and tool_objects
+            # F20: NOT prefix-stamped — Gemini hands the SDK protobuf `Tool`
+            # objects, not a dict request, and a digest of their repr is not
+            # stable across SDK versions. An unstable stamp is worse than none.
 
             # Log API request details
             func_count = sum(len(t.function_declarations) for t in tool_objects if hasattr(t, 'function_declarations')) if tool_objects else 0

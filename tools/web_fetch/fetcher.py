@@ -11,15 +11,15 @@ Security model:
 """
 
 import asyncio
-import socket
 import ssl
 from dataclasses import dataclass
 from typing import Callable, Optional
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 
 import aiohttp
 import certifi
-from aiohttp.abc import AbstractResolver
+
+from core.security.pinned_resolver import PinnedResolver, url_host_key
 
 from tools.mcp.security import get_url_validator
 
@@ -47,30 +47,24 @@ class FetchResult:
 	body: bytes
 
 
-class _PinnedResolver(AbstractResolver):
+class _PinnedResolver(PinnedResolver):
 	"""Force a single host to resolve to a pre-validated IP (defeats DNS rebinding).
 
-	aiohttp connects to the ``host`` field (our pinned IP) but uses ``hostname`` for
-	TLS SNI and keeps the URL's host for the Host header, so pinning is transparent.
+	Thin name over the ONE shared resolver (``core.security.pinned_resolver``):
+	the host is compared in its wire (IDNA) form and any other host RAISES —
+	it never falls through to a fresh lookup (H14).
 	"""
-
-	def __init__(self, hostname: str, pinned_ip: str) -> None:
-		self._hostname = hostname
-		self._ip = pinned_ip
-
-	async def resolve(self, host, port=0, family=socket.AF_INET):
-		ip = self._ip if host == self._hostname else host
-		return [{"hostname": host, "host": ip, "port": port,
-		         "family": family, "proto": 0, "flags": 0}]
-
-	async def close(self) -> None:  # pragma: no cover - trivial
-		return None
 
 
 def _default_session_factory(pinned_ip: Optional[str], hostname: Optional[str]):
 	ssl_ctx = ssl.create_default_context(cafile=certifi.where())
+	if pinned_ip and not hostname:
+		# A validated IP with no host to pin it to would mean an UNPINNED
+		# connection. Fail closed.
+		raise WebFetchError("cannot pin a URL with no usable host")
 	if pinned_ip and hostname:
-		connector = aiohttp.TCPConnector(resolver=_PinnedResolver(hostname, pinned_ip), ssl=ssl_ctx)
+		connector = aiohttp.TCPConnector(resolver=_PinnedResolver(hostname, pinned_ip),
+		                                 ssl=ssl_ctx, use_dns_cache=False)
 	else:
 		connector = aiohttp.TCPConnector(ssl=ssl_ctx)
 	return aiohttp.ClientSession(connector=connector, auto_decompress=False)
@@ -134,7 +128,8 @@ async def _fetch_hops(url, *, max_bytes, max_redirects, timeout_sec,
 				None, validator.validate_and_resolve, current)
 			if not ok or not pinned_ip:
 				raise WebFetchError(f"blocked URL ({current}): {err}")
-		hostname = urlparse(current).hostname
+		# The WIRE form of the host (IDNA), which is what aiohttp resolves.
+		hostname = url_host_key(current)
 
 		if session_factory is not None:
 			session_cm = session_factory(pinned_ip)

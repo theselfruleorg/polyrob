@@ -109,3 +109,57 @@ async def test_swap_quote_price_lookup_failure_is_fail_open():
     tool = DefiDataTool(route_fn=_route, identity_fn=_identity, price_fn=_boom)
     out = _text(await tool.swap_quote(SwapQuoteParams(token_in=IN, token_out=OUT, amount_in=1.0)))
     assert "lifi:fly" in out and "cross-check: unavailable" in out
+
+
+# ---- 'native' is a first-class token_in/out, as it is on the swap verb -------
+
+WETH_BASE = "0x4200000000000000000000000000000000000006"
+
+
+@pytest.mark.asyncio
+async def test_swap_quote_accepts_the_literal_native_and_says_what_it_quoted_via():
+    """2026-09-21 (intel): the swap verb PREFERS token_in='native' when the wallet
+    holds the gas asset, but swap_quote ran `_validate` on the literal and
+    refused it ("not a 20-byte hex address: 'native'") — 13 refused quotes in
+    three days, one wasted step per money-rail run before the agent re-quoted
+    via the wrapped-native address. The quote verb now resolves 'native' to the
+    chain registry's wrapped_native row (the asset the EVM routers price) and
+    names it in the result."""
+    calls = {}
+
+    def _route(chain, ti, to_, amt, *, holder, slippage_bps):
+        calls["ti"] = ti
+        return RouteQuote(chain=chain, token_in=ti, token_out=to_, amount_in_raw=amt,
+                          amount_out_raw=21 * 10 ** 17, amount_out_min_raw=21 * 10 ** 17,
+                          spender="0xspend", to="0xspend", calldata="0x", value_raw=0,
+                          venue="lifi:fly", quoted_at=_t.time())
+    tool = DefiDataTool(route_fn=_route, identity_fn=_identity,
+                        price_fn=lambda c, a: {WETH_BASE.lower(): _p(2.0), OUT.lower(): _p(1.0)}[a.lower()])
+    res = await tool.swap_quote(SwapQuoteParams(token_in="native", token_out=OUT, amount_in=1.0))
+    assert res.error is None, res.error
+    assert calls["ti"].lower() == WETH_BASE.lower()
+    assert "native" in _text(res).lower() and WETH_BASE[:8].lower() in _text(res).lower()
+
+
+# ---- USD value of the output (2026-09-22) ---------------------------------
+# The EXIT rail quotes every open row into WETH and then converts by hand
+# ("WETH≈$2,700 est; I need the ETH price to convert" — 02:01Z run). The
+# cross-check already reads the indexed price of the OUT side; render the
+# output's dollar value from that same read, and say UNKNOWN when it is not
+# usable — never a guessed rate.
+
+@pytest.mark.asyncio
+async def test_swap_quote_renders_the_output_value_in_usd():
+    # 2.1 OUT at $1.00 each; IN at $2.00 (consistent quote)
+    tool = _tool(21 * 10 ** 17, {IN: _p(2.0), OUT: _p(1.0)})
+    out = _text(await tool.swap_quote(SwapQuoteParams(token_in=IN, token_out=OUT, amount_in=1.0)))
+    assert "value:  ≈ $2.10" in out
+    assert "$1.00 per T" in out  # names the rate it used, and that it is indexed
+
+
+@pytest.mark.asyncio
+async def test_swap_quote_value_is_unknown_without_a_usable_out_price():
+    tool = _tool(21 * 10 ** 17, {IN: _p(2.0), OUT: _p(None)})
+    out = _text(await tool.swap_quote(SwapQuoteParams(token_in=IN, token_out=OUT, amount_in=1.0)))
+    assert "value:  unknown" in out
+    assert "$0.00" not in out

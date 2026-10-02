@@ -31,3 +31,20 @@ from core.config_policy.builder_mode import (  # noqa: E402 — 032 bundle
     reset_builder_mode_warnings,
     ship_clamp_reason,
 )
+from core.config_policy.money_regime import (  # noqa: E402,F401 — the money regime
+    REGIME_ARMED,
+    REGIME_AUTONOMOUS,
+    REGIME_SUPERVISED,
+    autonomous_money_armed,
+    autonomous_work_enabled,
+    money_regime,
+    money_regime_display,
+)
+
+# 067 P4 prerequisite: the payment-approval views are lazy (payment_tools.py) and
+# the star import above does not carry them; re-export them lazily so
+# ``import core.config_policy`` never builds a policy view.
+from core.config_policy import payment_tools as _payment_tools  # noqa: E402
+from core.lazy_views import lazy_module_getattr as _lazy, reexport_map as _reexport  # noqa: E402
+
+__getattr__ = _lazy(__name__, {}, _reexport(_payment_tools.__name__, _payment_tools.LAZY_VIEWS))

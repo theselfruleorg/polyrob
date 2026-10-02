@@ -53,14 +53,14 @@ def _make_client():
 def captured(monkeypatch):
     seen = {}
 
-    def _capture(system):
+    def _capture(system, ttl=None):
         seen["system"] = system
         return system  # keep it non-None so api_params['system'] is set
 
     monkeypatch.setattr(ac, "_build_cached_system_param", _capture)
     monkeypatch.setattr(ac, "count_messages_tokens", lambda *a, **k: 10)
     # thinking config off by default; don't let it interfere
-    monkeypatch.setattr(ac, "_apply_conversation_cache", lambda m: m, raising=False)
+    monkeypatch.setattr(ac, "_apply_conversation_cache", lambda m, **kw: m, raising=False)
     return seen
 
 

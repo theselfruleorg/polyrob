@@ -73,12 +73,74 @@ MAX_GAS_LIMIT = 8_000_000
 _ERC20_TRANSFER_SELECTOR = "0xa9059cbb"
 
 
+#: CR-L01: JSON-RPC error texts that mean the node REFUSED these bytes, so the
+#: transaction was definitively not sent. Matched case-insensitively against
+#: the node's own error object. ⚠️ "already known" is deliberately absent: it
+#: means the node HOLDS the transaction, which is the opposite of not-sent.
+_DEFINITIVE_REJECTIONS = (
+    "nonce too low",
+    "insufficient funds",
+    "transaction underpriced",
+    "replacement transaction underpriced",
+    "intrinsic gas too low",
+    "max fee per gas less than block base fee",
+    "fee cap less than block base fee",
+    "exceeds block gas limit",
+)
+
+
+def definitive_rejection(exc: BaseException) -> Optional[str]:
+    """The node's refusal text when *exc* proves the bytes were NOT accepted.
+
+    Only a JSON-RPC error RESPONSE qualifies (``onchain.RpcError`` carrying
+    the node's error object). A transport failure — timeout, reset, a lost
+    response — stays unknown, because the node may have accepted the bytes.
+    """
+    if not isinstance(exc, onchain.RpcError):
+        return None
+    text = str(exc).lower()
+    if "already known" in text:
+        return None
+    for needle in _DEFINITIVE_REJECTIONS:
+        if needle in text:
+            return needle
+    return None
+
+
 class GasCeilingExceeded(RuntimeError):
     """The estimated fee exceeds MAX_FEE_WEI_PER_TX; refusing to sign."""
 
 
 class BroadcastError(RuntimeError):
     """The transaction could not be submitted."""
+
+
+class BroadcastOutcomeUnknown(RuntimeError):
+    """The request left and no answer came back: it MAY have broadcast."""
+
+
+#: Text the rails put on an unknown outcome (the Solana rail raises a plain
+#: ``SolanaBroadcastError`` with it).
+_UNKNOWN_MARKERS = ("reconcile before retrying", "outcome unknown")
+
+
+def outcome_unknown(exc: BaseException) -> bool:
+    """True when a send error does NOT prove that nothing was sent."""
+    if isinstance(exc, BroadcastOutcomeUnknown):
+        return True
+    text = str(exc).lower()
+    return any(m in text for m in _UNKNOWN_MARKERS)
+
+
+def broadcast_failure_text(exc: BaseException, *,
+                           nothing: str = "nothing was sent") -> str:
+    """The ONE wording for a failed ``sign_and_send``: an unknown outcome is
+    never reported as "not sent" — a resend on that word can pay twice."""
+    if outcome_unknown(exc):
+        return (f"broadcast outcome unknown: {exc}. The transaction may have "
+                f"landed — look it up on the chain before any retry; do not "
+                f"send again.")
+    return f"broadcast failed: {exc} — {nothing}"
 
 
 @dataclass(frozen=True)
@@ -262,6 +324,8 @@ class EvmRail:
             raise BroadcastError(
                 f"transaction chainId {tx.get('chainId')} != rail chain "
                 f"{self.chain_id} — refusing")
+        if getattr(self._signer, "remote_send", False):
+            return self._remote_sign_and_send(tx)
         from eth_utils import keccak
         from core.wallet import submission_journal
         reference = submission_journal.reserve_signing(self.chain, self._signer.address, tx.get('nonce'))
@@ -272,10 +336,69 @@ class EvmRail:
             returned = self._rpc("eth_sendRawTransaction", ["0x" + raw.hex()])
             if not isinstance(returned, str) or returned.lower() != tx_hash:
                 logger.warning('wallet submission outcome unknown; reconcile local hash %s', tx_hash)
-        except Exception:
-            # The node may have accepted the bytes. Preserve their stable hash
-            # so callers poll/book a pending send rather than report NOT SENT.
-            logger.warning('wallet broadcast response lost; reconcile local hash %s', tx_hash)
+        except Exception as exc:
+            rejected = definitive_rejection(exc)
+            if rejected is None:
+                # The node may have accepted the bytes. Preserve their stable
+                # hash so callers poll/book a pending send rather than report
+                # NOT SENT.
+                logger.warning('wallet broadcast response lost; reconcile local hash %s', tx_hash)
+                return tx_hash
+            # CR-L01: the node REFUSED these bytes ("nonce too low", "insufficient
+            # funds", "underpriced", …). Nothing was sent, so there is nothing to
+            # wait 120 s for and no USD to book. Release the interlock this
+            # attempt took — it guards an accepted send, and there is none —
+            # then report NOT SENT. A release that fails leaves the interlock
+            # standing: conservative, never a silent free pass.
+            try:
+                submission_journal.mark_booked(tx_hash)
+            except Exception:
+                logger.warning('could not release the interlock for rejected %s', tx_hash,
+                               exc_info=True)
+            raise BroadcastError(
+                f"the node rejected the transaction ({rejected}): {exc}") from exc
+        return tx_hash
+
+    def _remote_sign_and_send(self, tx: dict) -> str:
+        """066 P2 ``WALLET_SIGNER=remote``: polyrob-signer guards, signs and sends.
+
+        The intent comes from :mod:`core.signer.attest` — ``tx_guard.authorize``
+        recorded it for this exact transaction. None recorded = this transaction
+        never passed the guard here, and nothing is sent.
+
+        The agent's own interlock still applies: an unresolved submission refuses
+        BEFORE the signer is asked, and an accepted send is journaled here as
+        ``prepared`` until the verb books it (``PolicyGate.record``). A signer that
+        received the request and then went silent is an UNKNOWN outcome — an
+        ``attempt:`` interlock row stands until the owner reconciles it.
+        """
+        from core.signer import attest
+        from core.signer.client import SignerRefused, SignerUnavailable
+        from core.wallet import submission_journal
+        intent = attest.take(tx)
+        if intent is None:
+            raise BroadcastError(
+                "no tx_guard authorization is recorded for this transaction in this "
+                "process — polyrob-signer signs only an authorized intent; nothing was sent")
+        if submission_journal.unresolved():
+            raise BroadcastError(
+                "unaccounted wallet submission; reconcile before another send — nothing was sent")
+        try:
+            result = self._signer.send_transaction(tx, chain=self.chain, intent=intent)
+        except SignerRefused as exc:
+            raise BroadcastError(f"polyrob-signer refused: {exc.reason} [{exc.code}]") from exc
+        except SignerUnavailable as exc:
+            if exc.sent:
+                submission_journal.prepare_attempt(f"signer:{self.chain}", self._signer.address, 0)
+                raise BroadcastOutcomeUnknown(
+                    f"polyrob-signer outcome UNKNOWN — the request was sent and no answer came "
+                    f"back ({exc}). It may have broadcast; the submission interlock holds until "
+                    f"reconciled (the signer's ledger is authoritative).") from exc
+            raise BroadcastError(f"polyrob-signer unreachable: {exc} — nothing was sent") from exc
+        tx_hash = str(result.get("tx_hash") or "")
+        if not tx_hash.startswith("0x"):
+            raise RuntimeError(f"polyrob-signer answered without a transaction hash: {result!r}")
+        submission_journal.prepare(tx_hash, self.chain, self._signer.address, tx.get("nonce"))
         return tx_hash
 
     def await_receipt(self, tx_hash: str, *, timeout: float = 120.0,

@@ -5,8 +5,8 @@ license: MIT
 metadata:
   polyrob-priority: '1'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":[],"keywords":["analyze person","research person","person intelligence","who is","profile analysis","sales prospect","contact research","background check","linkedin profile"],"task_patterns":["analyze.*person","research.*person","who is.*","find.*about.*person","profile.*analysis","prospect.*research","intelligence.*on"],"tool_ids":[]}'
-  polyrob-version: '1'
+  polyrob-triggers: '{"action_names":[],"keywords":["analyze person","research person","person intelligence","profile analysis","sales prospect","contact research","background check","linkedin profile"],"task_patterns":["analy[sz]e.*\\bperson\\b","research.*\\b(person|founder|ceo|executive)\\b","find.*about.*\\bperson\\b","\\bprofile analysis\\b","prospect.*research","\\bwho is\\b.*\\b(on linkedin|linkedin)\\b"],"tool_ids":[]}'
+  polyrob-version: '2'
 ---
 # Person Analyzer
 
@@ -20,7 +20,7 @@ Sales prospecting, partnership evaluation, investor research, talent assessment,
 ### Phase 1: Identify the person
 Start with whatever identifiers you have (name, LinkedIn URL, company, role).
 
-If `anysite` is available, discover what LinkedIn endpoints are available first, then query profile data. Do not hardcode endpoint paths — run a discovery call first to see what's available for the LinkedIn source, then pick the appropriate endpoint.
+If `anysite` is available, find the LinkedIn endpoints first with `anysite_describe(search="linkedin user")`, read the chosen one's params with `anysite_describe(endpoint=<path>)`, then query it with `anysite_api(endpoint=<path>, params={...})`. Do not hardcode endpoint paths.
 
 If `anysite` is unavailable or returns nothing, use this fallback order:
 - `web_fetch` — read the person's LinkedIn or personal site URL if you have it
@@ -33,7 +33,7 @@ Posts reveal priorities better than profile text. Collect at least 10–20 recen
 - How they engage with others (comments, reactions)
 - Tone: thought leadership, technical, promotional, personal
 
-When using `anysite`: discover available endpoints for user posts, comments, and reactions for the relevant source (e.g., LinkedIn). Execute after discovery.
+When using `anysite`: `anysite_describe(search=…)` for the user posts, comments, and reactions endpoints of the relevant source (e.g., LinkedIn), then `anysite_api` on the one you chose.
 
 **URN note:** LinkedIn activity endpoints (posts, comments, reactions) typically require the person's URN in `urn:li:fsd_profile:ACoAA...` format — extract it from the profile response before querying activity.
 

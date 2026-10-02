@@ -3,20 +3,34 @@
 from cli.commands.doctor import setup_lines
 
 
-def test_avatar_line_not_generated(tmp_path):
+def test_avatar_line_default(tmp_path):
     lines = setup_lines({"POLYROB_DATA_DIR": str(tmp_path)})
     joined = "\n".join(lines)
-    assert "avatar: not generated" in joined
-    assert "pfp generate" in joined
+    assert "avatar: the default polyrob mark" in joined
+    assert "polyrob avatar set" in joined
 
 
-def test_avatar_line_generated(tmp_path):
-    from core.instance import pfp_dir
-    d = pfp_dir(tmp_path, "rob")
-    d.mkdir(parents=True)
-    (d / "pfp.png").write_bytes(b"png")
+def test_avatar_line_not_set_without_the_shipped_default(tmp_path, monkeypatch):
+    monkeypatch.setattr("core.avatar.DEFAULT_AVATAR", tmp_path / "missing.png")
+    lines = setup_lines({"POLYROB_DATA_DIR": str(tmp_path)})
+    joined = "\n".join(lines)
+    assert "avatar: not set" in joined
+    assert "polyrob avatar set" in joined
+
+
+def test_avatar_line_set(tmp_path):
+    from core.avatar import set_avatar
+    set_avatar(tmp_path, "rob", b"\x89PNG\r\n\x1a\n" + b"\x00" * 8, source="file:me.png")
     lines = setup_lines({"POLYROB_DATA_DIR": str(tmp_path), "POLYROB_INSTANCE_ID": "rob"})
-    assert any("avatar: generated" in l for l in lines)
+    assert any("avatar: set (file:me.png)" in l for l in lines)
+
+
+def test_avatar_line_unreadable(tmp_path):
+    from core.avatar import avatar_dir, set_avatar
+    set_avatar(tmp_path, "rob", b"\x89PNG\r\n\x1a\n" + b"\x00" * 8, source="x")
+    (avatar_dir(tmp_path, "rob") / "avatar.json").write_text("{broken")
+    lines = setup_lines({"POLYROB_DATA_DIR": str(tmp_path), "POLYROB_INSTANCE_ID": "rob"})
+    assert any(l.startswith("avatar: unreadable") for l in lines)
 
 
 def test_surfaces_none_configured(tmp_path):
@@ -73,8 +87,10 @@ def test_surfaces_flag_only_surfaces_unchanged(tmp_path):
 
 
 def test_soul_default_vs_authored(tmp_path):
+    # 062: init SEEDS these docs, so the three states are none / seeded
+    # default / authored. "none" is what an un-bootstrapped home reports.
     lines = setup_lines({"POLYROB_DATA_DIR": str(tmp_path)})
-    assert any("identity docs: default" in l for l in lines)
+    assert any("identity docs: none" in l for l in lines)
     (tmp_path / "identity").mkdir(parents=True)
     (tmp_path / "identity" / "identity.md").write_text("# I am Rob")
     lines = setup_lines({"POLYROB_DATA_DIR": str(tmp_path)})

@@ -35,6 +35,7 @@ def _router_client():
     import webview.pages as pages
     app = FastAPI()
     app.include_router(pages.router)
+    app.include_router(pages.money_router)  # 067 P5a: Money readers
     return TestClient(app), pages
 
 

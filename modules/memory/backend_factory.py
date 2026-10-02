@@ -51,12 +51,22 @@ def maybe_register_memory_backend(*, data_dir: Optional[str] = None,
     db_path = os.path.join(data_dir_or_home(data_dir), "memory.db")
     if backend == "local_vector":
         from modules.memory.local_vector_memory_provider import LocalVectorMemoryProvider, _vec_available
+        # 058 T1.5: apsw/sqlite-vec/numpy are the [memory-vector] extra. On a
+        # local install the first use installs it (core/lazy_deps); a server, or
+        # a failed install, degrades to FTS5 with the remedy named. ⚠️ A bare
+        # local install therefore starts degraded until the lazy install lands.
+        if not _vec_available():
+            try:
+                from core.lazy_deps import ensure
+                ensure("memory.vector", prompt=False)
+            except Exception as e:  # FeatureUnavailable carries the remedy
+                logger.warning("memory.vector extra not installable here: %s", e)
         # Graceful fallback: if sqlite-vec unavailable, fall back to FTS5
         if not _vec_available():
             logger.warning(
                 "sqlite-vec extension unavailable (apsw or sqlite_vec not importable). "
-                "Falling back to FTS5 keyword recall. To enable vector recall, "
-                "install apsw and sqlite-vec."
+                "Falling back to FTS5 keyword recall. To enable vector recall: "
+                "pip install 'polyrob[memory-vector]'"
             )
             from modules.memory.sqlite_memory_provider import SqliteMemoryProvider
             provider = SqliteMemoryProvider(db_path)

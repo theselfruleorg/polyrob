@@ -19,9 +19,19 @@ Reference:
     Phase 3 Plan: docs/PHASE3_FINAL.md
 """
 
+from __future__ import annotations
+
 import logging
-import numpy as np
 from typing import List, Tuple, Dict, Any, Optional
+
+# 058 T1.5: numpy is an extra ([memory-vector]). The import is optional so this
+# module — imported at package level by modules.memory.task — never breaks a
+# bare install; __init__ refuses with the remedy, which routes the case into
+# task_context_manager's EXISTING lexical fallback (no second fallback here).
+try:
+    import numpy as np
+except ImportError:  # pragma: no cover - exercised by test_hmem_without_numpy
+    np = None  # type: ignore[assignment]
 from functools import lru_cache
 
 logger = logging.getLogger(__name__)
@@ -52,10 +62,15 @@ class SemanticRetriever:
             min_similarity: Minimum similarity threshold (default: 0.65)
             cache_size: Size of embedding cache (default: 100)
         """
+        if np is None:
+            raise ImportError(
+                "SemanticRetriever needs numpy, which is not installed. "
+                "Remedy: pip install 'polyrob[memory-vector]' (H-MEM cross-phase "
+                "search runs in lexical mode until then)")
         self.rag_manager = rag_manager
         self.min_similarity = min_similarity
         self.cache_size = cache_size
-        self._embedding_cache: Dict[str, np.ndarray] = {}
+        self._embedding_cache: Dict[str, "np.ndarray"] = {}
 
         # Validate that we have an embedding model
         if not hasattr(rag_manager, 'embedding_model') or not rag_manager.embedding_model:

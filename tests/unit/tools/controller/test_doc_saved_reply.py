@@ -6,6 +6,7 @@ read that as done; both sat inert in `.pending/` for two days while the agent
 kept posting. The reply has to say it is NOT in effect and name the command.
 """
 import logging
+import re
 import types
 
 import agents.task.agent.service  # noqa: F401 — avoid import cycle
@@ -26,6 +27,26 @@ def _bare_controller(data_dir):
     return c
 
 
+def _assert_tappable(body: str, kind: str, uid: str) -> None:
+    """The decision token in the reply must be one Telegram-linkable `/word` that
+    the router resolves back to THIS item.
+
+    ⚠️ This test used to pin ``/approve owner_doc:rob``. Telegram auto-links
+    exactly one token of ``[A-Za-z0-9_]`` and never sends the argument, so that
+    string's only tappable half did nothing: on 2026-09-20 the owner tapped three
+    times in eight minutes, promoted nothing, and the rule sat inert for 27 hours.
+    A literal is the wrong assertion — the invariant is the ROUND TRIP.
+    """
+    from core.self_evolution import pending_tap_token
+    from tools.controller.approval_queue import resolve_pending_target
+    item = {"kind": kind, "id": uid, "chars": 1, "preview": ""}
+    token = pending_tap_token("approve", item)
+    assert token in body, f"{token!r} not offered in: {body!r}"
+    assert re.fullmatch(r"/[A-Za-z0-9_]+", token), f"{token!r} is not one linkable token"
+    arg = token.split("_", 1)[1].replace("_", "-")
+    assert resolve_pending_target(arg, types.SimpleNamespace(items=[item])) == item
+
+
 def _ctx(uid="rob"):
     return types.SimpleNamespace(user_id=uid, is_sub_agent=False,
                                  role="orchestrator", metadata={})
@@ -35,6 +56,7 @@ def _ctx(uid="rob"):
 async def test_self_context_reply_states_inertness_and_command(monkeypatch, tmp_path):
     monkeypatch.setenv("SELF_CONTEXT_WRITABLE", "true")
     monkeypatch.setenv("SELF_CONTEXT_REQUIRE_REVIEW", "true")
+    monkeypatch.setenv("OWNER_RULES_IMMEDIATE", "false")  # this test IS the queued lane
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
     c = _bare_controller(tmp_path)
     c._register_self_context_manage_action()
@@ -44,7 +66,7 @@ async def test_self_context_reply_states_inertness_and_command(monkeypatch, tmp_
         execution_context=_ctx())
     body = res.extracted_content or ""
     assert "NOT YET IN EFFECT" in body
-    assert "/approve self_context:rob" in body
+    _assert_tappable(body, "self_context", "rob")
     assert "saved (pending review" not in body
 
 
@@ -52,6 +74,7 @@ async def test_self_context_reply_states_inertness_and_command(monkeypatch, tmp_
 async def test_owner_doc_reply_states_inertness_and_command(monkeypatch, tmp_path):
     monkeypatch.setenv("OWNER_DOC_WRITABLE", "true")
     monkeypatch.setenv("OWNER_DOC_REQUIRE_REVIEW", "true")
+    monkeypatch.setenv("OWNER_RULES_IMMEDIATE", "false")  # this test IS the queued lane
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
     c = _bare_controller(tmp_path)
     c._register_owner_doc_manage_action()
@@ -61,4 +84,4 @@ async def test_owner_doc_reply_states_inertness_and_command(monkeypatch, tmp_pat
         execution_context=_ctx())
     body = res.extracted_content or ""
     assert "NOT YET IN EFFECT" in body
-    assert "/approve owner_doc:rob" in body
+    _assert_tappable(body, "owner_doc", "rob")

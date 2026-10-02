@@ -48,3 +48,33 @@ def test_meter_aux_fails_open_on_tracker_error():
     asyncio.run(meter_aux_llm(usage_tracker=Boom(), user_id="u", session_id="s", agent_id="a",
                               llm=SimpleNamespace(model_name="m"), response=SimpleNamespace(usage_metadata={}),
                               duration_seconds=0, component="reflection", purpose="x"))
+
+
+def test_meter_aux_forwards_cache_creation_tokens():
+    """F17: the aux path already EXTRACTED cache_creation_tokens and then dropped
+    it — so an aux call's cache write was billed by calculate_cost but never
+    recorded on the row, and no rollup could see it."""
+    tr = _Tracker()
+    llm = SimpleNamespace(model_name="claude-haiku-4-5")
+    resp = SimpleNamespace(usage_metadata={
+        "input_tokens": 9000,
+        "output_tokens": 40,
+        "cache_read_input_tokens": 1000,
+        "cache_creation_input_tokens": 7500,
+    })
+    asyncio.run(meter_aux_llm(usage_tracker=tr, user_id="u1", session_id="s1",
+                              agent_id="a1", llm=llm, response=resp, duration_seconds=0.1,
+                              component="compaction", purpose="compaction"))
+    c = tr.calls[0]
+    assert c["cached_tokens"] == 1000
+    assert c["cache_creation_tokens"] == 7500
+
+
+def test_meter_aux_sends_zero_when_the_provider_reports_no_cache_write():
+    tr = _Tracker()
+    llm = SimpleNamespace(model_name="claude-haiku-4-5")
+    resp = SimpleNamespace(usage_metadata={"input_tokens": 500, "output_tokens": 40})
+    asyncio.run(meter_aux_llm(usage_tracker=tr, user_id="u1", session_id="s1",
+                              agent_id="a1", llm=llm, response=resp, duration_seconds=0.1,
+                              component="judge", purpose="x"))
+    assert tr.calls[0]["cache_creation_tokens"] == 0

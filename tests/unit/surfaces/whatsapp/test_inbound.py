@@ -115,3 +115,18 @@ def test_send_immediate_fail_open_without_responder(tmp_path):
     wa = WhatsAppInbound(IdempotencyStore(os.path.join(tmp_path, "i.db")), user_directory=_UD())
     inbound = SimpleNamespace(identity=SimpleNamespace(raw_user_id="x", user_id="u"))
     asyncio.run(wa._send_immediate(inbound, "hi"))  # no raise
+
+
+def test_verify_challenge_is_constant_time_and_never_raises(monkeypatch, tmp_path):
+    """Security review 2026-09-23: the verify token is compared with
+    hmac.compare_digest; a non-ASCII or missing token refuses, never raises."""
+    import hmac as _hmac
+    calls = []
+    real = _hmac.compare_digest
+    monkeypatch.setattr(_hmac, "compare_digest", lambda a, b: calls.append(1) or real(a, b))
+    monkeypatch.setenv("WHATSAPP_VERIFY_TOKEN", "mytoken")
+    wa = _wa(tmp_path)
+    assert wa.verify_challenge({"hub.verify_token": "mytoken", "hub.challenge": "c"}) == "c"
+    assert calls
+    assert wa.verify_challenge({"hub.verify_token": "мой", "hub.challenge": "c"}) is None
+    assert wa.verify_challenge({"hub.challenge": "c"}) is None

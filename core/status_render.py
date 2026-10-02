@@ -30,10 +30,13 @@ _SECTION_TITLES = {
     "work": "Goals",
     "approvals": "Approvals",
     "loops": "Loops",
+    "tools": "Tools",
+    "knowledge": "Knowledge",
     "delivery": "Delivery",
     "posture": "Posture",
     "security": "Security",
     "identity": "Identity",
+    "rules": "Rules",
     "apps": "Apps",
     "groups": "Groups",
     "room_actions": "Paid room actions",
@@ -41,6 +44,8 @@ _SECTION_TITLES = {
     "collectibles": "Collectibles",
     "liquidity": "Liquidity",
     "wallet": "Wallet",
+    "custody": "Custody",
+    "packs": "Packs",
     "money": "Money",
     "economics": "Economics",
 }
@@ -229,9 +234,35 @@ def render_agent_health_note(snap: StatusSnapshot, *, max_items: int = 8) -> str
         elif sec.lines:
             lines.append(f"- {name}: {sec.lines[0]}")
     lines.extend(wallet_note_lines(snap))
+    lines.extend(recent_notice_lines(snap))
     lines.append("If asked how things are going, state these facts first; do not claim "
                  "a clean state that this note contradicts.")
     return "\n".join(lines)
+
+
+def recent_notice_lines(snap: StatusSnapshot) -> List[str]:
+    """"You were just told …" — the owner messages OTHER sessions (an autonomous
+    run, a rail) delivered in the last few minutes, so a correction that lands
+    right after one is matched to THAT act, not to this session's own last
+    message (2026-09-21 15:33Z: "haven't i told you not to report about bugs?"
+    arrived 28 s after an X ORIGINAL run's delivery notice and the chat session
+    apologised for a 10:40 message instead)."""
+    import time as _t
+    sec = snap.sections.get("delivery")
+    recent = (sec.data.get("recent_notices") if sec is not None else None) or []
+    out: List[str] = []
+    for r in recent[:3]:
+        hhmm = _t.strftime("%H:%M", _t.gmtime(float(r.get("ts") or 0)))
+        text = str(r.get("text") or "").replace("\n", " ")
+        if len(text) > 160:
+            text = text[:157] + "…"
+        out.append(f"- the owner was just told ({hhmm} UTC, by an autonomous run via "
+                   f"{r.get('source') or '?'}, not by this chat): {text}")
+    if out:
+        out.append("  If the owner's next message reads as a correction, it most likely "
+                   "refers to the notice above — say so, and do not attribute it to "
+                   "an older message of your own.")
+    return out
 
 
 def _stamp(snap: StatusSnapshot) -> str:

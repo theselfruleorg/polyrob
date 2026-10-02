@@ -21,13 +21,13 @@ works, and how to run it as a service are in
 
 | Nav | Route | What it answers |
 |---|---|---|
-| New | `/` | Talk to it. A thread you already started is `/c/{session_id}` |
+| Chat | `/` | Talk to it. A thread you already started is `/c/{session_id}` |
 | Inbox | `/inbox` | What is waiting on you, and what expires soonest |
 | Work | `/work` | What it is doing and what is queued |
 | Money | `/money` | What it earned, what it spent, what it holds |
-| Agent | `/agent` | Who it is, how it is configured, whether it is healthy |
+| Rob | `/agent` | Who it is, how it is configured, whether it is healthy |
 
-**New** opens on one true sentence about the last day — built from the same reader
+**Chat** opens on one true sentence about the last day — built from the same reader
 `polyrob journey` and the chat `/recap` use — four things you could ask, and a place
 to type. It is deliberately not a configuration form. A thread you do not own
 answers 404 rather than an access-denied page.
@@ -102,11 +102,18 @@ The console is a control plane, not only a monitor. Unless it is read-only, you 
 ### Owner verbs in the chat box
 
 A leading `/verb` is routed through the same owner-verb plane every other seat uses,
-not sent to the model as prose. Roughly forty verbs work — `/pause`, `/resume`,
-`/halt`, `/status`, `/inbox`, `/pending`, `/approve`, `/reject`, `/asks`, `/goals`,
-`/cron`, `/book`, `/wallet`, `/invoices`, `/settle`, `/trade`, `/bridge`, `/launch`,
-`/deploy`, `/apps`, `/mcp`, `/kb`, `/files`, `/groups`, `/mute`, `/prefs`,
-`/config`, `/recap`, `/missed` and more. `/help` lists them.
+not sent to the model as prose. Every Telegram verb works — 61 of the 65 rows in
+the verb table (`/gates`, `/memory`, `/meter` and `/workers` are REPL-only) — for
+example `/pause`, `/resume`, `/halt`, `/status`, `/why`, `/inbox`, `/pending`,
+`/approve`, `/reject`, `/asks`, `/goals`, `/cron`, `/book`, `/wallet`, `/send`,
+`/writeoff`, `/unquarantine`, `/invoices`, `/settle`, `/trade`, `/bridge`,
+`/launch`, `/deploy`, `/apps`, `/mcp`, `/kb`, `/files`, `/groups`, `/mute`,
+`/prefs`, `/config`, `/recap`, `/thread` and `/missed`. `/help` lists them.
+
+A money quote (`/send`, `/swap`, `/bridge`, `/pay`, …) comes back as an **action
+card**: Confirm, Refresh and Cancel buttons sit under the answer, and each one sends
+the card's tap token exactly as if you typed it. The **Inbox** lists every open card —
+your quotes, and the agent's proposals and questions — with the same buttons.
 
 This works from an empty chat box too, not only inside a thread you already have
 open: a leading verb typed on the front door is answered inline and starts no

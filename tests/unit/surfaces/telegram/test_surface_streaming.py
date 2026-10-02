@@ -1,8 +1,9 @@
 """#8: TelegramSurface incremental streaming — live editMessageText as partial deltas
-arrive, gated TELEGRAM_INCREMENTAL_STREAM (default OFF = buffered one-send-on-finalize).
+arrive, gated stream.telegram (default OFF = buffered one-send-on-finalize).
 The edit cadence is flood-throttled (TELEGRAM_STREAM_EDIT_INTERVAL_SEC); tests set it
 to 0 for deterministic per-delta edits.
 """
+from tests.support.owner_prefs import set_owner_pref
 import pytest
 
 from surfaces.telegram.surface import TelegramSurface
@@ -33,7 +34,7 @@ def _om(text, *, partial, stream_id="sid"):
 
 @pytest.mark.asyncio
 async def test_incremental_stream_edits_one_message_in_place(monkeypatch):
-    monkeypatch.setenv("TELEGRAM_INCREMENTAL_STREAM", "true")
+    set_owner_pref(monkeypatch, "stream.telegram", True)
     monkeypatch.setenv("TELEGRAM_STREAM_EDIT_INTERVAL_SEC", "0")  # edit on every delta
     bot = _FakeBot()
     s = TelegramSurface(bot)
@@ -52,7 +53,7 @@ async def test_incremental_stream_edits_one_message_in_place(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_flag_off_is_buffered_single_send(monkeypatch):
-    monkeypatch.delenv("TELEGRAM_INCREMENTAL_STREAM", raising=False)
+    set_owner_pref(monkeypatch, "stream.telegram", False)
     bot = _FakeBot()
     s = TelegramSurface(bot)
     await s.stream(_om("Hello", partial=True))
@@ -66,7 +67,7 @@ async def test_flag_off_is_buffered_single_send(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_finalize_without_partials_just_sends(monkeypatch):
-    monkeypatch.setenv("TELEGRAM_INCREMENTAL_STREAM", "true")
+    set_owner_pref(monkeypatch, "stream.telegram", True)
     bot = _FakeBot()
     s = TelegramSurface(bot)
     await s.stream(_om("just the final", partial=False))
@@ -76,7 +77,7 @@ async def test_finalize_without_partials_just_sends(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_overflow_splits_on_finalize(monkeypatch):
-    monkeypatch.setenv("TELEGRAM_INCREMENTAL_STREAM", "true")
+    set_owner_pref(monkeypatch, "stream.telegram", True)
     monkeypatch.setenv("TELEGRAM_STREAM_EDIT_INTERVAL_SEC", "0")
     bot = _FakeBot()
     s = TelegramSurface(bot)
@@ -93,7 +94,7 @@ async def test_discrete_reply_finalizes_live_bubble_no_duplicate(monkeypatch):
     """End-to-end wiring: partials open+edit ONE live message (stable per-turn stream_id),
     then the turn's discrete reply (partial=False, via send()) commits that SAME message
     with the clean text — no second message is sent."""
-    monkeypatch.setenv("TELEGRAM_INCREMENTAL_STREAM", "true")
+    set_owner_pref(monkeypatch, "stream.telegram", True)
     monkeypatch.setenv("TELEGRAM_STREAM_EDIT_INTERVAL_SEC", "0")
     bot = _FakeBot()
     s = TelegramSurface(bot)
@@ -113,7 +114,7 @@ async def test_discrete_reply_finalizes_live_bubble_no_duplicate(monkeypatch):
 async def test_discrete_send_is_normal_when_no_live_stream(monkeypatch):
     """With streaming ON but no live stream open (agent replied without streaming), send()
     is a normal new message — not swallowed."""
-    monkeypatch.setenv("TELEGRAM_INCREMENTAL_STREAM", "true")
+    set_owner_pref(monkeypatch, "stream.telegram", True)
     bot = _FakeBot()
     s = TelegramSurface(bot)
     res = await s.send(OutboundMessage(session_key=_KEY, text="hi"))
@@ -123,7 +124,7 @@ async def test_discrete_send_is_normal_when_no_live_stream(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_discrete_send_unaffected_when_streaming_off(monkeypatch):
-    monkeypatch.delenv("TELEGRAM_INCREMENTAL_STREAM", raising=False)
+    set_owner_pref(monkeypatch, "stream.telegram", False)
     bot = _FakeBot()
     s = TelegramSurface(bot)
     # Even with a stray _live entry, OFF must not finalize-on-send (normal send).
@@ -137,7 +138,7 @@ async def test_discrete_send_unaffected_when_streaming_off(monkeypatch):
 async def test_unchanged_text_not_re_edited(monkeypatch):
     """A finalize whose text equals the last rendered live text must not re-edit
     (Telegram rejects an unchanged edit with 'message is not modified')."""
-    monkeypatch.setenv("TELEGRAM_INCREMENTAL_STREAM", "true")
+    set_owner_pref(monkeypatch, "stream.telegram", True)
     monkeypatch.setenv("TELEGRAM_STREAM_EDIT_INTERVAL_SEC", "0")
     bot = _FakeBot()
     s = TelegramSurface(bot)

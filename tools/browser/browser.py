@@ -40,6 +40,13 @@ from tools.browser.context import (
 	BrowserContextConfig,
 )
 from tools.browser.views import BrowserError
+
+
+def google_search_url(query: str) -> str:
+	"""The Google results URL for *query*, URL-encoded: a raw '&', '#', '%' or
+	'+' in the query would otherwise truncate it or inject a parameter."""
+	from urllib.parse import quote_plus
+	return f'https://www.google.com/search?q={quote_plus(str(query or ""))}&udm=14'
 from tools.base_tool import BaseTool
 from tools.controller.types import ActionResult
 from tools.browser.actions import (
@@ -168,7 +175,6 @@ class BrowserConfig:
 	_force_keep_browser_alive: bool = False
 
 
-# @singleton: TODO - think about id singleton makes sense here
 # @dev By default this is a singleton, but you can create multiple instances if you need to.
 class Browser(BaseTool):
 	"""
@@ -464,7 +470,7 @@ class Browser(BaseTool):
 
 		try:
 			page = await browser_context.get_current_page()
-			search_url = f'https://www.google.com/search?q={params.query}&udm=14'
+			search_url = google_search_url(params.query)
 			self.logger.info(f"🔍 Starting Google search for: {params.query}")
 
 			response = await page.goto(search_url, timeout=30000, wait_until='domcontentloaded')
@@ -1235,6 +1241,11 @@ class Browser(BaseTool):
 		if not (self.browser_config.cdp_url or self.browser_config.wss_url):
 			from tools.browser.launch_security import require_local_browser_allowed
 			require_local_browser_allowed()
+		# 066 P0.3: the Node driver gets a scrubbed env, not os.environ.copy().
+		from tools.browser.child_env import install_driver_env_scrub
+		if not install_driver_env_scrub():
+			self.logger.warning('Playwright driver env scrub unavailable (private '
+			                    'seam moved); the driver inherits the process env')
 		self._playwright = await async_playwright().start()
 		try:
 			self._browser = await self._setup_browser(self._playwright)

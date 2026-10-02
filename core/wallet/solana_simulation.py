@@ -72,6 +72,21 @@ class SolanaDeltas:
     #: ``owner_changed``, ``close_authority``, ``frozen``, ``closed``.
     authority_grants: Tuple[tuple, ...] = ()
     compute_units: Optional[int] = None
+    #: CR-L06. The transaction fee in lamports, computed from the message (base
+    #: fee per signature + the ComputeBudget priority fee). None = not computed
+    #: (``parse_deltas`` called without it) — never read as zero.
+    fee_lamports: Optional[int] = None
+    #: Lamports now held by token accounts this transaction CREATED and that
+    #: are ours afterwards — the rent that stays in the wallet's own accounts.
+    retained_rent_lamports: int = 0
+    #: Native outflow from our plain accounts that the fee plus the retained
+    #: rent does NOT explain: ``max(0, -native_delta - fee - retained_rent)``.
+    #: None when the fee is unknown. ⚠️ For a SOL-input swap or a SOL bridge
+    #: the declared principal is part of this number — the caller subtracts it.
+    #: Whatever is left is value that left the wallet, and a caller must either
+    #: refuse it or charge it to the USD caps; "it was under 0.01 SOL" is not a
+    #: reason to leave it uncharged.
+    native_excess: Optional[int] = None
 
     def grants_authority(self) -> bool:
         """The Solana analogue of ``Deltas.grants_allowance``."""
@@ -84,6 +99,11 @@ def is_plausible_rent(native_delta: int) -> bool:
     Only ever a CLASSIFICATION, never a permission: the caller still bounds the
     USD value. It exists so that creating a recipient's token account — an
     ordinary, necessary act — is not mistaken for a drain.
+
+    ⚠️ CR-L06: this ceiling alone let ~0.01 SOL per transaction go ANYWHERE
+    uncharged. The exact bound is ``SolanaDeltas.native_excess`` (fee + the
+    rent of accounts the transaction creates and we keep); use that, and charge
+    or refuse whatever it leaves.
     """
     if native_delta >= 0:
         return True
@@ -114,9 +134,19 @@ def _amount(info: Dict[str, Any]) -> Optional[int]:
         return None
 
 
+def _delegated(info: Dict[str, Any]) -> int:
+    """``delegatedAmount`` in raw units; 0 when absent or unreadable."""
+    try:
+        return int((info.get("delegatedAmount") or {}).get("amount") or 0)
+    except (AttributeError, TypeError, ValueError):
+        return 0
+
+
 def parse_deltas(sim: Any, *, owner: str,
                  owned_pubkeys: Sequence[str],
-                 ours: Optional[Sequence[str]] = None) -> SolanaDeltas:
+                 ours: Optional[Sequence[str]] = None,
+                 created: Sequence[str] = (),
+                 fee_lamports: Optional[int] = None) -> SolanaDeltas:
     """Turn a ``simulateTransaction`` result into asserted deltas.
 
     Pure: the caller supplies the RPC result and the pre-state, so this is
@@ -144,6 +174,18 @@ def parse_deltas(sim: Any, *, owner: str,
     the fee moved" about a transaction moving 0.9 SOL, with the drain assertion
     passing. ``ours=None`` keeps the old behaviour (every named account counts)
     so existing callers are unchanged.
+
+    ``created`` (CR-H04) names the accounts the transaction itself creates and
+    WE fund (decoded from the instructions). A created token account that is
+    claimed as ours — by ``created`` or by an explicit ``ours`` — but whose
+    post-state owner is someone else is an ownership grant: we paid its rent,
+    and a ``SetAuthority(AccountOwner)`` in the same transaction makes the
+    inflow into it vanish from ``token_deltas``. A created account that IS ours
+    runs the same delegate / close-authority / freeze taxonomy as an existing
+    one: a first buy of a token is the ordinary case, and skipping it left the
+    new position drainable later.
+
+    ``fee_lamports`` (CR-L06) lets this compute ``native_excess``.
     """
     if not isinstance(sim, dict):
         return SolanaDeltas(False, "no simulation result")
@@ -158,6 +200,10 @@ def parse_deltas(sim: Any, *, owner: str,
     owned = set(owned_pubkeys or ())
     aligned: List[str] = list(owned_pubkeys or ())
     ours_set = owned if ours is None else set(ours)
+    # Accounts whose post-state owner MUST be us: an explicit `ours` (never the
+    # legacy "everything named" default) and whatever we funded into existence.
+    claimed = (set(ours) if ours is not None else set()) | set(created or ())
+    retained_rent = 0
 
     native_delta = 0
     token_deltas: Dict[str, int] = {}
@@ -192,11 +238,33 @@ def parse_deltas(sim: Any, *, owner: str,
         # skipping it made every first trade invisible to the delta check, which
         # then refused it as "no token movement".
         if info_before is None and info_after is not None:
+            mint = str(info_after.get("mint") or "?")
             if _is_ours(info_after, owner):
                 amount = _amount(info_after)
                 if amount:
-                    mint = str(info_after.get("mint") or "?")
                     token_deltas[mint] = token_deltas.get(mint, 0) + amount
+                try:
+                    retained_rent += max(0, int(after.get("lamports", 0) or 0))
+                except (AttributeError, TypeError, ValueError):
+                    pass
+                # CR-H04: the SAME taxonomy as an existing account. A new
+                # account has no "before" to compare with, so any non-null
+                # delegate or close authority, or a frozen state, is a grant.
+                if info_after.get("delegate"):
+                    grants.append(("delegate", mint, str(info_after["delegate"])))
+                if info_after.get("closeAuthority"):
+                    grants.append(("close_authority", mint,
+                                   str(info_after["closeAuthority"])))
+                if str(info_after.get("state") or "") == "frozen":
+                    grants.append(("frozen", mint, owner))
+            elif _addr is not None and _addr in claimed and \
+                    "tokenAmount" in info_after:
+                # A token ACCOUNT only: a mint we create (the SPL deploy) has
+                # no owner field and is not a position.
+                # We named it as ours (or paid for it) and it ends the
+                # transaction owned by someone else.
+                grants.append(("owner_changed", mint,
+                               str(info_after.get("owner") or "?")))
             continue
         if info_before is None or info_after is None:
             continue
@@ -218,7 +286,10 @@ def parse_deltas(sim: Any, *, owner: str,
             # check would miss it.
             grants.append(("owner_changed", mint, str(info_after.get("owner") or "?")))
         new_delegate = info_after.get("delegate")
-        if new_delegate and new_delegate != info_before.get("delegate"):
+        # CR-L07: a re-Approve to the SAME delegate with a larger
+        # `delegatedAmount` widens the grant just as much as a new delegate.
+        if new_delegate and (new_delegate != info_before.get("delegate")
+                             or _delegated(info_after) > _delegated(info_before)):
             grants.append(("delegate", mint, str(new_delegate)))
         new_close = info_after.get("closeAuthority")
         if new_close and new_close != info_before.get("closeAuthority"):
@@ -227,7 +298,12 @@ def parse_deltas(sim: Any, *, owner: str,
                 and str(info_before.get("state") or "") != "frozen"):
             grants.append(("frozen", mint, str(info_after.get("owner") or "?")))
 
+    excess = None
+    if fee_lamports is not None:
+        excess = max(0, -int(native_delta) - int(fee_lamports) - retained_rent)
     return SolanaDeltas(
         ok=True, native_delta=native_delta, token_deltas=token_deltas,
         authority_grants=tuple(grants),
-        compute_units=value.get("unitsConsumed"))
+        compute_units=value.get("unitsConsumed"),
+        fee_lamports=fee_lamports, retained_rent_lamports=retained_rent,
+        native_excess=excess)

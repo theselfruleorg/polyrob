@@ -222,9 +222,13 @@ def test_install_is_offloaded_to_thread(monkeypatch):
     _run(ctx)
 
     out = buf.getvalue()
-    # The blocking dispatch_install ran via asyncio.to_thread, not inline.
+    # The blocking install ran via asyncio.to_thread, not inline. Since 067 P6
+    # the thread runs skill_hub.install_spec (tap-name resolution), which ends
+    # in the ONE pipeline entry, dispatch_install.
+    from cli.commands.skill_hub import install_spec
+
     assert record["count"] == 1
-    assert record["fn"] is fake_dispatch
+    assert record["fn"] is install_spec
     assert called["args"] == ("owner/repo", "local", "prompt", None)
     assert "cool-skill" in out
 

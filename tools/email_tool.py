@@ -613,8 +613,12 @@ class EmailTool(BaseTool):
             raise APIError(f"Failed to send email: {str(e)}")
 
     @BaseTool.action(
-        "Send an email to a specific address. Only the owner's email or an "
-        "owner-allowlisted address is permitted; other targets are denied.",
+        "Send an email with YOUR subject line to one address, from the agent's own "
+        "mailbox. For a file attachment or a threaded reply use message(surface='email'). "
+        "Allowed targets: the owner's email, an owner-allowlisted address, or (when "
+        "the owner set an open/domains outbound policy) a capped first contact; "
+        "anything else is refused, and only the owner can allow it (/allow email "
+        "<address>). An autonomous run obeys the same gate as `message`.",
         param_model=EmailSendAction,
     )
     async def email_send(self, params: EmailSendAction, execution_context=None) -> ActionResult:
@@ -625,6 +629,19 @@ class EmailTool(BaseTool):
         — this tool owns its own SMTP connection). On a first-contact open-tier
         send, reports it (telemetry + owner notice) after the send succeeds."""
         import os as _os
+
+        # Review E3: the SAME forged/autonomous gate as the `message` action
+        # (tools/controller/turn_origin.py) — this tool is the second outbound
+        # rail and had none. It falls through exactly where `message` does
+        # (MESSAGE_AUTONOMOUS_ALLOWLISTED, ON under AUTONOMY_MODE=autonomous; an
+        # open/domains outbound policy), so an owner-configured autonomous mail
+        # rail keeps working and the tier gate below still decides the target.
+        from tools.controller.turn_origin import _autonomous_message_refusal
+        refusal = _autonomous_message_refusal(execution_context, None)
+        if refusal is not None:
+            return ActionResult(
+                error=(refusal.extracted_content or "").replace("message:", "email_send:", 1),
+                include_in_memory=True)
 
         from core.instance import resolve_owner_email
         from core.surfaces.outbound_policy import (
@@ -658,8 +675,8 @@ class EmailTool(BaseTool):
                                    policy=policy, domains=domains)
         if tier == "denied":
             return ActionResult(
-                error=("target not on owner allowlist; ask the owner to run "
-                       f"`polyrob owner allow email {params.to}`"),
+                error=("target not on owner allowlist; only the owner can allow "
+                       f"it: /allow email {params.to}"),
                 include_in_memory=True)
 
         # D9 (2026-09-21 interface audit): the 031 owner pause, the SAME probe

@@ -14,7 +14,7 @@ without touching a single template.
 **A missing key is loud in tests and quiet in production.** Under pytest
 :func:`t` raises, so a typo fails the suite. In a running
 console it returns the key itself: a console that 500s because a string is
-missing is worse than one that shows ``work.placeholder`` for an afternoon.
+missing is worse than one that shows ``work.title`` for an afternoon.
 That asymmetry is deliberate and is the same shape as the rest of the product —
 fail loudly where a human is watching, degrade visibly where one is not.
 """

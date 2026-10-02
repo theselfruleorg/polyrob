@@ -144,12 +144,12 @@ def test_lp_pool_info_needs_pool_or_the_full_triple():
     assert res.error is not None
 
 
-def test_lp_pool_info_v4_is_an_honest_refusal():
+def test_lp_pool_info_v4_without_a_pons_token_is_an_honest_refusal():
+    # 048 phase 3: v4 pool reads exist, for a Pons PoolKey named by its token.
     tool = _tool(FakeRpc())
     res = _run(tool.lp_pool_info(LpPoolInfoParams(chain="robinhood", protocol="v4")))
     assert res.error is not None
-    assert "phase 3 of proposal 048" in res.error
-    assert "v3 only" in res.error
+    assert "name the Pons token" in res.error
 
 
 # --------------------------------------------------------------------------
@@ -242,11 +242,12 @@ def test_lp_quote_needs_an_amount():
     assert "amount_a" in res.error
 
 
-def test_lp_quote_v4_is_an_honest_refusal():
+def test_lp_quote_v4_on_a_non_pons_pair_is_an_honest_refusal():
+    # 048 phase 3: a v4 quote exists only for a Pons PoolKey; an unreadable
+    # factory record is an error, never a guessed pool.
     tool = _tool(FakeRpc())
     res = _run(tool.lp_quote(LpQuoteParams(
         chain="robinhood", protocol="v4", token_a=T0, token_b=T1, fee=3000,
         amount_a=1.0)))
     assert res.error is not None
-    assert "phase 3 of proposal 048" in res.error
-    assert "v3 only" in res.error
+    assert "Pons" in res.error

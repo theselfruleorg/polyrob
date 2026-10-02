@@ -28,7 +28,7 @@ turn that streams but ends via done() instead of a reply).
 CAVEAT (why it stays opt-in / default-OFF): the INTERMEDIATE frames shown mid-stream are the
 raw model deltas, scrubbed per-chunk by MessageRouter (scrub_brain_blocks) — best-effort, so
 a brain/think block straddling a chunk boundary can briefly surface before the clean final
-commit. The persisted final is always clean. Enable TELEGRAM_INCREMENTAL_STREAM only where
+commit. The persisted final is always clean. Enable the `stream.telegram` owner pref only where
 that intermediate exposure is acceptable; OFF keeps the buffered one-send-on-finalize path.
 """
 import logging
@@ -168,11 +168,26 @@ class Surface(ABC):
         return render_for_flavor(text, caps.markdown_flavor, caps.max_message_bytes)
 
     def can_send_now(self, session_key: str, *, now: Optional[float] = None) -> "SendDecision":
-        """Whether a (proactive) send to this chat is allowed right now. Base default:
-        ALLOW (free outbound). A windowed surface overrides this. Pure + sync so producers
-        can consult it cheaply before enqueuing."""
-        from core.surfaces.send_policy import SendDecision
-        return SendDecision.ALLOW
+        """Whether a (proactive) send to this chat is allowed right now. Pure + sync so
+        producers can consult it cheaply before enqueuing.
+
+        064 F4: read from ``capabilities.effective_reply_window()`` and the surface's
+        ``last_inbound_at`` hook. No window = ALLOW (free outbound); a windowed surface
+        with no tracker also ALLOWs (it cannot know, and refusing would be a guess)."""
+        import time as _t
+        from core.surfaces.send_policy import SendDecision, window_decision
+        window = self.capabilities.effective_reply_window()
+        if window is None:
+            return SendDecision.ALLOW
+        tracked, last = self.last_inbound_at(session_key)
+        if not tracked:
+            return SendDecision.ALLOW
+        return window_decision(window, last, now if now is not None else _t.time())
+
+    def last_inbound_at(self, session_key: str) -> "tuple":
+        """``(tracked, epoch_or_None)``: whether this surface tracks the user's last
+        inbound for the reply window, and when it was. Default: not tracked."""
+        return False, None
 
     async def _finalize_live_on_send(self, msg: OutboundMessage) -> bool:
         """If an in-flight live stream exists for this message's session, COMMIT it with

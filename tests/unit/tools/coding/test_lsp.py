@@ -149,3 +149,71 @@ def test_cap_truncates_100_errors_with_marker():
     out = diagnose_file("x.py", "/root", runner=runner)
     assert len(out) <= MAX_DIAGNOSTICS_CHARS
     assert "more)" in out
+
+
+# --- Coding-agent review B10 (2026-09-24): tsc honours the project ------------
+
+def test_tsc_uses_the_project_tsconfig_and_keeps_only_this_file(tmp_path):
+    (tmp_path / "tsconfig.json").write_text("{}")
+    (tmp_path / "src").mkdir()
+    seen = {}
+
+    def runner(cmd, cwd, timeout_sec):
+        seen["cmd"] = cmd
+        return _FakeProc(stdout=(
+            "src/x.ts(3,5): error TS2322: Type 'string' is not assignable to type 'number'.\n"
+            "src/other.ts(1,1): error TS2304: Cannot find name 'q'.\n"))
+
+    out = diagnose_file("src/x.ts", str(tmp_path), runner=runner)
+    assert seen["cmd"][-2:] == ["-p", str(tmp_path / "tsconfig.json")]
+    assert out == "src/x.ts:3:5 TS2322: Type 'string' is not assignable to type 'number'."
+
+
+def test_js_without_a_tsconfig_is_not_checked(tmp_path):
+    # Count calls OUTSIDE the runner: diagnose_file swallows exceptions, so a
+    # raising runner would pass on the old code too (codex review 2026-09-25).
+    calls = []
+
+    def runner(cmd, cwd, timeout_sec):
+        calls.append(cmd)
+        return _FakeProc(stdout="")
+
+    assert diagnose_file("app.js", str(tmp_path), runner=runner) == ""
+    assert calls == []
+
+
+def test_project_mode_keeps_config_errors_and_drops_other_files(tmp_path):
+    (tmp_path / "tsconfig.json").write_text("{}")
+
+    def runner(cmd, cwd, timeout_sec):
+        return _FakeProc(stdout=(
+            "error TS5023: Unknown compiler option 'bogus'.\n"
+            "other.ts(1,1): error TS2304: Cannot find name 'q'.\n"))
+
+    assert diagnose_file("a.ts", str(tmp_path), runner=runner) == \
+        "error TS5023: Unknown compiler option 'bogus'."
+
+
+def test_a_tsconfig_above_the_workspace_is_never_used(tmp_path):
+    (tmp_path / "tsconfig.json").write_text("{}")
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    seen = {}
+
+    def runner(cmd, cwd, timeout_sec):
+        seen["cmd"] = cmd
+        return _FakeProc(stdout="")
+
+    diagnose_file("a.ts", str(ws), runner=runner)
+    assert "-p" not in seen["cmd"]
+
+
+def test_tsx_without_a_tsconfig_gets_jsx_preserve(tmp_path):
+    seen = {}
+
+    def runner(cmd, cwd, timeout_sec):
+        seen["cmd"] = cmd
+        return _FakeProc(stdout="")
+
+    diagnose_file("c.tsx", str(tmp_path), runner=runner)
+    assert "--jsx" in seen["cmd"] and seen["cmd"][-1] == "c.tsx"

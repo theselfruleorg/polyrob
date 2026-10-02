@@ -78,12 +78,23 @@ def test_room_verbosity_beats_the_owner_pref(tmp_path):
     assert _Probe(_orchestrator(tmp_path, public=True))._resolve_verbosity() == "terse"
 
 
-def test_a_room_with_no_verbosity_falls_back_to_the_tenant_pref(tmp_path):
+def test_a_room_with_no_verbosity_does_not_borrow_the_owner_pref(tmp_path):
+    # The owner's style.verbosity describes his DM, not a room of other humans:
+    # a room with no chat.verbosity gets the prompt default (None), never his.
     from core.prefs import write_preference
 
     ok, err = write_preference(tmp_path, _OWNER, "style.verbosity", "detailed")
     assert ok, err
-    assert _Probe(_orchestrator(tmp_path, public=True))._resolve_verbosity() == "detailed"
+    _set(tmp_path, "chat.mode", "active")  # a room policy exists, no verbosity
+    assert _Probe(_orchestrator(tmp_path, public=True))._resolve_verbosity() is None
+
+
+def test_a_room_with_no_policy_at_all_does_not_borrow_the_owner_pref(tmp_path):
+    from core.prefs import write_preference
+
+    ok, err = write_preference(tmp_path, _OWNER, "style.verbosity", "detailed")
+    assert ok, err
+    assert _Probe(_orchestrator(tmp_path, public=True))._resolve_verbosity() is None
 
 
 def test_a_dm_still_reads_the_tenant_pref(tmp_path):

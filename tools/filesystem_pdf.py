@@ -15,10 +15,32 @@ import tempfile
 from io import BytesIO
 from typing import Dict, Any
 
-import pypdf  # type: ignore
+# 058 T1.6: pypdf rides the [docs] extra, and `filesystem` is a BASE default
+# tool, so this mixin must import without it. The readers refuse with the remedy.
+try:
+    import pypdf  # type: ignore
+except ImportError:  # pragma: no cover - exercised by test_optional_extras_refusals
+    pypdf = None  # type: ignore[assignment]
 
 from core.exceptions import ServiceError
-from utils.time_utils import get_current_timestamp
+
+
+def _require_pypdf() -> None:
+    global pypdf
+    if pypdf is None:
+        # 058: the sync readers take the same lazy path as tools/document_parser —
+        # under local mode the first use installs [docs]; a server refuses.
+        try:
+            from core.lazy_deps import ensure
+            ensure("docs.pdf", prompt=False)
+            import pypdf as _pypdf  # type: ignore
+            pypdf = _pypdf
+        except Exception:
+            pypdf = None
+    if pypdf is None:
+        raise ServiceError(
+            "PDF reading needs pypdf, which is not installed. Remedy: pip install "
+            "'polyrob[docs]'. The file is unchanged in the workspace.")
 
 
 class PdfExtractionMixin:
@@ -34,8 +56,9 @@ class PdfExtractionMixin:
         except Exception as exc:
             raise ServiceError('PDF parsing refused or resource limit reached') from exc
 
-    def _read_pdf_with_recovery(self, file_obj) -> pypdf.PdfReader:
+    def _read_pdf_with_recovery(self, file_obj) -> "pypdf.PdfReader":
         """Read PDF with additional recovery options."""
+        _require_pypdf()
         try:
             # Create a copy of the file content to avoid "I/O operation on closed file" errors
             file_obj.seek(0)
@@ -62,8 +85,9 @@ class PdfExtractionMixin:
             self.logger.warning(f"Recovery failed: {str(e)}")
             raise e
 
-    def _read_pdf_permissive(self, file_obj) -> pypdf.PdfReader:
+    def _read_pdf_permissive(self, file_obj) -> "pypdf.PdfReader":
         """Most permissive PDF reading attempt."""
+        _require_pypdf()
         try:
             # Create a copy of the file content
             file_obj.seek(0)
@@ -88,8 +112,9 @@ class PdfExtractionMixin:
             self.logger.warning(f"Permissive reading failed: {str(e)}")
             raise e
 
-    def _read_pdf_advanced_recovery(self, file_obj) -> pypdf.PdfReader:
+    def _read_pdf_advanced_recovery(self, file_obj) -> "pypdf.PdfReader":
         """Advanced PDF recovery for damaged files."""
+        _require_pypdf()
         try:
             # Create a copy of the file content
             file_obj.seek(0)

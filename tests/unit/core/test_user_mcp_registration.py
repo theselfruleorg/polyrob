@@ -11,6 +11,7 @@ not persist even in principle.
 Per-tenant MCP config has nothing to do with billing. The gate is MCP.
 """
 import asyncio
+import logging
 
 import pytest
 
@@ -90,8 +91,23 @@ def test_user_mcp_service_is_fail_open_without_a_database(monkeypatch):
     assert "user_mcp_service" not in container.registered
 
 
+@pytest.fixture
+def preserve_root_logging():
+    """CLI bootstrap configures the terminal; preserve pytest's capture sinks."""
+    root = logging.getLogger()
+    level = root.level
+    handlers = [(handler, handler.level) for handler in root.handlers]
+    try:
+        yield
+    finally:
+        root.setLevel(level)
+        for handler, saved_level in handlers:
+            handler.setLevel(saved_level)
+
+
 @pytest.mark.asyncio
-async def test_cli_container_registers_the_store_when_mcp_is_on(monkeypatch, tmp_path):
+async def test_cli_container_registers_the_store_when_mcp_is_on(
+        monkeypatch, tmp_path, preserve_root_logging):
     """`build_cli_container` never called auth-services, so the terminal-native
     agent had no per-tenant MCP store at all — an MCP server added from the REPL
     could not outlive the process."""

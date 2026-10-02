@@ -159,6 +159,11 @@ async def meter_aux_llm(*, usage_tracker, user_id: Optional[str], session_id: st
             input_tokens=usage.get("prompt_tokens") or 0,
             output_tokens=usage.get("completion_tokens") or 0,
             cached_tokens=usage.get("cached_tokens") or 0,
+            # F17: the aux path extracts cache_creation_tokens like every other
+            # path and then dropped it on the floor — so an aux call's cache
+            # write was billed (calculate_cost sees it) but never recorded.
+            cache_creation_tokens=usage.get("cache_creation_tokens") or 0,
+            cache_creation_1h_tokens=usage.get("cache_creation_1h_tokens") or 0,
             duration_seconds=duration_seconds, component=component, purpose=purpose, success=True,
             request_id=request_id,
         )

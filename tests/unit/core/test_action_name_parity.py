@@ -41,6 +41,9 @@ _DIRECT_ACTION_MODULES = (
     "tools/controller/autonomy_control_action.py",  # 031: owner pause/resume (extracted)
     "tools/controller/doc_authoring.py",  # self_context_manage/owner_doc_manage (extracted 2026-09-08)
     "tools/controller/room_read_action.py",  # gated direct action; still a real runtime name
+    "tools/controller/owner_ask_action.py",  # H04: gated direct action (owner_ask)
+    "tools/controller/card_actions.py",  # action cards: present_choice / propose_action
+    "tools/controller/worker_manage_action.py",  # 041 phase 2: gated direct action
 )
 
 
@@ -75,9 +78,13 @@ def _register_every_optional_tool() -> None:
         ("tools.x402", "register_x402_invoice_tool"),
         ("tools.cronjob_tools", "register_cronjob_tool"),
         ("tools.goal_tools", "register_goal_tool"),
-        ("tools.x_browser", "register_x_browser_tool"),
+        ("polyrob_x.x_browser", "register_x_browser_tool"),  # the X pack (067 P3b)
         ("tools.launchpad", "register_launchpad_tool"),
         ("tools.dapp_browser", "register_dapp_browser_tool"),
+        ("tools.agent_nft", "register_agent_nft_tool"),
+        ("tools.knowledge_ingest", "register_knowledge_tool"),  # M03: kb verbs are name-gated
+        ("tools.publish", "register_publish_tool"),
+        ("tools.app_service", "register_app_service_tool"),
     )
     for mod_name, fn_name in registrars:
         try:
@@ -100,6 +107,10 @@ def _container_tool_action_names() -> set:
         # A tool's capability/gate id can differ from its descriptor id
         # (browser_manager -> browser); gates are keyed on the capability id.
         tool_id = CATALOG_ALIASES.get(descriptor_id, descriptor_id)
+        if tool_id == "browser":
+            # browser_manager's actions are served by its `.browser` (a
+            # tools.browser.browser.Browser); the manager class declares none.
+            from tools.browser.browser import Browser as cls
         for attr in dir(cls):
             if attr.startswith("_"):
                 continue
@@ -308,6 +319,14 @@ def test_directly_registered_high_impact_actions_have_no_layer_2_to_fall_back_on
         )
 
 
+# Own-account reads are correspondent_blocked since the 2026-09-29 review
+# (packs/markets pack.toml); only MARKET-DATA reads stay open while tainted.
+_OWN_ACCOUNT_READS = ("_get_all_positions", "_get_balance", "_get_open_orders",
+                      "_get_order_history", "_get_portfolio_summary",
+                      "_get_trade_history", "_get_account_state", "_get_fills",
+                      "_get_spot_balances")
+
+
 def test_name_layer_blocks_every_trade_verb_under_its_venue_namespace(runtime_action_names):
     """Trading venues are readable-while-tainted by design, but their TRADE verbs
     must still be blocked under the venue-namespaced runtime name."""
@@ -323,7 +342,8 @@ def test_name_layer_blocks_every_trade_verb_under_its_venue_namespace(runtime_ac
             if any(sub in name for sub in _HIGH_IMPACT_VERB_SUBSTRINGS):
                 assert is_high_impact(name), f"trade verb {name} slips the gate"
                 checked += 1
-            elif name.startswith(f"{venue}_get_"):
+            elif name.startswith(f"{venue}_get_") and not any(
+                    name.endswith(own) for own in _OWN_ACCOUNT_READS):
                 assert not is_high_impact(name), (
                     f"read verb {name} must stay available while tainted"
                 )
@@ -358,3 +378,88 @@ def test_high_impact_names_has_no_unreachable_entries(runtime_action_names):
         "action name, not a tool_id token, not substring-backed. Use the namespaced "
         "runtime name ({tool_id}_{action}), or drop the entry."
     )
+
+
+# ---------------------------------------------------------------------------
+# 067 P1: the per-action policy table (core/verb_policy.py). The lists above are
+# derived views of it now, so the parity that matters is the table's own.
+# ---------------------------------------------------------------------------
+
+def test_every_verb_policy_row_names_an_emitted_action_or_a_reserved_name(
+        runtime_action_names):
+    from core.verb_policy import RESERVED_ACTION_NAMES, VERB_POLICY
+
+    stray = sorted(n for n in VERB_POLICY
+                   if n not in runtime_action_names and n not in RESERVED_ACTION_NAMES)
+    assert not stray, (
+        f"verb-policy rows {stray} name no emitted action and are not reserved. Use "
+        "the namespaced runtime name ({tool_id}_{action}), or record the name in "
+        "RESERVED_VERB_ROWS (core/verb_policy_rows.py) with its reason.")
+
+
+def test_reserved_names_are_really_not_emitted(runtime_action_names):
+    """A reserved name that an action now emits must move to its tool's group."""
+    from core.verb_policy import RESERVED_ACTION_NAMES
+
+    live = sorted(RESERVED_ACTION_NAMES & runtime_action_names)
+    assert not live, f"reserved names that are emitted now: {live}"
+
+
+def test_a_row_owner_matches_the_runtime_namespace():
+    """A container-tool row is filed under the tool whose namespace it carries."""
+    from core.verb_policy import VERB_POLICY
+
+    bad = sorted(n for n, row in VERB_POLICY.items()
+                 if row.tool is not None and not (n == row.tool or n.startswith(f"{row.tool}_")))
+    assert not bad, f"rows filed under a tool whose namespace they do not carry: {bad}"
+
+
+def _owning_tool(name: str, tool_ids) -> str:
+    """The LONGEST tool id whose namespace *name* carries (room_policy's rule):
+    ``polymarket_data_*`` belongs to the read-only data tool, not the venue."""
+    owner = ""
+    for t in tool_ids:
+        if (name == t or name.startswith(f"{t}_")) and len(t) > len(owner):
+            owner = t
+    return owner
+
+
+def test_every_emitted_money_write_is_blocked_by_its_row_alone(runtime_action_names):
+    """067 P1: a correspondent-tainted session is kept off every money WRITE by
+    the verb's own ``correspondent_blocked`` row — not by tool-id resolution (a
+    resolver fault degrades it) and not by the substring layer (which predates
+    the namespaced rows and over-blocks reads)."""
+    from agents.task.agent.core.correspondent_gate import _HIGH_IMPACT_NAMES
+    from core.tool_capabilities import TOOL_CAPABILITIES, ids_with
+    from core.verb_policy import VERB_POLICY
+
+    money = set(ids_with("money"))
+    checked, unblocked = 0, []
+    for name in sorted(runtime_action_names):
+        if _owning_tool(name, TOOL_CAPABILITIES) not in money:
+            continue
+        row = VERB_POLICY.get(name)
+        if row is not None and row.effect == "none":
+            continue  # a read (effects says it writes nothing)
+        checked += 1
+        if name not in _HIGH_IMPACT_NAMES:
+            unblocked.append(name)
+    assert checked > 30, f"only {checked} money writes derived — the check went vacuous"
+    assert not unblocked, (
+        f"money writes with no correspondent_blocked row: {unblocked}. Add the row in "
+        "core/verb_policy_rows.py; the substring/tool-id layers are not the guarantee.")
+
+
+def test_the_substring_layer_is_redundant_for_every_emitted_verb(runtime_action_names):
+    """Every emitted name the verb-substring layer matches is blocked by its row.
+    (The layer stays as defense-in-depth for names not in this tree.)"""
+    from agents.task.agent.core.correspondent_gate import (
+        _HIGH_IMPACT_NAMES, _HIGH_IMPACT_VERB_SUBSTRINGS)
+
+    matched = [n for n in sorted(runtime_action_names)
+               if any(sub in n for sub in _HIGH_IMPACT_VERB_SUBSTRINGS)]
+    # The *_data read tools statically declare the venue trade verbs that their
+    # live get_actions() filters out; those names are never emitted.
+    live = [n for n in matched if "_data_" not in n]
+    assert live, "no substring-matched verb derived — the check went vacuous"
+    assert [n for n in live if n not in _HIGH_IMPACT_NAMES] == []

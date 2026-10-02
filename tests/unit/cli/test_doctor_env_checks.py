@@ -145,3 +145,22 @@ def test_update_command_prints_schema_check():
     import inspect
     import cli.commands.update as u
     assert "schema_status_line" in inspect.getsource(u)
+
+
+def test_x_oauth2_line_names_the_relogin_when_the_verdict_is_open(tmp_path):
+    """X evaluation 2026-09-26 item 4: a dead X OAuth 2.0 login is on doctor."""
+    from cli.commands.doctor import x_oauth2_doctor_line
+    from core import credential_verdicts as cv
+    cv.record_rejection("x_oauth2", "", code="relogin_needed", remedy="/x login")
+    line = x_oauth2_doctor_line({"POLYROB_DATA_DIR": str(tmp_path)})
+    assert line.startswith("X login (OAuth 2.0, DMs): re-login needed since ")
+    assert line.endswith("/x login")
+
+
+def test_x_oauth2_line_reports_a_stored_login(tmp_path, monkeypatch):
+    import json
+    from cli.commands.doctor import x_oauth2_doctor_line
+    monkeypatch.delenv("TWITTER_OAUTH2_ACCESS_TOKEN", raising=False)
+    (tmp_path / ".x_session.json").write_text(json.dumps({"rob|x_oauth2": "opaque"}))
+    line = x_oauth2_doctor_line({"POLYROB_DATA_DIR": str(tmp_path)})
+    assert "stored" in line

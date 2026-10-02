@@ -129,3 +129,65 @@ def test_send_task_wires_the_push_wrapper():
     assert "_run_session_with_push" in src
     # both spawn points (initial run + resume) go through the wrapper
     assert src.count("_run_session_with_push") >= 3  # def + 2 call sites
+
+
+def test_push_delivery_is_pinned_to_the_validated_ip(monkeypatch):
+    """2026-09-23 Low: the webhook was validated but httpx re-resolved the host
+    at connect (rebinding window) and honoured env proxies. The delivery now
+    connects to the address the SSRF policy cleared, with trust_env=False."""
+    import socket
+
+    import httpx
+
+    lookups = []
+
+    def _dns(host, port, *a, **k):
+        lookups.append(host)
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", _dns)
+    sent = {}
+
+    class _Inner(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request):
+            sent["url"] = str(request.url)
+            sent["host"] = request.headers.get("Host")
+            sent["sni"] = request.extensions.get("sni_hostname")
+            return httpx.Response(200, content=b"ok")
+
+    real_client = httpx.AsyncClient
+    seen_kwargs = {}
+
+    def _client(**kw):
+        seen_kwargs.update(kw)
+        kw["transport"]._inner = _Inner()      # no socket; observe the pinned request
+        return real_client(**kw)
+
+    monkeypatch.setattr(httpx, "AsyncClient", _client)
+    handler, _ = _handler()
+    handler._push_configs["t1"] = PushNotificationConfig(url="https://cb.example/hook")
+    ok = asyncio.run(handler.send_push_notification("t1", A2ATaskState.COMPLETED))
+    assert ok is True
+    assert sent["url"].startswith("https://93.184.216.34/")
+    assert sent["host"] == "cb.example" and sent["sni"] == "cb.example"
+    assert seen_kwargs["trust_env"] is False
+    assert "follow_redirects" in seen_kwargs and seen_kwargs["follow_redirects"] is False
+
+
+def test_push_delivery_refuses_a_rebound_private_address(monkeypatch):
+    import socket
+
+    import httpx
+
+    def _dns(host, port, *a, **k):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("169.254.169.254", 0))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", _dns)
+
+    def _client(**kw):
+        raise AssertionError("no client may be built for a refused address")
+
+    monkeypatch.setattr(httpx, "AsyncClient", _client)
+    handler, _ = _handler()
+    handler._push_configs["t1"] = PushNotificationConfig(url="https://cb.example/hook")
+    assert asyncio.run(handler.send_push_notification("t1", A2ATaskState.COMPLETED)) is False

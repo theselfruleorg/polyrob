@@ -68,6 +68,11 @@ regexes = [
     '''0xD8c32C1585758Bd7505F9ceA9C977a4294873ab2''',
     '''0x5FC5360d0400a0fd4F2Af552aDD042d716f1d168''',
     '''0xC37160175A9Bac1Cf480AC7a0dE75c8D97c9aE6A''',
+    # Public on-chain addresses in the token-intelligence fixtures: a Solana
+    # freeze/mint authority pair (PYUSD-shaped mint) and an EVM token contract.
+    '''2apBGMsS6ti9RyF5TwQTDswXBWskiJP2LD4cUEDqYJjk''',
+    '''8Jornc27vtAYPkwDzsZVgLQchAYyC8nD7aCNPCDV8Qk2''',
+    '''0x4ed4E862860beD51a9570b96d89aF5E1B0Efefed''',
     # documented example API key placeholder in docstrings
     '''rob_abc123\.\.\.''',
     # a Python identifier, not a credential: the shared ERC-20 ABI fragment

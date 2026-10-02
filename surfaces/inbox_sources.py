@@ -119,8 +119,16 @@ def collect_tool_approvals(user_id: str, *, data_dir: str) -> List[Item]:
     from agents.task.goals.board import GoalBoard
     board = GoalBoard(path)
     out: List[Item] = []
-    for row in list_pending_tool_approvals(board, user_id) or []:
+    from tools.defi.token_identity_ask import list_pending_items
+    rows = list(list_pending_tool_approvals(board, user_id) or [])
+    rows += list_pending_items(board, user_id) or []  # W1: which token is real
+    for row in rows:
         preview = row.get("preview") or ""
+        # CR-M01 on the web too: a money grant is approved from the SAME full
+        # card the chat push carries (every money, asset and target field), not
+        # from the 160-char preview. ``card`` is "" for a row without stored
+        # params; the template then shows the preview as before.
+        card = str(row.get("card") or "")
         out.append(Item(
             kind=str(row.get("kind") or "tool_approval"),
             id=str(row.get("id") or ""),
@@ -129,6 +137,7 @@ def collect_tool_approvals(user_id: str, *, data_dir: str) -> List[Item]:
             blocking=True,
             actions=("approve", "reject"),
             source="tool_approvals",
+            extra={"card": card} if card else {},
         ))
     return out
 
@@ -185,7 +194,7 @@ def collect_asks(user_id: str, *, data_dir: str) -> List[Item]:
     still sees it waiting.
     """
     from agents.task.goals.board import ASK_OPEN, GoalBoard
-    from tools.controller.approval_queue import TOOL_APPROVAL_ASK_KIND
+    from core.goal_vocab import has_own_surface
     path = _store(os.path.join(data_dir, "goals.db"))
     if path is None:
         return []
@@ -193,7 +202,7 @@ def collect_asks(user_id: str, *, data_dir: str) -> List[Item]:
     out: List[Item] = []
     for ask in board.asks(user_id=user_id, status=ASK_OPEN) or []:
         payload = ask.payload or {}
-        if payload.get("ask_kind") == TOOL_APPROVAL_ASK_KIND:
+        if has_own_surface(payload):  # tool approvals + W1 token identity
             continue
         blocked = payload.get("blocks_goal_ids") or []
         out.append(Item(

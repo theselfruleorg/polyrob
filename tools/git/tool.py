@@ -2,7 +2,11 @@
 
 Every command runs ``git -C <root> …`` in a worker thread with a wall-clock timeout;
 the root is realpath-confined (a clone target and every staged path must stay inside
-it). ``git_push`` is high-impact (approval-gated + leaf-blocked at the gate layer, Task 9).
+it). ``git_push`` is high-impact and leaf-blocked at the gate layer (Task 9). Its approval
+lane is ``recommended`` (``core/verb_policy_rows.py``): it asks the owner at compute posture
+>= 2, or when an operator lists it in ``APPROVAL_REQUIRED_TOOLS`` with a real provider — NOT
+by default. The action description says so, so the model and the owner are not told a gate
+exists where none does (coding-agent review B6, 2026-09-24).
 
 LANDMINE: NO ``from __future__ import annotations`` — this module holds the action
 closures whose param models the registry introspects.
@@ -237,7 +241,10 @@ class GitTool(BaseTool):
         ok, text = await self._run_git(args, execution_context)
         return self._ok(text) if ok else self._err(text)
 
-    @BaseTool.action("Push to a remote (git push) — high-impact, approval-gated", param_model=GitPushParams)
+    @BaseTool.action(
+        "Push to a remote (git push) — high-impact and public. Asks the owner only at compute posture >= 2 or when the oper"
+        "ator gates it (under full autonomy it then proceeds and notifies); otherwise it runs at once, so push only what the owner asked to publish",
+        param_model=GitPushParams)
     async def git_push(self, params: GitPushParams, execution_context=None):
         if self._unsafe_remote(params.remote):
             return self._err(f"refused: unsafe git url/remote '{params.remote}'")

@@ -89,7 +89,7 @@ async def test_hostile_name_survives_rendering_for_the_wrapper_to_frame():
             "tools.defi.providers.base", fromlist=["ScreenVerdict"]).ScreenVerdict(False))
     out = _text(await tool.token_info(TokenRefParams(chain="base", address=FAKE)))
     assert "IGNORE PREVIOUS INSTRUCTIONS" in out
-    assert "verified: false" in out.lower()
+    assert "verified: no" in out.lower()
 
 
 # ==========================================================================
@@ -220,7 +220,9 @@ async def test_whitespace_typosquat_symbols_are_visibly_distinct():
     ]
     tool = DefiDataTool(search_fn=lambda s: cands)
     out = _text(await tool.token_resolve(ResolveParams(symbol="USDC")))
-    assert "'USDC  '" in out, "trailing whitespace must be visible in the output"
+    assert '"USDC  "' in out, "trailing whitespace must be visible in the output"
+    # The padded symbol is NOT an exact match: the genuine one ranks first.
+    assert out.index(USDC) < out.index(FAKE)
     assert "must choose" in out.lower()
 
 

@@ -52,12 +52,15 @@ async def test_done_only_accepted_on_any_step(n_steps):
 # D3-a: LLM compaction must not re-fire every step once usage stays >=85%.
 # ---------------------------------------------------------------------------
 
-def _compaction_agent(usage_pct: float) -> Agent:
+def _compaction_agent(usage_pct: float, last_savings=None) -> Agent:
     a = _build_agent(done=False, validate=True)
     mm = a.message_manager
     mm.get_context_usage_percent.return_value = usage_pct
     mm.llm_compact_history = AsyncMock()
     mm.emergency_context_prune = MagicMock()
+    # F11 progress rule: what the LAST compaction actually cut. None = no
+    # evidence of progress, which is what a stub manager reads as.
+    mm.last_compaction_savings = MagicMock(return_value=last_savings)
     return a
 
 
@@ -84,6 +87,65 @@ async def test_llm_compaction_has_step_cooldown():
     a.state.n_steps = 11 + COMPACTION_COOLDOWN_STEPS
     await a._prepare_step()
     assert mm.llm_compact_history.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_a_productive_compaction_may_re_fire_inside_the_cooldown():
+    """F11 progress rule: the cooldown is a floor, not a wall. A compaction that
+    actually cut >= COMPACTION_PROGRESS_FLOOR of the context has earned a second
+    run — waiting eight steps while usage sits at 90% is the other failure."""
+    from agents.task.constants import COMPACTION_PROGRESS_FLOOR
+
+    a = _compaction_agent(usage_pct=90.0, last_savings=COMPACTION_PROGRESS_FLOOR + 0.2)
+    mm = a.message_manager
+
+    a.state.n_steps = 11
+    await a._prepare_step()
+    assert mm.llm_compact_history.await_count == 1
+
+    a.state.n_steps = 12            # well inside the cooldown
+    await a._prepare_step()
+    assert mm.llm_compact_history.await_count == 2, (
+        "a compaction that cut 25% was refused a second run inside the cooldown")
+
+
+@pytest.mark.asyncio
+async def test_an_unproductive_compaction_waits_the_cooldown_out():
+    """Below the floor the rebuild is not worth another cold prefix."""
+    from agents.task.constants import COMPACTION_COOLDOWN_STEPS, COMPACTION_PROGRESS_FLOOR
+
+    a = _compaction_agent(usage_pct=90.0, last_savings=COMPACTION_PROGRESS_FLOOR / 2)
+    mm = a.message_manager
+
+    a.state.n_steps = 11
+    await a._prepare_step()
+    assert mm.llm_compact_history.await_count == 1
+
+    a.state.n_steps = 12
+    await a._prepare_step()
+    assert mm.llm_compact_history.await_count == 1
+
+    a.state.n_steps = 11 + COMPACTION_COOLDOWN_STEPS
+    await a._prepare_step()
+    assert mm.llm_compact_history.await_count == 2
+
+
+def test_the_ladder_lives_in_one_place():
+    """F11: 70/85/95 were literals in step.py, next to a second (dead) policy.
+    A grep here is the ratchet — a new literal in the ladder fails it."""
+    import re
+    from pathlib import Path
+
+    from agents.task.constants import (
+        COMPACTION_EMERGENCY_PCT, COMPACTION_LLM_PCT, COMPACTION_WARN_PCT,
+    )
+
+    assert (COMPACTION_WARN_PCT, COMPACTION_LLM_PCT, COMPACTION_EMERGENCY_PCT) == (70, 85, 95)
+    source = Path(__file__).resolve().parents[5] / "agents/task/agent/core/step.py"
+    body = source.read_text()
+    assert not re.search(r"usage_pct >= \d", body), (
+        "the compaction ladder compares against a literal again — read the "
+        "threshold from agents/task/constants.py")
 
 
 @pytest.mark.asyncio

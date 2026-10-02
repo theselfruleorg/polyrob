@@ -147,8 +147,12 @@ def test_deploy_happy_path(rig):
     assert "proxy_pass http://127.0.0.1:18000/;" in stanza
     assert rig.state["probes"][0] == "http://127.0.0.1:18000/api/status.json"
     kinds = [k for k, _ in rig.events.rows]
-    assert kinds == ["app_live"]
+    assert kinds == ["app_live", "external_write"]
     assert rig.events.rows[0][1]["attrs"]["url"] == "https://rob-status.apps.example.test"
+    # 033: going live is the outward act, recorded through the injected log
+    ew = rig.events.rows[1][1]
+    assert ew["effect"] == "public" and ew["user_id"] == "owner-1"
+    assert ew["attrs"]["action"] == "app_serve_live" and ew["attrs"]["target"] == "open"
     # 021: the app dir carries the URL in the artifact ledger
     from core.artifacts import get_artifact_ledger
     art = get_artifact_ledger()._row_by_path("owner-1", os.path.realpath(str(rig.proj / "server.py")))

@@ -63,10 +63,14 @@ CREDENTIAL_GATED_TOOLS = {
                       "GMAIL_* / EMAIL_* credentials, or switch EMAIL_PROVIDER to "
                       "agentmail. Do not retry this rail until then — say so and "
                       "use another channel."),
-    "twitter": ("twitter_api", "the X API refused this account (402 — credits). "
-                               "The owner must top up, or the browser rail "
-                               "(x_browser) carries the post instead."),
 }
+
+
+def register_credential_gate(tool_id: str, kind: str, remedy: str) -> None:
+    """A pack tool's row in :data:`CREDENTIAL_GATED_TOOLS` (067 P3b: the X pack
+    registers ``twitter`` -> ``twitter_api`` from its registrar). ``kind`` is a
+    ``core.credential_verdicts`` verdict kind. Last registration wins."""
+    CREDENTIAL_GATED_TOOLS[tool_id] = (kind, remedy)
 
 
 def _credential_verdict_status(display_id: str) -> Optional["ToolStatus"]:
@@ -180,7 +184,8 @@ def resolve_tool_status(
             "not missing, it is simply not YOURS. It is reachable from their "
             "seat as a chat verb they type themselves — `/trade <what to do>` "
             "for a run that carries the money verb, `/bridge <from> <to> "
-            "<amount>` to move native value between chains, `/wallet` for "
+            "<amount>` to move native value between chains, `/pay <url> "
+            "<max_usd> go` to pay one x402 resource, `/wallet` for "
             "balances and caps. Say THAT. Do not answer an owner's 'do X' with "
             "a list of grants you would need: naming a capability you cannot "
             "reach as though the system lacked it is a capability DENIAL, and "
@@ -240,11 +245,20 @@ def render_tool_catalog(
         TOOL_DESCRIPTORS, get_tool_init_order, get_tool_display_name)
 
     loaded = set(loaded_ids or ())
+    # F9 (063 WS-4): in BRIDGE mode a tool loaded mid-session never joins the
+    # emitted tools[] — it is called by name through the bridge, so the header
+    # must not promise a verb that will never be shown. In `grow` and `deferred`
+    # mode the actions DO appear (deferred surfaces them with a tool_addition),
+    # so both keep the pre-F9 wording.
+    _reach = ('call its actions through tool_call(name=..., arguments={...}) — '
+              'tool_describe("<id>") gives the names and parameters'
+              if _bridge_mode()
+              else "actions appear on the next step")
     lines = [
         "<tool-catalog>",
         "Every tool this deployment knows about, with its HONEST status for this "
-        "session. A [loadable] tool is one load_tool(\"<id>\") call away — its "
-        "actions appear on the next step. A [gated:...] tool names the reason and "
+        "session. A [loadable] tool is one load_tool(\"<id>\") call away — then "
+        f"{_reach}. A [gated:...] tool names the reason and "
         "the remedy channel; ask/act on it instead of working around a missing "
         "tool in silence. Use tool_search(\"<keyword>\") to find a tool by name "
         "(including the tools behind connected MCP servers, which are NOT listed "
@@ -308,8 +322,44 @@ async def perform_load_tool(controller, tool_id: str, execution_context=None):
 
     n_actions = len(getattr(loaded[display], "actions", None) or ()) or None
     detail = f" ({n_actions} actions)" if n_actions else ""
+    # F9 (063 WS-4): in BRIDGE mode the emitted schema list is pinned, so a newly
+    # registered action never joins `tools[]` — saying "available from the next
+    # step" would send the model looking for a verb it will never be shown. It is
+    # reachable, by name, through the bridge. `grow` and `deferred` both do show
+    # it (deferred via a tool_addition message), so they keep the old sentence.
+    if _bridge_armed(controller):
+        how = (f" — call it through tool_call(name=\"<action>\", arguments={{...}}); "
+               f"run tool_describe(\"{display}\") first for the action names and "
+               f"their parameters.")
+    else:
+        how = " — its actions are available from the next step."
     return ActionResult(
-        extracted_content=(
-            f"Tool '{display}' loaded{detail} — its actions are available from the "
-            f"next step."),
+        extracted_content=f"Tool '{display}' loaded{detail}{how}",
         include_in_memory=True)
+
+
+def _bridge_mode() -> bool:
+    """Is the deployment in F9 BRIDGE mode (shape (a))? Fail-open to False.
+
+    Not "is a freeze recorded" — `deferred` mode records one too, and its late
+    actions ARE emitted, so the bridge wording would be a lie there.
+    """
+    try:
+        from modules.llm.deferred_tools import late_tool_mode, LATE_TOOL_MODE_BRIDGE
+        return late_tool_mode("") == LATE_TOOL_MODE_BRIDGE
+    except Exception:
+        return False
+
+
+def _bridge_armed(controller) -> bool:
+    """Is BRIDGE mode on AND this session's emitted ``tools[]`` already pinned?"""
+    if not _bridge_mode():
+        return False
+    try:
+        return bool(controller.registry.schemas_frozen())
+    except Exception:
+        return False
+
+
+#: Back-compat name for the pre-2026-09-23 helper (tests monkeypatch by name).
+_schemas_frozen = _bridge_armed

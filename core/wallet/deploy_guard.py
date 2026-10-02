@@ -262,7 +262,53 @@ def _assert_create2(intent, deltas, salt):
         predicted_address=landed,
         runtime_size=0,
         runtime_hash="0x" + keccak(code).hex(),
-        template_matched=bool(intent.expected_runtime)), None
+        # CR-H07: nothing on this path compares runtime against a template (the
+        # return data is an address), and a template is refused on it anyway.
+        template_matched=False), None
+
+
+_ZERO_WORD = "0x" + "00" * 32
+_TOPIC_TRANSFER = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+
+
+def _topic_word(addr: str) -> str:
+    return "0x" + addr[2:].lower().rjust(64, "0")
+
+
+def _factory_named_in_logs(deltas) -> Optional[str]:
+    """The first log that names the CREATE2 factory as an indexed address.
+
+    On the CREATE2 path the constructor's ``msg.sender`` is the FACTORY, not
+    the wallet, so ``Ownable``/``AccessControl`` admin and an initial mint land
+    on a contract nobody controls. Any indexed factory address in the
+    constructor's events is that (CR-H07).
+    """
+    word = _topic_word(CREATE2_FACTORY)
+    for log in (getattr(deltas, "logs", None) or ()):
+        try:
+            topics = [str(t).lower() for t in (log.get("topics") or ())]
+        except Exception:
+            continue
+        if word in topics[1:]:
+            return str(log.get("address") or "?")
+    return None
+
+
+def _minted_to_holder(deltas, token: str, holder: str) -> int:
+    """Sum of ``Transfer(0x0 -> holder)`` the simulated tx emitted from *token*."""
+    total = 0
+    want_to = _topic_word(holder)
+    for log in (getattr(deltas, "logs", None) or ()):
+        try:
+            topics = [str(t).lower() for t in (log.get("topics") or ())]
+            if (len(topics) == 3 and topics[0] == _TOPIC_TRANSFER
+                    and str(log.get("address") or "").lower() == token.lower()
+                    and topics[1] == _ZERO_WORD and topics[2] == want_to):
+                data = str(log.get("data") or "0x")
+                total += int(data, 16) if data not in ("", "0x") else 0
+        except Exception:
+            continue
+    return total
 
 
 def assert_deploy(intent, deltas, *, holder: str, nonce: Optional[int]):
@@ -281,9 +327,26 @@ def assert_deploy(intent, deltas, *, holder: str, nonce: Optional[int]):
 
     salt = getattr(intent, "create2_salt", None)
     if salt:
+        if intent.expected_runtime or getattr(intent, "expected_holder_mint_raw", None):
+            # CR-H07: the pinned template mints its whole supply to msg.sender,
+            # and through the factory msg.sender is the FACTORY — the supply
+            # would be stranded there forever.
+            return None, ("refused: the pinned token template cannot be deployed "
+                          "through the CREATE2 factory — its constructor mints "
+                          "the whole supply to msg.sender, which on that path is "
+                          "the factory, not the wallet. Deploy without a salt "
+                          "or vanity prefix")
         facts, why = _assert_create2(intent, deltas, salt)
         if why:
             return None, why
+        named = _factory_named_in_logs(deltas)
+        if named:
+            return None, (
+                f"refused: the constructor emits an event on {named} that names "
+                f"the CREATE2 factory {CREATE2_FACTORY} — on this path "
+                f"msg.sender is the factory, so an owner/admin role or a mint "
+                f"assigned to the deployer would belong to a contract nobody "
+                f"controls")
     else:
         facts = None
 
@@ -351,6 +414,15 @@ def assert_deploy(intent, deltas, *, holder: str, nonce: Optional[int]):
         address = predict_create_address(holder, int(nonce))
     except Exception as exc:
         return None, f"refused: could not predict the deployment address ({exc})"
+
+    expected_mint = getattr(intent, "expected_holder_mint_raw", None)
+    if expected_mint is not None:
+        minted = _minted_to_holder(deltas, address, holder)
+        if minted != int(expected_mint):
+            return None, (
+                f"refused: the token at {address} mints {minted} raw to the "
+                f"wallet, not the declared supply {int(expected_mint)} — the "
+                f"supply would not be held by the wallet")
 
     from eth_utils import keccak
     return DeployFacts(predicted_address=address,

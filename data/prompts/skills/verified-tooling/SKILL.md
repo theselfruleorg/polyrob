@@ -5,8 +5,8 @@ license: MIT
 metadata:
   polyrob-priority: '3'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":["coding_create_file","coding_run_tests","code_execution_run_code"],"keywords":["build a tool","small tool","script","analysis tool","parser","ledger summary","pnl curve","watchlist diff","report tool","re-run","smoke test","verify the tool"],"task_patterns":["(build|write|make).*(tool|script).*(report|summar|analy|parse)","(re-?run|repeat).*(analysis|report)"],"tool_ids":["coding","code_execution"]}'
-  polyrob-version: '1'
+  polyrob-triggers: '{"action_names":["coding_create_file","coding_run_tests","code_execution_run_code"],"keywords":["build a tool","small tool","analysis script","analysis tool","parser","ledger summary","pnl curve","watchlist diff","report tool","re-run the analysis","verify the tool"],"task_patterns":["(build|write|make).*(tool|script).*(report|summar|analy|parse)","(re-?run|repeat).*(analysis|report)"],"tool_ids":["coding","code_execution"]}'
+  polyrob-version: '2'
 ---
 # Verified Tooling — small tools you can trust twice
 

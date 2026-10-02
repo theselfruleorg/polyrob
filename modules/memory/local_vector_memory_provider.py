@@ -31,6 +31,7 @@ import os
 import threading
 from typing import List, Optional
 
+from modules.memory import scope as _scope
 from modules.memory.sqlite_memory_provider import SqliteMemoryProvider
 
 logger = logging.getLogger(__name__)
@@ -180,6 +181,10 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
                     "rowid INTEGER PRIMARY KEY AUTOINCREMENT, "
                     "user_id TEXT, session_id TEXT, content TEXT)"
                 )
+                # 025: the scope twin of mem_provenance.scope (additive; '' = shared).
+                if "scope" not in {r[1] for r in cur.execute(
+                        "PRAGMA table_info(mem_meta)").fetchall()}:
+                    cur.execute("ALTER TABLE mem_meta ADD COLUMN scope TEXT NOT NULL DEFAULT ''")
                 with con:
                     cur.execute(
                         "INSERT INTO mem_vec_config (k, v) VALUES ('dim', ?) "
@@ -246,10 +251,11 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
 
     # ---- write --------------------------------------------------------------
     async def sync_turn(self, user_content: str, assistant_content: str, *,
-                        session_id: str, user_id=None) -> None:
+                        session_id: str, user_id=None, scope=None) -> None:
         # Keyword half (inherited) writes the FTS5 row + applies anon-block.
         inserted = await super().sync_turn(user_content, assistant_content,
-                                           session_id=session_id, user_id=user_id)
+                                           session_id=session_id, user_id=user_id,
+                                           scope=scope)
         if inserted is False:
             # B2 dup collapse: the keyword half refreshed an existing row's ts and
             # skipped the insert — embedding it again would grow the vector sidecar
@@ -265,12 +271,13 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
         try:
             emb = await self._embed(content)
             await asyncio.get_event_loop().run_in_executor(
-                None, self._vec_write, self._norm_user(user_id), session_id, content, emb)
+                None, self._vec_write, self._norm_user(user_id), session_id, content, emb,
+                _scope.write_label(scope))
         except Exception as e:  # fail-open: keyword row already persisted
             logger.debug("local-vector: vector write skipped: %s", e)
 
     def _vec_write(self, norm_user: str, session_id: str, content: str,
-                   emb: List[float]) -> None:
+                   emb: List[float], label: str = "") -> None:
         if not self._ensure_vec_schema():  # P2-6: lazy probe + table creation
             return
         import sqlite_vec
@@ -278,9 +285,13 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
         try:
             with con:
                 cur = con.cursor()
-                cur.execute(
-                    "INSERT INTO mem_meta (user_id, session_id, content) VALUES (?,?,?)",
-                    (norm_user, session_id, content))
+                if label:  # 025: only a scoped write names the column (OFF = legacy SQL)
+                    cur.execute("INSERT INTO mem_meta (user_id, session_id, content, scope) "
+                                "VALUES (?,?,?,?)", (norm_user, session_id, content, label))
+                else:
+                    cur.execute(
+                        "INSERT INTO mem_meta (user_id, session_id, content) VALUES (?,?,?)",
+                        (norm_user, session_id, content))
                 rowid = con.last_insert_rowid()
                 cur.execute(
                     "INSERT INTO mem_vec (rowid, user_id, embedding) VALUES (?,?,?)",
@@ -290,7 +301,7 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
 
     # ---- read ---------------------------------------------------------------
     def _vector_contents(self, query: str, norm_user: str, limit: int,
-                         exclude_session_id: str = None) -> List[str]:
+                         exclude_session_id: str = None, scope=None) -> List[str]:
         """Tenant-scoped semantic KNN -> ranked list of content strings (best first).
 
         P2-1: `exclude_session_id` (set by the automatic prefetch) drops rows from the
@@ -303,9 +314,11 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
         emb = self._embed_sync(query)
         con = vec_connect(self.db_path)
         try:
-            _k = limit * 2 if exclude_session_id else limit
-            _excl_sql = " AND m.session_id != ?" if exclude_session_id else ""
-            _excl_arg = (exclude_session_id,) if exclude_session_id else ()
+            # 025: a scope predicate post-filters the KNN too — over-fetch 2x.
+            _sc_sql, _sc_arg = _scope.vector_predicate(scope)
+            _k = limit * 2 if (exclude_session_id or _sc_sql) else limit
+            _excl_sql = (" AND m.session_id != ?" if exclude_session_id else "") + _sc_sql
+            _excl_arg = ((exclude_session_id,) if exclude_session_id else ()) + _sc_arg
             rows = con.cursor().execute(
                 "SELECT m.content, v.distance FROM mem_vec v "
                 "JOIN mem_meta m ON m.rowid = v.rowid "
@@ -333,7 +346,7 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
 
     async def search(self, query: str, *, user_id=None, session_id: str = None,
                      limit: int = 5, sort: str = None, before_id: int = None,
-                     with_ids: bool = False) -> str:
+                     with_ids: bool = False, scope=None) -> str:
         if self._anon_blocked(user_id):
             return ""
         limit = self._clamp_limit(limit, self.top_k)
@@ -342,7 +355,7 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
         # (execute_retry can time.sleep-retry under WAL contention) — offload it.
         kw_rows = await self._run_blocking(
             self._keyword_rows, query, norm_user=norm, limit=limit, sort=sort,
-            before_id=before_id)
+            before_id=before_id, scope=scope)
         kw_list = [r["content"] for r in kw_rows]
         # B2: date-prefix lines whose write-time stamp is known. Vector-only hits
         # aren't in the keyword row set — they render bare (fail-open).
@@ -363,14 +376,16 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
         if before_id is not None or not self._vec_ok or not terms or sort:
             return "\n".join(_line(c) for c in kw_list)
         try:
-            vec = await self._run_blocking(self._vector_contents, query, norm, limit)
+            vec = await self._run_blocking(self._vector_contents, query, norm, limit,
+                                           None, scope)
         except Exception as e:  # fail-open to keyword-only
             logger.debug("local-vector: vector search skipped: %s", e)
             return "\n".join(_line(c) for c in kw_list)
         merged = self._rrf_merge([kw_list, vec], limit)
         return "\n".join(_line(c) for c in merged)
 
-    async def prefetch(self, query: str, *, session_id: str, user_id=None) -> str:
+    async def prefetch(self, query: str, *, session_id: str, user_id=None,
+                       scope=None) -> str:
         # Keyword half computed DIRECTLY (not via super().prefetch — that calls
         # self.search(), which polymorphically dispatches to THIS class's hybrid
         # override and would run the vector KNN + embed twice per prefetch). Same
@@ -385,7 +400,7 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
         kw_rows = (
             await self._run_blocking(
                 self._keyword_rows, query, norm_user=norm, limit=self.top_k,
-                allow_browse=False, exclude_session_id=session_id)
+                allow_browse=False, exclude_session_id=session_id, scope=scope)
             if terms else []
         )
         kw_list = [r["content"] for r in kw_rows]
@@ -397,7 +412,7 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
         # finds no >=3-char terms — this is where semantic beats keyword.
         try:
             vec = await self._run_blocking(
-                self._vector_contents, query, norm, self.top_k, session_id)
+                self._vector_contents, query, norm, self.top_k, session_id, scope)
         except Exception as e:  # fail-open to keyword-only
             logger.debug("local-vector: prefetch vector skipped: %s", e)
             return kw
@@ -431,6 +446,28 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
             except Exception as e:
                 logger.debug("local-vector: vector prune skipped: %s", e)
         return removed
+
+    def _scope_purged_hook(self, norm_user, contents, *, label=None) -> None:
+        """025: a purged scope (or a threat-scan purge at promotion) drops its
+        vector twins too — only the twins UNDER that scope, never a shared row
+        with the same text. Fail-open: the keyword half is already gone."""
+        if not contents or not label or not self._vec_ok or not self._ensure_vec_schema():
+            return
+        try:
+            con = vec_connect(self.db_path)
+            try:
+                with con:
+                    cur = con.cursor()
+                    for content in contents:
+                        for row in cur.execute(
+                                "SELECT rowid FROM mem_meta WHERE user_id = ? AND scope = ? "
+                                "AND content = ?", (norm_user, label, content)).fetchall():
+                            cur.execute("DELETE FROM mem_vec WHERE rowid = ?", (row[0],))
+                            cur.execute("DELETE FROM mem_meta WHERE rowid = ?", (row[0],))
+            finally:
+                con.close()
+        except Exception as e:
+            logger.debug("local-vector: scope purge twin skipped: %s", e)
 
     def _vec_prune(self, doomed) -> None:
         if not self._ensure_vec_schema():

@@ -40,7 +40,9 @@ logger = logging.getLogger(__name__)
 _HOST_RE = re.compile(r"^[a-z0-9]+(?:[.-][a-z0-9]+)*$")
 _MAX_LOG_LINES = 400
 
-APPROVE_HINT = "polyrob apps approve {slug}  ·  /apps approve {slug}  ·  console → Apps"
+# The agent relays this to the owner on a chat seat: name only what he can do
+# there (the slash verb, the console), never the shell verb.
+APPROVE_HINT = "/apps approve {slug}  ·  console → Apps"
 
 
 class DeployParams(BaseModel):
@@ -140,9 +142,11 @@ class AppServiceTool(BaseTool):
         "Run a built app as a durable service behind a public URL. Give the app's "
         "workspace directory, the argv to start it, and the port it listens on. A NEW "
         "slug is recorded as PENDING until the owner approves it (the result tells you "
-        "how); an already-approved slug redeploys unattended within caps. Requires a "
-        "green run_tests with no edits since (ship == tested). The supervisor deploys "
-        "it; app_list shows the URL and health.",
+        "how); an already-approved slug redeploys unattended within caps. "
+        "Requires a successful coding_run_tests in this session with no coding edit since "
+        "(ship == tested: it proves a green test run happened, not what the tests covered; "
+        "writes by other tools are not tracked). "
+        "The supervisor deploys it; app_list shows the URL and health.",
         param_model=DeployParams,
     )
     async def deploy(self, params: DeployParams, execution_context=None) -> ActionResult:

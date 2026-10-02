@@ -73,3 +73,22 @@ def fingerprint(value, keep: int = 4) -> str:
     if len(text) <= keep * 3:
         return "*" * 8
     return f"{text[:keep]}…{text[-keep:]}"
+
+
+def args_shape(raw_args) -> str:
+    """A log-safe description of tool-call arguments: type, size and the
+    top-level KEYS of a JSON object — never a value (arguments carry message
+    bodies, keys, seeds). Used by the LLM clients' ``[RAW_TOOL_CALL]`` line."""
+    import json
+    kind = type(raw_args).__name__
+    obj = raw_args
+    if isinstance(raw_args, str):
+        try:
+            obj = json.loads(raw_args)
+        except (ValueError, TypeError):
+            return f"arguments type={kind} len={len(raw_args)} (unparsed)"
+    if isinstance(obj, dict):
+        keys = sorted(str(k)[:40] for k in obj)[:20]
+        size = len(raw_args) if isinstance(raw_args, str) else len(obj)
+        return f"arguments type={kind} size={size} keys={keys}"
+    return f"arguments type={kind} value_type={type(obj).__name__}"

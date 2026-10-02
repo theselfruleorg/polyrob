@@ -244,3 +244,16 @@ def test_render_settled_warns_only_on_false():
         tx_notify.TxNotice(**base, ledger_recorded=False))
     assert "NOT recorded" not in tx_notify.render_settled(
         tx_notify.TxNotice(**base, ledger_recorded=True))
+
+
+@pytest.mark.asyncio
+async def test_a_landed_token_deploy_records_own_launch_provenance(_armed):
+    """W0: a token this instance deployed is verified by provenance — the owner
+    never has to pin it. The row names the LANDED address."""
+    from core.wallet import token_provenance as tp
+    tp._reset_for_tests()
+    tool, gate = _deploy_tool([])
+    await _run_deploy(tool)
+    landed = gate.recorded[0]["counterparty"]
+    row = tp.own_token("base", landed)
+    assert row and row["kind"] == "deploy_token"

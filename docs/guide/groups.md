@@ -204,7 +204,7 @@ list can only grow by adding a guard, never by flipping a flag.
   `kb_remove`, or any other `kb_*` verb. The `knowledge` tool is not a room tool
   and its verbs stay denied even if `GROUP_TURN_TOOLS` names it.
 - **Deferred execution** — no `goal_create`, `goal_cancel`, `cronjob_schedule`,
-  `cronjob_cancel`, `skill_manage`, `self_context_manage`, `preferences`,
+  `cronjob_edit`, `cronjob_cancel`, `skill_manage`, `self_context_manage`, `preferences`,
   `owner_doc_manage`, `load_tool`, `tool_manage_install`, `mcp_install`,
   `self_modify`. A room turn cannot plant something a later owner-tenant run
   would execute, and it cannot widen its own rig.
@@ -243,12 +243,15 @@ so a member who talked the owner into typing one got it, and a room is the one p
 shoulder-surfer or a screen-share is guaranteed. These are refused with a one-line note
 in his DM:
 
-`/trade` `/wallet` `/deploy` `/launch` `/bridge` `/dev` `/pause` `/halt` `/resume`
-`/approve` `/reject` `/allow` `/deny` `/config` `/prefs` `/mcp` `/apps` `/invoices`
-`/settle` — do these in the private chat.
+`/trade` `/wallet` `/send` `/swap` `/cards` `/deploy` `/launch` `/lp` `/bridge` `/claim` `/pay`
+`/nft` `/dapp` `/identity` `/writeoff` `/unquarantine` `/dev` `/pause` `/halt`
+`/resume` `/approve` `/reject` `/allow` `/deny` `/config` `/prefs` `/mcp` `/apps`
+`/invoices` `/settle` `/cron` `/goal` `/fulfill` `/rail` `/contacts` `/thread`
+`/why` — do these in the private chat. A verb that a pack contributes is refused
+too, unless the pack declares it safe for a room.
 
 Still reachable from a room, answered in the owner's DM: `/status` `/help` `/groups`
-`/mute` `/cancel` `/new` `/goals` `/recap` `/journey` `/missed`.
+`/mute` `/paid` `/book` `/cancel` `/new` `/goals` `/recap` `/journey` `/missed`.
 
 ---
 
@@ -259,6 +262,10 @@ A room's session ages out exactly like a DM's, on the same
 line after the boundary starts a fresh session instead of resuming yesterday's. The
 room's ledger is unaffected (it is the durable record); only the agent's own
 conversation state resets. `/new` from the owner or a room admin does it on demand.
+
+A room never reads or writes the owner thread (the owner's private conversation
+across DM, console and terminal — [conversation.md](conversation.md)): the room's
+memory is its ledger, and a line the owner types in a room stays in the room.
 
 ---
 

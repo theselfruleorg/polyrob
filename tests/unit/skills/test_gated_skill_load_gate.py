@@ -144,3 +144,45 @@ def test_p2_19_word_boundary_still_holds_for_plain_keywords(tmp_path):
     sm = _make_manager(tmp_path, rules, bodies)
     assert not any(x.skill_id == "trade" for x in sm.get_skills_for_session(task="counselling please", tool_ids=[]))
     assert any(x.skill_id == "trade" for x in sm.get_skills_for_session(task="should I sell", tool_ids=[]))
+
+
+# ---- 067 P0.1: auto_activate money playbooks, catalog == load == trigger --------
+
+_MONEY_RULES = {
+    "web-research": {"priority": 5, "auto_activate": True, "triggers": {"keywords": ["research"]}},
+    "treasury-trading": {
+        "priority": 5, "auto_activate": True,
+        "triggers": {"tool_ids": ["defi_trade", "defi_data", "launchpad", "dapp_browser"],
+                     "keywords": ["buy"]},
+    },
+}
+_MONEY_BODIES = {
+    "web-research": "# Web research\nDo research.",
+    "treasury-trading": "# Treasury\nExecution doctrine.",
+}
+
+
+def test_money_playbook_not_in_session_catalog_without_money_tools(tmp_path):
+    sm = _make_manager(tmp_path, _MONEY_RULES, _MONEY_BODIES)
+    ids = {m.skill_id for m in sm.get_catalog_skills(tool_ids=["browser"])}
+    assert "treasury-trading" not in ids
+    assert "web-research" in ids
+    assert sm.may_load_skill("treasury-trading", tool_ids=["browser"]) is False
+    trig = {m.skill_id for m in sm.get_skills_for_session(tool_ids=["browser"], task="buy a token")}
+    assert "treasury-trading" not in trig
+
+
+def test_money_playbook_listed_and_loadable_with_a_declared_tool(tmp_path):
+    sm = _make_manager(tmp_path, _MONEY_RULES, _MONEY_BODIES)
+    # ANY declared tool satisfies the gate (a read-only defi_data session keeps the screens)
+    for tools in (["defi_trade"], ["defi_data"]):
+        ids = {m.skill_id for m in sm.get_catalog_skills(tool_ids=tools)}
+        assert "treasury-trading" in ids
+        assert sm.may_load_skill("treasury-trading", tool_ids=tools) is True
+
+
+def test_money_playbook_listed_in_non_session_listing(tmp_path):
+    # tool_ids=None is a listing view (console, export, /skills), not a session
+    sm = _make_manager(tmp_path, _MONEY_RULES, _MONEY_BODIES)
+    ids = {m.skill_id for m in sm.get_catalog_skills()}
+    assert "treasury-trading" in ids

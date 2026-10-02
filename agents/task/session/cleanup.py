@@ -31,16 +31,145 @@ _CLEANUP_STATUS_TO_OUTCOME = {
     "cancelled": "cancelled",
 }
 
+#: The one key above that is NOT the caller's account of the turn. Eviction passes
+#: it for every session it pages out — the one that ended mid-thought and the one
+#: whose agent had already called ``done()`` — so on its own it cannot tell them
+#: apart. ``_resolve_chat_outcome`` asks the closing turn instead.
+_EVICTION_STATUS = "suspended"
+
 _SUMMARY_MAX_CHARS = 500
+
+#: Lines of ``ContextRetriever._format_session_summary()`` that carry no account of
+#: what happened: the banner, the session id (the episode row's own column) and the
+#: memory machinery's current phase. ``Task:`` and ``Progress:`` are kept — they are
+#: the two lines that say anything about the conversation. Truncating the raw block
+#: to 500 chars was almost entirely header — intel, 2026-09-16: episode 1230 recorded
+#: a fully successful chat as boilerplate, so every consumer (digest, doctor, the
+#: oversight loop) under-read that turn.
+_HMEM_BOILERPLATE_PREFIXES = (
+    "[HIERARCHICAL MEMORY",
+    "Session:",
+    "Current Phase:",
+)
+
+
+def _strip_hmem_boilerplate(text: Optional[str]) -> Optional[str]:
+    """Drop the H-MEM banner/field lines, keeping whatever describes the session.
+
+    Pure. Returns None when nothing substantive survives — an empty summary is an
+    honest "no account of this session", which a consumer can render as such; a
+    banner is a confident-looking non-answer.
+    """
+    if not text:
+        return None
+    kept = []
+    for line in str(text).splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith(_HMEM_BOILERPLATE_PREFIXES):
+            continue
+        kept.append(stripped)
+    if not kept:
+        return None
+    # "Progress: …" is the one field of the block that reports what happened; keep
+    # its content without the label so the summary reads as prose.
+    if len(kept) == 1 and kept[0].startswith("Progress:"):
+        body = kept[0][len("Progress:"):].strip()
+        return body[:_SUMMARY_MAX_CHARS] or None
+    return "\n".join(kept)[:_SUMMARY_MAX_CHARS] or None
+
+
+def _primary_agent(orchestrator):
+    """The session's own agent — the first non-sub-agent, or None.
+
+    A delegated sub-agent's history is its errand, not the conversation, so both
+    the summary and the outcome read this one. Best-effort: an orchestrator
+    without an ``agents`` mapping yields None rather than raising in teardown.
+    """
+    try:
+        for candidate in (getattr(orchestrator, "agents", None) or {}).values():
+            if not getattr(candidate, "_is_sub_agent", False):
+                return candidate
+    except Exception:
+        return None
+    return None
+
+
+def _closing_turn_called_done(agent) -> bool:
+    """Whether the closing turn ended in a ``done()`` result.
+
+    ``AgentHistoryList.is_done()`` is the last step's ``is_done`` flag — the same
+    history the cron/goal episode paths already trust. Fail-CLOSED: a missing
+    history, a non-callable attribute or a raising accessor all read as "no
+    evidence it finished", which is the honest reading and the one that leaves the
+    recorded outcome unchanged.
+    """
+    try:
+        history = getattr(getattr(agent, "state", None), "history", None)
+        is_done = getattr(history, "is_done", None)
+        return bool(is_done()) if callable(is_done) else False
+    except Exception:
+        return False
+
+
+def _resolve_chat_outcome(status, orchestrator) -> Optional[str]:
+    """The episode outcome for a closing chat session.
+
+    ``status`` is the caller's word and is taken at face value for every value
+    except ``_EVICTION_STATUS``, which says only that the session was paged out.
+    For that one, a closing turn that called ``done()`` UPGRADES ``partial`` to
+    ``done``; anything else leaves it alone.
+
+    Deliberately one-directional. ``has_errors()`` is not consulted, because
+    ``errors()`` spans the whole history and a run that recovered from a tool error
+    and then finished properly is done — downgrading it would swap one wrong label
+    for another. An unrecognised status still returns None (write no episode rather
+    than guess), exactly as before.
+    """
+    outcome = _CLEANUP_STATUS_TO_OUTCOME.get((status or "").lower())
+    if outcome is None or (status or "").lower() != _EVICTION_STATUS:
+        return outcome
+    if _closing_turn_called_done(_primary_agent(orchestrator)):
+        return "done"
+    return outcome
+
+
+def _final_assistant_text(agent) -> Optional[str]:
+    """The closing turn's own words — the ``done()`` payload or last result.
+
+    ``AgentHistoryList.final_result()`` is the last step's ``extracted_content``,
+    which is exactly what the cron/goal episode paths already record. Best-effort:
+    a missing history, a non-callable attribute or a raising accessor all degrade
+    to None rather than raising inside teardown.
+    """
+    try:
+        history = getattr(getattr(agent, "state", None), "history", None)
+        final = getattr(history, "final_result", None)
+        if not callable(final):
+            return None
+        text = (final() or "").strip()
+        return text[:_SUMMARY_MAX_CHARS] or None
+    except Exception:
+        return None
 
 
 def _derive_closing_chat_summary(orchestrator) -> Optional[str]:
-    """Best-effort short H-MEM summary of the CLOSING chat session (Task 6 Part A).
+    """Best-effort short summary of the CLOSING chat session (Task 6 Part A).
 
-    Sourced from the (non-sub-agent) session's ``ContextRetriever._format_session_summary()``
-    — the same Layer-1 "[HIERARCHICAL MEMORY - SESSION CONTEXT]" text the retriever
-    already builds for in-session context injection, reached via
-    ``agent.task_context_manager.get_session(session_id).context_retriever``.
+    Preference order, matching what the cron/goal episode paths record:
+
+    1. The final assistant turn (``agent.state.history.final_result()`` — the
+       ``done()`` payload or the last result), i.e. the session's own account of
+       itself.
+    2. Failing that, the (non-sub-agent) session's
+       ``ContextRetriever._format_session_summary()`` with its banner and
+       already-stored fields stripped (``_strip_hmem_boilerplate``), reached via
+       ``agent.task_context_manager.get_session(session_id).context_retriever``.
+
+    Before 2026-09-22 only (2) existed and it was recorded RAW, so a successful
+    chat's summary was the "[HIERARCHICAL MEMORY - SESSION CONTEXT]" header plus a
+    couple of fields the row already carries.
 
     Gated by ``AutonomyConfig.continuity_bridge_enabled()`` at the call site (this
     function is only invoked when the flag is on) so behaviour when the bridge is
@@ -50,13 +179,13 @@ def _derive_closing_chat_summary(orchestrator) -> Optional[str]:
     swallowed and returns None — a summary failure must never break cleanup.
     """
     try:
-        agent = None
-        for candidate in getattr(orchestrator, "agents", {}).values():
-            if not getattr(candidate, "_is_sub_agent", False):
-                agent = candidate
-                break
+        agent = _primary_agent(orchestrator)
         if agent is None:
             return None
+
+        spoken = _final_assistant_text(agent)
+        if spoken:
+            return spoken
 
         task_context_manager = getattr(agent, "task_context_manager", None)
         if task_context_manager is None:
@@ -68,9 +197,7 @@ def _derive_closing_chat_summary(orchestrator) -> Optional[str]:
         if retriever is None:
             return None
 
-        text = retriever._format_session_summary()
-        text = (text or "").strip()
-        return text[:_SUMMARY_MAX_CHARS] or None
+        return _strip_hmem_boilerplate(retriever._format_session_summary())
     except Exception:
         logger.warning("continuity bridge summary derivation failed", exc_info=True)
         return None
@@ -172,7 +299,9 @@ class SessionCleanupMixin:
                 if is_public_session(self):
                     self.logger.debug("public (room) session: no episodic write")
                 elif not is_autonomous(_episode_session_id):
-                    outcome = _CLEANUP_STATUS_TO_OUTCOME.get((status or "").lower())
+                    # The eviction status ("suspended") is not an account of the
+                    # turn — ask the closing turn itself whether it finished.
+                    outcome = _resolve_chat_outcome(status, self)
                     if outcome is not None:
                         from modules.memory.episodic import finalize_episode
                         # Task 6 Part A: best-effort H-MEM summary of the closing
@@ -367,6 +496,18 @@ class SessionCleanupMixin:
                                                 session_id=self.session_id,
                                                 user_id=self.user_id,
                                             )
+                                            # 025: the close drain is a WRITE site too —
+                                            # it rides the session's memory scope (the
+                                            # registry resolves it from session_id) and
+                                            # now records the memory_write event it lacked.
+                                            from agents.task.telemetry.memory_events import emit_memory_event
+                                            from modules.memory.scope import session_scope, telemetry_attrs
+                                            emit_memory_event(
+                                                "memory_write", user_id=self.user_id or "",
+                                                session_id=self.session_id, source="session_close",
+                                                scope="cross_session", content="\n".join(_drained),
+                                                count=len(_drained),
+                                                **telemetry_attrs(session_scope(self.session_id)))
                                         except Exception as sync_err:
                                             self.logger.debug(
                                                 f"close-time memory sync skipped: {sync_err}"

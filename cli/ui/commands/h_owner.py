@@ -193,8 +193,9 @@ def h_asks(ctx) -> None:
     tenant = _tenant(ctx)
     try:
         from agents.task.goals.board import ASK_OPEN
+        from core.goal_vocab import has_own_surface
         rows = [a for a in _goal_board(write=False).asks(user_id=tenant, status=ASK_OPEN)
-                if (a.payload or {}).get("ask_kind") != "tool_approval"]
+                if not has_own_surface(a.payload or {})]
     except Exception as e:
         ctx.emit(f"{candy.GUTTER}(asks unavailable: {e})", title="asks")
         return

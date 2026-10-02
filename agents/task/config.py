@@ -192,6 +192,9 @@ class LimitsConfigModel(BaseModel):
     required_artifacts: List[str] = Field(default_factory=list, description="List of required artifact files")
 
 
+_ORCHESTRATOR_REMOVED_KEYS = ("enable_todo_forced_updates",)
+
+
 class OrchestratorConfigModel(BaseModel):
     """Orchestrator intervention configuration"""
     model_config = ConfigDict(extra='forbid')
@@ -211,10 +214,21 @@ class OrchestratorConfigModel(BaseModel):
 
     # Forced action overrides
     enable_forced_actions: bool = Field(default=False, description="[DEPRECATED-2024] Forced action overrides no longer supported; will be removed in future version")
-    enable_todo_forced_updates: bool = Field(default=False, description="[DEPRECATED-2024] Forced TODO updates no longer supported; will be removed in future version")
 
     # Performance mode integration
     respect_performance_mode: bool = Field(default=True, description="Adjust intervention aggressiveness based on TaskMode")
+
+    # The model forbids extra keys, so a stored config that still sets a removed
+    # key would fail to load; drop it with a deprecation log instead.
+    @model_validator(mode='before')
+    @classmethod
+    def _drop_removed_keys(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            for key in _ORCHESTRATOR_REMOVED_KEYS:
+                if key in data:
+                    data = {k: v for k, v in data.items() if k != key}
+                    logger.warning("orchestrator config: '%s' was removed and is ignored", key)
+        return data
 
     @classmethod
     def from_mode(cls, mode: str) -> 'OrchestratorConfigModel':
@@ -230,7 +244,6 @@ class OrchestratorConfigModel(BaseModel):
                 enable_history_clearing=False,
                 enable_guidance_injection=False,
                 enable_forced_actions=False,
-                enable_todo_forced_updates=False,
             )
         elif mode == TaskMode.THOROUGH:
             # Full interventions for thorough mode
@@ -243,7 +256,6 @@ class OrchestratorConfigModel(BaseModel):
                 enable_history_clearing=True,
                 enable_guidance_injection=True,
                 enable_forced_actions=True,
-                enable_todo_forced_updates=True,
             )
         else:  # BALANCED mode (default)
             # Moderate interventions for balanced mode
@@ -256,7 +268,6 @@ class OrchestratorConfigModel(BaseModel):
                 enable_history_clearing=False,
                 enable_guidance_injection=True,
                 enable_forced_actions=False,
-                enable_todo_forced_updates=False,
             )
 
 
@@ -275,7 +286,7 @@ class AgentProfileModel(BaseModel):
     prompt: Dict[str, Any] = Field(
         default_factory=lambda: {
             "prompt_type": "system",  # system|custom
-            "prompt_source": "builtin",  # builtin|prompt_manager:key|inline
+            "prompt_source": "builtin",  # builtin|inline
             "prompt_params": {}
         },
         description="Prompt configuration"
@@ -352,6 +363,10 @@ class TaskSessionConfig(BaseModel):
     scenario_id: Optional[str] = Field(default=None, description="Scenario to run")
     agent_profiles: Optional[List[AgentProfileModel]] = Field(default=None, description="Agent profile overrides")
     default_profile_id: Optional[str] = Field(default="executor", description="Default profile for single-agent sessions")
+    # 060 WS-5: the doctrine a rail pins — seeded into the session through
+    # SkillManager.get_skills_for_session(seeded_skill_ids=…), bypassing keyword
+    # matching and max_skills. None = today's matching, byte-identical.
+    skills: Optional[List[str]] = Field(default=None, description="Skill ids pinned for this session")
     
     # Metadata
     created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())

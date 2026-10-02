@@ -232,16 +232,19 @@ def test_the_key_scan_found_the_interface():
     assert len(_referenced_keys()) >= 10
 
 
-def test_the_destinations_each_have_a_title_and_a_body():
+def test_the_destinations_each_have_a_title():
+    """The placeholder bodies went with 070 E.4: every destination is built."""
     for key in ("new", "inbox", "work", "money", "agent"):
         assert f"{key}.title" in STRINGS
-        assert f"{key}.placeholder" in STRINGS
 
 
 # --- half two: the copy rules ----------------------------------------------- #
 
 def _values():
-    return sorted(STRINGS.items())
+    """Both copy layers: the console's and the core tier's (070 E.1)."""
+    from core.copy import STRINGS as CORE_STRINGS
+    return ([pytest.param(k, v, id=f"webview:{k}") for k, v in sorted(STRINGS.items())]
+            + [pytest.param(k, v, id=f"core:{k}") for k, v in sorted(CORE_STRINGS.items())])
 
 
 @pytest.mark.parametrize("key,value", _values())
@@ -381,7 +384,7 @@ def test_a_handler_that_writes_its_own_copy_is_caught():
         'def page():\n'
         '    """A docstring is exempt, because nobody reads it on a screen."""\n'
         '    logger.info("a log line is exempt for the same reason")\n'
-        '    return t("work.placeholder")\n'
+        '    return t("work.title")\n'
         '\n'
         'def bad():\n'
         '    return "Work is coming in the next phase."\n'

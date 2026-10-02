@@ -7,7 +7,7 @@ from typing import Callable, Dict, Mapping, Optional
 
 TESTNET_FACILITATOR_URL = "https://x402.org/facilitator"
 
-from core.env import bool_from as _bool_from, parse_opt_float as _parse_opt_float, float_from as _float_from
+from core.env import bool_from as _bool_from, parse_opt_float as _parse_opt_float
 
 
 def _b(env: Mapping[str, str], key: str, default: bool) -> bool:
@@ -285,6 +285,47 @@ def live_caps_resolver(env: Optional[Mapping[str, str]] = None, *,
 _UNRESOLVED = object()
 
 
+def normalize_master_seed(raw: Optional[str],
+                          env: Optional[Mapping[str, str]] = None) -> Optional[str]:
+    """CR-L30: the ONE normalization of ``AGENT_WALLET_MASTER_SEED``.
+
+    The runtime used to derive from the RAW value while ``wallet export``,
+    ``doctor`` and the continuity check ``.strip()``-ed it, so a quoted value
+    with a trailing space named two different treasury addresses. Every reader
+    now goes through here:
+
+    - no surrounding whitespace → returned unchanged (every existing install);
+    - surrounding whitespace under ``bip44`` → stripped: bip44 already
+      derived from the stripped phrase, so the address does not move;
+    - surrounding whitespace under ``legacy`` (or an unresolvable scheme) →
+      ``ValueError``. PBKDF2 digests the raw string, so stripping WOULD move a
+      live wallet's address; refuse rather than guess which address holds funds.
+    """
+    if raw is None:
+        return None
+    seed = str(raw)
+    stripped = seed.strip()
+    if not stripped:
+        return ""
+    if seed == stripped:
+        return seed
+    from core.wallet import derivation
+    try:
+        scheme = derivation.resolve_scheme(env=env)
+    except ValueError:
+        scheme = None
+    if scheme == "bip44":
+        return stripped
+    label = scheme or "unresolvable"
+    raise ValueError(
+        "AGENT_WALLET_MASTER_SEED has leading/trailing whitespace and the derivation "
+        f"is {label}: the running agent derived from the raw value but `wallet "
+        "export`/doctor derived from the stripped value, so the two name DIFFERENT "
+        "addresses. Refusing to pick one. Remove the whitespace only if the funds sit "
+        "at the address the stripped seed derives; otherwise move the funds off the "
+        "agent's old address first, then remove the whitespace.")
+
+
 def load_wallet_config(env: Optional[Mapping[str, str]] = None, *,
                        user_id: Optional[str] = None,
                        home_dir: Optional[object] = None) -> WalletConfig:
@@ -300,7 +341,40 @@ def load_wallet_config(env: Optional[Mapping[str, str]] = None, *,
     completely unchanged (fail-open — prefs are advisory, never a crash risk
     for money config).
     """
-    env = os.environ if env is None else env
+    if env is None:
+        # 066 P0.1 + P0.2: the process env is the custody source. Make this
+        # process non-dumpable BEFORE the seed is read, and take the key
+        # material out of ``os.environ`` once the config is built (finally: a
+        # config that raises must not leave the seed behind for the children).
+        from core.security.custody_env import take_custody_secrets
+        _harden_if_custody()
+        # 066 P2: under WALLET_SIGNER=remote the key lives in polyrob-signer;
+        # a seed that reached this process anyway is DROPPED before any read.
+        from core.signer import MODE_REMOTE, signer_mode
+        if signer_mode() == MODE_REMOTE:
+            from core.security.custody_env import discard_custody_secrets
+            discard_custody_secrets()
+        try:
+            return _load_wallet_config(os.environ, user_id=user_id, home_dir=home_dir)
+        finally:
+            take_custody_secrets()
+    return _load_wallet_config(env, user_id=user_id, home_dir=home_dir)
+
+
+def _harden_if_custody() -> None:
+    """066 P0.1: ``harden_custody_process`` before the first seed read.
+
+    A ratchet (tests/unit/core/test_066_p0_custody_reads.py) pins that
+    ``load_wallet_config`` calls this before it reads the seed.
+    """
+    from core.security.host_execution import wallet_custody_enabled
+    if wallet_custody_enabled():
+        from core.security.process_hardening import harden_custody_process
+        harden_custody_process()
+
+
+def _load_wallet_config(env: Mapping[str, str], *, user_id: Optional[str],
+                        home_dir: Optional[object]) -> WalletConfig:
     network = env.get("AGENT_WALLET_NETWORK", "testnet").strip().lower()
     # Safety default: a catastrophic per-tx ceiling, NOT a budget. Was
     # $1,000,000, then $1000 (H3, 2026-08-22: $1000 in one transaction is not
@@ -323,10 +397,17 @@ def load_wallet_config(env: Optional[Mapping[str, str]] = None, *,
         max_per_tx_usd = effective_max_per_tx_usd(resolved_user, resolved_home, env=env)
     except Exception:
         pass  # fail-open: prefs unavailable/raising -> env value unchanged
+    enabled = _b(env, "AGENT_WALLET_ENABLED", False)
+    # 066 P0.2: the process env first, then the copy an earlier load took out
+    # of it — a second load in the same process must see the same seed.
+    from core.security.custody_env import custody_secret
+    raw_seed = custody_secret("AGENT_WALLET_MASTER_SEED", env)
     return WalletConfig(
-        enabled=_b(env, "AGENT_WALLET_ENABLED", False),
+        enabled=enabled,
         backend=env.get("AGENT_WALLET_BACKEND", "local_eoa").strip().lower(),
-        master_seed=env.get("AGENT_WALLET_MASTER_SEED"),
+        # CR-L30: normalized ONCE (see normalize_master_seed); a disabled wallet
+        # derives nothing, so its seed is passed through untouched.
+        master_seed=normalize_master_seed(raw_seed, env=env) if enabled else raw_seed,
         network=network if network in ("testnet", "mainnet") else "testnet",
         max_per_tx_usd=max_per_tx_usd,
         x402_client_enabled=_b(env, "X402_CLIENT_ENABLED", False),
@@ -335,5 +416,12 @@ def load_wallet_config(env: Optional[Mapping[str, str]] = None, *,
         per_venue_daily_cap_usd=_load_per_venue_caps(env),
         operational_venue=(env.get("AGENT_WALLET_OPERATIONAL_VENUE", "treasury").strip().lower()
                            or "treasury"),
-        cap_resolver=live_caps_resolver(env, user_id=user_id, home_dir=home_dir),
+        # 067 P1b: through the kernel hook this module registers below — the
+        # ledger's cap values come from whoever registered the resolver.
+        cap_resolver=_registered_cap_resolver(env, user_id=user_id, home_dir=home_dir),
     )
+
+
+# 067 P1b: the wallet side supplies the kernel's cap values (registered by
+# ``core/wallet/__init__.py``, late-bound to ``live_caps_resolver``).
+from core.money.hooks import cap_resolver as _registered_cap_resolver  # noqa: E402

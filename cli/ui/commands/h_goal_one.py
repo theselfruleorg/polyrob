@@ -15,7 +15,7 @@ from cli.ui.commands.h_owner import _admin_data_dir, _tenant
 
 
 async def h_goal(ctx) -> None:
-    """``/goal <show|ready|pause|resume|retry|cancel> <id>`` — one goal.
+    """``/goal <show|ready|pause|resume|retry|cancel [--once]|allow> <id>`` — one goal.
 
     ``async`` + ``_awaited``: the ``owner_ops`` helpers are migrating to async
     one verb at a time (D12), and a seat that hard-codes one shape emits a
@@ -38,7 +38,9 @@ HELP_GOAL = (
     "    /goal pause <id>      hold it (it stops being dispatched)\n"
     "    /goal resume <id>     lift the hold\n"
     "    /goal retry <id>      clear the failure count and re-queue\n"
-    "    /goal cancel <id>     stop it (a cancel means never again)\n"
+    "    /goal cancel <id>     stop it for good: switched off until /goal allow\n"
+    "    /goal cancel <id> --once   stop just this run (it may be created again)\n"
+    "    /goal allow <id|title>     turn a switched-off goal back on\n"
     "\n"
     "  An id prefix is enough when it is unambiguous. See /goals for the board.",
     "`/goal` on Telegram, `polyrob goals`, and the console's Work › Now & next.",
@@ -49,7 +51,7 @@ def register(reg, Command) -> None:
     """Register ``/goal``. Called from ``h_a23.register``."""
     reg.register(Command(
         "goal", h_goal,
-        "Act on one goal: show / ready / pause / resume / retry / cancel",
+        "Act on one goal: show / ready / pause / resume / retry / cancel / allow",
         usage="<verb> <id>", group="work",
         help_long=HELP_GOAL[0], elsewhere=HELP_GOAL[1],
     ))

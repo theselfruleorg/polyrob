@@ -18,24 +18,10 @@ import click
 
 
 def _creds_error(config, env) -> Optional[str]:
-    """None when the resolved email provider has what it needs; else the message.
-
-    agentmail: only AGENTMAIL_API_KEY is required (the inbox self-provisions).
-    smtp (legacy): gmail_email + gmail_app_password, unchanged.
-    """
-    from core.config_policy.policy import email_provider
-    if email_provider(env) == "agentmail":
-        if not (env.get("AGENTMAIL_API_KEY") or "").strip():
-            return ("EMAIL_PROVIDER=agentmail but AGENTMAIL_API_KEY is unset — "
-                    "set it in ./.polyrob/.env (or config/.env.*).")
-        return None
-    gmail_email = getattr(config, "gmail_email", None)
-    gmail_pw = getattr(config, "gmail_app_password", None)
-    if not (gmail_email and gmail_pw):
-        return ("email not configured — set gmail_email + gmail_app_password in "
-                "./.polyrob/.env (or config/.env.*) to run the email surface, or "
-                "set AGENTMAIL_API_KEY for a self-provisioned managed inbox.")
-    return None
+    """Delegates to the ONE check (``surfaces/email/launch.py::creds_error``), which
+    ``polyrob gateway`` runs too — the two used to disagree (064 revalidation)."""
+    from surfaces.email.launch import creds_error
+    return creds_error(config, env)
 
 
 @click.command()

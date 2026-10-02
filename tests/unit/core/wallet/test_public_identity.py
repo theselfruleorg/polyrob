@@ -376,11 +376,13 @@ def test_a_money_verb_returns_a_labeled_error_not_a_traceback(
 
     from tools.defi.trade_tool import DefiTradeTool
     tool = DefiTradeTool(guard_fn=lambda *a, **k: _Decision())
-    result = tool._run_guarded(
+    import asyncio
+    # CR-M10: _run_guarded is a coroutine (the broadcast runs off the loop).
+    result = asyncio.run(tool._run_guarded(
         intent=type("I", (), {"chain": "base"})(), tx={"chainId": 8453},
         rail=_Rail(), gate=wallet.policy, signer=signer,
         execution_context=None, header="", dry_run=False,
-        venue_action="transfer", idem="t", counterparty="0x0")
+        venue_action="transfer", idem="t", counterparty="0x0"))
 
     assert result.error and "broadcast failed" in result.error
     assert "no seed" in result.error.lower()

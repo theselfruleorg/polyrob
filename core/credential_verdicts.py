@@ -49,12 +49,14 @@ SMTP_TTL_SEC = 900.0          # ~4 bad logins/hour per rail instead of one a min
 IMAP_TTL_SEC = 900.0          # the RECEIVE half of the same mailbox, same cadence
 TWITTER_API_TTL_SEC = 3600.0  # a 402 (credits depleted) is not fixed in a minute
 MISSING_KEY_TTL_SEC = 86400.0 # an absent API key is an owner action, not a retry
+X_OAUTH2_TTL_SEC = 3600.0     # a dead X refresh token needs the owner to re-login
 
 DEFAULT_TTL_BY_KIND: Dict[str, float] = {
     "smtp": SMTP_TTL_SEC,
     "imap": IMAP_TTL_SEC,
     "twitter_api": TWITTER_API_TTL_SEC,
     "missing_key": MISSING_KEY_TTL_SEC,
+    "x_oauth2": X_OAUTH2_TTL_SEC,
 }
 
 #: Kinds whose verdict only an OWNER ACTION clears — a new app password, a
@@ -67,7 +69,7 @@ DEFAULT_TTL_BY_KIND: Dict[str, float] = {
 #: verdict vanished, the status line with it, and the rail silently came back
 #: into the autonomous toolset while the credential was still dead. A verdict
 #: with an open remedy is history only once the owner closes it.
-OPEN_REMEDY_KINDS = frozenset({"smtp", "imap", "twitter_api", "missing_key"})
+OPEN_REMEDY_KINDS = frozenset({"smtp", "imap", "twitter_api", "missing_key", "x_oauth2"})
 
 # The TTL is the BASE hold; every repeat failure doubles it, up to this cap
 # (2026-09-19, intel inbox): a flat 900 s was shorter than the 20–35 min cron
@@ -85,16 +87,82 @@ def hold_sec(ttl_sec: Optional[float], count: int) -> Optional[float]:
     return float(min(float(ttl_sec) * (2 ** (n - 1)), BACKOFF_CAP_SEC))
 
 
+_DIGEST_KEY_NAME = "verdicts.key"
+_DIGEST_KEYS: Dict[str, bytes] = {}
+
+
+def _digest_key() -> bytes:
+    """The per-install HMAC key behind :func:`credential_digest` (a random 32
+    bytes in ``<data home>/verdicts.key``, 0600, created O_EXCL, never followed
+    through a symlink). ``verdicts.db`` is group-readable, so a STATIC-salt hash
+    of a password there was an offline dictionary target; keyed by a secret that
+    lives only in this identity's file it is not.
+
+    Trusted only when this process owns the file and nobody else can read it; a
+    planted, shared or unreadable key yields a process-lifetime random key
+    instead (fail-open: verdicts from that process are then per-process, never
+    wrong for a different credential)."""
+    import secrets as _secrets
+    import stat as _stat
+    try:
+        db = data_home_db_path(_DB_NAME, env_key=_DB_ENV_KEY)
+    except Exception:
+        db = ""
+    path = os.path.join(os.path.dirname(db), _DIGEST_KEY_NAME) if db else ""
+    cached = _DIGEST_KEYS.get(path)
+    if cached is not None:
+        return cached
+    key: Optional[bytes] = None
+    if path:
+        for _ in range(2):
+            try:
+                fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            except FileNotFoundError:
+                try:
+                    os.makedirs(os.path.dirname(path), exist_ok=True)
+                    wfd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                    try:
+                        os.fchmod(wfd, 0o600)
+                        os.write(wfd, _secrets.token_hex(32).encode("ascii"))
+                    finally:
+                        os.close(wfd)
+                except FileExistsError:
+                    pass
+                except OSError:
+                    break
+                continue
+            except OSError:
+                break
+            try:
+                st = os.fstat(fd)
+                ours = (not hasattr(os, "geteuid")) or st.st_uid == os.geteuid()
+                if _stat.S_ISREG(st.st_mode) and ours and not (st.st_mode & 0o077):
+                    data = os.read(fd, 4096).strip()
+                    key = data if len(data) >= 32 else None
+            finally:
+                os.close(fd)
+            break
+    if key is None:
+        logger.warning("credential verdicts: no private digest key at %s; using a "
+                       "process-local one", path or "(no data home)")
+        key = _secrets.token_bytes(32)
+    _DIGEST_KEYS[path] = key
+    return key
+
+
 def credential_digest(value: Optional[str]) -> str:
-    """A change DETECTOR for a secret, never a display form: a salted 12-hex
-    sha256. A verdict keyed on it belongs to ONE credential, so a new app
-    password has no standing verdict and is probed at once — the owner's fix
-    never waits out a hold (`core.security.redaction.fingerprint` reveals a
-    prefix and suffix and is for display, not for this)."""
+    """A change DETECTOR for a secret, never a display form: a 12-hex
+    HMAC-SHA256 keyed by the per-install :func:`_digest_key`. A verdict keyed on
+    it belongs to ONE credential, so a new app password has no standing verdict
+    and is probed at once — the owner's fix never waits out a hold
+    (`core.security.redaction.fingerprint` reveals a prefix and suffix and is for
+    display, not for this). Rows keyed by the old static-salt digest are
+    superseded: a success on the rail clears every ``<base>#…`` sibling."""
     if not value:
         return ""
     import hashlib
-    return hashlib.sha256(b"polyrob-credential-verdict:" + str(value).encode("utf-8")).hexdigest()[:12]
+    import hmac
+    return hmac.new(_digest_key(), str(value).encode("utf-8"), hashlib.sha256).hexdigest()[:12]
 
 # Rows whose last_seen is older than this are dropped on the next write: a rail
 # nobody has touched in a month is history, not a live verdict.
@@ -280,6 +348,13 @@ def clear_rejection(kind: str, key: str = "") -> None:
         return
     try:
         execute_retry(path, "DELETE FROM verdicts WHERE kind = ? AND key = ?", (kind, key))
+        if "#" in key:
+            # A success proves every verdict for an OLDER credential of the same
+            # rail obsolete — including rows keyed by the retired digest scheme,
+            # which would otherwise stand forever (OPEN_REMEDY rows never age out).
+            prefix = key.split("#", 1)[0] + "#"
+            execute_retry(path, "DELETE FROM verdicts WHERE kind = ? AND substr(key, 1, ?) = ?",
+                          (kind, len(prefix), prefix))
     except (sqlite3.Error, OSError) as e:
         _degrade(e)
 
@@ -438,6 +513,7 @@ def _reset_for_tests() -> None:
     _FALLBACK.clear()
     _WARNED.clear()
     _READY.clear()
+    _DIGEST_KEYS.clear()
     _DEGRADED_LOGGED = False
     try:
         path = data_home_db_path(_DB_NAME, env_key=_DB_ENV_KEY)
@@ -454,6 +530,7 @@ __all__ = [
     "MISSING_KEY_TTL_SEC",
     "SMTP_TTL_SEC",
     "TWITTER_API_TTL_SEC",
+    "X_OAUTH2_TTL_SEC",
     "DEFAULT_TTL_BY_KIND",
     "Verdict",
     "active",

@@ -2,9 +2,8 @@
   Money › Book — the ledger beside the chain (043 A34/A35, §3.4).
 
   Derived from docs/design/040/web/money.html (and its disagree / partial /
-  empty siblings). The five-tab subnav is server-rendered; only Book is built
-  this task, so Moves, Cash and Invoices are stub panes a later task fills, and
-  Limits is a link to Agent, where the caps live. Everything below the subnav is
+  empty siblings). The five-tab subnav is server-rendered; Limits is a link to
+  the agent page, where the caps live. Everything below the subnav is
   drawn by webview/static/app/money.js from GET /api/webgate/book — the verdict
   first, the positions the ledger claims beside the chain's reading, the chains
   Rob checked with the cache age, and the trading run (which lives in Work).
@@ -22,6 +21,12 @@
         <h1 class="page-title">{{ t('money.title') }}</h1>
         <p class="page-sub">{{ t('money.sub') }}</p>
       </div>
+      {# 067 P5a: the data routes are a contribution (webview/contributions.py).
+         None installed: the destination stays, the panes and money.js do not. #}
+      {% if money_installed is defined and not money_installed %}
+      <p class="state-body" id="money-not-installed">{{ t('money.not_installed') }}</p>
+    </div>
+      {% else %}
       <nav class="subnav" aria-label="{{ t('money.title') }}">
         <a href="#book" data-tab="book" aria-current="page">{{ t('money.tab.book') }}</a>
         <a href="#moves" data-tab="moves">{{ t('money.tab.moves') }}</a>
@@ -38,11 +43,52 @@
           <button type="button" class="btn btn-quiet" id="money-liquidity-recheck">{{ t('money.book.recheck') }}</button>
         </section>
         <p class="state-body" id="money-book-state" hidden></p>
+        {# W1: the tokens Rob trusts — drawn by money-tokens.js from /api/webgate/tokens. #}
+        <div id="money-tokens"></div>
       </div>
 
       {# Moves — in flight (bridges) + recent moves (wallet_spend) + made
          (creations). Drawn by money.js from /api/webgate/{bridges,moves,creations}. #}
       <div data-pane="moves" hidden>
+{%- if not read_only %}
+        {# Make a move: a /send or /swap QUOTE built from pickers. The answer is
+           an action card (core/surfaces/cards.py) whose Confirm runs the exact
+           quoted line once — drawn by money-move.js; the quote itself runs as
+           the owner typing it, with every gate. #}
+        <section class="section" id="money-move" aria-label="{{ t('money.move.title') }}"
+                 data-unreachable="{{ t('inbox.unreachable') }}"
+                 data-unreadable="{{ t('money.move.unreadable') }}"
+                 data-native="{{ t('money.move.native') }}">
+          <div class="section-head">
+            <h2 class="section-title">{{ t('money.move.title') }}</h2>
+            <span class="section-aside">{{ t('money.move.aside') }}</span>
+          </div>
+          <form id="money-move-form" class="move-form">
+            <label>{{ t('money.move.kind') }}
+              <select name="verb">
+                <option value="send">{{ t('money.move.kind_send') }}</option>
+                <option value="swap">{{ t('money.move.kind_swap') }}</option>
+              </select></label>
+            <label>{{ t('money.move.chain') }} <select name="chain"></select></label>
+            <label>{{ t('money.move.amount') }}
+              <input class="search-input" name="amount" inputmode="decimal" autocomplete="off" required></label>
+            <label>{{ t('money.move.token') }}
+              <input class="search-input" name="token" list="money-move-tokens" autocomplete="off" required></label>
+            <label data-for="send">{{ t('money.move.to') }}
+              <input class="search-input" name="to" list="money-move-recipients" autocomplete="off"></label>
+            <label data-for="swap" hidden>{{ t('money.move.buy') }}
+              <input class="search-input" name="token_out" list="money-move-tokens" autocomplete="off"></label>
+            <label data-for="swap" hidden>{{ t('money.move.slippage') }}
+              <input class="search-input" name="slippage" inputmode="numeric" autocomplete="off"></label>
+            <datalist id="money-move-tokens"></datalist>
+            <datalist id="money-move-recipients"></datalist>
+            <button class="btn btn-primary" type="submit">{{ t('money.move.quote') }}</button>
+          </form>
+          <p class="entry-meta">{{ t('money.move.note') }}</p>
+          <div class="ledger" id="money-move-result"></div>
+        </section>
+        <script src="/static/app/money-move.js" type="module"></script>
+{%- endif %}
         <div id="money-moves"></div>
         <p class="state-body" id="money-moves-state" hidden></p>
       </div>
@@ -66,7 +112,6 @@
         <p class="state-body" id="money-limits-state" hidden></p>
       </div>
 
-      <p class="sources">{{ t('money.book.sources')|safe }}</p>
     </div>
     {# The words money.js renders, and the states it distinguishes. #}
     <div id="money-copy" hidden
@@ -85,6 +130,33 @@
          data-col_since="{{ t('money.book.col_since') }}"
          data-entry_at="{{ t('money.book.entry_at') }}"
          data-no_positions="{{ t('money.book.no_positions') }}"
+         data-tracked_title="{{ t('money.book.tracked_title') }}"
+         data-tracked_aside="{{ t('money.book.tracked_aside') }}"
+         data-state_quarantined="{{ t('money.book.state_quarantined') }}"
+         data-state_written_off="{{ t('money.book.state_written_off') }}"
+         data-cost="{{ t('money.book.cost') }}"
+         data-no_cost="{{ t('money.book.no_cost') }}"
+         data-collision="{{ t('money.book.collision') }}"
+         data-tok_title="{{ t('money.tokens.title') }}"
+         data-tok_aside="{{ t('money.tokens.aside') }}"
+         data-src_canonical="{{ t('money.tokens.src_canonical') }}"
+         data-src_own_launch="{{ t('money.tokens.src_own_launch') }}"
+         data-src_owner_pin="{{ t('money.tokens.src_owner_pin') }}"
+         data-src_owner_approved="{{ t('money.tokens.src_owner_approved') }}"
+         data-tok_rejected_title="{{ t('money.tokens.rejected_title') }}"
+         data-tok_unreadable="{{ t('money.tokens.unreadable') }}"
+         data-tok_trust="{{ t('money.tokens.trust') }}"
+         data-tok_untrust="{{ t('money.tokens.untrust') }}"
+         data-tok_writeoff="{{ t('money.tokens.writeoff') }}"
+         data-tok_unquarantine="{{ t('money.tokens.unquarantine') }}"
+         data-tok_confirm_trust="{{ t('money.tokens.confirm_trust') }}"
+         data-tok_confirm_untrust="{{ t('money.tokens.confirm_untrust') }}"
+         data-tok_confirm_writeoff="{{ t('money.tokens.confirm_writeoff') }}"
+         data-tok_confirm_unquarantine="{{ t('money.tokens.confirm_unquarantine') }}"
+         data-tok_form_chain="{{ t('money.tokens.form_chain') }}"
+         data-tok_form_address="{{ t('money.tokens.form_address') }}"
+         data-tok_form_symbol="{{ t('money.tokens.form_symbol') }}"
+         data-tok_failed="{{ t('money.tokens.failed') }}"
          data-total_label="{{ t('money.book.total_label') }}"
          data-total_excludes="{{ t('money.book.total_excludes') }}"
          data-chains_title="{{ t('money.book.chains_title') }}"
@@ -219,4 +291,5 @@
          data-lim_body="{{ t('money.limits.body') }}"
          data-lim_link="{{ t('money.limits.link') }}"></div>
     <script src="/static/app/money.js" type="module"></script>
+      {% endif %}
 {% endblock %}

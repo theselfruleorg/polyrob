@@ -96,6 +96,8 @@ _OWNER_HELP_SECTIONS = [
     ("Money", ["invoices", "settle", "sub", "paid"]),
     ("Control", ["halt", "resume", "pause-entries", "resume-entries",
                  "pause-streams", "resume-streams", "show"]),
+    # 025: quarantined goal/cron findings (memory scopes).
+    ("Memory", ["memory"]),
 ]
 
 
@@ -505,7 +507,8 @@ def pending(user, as_json):
         # ride separate, non-self-evolution pipelines aggregated into this same
         # list, so they keep their own labels rather than falling back to "skill".
         label = {"correspondent": "contact",
-                 "tool_approval": "approval"}.get(
+                 "tool_approval": "approval",
+                 "signer_approval": "signer"}.get(
             it["kind"], self_evolution.pending_kind_label(it["kind"]))
         click.echo(f"  {click.style(label.ljust(8), fg='yellow')} "
                    f"{click.style(it['kind'] + ':' + str(it['id']), bold=True)}"
@@ -652,8 +655,9 @@ def asks(user, as_json):
     """
     from agents.task.goals.board import ASK_OPEN
     tenant = _owner_tenant(user)
+    from core.goal_vocab import has_own_surface
     rows = [a for a in _goal_board().asks(user_id=tenant, status=ASK_OPEN)
-            if (a.payload or {}).get("ask_kind") != "tool_approval"]
+            if not has_own_surface(a.payload or {})]
     if as_json:
         from dataclasses import asdict
         click.echo(json.dumps([asdict(a) for a in rows], indent=2, default=str))
@@ -1632,3 +1636,9 @@ def paid_cancel(offer_id):
     """
     from core.surfaces import room_action_admin as adm
     click.echo(adm.cancel(_group_container(write=True), offer_id, by="cli"))
+
+
+# 025: `polyrob owner memory scopes list|show|promote|purge` (its own module).
+from cli.commands.owner_memory import memory as _memory_group  # noqa: E402
+
+owner.add_command(_memory_group)

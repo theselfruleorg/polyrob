@@ -10,6 +10,9 @@ load-bearing rather than cosmetic:
   minute). That bounds replay for free — but it also means a transaction can
   silently EXPIRE, so "not confirmed" here is far more often "expired" than
   "pending", and must never be retried blind.
+  ⚠️ That bound holds only for a RECENT-BLOCKHASH transaction. A durable-nonce
+  transaction (first instruction System `AdvanceNonceAccount`) never expires,
+  so it is refused here and in `solana_tx_inspect` (CR-M05).
 * **`null` status is UNKNOWN, not failure.** `getSignatureStatuses` returns
   `null` for a signature the cluster has not seen. Reporting that as a failure
   is how a double-send happens.
@@ -46,6 +49,21 @@ def confirmation_outcome(ok: bool, detail: str) -> str:
         return "confirmed"
     return ("reverted" if str(detail or "").startswith(LANDED_FAILED_PREFIX)
             else "unknown")
+
+
+def _is_durable_nonce(message) -> bool:
+    """True when the first instruction is System ``AdvanceNonceAccount`` —
+    the runtime's own test for a nonce transaction."""
+    instructions = list(message.instructions)
+    if not instructions:
+        return False
+    first = instructions[0]
+    keys = list(message.account_keys)
+    index = int(first.program_id_index)
+    if index >= len(keys) or str(keys[index]) != "11111111111111111111111111111111":
+        return False
+    data = bytes(first.data)
+    return len(data) >= 4 and int.from_bytes(data[:4], "little") == 4
 
 
 class SolanaRail:
@@ -125,8 +143,14 @@ class SolanaRail:
             transaction.verify_and_hash_message()
             signature = str(transaction.signatures[0])
             blockhash = str(transaction.message.recent_blockhash)
+            durable = _is_durable_nonce(transaction.message)
         except Exception as exc:
             raise SolanaBroadcastError("refusing malformed or unsigned transaction") from exc
+        if durable:
+            raise SolanaBroadcastError(
+                "refusing a durable-nonce transaction: it never expires, so a "
+                "signed copy stays broadcastable indefinitely and 'not "
+                "confirmed' could no longer mean 'expired'")
         from core.wallet.submission_journal import prepare
         prepare(signature, "solana", self._signer.address, blockhash)
         encoded = base64.b64encode(bytes(raw)).decode()

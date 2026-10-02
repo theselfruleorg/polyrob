@@ -17,6 +17,11 @@ The implementation purposefully avoids any heavy frameworks – *FastAPI* +
 runtime footprint minimal.
 """
 
+# Standalone uvicorn does not pass through cli.main or api.app. Register pack
+# policy DATA before status/chat imports freeze their capability views.
+from core.packs.loader import register_policies as _register_pack_policies
+_register_pack_policies()
+
 from collections import OrderedDict
 from pathlib import Path
 import asyncio
@@ -52,20 +57,17 @@ from agents.task.telemetry.feed_reads import build_session_services, build_sessi
 from webview import webgate
 
 # No demo mode - WebView must use the real PathManager
-import os
 import sys
 
-# NOTE: a legacy `sys.path.insert(0, '/opt/rob')` used to live here (pre-rename
-# install path). On any box where the stale /opt/rob tree still exists it
-# HIJACKED every `agents`/`modules`/`core` import away from the live tree —
-# removed 2026-07-06. The webview imports from the tree it is deployed in
-# (WorkingDirectory/PYTHONPATH), never a hardcoded absolute path.
+# Import from WorkingDirectory/PYTHONPATH, never a hardcoded install path.
 
 # Import PathManager for session paths
 from agents.task.path import pm
 
 from core.version import get_version
-from webview import posture_routes, template_globals
+from webview import pack_console, posture_routes, template_globals
+from webview.socket_limits import first_join, forget, limit_key, refusal  # 070 W0.17
+from webview.error_page import StarletteHTTPException, error_response  # 070 W0.18
 
 logger = logging.getLogger("webview.server")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -255,7 +257,7 @@ async def startup_event():
     global _container
 
     logger.info("🚀 Initializing webview services...")
-
+    from core.security.process_hardening import harden_custody_process; harden_custody_process()  # L9: JWT key in exec env
     # S8 (2026-09-14): refuse to boot an ANONYMOUS console ('local' posture =
     # every request is the owner) on a server-shaped deployment. Raises, so the
     # boot aborts rather than serving the control plane to the internet.
@@ -356,8 +358,8 @@ async def add_security_headers(request: Request, call_next):
         )
         # No X-Frame-Options for serve endpoint (allows iframe embedding)
     else:
-        # CSP - strict. 043 R6: no `'unsafe-inline'` in `script-src` (de-inlined).
-        response.headers["Content-Security-Policy"] = (
+        # CSP - strict, unless the route set its own (the SVG /avatar.png). 043 R6: no inline script.
+        response.headers.setdefault("Content-Security-Policy", (
             "default-src 'self'; "
             "script-src 'self' https://cdn.socket.io https://cdnjs.cloudflare.com https://fonts.googleapis.com https://cdn.jsdelivr.net; "
             "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com; "
@@ -368,7 +370,7 @@ async def add_security_headers(request: Request, call_next):
             "frame-ancestors 'none'; "
             "base-uri 'self'; "
             "form-action 'self'"
-        )
+        ))
         response.headers["X-Frame-Options"] = "DENY"
 
     # Raw workspace HTML/XML can also be navigated to directly, outside the
@@ -426,8 +428,8 @@ _fastapi.mount(
     name="static"
 )
 
-# Final app for Uvicorn to run - order is important here
-app = socketio.ASGIApp(_sio, other_asgi_app=_fastapi)
+from webview.host_guard import LocalHostGuard  # noqa: E402 — H15: loopback-Host allowlist at `local` posture, outermost (HTTP + Socket.IO)
+app = LocalHostGuard(socketio.ASGIApp(_sio, other_asgi_app=_fastapi))  # the final app uvicorn runs
 
 # For tracking watchers and client sessions
 _watch_tasks: dict[str, asyncio.Task] = {}
@@ -436,7 +438,7 @@ _session_clients: dict[str, int] = {}
 
 # Rate limiting configuration (hardcoded for webview - not business logic)
 RATE_LIMIT_WINDOW = 60  # seconds
-RATE_LIMIT_MAX_CONNECTIONS = 10  # max connections per IP per window
+RATE_LIMIT_MAX_CONNECTIONS = 30  # max FIRST joins per owner (else IP) per window (070 W0.17)
 RATE_LIMIT_MAX_EVENTS = 100  # max events per session per window
 # Cap on distinct keys tracked per limiter: without a bound the per-session
 # event limiter grew one key per session forever (E5-Minor), and the per-IP
@@ -451,11 +453,11 @@ CONNECTION_ATTEMPTS_MAX_IPS = 5000
 from core.rate_limit import SlidingWindowLimiter
 
 _connection_limiter = SlidingWindowLimiter(
-    RATE_LIMIT_MAX_CONNECTIONS, RATE_LIMIT_WINDOW, max_keys=CONNECTION_ATTEMPTS_MAX_IPS
-)
+    RATE_LIMIT_MAX_CONNECTIONS, RATE_LIMIT_WINDOW, max_keys=CONNECTION_ATTEMPTS_MAX_IPS,
+    name="webview_connect")
 _event_limiter = SlidingWindowLimiter(
-    RATE_LIMIT_MAX_EVENTS, RATE_LIMIT_WINDOW, max_keys=EVENT_EMISSIONS_MAX_SESSIONS
-)
+    RATE_LIMIT_MAX_EVENTS, RATE_LIMIT_WINDOW, max_keys=EVENT_EMISSIONS_MAX_SESSIONS,
+    name="webview_event")
 
 def check_rate_limit(ip: str) -> bool:
     """Check if IP has exceeded connection rate limit.
@@ -901,7 +903,7 @@ async def auth_middleware(request: Request, call_next):
     # it is let through here too (after populating request.state via
     # _manual_auth_check, same as the other public paths) rather than
     # redirected to a login page by this middleware.
-    if path == "/" or any(path.startswith(p) for p in public_paths):
+    if path == "/" or any(path.startswith(p) for p in public_paths) or pack_console.is_public(path, request.scope.get("method", "")):
         # Attempt to authenticate if token present (for better UX)
         # This allows detecting session owners vs viewers
         _manual_auth_check(request)
@@ -1195,8 +1197,7 @@ from webview.owner_login_flow import (  # noqa: E402
 
 # 030 S1: serve tokens live in webview/serve_tokens.py; private aliases kept —
 # tests and the middleware resolve them off this module.
-from webview.serve_tokens import (SERVE_TOKEN_TTL_SEC as _SERVE_TOKEN_TTL_SEC,
-                                  mint_serve_token as _mint_serve_token,
+from webview.serve_tokens import (mint_serve_token as _mint_serve_token,
                                   verify_serve_token as _verify_serve_token)
 
 
@@ -1236,7 +1237,7 @@ async def owner_login_submit(request: Request) -> Response:
     client_ip = request.client.host if request.client else "unknown"
     if _login_throttled(client_ip):
         return _render_owner_login(request,
-            error="Too many attempts. Try again in a few minutes.", status_code=429)
+            error="login.too_many", status_code=429)
     _record_login_attempt(client_ip)
 
     form = await request.form()
@@ -1249,11 +1250,11 @@ async def owner_login_submit(request: Request) -> Response:
         supplied = str(form.get("csrf_token", ""))
         if not expected_csrf or not hmac.compare_digest(supplied, expected_csrf):
             return _render_owner_login(request, return_to=return_to,
-                error="Invalid or expired form. Please try again.", status_code=403)
+                error="login.expired", status_code=403)
 
     if not verify_owner_password(username, password):
         return _render_owner_login(request, return_to=return_to,
-            error="Invalid username or password.", status_code=401)
+            error="login.wrong", status_code=401)
 
     response = RedirectResponse(url=return_to, status_code=303)
     issue_owner_session_cookie(response)
@@ -1321,105 +1322,6 @@ async def api_feed(clean_id: str = Depends(get_clean_session_id)) -> Response:
         url=f"/api/session/{clean_id}/feed/events?limit=500",
         status_code=307  # Temporary redirect, preserves method
     )
-
-
-@_fastapi.get("/api/session/{session_id}/workspace/tree", response_class=JSONResponse)
-async def api_workspace_tree(request: Request, clean_id: str = Depends(get_clean_session_id)) -> Response:
-    """Return a very small file-tree of the session's workspace.
-    
-    Note: Uses session owner's user_id to allow public viewing of shared sessions.
-    """
-    logger.debug(f"API workspace tree request for cleaned ID: {clean_id}")
-
-    try:
-        # Use session owner's user_id (not requesting user's) to allow public viewing
-        from utils.auth_utils import get_authenticated_user_id
-        current_user_id = get_authenticated_user_id(request)
-        session_owner_id = pm().get_session_user(clean_id)
-        
-        # Use session owner's ID for data access (allows public viewing)
-        user_id = session_owner_id if session_owner_id else current_user_id
-
-        ws_dir = pm().get_workspace_dir(clean_id, user_id=user_id)
-        logger.debug(f"Getting workspace tree for {clean_id}, owner: {user_id}")
-        
-        if not ws_dir.exists():
-            # Try to create workspace directory for just this session
-            try:
-                ws_dir.mkdir(parents=True, exist_ok=True)
-                logger.info(f"Created missing workspace directory: {ws_dir}")
-            except Exception as e:
-                logger.error(f"Failed to create workspace directory: {e}")
-                # Instead of an HTTP error, return empty tree with a message
-                return JSONResponse({
-                    "name": ws_dir.name,
-                    "type": "dir",
-                    "children": [],
-                    "message": "Workspace directory does not exist or is not accessible"
-                })
-
-        def _walk(dir_path: Path) -> Dict[str, Any]:
-            try:
-                children = []
-                # Skip if the directory doesn't exist or is not accessible
-                if not dir_path.exists():
-                    logger.warning(f"Directory does not exist: {dir_path}")
-                    return children
-                
-                # Check if we can actually read the directory
-                if not os.access(str(dir_path), os.R_OK):
-                    logger.warning(f"Cannot read directory: {dir_path} (permission denied)")
-                    return children
-                    
-                for child in sorted(dir_path.iterdir()):
-                    # Skip hidden files/dirs at all directory levels (not just top level)
-                    if child.name.startswith("."):
-                        continue
-                        
-                    item = {"name": child.name, "type": "dir" if child.is_dir() else "file"}
-                    if child.is_dir():
-                        item["children"] = _walk(child)
-                    children.append(item)
-                return children
-            except PermissionError:
-                logger.warning(f"Permission denied when reading directory {dir_path}")
-                return []
-            except Exception as e:
-                logger.error(f"Error walking directory {dir_path}: {e}")
-                return []
-
-        logger.debug(f"Building workspace tree for: {ws_dir}")
-        children = _walk(ws_dir)
-        
-        # Log the result summary
-        file_count = sum(1 for item in children if item["type"] == "file")
-        dir_count = sum(1 for item in children if item["type"] == "dir")
-        logger.info(f"Workspace tree for {clean_id}: {file_count} files, {dir_count} directories at top level")
-        
-        # Include empty message if no files
-        if not children:
-            return JSONResponse({
-                "name": ws_dir.name,
-                "type": "dir", 
-                "children": [],
-                "empty": True,
-                "message": "No files found in workspace"
-            })
-        
-        return JSONResponse({
-            "name": ws_dir.name,
-            "type": "dir", 
-            "children": children
-        })
-    except Exception as e:
-        logger.error(f"Error getting workspace tree for {clean_id}: {e}", exc_info=True)
-        return JSONResponse({
-            "name": "workspace",
-            "type": "dir", 
-            "children": [],
-            "error": str(e),
-            "message": "Error accessing workspace"
-        }, status_code=500)
 
 
 @_fastapi.get("/api/session/{session_id}/workspace/status", response_class=JSONResponse)
@@ -2039,126 +1941,7 @@ async def api_skills(clean_id: str = Depends(get_clean_session_id)) -> Response:
         )
 
 
-@_fastapi.get("/api/session/{session_id}/feed/events", response_class=JSONResponse)
-async def api_feed_events(request: Request, session_id: str, event_type: Optional[str] = None, limit: int = FEED_DEFAULT_LIMIT, after_seq: Optional[int] = None) -> Response:
-    """Return specific event types from the feed.
-
-    Args:
-        request: FastAPI request object (for user authentication)
-        session_id: The session ID
-        event_type: Optional filter by event type (step, planner, evaluation, etc.)
-        limit: Maximum number of events to return (configurable, see FEED_DEFAULT_LIMIT/FEED_MAX_LIMIT)
-        after_seq: Optional sequence number for delta sync - only return events with _seq > after_seq
-
-    Note: Uses session owner's user_id to allow public viewing of shared sessions.
-
-    Response includes metadata for delta sync:
-        - last_seq: The highest sequence number in the returned events
-        - total: Total number of events returned
-    """
-    # Validate limit parameter to prevent DoS
-    if limit < 1 or limit > FEED_MAX_LIMIT:
-        raise HTTPException(400, f"Limit must be between 1 and {FEED_MAX_LIMIT}")
-
-    # Use session owner's user_id (not requesting user's) to allow public viewing
-    from utils.auth_utils import get_authenticated_user_id
-    current_user_id = get_authenticated_user_id(request)
-    session_owner_id = pm().get_session_user(session_id)
-    
-    # Use session owner's ID for data access (allows public viewing)
-    user_id = session_owner_id if session_owner_id else current_user_id
-
-    # Clean the session ID to handle agent prefixes
-    clean_id = pm().clean_session_id(session_id)
-    logger.info(f"🔍 API feed events request for session {session_id} (cleaned: {clean_id}), user: {user_id}, type: {event_type}")
-
-    try:
-        feed_dir = pm().get_feed_dir(clean_id, user_id=user_id)
-        logger.info(f"📁 Feed directory resolved to: {feed_dir}")
-    except Exception as e:
-        logger.error(f"Error getting feed directory: {e}")
-        raise HTTPException(500, "Internal server error")
-
-    if not feed_dir.exists():
-        logger.warning(f"Feed directory not found: {feed_dir}")
-        raise HTTPException(404, "Session not found")
-
-    # Define valid event types
-    valid_event_types = [
-        'step', 'planner', 'evaluation', 'multi_agent_relationship',
-        'agent_registration', 'session_start', 'task_update', 'llm_request',
-        'service_actions', 'available_actions', 'status',
-        'user_message', 'queue_status',  # Chat UI events
-        'tool_execution', 'tool_result'  # 043 A16: the typed tool_result event
-    ]
-
-    # Validate event_type if provided
-    if event_type and event_type not in valid_event_types:
-        raise HTTPException(400, f"Invalid event_type. Must be one of: {', '.join(valid_event_types)}")
-
-    # Get pattern for file search
-    pattern = f"{event_type}_*.json" if event_type else "*.json"
-    logger.info(f"🔎 Searching for pattern: {pattern}")
-
-    # Find matching files, sorted by name (sequence-based filenames sort correctly)
-    files = sorted(feed_dir.glob(pattern), key=lambda x: x.name)
-    logger.info(f"📋 Found {len(files)} files matching pattern")
-
-    # Process the files
-    items = []
-    last_seq = 0
-    for file in files:
-        try:
-            with file.open("r") as fh:
-                item = json.load(fh)
-
-                # Check sequence-based filtering for delta sync
-                item_seq = item.get('_seq')
-                if after_seq is not None and item_seq is not None:
-                    if item_seq <= after_seq:
-                        continue  # Skip events we already have
-
-                # Track highest sequence number
-                if item_seq is not None and item_seq > last_seq:
-                    last_seq = item_seq
-
-                # Normalize to 'type' field (single source of truth)
-                if 'event_type' in item and 'type' not in item:
-                    item['type'] = item['event_type']
-
-                # Add timestamp from filename if missing
-                if 'timestamp' not in item:
-                    ts_parts = file.stem.split('_')
-                    if len(ts_parts) >= 2:
-                        try:
-                            item['timestamp'] = int(ts_parts[-1])
-                        except ValueError:
-                            item['timestamp'] = file.stat().st_mtime
-
-                # Add source file for debugging
-                item['_source_file'] = file.name
-
-                # Enrich LLM cost if needed
-                _enrich_llm_event_with_cost(item)
-
-                items.append(item)
-
-                # Check limit after processing (not before, to correctly handle after_seq filtering)
-                if len(items) >= limit:
-                    break
-        except Exception as exc:
-            logger.debug(f"Failed to read {file}: {exc}")
-
-    # Return with metadata for delta sync
-    return JSONResponse(
-        {
-            "events": items,
-            "last_seq": last_seq,
-            "total": len(items),
-            "has_more": len(items) >= limit  # More events may exist if we hit the limit
-        },
-        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
-    )
+# GET /api/session/{session_id}/feed/events lives in webview/feed_routes.py (070 W0.10).
 
 
 @_fastapi.get("/api/session/{session_id}/status", response_class=JSONResponse)
@@ -2685,7 +2468,7 @@ async def send_message_to_session(session_id: str, request: Request) -> Response
                         # Rate limited - don't retry
                         logger.warning(f"Rate limit exceeded for session {clean_id}")
                         return JSONResponse(
-                            {"success": False, "error": "Rate limit exceeded", "retry_after": 60},
+                            {"success": False, "code": "busy", "error": "Rate limit exceeded", "retry_after": 60},
                             status_code=429,
                             headers={"Retry-After": "60"}
                         )
@@ -2989,6 +2772,7 @@ async def _stop_hub_if_activity_empty() -> None:
 async def disconnect(sid: str) -> None:  # noqa: D401 – Socket.IO callback
     """Handle client disconnect and clean up resources."""
     _socket_auth_monitor.remove(sid)
+    forget(sid)
     _socket_user.pop(sid, None)
     _socket_tier.pop(sid, None)
     if sid in _activity_clients:
@@ -3031,22 +2815,15 @@ async def disconnect(sid: str) -> None:  # noqa: D401 – Socket.IO callback
 async def join_session(sid, data):
     """Handle a client joining a session via Socket.io."""
     try:
-        # Rate limiting check
-        environ = _sio.get_environ(sid)
-        client_ip = environ.get('REMOTE_ADDR', 'unknown')
-
-        if not check_rate_limit(client_ip):
-            logger.warning(f"Rate limit exceeded for IP {client_ip}")
-            await _sio.emit("error", {
-                "message": "Rate limit exceeded. Please wait before reconnecting."
-            }, room=sid)
-            await _sio.disconnect(sid)
+        # 070 W0.17: one count per socket, keyed by the owner; the socket stays.
+        if first_join(sid) and not check_rate_limit(limit_key(sid, _sio.get_environ(sid), _socket_user)):
+            await _sio.emit("error", refusal("rate_limited", RATE_LIMIT_WINDOW), room=sid)
             return
 
         session_id = data.get("session_id")
         logger.info("join_session: received session_id=%s from client %s", session_id, sid)
         if not session_id:
-            await _sio.emit("error", {"message": "No session ID provided"}, room=sid)
+            await _sio.emit("error", refusal("no_chat"), room=sid)
             return
 
         # Clean the session ID to ensure consistency
@@ -3065,7 +2842,7 @@ async def join_session(sid, data):
                     "join_session denied: sid=%s user=%s session_owner=%s",
                     sid, current_user_id, session_owner_id,
                 )
-                await _sio.emit("error", {"message": "Not authorized to view this session"}, room=sid)
+                await _sio.emit("error", refusal("not_yours"), room=sid)
                 return
 
         # Join socket.io room for this session - use clean_id as room name
@@ -3105,7 +2882,7 @@ async def join_session(sid, data):
 
     except Exception as exc:
         logger.error("Error in join_session handler: %s", exc, exc_info=True)
-        await _sio.emit("error", {"message": str(exc)}, room=sid)
+        await _sio.emit("error", refusal("join_failed"), room=sid)
 
 
 @_sio.event
@@ -3119,18 +2896,12 @@ async def join_activity(sid, data=None):
     room empties (leave_activity/disconnect).
     """
     try:
-        environ = _sio.get_environ(sid) or {}
-        client_ip = environ.get("REMOTE_ADDR", "unknown")
-        if not check_rate_limit(client_ip):
-            logger.warning(f"join_activity rate limit exceeded for IP {client_ip}")
-            await _sio.emit("error", {
-                "message": "Rate limit exceeded. Please wait before reconnecting."
-            }, room=sid)
-            await _sio.disconnect(sid)
+        if first_join(sid) and not check_rate_limit(limit_key(sid, _sio.get_environ(sid), _socket_user)):
+            await _sio.emit("error", refusal("rate_limited", RATE_LIMIT_WINDOW), room=sid)
             return
 
         if not webgate.activity_enabled():
-            await _sio.emit("error", {"message": "Activity stream disabled"}, room=sid)
+            await _sio.emit("error", refusal("activity_off"), room=sid)
             return
 
         if webgate.requires_owner_login():
@@ -3143,9 +2914,7 @@ async def join_activity(sid, data=None):
                 logger.warning(
                     "join_activity denied: sid=%s user=%s tier=%s", sid, current_user_id, tier
                 )
-                await _sio.emit("error", {
-                    "message": "Not authorized for the activity stream"
-                }, room=sid)
+                await _sio.emit("error", refusal("not_yours"), room=sid)
                 return
 
         from webview.activity import get_hub
@@ -3161,7 +2930,7 @@ async def join_activity(sid, data=None):
                     sid, len(_activity_clients))
     except Exception as exc:
         logger.error(f"join_activity error: {exc}", exc_info=True)
-        await _sio.emit("error", {"message": "Failed to join activity stream"}, room=sid)
+        await _sio.emit("error", refusal("join_failed"), room=sid)
 
 
 @_sio.event
@@ -3216,12 +2985,11 @@ async def _feed_watcher(session_id: str) -> None:
                         continue
 
                     try:
-                        # Add to processed set right away to avoid race conditions
-                        processed_files.add(file_path.name)
-
-                        # Parse the file
+                        # Parse the file; mark it seen only AFTER it parsed, so a
+                        # half-written file is retried on the next change (W1.3)
                         with file_path.open("r") as f:
                             entry = json.load(f)
+                        processed_files.add(file_path.name)
 
                         # Skip invalid entries
                         if not entry or not isinstance(entry, dict) or "type" not in entry:
@@ -3400,45 +3168,11 @@ async def shutdown_event():
     _client_session.clear()
 
 
-@_fastapi.exception_handler(HTTPException)
-async def http_exception_handler(request: Request, exc: HTTPException) -> Response:
-    """Render a custom error page for HTTP errors — HTML for a PAGE, JSON for an API.
-
-    W3 (043): the console answers every HTTPException with ``error.html``. That
-    is right for ``/session/<id>`` in a browser tab and wrong for ``/api/…``,
-    where the caller is ``fetch(…).then(r => r.json())`` — an HTML body turns a
-    clear 403 ("Console is read-only") into a JSON parse error with no message.
-    So an API path answers JSON. Both ``detail`` (FastAPI's convention, which
-    ``chat.js`` already reads) and ``error`` (what the older page scripts read)
-    carry the SAME string — one message, two readers, never two messages.
-    """
-    status_code = exc.status_code
-    detail = exc.detail
-    if request.url.path.startswith("/api/"):
-        return JSONResponse({"detail": detail, "error": detail},
-                            status_code=status_code,
-                            headers=getattr(exc, "headers", None) or None)
-    
-    # Get WebSocket URL from environment variable
-    ws_url = os.environ.get("WEBVIEW_WS_URL", "")
-    
-    # Get version from environment variable or use a default
-    version = os.environ.get("WEBVIEW_VERSION", get_version())
-    
-    return _templates.TemplateResponse(request, "error.html",
-        {
-            "request": request,
-            "error": f"HTTP {status_code}",
-            "message": detail,
-            "troubleshooting": [
-                "The session may not exist or has been deleted.",
-                "Check the URL and try again."
-            ],
-            "ws_url": ws_url,
-            "version": version
-        },
-        status_code=status_code
-    )
+@_fastapi.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> Response:
+    """Every HTTP error, including an unmatched route: JSON for an API path, the
+    console's error page for a page (``webview/error_page.py``, 070 W0.18/E.34)."""
+    return error_response(request, exc, _templates)
 
 # --- the new console shell (043 C-series) ----------------------------------- #
 # Mounted LAST, on purpose: webview/pages_new.py skips any path this app already

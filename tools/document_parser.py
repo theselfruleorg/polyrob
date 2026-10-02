@@ -19,9 +19,27 @@ class DocumentParseError(ValueError):
     pass
 
 
+_KIND_FEATURE = {'pdf': 'docs.pdf', 'docx': 'docs.docx'}
+
+
+def _require_parser(kind):
+    """058 T1.6: pypdf / python-docx ride the [docs] extra. A local install pulls
+    it on first use (core/lazy_deps); a server refuses and names the extra. The
+    child interpreter would otherwise die on the import and the caller would read
+    'document parsing refused or resource limit reached' — the wrong remedy."""
+    from core.lazy_deps import FeatureUnavailable, ensure
+    try:
+        ensure(_KIND_FEATURE[kind], prompt=False)
+    except FeatureUnavailable as exc:
+        raise DocumentParseError(
+            f'{kind} parsing is unavailable: {exc}. The file is unchanged in the '
+            f'workspace; read it again once the extra is installed.') from exc
+
+
 def _reserve(kind, content):
     if kind not in ('pdf', 'docx') or not isinstance(content, bytes):
         raise DocumentParseError('unsupported document input')
+    _require_parser(kind)
     if len(content) > MAX_INPUT_BYTES:
         raise DocumentParseError('document input budget exceeded')
     if not _slots.acquire(blocking=False):

@@ -8,7 +8,7 @@ improvements, making it easy to tune behavior without code changes.
 import os
 from typing import Optional
 
-from core.env import bool_env as _bool_env
+from core.env import bool_env as _bool_env, int_env as _int_env
 
 
 def resolve_base64_strip_mode(raw: Optional[str]) -> dict:
@@ -58,15 +58,23 @@ class RobustParseConfig:
     # ActionResult content limits - Coordinated with tool limits
     # MAX_EXTRACTED_CONTENT_LENGTH: Target limit for tool outputs (browser, etc) - not currently enforced
     # MAX_EXTRACTED_CONTENT_SIZE: CRITICAL - content >this size offloaded to files
-    # FIXED (Nov 6, 2025): Increased threshold after browser accessibility fix
-    # Previous: 300K chars (too aggressive, triggered for legitimate large content from non-browser tools)
-    # Production issue: Browser returned 1-2M char raw HTML → file offload → agent read back → loop
-    # Solution: Browser now returns accessibility snapshots (30-80K chars), so higher threshold is safe
-    # New: 500K chars = ~125K tokens = 12% of 1M context per message
-    # Rationale: Browser won't trigger this anymore (returns clean content). For non-browser tools (filesystem, MCP),
-    # file offload with smart preview is superior to keeping massive content in context
+    # History: 300K chars (too aggressive) -> 500K chars (Nov 6, 2025, after the browser
+    # accessibility fix stopped returning 1-2M char raw HTML).
+    #
+    # F26 (2026-09-22 harness/cache review): 500K chars is ~125K TOKENS — a threshold the
+    # disk-pointer path almost never reached, so a single grep/web_fetch/MCP answer of 90K
+    # tokens rode in the context instead. A reference agent offloads at 100K chars per result and 200K
+    # chars per TURN; DeepSeek Harness and Pi at 50 KB. Both numbers below are that pair:
+    #   MAX_EXTRACTED_CONTENT_SIZE      — per RESULT (~25K tokens)
+    #   MAX_EXTRACTED_CONTENT_TURN_SIZE — per TURN, summed over the step's results; over it,
+    #                                     the LARGEST results go to disk first until the turn
+    #                                     fits (three 80K results each pass the per-result
+    #                                     test and together are 240K chars of context).
+    # 0 disables either check. The offloaded content is never lost — it is a workspace file
+    # the model reads back with read_file, named in the pointer.
     MAX_EXTRACTED_CONTENT_LENGTH: int = int(os.getenv("MAX_EXTRACTED_CONTENT_LENGTH", "500000"))  # 500K chars - browser won't hit this
-    MAX_EXTRACTED_CONTENT_SIZE: int = int(os.getenv("MAX_EXTRACTED_CONTENT_SIZE", "500000"))  # 500K chars - for non-browser large content
+    MAX_EXTRACTED_CONTENT_SIZE: int = _int_env("MAX_EXTRACTED_CONTENT_SIZE", 100000)  # 100K chars ~ 25K tokens, per result
+    MAX_EXTRACTED_CONTENT_TURN_SIZE: int = _int_env("MAX_EXTRACTED_CONTENT_TURN_SIZE", 200000)  # 200K chars ~ 50K tokens, per turn
     LARGE_CONTENT_PREVIEW_LENGTH: int = int(os.getenv("LARGE_CONTENT_PREVIEW_LENGTH", "15000"))  # 15K preview - better context when offloaded
     
     # PHASE 2 FIX (Nov 4, 2025): Separate error truncation limits
@@ -86,6 +94,10 @@ class RobustParseConfig:
     # NEW: Context safety configuration - CRITICAL ADDITION
     ENABLE_CONTEXT_OVERFLOW_GUARD: bool = _bool_env("ENABLE_CONTEXT_OVERFLOW_GUARD", True)
     CONTEXT_OVERFLOW_THRESHOLD: float = float(os.getenv("CONTEXT_OVERFLOW_THRESHOLD", "0.90"))  # 90% of context window - maximize usage
+    # F19: the denominator of last resort. Only reached when there is no live
+    # MessageManager AND the model registry does not know the id — a registry gap.
+    # Deliberately small so the guard fires early rather than late.
+    UNKNOWN_MODEL_CONTEXT_WINDOW: int = 8192
     SAFETY_MARGIN_PERCENT: float = float(os.getenv("SAFETY_MARGIN_PERCENT", "0.05"))  # 5% safety margin - minimal to maximize context
 
     # (Dead reads deleted 2026-08-27, 030 WS-F2 — no consumer anywhere in the
@@ -161,9 +173,10 @@ class RobustParseConfig:
 
 CRITICAL ACTION FIELD REQUIREMENTS:
 - For "done" action: {"done": {"text": "completion message"}} - USE "text", NOT "message"
-- For "write_file" action: {"write_file": {"file_path": "path", "content": "text"}} - USE "file_path", NOT "file_name" or "path"
-- For "click" action: {"click": {"selector": "element"}} - USE "selector"
-- For "type" action: {"type": {"text": "input", "selector": "element"}} - USE "text" for content
+- For "filesystem_write_file": {"filesystem_write_file": {"file_path": "path", "content": "text"}} - USE "file_path", NOT "file_name" or "path"
+- For "browser_click_element": {"browser_click_element": {"index": 3}} - USE the element "index" from the page state
+- For "browser_input_text": {"browser_input_text": {"index": 3, "text": "input"}} - USE "index" and "text"
+- Use only action names from your tool list; these are examples of the shape
 
 Use double quotes only. No text outside JSON. Follow field names EXACTLY as shown."""
     
@@ -202,8 +215,10 @@ Use double quotes only. No text outside JSON. Follow field names EXACTLY as show
             return content
             
         import re
-        # Remove data:image URLs which can be very large
-        content = re.sub(r'data:image/[^;]+;base64,[A-Za-z0-9+/=]+', '[IMAGE_REMOVED]', content)
+        # Remove data:image URLs which can be very large. M14: the subtype is
+        # bounded — the old `[^;]+` rescanned to end-of-input from every
+        # `data:image/` on untrusted content with no `;` (quadratic).
+        content = re.sub(r'data:image/[^;\s]{1,40};base64,[A-Za-z0-9+/=]+', '[IMAGE_REMOVED]', content)
         return content
     
     @classmethod
@@ -265,68 +280,56 @@ Use double quotes only. No text outside JSON. Follow field names EXACTLY as show
             return False
     
     @classmethod
-    def estimate_context_usage(cls, estimated_tokens: int, model_name: str) -> float:
-        """Estimate what percentage of model context is being used"""
-        # Use centralized model configuration
-        # Use centralized model registry
-        try:
-            from modules.llm.model_registry import get_model_config
-            model_config = get_model_config(model_name)
-            if model_config and model_config.context_window and model_config.context_window > 0:
-                return estimated_tokens / model_config.context_window
-        except ImportError:
-            pass
-        
-        # Final fallback - use reasonable defaults based on model name patterns
-        model_name_lower = model_name.lower() if model_name else ""
-        
-        # GPT models
-        if "gpt-5" in model_name_lower:
-            default_context = 1047576  # 1M tokens for gpt-5 series
-        elif "gpt-4.5" in model_name_lower:
-            default_context = 128000
-        elif "gpt-4-turbo" in model_name_lower:
-            default_context = 128000
-        elif "gpt-4" in model_name_lower:
-            default_context = 8192
-        elif "gpt-3.5" in model_name_lower:
-            default_context = 16385
-        # Claude models  
-        elif any(m in model_name_lower for m in ["claude-3", "claude-4"]):
-            default_context = 200000  # Most Claude 3/4 models have 200k context
-        # Gemini models
-        elif "gemini-2.5" in model_name_lower:
-            default_context = 2097152  # 2M tokens for Gemini 2.5 Pro
-        elif any(m in model_name_lower for m in ["gemini-1.5", "gemini-2.0"]):
-            default_context = 1048576  # 1M tokens for Gemini 1.5/2.0 Flash
-        elif "gemini" in model_name_lower:
-            default_context = 32768  # Other Gemini models
-        # DeepSeek models
-        elif "deepseek-chat" in model_name_lower:
-            default_context = 64000  # DeepSeek Chat has 64k context
-        elif "deepseek-reasoner" in model_name_lower:
-            default_context = 64000  # DeepSeek Reasoner
-        elif "deepseek" in model_name_lower:
-            default_context = 16000  # Other DeepSeek models
-        # Llama models
-        elif "llama" in model_name_lower:
-            default_context = 128000  # Modern Llama models typically have large context
-        # O-series models
-        elif any(m in model_name_lower for m in ["o1", "o3"]):
-            default_context = 200000  # O-series reasoning models
-        else:
-            # Conservative default for unknown models
-            default_context = 8192
-        
-        return estimated_tokens / default_context
-    
+    def estimate_context_usage(cls, estimated_tokens: int, model_name: str,
+                               message_manager=None) -> float:
+        """What fraction of the usable input budget ``estimated_tokens`` is.
+
+        F19 — ONE denominator. This used to divide by a raw model context window
+        (and, when the registry did not know the model, by a hardcoded ladder of
+        per-model constants that had to be edited for every new id), while the
+        MessageManager divided by ``max_input_tokens`` (``0.95*cw - reserve``,
+        plus any ``TASK_MAX_INPUT_TOKENS`` operator cap). The owner could see two
+        different "how full is it" numbers for the same request.
+
+        Pass the live ``message_manager`` and its ``context_usage()["limit"]`` IS
+        the denominator. Without one (a pure call from a test or a tool with no
+        session) the model registry's window is the fallback, and an unknown
+        model falls back to a single conservative default rather than a ladder —
+        an unknown id is a registry gap to fix, not a table to grow.
+        """
+        if estimated_tokens <= 0:
+            return 0.0
+
+        limit = 0
+        if message_manager is not None:
+            try:
+                limit = int(message_manager.context_usage()["limit"] or 0)
+            except Exception:
+                limit = int(getattr(message_manager, "max_input_tokens", 0) or 0)
+        if limit <= 0:
+            try:
+                from modules.llm.model_registry import get_model_config
+                model_config = get_model_config(model_name)
+                if model_config and model_config.context_window:
+                    limit = int(model_config.context_window)
+            except ImportError:
+                limit = 0
+        if limit <= 0:
+            # Conservative: a model nobody can size is treated as small, so the
+            # guard fires EARLY rather than passing a request the provider drops.
+            limit = cls.UNKNOWN_MODEL_CONTEXT_WINDOW
+
+        return estimated_tokens / limit
+
     @classmethod
-    def should_abort_context_overflow(cls, estimated_tokens: int, model_name: str) -> bool:
+    def should_abort_context_overflow(cls, estimated_tokens: int, model_name: str,
+                                      message_manager=None) -> bool:
         """Check if we should abort due to context overflow"""
         if not cls.ENABLE_CONTEXT_OVERFLOW_GUARD:
             return False
-            
-        usage_ratio = cls.estimate_context_usage(estimated_tokens, model_name)
+
+        usage_ratio = cls.estimate_context_usage(estimated_tokens, model_name,
+                                                 message_manager=message_manager)
         return usage_ratio > cls.CONTEXT_OVERFLOW_THRESHOLD
 
 

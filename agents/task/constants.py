@@ -288,6 +288,13 @@ from core.config_policy import (  # noqa: F401  (underscored + module-scope-used
     reset_autonomy_mode_warnings,
 )
 
+# 067 P4 prerequisite: the payment-approval views are lazy (built on first read,
+# core/config_policy/payment_tools.py); the star import above does not carry them.
+from core.config_policy import payment_tools as _payment_tools  # noqa: E402
+from core.lazy_views import lazy_module_getattr as _lazy, reexport_map as _reexport  # noqa: E402
+
+__getattr__ = _lazy(__name__, {}, _reexport(_payment_tools.__name__, _payment_tools.LAZY_VIEWS))
+
 class TimeoutConfig:
     """Centralized timeout configuration - SINGLE SOURCE OF TRUTH.
 
@@ -326,6 +333,10 @@ class TimeoutConfig:
         # Sit ABOVE the ceiling so the tool's own clean kill (with output) wins.
         'shell': _core_int_env('SHELL_TIMEOUT_SECONDS', 330),
         'code_execution': _core_int_env('CODE_EXEC_TIMEOUT_SECONDS', 330),
+        # Coding-agent review B2: `coding.run_tests` runs on the same code_exec
+        # backend with the same 300 s ceiling; under 'default' (60 s) the
+        # controller killed every real suite first. Same flag, same value.
+        'coding': _core_int_env('CODE_EXEC_TIMEOUT_SECONDS', 330),
         'default': _core_int_env('DEFAULT_TOOL_TIMEOUT_SECONDS', 60),   # Default for unknown tools
     }
 
@@ -414,10 +425,14 @@ class TimeoutConfig:
     LLM_BASE_TIMEOUT = _core_float_env('LLM_BASE_TIMEOUT_SECONDS', 30)        # Base (adjusted by tokens)
 
     # ========== BROWSER CLEANUP TIMEOUTS ==========
-    BROWSER_CLOSE = _core_float_env('BROWSER_CLOSE_TIMEOUT', 3.0)
-    BROWSER_CONTEXT_CLOSE = _core_float_env('BROWSER_CONTEXT_CLOSE_TIMEOUT', 8.0)
-    BROWSER_INSTANCE_CLOSE = _core_float_env('BROWSER_INSTANCE_CLOSE_TIMEOUT', 5.0)
-    PROCESS_KILL = _core_float_env('PROCESS_KILL_TIMEOUT', 2.0)
+    # 067 F4: plain constants. They read BROWSER_CLOSE_TIMEOUT /
+    # BROWSER_CONTEXT_CLOSE_TIMEOUT / BROWSER_INSTANCE_CLOSE_TIMEOUT /
+    # PROCESS_KILL_TIMEOUT from the env, undocumented, and nothing in the tree
+    # consumes them — an env knob with no effect. Values unchanged.
+    BROWSER_CLOSE = 3.0
+    BROWSER_CONTEXT_CLOSE = 8.0
+    BROWSER_INSTANCE_CLOSE = 5.0
+    PROCESS_KILL = 2.0
 
     @classmethod
     def get_tool_timeout(cls, tool_name: str) -> int:
@@ -455,16 +470,14 @@ BASE_DEFAULT_TOOLS = ("filesystem", "task")
 # every research/content/comms/coding/receivables tool. NEVER money-spend
 # (x402_pay/wallet/hyperliquid/polymarket) and NEVER host/compute tools
 # (code_execution/shell/self_env — those ride AGENT_COMPUTE_POSTURE).
-AUTONOMOUS_MODE_TOOLS = (
-    "filesystem", "task", "web_fetch", "knowledge",
-    "twitter", "email", "anysite", "perplexity",
-    "browser", "mcp", "coding", "x402_invoice",
-    "goal", "cronjob",
-    # Build-in-public: the real-account X browser rail (x_post is owner-approval-
-    # gated → auto+notify under autonomous mode). Social-write, NOT money/host, so
-    # the MONEY_AND_HOST exclusion invariant (test_autonomous_toolset) is intact.
-    "x_browser",
-)
+# The ids live in core/config_policy/profiles.py (067 P1): `grant:autonomous`.
+# It includes `x_browser` — build-in-public: the real-account X browser rail
+# (x_post is owner-approval-gated → auto+notify under autonomous mode).
+# Social-write, NOT money/host, so the MONEY_AND_HOST exclusion invariant
+# (test_autonomous_toolset) is intact.
+from core.config_policy.profiles import profile as _profile  # noqa: E402
+
+AUTONOMOUS_MODE_TOOLS = _profile("grant:autonomous")
 
 #: The on-chain trading rail, added to the autonomous grant ONLY when the
 #: operator arms it. Default OFF, so the shipped posture is unchanged.
@@ -490,10 +503,21 @@ AUTONOMOUS_MODE_TOOLS = (
 #: toolset while keeping the caps is the right trade and removing the caps would
 #: not be.
 #:
-#: Still excluded even when armed: `x402_pay`, `wallet`, `hyperliquid`,
-#: `polymarket` and every host tool (`MONEY_AND_HOST`). This widens the on-chain
-#: trading rail, not arbitrary payment or host access.
-DEFI_AUTONOMOUS_TOOLS = ("defi_data", "defi_trade")
+#: Still excluded even when armed: `wallet`, `hyperliquid`, `polymarket` and
+#: every host tool (`MONEY_AND_HOST`). `x402_pay` rides the same key since 068
+#: (below). This widens the on-chain trading rail, not host access.
+DEFI_AUTONOMOUS_TOOLS = _profile("grant:defi_autonomous")
+
+#: 068 X4: x402 auto-pay under the same armed key. Until 2026-09-26 no prod
+#: session ever held `x402_pay` — every goal run's `load_tool` answered
+#: "gated: money" — so the agent could not pay for one API call. What bounds it:
+#: `tools/x402/spend_gate.py` admits only the owner and a goal/cron run on the
+#: main agent (never a leaf, a self-wake or a tainted turn); a payment above
+#: `X402_AUTONOMOUS_MAX_USD` waits in the owner queue; the PolicyGate holds the
+#: per-tx ceiling and `WALLET_VENUE_DAILY_CAP_X402_USD`; the asset/network pins
+#: bind it to canonical Base USDC. The tool itself only exists with
+#: `X402_CLIENT_ENABLED` + `AGENT_WALLET_ENABLED` (`provided_only` drops it).
+X402_AUTONOMOUS_TOOLS = _profile("grant:x402_autonomous")
 
 #: 042: the launchpad and the injected dapp wallet. They ride `DEFI_AGENT_AUTONOMY`
 #: alongside the trading rail — for the SAME reason it exists. An agent asked to
@@ -506,25 +530,58 @@ DEFI_AUTONOMOUS_TOOLS = ("defi_data", "defi_trade")
 #: alone grants a tool that still refuses every call with its own remedy. Two
 #: deliberate keys, not one: reaching a capability and arming it are different
 #: decisions.
-DEFI_LAUNCH_AUTONOMOUS_TOOLS = ("launchpad", "dapp_browser")
+DEFI_LAUNCH_AUTONOMOUS_TOOLS = _profile("grant:defi_launch_autonomous")
+
+#: 050/069: the agent_nft tool rides the same key, but ONLY when the optional
+#: agent-NFT package (`core.tool_capabilities.AGENT_NFT_PACKAGE_MODULES`) is installed — requesting a tool the deploy cannot load
+#: writes a false `[tool gap]` line into every goal record (the 056 WS4 lesson).
+#: `AGENT_NFT_ENABLED` (default OFF) still gates every call inside the tool.
+AGENT_NFT_AUTONOMOUS_TOOLS = _profile("grant:agent_nft")
+
+
+def _agent_nft_package_installed() -> bool:
+    try:
+        import importlib.util
+        from core.tool_capabilities import AGENT_NFT_PACKAGE_MODULES
+        return any(importlib.util.find_spec(m) is not None for m in AGENT_NFT_PACKAGE_MODULES)
+    except Exception:
+        return False
+
+
+def _x402_pay_constructed() -> bool:
+    """`x402_pay` is registered only with BOTH flags (tools/x402/__init__.py +
+    the wallet factory); requesting it otherwise writes a false tool gap into
+    every goal record (the 056 WS4 lesson, as for agent_nft above)."""
+    from core.env import bool_env
+    return (bool_env("X402_CLIENT_ENABLED", False)
+            and bool_env("AGENT_WALLET_ENABLED", False))
 
 
 def autonomous_mode_tools() -> tuple:
     """`AUTONOMOUS_MODE_TOOLS`, plus the defi rail when `DEFI_AGENT_AUTONOMY` is
     armed. Resolved at CALL time so an operator can arm it without a redeploy."""
     from core.env import bool_env
+    from core.config_policy.profiles import provided_only
     if bool_env("DEFI_AGENT_AUTONOMY", False):
-        return (AUTONOMOUS_MODE_TOOLS + DEFI_AUTONOMOUS_TOOLS
-                + DEFI_LAUNCH_AUTONOMOUS_TOOLS)
-    return AUTONOMOUS_MODE_TOOLS
+        tools = (AUTONOMOUS_MODE_TOOLS + DEFI_AUTONOMOUS_TOOLS
+                 + DEFI_LAUNCH_AUTONOMOUS_TOOLS
+                 + (X402_AUTONOMOUS_TOOLS if _x402_pay_constructed() else ())
+                 + (AGENT_NFT_AUTONOMOUS_TOOLS if _agent_nft_package_installed() else ()))
+    else:
+        tools = AUTONOMOUS_MODE_TOOLS
+    # 067 P3: the views are import-time; a pack disabled at phase 2 drops out here.
+    return tuple(provided_only(tools))
 
 
 def stable_autonomous_toolset() -> bool:
     """057 WS-A: freeze the REQUESTED autonomous toolset so the emitted tool
     schemas (part of the cached prompt prefix) do not flip on a credential
-    verdict's TTL. Default OFF => the 056 WS4 drop behaviour is unchanged."""
+    verdict's TTL. Default ON since 2026-09-22 (the harness/cache review:
+    four distinct tool counts in one prod day, each a cold cache); ``false``
+    restores the 056 WS4 drop behaviour. `core/status_snapshot.py` carries the
+    same default literal (core may not import this module) — flip both."""
     from core.env import bool_env
-    return bool_env("STABLE_AUTONOMOUS_TOOLSET", False)
+    return bool_env("STABLE_AUTONOMOUS_TOOLSET", True)
 
 
 def effective_autonomous_tools() -> tuple:
@@ -564,16 +621,60 @@ def effective_autonomous_tools() -> tuple:
 # Each MCP action takes 30-180 seconds. Limiting prevents timeout cascades.
 MAX_MCP_PER_STEP = _core_int_env('MAX_MCP_PER_STEP', 3)  # Configurable via env
 
-# Context-compaction hysteresis (flow-efficiency D3-a)
-# LLM compaction (llm_compact_history) is an EXTRA LLM call. Without a cooldown it
-# re-fires every step once usage stays >=85% (a single large MCP result can re-cross
-# the line each step), doubling call cost on long runs. Enforce a minimum step gap
-# between LLM compactions; the >=95% emergency prune (non-LLM) remains the safety net.
-COMPACTION_COOLDOWN_STEPS = _core_int_env('COMPACTION_COOLDOWN_STEPS', 3)
+# The context-compaction LADDER — the ONE place these three numbers live (F11).
+# They were literals inside agent/core/step.py, and a second, window-scaled policy
+# (CompactionManager, 0.35/0.45) was built on every session and consulted by
+# nothing; F11(d) deleted that class. Do NOT add a third threshold — extend this
+# ladder. Read as PERCENT of the context window, by the one gauge
+# (MessageManager.get_context_usage_percent).
+COMPACTION_WARN_PCT = 70        # log only, every 5 steps
+COMPACTION_LLM_PCT = 85         # the EXTRA LLM call (llm_compact_history)
+COMPACTION_EMERGENCY_PCT = 95   # the non-LLM prune; the overflow safety net
+
+# Context-compaction hysteresis (flow-efficiency D3-a; widened by F11)
+# LLM compaction (llm_compact_history) is an EXTRA LLM call, and the rebuild colds
+# the whole conversation prefix. Without a cooldown it re-fires every step once
+# usage stays >=85% (a single large MCP result can re-cross the line each step).
+# Enforce a minimum step gap; the >=95% emergency prune (non-LLM) remains the
+# safety net. 3 -> 8 on 2026-09-23 (F11): at 3 the band could fire again almost
+# immediately, paying a cold prefix for a cut that had not yet earned it.
+COMPACTION_COOLDOWN_STEPS = _core_int_env('COMPACTION_COOLDOWN_STEPS', 8)
+
+# F11 warm summariser (DSH region.ts:532-563). The compaction summariser used to
+# send a LONE HumanMessage carrying the conversation as TEXT — a completely cold
+# request, even when it went to the session's own model, so the middle was re-read
+# at full price. When no distinct aux model is configured, send
+# [foundation + the messages being summarised + ONE trailing instruction] instead:
+# the leading bytes are the ones the provider just cached for the step request, and
+# only the instruction is cold. A DIFFERENT model cannot hit that prefix, so an
+# aux model always keeps the old shape. `false` = the old shape everywhere.
+def compaction_warm_prefix() -> bool:
+	"""``COMPACTION_WARM_PREFIX`` (default ON) — read per call, not frozen."""
+	return _core_bool_env('COMPACTION_WARM_PREFIX', True)
+
+
+# F11 progress rule: the cooldown is a floor, not a wall. A compaction
+# that ACTUALLY cut this fraction of the context has earned the right to run again
+# inside the window; one that did not must wait it out. Reuses the savings ratio
+# the anti-thrash counter already records (compactor._record_compaction_savings),
+# so there is one number, not a second measurement.
+COMPACTION_PROGRESS_FLOOR = 0.05
+
+# F16(ii) — the per-step state message is EPHEMERAL.
+# It used to be appended into `history` and then spliced back out mid-deque by
+# `remove_last_state_message()` on every step, which rebuilt the whole deque and
+# colded every cached byte behind the splice point. The one-shot ephemeral rail
+# already rides the tail of exactly one `get_messages_for_llm()` call and never
+# enters durable history, so the browser screenshot stops landing in
+# message_history.json too. `false` restores the append+splice, byte-identical.
+def state_message_ephemeral() -> bool:
+	"""``STATE_MESSAGE_EPHEMERAL`` (default ON) — read per call, not frozen."""
+	return _core_bool_env('STATE_MESSAGE_EPHEMERAL', True)
+
 
 # Compaction payload tuning (Reference-parity context upgrade, 2026-06).
-# These govern HOW the LLM compaction summarizes, not WHEN it fires (the tiered
-# thresholds in CompactionManager own the trigger). Previously the summary input
+# These govern HOW the LLM compaction summarizes, not WHEN it fires (the >=85/95 %
+# ladder in agent/core/step.py owns the trigger). Previously the summary input
 # was silently truncated to the last 50 messages, each clipped to 500 chars, with
 # tool results dropped entirely -> the summary lost most of what it claimed to keep.
 COMPACTION_KEEP_RECENT = _core_int_env('COMPACTION_KEEP_RECENT', 10)  # min recent msgs kept verbatim
@@ -707,25 +808,24 @@ GEMINI_FAMILY_INSTRUCTIONS = """## MODEL NOTE (Gemini)
 - Call exactly one function per step unless several are truly independent; after an
   optional brief planning turn, include at least one function call each step.
 - Use the exact tool names from the schema; do not invent wrapper names.
-- To reply to the user and finish, call done(text=...). A single non-blocking
-  send_message does not end your turn; if you only reply without acting for a couple of
-  steps the runtime ends the turn for you.
+- To answer the user, call send_message(text=...), then call done in the same step.
+  done(text) is your internal record; the user never reads it.
 """
 
 OPENAI_FAMILY_INSTRUCTIONS = """## MODEL NOTE (GPT)
-- Emit native function calls, not JSON-in-text. Every step must include ≥1 function call.
+- Emit native function calls, not JSON-in-text. After an optional brief planning
+  turn, include at least one function call every step.
 - Prefer one decisive action per step over long deliberation.
-- To reply and finish in one shot, use done(text=...); reserve non-blocking
-  send_message for a status update you immediately follow with more tool calls.
+- To answer the user, call send_message(text=...), then call done in the same step.
+  done(text) is your internal record; the user never reads it.
 """
 
 KIMI_FAMILY_INSTRUCTIONS = """## MODEL NOTE (Kimi)
 - Return tool calls as structured function calls only — never write tool-call
   delimiter tokens (e.g. <|tool_call_begin|>) into your text content.
 - One function call per step is enough; don't repeat the same message across steps.
-- To greet/answer and finish, call done(text=...). A single non-blocking send_message
-  does not end your turn; if you only reply without acting for a couple of steps the
-  runtime ends the turn for you, so prefer done() to finish deliberately.
+- To greet or answer, call send_message(text=...), then call done in the same step.
+  done(text) is your internal record; the user never reads it.
 """
 
 # Substring → guidance. First match on the lowercased model name wins.

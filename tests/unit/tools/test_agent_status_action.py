@@ -239,7 +239,8 @@ async def test_agent_status_everything_down_still_answers(monkeypatch):
     # 2026-08-28 status SSOT: dark organs are REPORTED, never hidden.
     assert "steps: unavailable" in text
     assert "tools: unavailable" in text
-    assert "wallet: unavailable" in text
+    # CR-M07: no tenant is not the owner — the operator wallet is withheld.
+    assert "wallet: withheld" in text
     assert "net:" not in text  # the ledger statements themselves never render
     assert "config:" in text
     # 031: the pause line leads every seat (the agent's own view included), THEN health
@@ -374,7 +375,7 @@ async def test_agent_status_total_blackout_composition(monkeypatch, tmp_path):
     # organ renders as `<section>: unavailable (<reason>)`, never vanishes.
     assert "steps: unavailable" in text
     assert "tools: unavailable" in text
-    assert "wallet: unavailable" in text
+    assert "wallet: withheld" in text  # CR-M07: no tenant is not the owner
     assert "ledger: unavailable" in text
     assert "net:" not in text  # the ledger statements themselves never render
     assert "config: unavailable" in text
@@ -483,3 +484,38 @@ async def test_agent_status_capabilities_fails_soft_when_container_absent(monkey
     text = result.extracted_content
     assert "steps: 4/25" in text  # other sections unaffected
     assert result.error is None
+
+
+# --- CR-M07: the operator wallet is the owner's fact -----------------------
+
+class _FakeWallet:
+    class config:
+        network = "testnet"
+
+    solana_address = "So1anaAddr111"
+
+    def operational_signer(self):
+        class _S:
+            address = "0x" + "ab" * 20
+        return _S()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("uid,visible", [("u_stranger", False), ("owner-1", True)])
+async def test_agent_status_wallet_is_owner_scoped(monkeypatch, uid, visible):
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "owner-1")
+    c = _live_controller(monkeypatch, user_id=uid)
+    import core.wallet.factory as wf
+    import modules.credits.unified_ledger as ul
+    monkeypatch.setattr(wf, "get_agent_wallet", lambda: _FakeWallet())
+
+    async def _no_ledger(*a, **k):
+        raise RuntimeError("not under test")
+
+    monkeypatch.setattr(ul, "build_ledger", _no_ledger)
+    action = c.registry.registry.actions["agent_status"]
+    result = await action.function(action.param_model(), execution_context=None)
+    text = result.extracted_content
+    assert (("0x" + "ab" * 20) in text) is visible
+    assert ("So1anaAddr111" in text) is visible
+    assert ("wallet: withheld" in text) is (not visible)

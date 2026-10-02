@@ -6,7 +6,7 @@ from typing import Optional
 
 from core.wallet.agent_wallet import AgentWallet
 from core.wallet.config import load_wallet_config
-from core.wallet.policy import PolicyGate
+from core.money.ledger import SpendLedger as PolicyGate
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +41,7 @@ def _emit_spend_to_event_log(entry: dict) -> None:
             result_ref=entry.get("result_ref"),
             ts=entry.get("ts"),
             chain=entry.get("chain"),
+            lane=entry.get("lane"),
         )
     except Exception:
         pass
@@ -96,11 +97,25 @@ def _wallet_without_a_seed(cfg, sink) -> AgentWallet:
     return wallet
 
 
+def _signer_mode() -> str:
+    from core.signer import signer_mode
+    return signer_mode()
+
+
 def get_agent_wallet() -> Optional[AgentWallet]:
     global _cached, _resolved
     if _resolved:
         return _cached
     cfg = load_wallet_config()
+    mode = _signer_mode() if cfg.enabled else "local"
+    if cfg.enabled and mode == "remote":
+        # 066 P2: the key lives in polyrob-signer. This process keeps the
+        # agent-side lane (its PolicyGate + ledger) and holds no seed.
+        from core.signer.remote import build_remote_wallet
+        _cached = build_remote_wallet(cfg, _durable_audit_sink(),
+                                      on_record=_emit_spend_to_event_log)
+        _resolved = True
+        return _cached
     if cfg.enabled:
         sink = _durable_audit_sink()
         if not cfg.master_seed or len(cfg.master_seed) < 32:
@@ -110,8 +125,13 @@ def get_agent_wallet() -> Optional[AgentWallet]:
             # public-only mode would hide a money-critical misconfiguration.
             _cached = _wallet_without_a_seed(cfg, sink)
         else:
-            _cached = AgentWallet(cfg, audit_sink=sink,
-                                  on_record=_emit_spend_to_event_log)
+            wallet_cls = AgentWallet
+            if mode == "shadow":
+                # 066 P2 shadow: sign locally as today AND ask the signer.
+                from core.signer.shadow import shadow_wallet_class
+                wallet_cls = shadow_wallet_class()
+            _cached = wallet_cls(cfg, audit_sink=sink,
+                                 on_record=_emit_spend_to_event_log)
             # The seeded process is the only one that CAN publish the public
             # half, so it does, every start. Fail-open — a JSON file that will
             # not write must never stop the agent's wallet.

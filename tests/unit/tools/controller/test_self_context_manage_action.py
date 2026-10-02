@@ -9,6 +9,19 @@ from tools.controller.registry.service import Registry
 from tools.controller.service import Controller
 
 
+@pytest.fixture(autouse=True)
+def _pin_the_review_lane(monkeypatch):
+    """⚠️ ``OWNER_RULES_IMMEDIATE`` defaults **ON** since 2026-09-21, so an unset
+    env no longer means "queued". This file tests the QUARANTINE/PROMOTE lane, so
+    it pins the flag rather than inheriting a default that has now moved. The
+    immediacy path and its forged-turn control live in
+    ``test_owner_rules_immediate.py``.
+    """
+    monkeypatch.setenv("OWNER_RULES_IMMEDIATE", "false")
+
+
+
+
 def _bare_controller(data_dir):
     c = object.__new__(Controller)
     c.logger = logging.getLogger("self-context-test")

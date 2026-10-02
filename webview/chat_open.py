@@ -226,6 +226,90 @@ def starters() -> list:
     return [t(key) for key in STARTERS]
 
 
+#: A session started by one of these is a RUN view, not a chat with the owner
+#: (070 W0.12; W2.25 moves it into its job or goal chat).
+RUN_CREATORS = frozenset({"cron", "goal", "correspondent"})
+
+#: The REPL's stock task text: not something the owner asked (plan open question 4).
+_REPL_STOCK_TASK = "Interactive conversation session."
+
+
+def _session_folder(session_id: str):
+    """The session's folder under its OWNER's id, or ``None``. Never creates one
+    (``pm().get_session_root`` would)."""
+    from agents.task.path import pm
+    paths = pm()
+    clean = paths.clean_session_id(session_id)
+    owner = paths.get_session_user(clean)
+    if not owner:
+        return None
+    for folder in (paths.data_root / owner / clean, paths.data_root / owner / "sessions" / clean):
+        if folder.is_dir():
+            return folder
+    return None
+
+
+def first_line_context(session_id: str) -> dict:
+    """``first_line`` (2000 chars), ``creator``, ``run_kind`` for a bound session.
+
+    A failed read leaves all three empty: no invented question.
+    """
+    empty = {"first_line": "", "creator": "", "run_kind": "", "run_head": ""}
+    try:
+        folder = _session_folder(session_id)
+        if folder is None:
+            return empty
+        from webview.session_catalog import session_head
+        head = session_head(folder, task_chars=2000)
+    except Exception:
+        logger.warning("chat first line: could not read session %s", session_id, exc_info=True)
+        return empty
+    if head["unreadable"].get("task"):
+        return empty
+    creator = str(head.get("creator") or "").strip().lower()
+    task = str(head.get("task") or "").strip()
+    if task == _REPL_STOCK_TASK:
+        task = ""
+    run = creator in RUN_CREATORS
+    return {"first_line": task, "creator": creator,
+            "run_kind": "run" if run else "chat",
+            "run_head": t(f"chat.run_head.{creator}") if run else ""}
+
+
+def run_live(session_id: str) -> str:
+    """``"true"`` / ``"false"`` / ``""`` — is a live process running this session?
+
+    The transcript reads it (``data-run-live``) to tell a turn that is still
+    working from one whose process ended before it wrote a closing event: the
+    second must not read "Working for …" forever (070 E.13). ``"true"`` when
+    THIS process runs it; else the SHARED registry (``session_registry.db``,
+    only when ``SESSION_REGISTRY_BACKEND=sqlite`` — the in-process backend
+    cannot see the agent service's sessions, so "absent" there means nothing).
+    ``""`` = not known: the transcript keeps its old behaviour.
+    """
+    try:
+        import os
+
+        from agents.task.path import pm
+        from webview import webgate
+        clean = pm().clean_session_id(session_id)
+        agent = webgate.in_process_task_agent()
+        route_fn = getattr(agent, "route_session", None) if agent else None
+        if route_fn is not None:
+            route = route_fn(clean)
+            if route is not None and getattr(route, "is_local", False):
+                return "true"
+        backend = (os.getenv("SESSION_REGISTRY_BACKEND") or "memory").strip().lower()
+        if backend != "sqlite":
+            return ""
+        from core.status_live import session_is_live
+        live = session_is_live(clean, webgate.data_dir())
+    except Exception:
+        logger.debug("run liveness probe failed for %s", session_id, exc_info=True)
+        return ""
+    return "" if live is None else ("true" if live else "false")
+
+
 def chat_context(request: Request, session_id: str = "") -> dict:
     """The template's own half of the context; the frame adds the rest.
 
@@ -247,7 +331,11 @@ def chat_context(request: Request, session_id: str = "") -> dict:
             # the owner nothing at all.
             logger.warning("ownership resolution raised", exc_info=True)
             is_owner, authed, unknown = (False, False, True)
+    first = (first_line_context(session_id) if bound and is_owner
+             else {"first_line": "", "creator": "", "run_kind": "", "run_head": ""})
     return {
+        **first,
+        "run_live": run_live(session_id) if bound and is_owner else "",
         "session_id": session_id,
         "is_new": not bound,
         "is_owner": is_owner,

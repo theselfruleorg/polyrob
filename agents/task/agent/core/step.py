@@ -219,6 +219,28 @@ def _is_fatal_step_exc(error, billing_failover_enabled: bool) -> bool:
 	return False
 
 
+def _last_compaction_savings(manager: Any) -> Optional[float]:
+	"""F11: the fraction of context the LAST compaction actually cut, or None.
+
+	Reads the ONE number the anti-thrash counter already keeps
+	(``compactor._record_compaction_savings``); there is deliberately no second
+	measurement of "did compaction help". A module-level delegator because the
+	compaction ladder runs against test doubles as often as against a real
+	MessageManager — a stub that cannot answer must read as "no evidence of
+	progress" (wait the cooldown out), never as an exception inside the ladder.
+	"""
+	reader = getattr(manager, "last_compaction_savings", None)
+	if not callable(reader):
+		return None
+	try:
+		value = reader()
+		return None if value is None else float(value)
+	except (TypeError, ValueError):
+		return None
+	except Exception:  # pragma: no cover - an observation never fails a step
+		return None
+
+
 def _emit_compaction_event(agent: Any, event_name: str, mode: str, **fields: Any) -> None:
 	"""019 P1: emit a compaction_started/compaction_finished feed span event.
 
@@ -365,9 +387,12 @@ class StepMixin:
 		# FIX (Jan 2026): Changed from every 10 steps to every step
 		# MCP responses can add 60K+ tokens in a single step, causing overflow before check
 		try:
+			from agents.task.constants import (
+				COMPACTION_EMERGENCY_PCT, COMPACTION_LLM_PCT, COMPACTION_WARN_PCT,
+			)
 			usage_pct = self.message_manager.get_context_usage_percent()
 
-			if usage_pct >= 95:
+			if usage_pct >= COMPACTION_EMERGENCY_PCT:
 				# CRITICAL: Emergency prune immediately - about to overflow.
 				# Non-LLM, always runs (the overflow safety net) - no cooldown.
 				self.logger.warning(f"🚨 Critical context: {usage_pct:.1f}% - emergency prune")
@@ -380,19 +405,36 @@ class StepMixin:
 					tokens_after=self.message_manager.get_token_count(),
 					duration_seconds=time.time() - _c_t0,
 				)
-			elif usage_pct >= 85:
+			elif usage_pct >= COMPACTION_LLM_PCT:
 				# HIGH: LLM compaction to intelligently summarize.
-				# Flow-efficiency D3-a: llm_compact_history is an EXTRA LLM call. Apply a
-				# step cooldown so it does not re-fire every step while usage lingers in the
-				# 85-95% band (a single large MCP result can re-cross 85% each step). If it
-				# climbs to >=95%, the emergency prune above handles overflow without an LLM call.
-				from agents.task.constants import COMPACTION_COOLDOWN_STEPS
+				# Flow-efficiency D3-a: llm_compact_history is an EXTRA LLM call, and its
+				# rebuild colds the whole conversation prefix. Apply a step cooldown so it
+				# does not re-fire every step while usage lingers in the 85-95% band (a
+				# single large MCP result can re-cross 85% each step). If it climbs to
+				# >=95%, the emergency prune above handles overflow without an LLM call.
+				from agents.task.constants import (
+					COMPACTION_COOLDOWN_STEPS, COMPACTION_PROGRESS_FLOOR,
+				)
 				last_compaction = getattr(self, '_last_llm_compaction_step', None)
 				steps_since = (
 					self.state.n_steps - last_compaction
 					if last_compaction is not None else COMPACTION_COOLDOWN_STEPS
 				)
-				if steps_since >= COMPACTION_COOLDOWN_STEPS:
+				# F11 progress rule: the cooldown is a floor, not a wall. A compaction
+				# that actually cut >= COMPACTION_PROGRESS_FLOOR of the context has
+				# earned a second run inside the window; one that barely helped has not,
+				# and re-paying a cold prefix for it is exactly the thrash the cooldown
+				# exists to stop. The number is the one the anti-thrash counter already
+				# records — there is no second measurement.
+				_saved = _last_compaction_savings(self.message_manager)
+				_made_progress = _saved is not None and _saved >= COMPACTION_PROGRESS_FLOOR
+				if steps_since >= COMPACTION_COOLDOWN_STEPS or _made_progress:
+					if steps_since < COMPACTION_COOLDOWN_STEPS:
+						self.logger.info(
+							f"📦 High context: {usage_pct:.1f}% - inside the cooldown "
+							f"({steps_since}/{COMPACTION_COOLDOWN_STEPS} steps) but the last "
+							f"compaction cut {_saved:.0%}, so this one is allowed"
+						)
 					self.logger.info(f"📦 High context: {usage_pct:.1f}% - LLM compaction")
 					# P2-15: only start the cooldown when compaction ACTUALLY ran. A
 					# transient abort (rate-limit/connection blip), a <15-message history,
@@ -413,10 +455,13 @@ class StepMixin:
 						self._last_llm_compaction_step = self.state.n_steps
 				else:
 					self.logger.info(
-						f"📦 High context: {usage_pct:.1f}% - compacted {steps_since} step(s) ago, "
-						f"skipping LLM compaction (cooldown {COMPACTION_COOLDOWN_STEPS})"
+						f"📦 High context: {usage_pct:.1f}% - compacted {steps_since} step(s) ago "
+						f"and it cut "
+						f"{'nothing measurable' if _saved is None else format(_saved, '.0%')}, "
+						f"skipping LLM compaction (cooldown {COMPACTION_COOLDOWN_STEPS}, "
+						f"progress floor {COMPACTION_PROGRESS_FLOOR:.0%})"
 					)
-			elif usage_pct >= 70:
+			elif usage_pct >= COMPACTION_WARN_PCT:
 				# WARNING: Log for visibility every 5 steps at this level
 				if self.state.n_steps % 5 == 0:
 					self.logger.info(f"⚠️ Context at {usage_pct:.1f}% - monitoring")
@@ -575,6 +620,10 @@ class StepMixin:
 		# AutonomyConfig.continuity_bridge_enabled() is on and a prior chat episode
 		# with a summary exists for this session's thread_key.
 		await self._maybe_inject_continuity_bridge()
+
+		# 061: the owner thread — tail on the session's first turn, delta on every
+		# later turn, the rail slice for an autonomous run. Fail-open.
+		await self._maybe_inject_owner_thread()
 
 		# §7.5: autonomous continuity bridge — first step only, AUTONOMOUS sessions
 		# only (goal/cron; never chat/sub-agent). Carries recent activity into the

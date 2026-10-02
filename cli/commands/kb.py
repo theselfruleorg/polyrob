@@ -37,7 +37,8 @@ def _require_kb_enabled() -> bool:
     "KB disabled, did nothing" from "succeeded".
     """
     if not _kb_enabled():
-        click.echo(click.style("KB disabled (set KB_ENABLED=1)", dim=True))
+        from core.remedy import flag_remedy
+        click.echo(click.style(f"KB disabled — {flag_remedy('KB_ENABLED')}", dim=True))
         raise SystemExit(2)
     return True
 
@@ -321,3 +322,98 @@ async def _kb_search(query: str, collection: str, limit: int,
 
     click.echo(click.style(f"KB results for {query!r}:", fg="cyan"))
     click.echo(result)
+
+
+# ---------------------------------------------------------------------------
+# kb reindex (WS-K3, 2026-09-22)
+# ---------------------------------------------------------------------------
+
+@kb.command("reindex")
+@click.option("--user", "user_id", default=None,
+              help="Owner tenant (default: this box's owner principal).")
+@click.option("--limit", default=0, show_default=True,
+              help="Stop after N documents (0 = every one).")
+@click.option("--dry-run", is_flag=True,
+              help="Name what would be indexed and change nothing.")
+def kb_reindex(user_id, limit: int, dry_run: bool) -> None:
+    """Index the documents this agent has already written.
+
+    The artifact registry holds one row per produced file; this walks it and
+    ingests the ones that are knowledge rather than run logs. Measured on prod
+    2026-09-22: 76 indexed sources against 473 registered documents — the
+    backfill for everything written before the auto-ingest existed.
+    """
+    _bootstrap()
+    if not _require_kb_enabled():
+        return
+    from cli._admin_home import admin_data_dir
+    from core.admin_data_home import admin_owner_principal
+
+    data_dir = admin_data_dir(write=not dry_run)
+    uid = str(user_id or admin_owner_principal())
+    asyncio.run(_kb_reindex(uid, data_dir, int(limit or 0), dry_run))
+
+
+async def _kb_reindex(user_id: str, data_dir: str, limit: int, dry_run: bool) -> None:
+    from tools.kb_autoingest import ingest_artifact, should_ingest
+
+    await _ensure_memory_backend()
+    db = os.path.join(data_dir, "artifacts.db")
+    if not os.path.exists(db):
+        click.echo(click.style(f"no artifact registry at {db} — nothing written yet",
+                               dim=True))
+        raise SystemExit(2)
+
+    from core.sqlite_util import execute_retry
+    # ⚠️ The row's OWN session_id rides along: `kb_ingest` confines a path to the
+    # session's workspace, and an empty session id resolves to a workspace that
+    # does not exist (and, off project-root mode, would be CREATED by the
+    # resolver). A backfill must not invent a session directory.
+    rows = execute_retry(
+        db, "SELECT path, session_id FROM artifacts WHERE user_id = ? "
+            "ORDER BY rowid DESC", (user_id,), fetch="all") or []
+    entries = [(str(dict(r).get("path") or ""), str(dict(r).get("session_id") or ""))
+               for r in rows]
+
+    picked, skipped, missing = [], 0, 0
+    for path, session_id in entries:
+        if not path:
+            continue
+        if not os.path.exists(path):
+            missing += 1
+            continue
+        if not should_ingest(path):
+            skipped += 1
+            continue
+        picked.append((path, session_id))
+        if limit and len(picked) >= limit:
+            break
+
+    click.echo(click.style(
+        f"{len(entries)} registered · {len(picked)} to index · {skipped} not "
+        f"knowledge (records, images, other binaries) · {missing} gone from disk",
+        fg="cyan"))
+    if dry_run:
+        for path, _sid in picked[:40]:
+            click.echo(f"  would index {path}")
+        if len(picked) > 40:
+            click.echo(f"  … +{len(picked) - 40} more")
+        return
+
+    done = unchanged = failed = 0
+    for path, session_id in picked:
+        result = await ingest_artifact(user_id, path, session_id=session_id,
+                                       force=True)
+        if result is None:
+            failed += 1
+            continue
+        if result.get("error"):
+            failed += 1
+            click.echo(click.style(f"  declined {path}: {result['error']}", dim=True))
+            continue
+        if result.get("unchanged"):
+            unchanged += 1
+        else:
+            done += result.get("ingested") or 0
+    click.echo(click.style(
+        f"indexed {done} · unchanged {unchanged} · failed {failed}", fg="green"))

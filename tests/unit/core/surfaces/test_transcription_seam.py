@@ -42,3 +42,21 @@ async def test_transcribe_inbound_media_empty_returns_none():
     c.register_service("transcriber", _FakeTranscriber("   "))
     out = await transcribe_inbound_media(c, [Media(kind="voice", data=b"\x00")])
     assert out is None
+
+
+def test_a_url_only_voice_media_is_never_downloaded(monkeypatch):
+    """2026-09-23 Low: the dormant url path did a bare aiohttp GET (no SSRF
+    policy, no cap). It is removed; bytes are the only input."""
+    import asyncio
+
+    import aiohttp
+
+    from core.surfaces.media import Media
+    from core.surfaces.transcription import _audio_bytes
+
+    def _boom(*a, **k):
+        raise AssertionError("transcription must not open an HTTP session")
+
+    monkeypatch.setattr(aiohttp, "ClientSession", _boom)
+    assert asyncio.run(_audio_bytes(Media(kind="voice", url="http://169.254.169.254/x"))) is None
+    assert asyncio.run(_audio_bytes(Media(kind="voice", data=b"ogg"))) == b"ogg"

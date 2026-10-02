@@ -96,19 +96,30 @@ def _env_path(is_global: bool) -> Path:
 
 
 def _write_env_flag(key: str, value: str, is_global: bool) -> Path:
-    """Upsert KEY=VALUE into the resolved env file; project scope also gitignores.
+    """Write KEY=VALUE through the ONE write path (026 P2).
 
-    Both env files may hold API keys, so lock them to 0600 regardless of scope.
+    ``core.config_service.set_value`` owns the 0600 upsert and the project-scope
+    gitignore housekeeping; this stays as the import site `polyrob auth` uses.
+    It writes raw (``allow_unknown``): its callers have already validated.
+    Raises ``ClickException`` when the write is refused.
     """
-    path = _env_path(is_global)
-    _upsert_env(path, key, value, secure=True)
-    if not is_global:
-        # Project scope writes ./.polyrob/.env — which may hold a secret — so make
-        # sure .polyrob/ is gitignored BEFORE the user can `git add` it. Previously
-        # only `init`/`run` did this; `config set` was a leak path in between.
-        from cli.gitignore import ensure_polyrob_gitignored
-        ensure_polyrob_gitignored(Path.cwd(), require_git_repo=True)
-    return path
+    res = _service_set(key, value, is_global=is_global, allow_unknown=True)
+    return Path(res.store)
+
+
+def _service_set(key: str, value: str, *, is_global: bool,
+                 allow_unknown: bool = False):
+    """``set_value`` for an env-scope key from the local CLI; refusal -> ClickException."""
+    from core.config_service import set_value
+    res = set_value(key, value, scope="global" if is_global else "project",
+                    surface="local", allow_unknown=allow_unknown)
+    if not res.ok:
+        msg = res.message
+        if res.outcome == "refused" and msg.startswith("unknown key") \
+                and not allow_unknown:
+            msg += " — pass --force to write it anyway"
+        raise click.ClickException(msg)
+    return res
 
 
 
@@ -233,46 +244,63 @@ def set_cmd(key, value, is_global, project_scope, user_id, confirm, force, home_
         click.echo(f"Set {key} in {path} (applies: {spec.applies}).")
         return
 
-    # 3. KEY documented in the flags catalog -> shape-checked env-flag write.
-    hit = catalog_lookup(key)
-    if hit is not None:
-        _group, documented_default = hit
-        # 026 P1.4: enum-shaped flags name their valid set on a typo instead of
-        # writing a value the resolver silently degrades.
-        from core.config_policy.flag_enums import enum_error
-        enum_err = enum_error(key, value)
-        if enum_err:
-            raise click.ClickException(enum_err)
-        shape = shape_of_default(documented_default)
-        if not value_matches_shape(value, shape):
-            raise click.ClickException(
-                f"{key} expects a {shape} value (documented default: "
-                f"{documented_default}); got {value!r}"
-            )
-        path = _write_env_flag(key, value, is_global)
-        click.echo(f"Set {key} in {path} (takes effect: restart).")
-        # 026 P0.6/P1.6: shadow + clamp honesty from the ONE note builder.
-        from core.config_service import post_write_notes
-        for note in post_write_notes(key, value, "global" if is_global else "project"):
+    # 3. KEY documented in the flags catalog -> the ONE write path (026 P2):
+    #    enum + shape validation, the 0600 upsert, gitignore housekeeping and the
+    #    shadow/clamp notes all live in core.config_service.set_value.
+    if catalog_lookup(key) is not None:
+        res = _service_set(key, value, is_global=is_global)
+        click.echo(f"Set {key} in {res.store} (takes effect: restart).")
+        for note in res.notes:
             click.echo(click.style(note, fg="yellow"))
         return
 
     # 4. Otherwise: hard-reject any unrecognized key unless --force — a
     #    semantically-different name (no character-level close match) is no
-    #    safer than a typo.
+    #    safer than a typo. The refusal (with its closest-match hint) is the
+    #    service's; --force is its local-only `allow_unknown`.
     hint = _closest_match(key)
-    if not force:
-        if hint is not None:
-            raise click.ClickException(
-                f"unknown key: {key} (did you mean {hint}?) — pass --force to write it anyway"
-            )
-        raise click.ClickException(
-            f"unknown key: {key} — not a documented flag or preference; "
-            "pass --force to write it anyway"
-        )
-    path = _write_env_flag(key, value, is_global)
+    res = _service_set(key, value, is_global=is_global, allow_unknown=force)
     suffix = f"; did you mean {hint}?" if hint is not None else ""
-    click.echo(f"Set {key} in {path} (--force override{suffix}).")
+    click.echo(f"Set {key} in {res.store} (--force override{suffix}).")
+
+
+@config.command("edit")
+@click.option("--global", "--home", "is_global", is_flag=True, default=True,
+              help="Edit ~/.polyrob/.env (the default).")
+@click.option("--project", "project_scope", is_flag=True, default=False,
+              help="Edit ./.polyrob/.env instead.")
+def edit_cmd(is_global, project_scope):
+    """Open the env file in $EDITOR, then validate it before you leave.
+
+    062: every other agent CLI has this and ours did not — `config path` told
+    you where the file was and left you to find an editor yourself. The
+    validation pass afterwards is the point: a typo in a flag name is silent
+    at runtime (an unknown key is simply never read), so the edit ends with
+    the same check `config check` runs.
+    """
+    path = _env_path(is_global and not project_scope)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        path.write_text("# POLYROB configuration — one KEY=value per line\n",
+                        encoding="utf-8")
+        try:
+            path.chmod(0o600)
+        except OSError:
+            pass
+    before = path.read_text(encoding="utf-8")
+    click.edit(filename=str(path))
+    after = path.read_text(encoding="utf-8")
+    if after == before:
+        click.echo(f"No change to {path}")
+        return
+    click.echo(f"Saved {path}")
+    ctx = click.get_current_context()
+    try:
+        ctx.invoke(check_cmd)
+    except SystemExit:
+        raise
+    except Exception as exc:
+        click.echo(f"(could not validate: {exc})", err=True)
 
 
 @config.command("unset")

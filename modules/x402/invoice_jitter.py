@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import secrets
 import sqlite3
 from typing import Dict, Optional
 
@@ -176,6 +177,63 @@ def jitter_step(decimals) -> int:
     if d < _ROUND_STEP_MIN_DECIMALS:
         return 1
     return 10 ** d
+
+#: CR-M16 test seam: the unit suites that assert exact invoice amounts turn the
+#: random tail off (tests/unit/modules/x402/conftest.py). Never an env flag.
+TAIL_ENABLED = True
+
+
+def random_tail_usd(amount_usd: float, cap: float, decimals=6) -> float:
+    """CR-M16: a random SUB-CENT tail on an EVM invoice amount, at creation.
+
+    The EVM settlement pass identifies an invoice BY its amount, so a round
+    amount ($5.00) is settled by ANY transfer of that amount — an owner top-up,
+    a venue withdrawal — and wakes the agent to "continue the work" for a
+    stranger. A random tail of 1..9999 millionths of a dollar makes an
+    accidental match improbable. The tail stays inside the asset's decimals
+    (never finer than one raw unit of a 6-decimal stable), and below the cap:
+    when adding it would cross the ceiling it is subtracted instead.
+    """
+    if not TAIL_ENABLED:
+        return amount_usd
+    try:
+        d = min(6, int(decimals))
+    except (TypeError, ValueError):
+        d = 6
+    units_per_cent = 10 ** d // 100      # tail quanta below one cent
+    if units_per_cent < 2:
+        return amount_usd                 # the asset cannot express a sub-cent tail
+    k = secrets.randbelow(min(9999, units_per_cent - 1)) + 1
+    tail = k / (10 ** d)
+    up = round(float(amount_usd) + tail, d)
+    if up <= cap:
+        return up
+    down = round(float(amount_usd) - tail, d)
+    return down if down > 0 else amount_usd
+
+
+def random_tail_raw(raw: int, amount_usd: float, decimals) -> int:
+    """CR-M16 for a PINNED-raw invoice: a random tail worth less than a cent,
+    in steps of `jitter_step(decimals)` so a memecoin-scale amount stays
+    typeable. 0 when one step is already worth a cent or more (the unique-raw
+    dedupe still separates pending rows; the amount is then only unique, not
+    unguessable)."""
+    if not TAIL_ENABLED:
+        return 0
+    try:
+        if float(amount_usd) <= 0 or int(raw) <= 0:
+            return 0
+        from fractions import Fraction
+        step = jitter_step(decimals)
+        cent_raw = Fraction(int(raw)) / (Fraction(str(amount_usd)) * 100)
+        # the largest whole number of steps strictly below one cent
+        max_steps = -(-cent_raw // step) - 1
+    except (TypeError, ValueError, ZeroDivisionError, ArithmeticError):
+        return 0
+    if max_steps < 1:
+        return 0
+    return (secrets.randbelow(int(min(9999, max_steps))) + 1) * step
+
 
 async def _dedupe_raw_for_treasury(
     raw: int, recipient: str, database, *, asset_address: Optional[str] = None,

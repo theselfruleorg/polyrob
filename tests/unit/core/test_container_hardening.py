@@ -18,7 +18,8 @@ def test_install_mount_and_app_variant():
     dev = hardening_flags(network="bridge", workdir_host="/w", install_host="/w/.pylibs",
                           pids_limit=1, memory_mb=1, shm_size_mb=1, cpus=0.5, user="u")
     assert dev[dev.index("-v") + 1] == "/w:/workspace"
-    assert "/w/.pylibs:/install" in dev and dev[-2:] == ["-w", "/workspace"]
+    assert "type=bind,src=/w/.pylibs,dst=/install" in dev and dev[-2:] == ["-w", "/workspace"]
+    assert dev[dev.index("type=bind,src=/w/.pylibs,dst=/install") - 1] == "--mount"
     app = hardening_flags(network="polyrob-app-u1-st", workdir_host="/snap", pids_limit=256,
                           memory_mb=512, shm_size_mb=64, cpus=0.5, user="65534:65534",
                           mount_target="/app", read_only_mount=True, workdir="/app")
@@ -38,3 +39,10 @@ def test_docker_backend_delegates_byte_identically():
                              memory_mb=b.memory_mb, shm_size_mb=b.shm_size_mb, cpus=b.cpus,
                              user=b.user)
     assert via_backend == direct
+
+
+def test_install_mount_refuses_a_comma_in_the_source():
+    import pytest
+    with pytest.raises(ValueError):
+        hardening_flags(network="none", workdir_host="/w", install_host="/x,dst=/etc",
+                        pids_limit=1, memory_mb=1, shm_size_mb=1, cpus=0.5, user="u")

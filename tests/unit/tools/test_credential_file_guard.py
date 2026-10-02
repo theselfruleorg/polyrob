@@ -25,6 +25,9 @@ def _fs_tool(tmp_path):
     t.user_id = "u1"
     t._current_session_id = None
     t.workspace_dir = str(tmp_path)
+    # The confinement root the I/O helpers anchor on (these tests stub
+    # _normalize_path to tmp_path, so the root must agree with it).
+    t._workspace_root = lambda: str(tmp_path)
     return t
 
 

@@ -78,6 +78,7 @@ from agents.task.agent.core.llm_runner import LLMRunnerMixin
 from agents.task.agent.core.memory_writer import MemoryWriterMixin
 from agents.task.agent.core.result_offload import ToolResultOffloadMixin
 from agents.task.agent.core.memory_prefetch import MemoryPrefetchMixin
+from agents.task.agent.core.owner_thread_inject import OwnerThreadInjectMixin
 from agents.task.agent.core.live_health import LiveHealthMixin
 from agents.task.agent.core.background_review import BackgroundReviewMixin
 from agents.task.agent.core.step import StepMixin
@@ -182,15 +183,6 @@ def _normalize_llm_content(content: Any) -> str:
 	return str(content)
 
 
-# Known tool/service names that namespace their actions
-# ONE detector (agents/task/telemetry/service_detect.py); this name is kept
-# because the step/telemetry mixins reference it as a module global.
-from agents.task.telemetry.service_detect import (  # noqa: E402
-	KNOWN_TOOLS as _KNOWN_TOOLS,
-	detect_service_for_action as _detect_service_for_action,
-)
-
-
 @dataclass
 class AgentDeps:
 	"""Injected collaborators an Agent needs (objects/callables, not config values).
@@ -256,7 +248,7 @@ _AGENT_DEP_KEYS = frozenset({
 })
 
 
-class Agent(AgentConstructionMixin, RunLoopMixin, StepMixin, StepExecutionMixin, StepTelemetryMixin, ResultProcessingMixin, LLMRunnerMixin, NextActionInternalMixin, ErrorRecoveryMixin, OutputValidationMixin, MemoryWriterMixin, ToolResultOffloadMixin, MemoryPrefetchMixin, LiveHealthMixin, BackgroundReviewMixin, HistoryIOMixin, LoggingIOMixin, SafetyLifecycleMixin, UserIngressMixin, TurnInputMixin, LLMProvisioningMixin, ModelSwapMixin, ModelIntrospectionMixin, LoopDetectionMixin, ResourceMixin, SessionMetadataMixin):
+class Agent(AgentConstructionMixin, RunLoopMixin, StepMixin, StepExecutionMixin, StepTelemetryMixin, ResultProcessingMixin, LLMRunnerMixin, NextActionInternalMixin, ErrorRecoveryMixin, OutputValidationMixin, MemoryWriterMixin, ToolResultOffloadMixin, MemoryPrefetchMixin, OwnerThreadInjectMixin, LiveHealthMixin, BackgroundReviewMixin, HistoryIOMixin, LoggingIOMixin, SafetyLifecycleMixin, UserIngressMixin, TurnInputMixin, LLMProvisioningMixin, ModelSwapMixin, ModelIntrospectionMixin, LoopDetectionMixin, ResourceMixin, SessionMetadataMixin):
 	@classmethod
 	def from_params(cls, **kwargs) -> "Agent":
 		"""Build an Agent from the legacy flat keyword arguments.
@@ -431,9 +423,6 @@ class Agent(AgentConstructionMixin, RunLoopMixin, StepMixin, StepExecutionMixin,
 			
 		except Exception as e:
 			self.logger.warning(f"Failed to save session config: {e}")
-
-	def add_new_task(self, new_task: str) -> None:
-		self.message_manager.add_new_task(new_task)
 
 	async def _save_progress_on_timeout(self) -> None:
 		"""Save progress when a step times out to enable recovery."""

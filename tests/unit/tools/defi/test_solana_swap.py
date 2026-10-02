@@ -14,6 +14,7 @@ from tools.defi.trade_tool import DefiTradeTool, SolanaSwapParams
 USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 WSOL = "So11111111111111111111111111111111111111112"
 ME = "HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk"
+MEME = "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"
 
 
 def _params(**kw):
@@ -93,10 +94,12 @@ class _Wallet:
     def solana_address(self): return ME
 
 
-def _quote(out=10_000_000, floor=9_900_000):
+def _quote(out=10_000_000, floor=9_900_000, *, ti=USDC, to=WSOL, amt=1_000_000):
+    # CR-H03: the verb refuses a quote for another trade, so the fixture quotes
+    # the mints and amount it was asked for.
     from tools.defi.providers.jupiter import JupiterQuote
-    return JupiterQuote(chain="solana", token_in=USDC, token_out=WSOL,
-                        amount_in_raw=1_000_000, amount_out_raw=out,
+    return JupiterQuote(chain="solana", token_in=ti, token_out=to,
+                        amount_in_raw=amt, amount_out_raw=out,
                         amount_out_min_raw=floor, venue="jupiter:Orca",
                         raw={"outAmount": str(out),
                              "otherAmountThreshold": str(floor)})
@@ -108,10 +111,10 @@ async def test_an_undeclared_authority_grant_refuses(monkeypatch):
     hands someone a delegate, a close authority or ownership is not a swap."""
     monkeypatch.setenv("SOLANA_TRADE_ENABLED", "true")
     from core.wallet.solana_simulation import SolanaDeltas
-    deltas = SolanaDeltas(ok=True, token_deltas={USDC: -1_000_000},
+    deltas = SolanaDeltas(ok=True, fee_lamports=5_000, token_deltas={USDC: -1_000_000},
                           authority_grants=(("delegate", USDC, "someone"),))
     tool = DefiTradeTool(wallet=_Wallet(),
-                         solana_quote_fn=lambda *a, **k: _quote(),
+                         solana_quote_fn=lambda ti, to, amt, **k: _quote(ti=ti, to=to, amt=amt),
                          solana_build_fn=lambda *a, **k: b"\x01",
                          solana_simulate_fn=lambda **k: deltas)
     res = await tool.solana_swap(_params(dry_run=True))
@@ -124,7 +127,7 @@ async def test_a_failed_simulation_refuses(monkeypatch):
     monkeypatch.setenv("SOLANA_TRADE_ENABLED", "true")
     from core.wallet.solana_simulation import SolanaDeltas
     tool = DefiTradeTool(wallet=_Wallet(),
-                         solana_quote_fn=lambda *a, **k: _quote(),
+                         solana_quote_fn=lambda ti, to, amt, **k: _quote(ti=ti, to=to, amt=amt),
                          solana_build_fn=lambda *a, **k: b"\x01",
                          solana_simulate_fn=lambda **k: SolanaDeltas(False, "reverted"))
     res = await tool.solana_swap(_params(dry_run=True))
@@ -137,10 +140,11 @@ async def test_a_clean_dry_run_broadcasts_nothing(monkeypatch):
     from core.wallet.solana_simulation import SolanaDeltas
     sent = []
     tool = DefiTradeTool(wallet=_Wallet(),
-                         solana_quote_fn=lambda *a, **k: _quote(),
+                         solana_quote_fn=lambda ti, to, amt, **k: _quote(ti=ti, to=to, amt=amt),
                          solana_build_fn=lambda *a, **k: b"\x01",
                          solana_simulate_fn=lambda **k: SolanaDeltas(
-                             ok=True, token_deltas={USDC: -1_000_000}),
+                             ok=True, fee_lamports=5_000, token_deltas={USDC: -1_000_000},
+                             native_delta=10_000_000),
                          solana_send_fn=lambda raw: sent.append(raw) or "sig")
     res = await tool.solana_swap(_params(dry_run=True))
     assert res.error is None
@@ -154,10 +158,10 @@ async def test_an_unexplained_native_outflow_refuses(monkeypatch):
     monkeypatch.setenv("SOLANA_TRADE_ENABLED", "true")
     from core.wallet.solana_simulation import SolanaDeltas
     tool = DefiTradeTool(wallet=_Wallet(),
-                         solana_quote_fn=lambda *a, **k: _quote(),
+                         solana_quote_fn=lambda ti, to, amt, **k: _quote(ti=ti, to=to, amt=amt),
                          solana_build_fn=lambda *a, **k: b"\x01",
                          solana_simulate_fn=lambda **k: SolanaDeltas(
-                             ok=True, native_delta=-500_000_000,
+                             ok=True, fee_lamports=5_000, native_delta=-500_000_000,
                              token_deltas={USDC: -1_000_000}))
     res = await tool.solana_swap(_params(dry_run=True))
     assert res.error and "sol" in res.error.lower()
@@ -168,20 +172,28 @@ async def test_rent_sized_native_movement_is_allowed(monkeypatch):
     monkeypatch.setenv("SOLANA_TRADE_ENABLED", "true")
     from core.wallet.solana_simulation import SolanaDeltas
     tool = DefiTradeTool(wallet=_Wallet(),
-                         solana_quote_fn=lambda *a, **k: _quote(),
+                         solana_quote_fn=lambda ti, to, amt, **k: _quote(ti=ti, to=to, amt=amt),
                          solana_build_fn=lambda *a, **k: b"\x01",
                          solana_simulate_fn=lambda **k: SolanaDeltas(
-                             ok=True, native_delta=-2_100_000,
-                             token_deltas={USDC: -1_000_000}))
-    res = await tool.solana_swap(_params(dry_run=True))
-    assert res.error is None
+                             ok=True, fee_lamports=5_000, native_delta=-2_100_000,
+                             token_deltas={USDC: -1_000_000, MEME: 10_000_000}),
+                         # CR-L06: the SOL beyond fee + retained rent is charged,
+                         # so SOL needs a price.
+                         price_fn=lambda c, a: 100.0,
+                         # CR-L10: the MEME buy is screened; this one is clean.
+                         solana_screen_fn=lambda m: __import__(
+                             "tools.defi.providers.base", fromlist=["x"]).ScreenVerdict(
+                                 available=True, checks={"transfer_fee": "no"}))
+    res = await tool.solana_swap(_params(token_out=MEME, dry_run=True, max_spend_usd=2.0))
+    assert res.error is None, res.error
 
 
 @pytest.mark.asyncio
 async def test_a_loose_jupiter_floor_refuses(monkeypatch):
     monkeypatch.setenv("SOLANA_TRADE_ENABLED", "true")
     tool = DefiTradeTool(wallet=_Wallet(),
-                         solana_quote_fn=lambda *a, **k: _quote(out=1_000_000, floor=1))
+                         solana_quote_fn=lambda ti, to, amt, **k: _quote(
+                             out=1_000_000, floor=1, ti=ti, to=to, amt=amt))
     res = await tool.solana_swap(_params(dry_run=True))
     assert res.error and ("slippage" in res.error.lower() or "floor" in res.error.lower())
 
@@ -266,10 +278,10 @@ async def test_a_swap_whose_simulation_shows_NO_token_movement_refuses(monkeypat
     monkeypatch.setenv("SOLANA_TRADE_ENABLED", "true")
     from core.wallet.solana_simulation import SolanaDeltas
     tool = DefiTradeTool(wallet=_Wallet(), solana_decimals_fn=lambda m: 6,
-                         solana_quote_fn=lambda *a, **k: _quote(),
+                         solana_quote_fn=lambda ti, to, amt, **k: _quote(ti=ti, to=to, amt=amt),
                          solana_build_fn=lambda *a, **k: b"\x01",
                          solana_simulate_fn=lambda **k: SolanaDeltas(
-                             ok=True, token_deltas={}, native_delta=0))
+                             ok=True, fee_lamports=5_000, token_deltas={}, native_delta=0))
     res = await tool.solana_swap(_params(dry_run=True))
     assert res.error and ("no token movement" in res.error.lower()
                           or "observed nothing" in res.error.lower())
@@ -280,10 +292,10 @@ async def test_a_swap_with_real_observed_movement_passes(monkeypatch):
     monkeypatch.setenv("SOLANA_TRADE_ENABLED", "true")
     from core.wallet.solana_simulation import SolanaDeltas
     tool = DefiTradeTool(wallet=_Wallet(), solana_decimals_fn=lambda m: 6,
-                         solana_quote_fn=lambda *a, **k: _quote(),
+                         solana_quote_fn=lambda ti, to, amt, **k: _quote(ti=ti, to=to, amt=amt),
                          solana_build_fn=lambda *a, **k: b"\x01",
                          solana_simulate_fn=lambda **k: SolanaDeltas(
-                             ok=True, token_deltas={USDC: -1_000_000},
-                             native_delta=0))
+                             ok=True, fee_lamports=5_000, token_deltas={USDC: -1_000_000},
+                             native_delta=10_000_000))
     res = await tool.solana_swap(_params(dry_run=True))
     assert res.error is None

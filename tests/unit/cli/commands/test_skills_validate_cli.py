@@ -25,7 +25,12 @@ def test_count_authored_skills_matches_bundled_library_size():
         if d.is_dir() and (d / "SKILL.md").exists() and not d.name.startswith((".", "user_"))
     ]
     assert mgr.count_authored_skills() == len(on_disk)
-    assert mgr.count_authored_skills() == 29  # 29 bundled skills (self-deploy added 2026-09-17)
+    # 29 bundled until 067 P3a moved lead-research + web-scraping into the discovery pack;
+    # 067 P3b moved x-engagement + social-discovery into the x pack; 067 P4 moved the
+    # six polymarket-*/hyperliquid-* skills into the markets pack (19). 068 W2 added the
+    # ten basic trading procedure skills (29); Codex A10 split treasury-trading's
+    # 57 KB body into five sibling skills (34).
+    assert mgr.count_authored_skills() == 34
 
 
 def test_cli_skills_validate_no_arg_exits_zero_for_compliant_library():

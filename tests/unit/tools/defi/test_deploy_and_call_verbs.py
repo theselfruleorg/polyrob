@@ -356,10 +356,12 @@ async def test_the_create2_report_does_not_claim_a_NONCE_derived_address():
     """On the deterministic path the address is a hash of the init code, not a
     function of the wallet's nonce. Saying otherwise describes a different
     guarantee than the one that was actually checked."""
+    # CR-H07: deploy_token refuses CREATE2 (its supply would land on the
+    # factory), so the deterministic report is exercised on deploy_contract.
     tool, _ = _tool()
-    res = await tool.deploy_token(DeployTokenParams(
-        chain="base", name="Rob Coin", symbol="ROB", supply=1_000,
-        max_spend_usd=5.0, vanity="ab", dry_run=True))
+    res = await tool.deploy_contract(DeployContractParams(
+        chain="base", bytecode="0x6080604052", max_spend_usd=5.0,
+        vanity="ab", dry_run=True))
     assert res.error is None, res.error
     text = res.extracted_content
     assert "predicted from the wallet's nonce" not in text

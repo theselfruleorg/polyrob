@@ -51,7 +51,7 @@ from typing import Awaitable, Callable, List, Optional, Tuple
 from tools.code_exec.backend import ExecutionBackend, ExecutionBackendError
 from tools.code_exec.backends._proc import run_group
 from tools.code_exec.env_policy import SECRET_PAT, build_child_env
-from tools.code_exec.limits import dev_exec_max_timeout_sec
+from tools.code_exec.limits import dev_exec_max_timeout_sec, exec_timeout_cap
 from tools.code_exec.result import ExecutionRequest, ExecutionResult
 
 logger = logging.getLogger(__name__)
@@ -76,6 +76,59 @@ def widen_mode_for_container(mode: int) -> int:
     if mode & stat.S_IXUSR:
         widened |= 0o011                       # keep an executable file executable
     return widened
+
+
+def _chmod_nofollow(path: str, mode: int, *, want_dir: bool) -> None:
+    """chmod *path* WITHOUT ever following a symlink (H10).
+
+    Opens the entry with ``O_NOFOLLOW`` (a symlink swapped in after the caller's
+    ``lstat`` makes the open fail with ELOOP), re-checks the type on the fd, and
+    ``fchmod``s the fd — so the mode can only land on the inode that was opened.
+    Linux's ``os.chmod(..., follow_symlinks=False)`` raises NotImplementedError,
+    hence the fd route rather than that flag. Raises ``OSError`` on refusal.
+    """
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDONLY | nofollow | getattr(os, "O_NONBLOCK", 0)
+    if want_dir:
+        flags |= getattr(os, "O_DIRECTORY", 0)
+    if not nofollow:  # platform without O_NOFOLLOW: fall back to an lstat gate
+        if stat.S_ISLNK(os.lstat(path).st_mode):
+            raise OSError(f"refusing to chmod through a symlink: {path}")
+        os.chmod(path, mode)
+        return
+    fd = os.open(path, flags)
+    try:
+        st = os.fstat(fd)
+        ok = stat.S_ISDIR(st.st_mode) if want_dir else stat.S_ISREG(st.st_mode)
+        if not ok:
+            raise OSError(f"refusing to chmod unexpected file type: {path}")
+        os.fchmod(fd, mode)
+    finally:
+        os.close(fd)
+
+
+def _install_root() -> str:
+    """Host root for the dev-mode ``/install`` dirs — OUTSIDE every bind-mounted
+    workspace (H02). ``<data_home>/sandbox_installs``; a tempdir fallback (per
+    uid) only when the data home cannot be resolved."""
+    try:
+        from core.runtime_paths import effective_data_home
+        return os.path.join(str(effective_data_home()), "sandbox_installs")
+    except Exception:
+        uid = os.geteuid() if hasattr(os, "geteuid") else "u"
+        return os.path.join(tempfile.gettempdir(), f"polyrob_sandbox_installs_{uid}")
+
+
+def _rmtree_install_dir(path: str) -> None:
+    """Remove a throwaway install dir; never follow it if it became a link."""
+    try:
+        if os.path.islink(path):
+            os.unlink(path)
+        else:
+            shutil.rmtree(path, ignore_errors=True)
+    except OSError:
+        pass
+
 
 #: Label applied to every persistent container this backend creates — the marker
 #: ``reap_orphans`` filters ``docker ps`` on.
@@ -273,11 +326,16 @@ class DockerBackend(ExecutionBackend):
             if self._container is not None:  # lost a setup() race to another waiter
                 return
             workdir = self._resolve_persistent_workdir()
+            os.makedirs(workdir, exist_ok=True)  # as ephemeral does; lstat-checked below
             if self._workspace_needs_chmod:
                 self._ensure_workspace_writable(workdir)
             network = self._resolve_setup_network()
             container_name = f"polyrob-sbx-{uuid.uuid4().hex}"
             install_host = self._ensure_install_dir(workdir) if self._dev_mode else None
+            # H02: verify every bind source right before the argv (raises).
+            self._check_bind_source(workdir, "workspace")
+            if install_host is not None:
+                self._check_bind_source(install_host, "install dir")
             argv = [
                 "run", "-d",
                 "--label", _SANDBOX_LABEL,
@@ -328,10 +386,11 @@ class DockerBackend(ExecutionBackend):
 
     # -- helpers --------------------------------------------------------------
 
-    def _clamp_timeout(self, t) -> float:
+    def _clamp_timeout(self, t, ceiling=None) -> float:
+        cap = exec_timeout_cap(self.max_timeout, ceiling)
         if t is None:
-            return self.max_timeout
-        return max(1.0, min(float(t), self.max_timeout))
+            return cap
+        return max(1.0, min(float(t), cap))
 
     def _cap(self, data: bytes):
         text = (data or b"").decode("utf-8", errors="replace")
@@ -528,25 +587,44 @@ class DockerBackend(ExecutionBackend):
         walk already visits — a directory owned by the container's own uid is
         pruned (it and its subtree are already writable by that uid), which is what
         keeps this cheap once a large `node_modules` exists.
+
+        SECURITY (H10, 2026-09-23): this runs as ROOT over a tree the sandbox can
+        write, so it NEVER follows a symlink — every decision is an ``lstat``, a
+        symlinked dir/file is skipped (and never descended), and the chmod itself
+        goes through ``_chmod_nofollow`` (``O_NOFOLLOW`` open + ``fchmod``), so a
+        link swapped in between the ``lstat`` and the chmod cannot redirect the
+        0o777 onto a host path outside the workspace.
         """
         try:
-            os.chmod(workdir_host, 0o777)
+            st = os.lstat(workdir_host)
+            if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
+                logger.warning("refusing to chmod workspace root that is a symlink or "
+                               "not a directory: %s", workdir_host)
+                return
+            _chmod_nofollow(workdir_host, 0o777, want_dir=True)
         except Exception:
             logger.warning("could not chmod workspace dir writable: %s", workdir_host, exc_info=True)
             return
-        for root, dirs, files in os.walk(workdir_host, topdown=True):
+        for root, dirs, files in os.walk(workdir_host, topdown=True, followlinks=False):
             keep = []
             for d in dirs:
                 path = os.path.join(root, d)
                 try:
-                    if os.stat(path).st_uid == 0:
-                        os.chmod(path, 0o777)
+                    st = os.lstat(path)          # lstat: never follow a symlink out
+                    if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
+                        continue                 # never chmod through, never descend
+                    if st.st_uid == 0:
+                        _chmod_nofollow(path, 0o777, want_dir=True)
                         keep.append(d)
                     # else: already owned by a non-root (container) uid — that uid
                     # can already write its own subtree, so don't descend further.
                 except Exception:
                     logger.warning("could not chmod workspace subdir writable: %s", path, exc_info=True)
-                    keep.append(d)  # best-effort — still try descendants
+                    try:
+                        if not stat.S_ISLNK(os.lstat(path).st_mode):
+                            keep.append(d)  # best-effort — still try descendants
+                    except Exception:
+                        pass
             dirs[:] = keep
             for f in files:
                 path = os.path.join(root, f)
@@ -557,27 +635,88 @@ class DockerBackend(ExecutionBackend):
                     mode = stat.S_IMODE(st.st_mode)
                     widened = widen_mode_for_container(mode)
                     if widened != mode:
-                        os.chmod(path, widened)
+                        _chmod_nofollow(path, widened, want_dir=False)
                 except Exception:
                     logger.warning("could not chmod workspace file writable: %s", path, exc_info=True)
 
     @staticmethod
-    def _ensure_install_dir(workdir_host: str) -> str:
-        """Ensure + return the host dir bind-mounted at ``/install`` for dev mode.
+    def _install_dir_path(workdir_host: str) -> str:
+        """PURE: the host dir bind-mounted at ``/install`` for a dev run in *workdir_host*.
 
-        Lives under the session workspace (``<workspace>/.pylibs``) so installs
-        survive container reaps/restarts with the session. Mode 0o777 (best-effort)
-        because the container user (e.g. forced 65534:65534 when the host process is
-        root) is generally NOT the host owner of the workspace tree — without it,
-        pip inside the container can't write and dev mode dies with EACCES.
+        SECURITY (H02, 2026-09-23): this used to be ``<workspace>/.pylibs`` — INSIDE
+        the tree the sandbox can write. Sandbox code could replace it with a symlink
+        to any host path, and the next ``docker run`` (as root) bind-mounted the
+        HOST target read-write: a sandbox escape. It now lives OUTSIDE every
+        bind-mounted tree, under ``<data_home>/sandbox_installs/<key>``, keyed by the
+        workspace path so run_code and shell_run on one workspace still share their
+        installs, and so installs survive container reaps with the session.
         """
-        path = os.path.join(workdir_host, ".pylibs")
+        import hashlib
+        key = hashlib.sha256(os.path.abspath(workdir_host).encode("utf-8", "surrogateescape")).hexdigest()[:32]
+        return os.path.join(_install_root(), key)
+
+    @staticmethod
+    def _ensure_install_dir(workdir_host: str) -> str:
+        """Ensure + return the host dir bind-mounted at ``/install`` for dev mode
+        (see ``_install_dir_path`` for WHERE and why it is outside the workspace).
+
+        Mode 0o777 because the container user (e.g. forced 65534:65534 when the
+        host process is root) is generally NOT the host owner — without it, pip
+        inside the container can't write and dev mode dies with EACCES. The parent
+        root is 0o700 and host-owned; the dir is created with ``mkdir`` (never
+        through an existing link) and chmodded through an ``O_NOFOLLOW`` fd. The
+        caller still runs ``_check_bind_source`` right before building the argv.
+        """
+        path = DockerBackend._install_dir_path(workdir_host)
+        parent = os.path.dirname(path)
         try:
-            os.makedirs(path, exist_ok=True)
-            os.chmod(path, 0o777)
+            try:
+                os.makedirs(parent, mode=0o700, exist_ok=True)
+            except FileExistsError:
+                pass
+            pst = os.lstat(parent)
+            if stat.S_ISLNK(pst.st_mode) or not stat.S_ISDIR(pst.st_mode):
+                logger.warning("dev-mode: install root %s is a symlink or not a directory", parent)
+                return path
+            try:
+                os.mkdir(path, 0o777)
+            except FileExistsError:
+                pass
+            _chmod_nofollow(path, 0o777, want_dir=True)
         except Exception:
             logger.warning("dev-mode: could not prepare install dir %s", path, exc_info=True)
         return path
+
+    @staticmethod
+    def _check_bind_source(path: str, what: str) -> None:
+        """Refuse a bind-mount source that the sandbox could have swapped (H02).
+
+        Run right before a ``docker run`` argv is built: the daemon (root) resolves
+        the source path itself, so a symlink here would mount its HOST target
+        read-write into the container. Refuses a symlink, a non-directory, and a
+        directory not owned by this process's euid (or root). Raises
+        ``ExecutionBackendError`` — never mount something we did not verify.
+        """
+        try:
+            st = os.lstat(path)
+        except OSError as e:
+            raise ExecutionBackendError(
+                f"refusing to bind-mount {what} {path!r}: cannot lstat it ({e})"
+            ) from e
+        if stat.S_ISLNK(st.st_mode):
+            raise ExecutionBackendError(
+                f"refusing to bind-mount {what} {path!r}: it is a symlink"
+            )
+        if not stat.S_ISDIR(st.st_mode):
+            raise ExecutionBackendError(
+                f"refusing to bind-mount {what} {path!r}: it is not a directory"
+            )
+        euid = os.geteuid() if hasattr(os, "geteuid") else None
+        if euid is not None and st.st_uid not in (euid, 0):
+            raise ExecutionBackendError(
+                f"refusing to bind-mount {what} {path!r}: owned by uid {st.st_uid}, "
+                f"expected {euid}"
+            )
 
     def _resolve_persistent_workdir(self) -> str:
         """Ensure + return the host dir bind-mounted into the persistent container.
@@ -637,9 +776,10 @@ class DockerBackend(ExecutionBackend):
                      "--label", "polyrob.ephemeral=1"]
         argv += self._hardening_flags(
             network=self._resolve_network(request), workdir_host=workdir,
-            # dev run: bind <workdir>/.pylibs as the writable /install (path built
-            # here purely; _run_ephemeral pre-creates the dir before invoking).
-            install_host=os.path.join(workdir, ".pylibs") if request.dev_mode else None,
+            # dev run: bind the per-workspace install dir (OUTSIDE the workspace —
+            # H02) as the writable /install (path built here purely; _run_ephemeral
+            # pre-creates + verifies it before invoking).
+            install_host=self._install_dir_path(workdir) if request.dev_mode else None,
         )
         if request.stdin is not None:
             argv.append("-i")  # keep stdin open
@@ -677,14 +817,25 @@ class DockerBackend(ExecutionBackend):
                 stderr=f"unsupported language '{request.language}' (use python|bash)",
                 exit_code=2, backend=self.name,
             )
-        timeout = self._clamp_timeout(request.timeout)
+        timeout = self._clamp_timeout(request.timeout, getattr(request, "ceiling", None))
         workdir = request.workdir or tempfile.mkdtemp(prefix="rob_docker_")
         created_tmp = request.workdir is None
         os.makedirs(workdir, exist_ok=True)
         if self._workspace_needs_chmod:
             self._ensure_workspace_writable(workdir)
-        if request.dev_mode:
-            self._ensure_install_dir(workdir)  # pre-create so docker doesn't root-own it
+        install_dir = self._ensure_install_dir(workdir) if request.dev_mode else None
+        try:
+            # H02: verify every bind source right before the argv — never mount a
+            # symlink (the daemon would mount its HOST target read-write).
+            self._check_bind_source(workdir, "workspace")
+            if install_dir is not None:
+                self._check_bind_source(install_dir, "install dir")
+        except ExecutionBackendError as e:
+            if created_tmp:
+                shutil.rmtree(workdir, ignore_errors=True)
+                if install_dir is not None:
+                    _rmtree_install_dir(install_dir)
+            return ExecutionResult(stderr=str(e), exit_code=2, backend=self.name)
         # P0 finalization: a named+labeled container with an IN-CONTAINER timeout so a
         # host-side kill can no longer orphan a still-running container on the daemon.
         container_name = f"polyrob-sbx-{uuid.uuid4().hex}"
@@ -754,6 +905,10 @@ class DockerBackend(ExecutionBackend):
         finally:
             if created_tmp:
                 shutil.rmtree(workdir, ignore_errors=True)
+                if install_dir is not None:
+                    # A throwaway tempdir workspace's installs die with it (they
+                    # used to live inside it, so the rmtree above took them).
+                    _rmtree_install_dir(install_dir)
         # In-container `timeout --signal=KILL` exits 124/137 when it fires (the
         # container then self-removes via --rm); map that to timed_out too, since the
         # host wait returns normally in that case.
@@ -802,7 +957,7 @@ class DockerBackend(ExecutionBackend):
             # HOST-side tool (filesystem/coding) can scaffold new subdirectories
             # under this same workspace between calls on a long-lived session.
             self._ensure_workspace_writable(self._workdir)
-        clamped_sec = self._clamp_timeout(request.timeout)
+        clamped_sec = self._clamp_timeout(request.timeout, getattr(request, "ceiling", None))
 
         argv = ["exec"]
         if request.stdin is not None:

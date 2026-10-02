@@ -15,6 +15,7 @@ import time
 from datetime import datetime
 import traceback
 import threading
+import tempfile
 
 from dotenv import load_dotenv
 
@@ -29,6 +30,7 @@ except ImportError:
 from agents.task.telemetry.views import BaseTelemetryEvent, LLMRequestTelemetryEvent, AgentStepTelemetryEvent
 from agents.task.telemetry.sequence import SequenceGenerator, generate_event_id, get_timestamp_ms
 from agents.task.utils import SafeFileLock
+from core.data_perms import apply_birth_mode
 from agents.task.path import get_safe_singleton
 from agents.task.path import pm
 
@@ -528,7 +530,7 @@ class ProductTelemetry:
 				sanitized_update = self._sanitize_telemetry_data(update_data)
 
 				# Enrich with sequence number, millisecond timestamp, and unique ID
-				seq_gen = SequenceGenerator.get(clean_id)
+				seq_gen = SequenceGenerator.get(clean_id, feed_dir=feed_dir)
 				sanitized_update['_seq'] = seq_gen.next()
 				sanitized_update['_ts_ms'] = get_timestamp_ms()
 				sanitized_update['_id'] = generate_event_id()
@@ -546,79 +548,79 @@ class ProductTelemetry:
 					filename = f"{seq:06d}_{update_type}.json"
 
 				
-				# Write update to file with atomic file operations to prevent race conditions
+				# Write update to file with atomic file operations to prevent race conditions.
+				# W1.2: no lock — the file name is unique per _seq and the write is
+				# temp + os.replace. A lock left one {seq}_{type}.lock behind per
+				# event. The temp name is unique and dot-prefixed, so the *.json
+				# globs and the watcher never see it.
 				update_path = feed_dir / filename
-				temp_path = update_path.with_suffix('.tmp')
-				lock_path = update_path.with_suffix('.lock')
-				
+				fd, temp_path = tempfile.mkstemp(dir=str(feed_dir), prefix=".", suffix=".tmp")
+
 				try:
-					with SafeFileLock(str(lock_path)):
+					with os.fdopen(fd, 'w') as f:
+						json.dump(sanitized_update, f, indent=2, default=self._json_serializable)
+					# mkstemp births 0600; the console reads as another UID.
+					apply_birth_mode(temp_path)
+
+					# Atomic rename
+					os.replace(temp_path, update_path)
+
+					# Verify file was actually created (safety check)
+					if not update_path.exists():
+						raise IOError(f"Feed file not created: {update_path}")
+					if update_path.stat().st_size == 0:
+						raise IOError(f"Feed file is empty: {update_path}")
+
+					self.logger.debug(f"Saved {update_type} update to feed file: {update_path}")
+
+					# 019 P1: fold the event into the per-session
+					# RunActivity snapshot at this ONE choke point —
+					# AFTER the write succeeded, so the snapshot never
+					# claims a state the feed doesn't show. Best-effort.
+					try:
+						from agents.task.telemetry.run_activity import note_feed_event
+						note_feed_event(
+							clean_id, update_type,
+							sanitized_update.get('data'),
+							sanitized_update.get('step'),
+						)
+					except Exception:
+						pass
+
+					# Emit to CLI feed callback if registered
+					if self.__class__._on_feed_entry:
 						try:
-							with open(temp_path, 'w') as f:
-								json.dump(sanitized_update, f, indent=2, default=self._json_serializable)
-							
-							# Atomic rename
-							temp_path.replace(update_path)
+							self.__class__._on_feed_entry(clean_id, sanitized_update)
+						except Exception:
+							pass
 
-							# Verify file was actually created (safety check)
-							if not update_path.exists():
-								raise IOError(f"Feed file not created: {update_path}")
-							if update_path.stat().st_size == 0:
-								raise IOError(f"Feed file is empty: {update_path}")
+					# 019 P2: additional subscribers (surface progress etc.)
+					for _subscriber in list(self.__class__._feed_subscribers):
+						try:
+							_subscriber(clean_id, sanitized_update)
+						except Exception:
+							pass
 
-							self.logger.debug(f"Saved {update_type} update to feed file: {update_path}")
+					# Direct emit to WebView for low-latency delivery
+					# Fire-and-forget after successful file write
+					self._emit_to_webview_sync(clean_id, sanitized_update)
 
-							# 019 P1: fold the event into the per-session
-							# RunActivity snapshot at this ONE choke point —
-							# AFTER the write succeeded, so the snapshot never
-							# claims a state the feed doesn't show. Best-effort.
-							try:
-								from agents.task.telemetry.run_activity import note_feed_event
-								note_feed_event(
-									clean_id, update_type,
-									sanitized_update.get('data'),
-									sanitized_update.get('step'),
-								)
-							except Exception:
-								pass
-
-							# Emit to CLI feed callback if registered
-							if self.__class__._on_feed_entry:
-								try:
-									self.__class__._on_feed_entry(clean_id, sanitized_update)
-								except Exception:
-									pass
-
-							# 019 P2: additional subscribers (surface progress etc.)
-							for _subscriber in list(self.__class__._feed_subscribers):
-								try:
-									_subscriber(clean_id, sanitized_update)
-								except Exception:
-									pass
-
-							# Direct emit to WebView for low-latency delivery
-							# Fire-and-forget after successful file write
-							self._emit_to_webview_sync(clean_id, sanitized_update)
-
-							# Enforce feed retention every N writes (throttled so we don't
-							# glob the dir on every event). Was dead code before this wiring.
-							try:
-								cnt = self._feed_write_counts.get(clean_id, 0) + 1
-								self._feed_write_counts[clean_id] = cnt
-								if cnt % self._feed_retention_every == 0:
-									self._enforce_feed_retention(feed_dir)
-							except Exception:
-								pass
-						except Exception as e:
-							self.logger.error(f"Failed to write feed file: {e}", exc_info=True)
-							if temp_path.exists():
-								try:
-									temp_path.unlink()  # Clean up failed temp file
-								except Exception:
-									pass
+					# Enforce feed retention every N writes (throttled so we don't
+					# glob the dir on every event). Was dead code before this wiring.
+					try:
+						cnt = self._feed_write_counts.get(clean_id, 0) + 1
+						self._feed_write_counts[clean_id] = cnt
+						if cnt % self._feed_retention_every == 0:
+							self._enforce_feed_retention(feed_dir)
+					except Exception:
+						pass
 				except Exception as e:
-					self.logger.error(f"Failed to acquire lock for feed file: {e}", exc_info=True)
-		
+					self.logger.error(f"Failed to write feed file: {e}", exc_info=True)
+					try:
+						os.unlink(temp_path)  # Clean up failed temp file
+					except OSError:
+						pass
+
 		except Exception as e:
 			self.logger.error(f"Error in _save_to_feed_directory: {e}", exc_info=True)
 			# Track failure in health stats for visibility
@@ -725,6 +727,7 @@ class ProductTelemetry:
 						 prompt_tokens: Optional[int] = None,
 						 completion_tokens: Optional[int] = None,
 						 cached_tokens: Optional[int] = None,
+						 cache_creation_tokens: Optional[int] = None,
 						 parameters: Optional[Dict[str, Any]] = None,
 						 agent_id: Optional[str] = None,
 						 provider: Optional[str] = None) -> str:
@@ -857,6 +860,10 @@ class ProductTelemetry:
 				# llm_usage JSON is cache-aware (cost_estimate already is). Without
 				# this, recompute overstates cost ~2x for cached models (e.g. GLM).
 				'cached_tokens': cached_tokens or 0,
+				# F17: the cache-WRITE half. A write costs MORE than an uncached
+				# token, so an offline recompute that sees only reads cannot tell
+				# a cache that paid for itself from one that did not.
+				'cache_creation_tokens': cache_creation_tokens or 0,
 				'parameters': parameters,
 				'cost_estimate': cost_estimate,
 				'agent_id': agent_id,
@@ -1154,6 +1161,16 @@ class ProductTelemetry:
 						p.unlink()
 				except Exception:
 					pass
+
+			# W1.2: sweep leftovers older than 300 s — the *.lock files the old
+			# locked write left behind, and temp files of a crashed write.
+			stale_cutoff = now - 300
+			for p in list(feed_dir.glob('*.lock')) + list(feed_dir.glob('.*.tmp')):
+				try:
+					if p.stat().st_mtime < stale_cutoff:
+						p.unlink()
+				except Exception:
+					pass
 		except Exception as e:
 			self.logger.debug(f"Retention enforcement error: {e}")
 
@@ -1164,7 +1181,8 @@ class ProductTelemetry:
 			if telemetry_file.exists() and telemetry_file.stat().st_size > max_bytes:
 				ts = time.strftime('%Y%m%d_%H%M%S', time.localtime())
 				rotated = telemetry_file.with_name(f"events_{ts}.jsonl")
-				lock_file = telemetry_file.with_suffix('.lock')
+				# the flush's append lock (``events.jsonl.lock``), not ``events.lock``
+				lock_file = telemetry_file.with_name(telemetry_file.name + '.lock')
 				with SafeFileLock(str(lock_file)):
 					# Rename existing file and create a new empty one
 					telemetry_file.rename(rotated)

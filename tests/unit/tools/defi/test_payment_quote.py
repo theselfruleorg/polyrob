@@ -47,8 +47,23 @@ def test_a_native_asset_with_no_address_yields_no_quote():
     assert PaymentQuoter(pool_fn=lambda c, a: (_Pool(), 1.0)).quote(native) is None
 
 
+TOKEN = "0x" + "bb" * 20
+WETH = "0x" + "cc" * 20
+
+
+def _rel(base=TOKEN, quote=WETH, network="base"):
+    return {"base_token": {"data": {"id": f"{network}_{base}"}},
+            "quote_token": {"data": {"id": f"{network}_{quote}"}}}
+
+
 def _payload(*pools):
-    return {"data": [{"attributes": dict(p)} for p in pools]}
+    """Each pool is ``attrs`` or ``(attrs, relationships)``; a bare ``attrs``
+    has the asset on the BASE side."""
+    rows = []
+    for p in pools:
+        attrs, rel = (p if isinstance(p, tuple) else (p, _rel()))
+        rows.append({"attributes": dict(attrs), "relationships": rel})
+    return {"data": rows}
 
 
 def test_the_deepest_pool_wins_and_its_own_price_is_used():
@@ -91,3 +106,53 @@ def test_a_pool_with_no_liquidity_figure_is_skipped():
                         "price_change_percentage": {"h24": "0"}})
     assert _deepest_priced_pool(
         "base", "0x" + "bb" * 20, fetch=lambda url: payload) is None
+
+
+def test_cr_m06_quote_side_asset_is_priced_by_its_own_side():
+    """CR-M06: when the asset is the QUOTE side, `base_token_price_usd` is the
+    OTHER token's price (USDC read as $3000 off a WETH/USDC pool)."""
+    payload = _payload(
+        ({"address": "0xdeep", "reserve_in_usd": "50000",
+          "base_token_price_usd": "3000.0", "quote_token_price_usd": "1.0",
+          "name": "WETH/USDC", "volume_usd": {"h24": "60000"},
+          "price_change_percentage": {"h24": "0"}},
+         _rel(base=WETH, quote=TOKEN)))
+    pool, price = _deepest_priced_pool("base", TOKEN, fetch=lambda url: payload)
+    assert pool.pool_address == "0xdeep"
+    assert price == 1.0
+
+
+def test_cr_m06_pool_without_the_asset_on_either_side_is_not_a_price():
+    payload = _payload(
+        ({"address": "0xother", "reserve_in_usd": "90000",
+          "base_token_price_usd": "3000.0", "quote_token_price_usd": "1.0",
+          "name": "X/Y", "volume_usd": {"h24": "1"},
+          "price_change_percentage": {"h24": "0"}},
+         _rel(base=WETH, quote="0x" + "dd" * 20)),
+        {"address": "0xmine", "reserve_in_usd": "5000",
+         "base_token_price_usd": "0.10", "name": "ROB/WETH",
+         "volume_usd": {"h24": "1"}, "price_change_percentage": {"h24": "0"}})
+    pool, price = _deepest_priced_pool("base", TOKEN, fetch=lambda url: payload)
+    assert pool.pool_address == "0xmine"
+    assert price == 0.10
+
+
+def test_cr_m06_wrong_network_prefix_and_no_relationship_are_refused():
+    payload = _payload(
+        ({"address": "0xa", "reserve_in_usd": "50000",
+          "base_token_price_usd": "1.0", "name": "a",
+          "volume_usd": {"h24": "1"}, "price_change_percentage": {"h24": "0"}},
+         _rel(network="eth")),
+        ({"address": "0xb", "reserve_in_usd": "50000",
+          "base_token_price_usd": "1.0", "name": "b",
+          "volume_usd": {"h24": "1"}, "price_change_percentage": {"h24": "0"}},
+         {}))
+    assert _deepest_priced_pool("base", TOKEN, fetch=lambda url: payload) is None
+
+
+def test_cr_m06_non_positive_price_is_not_a_price():
+    payload = _payload({"address": "0xdeep", "reserve_in_usd": "50000",
+                        "base_token_price_usd": "0", "name": "deep",
+                        "volume_usd": {"h24": "1"},
+                        "price_change_percentage": {"h24": "0"}})
+    assert _deepest_priced_pool("base", TOKEN, fetch=lambda url: payload) is None

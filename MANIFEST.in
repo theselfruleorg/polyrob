@@ -3,14 +3,16 @@ graft data/characters
 graft webview/static
 graft webview/templates
 prune webview/templates/__pycache__
-graft avatar
-# The invoice/PFP card fonts. modules/pfp/cards.py reads assets/fonts/dejavu/*.ttf
+# The invoice card fonts. modules/cards/cards.py reads assets/fonts/dejavu/*.ttf
 # by path at runtime; without this the sdist omits them and card rendering
 # degrades to PIL's default font. The wheel already carried them via
 # package-data; the sdist did not.
 graft assets
 recursive-include agents/personality/characters *.json
 include config/*.template
+# 058: the lock ships in the SDIST so a source install can pin its lazy
+# installs (core/lazy_deps.py) exactly as the deploy does; a wheel has none.
+include requirements.lock
 include README.md LICENSE
 # 030 WS-F6 (E7): ship the user guide + flag SSOT in the SDIST so a pip
 # source install has the documentation its docstrings reference. (Wheels are

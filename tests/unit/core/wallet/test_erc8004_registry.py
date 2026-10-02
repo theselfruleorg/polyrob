@@ -55,6 +55,21 @@ def test_a_testnet_has_its_own_distinct_address():
     assert row.identity.lower() != IDENTITY_MAINNET
 
 
+def test_robinhood_is_pinned_to_the_published_singleton():
+    """050 §7.1 (Phase 0). Measured 2026-09-23: on 4663 the mainnet pair answers
+    name() == "AgentIdentity", proxy code sha256 e3b1c1b4 == Base/Ethereum; on
+    46630 the TESTNET pair is deployed (same code as base-sepolia) and the mainnet
+    address has no code — the testnet row must never point at the mainnet pair."""
+    row = erc8004.registry_for("robinhood")
+    assert row is not None and row.chain_id == 4663
+    assert row.identity.lower() == IDENTITY_MAINNET
+    assert row.reputation.lower() == REPUTATION_MAINNET
+    test = erc8004.registry_for("robinhood-testnet")
+    assert test is not None and test.chain_id == 46630
+    assert test.identity.lower() == IDENTITY_TESTNET
+    assert test.identity.lower() != IDENTITY_MAINNET
+
+
 def test_an_unknown_chain_returns_none_rather_than_guessing():
     assert erc8004.registry_for("dogecoin") is None
     assert erc8004.registry_for("") is None

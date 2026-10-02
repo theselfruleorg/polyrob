@@ -20,7 +20,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 import time
 import uuid
 from collections import OrderedDict
@@ -79,8 +78,24 @@ class DuplicateGoalError(ValueError):
             f"near-duplicate of goal {match_id} '{match_title}' (similarity {similarity:.2f})")
 
 
-def normalize_title(title: str) -> str:
-    return " ".join(re.sub(r"[^a-z0-9]+", " ", title.lower()).split())
+from core.goal_vocab import normalize_title  # noqa: E402,F401 — the ONE title key
+
+
+class SuppressedGoalError(ValueError):
+    """The owner switched this goal OFF (034 §3.5 — ``/goal cancel``).
+
+    Raised by ``create`` BEFORE the dedup check, and ``force=True`` does not
+    bypass it: the stream seeder forces every create, and the owner's "never
+    again" must beat the seeder."""
+
+    def __init__(self, suppression):
+        self.suppression = suppression
+        what = {"stream": "stream ", "objective": "objective "}.get(
+            getattr(suppression, "scope", ""), "")
+        label = getattr(suppression, "label", "") or getattr(suppression, "key", "")
+        super().__init__(
+            f"the owner switched {what}'{label}' OFF — do not create it again or a "
+            f"variant of it. Only the owner turns it back on (/goal allow).")
 
 
 def _trigrams(s: str) -> set:
@@ -201,7 +216,17 @@ class GoalBoard:
                parent_id: Optional[str] = None, max_retries: Optional[int] = None,
                payload: Optional[Dict[str, Any]] = None, status: str = STATUS_READY,
                kind: str = KIND_GOAL, force: bool = False,
-               depends_on: Optional[List[str]] = None) -> Goal:
+               depends_on: Optional[List[str]] = None,
+               actor: Optional[str] = None, rail_id: Optional[str] = None,
+               tool_ceiling: Optional[List[str]] = None) -> Goal:
+        """Write one row. ``actor`` names WHO is writing it (036 §3.3,
+        ``core.tool_grants``): ``payload.tools`` must pass
+        :func:`core.tool_grants.assert_grantable` for that actor —
+        ``owner_seat`` / ``agent`` (+ ``tool_ceiling``) / ``rail`` (+ ``rail_id``)
+        / ``none``. ``actor=None`` is the legacy/test path; every production call
+        site names one (``tests/test_board_create_grant_ratchet.py``).
+        A refusal raises :class:`core.tool_grants.GrantRefused` (a ``ValueError``)
+        before any row is written."""
         from core.identity import is_anonymous
         if is_anonymous(user_id):
             raise ValueError("goal create requires a real (non-anonymous) user_id (tenant scope)")
@@ -209,6 +234,24 @@ class GoalBoard:
         if kind == KIND_GOAL:
             self._check_objective_budget(user_id, parent_id)
         from agents.task.constants import AutonomyConfig
+
+        # 034 §3.5 read site 2: what the owner switched OFF is refused BEFORE,
+        # and independent of, the dedup check — and `force` does not bypass it.
+        if kind == KIND_GOAL:
+            from core.goal_suppressions import blocking
+            hit = blocking(self.db_path, user_id=user_id, title=title,
+                           objective_id=parent_id,
+                           stream_id=(payload or {}).get("stream"), now=self._now())
+            if hit is not None:
+                raise SuppressedGoalError(hit)
+
+        # 036 §3.3: ONE predicate decides who may put a tool on a goal.
+        if (payload or {}).get("tools"):
+            from core.tool_grants import assert_grantable
+            payload = dict(payload or {})
+            payload["tools"] = assert_grantable(
+                payload["tools"], actor=actor, rail_id=rail_id, user_id=user_id,
+                db_path=self.db_path, ceiling=tool_ceiling)
 
         # Check for near-duplicates in the last 7 days
         threshold = AutonomyConfig.goal_dedup_threshold()
@@ -1414,6 +1457,12 @@ class GoalBoard:
                 out[str(r[0])] = int(r[1])
         return out
 
+    def suppressions(self, *, user_id: str) -> list:
+        """What the owner switched OFF (034), newest first. A read: never
+        creates the table."""
+        from core.goal_suppressions import active
+        return active(self.db_path, user_id=user_id, now=self._now())
+
     def has_live_goals(self, *, user_id: str) -> bool:
         """True while any goal of this tenant is in flight (triage/waiting/ready/
         running). ``blocked`` is NOT live here: it needs an owner, it is not
@@ -1665,7 +1714,10 @@ class GoalBoard:
         again if the stream identity is ever removed); it is simply not enforced
         while the row IS a stream.
         """
-        if (objective.payload or {}).get("stream_id"):
+        # 036 §3.1: a RAIL (``payload.recurrence``) is standing work too — it is
+        # bounded by its own ``max_live`` + schedule, never a lifetime tally.
+        if (objective.payload or {}).get("stream_id") or \
+                (objective.payload or {}).get("recurrence"):
             return 0
         own = (objective.payload or {}).get("goal_budget")
         if own is not None:
@@ -1719,7 +1771,7 @@ class GoalBoard:
         """
         return self.create(user_id=user_id, title=title, body=body, priority=priority,
                            kind=KIND_OBJECTIVE, status=OBJ_ACTIVE, force=force,
-                           payload=payload)
+                           payload=payload, actor="none")
 
     # --- asks (§7.2b) ---------------------------------------------------------
 
@@ -1792,7 +1844,7 @@ class GoalBoard:
             payload.update(extra_payload)
         return self.create(user_id=user_id, title=what, body=why, kind=KIND_ASK,
                            status=ASK_OPEN, parent_id=objective_id, force=True,
-                           payload=payload)
+                           payload=payload, actor="none")
 
     #: ``payload.kind`` discriminator for the budget-exhaustion ask below, so the
     #: "does one already exist" check is an EXACT match on a stable key rather
@@ -1885,7 +1937,8 @@ class GoalBoard:
         return [Goal.from_row(r) for r in rows]
 
     def decide_ask(self, ask_id: str, *, user_id: str, approved: bool,
-                   answer: Optional[str] = None) -> tuple:
+                   answer: Optional[str] = None,
+                   answer_via: Optional[str] = None) -> tuple:
         """Record an owner decision (approve or reject) on an OPEN ask.
 
         ``answer`` is the owner's free-text reply (2026-09-21, interface audit
@@ -1911,6 +1964,9 @@ class GoalBoard:
         answer_text = (answer or "").strip()[:2000]
         if answer_text:
             payload["answer"] = answer_text
+            # H04: WHERE the text was recorded (an owner seat verb vs an agent
+            # turn's `owner_ask(answer=)`) — rendered as provenance, never trust.
+            payload["answer_via"] = (answer_via or "owner seat").strip()[:120]
         new_status = ASK_FULFILLED if approved else ASK_REJECTED
         rc = execute_retry(
             self.db_path,
@@ -1933,6 +1989,7 @@ class GoalBoard:
                 dep_payload["owner_unblocked"] = {"ts": now, "ask_id": ask_id}
                 if answer_text:
                     dep_payload["owner_unblocked"]["answer"] = answer_text
+                    dep_payload["owner_unblocked"]["answer_via"] = payload.get("answer_via", "")
                 # T2.1 final-review Fix 1: an ask-fulfillment unblock is also an
                 # owner reset — clear the stale block_kind (see unblock()'s
                 # docstring for the full rationale). provider_requeues /
@@ -2287,6 +2344,24 @@ class GoalBoard:
     def mark_stall_escalated(self, user_id: Optional[str] = None) -> None:
         """Durable "the owner was told about this stall" marker."""
         self._event(self._planner_key(user_id), "empty_pipeline_escalated", {})
+
+    def stall_escalation_count(self, user_id: Optional[str] = None) -> int:
+        """How many stall escalations were ever recorded for this tenant. After
+        :meth:`mark_stall_escalated` it is the ordinal of the current stall — the
+        honest fact that makes two stalls' owner messages distinct."""
+        keys = self._planner_read_keys(user_id)
+        placeholders = ",".join("?" for _ in keys)
+        row = execute_retry(
+            self.db_path,
+            f"SELECT COUNT(*) AS n FROM goal_events WHERE goal_id IN ({placeholders}) "
+            f"AND kind='empty_pipeline_escalated'",
+            (*keys,), fetch="one")
+        if row is None:
+            return 0
+        try:
+            return int(row["n"])
+        except (KeyError, TypeError, IndexError):
+            return int(row[0])
 
     def stall_escalated_since(self, since: Optional[float],
                               user_id: Optional[str] = None) -> bool:

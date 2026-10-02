@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "polyrob-echo"
+version = "0.1.0"
+description = "Fixture pack for the 067 P2 loader tests: one read-only tool, one skill, one CLI command."
+requires-python = ">=3.11"
+
+[project.entry-points."polyrob.packs"]
+echo = "polyrob_echo:pack"
+
+[tool.setuptools]
+packages = ["polyrob_echo"]
+
+[tool.setuptools.package-data]
+polyrob_echo = ["pack.toml", "skills/*/SKILL.md"]

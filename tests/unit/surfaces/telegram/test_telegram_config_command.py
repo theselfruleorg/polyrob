@@ -187,3 +187,20 @@ async def test_help_mentions_config(env):
     out = await act_on_inbound(_Agent(str(env)), _cmd("/help", "/help"))
     assert "/config" in out
     assert "/config" in _help_text()
+
+
+def test_a_flag_write_names_where_it_applies(monkeypatch, tmp_path):
+    """Validation 2026-09-27: the owner was told `/config set CRON_ENABLED true`
+    turns cron on at the next restart. On a server whose unit does not read
+    .polyrob/.env the write reaches CLI runs only — set_value says so in its
+    notes, and the Telegram reply dropped them."""
+    from core.config_service import SetResult
+    from surfaces.telegram import harness
+    note = ("note: this serving process reads the server env ladder (config/.env.* "
+            "/ systemd EnvironmentFile), not .polyrob/.env — the write applies to "
+            "CLI runs only")
+    monkeypatch.setattr("core.config_service.set_value", lambda *a, **k: SetResult(
+        True, "written", "set CRON_ENABLED=true", store="x", applies="restart",
+        notes=(note,)))
+    out = harness._config_reply("alice", str(tmp_path), "i", ["set", "CRON_ENABLED", "true"])
+    assert "CLI runs only" in out

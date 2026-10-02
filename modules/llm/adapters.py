@@ -416,6 +416,14 @@ class LLMClientAdapter(BaseChatModel):
         # G3: cache-WRITE (creation) tokens, billed at a surcharge downstream
         if usage_data.get('cache_creation_tokens'):
             usage_metadata['cache_creation_input_tokens'] = usage_data.get('cache_creation_tokens')
+        # F4: the 1h-window slice of that write (Anthropic 2.0x)
+        if usage_data.get('cache_creation_1h_tokens'):
+            usage_metadata['cache_creation_1h_tokens'] = usage_data.get('cache_creation_1h_tokens')
+        # F23: what the provider actually billed. None means "not reported" (keep
+        # the estimate); 0.0 is a real free call, so test against None, not falsy.
+        for key in ('billed_cost_usd', 'cache_discount_usd'):
+            if usage_data.get(key) is not None:
+                usage_metadata[key] = usage_data[key]
         return usage_metadata
 
     async def _agenerate(self, messages: List[BaseMessage], stop: Optional[List[str]] = None, **kwargs) -> ChatResult:

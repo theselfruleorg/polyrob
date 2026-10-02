@@ -422,14 +422,21 @@ async def perform_message_send(*, router, allowlist, owner_targets, user_id,
     # here is already the RESOLVED owner address (the alias resolution above
     # ran before tier was computed), so this never collides with a literal
     # 'owner'-keyed row from elsewhere.
+    # 061: the owner's line goes to the ONE owner thread, not the correspondent
+    # store. An interactive session's send was already recorded by the turn
+    # latch above (`mark_reply_published`); an autonomous one is recorded here.
+    # The legacy owner rows (`28436760` AND `telegram:28436760`) are adopted
+    # into the thread once, so `/contacts` stops listing the owner.
     elif ok and tier == "owner" and container is not None:
         try:
-            owner_store = container.get_service("conversation_store")
-            if owner_store is not None:
-                owner_store.record_outbound(user_id or "", surface, str(target), text,
-                                            session_id=session_id or "")
+            from core.surfaces.owner_thread import adopt_legacy_owner_rows, record_owner_out
+            adopt_legacy_owner_rows(container, user_id or "", owner_targets)
+            if _is_autonomous_session(session_id):
+                record_owner_out(container, user_id or "", text, via=surface,
+                                 session_id=session_id or "", source="message_tool",
+                                 attachments=media)
         except Exception as e:
-            logger.debug("owner-send conversation record skipped: %s", e)
+            logger.debug("owner-send thread record skipped: %s", e)
         _record_owner_send_on_the_rail(user_id, session_id, surface, text)
 
     # T6: first-contact report — AFTER a successful send+record. A blocked or
@@ -516,7 +523,13 @@ def _record_owner_send_on_the_rail(user_id, session_id, surface: str,
 
 #: Surface order used when the model omits `surface`: the owner's primary chat
 #: surface first, then the rest of the owner-address contract.
-_OWNER_SURFACE_ORDER = ("telegram", "email", "slack", "discord", "signal", "whatsapp", "x")
+#: Derived from the surface catalog's row order (064 F1).
+def _owner_surface_order() -> tuple:
+	from core.surfaces.catalog import owner_seat_ids
+	return owner_seat_ids()
+
+
+_OWNER_SURFACE_ORDER = _owner_surface_order()
 
 
 def resolve_message_defaults(surface, target, owner_targets) -> tuple:
@@ -534,7 +547,7 @@ def resolve_message_defaults(surface, target, owner_targets) -> tuple:
 	sfc = (surface or "").strip()
 	if not sfc:
 		targets = owner_targets or {}
-		for sid in _OWNER_SURFACE_ORDER:
+		for sid in _owner_surface_order():
 			if targets.get(sid):
 				sfc = sid
 				break
@@ -550,6 +563,14 @@ def prepare_message_targets(container, user_id: str, surface, target) -> tuple:
 	owner_targets = build_owner_targets(container, user_id)
 	sfc, tgt = resolve_message_defaults(surface, target, owner_targets)
 	return owner_targets, sfc, tgt
+
+
+def _is_autonomous_session(session_id: Optional[str]) -> bool:
+	try:
+		from agents.task.goals.autonomy_marker import is_autonomous
+		return is_autonomous(session_id)
+	except Exception:
+		return False
 
 
 def build_owner_targets(container, user_id: str) -> dict:
@@ -571,7 +592,7 @@ def build_owner_targets(container, user_id: str) -> dict:
 		targets["email"] = oem
 	try:
 		from core.surfaces.owner_address import owner_address
-		for _sid in ("slack", "discord", "signal", "whatsapp", "x"):
+		for _sid in _owner_surface_order():
 			if _sid not in targets:
 				_addr = owner_address(container, _sid, user_id)
 				if _addr:

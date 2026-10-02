@@ -121,17 +121,24 @@ _DIAGNOSTIC_KINDS = frozenset({
 _DIAGNOSTIC_PREFIXES = ("compaction_",)  # compaction_started / compaction_finished
 
 
-def classify(kind):
-    # type: (str) -> str
+#: 033: an ``external_write`` row is classed by its EFFECT, not its kind — one
+#: kind spans every outward act. A write whose effect is unknown is tool use.
+_EFFECT_CLASS = {"money": "money", "social": "message", "comms": "message"}
+
+
+def classify(kind, effect=None):
+    # type: (str, object) -> str
     """Map a durable/feed/unknown ``kind`` to one member of ``CLIENT_CLASSES``.
 
     Total and pure: an empty, unknown, or non-string kind is ``"system"``.
     Precedence is money → cron → goal → tool → message → system, so a family
     prefix never steals a kind another class owns (no kind starts with another
-    class's prefix).
+    class's prefix). ``effect`` only refines ``external_write`` (033).
     """
     if not isinstance(kind, str) or not kind:
         return "system"
+    if kind == ek.EXTERNAL_WRITE:
+        return _EFFECT_CLASS.get(effect if isinstance(effect, str) else "", "tool")
     if kind in _MONEY_KINDS or kind.startswith(_MONEY_PREFIXES):
         return "money"
     if kind in _CRON_KINDS:

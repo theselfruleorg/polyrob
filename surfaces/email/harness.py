@@ -234,7 +234,7 @@ class EmailHarness:
         ``_MAX_ROUTE_ATTEMPTS`` tries and reported, never silently retried
         forever.
         """
-        from surfaces.telegram.harness import act_on_inbound  # shared decision executor
+        from surfaces._actor import act_on_inbound  # shared decision executor
         routed = 0
         try:
             messages = await self.fetcher.fetch_unread()

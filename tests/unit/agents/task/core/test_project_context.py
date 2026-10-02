@@ -898,3 +898,178 @@ class TestTokenCount:
         mm._project_context_tokens = 75
         after = mm.get_token_stats()["base"]
         assert after == before + 75
+
+
+# ---------------------------------------------------------------------------
+# F25: window-relative cap, head+tail named marker, named skipped sibling
+# ---------------------------------------------------------------------------
+
+
+class TestWindowRelativeCap:
+    def test_unknown_window_falls_back_to_the_default_cap(self):
+        from agents.task.agent.core.project_context import (
+            DEFAULT_PROJECT_CONTEXT_CAP_TOKENS,
+            resolve_cap_tokens,
+        )
+        assert resolve_cap_tokens(None) == DEFAULT_PROJECT_CONTEXT_CAP_TOKENS
+        assert resolve_cap_tokens(0) == DEFAULT_PROJECT_CONTEXT_CAP_TOKENS
+        assert resolve_cap_tokens(-1) == DEFAULT_PROJECT_CONTEXT_CAP_TOKENS
+        assert resolve_cap_tokens("200000") == DEFAULT_PROJECT_CONTEXT_CAP_TOKENS
+        # A caller-supplied fallback wins over the module default.
+        assert resolve_cap_tokens(None, default_cap=1234) == 1234
+
+    def test_cap_is_four_percent_of_the_window_clamped(self):
+        from agents.task.agent.core.project_context import resolve_cap_tokens
+        assert resolve_cap_tokens(200_000) == 8_000      # 4 %
+        assert resolve_cap_tokens(1_000_000) == 40_000   # clamped at the ceiling
+        assert resolve_cap_tokens(2_000_000) == 40_000   # still the ceiling
+        assert resolve_cap_tokens(8_000) == 4_000        # clamped at the floor
+
+    def test_build_message_uses_the_window_cap(self, tmp_path: Path):
+        from agents.task.agent.core.project_context import build_project_context_message
+
+        _make_git_root(tmp_path)
+        (tmp_path / "CLAUDE.md").write_text("B" * 200_000, encoding="utf-8")
+
+        small = build_project_context_message(
+            local=True, autoload=True, server_mode=False,
+            cwd=str(tmp_path), workspace_dir=None, context_window=100_000,  # 4 K cap
+        )
+        big = build_project_context_message(
+            local=True, autoload=True, server_mode=False,
+            cwd=str(tmp_path), workspace_dir=None, context_window=1_000_000,  # 40 K cap
+        )
+        assert small is not None and big is not None
+        assert len(big) > len(small)
+        # 4 K tokens ≈ 16 K chars of budget; 40 K tokens ≈ 160 K chars.
+        assert len(small) < 20_000
+        assert len(big) > 100_000
+
+    def test_no_window_is_byte_identical_to_the_explicit_cap(self, tmp_path: Path):
+        from agents.task.agent.core.project_context import (
+            build_project_context_message,
+            load_project_context,
+        )
+        _make_git_root(tmp_path)
+        (tmp_path / "CLAUDE.md").write_text("C" * 200_000, encoding="utf-8")
+
+        built = build_project_context_message(
+            local=True, autoload=True, server_mode=False,
+            cwd=str(tmp_path), workspace_dir=None, cap_tokens=5000,
+        )
+        direct = load_project_context(tmp_path, cap_tokens=5000)
+        assert built == direct
+
+
+class TestNamedHeadTailTruncation:
+    def _big_file(self, tmp_path: Path) -> Path:
+        _make_git_root(tmp_path)
+        path = tmp_path / "CLAUDE.md"
+        # A distinct head and tail so we can prove both survive.
+        path.write_text("HEADMARKER\n" + ("x" * 100_000) + "\nTAILMARKER", encoding="utf-8")
+        return path
+
+    def test_marker_names_the_cut_and_the_path(self, tmp_path: Path):
+        from agents.task.agent.core.project_context import load_project_context
+        path = self._big_file(tmp_path)
+
+        result = load_project_context(tmp_path, cap_tokens=1000)
+        assert result is not None
+        assert "[…project context truncated: kept " in result
+        assert "(head + tail);" in result
+        assert f"read {path} for the full file]" in result
+
+    def test_head_and_tail_both_survive(self, tmp_path: Path):
+        from agents.task.agent.core.project_context import load_project_context
+        self._big_file(tmp_path)
+
+        result = load_project_context(tmp_path, cap_tokens=1000)
+        assert result is not None
+        assert "HEADMARKER" in result
+        assert "TAILMARKER" in result
+        # The marker sits BETWEEN them.
+        assert result.index("HEADMARKER") < result.index("truncated: kept") < result.index("TAILMARKER")
+
+    def test_within_budget_is_untouched(self, tmp_path: Path):
+        from agents.task.agent.core.project_context import load_project_context
+        _make_git_root(tmp_path)
+        (tmp_path / "CLAUDE.md").write_text("short and sweet", encoding="utf-8")
+
+        result = load_project_context(tmp_path, cap_tokens=20000)
+        assert result is not None
+        assert "truncated" not in result
+        assert "short and sweet" in result
+
+
+class TestSkippedSiblingIsNamed:
+    def test_lower_precedence_sibling_is_named(self, tmp_path: Path):
+        from agents.task.agent.core.project_context import load_project_context
+        _make_git_root(tmp_path)
+        (tmp_path / "AGENTS.md").write_text("the winner", encoding="utf-8")
+        (tmp_path / "CLAUDE.md").write_text("the sibling", encoding="utf-8")
+
+        result = load_project_context(tmp_path)
+        assert result is not None
+        assert "the winner" in result
+        # One-file-wins still holds: the sibling's CONTENT is not loaded…
+        assert "the sibling" not in result
+        # …but its NAME is, so the model knows it can read it.
+        assert "CLAUDE.md" in result
+        assert "NOT loaded" in result
+
+    def test_no_sibling_no_line(self, tmp_path: Path):
+        from agents.task.agent.core.project_context import load_project_context
+        _make_git_root(tmp_path)
+        (tmp_path / "AGENTS.md").write_text("only me", encoding="utf-8")
+
+        result = load_project_context(tmp_path)
+        assert result is not None
+        assert "NOT loaded" not in result
+
+    def test_higher_precedence_sibling_is_not_named(self, tmp_path: Path):
+        """polyrob.md wins; AGENTS.md below it is named, nothing above it exists."""
+        from agents.task.agent.core.project_context import load_project_context
+        _make_git_root(tmp_path)
+        (tmp_path / "polyrob.md").write_text("native", encoding="utf-8")
+        (tmp_path / ".cursorrules").write_text("legacy", encoding="utf-8")
+
+        result = load_project_context(tmp_path)
+        assert result is not None
+        assert "native" in result
+        assert ".cursorrules" in result
+        assert "legacy" not in result
+
+
+class TestNamedTruncationSharedHelper:
+    def test_tool_result_bytes_are_unchanged(self):
+        """`truncate_tool_result` is the no-tail branch of `named_truncation`."""
+        from agents.task.agent.core.result_budget import (
+            named_truncation,
+            truncate_tool_result,
+        )
+        content = "z" * 100_000
+        assert truncate_tool_result(content, 1000) == (
+            content[:4000]
+            + "\n[…truncated: 1,000 of 25,000 tokens; use offset/limit to read more]"
+        )
+        assert truncate_tool_result(content, 1000) == named_truncation(
+            content, 1000, way_out="use offset/limit to read more"
+        )
+
+    def test_head_tail_split_is_seventy_twenty(self):
+        from agents.task.agent.core.result_budget import named_truncation
+        content = "q" * 100_000
+        out = named_truncation(
+            content, 1000, way_out="read /tmp/f for the full file",
+            keep_head_ratio=0.70, keep_tail_ratio=0.20, label="project context ",
+        )
+        head, _, rest = out.partition("\n[…project context truncated:")
+        assert len(head) == 2800   # 0.70 * 1000 tokens * 4 chars
+        tail = rest.split("]\n", 1)[1]
+        assert len(tail) == 800    # 0.20 * 1000 tokens * 4 chars
+
+    def test_within_budget_returns_identity(self):
+        from agents.task.agent.core.result_budget import named_truncation
+        content = "small"
+        assert named_truncation(content, 1000, way_out="x", keep_tail_ratio=0.2) is content
+        assert named_truncation(content, 0, way_out="x") is content

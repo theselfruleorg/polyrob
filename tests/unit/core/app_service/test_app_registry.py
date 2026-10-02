@@ -15,7 +15,7 @@ from core.app_service.registry import (
 def _req(r, slug="st", uid="u1", **over):
     kw = dict(source_dir="rob-status", cmd=["python", "server.py"], container_port=8765,
               health_path="/api/status.json", egress="none", egress_allow=[],
-              env={"PORT": "8765"}, workspace_digest="d1")
+              env={"PORT": "8765"}, workspace_digest="d1" * 12)
     kw.update(over)
     return r.upsert_request(slug, uid, **kw)
 
@@ -34,10 +34,10 @@ def test_request_pending_then_approve_then_redeploy_unattended(tmp_path):
     live = r.get("st", "u1")
     assert live["status"] == STATUS_LIVE and live["host_port"] == 18000
     assert live["public_url"] == "https://st.apps.example.test"
-    again = _req(r, workspace_digest="d2")
+    again = _req(r, workspace_digest="d2" * 12)
     # approval sticks to the ADDRESS *and its approved CONFIG*; only the tree moved
     assert again["status"] == STATUS_APPROVED
-    assert again["workspace_digest"] == "d2" and again["health_path"] == "/api/status.json"
+    assert again["workspace_digest"] == "d2" * 12 and again["health_path"] == "/api/status.json"
     assert again["approved_at"] is not None and again["approval_change"] == []
 
 
@@ -81,7 +81,7 @@ def test_failed_increments_and_redeploy_resets(tmp_path):
     row = r.get("st", "u1")
     assert row["status"] == STATUS_FAILED and row["consecutive_failures"] == 2
     assert "again" in row["last_failure_error"]
-    row = _req(r, workspace_digest="d3")
+    row = _req(r, workspace_digest="d3" * 12)
     assert row["status"] == STATUS_APPROVED and row["consecutive_failures"] == 0
     assert row["last_failure_error"] is None
 
@@ -209,7 +209,7 @@ def test_inert_changes_stay_unattended(tmp_path):
     r = AppServiceRegistry(str(tmp_path / "a.db"))
     _req(r, egress="allowlist", egress_allow=["a.example.com", "b.example.com"])
     r.mark_approved("st", "u1")
-    row = _req(r, workspace_digest="d9", env={"PORT": "9999"}, source_dir="elsewhere",
+    row = _req(r, workspace_digest="d9" * 12, env={"PORT": "9999"}, source_dir="elsewhere",
                egress="allowlist", egress_allow=["B.example.com", "a.example.com"])
     assert row["status"] == STATUS_APPROVED and row["approval_change"] == []
 
@@ -248,7 +248,7 @@ def test_pre_fingerprint_row_is_migrated_not_crashed(tmp_path):
     conn.close()
     row = r.get("st", "u1")
     assert row["approved_fingerprint"] and row["approval_change"] == []
-    assert _req(r, workspace_digest="d7")["status"] == STATUS_APPROVED   # same config
+    assert _req(r, workspace_digest="d7" * 12)["status"] == STATUS_APPROVED   # same config
     assert _req(r, egress="open")["status"] == STATUS_PENDING            # changed config
 
 

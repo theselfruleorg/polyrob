@@ -1,12 +1,14 @@
 """Cron result delivery (W3, Reference-parity §_deliver_result).
 
 After a cron job runs the agent loop (W3 run-loop fix), its final result can be
-delivered out-of-band to an external sink — email, twitter, or telegram — so a
-scheduled task can actually *report back* instead of dying silently in a session.
+delivered out-of-band to an external sink — email, telegram, a chat surface, or a
+pack's delivery channel (the X pack's ``twitter`` post sink) — so a scheduled
+task can actually *report back* instead of dying silently in a session.
 
 Design constraints (Fusion-validated):
 
-- **Allowlisted targets** ``{telegram, email, twitter}`` — never an arbitrary sink.
+- **Allowlisted targets** — the surface catalog's cron targets plus the delivery
+  channels installed packs declare (:func:`allowed_targets`); never an arbitrary sink.
 - **`[SILENT]`** anywhere in the result (case-insensitive) suppresses delivery,
   matching the Reference convention (the agent opts a run out of notifying).
 - **Tenant-scoped** — the recipient is resolved from the *job's owner*, not from a
@@ -30,11 +32,29 @@ logger = logging.getLogger(__name__)
 
 # 030 WS-B1 (D8): every router-reachable surface can carry an owner-bound cron
 # report; the owner address resolves through the owner-address contract.
-# "twitter" stays the PUBLIC-post sink (TwitterTool), distinct from the "x" DM
-# surface.
-ALLOWED_TARGETS = ("telegram", "email", "twitter",
-                   "slack", "discord", "signal", "whatsapp", "x")
-_ROUTER_TARGETS = ("slack", "discord", "signal", "whatsapp", "x")
+# "twitter" (the X pack's PUBLIC-post sink) is a pack delivery channel (067
+# P3b, core.delivery_channels), distinct from the "x" DM surface.
+#: Both derive from the surface catalog (064 F1) at CALL time, so a new
+#: surface row is a cron target with no edit here. The module constants are the
+#: import-time snapshot kept for back-compat callers.
+def allowed_targets() -> tuple:
+    """Chat-surface targets (the catalog) + the named delivery CHANNELS installed
+    packs declare (067 P3b, ``core.delivery_channels``) — e.g. ``twitter``, the
+    X pack's public-post sink. A declared channel whose pack did not load stays
+    a valid target and is reported ``unavailable`` with the reason."""
+    from core.delivery_channels import channel_names
+    from core.surfaces.catalog import cron_target_ids
+    ids = cron_target_ids()
+    return ids + tuple(t for t in channel_names() if t not in ids)
+
+
+def router_targets() -> tuple:
+    from core.surfaces.catalog import router_target_ids
+    return router_target_ids()
+
+
+ALLOWED_TARGETS = allowed_targets()
+_ROUTER_TARGETS = router_targets()
 SILENT_MARKER = "[SILENT]"
 
 
@@ -122,6 +142,7 @@ async def deliver_result(
     target: Optional[str],
     deliver_target: Optional[str] = None,
     session_id: Optional[str] = None,
+    record: Optional[str] = None,
 ) -> bool:
     """Boolean shim over :func:`deliver_result_ex` (the legacy contract).
 
@@ -131,7 +152,7 @@ async def deliver_result(
     """
     return await deliver_result_ex(
         task_agent, job, final, target=target, deliver_target=deliver_target,
-        session_id=session_id) == "sent"
+        session_id=session_id, record=record) == "sent"
 
 
 async def deliver_result_ex(
@@ -142,13 +163,22 @@ async def deliver_result_ex(
     target: Optional[str],
     deliver_target: Optional[str] = None,
     session_id: Optional[str] = None,
+    record: Optional[str] = None,
 ) -> str:
-    """Deliver a cron job's final result to an allowlisted external sink.
+    """Deliver a cron job's report to an allowlisted external sink.
+
+    ``final`` is the body: what the run said with ``send_message`` (owner rule
+    2026-09-29 — ``done()`` text is a record, never the delivered answer).
+    ``record`` is the run's done() text, passed only when the owner's
+    verbosity shows records; it is appended for an OWNER-bound sink and never
+    for a public one.
 
     Returns ``sent`` | ``deferred`` (held, deduped, capped, paused, or handed
     to the durable cross-process queue — recorded, not lost) | ``suppressed``
     (the agent's own ``[SILENT]`` opt-out) | ``already_told`` (the run itself
-    already delivered to the owner — tell once) | ``failed`` (unknown/blank target,
+    already delivered to the owner — tell once) | ``unavailable`` (a pack's
+    delivery channel whose pack is not loaded here; the reason is logged) |
+    ``failed`` (unknown/blank target,
     empty result, sink unconfigured, or any sink exception). Never raises —
     delivery must not fail the job.
 
@@ -162,41 +192,69 @@ async def deliver_result_ex(
     if not target:
         return "failed"
     target = target.strip().lower()
-    if target not in ALLOWED_TARGETS:
-        logger.warning("cron delivery: target %r not in allowlist %s", target, ALLOWED_TARGETS)
+    if target not in allowed_targets():
+        logger.warning("cron delivery: target %r not in allowlist %s", target, allowed_targets())
         return "failed"
     if not final or not final.strip():
         return "failed"
     if is_silent(final):
         logger.info("cron delivery: job %s opted out via [SILENT]", getattr(job, "id", "?"))
         return "suppressed"
-    # Tell once (owner ruling 2026-09-21): when the run itself already told the
-    # owner, the `deliver` echo of its final text is a duplicate — skip it and
-    # say so. The run's send is the user_delivery row carrying THIS session id.
-    if session_id and run_already_told_owner(_event_log_for_read(),
-                                             getattr(job, "user_id", None), session_id):
-        logger.info("cron delivery: job %s already told the owner in-run — echo skipped",
-                    getattr(job, "id", "?"))
-        _mark_surfaced(session_id, getattr(job, "user_id", None))
-        return "already_told"
-
     # Security: ignore an agent-supplied explicit recipient unless an operator opted in.
     # By default, deliver only to the job owner's own channel (no exfiltration).
     if deliver_target and not _allow_explicit_target():
         logger.info("cron delivery: ignoring explicit deliver_target (owner-only by default)")
         deliver_target = None
 
+    # A run whose money verb was refused reports to the OWNER only
+    # (core/security/refusal_taint.py): an explicit recipient is dropped and a
+    # pack's public channel (the X post sink) is re-routed to the owner's
+    # Telegram lane, so the report is kept but never published.
+    if session_id:
+        from core.security.refusal_taint import is_tainted
+        if is_tainted(session_id):
+            from core.surfaces.catalog import cron_target_ids
+            # Owner-bound = a catalog chat surface; a pack channel is public.
+            is_public_sink = target not in cron_target_ids()
+            if deliver_target or is_public_sink:
+                logger.warning("cron delivery: job %s had a refused money action — "
+                               "%s report re-routed to the owner",
+                               getattr(job, "id", "?"), target)
+            deliver_target = None
+            if is_public_sink:
+                target = "telegram"
+
+    # The recipient is the OWNER when the sink is a catalog chat surface (or
+    # email) with no explicit address; a pack channel (the X post sink) is public.
+    from core.surfaces.catalog import cron_target_ids as _owner_sinks
+    owner_bound = target in _owner_sinks() and not deliver_target
+
+    # Tell once (owner ruling 2026-09-21): when the run itself already told the
+    # owner, the `deliver` echo of what it sent is a duplicate — skip it and say
+    # so. The run's send is the user_delivery row carrying THIS session id. Only
+    # an owner-bound sink is an echo: a public post is not a copy of an owner DM.
+    if owner_bound and session_id and run_already_told_owner(
+            _event_log_for_read(), getattr(job, "user_id", None), session_id):
+        logger.info("cron delivery: job %s already told the owner in-run — echo skipped",
+                    getattr(job, "id", "?"))
+        _mark_surfaced(session_id, getattr(job, "user_id", None))
+        return "already_told"
+
+    if owner_bound and record:
+        from agents.task.runtime.run_outcome import with_done_record
+        final = with_done_record(final, record, True)
+
     ok: Any = False
     try:
         if target == "email":
             ok = await _deliver_email(task_agent, job, final, deliver_target)
-        elif target == "twitter":
-            ok = await _deliver_twitter(task_agent, job, final)
         elif target == "telegram":
             ok = await _deliver_telegram(task_agent, job, final, deliver_target)
-        elif target in _ROUTER_TARGETS:
+        elif target in router_targets():
             ok = await _deliver_router_surface(task_agent, job, final, target,
                                                deliver_target)
+        else:
+            ok = await _deliver_channel(task_agent, job, final, target)
     except Exception as e:  # fail-open: a delivery error never fails the job
         logger.error("cron delivery to %s failed for job %s: %s",
                      target, getattr(job, "id", "?"), e, exc_info=True)
@@ -306,6 +364,9 @@ async def _deliver_email(task_agent: Any, job: Any, final: str, deliver_target: 
     res = await tool.email_send(
         EmailSendAction(to=to_email, subject=subject, body=final),
         execution_context=_delivery_context(job))
+    _record_delivery_write(job, "email", "email_send", res,
+                           target="unknown" if deliver_target else "owner",
+                           fingerprint=f"{to_email}:{final}")
     if getattr(res, "error", None):
         logger.warning("cron delivery: email_send refused for job %s: %s",
                        getattr(job, "id", "?"), res.error)
@@ -349,16 +410,44 @@ async def _deliver_router_surface(task_agent: Any, job: Any, final: str,
     return classify_rail_outcome(outcome)
 
 
-def _build_twitter_tool(config: Any, container: Any) -> Any:
-    """Construction seam (033 T0.2) so a test can assert the ACTION is used."""
-    from tools.twitter_tool import TwitterTool
-    return TwitterTool("twitter", config, container)
+async def _deliver_channel(task_agent: Any, job: Any, final: str, target: str) -> Any:
+    """A pack's delivery channel (067 P3b, ``core.delivery_channels``): the
+    sender the pack registered, or ``unavailable`` with the named reason."""
+    from core.delivery_channels import sender_for, unavailable_reason
+    sender = sender_for(target)
+    if sender is None:
+        logger.warning("cron delivery: channel %r unavailable for job %s — %s",
+                       target, getattr(job, "id", "?"), unavailable_reason(target))
+        return "unavailable"
+    return await sender(task_agent, job, final)
 
 
 def _build_email_tool(config: Any, container: Any) -> Any:
-    """Construction seam (033 T0.2), mirroring :func:`_build_twitter_tool`."""
+    """Construction seam (033 T0.2) so a test can assert the ACTION is used."""
     from tools.email_tool import EmailTool
     return EmailTool("email", config, container)
+
+
+def _record_delivery_write(job: Any, tool: str, action: str, res: Any, *,
+                           target: str, fingerprint: str) -> None:
+    """033: cron delivery calls the gated ACTION directly, outside any
+    Controller, so the effect post-hook never sees it — this is its direct seam.
+    Classified by the ONE table (``core.effects.classify_effect``), recorded on
+    success and refusal alike. Fail-open."""
+    try:
+        from core.effects import classify_effect, record_external_write
+        verdict = classify_effect(tool, action)
+        if verdict is None:
+            return
+        record_external_write(
+            effect=verdict.effect, tool=tool, action=action, target=target,
+            surface="cron", autonomous=True, confidence=verdict.confidence,
+            outcome="error" if getattr(res, "error", None) else "ok",
+            user_id=str(getattr(job, "user_id", "") or ""),
+            session_id=str(getattr(job, "session_id", "") or ""),
+            fingerprint=fingerprint)
+    except Exception:
+        logger.debug("cron delivery: effect record skipped", exc_info=True)
 
 
 def _delivery_context(job: Any) -> Any:
@@ -376,27 +465,6 @@ def _delivery_context(job: Any) -> Any:
     )
 
 
-async def _deliver_twitter(task_agent: Any, job: Any, final: str) -> bool:
-    config, container = _config_and_container(task_agent)
-    from tools.twitter_tool import TwitterPostAction
-    tool = _build_twitter_tool(config, container)
-    text = final.strip()
-    if len(text) > 280:
-        text = text[:277] + "..."
-    # 033 T0.2: route through the ACTION, never TwitterTool.post(). The raw
-    # helper skips _check_ready (so TWITTER_ENABLED=false did not stop it), the
-    # hourly rate limit, TWITTER_REQUIRE_APPROVAL, the cross-session repeat-post
-    # cooldown, the 031 pause gate and the social_write record — a cron job with
-    # deliver=twitter published with zero governance.
-    res = await tool.twitter_post(TwitterPostAction(text=text),
-                                  execution_context=_delivery_context(job))
-    if getattr(res, "error", None):
-        logger.warning("cron delivery: twitter_post refused for job %s: %s",
-                       getattr(job, "id", "?"), res.error)
-        return False
-    return True
-
-
 async def _deliver_room(container: Any, job: Any, final: str, chat_id: str) -> str:
     """044 T21: deliver a cron report INTO an allowlisted room.
 
@@ -409,6 +477,26 @@ async def _deliver_room(container: Any, job: Any, final: str, chat_id: str) -> s
       survived every other scrub must not be the thing the agent posts publicly.
     """
     from core.secret_scrub import scrub_secret_shapes
+
+    # A cron can finish after the owner pauses. This direct send does not pass
+    # through the Controller effect gate, so check the same predicate here.
+    from core.effects import (effect_pause_refusal, external_write_pause_gate_enabled,
+                              record_external_write)
+    refusal = None
+    if external_write_pause_gate_enabled():
+        try:
+            data_dir = getattr(getattr(container, "config", None), "data_dir", None)
+            refusal = effect_pause_refusal("comms", None, "cron_room_delivery", data_dir)
+        except Exception:
+            refusal = "pause state unavailable"
+    if refusal:
+        record_external_write(
+            effect="comms", action="cron_room_delivery", target="allowlisted",
+            surface="telegram", autonomous=True, outcome="denied",
+            user_id=str(getattr(job, "user_id", "") or ""),
+            session_id=str(getattr(job, "session_id", "") or ""))
+        logger.info("cron room delivery deferred: %s", refusal)
+        return "deferred"
 
     job_id = getattr(job, "id", "?")
     caps = container.get_service("room_caps") if container is not None else None
@@ -470,7 +558,8 @@ async def _deliver_telegram(task_agent: Any, job: Any, final: str, deliver_targe
         logger.info("cron delivery: suppressed (send policy) for job %s", getattr(job, "id", "?"))
         return "suppressed"
     if _action == "template":
-        # TODO(4.x): send approved template instead of suppress
+        # A closed send window needs an approved template; cron delivery does
+        # not send templates, so it suppresses the free-text message.
         logger.info(
             "cron delivery: send window closed; template required (job %s) — suppressing free-text",
             getattr(job, "id", "?"),
