@@ -47,10 +47,18 @@ def test_actions_come_from_the_text_producers_already_write():
             " 1. skill: summarize_pdf\n   /approve_p_a1b2c3   /reject_p_a1b2c3\n"
             "Everything at once: /approve_all · the full list: /pending")
     got = [(a.label, a.command, a.style) for a in actions_from_text(text)]
+    # TG9 (audit 2026-10-03): no whole-queue button. A button lives on an OLD
+    # message and `/approve_all` decides the queue as it is at TAP time — an
+    # old "Approve all" approved items its message never listed.
     assert got == [("Approve p-a1b2c3", "/approve_p_a1b2c3", "primary"),
-                   ("Reject p-a1b2c3", "/reject_p_a1b2c3", "danger"),
-                   ("Approve all", "/approve_all", "primary")]
+                   ("Reject p-a1b2c3", "/reject_p_a1b2c3", "danger")]
     assert actions_from_text("see /workspace/approve_p_a1b2c3.txt") == []
+
+
+def test_no_whole_queue_button_is_derived():
+    """TG9: per-item buttons name an item; a whole-queue button names nothing."""
+    text = "/approve_p_a1b2c3\nAll: /approve_all /reject_all"
+    assert [a.command for a in actions_from_text(text)] == ["/approve_p_a1b2c3"]
 
 
 def test_a_renderer_shows_explicit_actions_only():

@@ -4,14 +4,15 @@ Core owns them because the guard's 069 §5 rule 5 names ``agent_nft_revoke_all``
 for an NFT that may not leave with open approvals — a remedy must not depend on the optional
 agent-NFT package — and because ``/nft send`` (the owner's seat) runs the withdraw.
 
-* withdraw: ``transferFrom(treasury, to, id)`` on the pinned collection, signed by the treasury
+* withdraw: ``safeTransferFrom(treasury, to, id)`` on the pinned collection, signed by the treasury
   (the NFT's owner), declared as ``nft_out``. The guard judges the move: the nesting rules (no
   token-bound account of a pinned collection, deployed or not yet minted, as ``to``), the code
   pin, and rule 5 (no open approval on the token's account, complete scan). ALWAYS
   owner-approved (lane ``owner_always``).
 * revoke_all: every open approval the scan finds on the account, one guarded call THROUGH the
   account each (ERC-20 ``approve(s, 0)``, ``setApprovalForAll(op, false)``, ERC-721
-  ``approve(0, id)``, Permit2 ``approve(token, s, 0, 0)``).
+  ``approve(0, id)``, Permit2 ``approve(token, s, 0, 0)``, ERC-6909 ``approve(s, id, 0)`` and
+  ``setOperator(op, false)``).
 """
 from __future__ import annotations
 
@@ -46,8 +47,10 @@ async def withdraw(tool, params, execution_context) -> Any:
     if to.lower() == signer.address.lower():
         return tool._ar(error="the destination is this treasury itself — nothing would move. "
                               "Nothing was broadcast.")
-    data = abi.encode_call("transferFrom", [{"type": "address"}, {"type": "address"},
-                                            {"type": "uint256"}],
+    # C15: safeTransferFrom — a contract recipient that cannot hold an ERC-721 (no
+    # onERC721Received) reverts in the simulation instead of locking the NFT and its account.
+    data = abi.encode_call("safeTransferFrom", [{"type": "address"}, {"type": "address"},
+                                                {"type": "uint256"}],
                            [signer.address, to, held.token_id])
     intent = TxIntent(chain=params.chain, token=None, to=held.collection, amount_raw=0,
                       max_spend_usd=params.max_spend_usd, is_nft_op=True,
@@ -114,6 +117,18 @@ async def revoke_all(tool, params, execution_context) -> Any:
                               max_spend_usd=per, is_nft_op=True,
                               nft_approval_revokes=((a.contract, int(a.token_id)),))
             what = f"erc721 {a.contract} #{a.token_id} → {a.spender}"
+        elif a.kind == "erc6909":
+            data = erc6551.encode_erc6909_revoke(a.spender, int(a.token_id))
+            intent = TxIntent(chain=params.chain, token=None, to=a.contract, amount_raw=0,
+                              max_spend_usd=per, is_nft_op=True,
+                              erc6909_revokes=((a.contract, a.spender, int(a.token_id)),))
+            what = f"erc6909 {a.contract} #{a.token_id} → {a.spender}"
+        elif a.kind == "erc6909_operator":
+            data = erc6551.encode_erc6909_operator_revoke(a.spender)
+            intent = TxIntent(chain=params.chain, token=None, to=a.contract, amount_raw=0,
+                              max_spend_usd=per, is_nft_op=True,
+                              nft_operator_ops=((a.contract, a.spender, False),))
+            what = f"erc6909 operator {a.contract} → {a.spender}"
         elif a.kind == "permit2":
             inner_to = erc6551.PERMIT2
             data = erc6551.encode_permit2_revoke(a.contract, a.spender)

@@ -122,6 +122,12 @@ export function render(container, data, query, copy) {
   const groups = filterVerbs(data, query);
   if (!groups.length) {
     const note = el("p", "state-body");
+    if (data && data.unreadable) {
+      // FE8: the table did not load — no verb is "unknown", it is unread.
+      note.textContent = (copy && copy.unreadable) || "";
+      container.appendChild(note);
+      return "unreadable";
+    }
     if (isUnknownSlash(data, query)) {
       note.textContent = (copy && copy.unknown) || "";
       container.appendChild(note);
@@ -149,17 +155,21 @@ export function render(container, data, query, copy) {
 
 let _data = null;
 
-async function loadVerbs() {
+/** Read the verb table. FE8: only a GOOD read is cached — a failed read
+ *  answers an `unreadable` table (so the palette says it could not read the
+ *  commands, never "unknown command" for a real verb) and the next open reads
+ *  again. Exported for tests. */
+export async function loadVerbs(fetcher) {
   if (_data) return _data;
   try {
-    const resp = await fetch("/static/app/verbs.en.json", { credentials: "same-origin" });
+    const resp = await (fetcher || fetch)("/static/app/verbs.en.json", { credentials: "same-origin" });
     if (!resp.ok) throw new Error(String(resp.status));
     _data = await resp.json();
+    return _data;
   } catch (err) {
     console.error("[palette] could not read the verb table", err);
-    _data = { group_order: [], verbs: [] };
+    return { group_order: [], verbs: [], unreadable: true };
   }
-  return _data;
 }
 
 /** The bound composer, if this screen has one. The palette works everywhere;
@@ -244,11 +254,11 @@ function bind() {
   if (!dialog || !input || !results) return;
   const copy = copyFrom(document.getElementById("palette-copy"));
 
-  const paint = () => render(results, _data || { group_order: [], verbs: [] },
-                            input.value, copy);
+  let table = { group_order: [], verbs: [] };
+  const paint = () => render(results, table, input.value, copy);
 
   async function open(seed) {
-    await loadVerbs();
+    table = await loadVerbs();
     // A second ⌘⇧P while the palette is already open must not re-seed (that
     // would wipe an in-progress filter) nor call showModal again (which throws
     // InvalidStateError on an open dialog); it just refocuses the input.

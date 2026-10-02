@@ -144,7 +144,8 @@ def _h_autonomy(ctx: CommandContext):
     except Exception:
         data_dir = data_dir_or_home(None)
 
-    snap = _autonomy_snapshot(ctx.user_id or "local", data_dir)
+    from cli._admin_home import admin_owner_tenant
+    snap = _autonomy_snapshot(admin_owner_tenant(ctx.user_id), data_dir)
 
     rows = [("local mode", "on" if snap["local_mode"] else "off"),
             ("autonomy", "on" if snap["autonomy_enabled"] else "off"),

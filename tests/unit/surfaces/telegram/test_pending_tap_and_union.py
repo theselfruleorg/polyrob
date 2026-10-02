@@ -144,6 +144,26 @@ async def test_bare_approve_does_not_deny_a_queue_it_cannot_see(env):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("verb", ["/approve", "/reject"])
+async def test_bare_verb_never_decides_the_one_item(env, verb):
+    """CLI4 (audit 2026-10-03): with ONE item waiting, a bare `/approve`
+    decided it — on the console too, where the owner may never have seen the
+    item. The bare verb now SHOWS the item with its one-token tap, like the
+    REPL lists; only an id or a tap decides."""
+    from tools.controller.approval_queue import all_pending
+    _seed_tool_approval(env)
+
+    out = await act_on_inbound(_Agent(str(env)), _cmd(verb, verb))
+
+    assert f"{verb}_p_" in out
+    assert "defi_trade" in out
+    from core.instance import resolve_instance_id
+    left = all_pending(user_id="alice", home_dir=str(env),
+                       instance_id=resolve_instance_id())
+    assert len(left.items) == 1
+
+
+@pytest.mark.asyncio
 async def test_pending_and_approve_read_the_same_set(env):
     """Listing showed three queues; deciding read one. They are one function."""
     _seed_pending_self(env)

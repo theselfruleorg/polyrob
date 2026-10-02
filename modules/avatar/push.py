@@ -8,8 +8,11 @@
 - **Discord — live** via ``PATCH /users/@me`` (bot token, ``DISCORD_BOT_TOKEN`` — the
   same env the Discord surface uses). Flag-gated (``PFP_PUSH_DISCORD``) +
   hash-idempotent at the caller. Stdlib urllib — no new dependency.
-- **Telegram — assisted.** The Bot API CANNOT set a bot's own avatar (BotFather only),
-  so we save the PNG and print the exact ``/setuserpic`` steps. Stated plainly.
+- **Telegram — live** via ``setMyProfilePhoto`` (the bot's own photo, a static JPEG —
+  the PNG is re-encoded) and ``setChatPhoto`` (a group's photo; the bot must be an
+  admin with the change-info right). ``TELEGRAM_BOT_TOKEN``, flag-gated
+  (``PFP_PUSH_TELEGRAM``), hash-idempotent at the caller; on failure the caller prints
+  the BotFather ``/setuserpic`` steps as the manual path.
 
 tweepy is imported lazily so this module (and its tests) import without the dep.
 """
@@ -113,10 +116,101 @@ def push_discord(png_path, *, env: Optional[Mapping[str, str]] = None,
         pass  # 2xx = success; HTTPError propagates to the fail-open caller
 
 
+class TelegramCredsMissing(RuntimeError):
+    """``TELEGRAM_BOT_TOKEN`` is not configured."""
+
+
+def to_jpeg(png_path) -> bytes:
+    """Re-encode the avatar as a JPEG (Telegram's static profile photo is JPG-only).
+    Transparency is flattened onto black."""
+    import io
+
+    from PIL import Image
+
+    with Image.open(png_path) as im:
+        im.load()
+        if im.mode in ("RGBA", "LA", "P"):
+            rgba = im.convert("RGBA")
+            flat = Image.new("RGB", rgba.size, (0, 0, 0))
+            flat.paste(rgba, mask=rgba.split()[-1])
+            im = flat
+        else:
+            im = im.convert("RGB")
+        buf = io.BytesIO()
+        im.save(buf, format="JPEG", quality=95)
+        return buf.getvalue()
+
+
+def _multipart(fields: Mapping[str, str], files: Mapping[str, tuple]) -> tuple:
+    import uuid
+    boundary = f"polyrob{uuid.uuid4().hex}"
+    out = bytearray()
+    for name, value in fields.items():
+        out += (f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n"
+                f"{value}\r\n").encode("utf-8")
+    for name, (filename, data, ctype) in files.items():
+        out += (f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"; "
+                f"filename=\"{filename}\"\r\nContent-Type: {ctype}\r\n\r\n").encode("utf-8")
+        out += data + b"\r\n"
+    out += f"--{boundary}--\r\n".encode("utf-8")
+    return bytes(out), f"multipart/form-data; boundary={boundary}"
+
+
+def _telegram_call(method: str, fields: Mapping[str, str], files: Mapping[str, tuple], *,
+                   env: Optional[Mapping[str, str]], opener: Any) -> None:
+    import json as _json
+    import urllib.error
+    import urllib.request
+
+    env = os.environ if env is None else env
+    token = (env.get("TELEGRAM_BOT_TOKEN") or "").strip()
+    if not token:
+        raise TelegramCredsMissing("missing TELEGRAM_BOT_TOKEN")
+    body, ctype = _multipart(fields, files)
+    req = urllib.request.Request(
+        f"https://api.telegram.org/bot{token}/{method}", data=body,
+        headers={"Content-Type": ctype, "User-Agent": "polyrob-avatar-push"}, method="POST")
+    open_fn = opener if opener is not None else (
+        lambda r: urllib.request.urlopen(r, timeout=30))
+    try:
+        with open_fn(req) as resp:
+            payload = _json.loads(resp.read().decode("utf-8") or "{}")
+    except urllib.error.HTTPError as e:  # Telegram puts the reason in the error body
+        try:
+            payload = _json.loads(e.read().decode("utf-8") or "{}")
+        except Exception:
+            payload = {}
+        raise RuntimeError(f"{method}: {payload.get('description') or f'HTTP {e.code}'}") from None
+    if not payload.get("ok"):
+        raise RuntimeError(f"{method}: {payload.get('description') or 'not ok'}")
+
+
+def push_telegram_bot(png_path, *, env: Optional[Mapping[str, str]] = None,
+                      opener: Any = None) -> None:
+    """Set the bot's own profile photo (``setMyProfilePhoto``, static JPEG)."""
+    import json as _json
+    require_raster(png_path)
+    _telegram_call(
+        "setMyProfilePhoto",
+        {"photo": _json.dumps({"type": "static", "photo": "attach://avatar"})},
+        {"avatar": ("avatar.jpg", to_jpeg(png_path), "image/jpeg")},
+        env=env, opener=opener)
+
+
+def push_telegram_chat(png_path, chat_id: str, *, env: Optional[Mapping[str, str]] = None,
+                       opener: Any = None) -> None:
+    """Set a group's photo (``setChatPhoto``; the bot must be an admin there)."""
+    require_raster(png_path)
+    _telegram_call(
+        "setChatPhoto", {"chat_id": str(chat_id)},
+        {"photo": ("avatar.jpg", to_jpeg(png_path), "image/jpeg")},
+        env=env, opener=opener)
+
+
 def telegram_instructions(png_path, bot_name: Optional[str] = None) -> str:
     who = f" for {bot_name}" if bot_name else ""
     return (
-        "Telegram bots can't set their own avatar via the Bot API — use @BotFather:\n"
+        "The Bot API did not set the bot photo — set it by hand with @BotFather:\n"
         f"  1. open a chat with @BotFather\n"
         f"  2. send /setuserpic and choose your bot{who}\n"
         f"  3. upload this image: {png_path}"

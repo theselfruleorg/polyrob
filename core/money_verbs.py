@@ -24,7 +24,7 @@ MONEY_VERBS: tuple = (
     Verb("/deploy", "money", "Deploy a fixed-supply token"),
     Verb("/lp", "money", "Liquidity positions: inspect, quote, add, remove, or collect fees"),
     Verb("/claim", "money", "Collect the creator fees a launchpad already owes me"),
-    Verb("/nft", "money", "Collectibles I hold: look, send one, or revoke an approval"),
+    Verb("/nft", "money", "Collectibles I hold: look, trust a collection, send one, or revoke an approval"),
     Verb("/dapp", "money", "Web pages my wallet is connected to, and how to cut one off"),
     Verb("/paid", "money", "Paid room actions: status, pricing, and offers"),
     Verb("/pay", "money", "Pay for one x402 resource, up to a price you name"),

@@ -124,12 +124,28 @@ class OwnerThreadStore:
         # same reply (the turn latch and the delivery rail on a resumed session),
         # and a retry must never append the same line twice (OpenClaw's cron
         # result carries an idempotency key for the same reason).
-        dup = execute_retry(
-            self.db_path,
-            "SELECT 1 FROM owner_thread WHERE user_id=? AND direction=? AND body=? "
-            "AND ts>=? LIMIT 1",
-            (uid, "in" if direction == "in" else "out", text, ts - _DEDUP_WINDOW_S),
-            fetch="one")
+        #
+        # ⚠️ AC8: when the line carries a message id, the id IS its identity.
+        # The body-only window dropped an owner's second identical line ("yes",
+        # "yes") sent inside it — two messages, two mids. With a mid: the same
+        # mid on the same rail is a retry (any age); the same body inside the
+        # window is a duplicate only when that row has NO mid (the other rail of
+        # the same reply). Without a mid the body window stands as before.
+        d = "in" if direction == "in" else "out"
+        if mid:
+            dup = execute_retry(
+                self.db_path,
+                "SELECT 1 FROM owner_thread WHERE user_id=? AND direction=? AND ("
+                "(via=? AND mid=?) OR (mid='' AND body=? AND ts>=?)) LIMIT 1",
+                (uid, d, str(via or ""), str(mid), text, ts - _DEDUP_WINDOW_S),
+                fetch="one")
+        else:
+            dup = execute_retry(
+                self.db_path,
+                "SELECT 1 FROM owner_thread WHERE user_id=? AND direction=? AND body=? "
+                "AND ts>=? LIMIT 1",
+                (uid, d, text, ts - _DEDUP_WINDOW_S),
+                fetch="one")
         if dup is not None:
             return 0
         rowid = execute_retry(

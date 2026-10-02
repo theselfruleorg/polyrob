@@ -89,15 +89,59 @@ export function codeAnswer(body, doc = (typeof document !== 'undefined' ? docume
   return (node && node.dataset && node.dataset.busy) || null;
 }
 
+/**
+ * A refusal's `detail` as words a person reads, or `''`.
+ *
+ * FE13: FastAPI answers a validation failure (422) with `detail` as an ARRAY of
+ * `{loc, msg, type}` objects, and an HTTPException may carry an object. Neither
+ * is a string: shown raw it reads as JSON or `[object Object]`. This keeps the
+ * `msg` sentences and drops the machine parts.
+ */
+export function detailText(detail) {
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) {
+    return detail
+      .map((d) => (typeof d === 'string' ? d : (d && typeof d.msg === 'string' ? d.msg : '')))
+      .filter(Boolean)
+      .join(' ');
+  }
+  if (detail && typeof detail === 'object') {
+    const inner = detail.message || detail.msg || detail.error;
+    return typeof inner === 'string' ? inner : '';
+  }
+  return '';
+}
+
 /** Preserve the server refusal and its actionable detail. */
 export function serverAnswer(body, fallback = '') {
   if (!body) return fallback;
   const coded = codeAnswer(body);
   if (coded) return coded;
+  const detail = detailText(body.detail);
   if (body.message || body.error) {
     const message = String(body.message || body.error);
-    return typeof body.detail === 'string' && body.detail !== message ? `${message} ${body.detail}` : message;
+    return detail && detail !== message ? `${message} ${detail}` : message;
   }
-  if (typeof body.detail === 'string') return body.detail;
-  return JSON.stringify(body);
+  if (detail) return detail;
+  return fallback || JSON.stringify(body);
+}
+
+/**
+ * FE10: wrap a read so only the LATEST call's answer is used. Two reads in
+ * flight (a class chip flipped, then a live redraw) can answer out of order;
+ * the older answer drawn last shows the wrong class or a stale list. A call
+ * that has been overtaken resolves `{stale: true}` and its error is dropped;
+ * the latest resolves `{stale: false, value}` or rejects as the read did.
+ */
+export function latestOnly(read) {
+  let latest = 0;
+  return (...args) => {
+    const mine = ++latest;
+    return Promise.resolve()
+      .then(() => read(...args))
+      .then(
+        (value) => (mine === latest ? { stale: false, value } : { stale: true }),
+        (err) => { if (mine === latest) throw err; return { stale: true }; },
+      );
+  };
 }

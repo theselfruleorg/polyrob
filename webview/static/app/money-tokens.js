@@ -18,6 +18,7 @@
  * and the REPL. Every word comes from the copy layer on `#money-copy`.
  */
 import { postJson } from "./http.js";
+import { fmtUsd } from "./format.js";
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -33,7 +34,8 @@ function fillAll(template, vars) {
 }
 
 function money(n) {
-  return Number.isFinite(n) && n > 0 ? `$${n.toFixed(2)}` : null;
+  // FE11: a sub-cent figure is written out, never a confident `$0.00`.
+  return Number.isFinite(n) && n > 0 ? fmtUsd(n) : null;
 }
 
 function head(title, aside) {

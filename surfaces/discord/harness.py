@@ -20,7 +20,7 @@ from surfaces.discord.surface import DiscordSurface
 
 def DiscordSink(client: DiscordClient) -> TextSink:  # noqa: N802 — kept name
     """cron/delivery sink: send a raw text to a channel id (best-effort)."""
-    return TextSink(client.send_message, label="DiscordSink")
+    return TextSink(client.send_message, label="DiscordSink", surface_id="discord")
 
 
 class DiscordHarness(BaseHarness):

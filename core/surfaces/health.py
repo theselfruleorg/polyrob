@@ -50,7 +50,7 @@ def surface_health(container: Any) -> List[Dict]:
             if dt is not None and hasattr(dt, "count_for_surface"):
                 dead = int(dt.count_for_surface(sid))
         except Exception:
-            dead = 0
+            dead = None   # unreadable is not "none dead" — rendered as "?"
         rows.append({
             "surface_id": sid,
             "registered": True,
@@ -84,7 +84,9 @@ def render_surface_health(rows: List[Dict]) -> List[str]:
         if r.get("registered"):
             bits.append("media" if r.get("media_out") else "no-media")
             bits.append(f"circuit:{r.get('circuit')}")
-            if r.get("dead_targets"):
+            if r.get("dead_targets") is None:
+                bits.append("dead-targets:?")
+            elif r.get("dead_targets"):
                 bits.append(f"dead-targets:{r['dead_targets']}")
         out.append(f"{r['surface_id']}: " + ", ".join(bits))
     return out

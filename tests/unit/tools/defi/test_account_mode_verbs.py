@@ -341,103 +341,27 @@ def test_portfolio_reads_the_account(env, monkeypatch):
     assert res.error and "does not own" in res.error
 
 
-# --- the optional site publish after a journal append (069 v4 A3; polyrob_drop.publish) ---------
+# --- J1: no site publish — the journal goes on chain, not to a site -------------------------------
 
-class _PubResult:
-    def __init__(self, text):
-        self.text = text
-
-    def line(self):
-        return self.text
-
-
-@pytest.fixture
-def publisher(monkeypatch):
-    """Install a fake ``polyrob_drop.publish`` whose ``publish_journal`` runs *behaviour*."""
+@pytest.mark.asyncio
+async def test_core_never_hands_the_journal_to_a_site_publisher(env, monkeypatch):
+    """The site journal API is retired (polyrob-desk handoff-core J1): even with a
+    ``polyrob_drop.publish`` installed, core never imports or calls it."""
     import sys
     import types
     calls = []
-    state = {"behaviour": lambda chain_id, account: _PubResult("journal publish: published — 1 new of 1")}
-
-    def publish_journal(chain_id, account):
-        calls.append((chain_id, account))
-        return state["behaviour"](chain_id, account)
-    pkg = types.ModuleType("polyrob_drop")
     mod = types.ModuleType("polyrob_drop.publish")
-    mod.publish_journal = publish_journal
-    pkg.publish = mod
-    monkeypatch.setitem(sys.modules, "polyrob_drop", pkg)
+    mod.publish_journal = lambda *a, **k: calls.append(a)
     monkeypatch.setitem(sys.modules, "polyrob_drop.publish", mod)
-    return calls, state
-
-
-def test_publish_helper_is_a_silent_no_op_without_the_package(monkeypatch):
-    import sys
-    from core.wallet.nft_account import publish_after_append
-    monkeypatch.setitem(sys.modules, "polyrob_drop", None)        # import → ImportError
-    monkeypatch.setitem(sys.modules, "polyrob_drop.publish", None)
-    assert publish_after_append(8453, ACCOUNT) == ""
-
-
-@pytest.mark.asyncio
-async def test_without_the_package_the_verb_result_has_no_publish_line(env, monkeypatch):
-    import sys
-    monkeypatch.setitem(sys.modules, "polyrob_drop", None)
-    monkeypatch.setitem(sys.modules, "polyrob_drop.publish", None)
-    tool, _gate, _seen = _tool(env)
-    res = await tool.transfer(_transfer(account=ACCOUNT, dry_run=False))
-    assert "journal: entry #0 (tend) signed" in res.extracted_content
-    assert "journal publish" not in res.extracted_content
-
-
-@pytest.mark.asyncio
-async def test_a_published_journal_line_appears_in_the_verb_result(env, publisher):
-    calls, _state = publisher
-    tool, _gate, _seen = _tool(env)
-    res = await tool.transfer(_transfer(account=ACCOUNT, dry_run=False))
-    assert "journal: entry #0 (tend) signed" in res.extracted_content
-    assert "journal publish: published — 1 new of 1" in res.extracted_content
-    assert calls == [(8453, ACCOUNT.lower())]
-
-
-@pytest.mark.asyncio
-async def test_a_raising_publisher_leaves_the_verb_result_unchanged(env, publisher):
-    calls, state = publisher
-
-    def boom(chain_id, account):
-        raise RuntimeError("site down")
-    state["behaviour"] = boom
-    tool, gate, _seen = _tool(env)
-    res = await tool.transfer(_transfer(account=ACCOUNT, dry_run=False))
-    assert res.error is None
-    assert "SENT AND CONFIRMED" in res.extracted_content
-    assert "journal: entry #0 (tend) signed" in res.extracted_content
-    assert "journal publish: failed — RuntimeError: site down" in res.extracted_content
-    assert gate.recorded and len(calls) == 1
-
-
-@pytest.mark.asyncio
-async def test_a_slow_publisher_is_cut_off_at_the_timeout(env, publisher, monkeypatch):
-    import threading
     from core.wallet import nft_account
-    monkeypatch.setattr(nft_account, "PUBLISH_TIMEOUT_S", 0.2)
-    release = threading.Event()
-    _calls, state = publisher
-    state["behaviour"] = lambda chain_id, account: (release.wait(5), _PubResult("LATE-PUBLISH-LINE"))[1]
+    assert not hasattr(nft_account, "publish_after_append")
     tool, _gate, _seen = _tool(env)
-    t0 = time.monotonic()
-    try:
-        res = await tool.transfer(_transfer(account=ACCOUNT, dry_run=False))
-    finally:
-        release.set()
-    assert time.monotonic() - t0 < 2.0
-    assert res.error is None and "SENT AND CONFIRMED" in res.extracted_content
+    res = await tool.transfer(_transfer(account=ACCOUNT, dry_run=False))
     assert "journal: entry #0 (tend) signed" in res.extracted_content
-    assert "journal publish: pending" in res.extracted_content and "LATE-PUBLISH-LINE" not in res.extracted_content
+    assert "journal publish" not in res.extracted_content and calls == []
 
 
-def test_publish_never_runs_when_the_append_failed(env, publisher, monkeypatch):
-    calls, _state = publisher
+def test_a_failed_append_is_reported(env, monkeypatch):
     from core.wallet import nft_account
     from tools.defi import account_mode
 
@@ -447,4 +371,101 @@ def test_publish_never_runs_when_the_append_failed(env, publisher, monkeypatch):
     held = type("H", (), {"chain_id": 8453, "account": ACCOUNT})()
     line = account_mode.journal_line(held, env["signer"], kind="tend", text="x")
     assert "journal: NOT written (disk full)" in line
-    assert "journal publish" not in line and calls == []
+
+
+# --- J1: the journal entry rides the action's batch when a JournalLog is pinned ----------------
+
+JLOG = "0x10910910910910910910910910910910910910a1"
+
+
+class JournalRpc(AcctRpc):
+    """The account reads plus an empty (or broken) JournalLog history."""
+
+    def __init__(self, owner, *, logs_broken=False, **kw):
+        super().__init__(owner, **kw)
+        self.logs_broken = logs_broken
+
+    def __call__(self, method, params):
+        if method == "eth_blockNumber":
+            return hex(0x200)
+        if method == "eth_getLogs":
+            if self.logs_broken:
+                raise RuntimeError("getLogs refused")
+            return []
+        return super().__call__(method, params)
+
+
+@pytest.fixture
+def journaled(env, monkeypatch):
+    pin(monkeypatch, dict(profile(PINNED, chain_id=8453, journal_prefix="POLYROB"),
+                          journal_log=JLOG))
+    return env
+
+
+def _journal_leg_entry(leg):
+    from core.wallet import journal_log
+    to, value, data, op = leg
+    assert (to.lower(), value, op) == (JLOG.lower(), 0, 0)
+    return journal_log.parse_entry(journal_log.decode_log(data))
+
+
+@pytest.mark.asyncio
+async def test_j1_a_transfer_carries_its_signed_entry_as_the_last_leg(journaled):
+    from core.wallet import nft_account
+    signer = journaled["signer"]
+    tool, gate, seen = _tool(journaled, rpc=JournalRpc(signer.address))
+    res = await tool.transfer(_transfer(nft=str(ID), dry_run=False))
+    assert res.error is None, res.error
+    intent, tx, _ = seen[0]
+    assert intent.via_account_journal is True and intent.via_account_batch is False
+    legs = erc6551.decode_execute_batch(tx["data"])
+    assert len(legs) == 2 and legs[0][0].lower() == USDC.lower()
+    entry = _journal_leg_entry(legs[1])
+    assert entry["seq"] == 0 and entry["refs"] == [] and entry["account"] == ACCOUNT.lower()
+    assert nft_account.recover_owner(entry, "POLYROB") == signer.address.lower()
+    assert "logged on chain" in res.extracted_content and f"JournalLog {JLOG.lower()}" in res.extracted_content
+    path = nft_account.journal_path(journaled["tmp"], *_owner_and_instance(), 8453, ACCOUNT)
+    assert nft_account.load_journal(path) == [entry]          # the cache
+
+
+def _owner_and_instance():
+    from core.instance import resolve_instance_id, resolve_owner_user_id
+    return resolve_owner_user_id(), resolve_instance_id()
+
+
+@pytest.mark.asyncio
+async def test_j1_a_reverted_action_keeps_no_entry(journaled, monkeypatch):
+    from core.wallet.broadcast.evm import Receipt
+    monkeypatch.setattr(_Rail, "await_receipt", lambda self, h, **kw: Receipt(
+        tx_hash=h, status="failed", block_number=7, gas_used=60_000))
+    tool, _gate, _seen = _tool(journaled, rpc=JournalRpc(journaled["signer"].address))
+    res = await tool.transfer(_transfer(nft=str(ID), dry_run=False))
+    assert "no entry — the transaction reverted" in (res.extracted_content or res.error or "")
+
+
+@pytest.mark.asyncio
+async def test_j1_an_unreadable_history_sends_without_a_journal_leg_and_says_so(journaled):
+    tool, _gate, seen = _tool(journaled, rpc=JournalRpc(journaled["signer"].address,
+                                                        logs_broken=True))
+    res = await tool.transfer(_transfer(nft=str(ID), dry_run=False))
+    assert res.error is None, res.error
+    intent, tx, _ = seen[0]
+    assert intent.via_account_journal is False
+    erc6551.decode_execute(tx["data"])                      # the plain execute
+    assert "journal: NOT written (RuntimeError: getLogs refused)" in res.extracted_content
+
+
+@pytest.mark.asyncio
+async def test_j1_an_erc20_swap_carries_the_entry_as_a_fourth_leg(journaled, no_side_checks):
+    holders = []
+    tool, _gate, seen = _tool(journaled, rpc=JournalRpc(journaled["signer"].address),
+                              route_fn=_route_fn(holders))
+    res = await tool.swap(SwapParams(chain="base", token_in=USDC, token_out=WETH, amount_in=1.0,
+                                     max_spend_usd=2.0, nft=str(ID), dry_run=False))
+    assert res.error is None, res.error
+    intent, tx, _ = seen[0]
+    assert intent.via_account_batch is True and intent.via_account_journal is True
+    legs = erc6551.decode_execute_batch(tx["data"])
+    assert len(legs) == 4
+    assert _journal_leg_entry(legs[3])["kind"] == "entry"
+    assert "entry #0 (entry) signed and logged on chain" in res.extracted_content

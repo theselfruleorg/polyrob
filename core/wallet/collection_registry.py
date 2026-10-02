@@ -36,6 +36,7 @@ Schema (JSON)::
         "max_supply": 6551,                     # token ids are 1..max_supply
         "accounts": [{"registry": "0x0000…5758", "implementation": "0x41C8…44eC", "salt": 0}],
         "journal_prefix": "POLYROB",            # optional
+        "journal_log": "0x…",                   # optional: the JournalLog contract (on-chain journal)
         "call_shapes": {"mint": "mint(address,uint256,uint256)",
                         "reveal": "reveal(uint256[])"}   # optional; must equal the known shapes
     }]}
@@ -74,8 +75,8 @@ _ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _PROFILE_KEYS = frozenset({"spec", "capabilities", "chain_id", "address", "runtime_sha256",
                            "deploy_block", "max_supply", "accounts", "journal_prefix",
-                           "call_shapes"})
-_REQUIRED_KEYS = _PROFILE_KEYS - {"journal_prefix", "call_shapes"}
+                           "call_shapes", "journal_log"})
+_REQUIRED_KEYS = _PROFILE_KEYS - {"journal_prefix", "call_shapes", "journal_log"}
 _ACCOUNT_KEYS = frozenset({"registry", "implementation", "salt"})
 
 
@@ -101,6 +102,10 @@ class CollectionProfile:
     max_supply: int
     accounts: Tuple[AccountVersion, ...]
     journal_prefix: Optional[str] = None
+    #: J2: the pinned ``JournalLog`` (``log(bytes)`` → ``Entry(address indexed account, bytes)``)
+    #: this collection's accounts write their journal to, in the same ``executeBatch`` as the
+    #: action. None = no on-chain journal (the local file only).
+    journal_log: Optional[str] = None  # lowercase
 
 
 def _int(value, what: str, *, minimum: int) -> int:
@@ -169,6 +174,8 @@ def _parse_profile(i: int, raw) -> CollectionProfile:
     if prefix is not None and (not isinstance(prefix, str)
                                or not account_journal.JOURNAL_PREFIX_RE.fullmatch(prefix)):
         raise CollectionRegistryError(f"{where} journal_prefix {prefix!r} is not a valid prefix")
+    journal_log = (_address(raw["journal_log"], f"{where}.journal_log")
+                   if "journal_log" in raw else None)
     return CollectionProfile(
         spec=spec, capabilities=tuple(caps),
         chain_id=_int(raw["chain_id"], f"{where}.chain_id", minimum=1),
@@ -176,7 +183,7 @@ def _parse_profile(i: int, raw) -> CollectionProfile:
         runtime_sha256=runtime,
         deploy_block=_int(raw["deploy_block"], f"{where}.deploy_block", minimum=0),
         max_supply=_int(raw["max_supply"], f"{where}.max_supply", minimum=1),
-        accounts=tuple(accounts), journal_prefix=prefix)
+        accounts=tuple(accounts), journal_prefix=prefix, journal_log=journal_log)
 
 
 def parse(data) -> Tuple[CollectionProfile, ...]:
@@ -211,9 +218,82 @@ def load(path: Optional[str] = None) -> Tuple[CollectionProfile, ...]:
     return parse(data)
 
 
+#: The owner's chat pins (``/nft trust``, ``core/wallet/collection_trust.py``), beside the
+#: token pins in the wallet data home. The agent's file tools are denied it
+#: (``core/security/secret_guard.py``); only an owner seat writes it.
+OWNER_PINS_NAME = "collection_pins.json"
+
+
+def owner_pins_path(data_home: Optional[str] = None) -> str:
+    """``<data_home>/wallet/collection_pins.json`` — the token pins' rule."""
+    if data_home:
+        return os.path.join(str(data_home), "wallet", OWNER_PINS_NAME)
+    from core.wallet.audit_sink import _wallet_data_dir
+    return os.path.join(_wallet_data_dir(), OWNER_PINS_NAME)
+
+
+#: The largest supply an owner pin may carry. The guard's nesting rule derives the account
+#: address of EVERY id ``0..max_supply`` (``erc6551.collection_account_addresses``); an
+#: uncapped collection would hang every NFT move. A larger collection is the admin's to pin.
+MAX_OWNER_SUPPLY = 20_000
+
+
+def _owner_shape_refusal(p: CollectionProfile) -> Optional[str]:
+    """Why an owner-store profile is not the shape ``/nft trust`` writes, or None. Checked on
+    READ, not only by the writer: a store the agent forged through a shell must not arm a mint,
+    a reveal or an on-chain journal target, or carry a supply that hangs the guard."""
+    if p.capabilities:
+        return f"{p.address} carries capabilities {list(p.capabilities)} (only the admin file grants them)"
+    if p.journal_log or p.journal_prefix:
+        return f"{p.address} carries a journal setting (only the admin file sets one)"
+    if p.max_supply > MAX_OWNER_SUPPLY:
+        return f"{p.address} max_supply {p.max_supply} is above {MAX_OWNER_SUPPLY}"
+    return None
+
+
+def load_owner_pins(path: Optional[str] = None) -> Tuple[CollectionProfile, ...]:
+    """The owner's chat pins. No file = ``()``; an unreadable, off-schema or off-shape file
+    RAISES (the whole store: one forged row poisons it all)."""
+    path = path or owner_pins_path()
+    if not os.path.exists(path):
+        return ()
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError) as exc:
+        raise CollectionRegistryError(f"{path} is unreadable: {exc}") from exc
+    out = parse(data)
+    for p in out:
+        why = _owner_shape_refusal(p)
+        if why:
+            raise CollectionRegistryError(f"{path}: {why} — refusing the owner pins")
+    return out
+
+
+def pinned_with_source(*, strict: bool = True) -> Tuple[Tuple[CollectionProfile, str], ...]:
+    """Every pin with who made it: ``"admin"`` (the root file) or ``"owner"`` (``/nft trust``).
+    A collection in both is the admin's. The admin file always raises when it cannot be
+    trusted. A bad OWNER store raises when *strict* (the views: unreadable is not empty);
+    otherwise its pins are left out with a warning, so a broken chat store never takes the
+    admin's pins down with it — leaving an owner pin out only refuses acts through it."""
+    admin = load()
+    seen = {(p.chain_id, p.address) for p in admin}
+    try:
+        owner_all = load_owner_pins()
+    except CollectionRegistryError:
+        if strict:
+            raise
+        logger.warning("owner collection pins unreadable; acting on the admin pins only",
+                       exc_info=True)
+        owner_all = ()
+    owner = tuple(p for p in owner_all if (p.chain_id, p.address) not in seen)
+    return tuple((p, "admin") for p in admin) + tuple((p, "owner") for p in owner)
+
+
 def profiles() -> Tuple[CollectionProfile, ...]:
-    """Every pinned profile (re-read per call). Raises when the file cannot be trusted."""
-    return load()
+    """Every pinned profile (re-read per call): the root file's, then the owner's chat pins.
+    Raises when the admin file cannot be trusted; a bad owner store drops only its own pins."""
+    return tuple(p for p, _src in pinned_with_source(strict=False))
 
 
 def profiles_on(chain_id: int, capability: Optional[str] = None) -> Tuple[CollectionProfile, ...]:

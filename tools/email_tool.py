@@ -30,6 +30,10 @@ from tools.controller.types import ActionResult
 # boundary); this name is kept because it is the tool's published contract.
 from core.credential_verdicts import SMTP_TTL_SEC as SMTP_AUTH_BACKOFF_SEC  # noqa: E402
 
+#: Seconds one IMAP socket operation may block before it fails (EM1). Without
+#: it a half-open server held the read forever.
+IMAP_TIMEOUT_S = 30
+
 
 def smtp_verdict_key(server: Any, port: Any, user: Any, secret: Any = None) -> str:
     """The ONE verdict key for an SMTP rail: ``server:port:user``, plus a
@@ -388,15 +392,41 @@ class EmailTool(BaseTool):
                                 "outage will not show on a status surface", exc,
                                 exc_info=True)
 
+    async def run_imap(self, fn, *args):
+        """Run one blocking ``imaplib`` step OFF the event loop (EM1).
+
+        ``imaplib`` is synchronous: called inside ``async def`` it held the
+        gateway's ONE loop for as long as the server took, and a half-open
+        socket had no timeout at all. The step runs in a worker thread, one
+        at a time per tool (an ``imaplib`` connection is not thread-safe), and
+        the socket carries :data:`IMAP_TIMEOUT_S`. Do not nest two calls.
+        """
+        loop = asyncio.get_running_loop()
+        held = getattr(self, "_imap_lock_pair", None)
+        if held is None or held[0] is not loop:
+            held = (loop, asyncio.Lock())
+            self._imap_lock_pair = held
+        async with held[1]:
+            return await asyncio.to_thread(fn, *args)
+
     async def _connect_imap(self) -> None:
-        """Establish IMAP connection."""
+        """Establish IMAP connection (off the loop, with a socket timeout)."""
+        user, password = self.config.gmail_email, self.config.gmail_app_password
+
+        def _open():
+            conn = imaplib.IMAP4_SSL(self.imap_server, timeout=IMAP_TIMEOUT_S)
+            try:
+                conn.login(user, password)
+            except BaseException:
+                try:
+                    conn.logout()
+                except Exception:
+                    pass
+                raise
+            return conn
+
         try:
-            # Connect to IMAP server
-            self.imap_connection = imaplib.IMAP4_SSL(self.imap_server)
-
-            # Login
-            self.imap_connection.login(self.config.gmail_email, self.config.gmail_app_password)
-
+            self.imap_connection = await self.run_imap(_open)
         except imaplib.IMAP4.error as e:
             raise AuthenticationError(f"IMAP authentication failed: {str(e)}")
         except Exception as e:
@@ -872,92 +902,96 @@ class EmailTool(BaseTool):
         try:
             if not self.imap_connection:
                 await self._connect_imap()
+            conn = self.imap_connection
 
-            # Select folder
-            self.imap_connection.select(folder)
+            def _read_sync():
+                # EM1: the whole select → search → fetch runs in a worker thread.
+                conn.select(folder)
             
-            # Build search criteria
-            search_criteria = []
-            if unread_only:
-                search_criteria.append('UNSEEN')
-            if since_date:
-                date_str = since_date.strftime("%d-%b-%Y")
-                search_criteria.append(f'SINCE "{date_str}"')
+                # Build search criteria
+                search_criteria = []
+                if unread_only:
+                    search_criteria.append('UNSEEN')
+                if since_date:
+                    date_str = since_date.strftime("%d-%b-%Y")
+                    search_criteria.append(f'SINCE "{date_str}"')
                 
-            # Perform search
-            if search_criteria:
-                _, message_numbers = self.imap_connection.search(None, ' '.join(search_criteria))
-            else:
-                _, message_numbers = self.imap_connection.search(None, 'ALL')
+                # Perform search
+                if search_criteria:
+                    _, message_numbers = conn.search(None, ' '.join(search_criteria))
+                else:
+                    _, message_numbers = conn.search(None, 'ALL')
                 
-            # Get message numbers and limit results
-            message_nums = message_numbers[0].split()
-            if limit:
-                message_nums = message_nums[-limit:]
+                # Get message numbers and limit results
+                message_nums = message_numbers[0].split()
+                if limit:
+                    message_nums = message_nums[-limit:]
                 
-            emails = []
-            for num in message_nums:
-                try:
-                    # D4 (same rule as `surfaces/email/fetchers.py`): a READ
-                    # must not consume the mailbox. `(RFC822)` sets `\Seen` as
-                    # a side effect of the FETCH, and the email SURFACE's
-                    # inbound queue IS the UNSEEN set — so one agent-side
-                    # `read_emails` marked every waiting message read and the
-                    # surface never routed it. `BODY.PEEK[]` returns the same
-                    # bytes and touches no flag; `mark_as_read` stays the ONE
-                    # place a message is marked.
-                    #
-                    # The server answers `BODY.PEEK[]` with a `BODY[]` tag, but
-                    # imaplib's literal parse is positional — `msg_data[0][1]`
-                    # is the raw message either way.
-                    _, msg_data = self.imap_connection.fetch(num, '(BODY.PEEK[])')
-                    email_body = msg_data[0][1]
-                    email_message = email.message_from_bytes(email_body)
+                emails = []
+                for num in message_nums:
+                    try:
+                        # D4 (same rule as `surfaces/email/fetchers.py`): a READ
+                        # must not consume the mailbox. `(RFC822)` sets `\Seen` as
+                        # a side effect of the FETCH, and the email SURFACE's
+                        # inbound queue IS the UNSEEN set — so one agent-side
+                        # `read_emails` marked every waiting message read and the
+                        # surface never routed it. `BODY.PEEK[]` returns the same
+                        # bytes and touches no flag; `mark_as_read` stays the ONE
+                        # place a message is marked.
+                        #
+                        # The server answers `BODY.PEEK[]` with a `BODY[]` tag, but
+                        # imaplib's literal parse is positional — `msg_data[0][1]`
+                        # is the raw message either way.
+                        _, msg_data = conn.fetch(num, '(BODY.PEEK[])')
+                        email_body = msg_data[0][1]
+                        email_message = email.message_from_bytes(email_body)
                     
-                    # Decode subject
-                    subject = decode_header(email_message["Subject"])[0]
-                    if isinstance(subject[0], bytes):
-                        subject = subject[0].decode(subject[1] or 'utf-8')
-                    else:
-                        subject = subject[0]
+                        # Decode subject
+                        subject = decode_header(email_message["Subject"])[0]
+                        if isinstance(subject[0], bytes):
+                            subject = subject[0].decode(subject[1] or 'utf-8')
+                        else:
+                            subject = subject[0]
                         
-                    # Get sender
-                    from_header = decode_header(email_message["From"])[0]
-                    if isinstance(from_header[0], bytes):
-                        from_addr = from_header[0].decode(from_header[1] or 'utf-8')
-                    else:
-                        from_addr = from_header[0]
+                        # Get sender
+                        from_header = decode_header(email_message["From"])[0]
+                        if isinstance(from_header[0], bytes):
+                            from_addr = from_header[0].decode(from_header[1] or 'utf-8')
+                        else:
+                            from_addr = from_header[0]
                         
-                    # Get date
-                    date_str = email_message["Date"]
+                        # Get date
+                        date_str = email_message["Date"]
                     
-                    # Get content
-                    content = ""
-                    html_content = ""
+                        # Get content
+                        content = ""
+                        html_content = ""
                     
-                    if email_message.is_multipart():
-                        for part in email_message.walk():
-                            if part.get_content_type() == "text/plain":
-                                content = part.get_payload(decode=True).decode()
-                            elif part.get_content_type() == "text/html":
-                                html_content = part.get_payload(decode=True).decode()
-                    else:
-                        content = email_message.get_payload(decode=True).decode()
+                        if email_message.is_multipart():
+                            for part in email_message.walk():
+                                if part.get_content_type() == "text/plain":
+                                    content = part.get_payload(decode=True).decode()
+                                elif part.get_content_type() == "text/html":
+                                    html_content = part.get_payload(decode=True).decode()
+                        else:
+                            content = email_message.get_payload(decode=True).decode()
                         
-                    emails.append({
-                        'id': num.decode(),
-                        'subject': subject,
-                        'from': from_addr,
-                        'date': date_str,
-                        'content': content,
-                        'html_content': html_content
-                    })
+                        emails.append({
+                            'id': num.decode(),
+                            'subject': subject,
+                            'from': from_addr,
+                            'date': date_str,
+                            'content': content,
+                            'html_content': html_content
+                        })
                     
-                except Exception as e:
-                    self.logger.error(f"Error processing email {num}: {str(e)}")
-                    continue
+                    except Exception as e:
+                        self.logger.error(f"Error processing email {num}: {str(e)}")
+                        continue
                     
-            return emails
+                return emails
+
+            return await self.run_imap(_read_sync)
 
         except Exception as e:
             self.logger.error(f"Failed to read emails: {str(e)}")
@@ -1019,9 +1053,13 @@ class EmailTool(BaseTool):
         try:
             if not self.imap_connection:
                 await self._connect_imap()
-                
-            self.imap_connection.select(folder)
-            self.imap_connection.store(message_id.encode(), '+FLAGS', '\\Seen')
+            conn = self.imap_connection
+
+            def _mark_sync():
+                conn.select(folder)
+                conn.store(message_id.encode(), '+FLAGS', '\\Seen')
+
+            await self.run_imap(_mark_sync)
             return True
             
         except Exception as e:
@@ -1049,10 +1087,14 @@ class EmailTool(BaseTool):
         try:
             if not self.imap_connection:
                 await self._connect_imap()
-                
-            self.imap_connection.select(folder)
-            self.imap_connection.store(message_id.encode(), '+FLAGS', '\\Deleted')
-            self.imap_connection.expunge()
+            conn = self.imap_connection
+
+            def _delete_sync():
+                conn.select(folder)
+                conn.store(message_id.encode(), '+FLAGS', '\\Deleted')
+                conn.expunge()
+
+            await self.run_imap(_delete_sync)
             return True
             
         except Exception as e:

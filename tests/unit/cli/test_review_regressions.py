@@ -57,7 +57,8 @@ async def test_prompt_approval_uses_app_input_and_cleans_up_on_timeout():
         task = asyncio.create_task(approver.request("shell_run", {}, None))
         await asyncio.sleep(0)
         assert prompt.submit("/status") is False
-        assert prompt.submit("once") is True
+        assert prompt.submit("once") is False   # CLI5: plain text is chat
+        assert prompt.submit("/once") is True
         assert await task is True
         assert prompt.pending is None
         with pytest.raises(asyncio.TimeoutError):
@@ -65,7 +66,7 @@ async def test_prompt_approval_uses_app_input_and_cleans_up_on_timeout():
         assert prompt.pending is None
         task = asyncio.create_task(approver.request("shell_run", {}, None))
         await asyncio.sleep(0)
-        assert prompt.submit("deny")
+        assert prompt.submit("/deny")
         assert await task is False
     finally:
         approval_input.reset(token)

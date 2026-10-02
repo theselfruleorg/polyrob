@@ -30,6 +30,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -57,6 +58,10 @@ class HeldNft:
     token_id: int
     account: str           # checksummed
     journal_prefix: Optional[str] = None
+    #: J1: the pinned ``JournalLog`` (profile ``journal_log``); None = local journal only.
+    journal_log: Optional[str] = None
+    #: the collection's deploy block — where an account's on-chain journal can start.
+    deploy_block: int = 0
 
     @property
     def label(self) -> str:
@@ -188,7 +193,8 @@ def resolve(chain: str, *, rpc: Rpc, treasury: str, account: Optional[str] = Non
                 f"this treasury ({treasury}) does not own {profile.address} #{token_id} (its owner "
                 f"is {owner}) — an agent acts through an account only as the NFT's current owner")
     return HeldNft(chain=chain, chain_id=int(chain_id), collection=profile.address,
-                   token_id=int(token_id), account=acct, journal_prefix=profile.journal_prefix)
+                   token_id=int(token_id), account=acct, journal_prefix=profile.journal_prefix,
+                   journal_log=profile.journal_log, deploy_block=int(profile.deploy_block))
 
 
 # ------------------------------------------------------------------------------ the journal
@@ -248,71 +254,119 @@ def sign_entry(entry: Dict[str, Any], signer, prefix: Optional[str] = None) -> D
     return out
 
 
-def append_journal(held: HeldNft, signer, *, kind: str, text: str, refs: Sequence[str] = (),
-                   home_dir=None, user_id: Optional[str] = None,
-                   instance_id: Optional[str] = None) -> Tuple[Dict[str, Any], Path]:
-    """Sign and append one entry to *held*'s journal; returns ``(entry, path)``. Raises on any
-    failure (the caller reports it — a transaction that landed is never undone by its journal)."""
+def _held_path(held: HeldNft, home_dir=None, user_id: Optional[str] = None,
+               instance_id: Optional[str] = None) -> Path:
     from core.instance import resolve_instance_id, resolve_owner_user_id
     from core.runtime_paths import resolve_data_home
     home_dir = home_dir if home_dir is not None else resolve_data_home()
-    user_id = user_id or resolve_owner_user_id()
-    instance_id = instance_id or resolve_instance_id()
-    path = journal_path(home_dir, user_id, instance_id, held.chain_id, held.account)
-    prior = load_journal(path)
-    entry = sign_entry(build_entry(prior=prior, account=held.account, chain_id=held.chain_id,
-                                   kind=kind, text=text, owner=signer.address, refs=refs),
-                       signer, prefix=held.journal_prefix)
+    return journal_path(home_dir, user_id or resolve_owner_user_id(),
+                        instance_id or resolve_instance_id(), held.chain_id, held.account)
+
+
+@contextmanager
+def _locked(path: Path):
+    """J4: one writer per journal file at a time (``fcntl.flock`` on a sidecar lock file), so two
+    verbs of the same account cannot both append seq n."""
+    import fcntl
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a", encoding="utf-8") as fh:
-        fh.write(canonical(entry).decode("utf-8") + "\n")
-    return entry, path
-
-
-#: how long a verb waits for the optional journal publisher before it reports and moves on
-PUBLISH_TIMEOUT_S = 8.0
-
-
-def publish_after_append(chain_id: int, account: str, *, timeout: Optional[float] = None) -> str:
-    """Best effort: hand the account's journal to the optional ``polyrob_drop`` publisher AFTER an
-    entry was appended (so after the transaction landed); return its one status line, or ``""``
-    when the package is not installed. Never raises, never waits longer than *timeout*: the
-    publisher runs on a daemon thread, and a slow or failing one changes nothing but this line.
-    Not a gate — nothing here authorizes or refuses; the package has its own off switch
-    (``POLYROB_DROP_PUBLISH=0``)."""
-    try:
-        import importlib
-        mod = importlib.import_module("polyrob_drop.publish")
-        fn = getattr(mod, "publish_journal")
-    except Exception:  # noqa: BLE001 — not installed (or broken): no publish, no noise
-        return ""
-    import threading
-    timeout = PUBLISH_TIMEOUT_S if timeout is None else float(timeout)
-    box: Dict[str, Any] = {}
-
-    def _run() -> None:
+    with open(str(path) + ".lock", "a+") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         try:
-            box["res"] = fn(int(chain_id), str(account).lower())
-        except BaseException as exc:  # noqa: BLE001 — a raising publisher is only reported
-            box["exc"] = exc
+            yield
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
-    worker = threading.Thread(target=_run, name="journal-publish", daemon=True)
-    try:
-        worker.start()
-        worker.join(timeout)
-    except Exception as exc:  # noqa: BLE001
-        return f"journal publish: failed — {type(exc).__name__}: {exc}"
-    if worker.is_alive():
-        return f"journal publish: pending — no answer within {timeout:g}s; it continues in the background"
-    if "exc" in box:
-        exc = box["exc"]
-        return f"journal publish: failed — {type(exc).__name__}: {exc}"
-    res = box.get("res")
-    try:
-        line = res.line() if hasattr(res, "line") else str(res)
-        return " ".join(str(line).split())[:300]
-    except Exception as exc:  # noqa: BLE001
-        return f"journal publish: failed — {type(exc).__name__}: {exc}"
+
+def verified_chain(entries: Sequence[Dict[str, Any]], *, account: str, chain_id: int,
+                   prefix: Optional[str] = None) -> List[Dict[str, Any]]:
+    """The valid journal chain in *entries* (chain order): an entry counts when it names this
+    account and chain, its ``seq`` and ``prev`` extend the chain so far, and its signature
+    recovers to the ``owner`` it names (any owner — a sold account keeps its seller's entries).
+    Anything else is ignored, never trusted."""
+    out: List[Dict[str, Any]] = []
+    for e in entries:
+        try:
+            if (str(e["account"]).lower() != str(account).lower()
+                    or int(e["chain_id"]) != int(chain_id) or int(e["seq"]) != len(out)
+                    or e["prev"] != (digest(out[-1]) if out else GENESIS)):
+                continue
+            if recover_owner(e, prefix) != str(e["owner"]).lower():
+                continue
+        except (KeyError, TypeError, ValueError):
+            continue
+        out.append(dict(e))
+    return out
+
+
+def prior_entries(held: HeldNft, *, rpc: Optional[Rpc] = None, path: Optional[Path] = None,
+                  **path_kw) -> List[Dict[str, Any]]:
+    """The chain the next entry extends (J3). With a pinned ``journal_log`` the CHAIN is the source
+    of truth: the account's verified ``Entry`` events (a sold account continues from its seller's
+    last entry), then local entries that extend it (an entry still in flight). The local file is a
+    cache. Without one, the local file alone. A failed chain read RAISES — a new chain is never
+    started over entries that could not be read."""
+    path = path or _held_path(held, **path_kw)
+    local = load_journal(path)
+    if not held.journal_log:
+        return local
+    if rpc is None:
+        raise ValueError("an on-chain journal needs an rpc to read its entries")
+    from core.wallet import journal_log
+    onchain = verified_chain(
+        journal_log.read_entries(rpc, held.journal_log, held.account, held.deploy_block),
+        account=held.account, chain_id=held.chain_id, prefix=held.journal_prefix)
+    merged = verified_chain(onchain + [e for e in local if int(e.get("seq", -1)) >= len(onchain)],
+                            account=held.account, chain_id=held.chain_id, prefix=held.journal_prefix)
+    return merged if len(merged) >= len(onchain) else onchain
+
+
+def prepare_entry(held: HeldNft, signer, *, kind: str, text: str, rpc: Rpc,
+                  refs: Sequence[str] = (), **path_kw) -> Dict[str, Any]:
+    """J1: sign the entry an action carries ON CHAIN (its ``JournalLog.log`` leg), before the
+    action is broadcast — ``refs`` is empty: the transaction that emits it is its reference.
+    Raises on any failure (the caller sends the action without a journal leg and says so)."""
+    if not held.journal_log:
+        raise ValueError("no journal_log is pinned for this collection")
+    prior = prior_entries(held, rpc=rpc, **path_kw)
+    return sign_entry(build_entry(prior=prior, account=held.account, chain_id=held.chain_id,
+                                  kind=kind, text=text, owner=signer.address, refs=refs),
+                      signer, prefix=held.journal_prefix)
+
+
+def cache_entry(held: HeldNft, entry: Dict[str, Any], *, rpc: Optional[Rpc] = None,
+                **path_kw) -> Path:
+    """Keep *entry* (already on chain, or in flight) in the local cache file, after the chain it
+    extends. Under the file lock; raises on failure."""
+    path = _held_path(held, **path_kw)
+    with _locked(path):
+        try:
+            prior = prior_entries(held, rpc=rpc, path=path) if rpc is not None else load_journal(path)
+        except Exception:  # noqa: BLE001 — the cache follows what this process knows
+            prior = load_journal(path)
+        prior = [e for e in prior if int(e.get("seq", -1)) < int(entry["seq"])]
+        lines = [canonical(e).decode("utf-8") for e in (*prior, entry)]
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        tmp.replace(path)
+    return path
+
+
+def append_journal(held: HeldNft, signer, *, kind: str, text: str, refs: Sequence[str] = (),
+                   home_dir=None, user_id: Optional[str] = None,
+                   instance_id: Optional[str] = None) -> Tuple[Dict[str, Any], Path]:
+    """Sign and append one entry to *held*'s LOCAL journal (no ``journal_log`` pinned, or an act
+    with no account batch to carry it); returns ``(entry, path)``. Under the file lock (J4).
+    Raises on any failure (the caller reports it — a transaction that landed is never undone by
+    its journal)."""
+    path = _held_path(held, home_dir, user_id, instance_id)
+    with _locked(path):
+        prior = load_journal(path)
+        entry = sign_entry(build_entry(prior=prior, account=held.account, chain_id=held.chain_id,
+                                       kind=kind, text=text, owner=signer.address, refs=refs),
+                           signer, prefix=held.journal_prefix)
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(canonical(entry).decode("utf-8") + "\n")
+    return entry, path
 
 
 def recover_owner(entry: Dict[str, Any], prefix: Optional[str] = None) -> Optional[str]:

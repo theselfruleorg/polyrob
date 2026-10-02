@@ -161,3 +161,8 @@ class SendResult:
     success: bool
     surface_message_id: Optional[str] = None
     error: Optional[str] = None
+    #: OB7 — on a PARTIAL failure, the text that did NOT go. ``None`` = the
+    #: surface does not know its progress (the whole message is retried);
+    #: ``""`` = every word landed and only a best-effort extra failed (the
+    #: message counts as delivered); otherwise the retry sends only this text.
+    remaining_text: Optional[str] = None

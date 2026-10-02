@@ -6,8 +6,10 @@ writes; route_inbound -> create_session). A SELECT-then-INSERT check races when 
 deliveries of the same update arrive concurrently; `INSERT OR IGNORE` is the atomic
 compare-and-set — exactly one caller gets rowcount==1 (process), the rest get 0 (drop).
 
-5-minute window (Telegram's retry horizon is minutes); stale rows are pruned before
-each check so a genuine redelivery after the window is processed again.
+The store's default window is 5 minutes (Telegram's webhook retry horizon); the
+harness passes ONE DAY (``harness._TG_DEDUP_WINDOW_S``) because the poll offset
+lives in memory and a restart replays every unacknowledged update (TG5). Stale rows
+are pruned before each check.
 """
 from core.surfaces.idempotency import IdempotencyStore
 

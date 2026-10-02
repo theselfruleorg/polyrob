@@ -124,8 +124,9 @@ def register_avatar_action(controller) -> None:
                          "is refused on any turn that is not the owner's."))
 
     @controller.registry.action(
-        "Your avatar: the one image that is your face on every surface (chat, "
-        "console, profile, on-chain registration). Reads whether it is set and "
+        "Your avatar: the one image slot that is your face (console, chat, "
+        "on-chain registration; the X/Telegram profile photos follow it only when "
+        "the owner runs `polyrob avatar push`). Reads whether it is set and "
         "where it came from. With attach=true it also places the image in your "
         "workspace so you can send it with message(media_paths=[...]). With "
         "set_from it replaces the image — only when the owner asks.",
@@ -160,8 +161,9 @@ def register_avatar_action(controller) -> None:
                 return ActionResult(error=f"agent_avatar set_from failed: "
                                           f"{type(e).__name__}: {e}",
                                     include_in_memory=True)
-            lines.append(f"avatar: {describe(st)} — the new image is now your "
-                         f"face on every surface")
+            lines.append(f"avatar: {describe(st)} — the console and the on-chain "
+                         f"registration show it now; the X/Telegram profile photos "
+                         f"keep the old image until the owner runs `polyrob avatar push`")
         else:
             st = load_avatar(home, instance_id)
             if st.state == "none":

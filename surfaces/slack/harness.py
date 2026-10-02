@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 def SlackSink(client: SlackClient) -> TextSink:  # noqa: N802 — kept name
     """cron/delivery sink: send a raw text to a channel id (best-effort)."""
-    return TextSink(client.send_message, label="SlackSink")
+    return TextSink(client.send_message, label="SlackSink", surface_id="slack")
 
 
 class SlackHarness(BaseHarness):
@@ -41,8 +41,15 @@ class SlackHarness(BaseHarness):
             return
         await self._route(inbound)
 
+    def _reply_target(self, inbound):
+        """OS7: ``(channel, thread_ts)`` — a message inside a thread is
+        answered in that thread; ``thread_ts`` is None otherwise."""
+        src = inbound.identity.source
+        return (src.chat_id, getattr(src, "thread_id", None) or None)
+
     async def _deliver_to(self, target, text: str) -> None:
-        await self._client.send_message(target, text)
+        channel, thread_ts = target if isinstance(target, tuple) else (target, None)
+        await self._client.send_message(channel, text, thread_ts=thread_ts)
 
     async def _fetch_media(self, media) -> Optional[bytes]:
         """A Slack private file: the bot token rides ONLY to files.slack.com."""

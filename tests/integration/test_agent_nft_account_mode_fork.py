@@ -136,11 +136,47 @@ def _start_proxy(upstream):
     return server
 
 
-def _artifact(tmp_path):
+def _artifact(tmp_path, name=None):
     out, cache = tmp_path / "out", tmp_path / "cache"
-    subprocess.run(["forge", "build", "--root", str(CONTRACTS), "--out", str(out),
-                    "--cache-path", str(cache)], check=True, capture_output=True, text=True)
-    return json.loads((out / f"{CONTRACT}.sol" / f"{CONTRACT}.json").read_text())
+    if not out.exists():
+        subprocess.run(["forge", "build", "--root", str(CONTRACTS), "--out", str(out),
+                        "--cache-path", str(cache)], check=True, capture_output=True, text=True)
+    name = name or CONTRACT
+    return json.loads((out / f"{name}.sol" / f"{name}.json").read_text())
+
+
+def _create2(sender, init: bytes) -> str:
+    """Deploy *init* through the Arachnid CREATE2 deployer with a fresh salt; its address."""
+    from eth_utils import keccak, to_checksum_address
+    salt = os.urandom(32)
+    addr = to_checksum_address(keccak(b"\xff" + bytes.fromhex(ARACHNID[2:]) + salt + keccak(init))[12:])
+    rc = _send(sender, ARACHNID, "0x" + salt.hex() + init.hex())
+    assert len(_rpc("eth_getCode", [addr, "latest"])) > 2, f"nothing deployed at {addr}"
+    return addr, rc
+
+
+def _deploy_collection(tmp_path, owner):
+    """The collection as polyrob-desk deploys it (a701720+; tests/test_fork_e2e.py::_deploy,
+    76a5192): two DataChunks (engine, trait schema) → PolyrobRenderer(engine chunks, sha256(engine),
+    schema chunk) → Polyrob(owner, proceeds, faceWriter, renderer). Returns ``(address, block)``."""
+    import hashlib
+
+    from eth_abi import encode
+
+    def chunk(data: bytes) -> bytes:   # runtime = 0x00 ‖ data
+        return bytes.fromhex("61" + (len(data) + 1).to_bytes(2, "big").hex() + "80600a3d393df300") + data
+    engine = b"// test engine"
+    schema = bytes([4]) + b"tier" + bytes([1, 5]) + b"basic"
+    engine_chunk, _ = _create2(owner, chunk(engine))
+    schema_chunk, _ = _create2(owner, chunk(schema))
+    renderer_init = bytes.fromhex(_artifact(tmp_path, "PolyrobRenderer")["bytecode"]["object"].removeprefix("0x")) \
+        + encode(["address[]", "bytes32", "address"],
+                 [[engine_chunk], hashlib.sha256(engine).digest(), schema_chunk])
+    renderer, _ = _create2(owner, renderer_init)
+    init = bytes.fromhex(_artifact(tmp_path)["bytecode"]["object"].removeprefix("0x")) \
+        + encode(["address", "address", "address", "address"], [owner, owner, owner, renderer])
+    collection, rc = _create2(owner, init)
+    return collection, int(rc["blockNumber"], 16)
 
 
 class _Wallet:
@@ -154,9 +190,7 @@ class _Wallet:
 def test_account_mode_holdings_watch_and_rule_5_on_a_fork(fork, tmp_path, monkeypatch):
     import asyncio
 
-    from eth_abi import encode
     from eth_account import Account
-    from eth_utils import keccak, to_checksum_address
 
     from core.wallet import abi, erc6551, nft_holdings
     from core.wallet.audit_sink import JsonlAuditSink
@@ -187,13 +221,7 @@ def test_account_mode_holdings_watch_and_rule_5_on_a_fork(fork, tmp_path, monkey
         assert _rpc("eth_getCode", [a, "latest"]) in ("0x", "0x0"), "a fresh key has no code"
 
     # -- the collection, minted by a human ----------------------------------------------------
-    art = _artifact(tmp_path)
-    init = bytes.fromhex((art["bytecode"]["object"] + encode(["address", "address"], [owner, owner]).hex())
-                         .removeprefix("0x"))
-    salt = os.urandom(32)
-    collection = to_checksum_address(keccak(b"\xff" + bytes.fromhex(ARACHNID[2:]) + salt + keccak(init))[12:])
-    deploy_rc = _send(owner, ARACHNID, "0x" + salt.hex() + init.hex())
-    deploy_block = int(deploy_rc["blockNumber"], 16)
+    collection, deploy_block = _deploy_collection(tmp_path, owner)
     _send(owner, collection, abi.selector("openMint()"))
     mint = abi.encode_call("mint", [{"type": "address"}, {"type": "uint256"}, {"type": "uint256"}],
                            [human, 1, 0])

@@ -358,7 +358,8 @@ def bind_host() -> str:
 def _is_loopback_host(host: str) -> bool:
     """True if ``host`` binds to loopback only (safe for the no-auth local posture)."""
     h = (host or "").strip().lower()
-    return h in ("127.0.0.1", "::1", "localhost", "") or h.startswith("127.")
+    # WS6: "" is NOT loopback — uvicorn reads an empty host as every interface.
+    return h in ("127.0.0.1", "::1", "[::1]", "localhost") or h.startswith("127.")
 
 
 def bind_port() -> int:

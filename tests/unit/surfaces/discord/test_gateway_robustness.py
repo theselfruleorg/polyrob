@@ -102,3 +102,31 @@ def test_server_heartbeat_request_answered():
     asyncio.run(client._consume(ws, _noop_handler))
     beats = [p for p in ws.sent if p.get("op") == 1]
     assert beats and beats[-1]["d"] == 5
+
+
+def test_slow_message_handler_does_not_block_the_read_loop():
+    """OS3: a long turn must not stall the socket read (HEARTBEAT_ACKs are
+    read on it); MESSAGE_CREATE runs as a retained task."""
+
+    async def scenario():
+        release = asyncio.Event()
+        started = []
+
+        async def slow_handler(d):
+            started.append(d)
+            await release.wait()
+
+        frames = [_hello(interval_ms=60000),
+                  {"op": 0, "t": "MESSAGE_CREATE", "s": 2, "d": {"id": "m1"}},
+                  {"op": 11}]
+        ws = _FakeWS(frames)
+        client = DiscordGatewayClient("tok", lambda: "url")
+        await asyncio.wait_for(client._consume(ws, slow_handler), timeout=1)
+        await asyncio.sleep(0)
+        assert started == [{"id": "m1"}]
+        assert len(client._handler_tasks) == 1      # retained, still running
+        release.set()
+        await asyncio.sleep(0.01)
+        assert not client._handler_tasks
+
+    asyncio.run(scenario())

@@ -66,7 +66,7 @@ const COPY = {
   col_amount: "Amount",
   col_worth: "Worth now",
   col_since: "Since entry",
-  entry_at: "bought at {price}",
+  entry_at: "cost {price}",
   no_positions: "Rob has not written down a position on any chain it can read.",
   total_label: "Positions, at today's prices",
   total_excludes: "not counted here: {chains}",
@@ -168,10 +168,21 @@ describe("positions — the ledger's rows, honest per cell", () => {
     expect(cell.textContent).toContain("no entry recorded");
   });
 
-  it("shows the entry price in the why line when the store carries it", () => {
+  it("shows the cost basis in the why line when the store carries it (FE3)", () => {
     const row = priced({ entry: 7.63, entry_reason: null });
     const section = positionsSection({ rows: [row], chains: {} }, COPY);
-    expect(section.querySelector(".why").textContent).toBe("bought at $7.63");
+    expect(section.querySelector(".why").textContent).toBe("cost $7.63");
+  });
+
+  it("FE2 — since entry is a signed USD figure, never the raw float", () => {
+    const up = priced({ since_entry: 6773.123456789012, since_entry_reason: null });
+    let cell = positionsSection({ rows: [up], chains: {} }, COPY)
+      .querySelector('td[data-label="Since entry"]');
+    expect(cell.textContent).toBe("+$6,773.12");
+    const down = priced({ since_entry: -7.5, since_entry_reason: null });
+    cell = positionsSection({ rows: [down], chains: {} }, COPY)
+      .querySelector('td[data-label="Since entry"]');
+    expect(cell.textContent).toBe("-$7.50");
   });
 
   it("with no positions it says so rather than drawing an empty table", () => {
@@ -684,5 +695,32 @@ describe("formatVars fills multiple tokens, values only", () => {
   it("replaces every named token and leaves unknown ones", () => {
     expect(formatVars("{a}/{b}", { a: 1, b: 2 })).toBe("1/2");
     expect(formatVars("{a}/{c}", { a: 1 })).toBe("1/{c}");
+  });
+});
+
+describe("FE11 — the tracked-token cost shares fmtUsd", () => {
+  it("a sub-cent entry cost is written out, never $0.00", async () => {
+    const { trackedSection } = await import("../static/app/money-tokens.js");
+    const node = trackedSection(
+      { tracked: [{ symbol: "DUST", chain: "base", address: "0xabc", entry: 0.0042 }] },
+      { cost: "cost {price}", no_cost: "no cost" }, true);
+    expect(node.textContent).toContain("cost $0.0042");
+    expect(node.textContent).not.toContain("$0.00;");
+  });
+});
+
+describe("FE9 — a failed ledger read is retried", () => {
+  it("shareOnce forgets a rejection and keeps a success", async () => {
+    const { shareOnce } = await import("../static/app/money.js");
+    let calls = 0;
+    const get = shareOnce(async () => {
+      calls += 1;
+      if (calls === 1) throw new Error("down");
+      return { ok: true };
+    });
+    await expect(get()).rejects.toThrow("down");
+    await expect(get()).resolves.toEqual({ ok: true });
+    await get();
+    expect(calls).toBe(2);
   });
 });

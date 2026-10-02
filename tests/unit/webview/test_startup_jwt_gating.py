@@ -67,3 +67,45 @@ def test_multitenant_startup_still_requires_jwt(monkeypatch, _stub_core):
     monkeypatch.delenv("JWT_SECRET_KEY", raising=False)
     with pytest.raises(RuntimeError, match="JWT_SECRET_KEY"):
         asyncio.run(_jwt_startup_handler()())
+
+
+# --- WS5: own_ops refuses to boot without the login it needs ---------------- #
+
+from webview import posture_guard  # noqa: E402
+
+_OWNER = {"POLYROB_OWNER_USERNAME": "op", "POLYROB_OWNER_PASSWORD_HASH": "$argon2id$x",
+          "JWT_SECRET_KEY": "k" * 32}
+
+
+@pytest.mark.parametrize("missing", ["JWT_SECRET_KEY", "POLYROB_OWNER_USERNAME",
+                                     "POLYROB_OWNER_PASSWORD_HASH"])
+def test_own_ops_refuses_to_boot_without_login_config(missing):
+    env = {k: v for k, v in _OWNER.items() if k != missing}
+    with pytest.raises(RuntimeError, match=missing):
+        posture_guard.assert_login_configured(env=env, posture="own_ops")
+
+
+def test_own_ops_boots_with_login_config():
+    posture_guard.assert_login_configured(env=_OWNER, posture="own_ops")
+
+
+def test_multitenant_needs_only_the_jwt_secret():
+    posture_guard.assert_login_configured(env={"JWT_SECRET_KEY": "k"}, posture="multitenant")
+    with pytest.raises(RuntimeError, match="JWT_SECRET_KEY"):
+        posture_guard.assert_login_configured(env={}, posture="multitenant")
+
+
+def test_local_needs_no_login_config():
+    posture_guard.assert_login_configured(env={}, posture="local")
+
+
+def test_own_ops_startup_refuses_without_jwt(monkeypatch, _stub_core):
+    monkeypatch.setenv("POLYROB_POSTURE", "own_ops")
+    monkeypatch.delenv("WEBGATE_MULTITENANT", raising=False)
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u-owner")
+    monkeypatch.setenv("SESSION_REGISTRY_BACKEND", "sqlite")
+    monkeypatch.setenv("POLYROB_OWNER_USERNAME", "op")
+    monkeypatch.setenv("POLYROB_OWNER_PASSWORD_HASH", "$argon2id$x")
+    monkeypatch.delenv("JWT_SECRET_KEY", raising=False)
+    with pytest.raises(RuntimeError, match="JWT_SECRET_KEY"):
+        asyncio.run(_jwt_startup_handler()())

@@ -963,16 +963,9 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
                 _completer_p = build_completer(default_registry(), sessions_provider=_session_ids_p)
 
                 def _autonomy_poll():
-                    from cli.ui.autonomy_poll import read_autonomy_snapshot
-
-                    # Mirrors _h_autonomy's data_dir resolution (handlers.py).
-                    _data_dir = "data"
-                    try:
-                        _cfg = getattr(container, "config", None)
-                        _data_dir = data_dir_or_home(getattr(_cfg, "data_dir", None))
-                    except Exception:
-                        pass
-                    return read_autonomy_snapshot(user_id or "local", _data_dir)
+                    # CLI13: the deployed home + owner, the same as /autonomy.
+                    from cli.ui.autonomy_poll import poll_status_bar
+                    return poll_status_bar(user_id)
 
                 await _run_persistent_app(
                     convo, _ui_state, _renderer, _slash_dispatch, _poll_usage,

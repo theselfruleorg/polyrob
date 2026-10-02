@@ -79,3 +79,17 @@ def test_empty_answer_is_not_a_recap():
 def test_the_cli_import_site_still_works():
     from cli.ui import dialog
     assert dialog.is_redundant_recap(BUBBLE, BUBBLE)
+
+
+# --- OB20 (2026-10-03 audit) -------------------------------------------------
+
+def test_a_lead_verb_used_as_a_label_is_an_answer():
+    """OB20: the lead-verb rule hid real answers."""
+    for answer in ("Confirmed: the 0.5 ETH transfer landed in block 19234001.",
+                   "Done — the invoice is paid.",
+                   "Sent 0.5 ETH to 0xabc123; tx 0xdeadbeef."):
+        assert not is_redundant_recap(answer, BUBBLE), answer
+
+
+def test_narration_that_repeats_the_bubbles_facts_is_still_a_recap():
+    assert is_redundant_recap("Informed the owner the deploy finished at 14:02.", BUBBLE)

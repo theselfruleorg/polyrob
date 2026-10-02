@@ -32,7 +32,8 @@ _USAGE = ("usage: /cron [list] | /cron show <id> | /cron add <schedule> <task…
 
 
 def _tenant(ctx: CommandContext) -> str:
-    return (getattr(ctx, "user_id", "") or "").strip() or "local"
+    from cli._admin_home import admin_owner_tenant
+    return admin_owner_tenant(getattr(ctx, "user_id", None))
 
 
 def _db_path() -> str:

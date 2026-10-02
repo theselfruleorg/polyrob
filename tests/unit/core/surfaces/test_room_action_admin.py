@@ -125,6 +125,29 @@ def test_cancel_refuses_a_PAID_offer(rig):
     assert _store(rig).get("o2").status == "paid"
 
 
+def test_cancel_loses_to_a_settlement_that_lands_between_read_and_write(
+        rig, monkeypatch):
+    """RA1: the settlement watcher can move the row to ``paid`` after cancel
+    read ``pending``. The withdraw must be a CAS on ``status='pending'`` —
+    otherwise the money is taken and the effect is cancelled with no credit."""
+    from core.surfaces import room_action_store as ras
+    store = _store(rig)
+    store.create(_offer(offer_id="o3"))
+    real_get = ras.OfferStore.get
+
+    def racing_get(self, offer_id):
+        row = real_get(self, offer_id)
+        # The watcher settles right after cancel's read.
+        ras.OfferStore(self.db_path).settle_pending(offer_id, time.time())
+        return row
+
+    monkeypatch.setattr(ras.OfferStore, "get", racing_get)
+    out = adm.cancel(rig, "o3", by="u_owner")
+    monkeypatch.setattr(ras.OfferStore, "get", real_get)
+    assert "❌" in out and "✅" not in out
+    assert _store(rig).get("o3").status == "paid"
+
+
 def test_cancel_of_an_unknown_offer_says_so(rig):
     assert "unknown offer" in adm.cancel(rig, "nope")
 

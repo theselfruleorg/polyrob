@@ -4,7 +4,8 @@ Nothing here decides policy: ``tool.guard`` (= ``tx_guard.authorize``, the ONE a
 does, with the same caps, pause, turn origin and owner queue as every money verb. With
 ``held`` the treasury — the NFT's OWNER — signs ``account.execute(inner, 0)`` and the guard
 measures the account; the spend is booked with ``account=`` and a signed journal entry is
-appended for the account (``core.wallet.nft_account``).
+written for the account — on chain as the batch's last leg when the collection pins a
+``journal_log`` (J1), else to the local journal (``core.wallet.nft_account``).
 """
 from __future__ import annotations
 
@@ -53,11 +54,18 @@ async def guarded_call(tool, *, execution_context, verb: str, intent, inner_to: 
         idem = idempotency_key(verb=verb, chain=chain, via=getattr(held, "account", None),
                                state=state, to=inner_to, value=int(inner_value), data=inner_data,
                                hint=hint)
+        entry, skipped = None, ""
         if held is not None:
-            tx = rail.build_call(to=held.account, value=0, data=erc6551.encode_execute(
-                inner_to, int(inner_value), inner_data, 0))
+            leg = (inner_to, int(inner_value), inner_data, 0)
+            if journal_kind:
+                from tools.defi.account_mode import _journal_leg, prepare_journal
+                entry, skipped = prepare_journal(held, signer, kind=journal_kind,
+                                                 text=journal_text, rpc=rpc)
+            data = (erc6551.encode_execute_batch([leg, _journal_leg(held, entry)])
+                    if entry is not None else erc6551.encode_execute(*leg))
+            tx = rail.build_call(to=held.account, value=0, data=data)
             intent = dataclasses.replace(intent, via_account=held.account, via_account_state=state,
-                                         idempotency_key=idem)
+                                         idempotency_key=idem, via_account_journal=entry is not None)
         else:
             tx = rail.build_call(to=inner_to, data=inner_data, value=int(inner_value))
             intent = dataclasses.replace(intent, idempotency_key=idem)
@@ -89,16 +97,21 @@ async def guarded_call(tool, *, execution_context, verb: str, intent, inner_to: 
         except Exception as exc:  # noqa: BLE001
             from core.wallet.broadcast.evm import broadcast_failure_text
             return tool._ar(error=broadcast_failure_text(exc))
-        receipt = await asyncio.to_thread(rail.await_receipt, tx_hash)
-        gate.record(venue="defi", action=f"agent_nft_{verb}", amount_usd=decision.amount_usd or 0.0,
-                    counterparty=counterparty or inner_to, idempotency_key=idem, result_ref=tx_hash,
-                    chain=chain,
-                    asset=asset, account=(held.account if held is not None else None))
+        rec = dict(venue="defi", action=f"agent_nft_{verb}", amount_usd=decision.amount_usd or 0.0,
+                   counterparty=counterparty or inner_to, idempotency_key=idem, result_ref=tx_hash,
+                   chain=chain,
+                   asset=asset, account=(held.account if held is not None else None))
+        # CLI1: a cancel during the wait records the broadcast first (one seam).
+        from tools.defi.receipt_wait import await_receipt_or_record
+        receipt = await await_receipt_or_record(rail, tx_hash, gate=gate, record_kw=rec)
+        gate.record(**rec)
     tool._last_receipt = (tx_hash, receipt, decision)
     status = {"success": "confirmed", "pending": "in flight"}.get(receipt.status, "REVERTED")
     out = header + f"  tx:       {tx_hash} ({status})"
     if held is not None and journal_kind:
         from tools.defi.account_mode import journal_line
         out += journal_line(held, signer, kind=journal_kind,
-                            text=f"{journal_text}: tx {tx_hash} ({receipt.status})", refs=(tx_hash,))
+                            text=f"{journal_text}: tx {tx_hash} ({receipt.status})", refs=(tx_hash,),
+                            entry=entry, landed=receipt.status != "failed", skipped=skipped,
+                            rpc=rpc)
     return tool._ar(content=out)

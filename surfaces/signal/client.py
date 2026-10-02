@@ -115,7 +115,14 @@ class SignalEventStream:
                 timeout = aiohttp.ClientTimeout(total=None, sock_read=None)
                 async with aiohttp.ClientSession(timeout=timeout) as session:
                     async with session.get(self._url) as resp:
-                        backoff = 1.0
+                        # OS4: a wrong SIGNAL_DAEMON_URL answers 404 (or an
+                        # HTML page) that ends at once; read as a stream, that
+                        # reconnected every second forever and said nothing.
+                        if resp.status != 200:
+                            raise RuntimeError(
+                                f"HTTP {resp.status} from {self._url} — check "
+                                "SIGNAL_DAEMON_URL and that signal-cli runs in "
+                                "--http daemon mode")
                         async for raw in resp.content:
                             if self._stopped.is_set():
                                 return
@@ -126,6 +133,7 @@ class SignalEventStream:
                                 payload = json.loads(line[len("data:"):].strip())
                             except json.JSONDecodeError:
                                 continue
+                            backoff = 1.0     # a real event: the stream works
                             envelope = extract_envelope(payload)
                             try:
                                 await handler(envelope)

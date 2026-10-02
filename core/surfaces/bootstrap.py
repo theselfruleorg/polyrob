@@ -254,7 +254,9 @@ def install_surface_bus(container, db_path: str = None) -> bool:
         from core.surfaces.outbound_dispatcher import OutboundDispatcher
         from core.surfaces.circuit import CircuitStore, SurfaceCircuitBreaker
         q = OutboundDeliveryQueue(os.path.join(os.path.dirname(db_path) or ".", "outbox.db"))
-        q.reclaim_inflight(older_than=__import__("time").time() - 120)  # restart-recovery
+        # Restart-recovery: only rows whose lease expired (OB6) — another live
+        # process may be mid-send on a younger inflight row.
+        q.reclaim_inflight()
         router.attach_queue(q)
         circuit_store = CircuitStore(
             os.path.join(os.path.dirname(db_path) or ".", "surface_state.db")
@@ -268,8 +270,11 @@ def install_surface_bus(container, db_path: str = None) -> bool:
         # defaults to None and its emit helper is already a no-op in that case
         # (see OutboundDispatcher._emit_dead_target_event) — dead-target skip/mark
         # still logs at INFO either way, only the telemetry event is absent.
+        # OB5: claim only the surfaces this process hosts; every process drains
+        # the shared outbox.db.
         dispatcher = OutboundDispatcher(q, lambda sid: router._surfaces.get(sid),
-                                        circuit=circuit, dead_targets=dt)
+                                        circuit=circuit, dead_targets=dt,
+                                        hosted_surfaces=lambda: list(router._surfaces))
         container.register_service("outbound_queue", q)
         container.register_service("outbound_dispatcher", dispatcher)
         container.register_service("surface_circuit_breaker", circuit)

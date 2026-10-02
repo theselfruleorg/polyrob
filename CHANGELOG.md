@@ -10,10 +10,72 @@ short, user-facing notes for each release are on its GitHub Release page.
 
 ## [Unreleased]
 
+## [1.2.1] — 2026-10-03
+
+### Changed
+
+- **Agent-NFT snapshot, inspect, journal and bind run in core:** they no longer need the agent-NFT package, which keeps
+  only mint, adopt's pfp/positions/Brief and a collection's own view lines.
+
+### Added
+
+- **`VALUELESS_CHAIN_MONEY` (off):** the owner's opt-in to a core run on Robinhood Chain testnet 46630 — its native coin
+  is priced at $0, so the USD caps do not bind, and every fee stays bounded in wei.
+- **`agent_nft_adopt`:** an owner-approved verb that reads an agent NFT's journal history from the chain, runs the
+  package's adopt, then writes a handover entry; a note with no action is now an on-chain journal entry too.
+- **`/nft trust <collection>`:** the owner trusts an agent-NFT collection from chat — a read-only quote card, then `go`
+  writes an owner pin (no mint/reveal) beside the token pins; the root file stays for admin pins. `/nft` lists the trusted collections.
+- **The agent-NFT journal goes on chain:** each account action carries its signed entry in the same `executeBatch`
+  (`JournalLog.log`); the next entry continues the chain read from the account's events. No site upload.
+
+### Fixed
+
+- **Identity doc caps:** owner facts rise 4000 → 8000 chars and SELF 2200 → 6000 (both had filled and refused a new
+  owner rule); tool descriptions quote the live caps.
+- **X login:** building an X client no longer spends the rotating refresh token, refresh logs name
+  their process, and `/x login`/`/x status` say the 2-hour access token renews itself.
+- **Holdings watch:** the scan runs off the event loop; the owner hears once after 6 failed passes in a row
+  and once when it works again.
+- **`/journey`, `/recap` and `polyrob journey` default to 24 h** on every seat, and the REPL reads the deployed home.
+- **Outbound delivery:** the auto-opened breaker probes and closes; a repeated message is sent, not swallowed; a
+  process drains only its own surfaces, on a lease; quiet holds keep target, files and full text in `digest.timezone`.
+- **Money waits survive a cancel:** Ctrl-C during any receipt wait (send, swap, LP, claim, launch, deploy, call, NFT) records
+  the broadcast against the cap and `/book` and says the tx may have gone through; Telegram runs every `go` verb off the poll loop.
+- **Console reads say when they fail:** identity, memory, Work › Log, pickers and the activity tail report "could not read"
+  instead of empty; the thread re-syncs after a reconnect or `feed_gap`; own_ops opens every listed chat; money cells format.
+- **Seat parity:** bare `/approve` never decides; one `/kb` grammar; the REPL reads the deployed owner and instance; inline
+  approvals need a slash token; console typos get the help answer; quote-card Refresh re-quotes from the typed words.
+- **Chat surfaces:** Discord stops on a fatal close code and no longer blocks its gateway; IMAP runs off the loop with a
+  timeout; harness replies split to the platform limit; WhatsApp/Feishu replays refused; email auto-replies ignored.
+- **HTTP API:** `Bearer rob_…` keys and `X-Service-Token` authenticate; the JWT `user_id` claim wins; validation errors are 422;
+  `/v1` accepts content-part arrays and streams errors and usage in the OpenAI shape; A2A push-config reads and deletes work.
+- **Agent-NFT journal entries are signed under `WALLET_SIGNER=remote`:** the signer's new `journal.sign`
+  op signs the account journal template and nothing else; before, no entry was ever written.
+
+### Security
+
+- **The REPL history keeps no secrets:** `/config set` of a secret key and any line with a 64-hex key are not
+  recorded, the file is `0600`, and the display scrubber redacts a labelled private key.
+- **An edited Telegram message never runs again:** edits are dropped before routing, so a corrected old `/send … go` or
+  `/pay … go` cannot move money twice; Telegram dedup keeps 24 h and honours `retry_after`.
+- **API keys cannot mint or revoke keys;** key validation is cached 60 s and revoked at once; x402 charges only a new A2A
+  `message/send`, and a post-settlement failure is marked refund-due; `/api/chat/message` is payment-gated; uploads refuse symlinks.
+- **Room offer cancel is compare-and-set:** a cancel can no longer overwrite an offer the settlement watcher just marked paid.
+- **Console hardening:** an empty `WEBGATE_HOST` no longer binds all interfaces; own_ops refuses to boot without login
+  config; refused socket joins stay rate-limited; `/logout` clears storage without inline script; no server text in `innerHTML`.
+- **ERC-6909 approvals are seen:** the guard refuses an ERC-6909 grant and measures a claim-token move like an
+  NFT's; the account approval scan and `agent_nft_revoke_all` cover ERC-6909 allowances and operators.
+- **Agent-NFT account calls are held to the pinned collection:** the account's `token()` must be a pinned
+  collection with unchanged code; no asset may go to the account of an unminted token; and nothing may move
+  on the treasury side of an account call except the account paying its owner.
+
 ## [1.2.0] — 2026-10-02
 
 ### Added
 
+- **Telegram avatar push.** `polyrob avatar push --telegram [--telegram-chat ID]` now sets the bot photo
+  (`setMyProfilePhoto`, JPEG) and each named group's photo (`setChatPhoto`); hash-idempotent, falls back
+  to the BotFather steps.
 - **Check any wallet or token.** New read verbs `wallet_holdings`, `wallet_activity` and
   `token_origin` (Solana and EVM), `positions` (the agent's own P&L), the `/check` command, and
   cron price watches with an alert threshold.
@@ -273,6 +335,8 @@ short, user-facing notes for each release are on its GitHub Release page.
 
 ### Fixed
 
+- **Honest avatar replies.** `agent_avatar set_from` and Telegram `/avatar set` no longer claim the new
+  image is on every surface; they say the X/Telegram profile photos change only on `polyrob avatar push`.
 - **`/x status` says what each X credential unlocks and how to restore it**: the API login
   covers DMs (`/x login`); the browser session covers posts and outreach (`polyrob x-account capture-session`).
 - **`polyrob dashboard` no longer creates `./data/task` in the folder it runs from:** with no

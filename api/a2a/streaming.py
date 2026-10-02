@@ -28,6 +28,29 @@ from api.dependencies import get_user_permissive
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/a2a", tags=["a2a-streaming"])
 
+#: API17: the longest one SSE poll loop runs. A task that outlives it gets a
+#: last non-final status frame and a clean close; the client resubscribes
+#: (``tasks/resubscribe`` / ``GET /a2a/tasks/{id}/stream``). Without it an
+#: abandoned stream for a stuck task polled forever.
+STREAM_MAX_SECONDS = 3600.0
+#: Seconds between polls of the feed directory and the session status.
+STREAM_POLL_SECONDS = 1.0
+
+
+def _sse_failure(e: Exception, what: str) -> str:
+    """An SSE error frame that NAMES a reference, never the exception (API17).
+
+    A ``ValueError`` is the handler's own controlled signal ("Task … not
+    found", "terminal state") and is passed through; anything else can carry
+    a path, SQL or a provider string.
+    """
+    if isinstance(e, ValueError):
+        return _format_sse_error(str(e))
+    import uuid
+    ref = uuid.uuid4().hex[:12]
+    logger.error("%s failed (ref %s): %s", what, ref, e, exc_info=True)
+    return _format_sse_error(f"{what} failed (reference {ref})")
+
 
 async def task_event_stream(
     task_id: str,
@@ -61,7 +84,7 @@ async def task_event_stream(
             return
 
     except Exception as e:
-        yield _format_sse_error(str(e))
+        yield _sse_failure(e, "Task stream")
         return
 
     # Get session info for feed directory
@@ -87,8 +110,19 @@ async def task_event_stream(
     terminal_states = TERMINAL_SESSION_STATUSES
     last_status = None
 
-    # Poll for updates
+    # Poll for updates (API17: bounded by STREAM_MAX_SECONDS)
+    deadline = asyncio.get_running_loop().time() + STREAM_MAX_SECONDS
     while True:
+        if asyncio.get_running_loop().time() >= deadline:
+            try:
+                task = await handler.get_task(task_id, history_length=0)
+                yield _format_sse_event(
+                    TaskStatusUpdateEvent.from_task(task, final=False))
+            except Exception as e:
+                logger.debug("a2a stream: last status before close failed: %s", e)
+            logger.info("SSE stream for task %s reached its %ss lifetime",
+                        task_id, STREAM_MAX_SECONDS)
+            return
         try:
             # Check for new feed files
             if feed_dir and feed_dir.exists():
@@ -189,14 +223,13 @@ async def task_event_stream(
                     return
 
             # Poll interval
-            await asyncio.sleep(1)
+            await asyncio.sleep(STREAM_POLL_SECONDS)
 
         except asyncio.CancelledError:
             logger.info(f"SSE stream cancelled for task {task_id}")
             break
         except Exception as e:
-            logger.error(f"Error in SSE stream: {e}")
-            yield _format_sse_error(str(e))
+            yield _sse_failure(e, "Task stream")
             break
 
 

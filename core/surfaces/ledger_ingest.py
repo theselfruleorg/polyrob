@@ -223,7 +223,8 @@ def record_anonymous_to_ledger(container: Any, *, surface: str,
 
 def record_outbound_to_ledger(ledger: Any, *, surface: str, chat_id: str,
                               thread_id: Any, text: str, ts: float,
-                              reply_to: Any = None, media: bool = False) -> bool:
+                              reply_to: Any = None, media: bool = False,
+                              message_key: Any = None) -> bool:
     """Record what the AGENT said in a room — the other half of the room log.
 
     ⚠️ Until 2026-09-16 :func:`record_inbound_to_ledger` was the ledger's ONLY
@@ -241,10 +242,13 @@ def record_outbound_to_ledger(ledger: Any, *, surface: str, chat_id: str,
     ``role_at_write="agent"``) so every existing reader — the context renderer,
     the owner tail, the service goal — picks it up with no change.
 
-    ``message_id`` is SYNTHETIC (``out:<ts>:<hash>``): the durable-queue path
+    ``message_id`` is SYNTHETIC (``out:<sha256>``): the durable-queue path
     returns before any surface has minted a real id, so waiting for one would
-    record only the direct-send half. The hash makes the PK idempotent, so a
-    retried send updates rather than duplicates.
+    record only the direct-send half. OB18 (2026-10-03 audit): the id is derived
+    from the caller's per-message ``message_key`` when given — NOT from ``ts``
+    and Python's salted ``hash()``, which made every retry (and every process) a
+    new row. Without a key it falls back to ``ts`` + body, stable across
+    processes.
 
     Fail-open and boolean: the room log is bookkeeping. A fault here must cost
     context, never the message that was already delivered.
@@ -256,7 +260,9 @@ def record_outbound_to_ledger(ledger: Any, *, surface: str, chat_id: str,
         return False
     try:
         stamp = float(ts)
-        mid = f"out:{stamp:.3f}:{abs(hash(body)) & 0xffffffff:08x}"
+        import hashlib
+        seed = (str(message_key) if message_key else f"{stamp:.3f}\x00{body}")
+        mid = "out:" + hashlib.sha256(seed.encode("utf-8", "replace")).hexdigest()[:24]
         ledger.append(LedgerRow(
             surface=str(surface), chat_id=str(chat_id),
             thread_id=(str(thread_id) if thread_id else None),

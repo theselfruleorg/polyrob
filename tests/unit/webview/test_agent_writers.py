@@ -106,7 +106,7 @@ def mem(monkeypatch):
     from modules.memory.sqlite_memory_provider import SqliteMemoryProvider
     d = tempfile.mkdtemp()
     provider = SqliteMemoryProvider(db_path=os.path.join(d, "memory.db"))
-    monkeypatch.setattr("webview.pages._memory_provider", lambda: provider)
+    monkeypatch.setattr("webview.pages._memory_provider_status", lambda: (provider, None))
     monkeypatch.setattr("webview.pages._effective_user_id", lambda request: "u1")
     app = FastAPI()
     app.include_router(mod.router)
@@ -159,7 +159,7 @@ def test_memory_add_writes_a_console_audit_row(monkeypatch, tmp_path):
     from core.event_log import get_event_log
 
     provider = SqliteMemoryProvider(db_path=str(tmp_path / "memory.db"))
-    monkeypatch.setattr("webview.pages._memory_provider", lambda: provider)
+    monkeypatch.setattr("webview.pages._memory_provider_status", lambda: (provider, None))
     monkeypatch.setattr("webview.pages._effective_user_id", lambda request: "u1")
     app = FastAPI()
     app.include_router(mod.router)
@@ -174,7 +174,7 @@ def test_memory_add_writes_a_console_audit_row(monkeypatch, tmp_path):
 
 
 def test_memory_add_with_no_provider_is_409(monkeypatch):
-    monkeypatch.setattr("webview.pages._memory_provider", lambda: None)
+    monkeypatch.setattr("webview.pages._memory_provider_status", lambda: (None, None))
     monkeypatch.setattr("webview.pages._effective_user_id", lambda request: "u1")
     app = FastAPI()
     app.include_router(mod.router)

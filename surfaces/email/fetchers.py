@@ -15,6 +15,7 @@ Both yield ``(handle, normalized_dict)`` pairs where the dict is exactly the
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, List, Protocol, Tuple
 
@@ -60,8 +61,23 @@ class MailFetcher(Protocol):
         ...
 
 
+async def _off_loop(tool: Any, fn):
+    """EM1: one blocking ``imaplib`` step in a worker thread. The tool's
+    ``run_imap`` serialises the steps on its one connection; a tool without
+    it (a fake) still runs off the loop."""
+    run = getattr(tool, "run_imap", None)
+    if callable(run):
+        return await run(fn)
+    return await asyncio.to_thread(fn)
+
+
 class ImapFetcher:
-    """The legacy IMAP path, moved verbatim from EmailHarness."""
+    """The legacy IMAP path, moved verbatim from EmailHarness.
+
+    ⚠️ Every ``imaplib`` call goes through :func:`_off_loop` (EM1): a call
+    inside ``async def`` held the gateway's ONE event loop for as long as the
+    server took — Discord heartbeats, Slack acks and webhooks all froze.
+    """
 
     def __init__(self, email_tool: Any) -> None:
         self.email_tool = email_tool
@@ -95,7 +111,8 @@ class ImapFetcher:
                 # the mail with no trace. ``BODY.PEEK[]`` returns the same bytes
                 # and touches no flag; ``mark_handled`` remains the ONE place a
                 # message is marked, and it now runs only on success.
-                _, data = conn.fetch(num, "(BODY.PEEK[])")
+                _, data = await _off_loop(
+                    tool, lambda n=num: conn.fetch(n, "(BODY.PEEK[])"))
                 em = _email.message_from_bytes(data[0][1])
                 out.append((num, normalize_email_message(em)))
             except Exception as e:
@@ -125,9 +142,12 @@ class ImapFetcher:
             conn = tool.imap_connection
             if conn is None:
                 raise MailFetchError("IMAP connection unavailable after connect")
+            def _select_search(c=conn):
+                c.select("INBOX")
+                return c.search(None, "UNSEEN")[1]
+
             try:
-                conn.select("INBOX")
-                _, nums = conn.search(None, "UNSEEN")
+                nums = await _off_loop(tool, _select_search)
                 return conn, nums
             except Exception as exc:
                 if attempt or self._is_auth_error(exc):
@@ -137,7 +157,7 @@ class ImapFetcher:
                 # Drop the corpse so the next pass reconnects. `logout()` on a
                 # dead socket raises, and that failure is not news here.
                 try:
-                    conn.logout()
+                    await _off_loop(tool, conn.logout)
                 except Exception:
                     pass
                 tool.imap_connection = None
@@ -160,10 +180,18 @@ class ImapFetcher:
         return f"{getattr(tool, 'imap_server', '?')}:{getattr(cfg, 'gmail_email', '') or ''}"
 
     def mark_handled(self, handle: Any) -> None:
+        """Synchronous form (protocol). The harness awaits
+        :meth:`mark_handled_async`, which keeps the call off the loop."""
         try:
             conn = getattr(self.email_tool, "imap_connection", None)
             if conn is not None and handle is not None:
                 conn.store(handle, "+FLAGS", "\\Seen")
+        except Exception as e:
+            logger.debug("email mark-seen %s failed: %s", handle, e)
+
+    async def mark_handled_async(self, handle: Any) -> None:
+        try:
+            await _off_loop(self.email_tool, lambda: self.mark_handled(handle))
         except Exception as e:
             logger.debug("email mark-seen %s failed: %s", handle, e)
 
@@ -234,6 +262,8 @@ class AgentMailFetcher:
                 # fixed for on 2026-09-13.
                 "attachments": normalize_agentmail_attachments(
                     full.get("attachments")),
+                # OS5: the auto-reply markers, when the provider passes headers.
+                "headers": full.get("headers") if isinstance(full.get("headers"), dict) else {},
             }))
         return out
 

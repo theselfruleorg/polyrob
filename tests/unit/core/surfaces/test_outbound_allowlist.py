@@ -36,3 +36,27 @@ def test_allow_idempotent():
     s.allow("u1", "telegram", "12345")
     s.allow("u1", "telegram", "12345", note="updated")
     assert len(s.list("u1")) == 1
+
+
+def test_allowlist_matches_any_spelling_of_the_target(tmp_path):
+    """OB13: the allowlist compared the raw target, so Bob@Corp.io != bob@corp.io."""
+    import os
+    import sqlite3
+    import time
+    from core.surfaces.outbound_allowlist import OutboundAllowlist
+    db = os.path.join(str(tmp_path), "surfaces.db")
+    al = OutboundAllowlist(db)
+    al.allow("u", "email", "Bob@Corp.io")
+    assert al.is_allowed("u", "email", "bob@corp.io")
+    assert al.is_allowed("u", "email", " BOB@corp.IO ")
+    al.allow("u", "telegram", "@SomeChannel")
+    assert al.is_allowed("u", "telegram", "somechannel")
+    assert al.is_allowed("u", "telegram", "t.me/SomeChannel")
+    # a LEGACY raw-spelled row is matched and revoked too
+    c = sqlite3.connect(db)
+    c.execute("INSERT INTO outbound_allowlist VALUES ('u','email','Old@Corp.io','', 'active', ?)",
+              (time.time(),))
+    c.commit(); c.close()
+    assert al.is_allowed("u", "email", "old@corp.io")
+    assert al.revoke("u", "email", "OLD@corp.io") is True
+    assert not al.is_allowed("u", "email", "Old@Corp.io")

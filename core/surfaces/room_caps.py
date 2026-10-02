@@ -124,6 +124,27 @@ class RoomCaps:
     def record_reply(self, surface, chat_id, *, now: Optional[float] = None) -> None:
         self._record(surface, chat_id, "reply", "", time.time() if now is None else now)
 
+    #: The longest window any reader asks about: the status section's
+    #: "replies today". A prune horizon never cuts inside it.
+    _MIN_KEEP_SEC = 86400
+
+    def prune(self, max_age_secs: float = 7 * 86400, *,
+              now: Optional[float] = None) -> int:
+        """Delete room events older than ``max_age_secs`` (AC5). Returns the count.
+
+        One row per trigger and per reply was kept forever. Every check is a
+        COUNT over a window, so a horizon shorter than the longest window would
+        reset a cap; the horizon is floored at the longest window read.
+        """
+        now = time.time() if now is None else now
+        keep = max(float(max_age_secs), float(self._MIN_KEEP_SEC),
+                   float(_cfg("GROUP_BOT_LOOP_WINDOW_SEC", 300)),
+                   float(_cfg("GROUP_BOT_LOOP_COOLDOWN_SEC", 600)),
+                   float(_cfg("GROUP_MEMBER_COOLDOWN_SEC", 20)))
+        return int(execute_retry(self.db_path,
+                                 "DELETE FROM room_events WHERE ts < ?",
+                                 (now - keep,)) or 0)
+
     def replies_since(self, surface, chat_id, since: float) -> int:
         """044 T18: how many replies this room got since *since* (epoch
         seconds) — the public read the status section renders from. ``_count``

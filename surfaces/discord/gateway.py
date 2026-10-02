@@ -34,6 +34,28 @@ _OP_HEARTBEAT_ACK = 11
 # IDENTIFY rate limit locks the bot out. Module-level so tests can shrink it.
 _INVALID_SESSION_DELAY_SEC = 2.5
 
+#: Close codes after which a reconnect can never succeed (Discord docs,
+#: "Gateway Close Event Codes"): re-IDENTIFYing on them in a loop makes
+#: Discord reset the bot token. The gateway stops and says why instead.
+FATAL_CLOSE_CODES = {
+    4004: "Authentication failed — the bot token is wrong or was reset",
+    4010: "Invalid shard",
+    4011: "Sharding required",
+    4012: "Invalid API version",
+    4013: "Invalid intent(s)",
+    4014: ("Disallowed intent(s) — enable the MESSAGE CONTENT privileged "
+           "intent for this bot in the Discord Developer Portal"),
+}
+
+
+class DiscordGatewayFatal(RuntimeError):
+    """The gateway closed with a code a reconnect cannot fix."""
+
+    def __init__(self, code: int, reason: str) -> None:
+        super().__init__(f"discord gateway closed with {code}: {reason}")
+        self.code = code
+        self.reason = reason
+
 
 def _mentions_bot(d: dict, bot_user_id: str) -> bool:
     if any(str(m.get("id")) == str(bot_user_id)
@@ -121,34 +143,60 @@ class DiscordGatewayClient:
         self._get_gateway_url = get_gateway_url
         self.bot_user_id: Optional[str] = None
         self._stopped = asyncio.Event()
+        #: OS3: in-flight MESSAGE_CREATE turns, held so the loop cannot GC them.
+        self._handler_tasks: set = set()
 
     async def stop(self) -> None:
         self._stopped.set()
 
     async def run(self, handler: Callable[[dict], Awaitable[None]]) -> None:
-        import aiohttp
+        """Connect, consume, reconnect. The backoff resets only after a READY
+        (a socket that opens and then closes at once must not reconnect every
+        second). A fatal close code stops the loop and raises."""
         backoff = 1.0
         while not self._stopped.is_set():
+            ready = False
             try:
-                url = await self._get_gateway_url()
-                async with aiohttp.ClientSession() as session:
-                    async with session.ws_connect(
-                            f"{url}?v=10&encoding=json", heartbeat=None,
-                            max_msg_size=8 * 1024 * 1024) as ws:
-                        backoff = 1.0
-                        await self._consume(ws, handler)
+                ready = await self._connect_once(handler)
             except asyncio.CancelledError:
+                raise
+            except DiscordGatewayFatal as e:
+                logger.error("discord gateway STOPPED: %s. The surface will not "
+                             "reconnect until the gateway restarts.", e)
+                self._stopped.set()
                 raise
             except Exception as e:
                 logger.warning("discord gateway error: %s — reconnecting in %.0fs",
                                e, backoff)
             if self._stopped.is_set():
                 break
+            if ready:
+                backoff = 1.0
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 60.0)
 
-    async def _consume(self, ws, handler) -> None:
+    async def _connect_once(self, handler) -> bool:
+        """One socket lifetime; True when READY arrived on it."""
         import aiohttp
+        url = await self._get_gateway_url()
+        async with aiohttp.ClientSession() as session:
+            async with session.ws_connect(
+                    f"{url}?v=10&encoding=json", heartbeat=None,
+                    max_msg_size=8 * 1024 * 1024) as ws:
+                return await self._consume(ws, handler)
+
+    @staticmethod
+    async def _run_handler(handler, d: dict) -> None:
+        try:
+            await handler(d)
+        except Exception:
+            logger.warning("discord inbound handler failed", exc_info=True)
+
+    async def _consume(self, ws, handler) -> bool:
+        """Read one socket until it ends. Returns True when READY arrived;
+        raises :class:`DiscordGatewayFatal` on a fatal close code."""
+        import aiohttp
+        ready = False
         seq: Optional[int] = None
         heartbeat_task: Optional[asyncio.Task] = None
         acked = {"v": True}  # HEARTBEAT_ACK bookkeeping (half-open detection)
@@ -195,27 +243,35 @@ class DiscordGatewayClient:
                     acked["v"] = True
                 elif op == _OP_RECONNECT:
                     logger.info("discord gateway: server RECONNECT — rotating")
-                    return
+                    return ready
                 elif op == _OP_INVALID_SESSION:
                     logger.warning("discord gateway: INVALID_SESSION — waiting "
                                    "%.1fs before re-IDENTIFY",
                                    _INVALID_SESSION_DELAY_SEC)
                     await asyncio.sleep(_INVALID_SESSION_DELAY_SEC)
-                    return
+                    return ready
                 elif op == _OP_DISPATCH:
                     event_type = payload.get("t")
                     d = payload.get("d") or {}
                     if event_type == "READY":
                         self.bot_user_id = str((d.get("user") or {}).get("id") or "")
+                        ready = True
                         logger.info("discord gateway READY as %s", self.bot_user_id)
                     elif event_type == "MESSAGE_CREATE":
-                        try:
-                            await handler(d)
-                        except Exception:
-                            logger.warning("discord inbound handler failed",
-                                           exc_info=True)
+                        # OS3: a turn can take minutes. Awaited inline it
+                        # stopped this read loop, the HEARTBEAT_ACK went
+                        # unread, the watchdog closed the socket and the
+                        # messages of the gap were lost. Per-chat order is
+                        # kept by act_on_inbound's per-session lock.
+                        from core.async_bridge import spawn_retained
+                        spawn_retained(self._run_handler(handler, d),
+                                       self._handler_tasks)
                 if self._stopped.is_set():
                     break
         finally:
             if heartbeat_task is not None:
                 heartbeat_task.cancel()
+        code = getattr(ws, "close_code", None)
+        if isinstance(code, int) and code in FATAL_CLOSE_CODES:
+            raise DiscordGatewayFatal(code, FATAL_CLOSE_CODES[code])
+        return ready

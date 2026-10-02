@@ -85,3 +85,47 @@ def test_unprotected_stale_binding_is_deleted_at_future_cutoff(tmp_path):
     removed = purge_stale_safe(reg, q, older_than_secs=-1)   # stale + unprotected
     assert removed == 1
     assert reg.resolve("sk") is None
+
+
+def test_gc_tick_prunes_terminal_outbox_rows(tmp_path):
+    """OB15: the surface GC tick is the outbox's retention owner."""
+    reg = SessionChatRegistry(os.path.join(tmp_path, "r.db"))
+    q = OutboundDeliveryQueue(os.path.join(tmp_path, "o.db"))
+    calls = []
+    orig = q.prune
+    q.prune = lambda *a, **kw: calls.append(1) or orig(*a, **kw)
+    purge_stale_safe(reg, q, older_than_secs=-1)
+    assert calls == [1]
+
+
+def test_gc_tick_prunes_room_caps_and_thread_anchors(tmp_path, monkeypatch):
+    """AC5: the GC tick prunes RoomCaps (surfaces.db) and the correspondent
+    thread anchors (correspondents.db beside it), fail-open."""
+    from core.surfaces import gc
+    from core.surfaces.correspondents import CorrespondentRegistry
+    from core.surfaces.room_caps import RoomCaps
+    reg = SessionChatRegistry(os.path.join(tmp_path, "surfaces.db"))
+    CorrespondentRegistry(os.path.join(tmp_path, "correspondents.db"))
+    calls = []
+    monkeypatch.setattr(RoomCaps, "prune", lambda self, *a, **k: calls.append(
+        ("room", self.db_path)) or 0)
+    monkeypatch.setattr(CorrespondentRegistry, "prune_thread_anchors",
+                        lambda self, age, **k: calls.append(("anchors", age)) or 0)
+    purge_stale_safe(reg, None, older_than_secs=-1)
+    assert ("room", reg.db_path) in calls
+    assert ("anchors", gc.THREAD_ANCHOR_RETENTION_SEC) in calls
+
+
+def test_gc_prune_faults_do_not_stop_the_purge(tmp_path, monkeypatch, caplog):
+    from core.surfaces.room_caps import RoomCaps
+
+    def boom(self, *a, **k):
+        raise RuntimeError("locked")
+
+    monkeypatch.setattr(RoomCaps, "prune", boom)
+    reg = SessionChatRegistry(os.path.join(tmp_path, "surfaces.db"))
+    reg.bind("sk", "sid", "u1", "wa", "123")
+    with caplog.at_level("WARNING"):
+        assert purge_stale_safe(reg, None, older_than_secs=-1) == 1
+    assert "room-caps prune failed" in caplog.text
+    assert not os.path.exists(os.path.join(tmp_path, "correspondents.db"))

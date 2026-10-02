@@ -95,7 +95,8 @@ def test_cancel_refresh_and_expiry(tmp_path):
     assert cards.press(c1.card_id, "no", "u1", st=st).card.state == cards.S_CANCELLED
     c2 = _quote(st)
     p = cards.press(c2.card_id, "re", "u1", st=st)
-    assert p.run == f"/send 1 native to {ADDR} on ethereum max 2814.01"   # a quote, no go
+    # a quote, no go — and no seat-added bound (CA1): the new quote sets its own
+    assert p.run == f"/send 1 native to {ADDR} on ethereum"
     assert st.get(c2.card_id).state == cards.S_REPLACED
     c3 = _quote(st)
     st.transition(c3.card_id, frozenset({cards.S_OPEN}), cards.S_OPEN,)

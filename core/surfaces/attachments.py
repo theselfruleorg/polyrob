@@ -97,12 +97,83 @@ def validate_media_paths(paths: List[str], workspace_dir: Optional[str]) -> Tupl
     return validated, None
 
 
+def file_identity(path: str) -> Optional[List[int]]:
+    """``[st_dev, st_ino]`` of *path* (following links), or None."""
+    try:
+        st = os.stat(path)
+    except (OSError, ValueError):
+        return None
+    return [int(st.st_dev), int(st.st_ino)]
+
+
 def media_entries_from_paths(paths: List[str]) -> list:
     entries = []
     for p in paths:
         kind = "image" if Path(p).suffix.lower() in _IMAGE_EXTS else "document"
         entries.append({"kind": kind, "path": p, "caption": None})
     return entries
+
+
+def stamp_identity(media: list) -> list:
+    """Copies of *media* entries stamped with their file's identity (``ident``,
+    OB17), for a sender that opens the file LATER — the durable queue stamps at
+    enqueue and :func:`drop_swapped` checks at drain."""
+    out = []
+    for entry in media or []:
+        if isinstance(entry, dict) and entry.get("path") and "ident" not in entry:
+            ident = file_identity(str(entry["path"]))
+            if ident is not None:
+                entry = {**entry, "ident": ident}
+        out.append(entry)
+    return out
+
+
+def drop_swapped(media: list) -> Tuple[list, List[str]]:
+    """Keep the media entries whose file is still the one validated (OB17).
+
+    Confinement is checked when a message is enqueued and the file is opened
+    when the queue drains; a directory or file replaced by a symlink in
+    between would send whatever it now points at. An entry stamped with
+    ``ident`` must still stat to the same device + inode; an entry without one
+    (legacy, or a non-file entry such as the email subject) passes unchanged.
+    Returns ``(kept, dropped_paths)``."""
+    kept: list = []
+    dropped: List[str] = []
+    for entry in media or []:
+        ident = entry.get("ident") if isinstance(entry, dict) else None
+        if ident and entry.get("path"):
+            now = file_identity(str(entry["path"]))
+            if now is None or list(now) != [int(x) for x in ident]:
+                dropped.append(str(entry["path"]))
+                continue
+        kept.append(entry)
+    return kept, dropped
+
+
+def secret_screen_reason(real_path: str) -> Optional[str]:
+    """The secret half of :func:`screen_attachment_path`: a secret-shaped
+    filename or secret-shaped content. Applies to a LINK as much as to an
+    attachment (OB16) — a console link to a .env hands it over just the same."""
+    try:
+        from core.security.secret_guard import is_credential_file
+        if is_credential_file(Path(real_path)):
+            return "secret-shaped filename refused"
+    except ImportError:
+        pass
+    try:
+        with open(real_path, "rb") as f:
+            head = f.read(_SCAN_HEAD_BYTES)
+    except OSError:
+        return None   # nothing readable to leak; the link itself decides
+    if head:
+        text = head.decode("utf-8", "replace")
+        try:
+            from core.secret_scrub import scrub_secret_shapes
+            if scrub_secret_shapes(text) != text:
+                return "content contains secret-shaped material"
+        except ImportError:
+            pass
+    return None
 
 
 def screen_attachment_path(real_path: str, *, max_mb: Optional[float] = None,
@@ -133,12 +204,9 @@ def screen_attachment_path(real_path: str, *, max_mb: Optional[float] = None,
     if st.st_size > cap_mb * 1024 * 1024:
         return (f"size {st.st_size / (1024 * 1024):.1f} MB exceeds the "
                 f"{cap_mb:g} MB attach cap")
-    try:
-        from core.security.secret_guard import is_credential_file
-        if is_credential_file(Path(real_path)):
-            return "secret-shaped filename refused"
-    except ImportError:
-        pass
+    secret = secret_screen_reason(real_path)
+    if secret:
+        return secret
     try:
         with open(real_path, "rb") as f:
             head = f.read(_SCAN_HEAD_BYTES)
@@ -146,12 +214,6 @@ def screen_attachment_path(real_path: str, *, max_mb: Optional[float] = None,
         return "file unreadable"
     if head:
         text = head.decode("utf-8", "replace")
-        try:
-            from core.secret_scrub import scrub_secret_shapes
-            if scrub_secret_shapes(text) != text:
-                return "content contains secret-shaped material"
-        except ImportError:
-            pass
         if scanner is not None and b"\x00" not in head:
             try:
                 if scanner(text):

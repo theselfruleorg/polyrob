@@ -183,28 +183,28 @@ def pending_correspondent_items(registry: Any, tenant: str) -> List[Dict[str, An
     Without this in the pending listing, a third party the agent contacted stays
     permanently unroutable with no owner-visible trace — the silent evaporation the
     approval gate exists to prevent.
+
+    ⚠️ AC1: an unreadable registry RAISES. It used to log and return what it
+    had collected — an empty list — so `/pending` and the status snapshot
+    said "no pending contacts" over a store nobody could read. Every caller
+    names the store unreadable instead (AGENTS: an unreadable store is not an
+    empty one).
     """
     items: List[Dict[str, Any]] = []
-    try:
-        for r in registry.list(user_id=tenant):
-            if r.get("state") != "pending":
-                continue
-            items.append({
-                "kind": "correspondent",
-                "id": f"{r['surface']}:{r['address']}",
-                "chars": 0,
-                # 030 C7: seat-aware remedy — chat CAN decide this (the old hint
-                # pointed a phone owner at the CLI, teaching them chat couldn't).
-                "preview": (f"{r['surface']}:{r['address']} -> session "
-                            f"{r['session_id']}  (approve: /approve "
-                            f"{r['surface']}:{r['address']} — or polyrob owner "
-                            f"approve {r['surface']} {r['address']})"),
-            })
-    except Exception:
-        # L10 (2026-07-15): was a silent `except: pass` — a broken correspondent
-        # registry would hide pending contacts with no trace. Log it (the pending
-        # listing still degrades gracefully to whatever was collected).
-        logger.warning("owner pending: correspondent registry read failed", exc_info=True)
+    for r in registry.list(user_id=tenant):
+        if r.get("state") != "pending":
+            continue
+        items.append({
+            "kind": "correspondent",
+            "id": f"{r['surface']}:{r['address']}",
+            "chars": 0,
+            # 030 C7: seat-aware remedy — chat CAN decide this (the old hint
+            # pointed a phone owner at the CLI, teaching them chat couldn't).
+            "preview": (f"{r['surface']}:{r['address']} -> session "
+                        f"{r['session_id']}  (approve: /approve "
+                        f"{r['surface']}:{r['address']} — or polyrob owner "
+                        f"approve {r['surface']} {r['address']})"),
+        })
     return items
 
 

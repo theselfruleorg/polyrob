@@ -217,5 +217,7 @@ def test_stream_error_after_headers_surfaces_in_stream(monkeypatch):
         "messages": [{"role": "user", "content": "hi"}],
     })
     assert resp.status_code == 200
-    assert "[error] agent turn failed" in resp.text
+    # API14: an in-stream ERROR event, never assistant content.
+    assert '"error":{"message":"agent turn failed' in resp.text
+    assert "[error]" not in resp.text
     assert "data: [DONE]" in resp.text

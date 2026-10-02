@@ -218,10 +218,13 @@ def test_a_known_verb_is_recognised_before_a_session_is_made():
     assert looks_like_console_verb("/halt") is True
     assert looks_like_console_verb("/status now") is True
     assert looks_like_console_verb("/status@robot") is True
-    # Prose, an unknown slash, and the two session-CREATING verbs the console
-    # has its own controls for, all reach the agent unchanged.
+    # A command-SHAPED unknown verb is answered inline with the help reply
+    # (2026-10-03 audit CLI11, Telegram parity) — never a new session.
+    assert looks_like_console_verb("/notaverb") is True
+    # Prose, a path, and the two session-CREATING verbs the console has its own
+    # controls for, all reach the agent unchanged.
     assert looks_like_console_verb("halt the trading") is False
-    assert looks_like_console_verb("/notaverb") is False
+    assert looks_like_console_verb("/etc/passwd") is False
     assert looks_like_console_verb("/task do a thing") is False
     assert looks_like_console_verb("/new") is False
     assert looks_like_console_verb("") is False

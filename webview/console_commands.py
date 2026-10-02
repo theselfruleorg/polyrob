@@ -72,74 +72,112 @@ def _console_deliver(task_agent, clean_id: str, user_id: str):
 
 
 async def maybe_handle_console_command(task_agent, clean_id: str, user_id: str, text: str):
-    """Returns the reply text for a known owner verb, or None for anything that
-    should reach the agent as a normal message. Fail-open — never swallow a
-    user message over an error here."""
+    """Returns the reply text for a slash verb, or None for anything that
+    should reach the agent as a normal message.
+
+    - Not a slash line, or the line cannot even be classified: None (fail-open
+      — never swallow a user message over an error here).
+    - A command-SHAPED token no verb owns (``/statsu``): the same "unknown
+      command" help answer Telegram gives, never an agent turn (audit CLI11).
+    - A KNOWN verb whose routing raises: an error reply, never the verb line
+      forwarded to the agent as prose — ``/send … go`` must not become a
+      message the model reads as an instruction (audit CLI12).
+    """
     try:
         token = (text or "").strip().split()[0].lower() if (text or "").strip() else ""
         if not token.startswith("/"):
             return None
         token = token.split("@", 1)[0]
-        from core.surfaces.dispatcher import RouteDecision, RouteKind, command_names
+        from core.surfaces.dispatcher import _COMMAND_SHAPE_RE, command_names
         from core.surfaces.tappable import is_tappable_token
-        if token not in command_names() and not is_tappable_token(token):
-            return None  # unknown slash: let the agent see it (prose question)
-        if token in ("/task", "/new"):
-            return None  # session-creating verbs: the console has real UI for these
-        if task_agent is None:
-            return None  # two-service shape: let the :9000 proxy carry it
-        args = (text or "").strip().split()[1:]
-        if token == "/help" and args and ("/" + args[0].strip().lstrip("/").lower()
-                                          in CONSOLE_HELP_EXCLUDED):
-            return _CONSOLE_HELP_UNAVAILABLE
-        from core.surfaces.envelopes import Identity, InboundMessage, SessionSource
-        from surfaces.telegram.harness import _handle_command
-        from surfaces.telegram.inbound import InboundResult
-        source = SessionSource(surface_id="webview", chat_id=clean_id, chat_type="dm")
-        inbound = InboundMessage(text=text, identity=Identity(user_id=str(user_id),
-                                                              source=source))
-        decision = RouteDecision(kind=RouteKind.COMMAND,
-                                 # A10: the tail must match build_session_key's real
-                                 # DM shape (…:dm:{chat_id}:{user_id}) — the lifecycle
-                                 # gate for /cancel and /new (harness._lifecycle_permitted)
-                                 # confirms a non-owner is acting on THEIR OWN session by
-                                 # matching this suffix; the route above already checked
-                                 # `current_user_id == session_owner_id` before this is
-                                 # ever reached, so this is restating an already-verified
-                                 # fact, not a new grant.
-                                 session_key=f"agent:main:webview:dm:{clean_id}:{user_id}",
-                                 session_id=clean_id, command=token)
-        result = InboundResult(inbound=inbound, decision=decision)
-        # 061: a DECIDING console verb (/approve, /pause, …) is a line of the
-        # owner's conversation exactly as the same verb on Telegram is.
-        from surfaces.telegram.harness import _record_owner_line
-        _record_owner_line(task_agent, result, session_id=clean_id, kind="command")
-        # An EXECUTING money verb (`/send … go`, `/bridge … go`) waits up to
-        # ~120 s for a receipt. Without a `deliver` the harness ran it INLINE
-        # and held this HTTP request the whole time. The console passes one
-        # under the SAME rule Telegram uses (`_runs_in_background`), so the
-        # harness answers "started" at once and hands the result here. Only
-        # then: every other verb keeps its inline answer, byte-identical.
-        from surfaces.telegram.harness import _runs_in_background
-        # A card tap (`/card_<id>_ok`) may run a money line: the card seat
-        # decides whether THAT line goes to the background, so it gets one too.
-        from core.surfaces.cards import parse_card_token
-        deliver = (_console_deliver(task_agent, clean_id, str(user_id))
-                   if (_runs_in_background(token, result)
-                       or parse_card_token(token)[0] is not None) else None)
-        reply = await _handle_command(task_agent, result, spawn=None,
-                                      deliver=deliver)
-        if token == "/help" and not args and isinstance(reply, str):
-            reply = _filter_console_help(reply)
-        # An action card (or a room reply) answers with a CommandReply; the
-        # console draws text, and the text keeps every tap token.
-        from core.surfaces.command_reply import CommandReply, reply_text
-        if isinstance(reply, CommandReply):
-            reply = reply_text(reply)
-        return reply
+        known = token in command_names() or is_tappable_token(token)
+        shaped = bool(_COMMAND_SHAPE_RE.fullmatch(token))
     except Exception:
-        logger.debug("console command routing skipped (fail-open)", exc_info=True)
+        logger.debug("console command classification skipped (fail-open)", exc_info=True)
         return None
+    if token in ("/task", "/new"):
+        return None  # session-creating verbs: the console has real UI for these
+    if task_agent is None:
+        return None  # two-service shape: let the :9000 proxy carry it
+    if not known:
+        if not shaped:
+            return None  # a path or prose that starts with "/": the agent's
+        return _unknown_verb_reply(token)
+    try:
+        return await _route_known_verb(task_agent, clean_id, user_id, text, token)
+    except Exception as exc:
+        logger.warning("console command %s failed in routing", token, exc_info=True)
+        return _routing_failed_reply(token, exc)
+
+
+def _unknown_verb_reply(token: str) -> str:
+    """The Telegram seat's own answer for an unknown verb (one source)."""
+    try:
+        from surfaces.telegram.harness import _unknown_command_text
+        return _unknown_command_text(token)
+    except Exception:
+        logger.debug("unknown-verb help unavailable", exc_info=True)
+        return f"Unknown command {token}. Send /help for the full list."
+
+
+def _routing_failed_reply(token: str, exc: BaseException) -> str:
+    return (f"{token} could not run here ({type(exc).__name__}). The line was "
+            "not sent to the agent. Try again, or use Telegram or the terminal.")
+
+
+async def _route_known_verb(task_agent, clean_id: str, user_id: str, text: str,
+                            token: str):
+    """Run a KNOWN owner verb through the shared owner-verb plane."""
+    args = (text or "").strip().split()[1:]
+    if token == "/help" and args and ("/" + args[0].strip().lstrip("/").lower()
+                                      in CONSOLE_HELP_EXCLUDED):
+        return _CONSOLE_HELP_UNAVAILABLE
+    from core.surfaces.dispatcher import RouteDecision, RouteKind
+    from core.surfaces.envelopes import Identity, InboundMessage, SessionSource
+    from surfaces.telegram.harness import _handle_command
+    from surfaces.telegram.inbound import InboundResult
+    source = SessionSource(surface_id="webview", chat_id=clean_id, chat_type="dm")
+    inbound = InboundMessage(text=text, identity=Identity(user_id=str(user_id),
+                                                          source=source))
+    decision = RouteDecision(kind=RouteKind.COMMAND,
+                             # A10: the tail must match build_session_key's real
+                             # DM shape (…:dm:{chat_id}:{user_id}) — the lifecycle
+                             # gate for /cancel and /new (harness._lifecycle_permitted)
+                             # confirms a non-owner is acting on THEIR OWN session by
+                             # matching this suffix; the route above already checked
+                             # `current_user_id == session_owner_id` before this is
+                             # ever reached, so this is restating an already-verified
+                             # fact, not a new grant.
+                             session_key=f"agent:main:webview:dm:{clean_id}:{user_id}",
+                             session_id=clean_id, command=token)
+    result = InboundResult(inbound=inbound, decision=decision)
+    # 061: a DECIDING console verb (/approve, /pause, …) is a line of the
+    # owner's conversation exactly as the same verb on Telegram is.
+    from surfaces.telegram.harness import _record_owner_line
+    _record_owner_line(task_agent, result, session_id=clean_id, kind="command")
+    # An EXECUTING money verb (`/send … go`, `/bridge … go`) waits up to
+    # ~120 s for a receipt. Without a `deliver` the harness ran it INLINE
+    # and held this HTTP request the whole time. The console passes one
+    # under the SAME rule Telegram uses (`_runs_in_background`), so the
+    # harness answers "started" at once and hands the result here. Only
+    # then: every other verb keeps its inline answer, byte-identical.
+    from surfaces.telegram.harness import _runs_in_background
+    # A card tap (`/card_<id>_ok`) may run a money line: the card seat
+    # decides whether THAT line goes to the background, so it gets one too.
+    from core.surfaces.cards import parse_card_token
+    deliver = (_console_deliver(task_agent, clean_id, str(user_id))
+               if (_runs_in_background(token, result)
+                   or parse_card_token(token)[0] is not None) else None)
+    reply = await _handle_command(task_agent, result, spawn=None,
+                                  deliver=deliver)
+    if token == "/help" and not args and isinstance(reply, str):
+        reply = _filter_console_help(reply)
+    # An action card (or a room reply) answers with a CommandReply; the
+    # console draws text, and the text keeps every tap token.
+    from core.surfaces.command_reply import CommandReply, reply_text
+    if isinstance(reply, CommandReply):
+        reply = reply_text(reply)
+    return reply
 
 
 async def run_console_line(task_agent, clean_id: str, user_id: str, text: str) -> str:
@@ -162,7 +200,8 @@ async def run_console_line(task_agent, clean_id: str, user_id: str, text: str) -
 
 
 def looks_like_console_verb(text) -> bool:
-    """Is *text*'s first token an owner verb this seat can answer inline?
+    """Is *text*'s first token a verb (known, or command-shaped) this seat
+    answers inline?
 
     Pure and cheap: the membership test only, no agent, no I/O. ``/task`` and
     ``/new`` are excluded for the same reason as above — the console has its
@@ -174,12 +213,21 @@ def looks_like_console_verb(text) -> bool:
         return False
     token = token.split("@", 1)[0]
     try:
-        from core.surfaces.dispatcher import command_names
+        from core.surfaces.dispatcher import _COMMAND_SHAPE_RE, command_names
     except Exception:  # pragma: no cover — the dispatcher is always importable
         return False
     from core.surfaces.tappable import is_tappable_token
-    return ((token in command_names() or is_tappable_token(token))
-            and token not in ("/task", "/new"))
+    # A command-SHAPED unknown verb is answered too (the help reply, audit
+    # CLI11): a typo in an empty chat box must not start a session. A
+    # MALFORMED tap token (``/card_nothex_ok``, ``/approve_zz``) is not: its
+    # base is a real verb, and the tap parser already refused it.
+    if token in ("/task", "/new"):
+        return False
+    if token in command_names() or is_tappable_token(token):
+        return True
+    base = token.split("_", 1)[0]
+    malformed_tap = "_" in token and (base in command_names() or base == "/card")
+    return bool(_COMMAND_SHAPE_RE.fullmatch(token)) and not malformed_tap
 
 
 def build_console_create_router():

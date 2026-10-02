@@ -75,12 +75,22 @@ def _label_for(token: str) -> str:
     return f"{word} all" if arg == "all" else f"{word} {arg}"
 
 
+def _whole_queue(token: str) -> bool:
+    from core.surfaces.tappable import parse_tappable
+    return parse_tappable(token)[1] == "all"
+
+
 def actions_from_text(text: str) -> List["object"]:
-    """The tappable tokens ``text`` already offers, as ``Action``s, in order."""
+    """The tappable tokens ``text`` already offers, as ``Action``s, in order.
+
+    ⚠️ TG9 (audit 2026-10-03): never a whole-queue button (``/approve_all``,
+    ``/reject_all``). A button outlives its message and decides the queue as
+    it is at TAP time — an old "Approve all" approved items its message never
+    listed. Each item keeps its own button; the typed token stays in the text."""
     from core.surfaces.envelopes import Action
     out, seen = [], set()
     for token in _TAPPABLE_IN_TEXT.findall(text or ""):
-        if token in seen or not is_action_command(token):
+        if token in seen or not is_action_command(token) or _whole_queue(token):
             continue
         seen.add(token)
         style = "primary" if token.startswith("/approve") else "danger"

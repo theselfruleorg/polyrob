@@ -31,6 +31,7 @@ OPS = frozenset({
     "x402.authorize",     # EIP-3009 TransferWithAuthorization
     "venue.sign",         # 066 P3: typed venue payloads (Hyperliquid L1 orders)
     "eip8004.feedback_auth",  # 066 P3: the EIP-712 feedback authorization
+    "journal.sign",       # C1: EIP-191 over the account journal template, nothing else
     "deposit.address",    # the deterministic per-user deposit address
     "deposit.sweep",      # sweep a deposit to the PINNED treasury destination
     "approvals.list",     # pending above-hard-cap requests

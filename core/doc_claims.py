@@ -243,8 +243,9 @@ SUPERSEDED_HEADING = "## Superseded"
 
 #: The superseded section's own bound. Past it the OLDEST entries fall off the
 #: live file — nothing is lost: every active write archives the whole prior doc
-#: first (``SelfContextWriter._archive_existing``).
-SUPERSEDED_MAX_CHARS = 8000
+#: first (``SelfContextWriter._archive_existing``). Kept at 2x OWNER_DOC_MAX_CHARS
+#: so one whole retired doc still fits; the section is never injected.
+SUPERSEDED_MAX_CHARS = 16000
 
 def owner_rules_supersede() -> bool:
     """``OWNER_RULES_SUPERSEDE`` — supersede, never evict. Default ON.

@@ -24,6 +24,15 @@ CREATE TABLE IF NOT EXISTS outbound_allowlist (
 """
 
 
+def _key(surface: str, target: str) -> str:
+    """The ONE spelling a target is compared under (OB13): the same rule the
+    owner match uses (``outbound_target.canonical_owner_addr`` = a matching
+    ``<surface>:`` prefix stripped, then ``address_key.canonical_addr``). The
+    raw compare made ``Bob@Corp.io`` a different target from ``bob@corp.io``."""
+    from core.surfaces.outbound_target import canonical_owner_addr
+    return canonical_owner_addr(surface, target)
+
+
 class OutboundAllowlist:
     def __init__(self, db_path: str) -> None:
         self.db_path = db_path
@@ -32,7 +41,18 @@ class OutboundAllowlist:
             os.makedirs(parent, exist_ok=True)
         execute_retry(self.db_path, _DDL)
 
+    def _matching_targets(self, user_id: str, surface: str, target: str,
+                          *, active_only: bool) -> List[str]:
+        """Stored spellings (a legacy row may be raw) that key to *target*."""
+        sql = "SELECT target FROM outbound_allowlist WHERE user_id=? AND surface=?"
+        if active_only:
+            sql += " AND status='active'"
+        rows = execute_retry(self.db_path, sql, (user_id, surface), fetch="all") or []
+        want = _key(surface, target)
+        return [r["target"] for r in rows if _key(surface, r["target"]) == want]
+
     def allow(self, user_id: str, surface: str, target: str, note: str = "") -> None:
+        target = _key(surface, target)
         execute_retry(
             self.db_path,
             "INSERT INTO outbound_allowlist(user_id,surface,target,note,status,created_at)"
@@ -42,23 +62,18 @@ class OutboundAllowlist:
         )
 
     def revoke(self, user_id: str, surface: str, target: str) -> bool:
-        rc = execute_retry(
-            self.db_path,
-            "UPDATE outbound_allowlist SET status='revoked'"
-            " WHERE user_id=? AND surface=? AND target=? AND status='active'",
-            (user_id, surface, target),
-        )
+        rc = 0
+        for stored in self._matching_targets(user_id, surface, target, active_only=True):
+            rc += execute_retry(
+                self.db_path,
+                "UPDATE outbound_allowlist SET status='revoked'"
+                " WHERE user_id=? AND surface=? AND target=? AND status='active'",
+                (user_id, surface, stored),
+            ) or 0
         return bool(rc)
 
     def is_allowed(self, user_id: str, surface: str, target: str) -> bool:
-        row = execute_retry(
-            self.db_path,
-            "SELECT 1 FROM outbound_allowlist"
-            " WHERE user_id=? AND surface=? AND target=? AND status='active'",
-            (user_id, surface, target),
-            fetch="one",
-        )
-        return row is not None
+        return bool(self._matching_targets(user_id, surface, target, active_only=True))
 
     def list(self, user_id: str) -> List[Dict]:
         rows = execute_retry(

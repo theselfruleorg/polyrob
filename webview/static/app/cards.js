@@ -15,7 +15,7 @@
  * 3. **It writes no copy.** The card text and the button labels come from the
  *    server; the two transport sentences ride on the section's data attributes.
  */
-import { postJson } from './http.js';
+import { detailText, postJson } from './http.js';
 
 export function cardsUrl() { return '/api/webgate/cards'; }
 
@@ -54,12 +54,17 @@ export function drawCard(card, { readOnly = false, onPress } = {}) {
 }
 
 /** POST one tap; `{ok, message, card}`, never throws. */
-export async function press(id, act, { fetcher, fallback } = {}) {
+export async function press(id, act, { fetcher, fallback, refused } = {}) {
   try {
-    const { body } = await postJson(pressUrl(id, act), undefined, { fetcher });
+    const { ok, body } = await postJson(pressUrl(id, act), undefined, { fetcher });
     if (body && typeof body.message === 'string') {
       return { ok: Boolean(body.ok), message: body.message, card: body.card || null };
     }
+    // FE19: the server answered — a refusal with only a `detail` (403, 422)
+    // is a refusal to name, never "could not reach the console".
+    const detail = body ? detailText(body.detail) : '';
+    if (detail) return { ok: Boolean(ok && body.ok !== false), message: detail, card: null };
+    if (body || ok === false) return { ok: false, message: refused || fallback || '', card: null };
     return { ok: false, message: fallback || '', card: null };
   } catch (err) {
     console.error('[cards] the tap did not reach the console', err);
@@ -92,7 +97,8 @@ export async function load(section, { fetcher = globalThis.fetch, postFetcher } 
   const cards = Array.isArray(body.cards) ? body.cards : [];
   const onPress = async (card, act, entry) => {
     entry.querySelectorAll('button').forEach((b) => { b.disabled = true; });
-    const result = await press(card.id, act, { fetcher: postFetcher, fallback: copy.unreachable });
+    const result = await press(card.id, act, { fetcher: postFetcher, fallback: copy.unreachable,
+                                               refused: copy.refused });
     const next = result.card ? drawCard(result.card, { readOnly, onPress }) : entry;
     if (next !== entry) entry.replaceWith(next);
     let line = next.querySelector('.entry-answer');

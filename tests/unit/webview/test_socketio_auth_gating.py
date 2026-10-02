@@ -23,6 +23,17 @@ async def close_socket_monitors(monkeypatch):
     yield
     for monitor in monitors:
         await monitor.aclose()
+    # WS12: an allowed join starts a feed watcher on THIS test's loop. Left
+    # pending, the loop closed under it and its awatch AnyIO worker (a
+    # NON-daemon thread) waited forever, so the whole run never exited.
+    import sys
+    server = sys.modules.get("webview.server")
+    tasks = list(getattr(server, "_watch_tasks", {}).values())
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+    if server is not None:
+        server._watch_tasks.clear()
 
 
 def _reload_server(monkeypatch, multitenant: bool):

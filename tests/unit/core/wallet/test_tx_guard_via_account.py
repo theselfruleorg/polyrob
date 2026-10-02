@@ -15,16 +15,22 @@ and the existing shapes produce IDENTICAL verdicts with and without via_account.
 """
 import pytest
 
-from core.wallet import abi, erc6551, tx_guard
+from core.wallet import abi, collection_registry, erc6551, tx_guard
 from core.wallet.policy import PolicyGate
 from core.wallet.simulation import Deltas
 
 USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 TO = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
-ACCOUNT = "0xe0f47C083B28C76124129786cBd02a4489b86ec4"
 TREASURY = "0x2222222222222222222222222222222222222222"
 OWNER = "0x5555555555555555555555555555555555555555"
 NFT = "0x4444444444444444444444444444444444444444"
+COLLECTION = "0x6666666666666666666666666666666666666666"
+BASE_ID = 8453
+TOKEN_ID = 1
+#: C4: the account is the canonical ERC-6551 account of a PINNED collection's token.
+ACCOUNT = erc6551.account_address(BASE_ID, COLLECTION, TOKEN_ID)
+RH_ID = 4663
+ACCOUNT_RH = erc6551.account_address(RH_ID, COLLECTION, TOKEN_ID)
 REGISTRY = "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432"
 ESCROW = "0xd3afeb2a57f70ef218aa82451c51b2fb0416ac9e"
 ZERO = "0x0000000000000000000000000000000000000000"
@@ -35,8 +41,10 @@ class AccountRpc:
     """Pre-flight reads for the token-bound account. Every knob is one refusal."""
 
     def __init__(self, *, locked=False, state=STATE, impl=erc6551.ACCOUNT_V3_IMPL,
-                 pins_ok=True, broken=False, owner=TREASURY, forwarders=(), forwarder_broken=False):
+                 pins_ok=True, broken=False, owner=TREASURY, forwarders=(), forwarder_broken=False,
+                 token=(BASE_ID, COLLECTION, TOKEN_ID), collection_code="0x00"):
         self.locked, self.state, self.owner = locked, state, owner
+        self.token, self.collection_code = token, collection_code
         self.impl, self.pins_ok, self.broken = impl, pins_ok, broken
         self.forwarders = {f.lower() for f in forwarders}
         self.forwarder_broken = forwarder_broken
@@ -50,9 +58,11 @@ class AccountRpc:
             self.calls.append(params[0]["data"][:10])
         if method == "eth_getCode":
             addr = params[0].lower()
-            if addr == ACCOUNT.lower():
+            if addr in (ACCOUNT.lower(), ACCOUNT_RH.lower()):
                 return ("0x363d3d373d3d3d363d73" + self.impl[2:].lower() + "5af43d82803e903d91602b57fd5bf3"
                         + "00" * 128)
+            if addr == COLLECTION.lower():
+                return self.collection_code
             return "0x" + ("00" if self.pins_ok else "01")
         if method == "eth_call":
             sel = params[0]["data"][:10]
@@ -67,6 +77,9 @@ class AccountRpc:
                 abi.selector("isLocked()"): word(int(self.locked)),
                 abi.selector("owner()"): word(int(self.owner, 16)),
                 abi.selector("state()"): word(self.state),
+                abi.selector("token()"): "0x" + abi.encode(
+                    [{"type": "uint256"}, {"type": "address"}, {"type": "uint256"}],
+                    list(self.token)).hex(),
             }[sel]
         raise AssertionError(method)
 
@@ -78,6 +91,23 @@ def _pins(monkeypatch):
     h = hashlib.sha256(b"\x00").hexdigest()
     monkeypatch.setattr(erc6551, "CODE_SHA256", {erc6551.REGISTRY.lower(): h,
                                                  erc6551.ACCOUNT_V3_IMPL.lower(): h})
+
+
+def _profile(**kw):
+    import hashlib
+    base = dict(spec=collection_registry.SPEC_V1, capabilities=("mint",), chain_id=BASE_ID,
+                address=COLLECTION.lower(), runtime_sha256=hashlib.sha256(b"\x00").hexdigest(),
+                deploy_block=0, max_supply=3,
+                accounts=(collection_registry.AccountVersion(
+                    erc6551.REGISTRY.lower(), erc6551.ACCOUNT_V3_IMPL.lower(), 0),))
+    base.update(kw)
+    return collection_registry.CollectionProfile(**base)
+
+
+@pytest.fixture(autouse=True)
+def _pinned_collection(monkeypatch):
+    monkeypatch.setattr(collection_registry, "profiles",
+                        lambda: (_profile(), _profile(chain_id=RH_ID)))
 
 
 def _gate():
@@ -110,9 +140,9 @@ def _run(intent, deltas, tx, *, holder, rpc=None, sim_calls=None):
         account_rpc=rpc or AccountRpc())
 
 
-def _via(intent, **kw):
+def _via(intent, *, account=ACCOUNT, **kw):
     base = dict(intent.__dict__)
-    base.update(via_account=ACCOUNT, via_account_state=STATE)
+    base.update(via_account=account, via_account_state=STATE)
     base.update(kw)
     return tx_guard.TxIntent(**base)
 
@@ -204,10 +234,31 @@ def test_an_undeclared_account_call_refuses(data):
     (AccountRpc(impl="0x" + "99" * 20), "not the pinned AccountV3"),
     (AccountRpc(pins_ok=False), "un-reviewed"),
     (AccountRpc(broken=True), "failing closed"),
+    # C4: the account's token() must name a PINNED collection whose live code is the pinned code
+    (AccountRpc(token=(BASE_ID, NFT, TOKEN_ID)), "is not a pinned collection"),
+    (AccountRpc(collection_code="0x01"), "not the pinned"),
+    (AccountRpc(collection_code="0x"), "could not be read"),
+    (AccountRpc(token=(RH_ID, COLLECTION, TOKEN_ID)), "bound to a token on chain 4663"),
+    (AccountRpc(token=(BASE_ID, COLLECTION, 2)), "is not the pinned ERC-6551 account"),
 ])
 def test_preflight_refusals(rpc, needle):
     d = _run(_via(_erc20_intent()), _erc20_deltas(), _outer(_erc20_inner()), holder=TREASURY, rpc=rpc)
     assert d.allowed is False and needle in d.reason, d.reason
+
+
+def test_c4_an_empty_registry_refuses_every_account(monkeypatch):
+    """The signer re-runs this guard: with no pinned collection, no account call passes."""
+    monkeypatch.setattr(collection_registry, "profiles", lambda: ())
+    d = _run(_via(_erc20_intent()), _erc20_deltas(), _outer(_erc20_inner()), holder=TREASURY)
+    assert d.allowed is False and "is not a pinned collection" in d.reason
+
+
+def test_c4_an_untrusted_registry_refuses(monkeypatch):
+    def boom():
+        raise collection_registry.CollectionRegistryError("the file is writable")
+    monkeypatch.setattr(collection_registry, "profiles", boom)
+    d = _run(_via(_erc20_intent()), _erc20_deltas(), _outer(_erc20_inner()), holder=TREASURY)
+    assert d.allowed is False and "cannot be trusted" in d.reason
 
 
 def test_the_treasury_owns_the_nft_and_needs_no_grant():
@@ -232,9 +283,57 @@ def test_the_account_paying_its_owner_is_an_ordinary_send():
     its own funds: judged like any other transfer (no operator rule, 069 v4)."""
     intent = _via(_erc20_intent(to=TREASURY))
     deltas = _erc20_deltas(holder_transfers=((USDC.lower(), TREASURY.lower(), 250_000),),
-                           sender_moved=(USDC.lower() + ":0xddf252ad",))
+                           sender_moved=(USDC.lower() + ":0xddf252ad",),
+                           logs=(_transfer_log(ACCOUNT, TREASURY),))
     d = _run(intent, deltas, _outer(_erc20_inner()), holder=TREASURY)
     assert d.allowed is True and d.lane == "autonomous", d.reason
+
+
+# --- C6: nothing moves on the treasury side of an account call ----------------------------
+
+_TRANSFER = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+
+
+def _word(a):
+    return "0x" + "0" * 24 + a.lower()[2:]
+
+
+def _transfer_log(frm, to, token=USDC):
+    return {"address": token.lower(), "topics": [_TRANSFER, _word(frm), _word(to)],
+            "data": "0x" + "00" * 32}
+
+
+@pytest.mark.parametrize("deltas_kw, intent_to, needle", [
+    # the treasury pays out inside an account call (e.g. a transferFrom on its allowance)
+    (dict(sender_moved=(USDC.lower() + ":0xddf252ad",), logs=(_transfer_log(TREASURY, TO),)),
+     TO, "treasury side"),
+    # the treasury receives, but the declared destination is someone else
+    (dict(sender_moved=(USDC.lower() + ":0xddf252ad",), logs=(_transfer_log(ACCOUNT, TREASURY),)),
+     TO, "treasury side"),
+    # an approval by the treasury
+    (dict(sender_moved=(USDC.lower() + ":0x8c5be1e5",), logs=({"address": USDC.lower(), "topics": [
+        "0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925", _word(TREASURY),
+        _word(TO)], "data": "0x"},)), TO, "treasury side"),
+    # the treasury's native balance falls / rises undeclared
+    (dict(sender_native_delta=-1), TO, "native balance"),
+    (dict(sender_native_delta=10 ** 15), TO, "native balance"),
+    # a treasury movement the guard cannot attribute
+    (dict(sender_moved=(USDC.lower() + ":0xddf252ad",)), TREASURY, "cannot tell"),
+])
+def test_c6_treasury_side_movement_refuses(deltas_kw, intent_to, needle):
+    holder_to = intent_to.lower()
+    deltas = _erc20_deltas(holder_transfers=((USDC.lower(), holder_to, 250_000),), **deltas_kw)
+    d = _run(_via(_erc20_intent(to=intent_to)), deltas, _outer(_erc20_inner()), holder=TREASURY)
+    assert d.allowed is False and needle in d.reason, d.reason
+
+
+def test_c6_the_account_paying_its_owner_native_is_allowed():
+    intent = _via(tx_guard.TxIntent(chain="base", token=None, to=TREASURY, amount_raw=10 ** 15,
+                                    max_spend_usd=10.0, idempotency_key="n"))
+    deltas = Deltas(ok=True, native_delta=-10 ** 15, sender_native_delta=10 ** 15, gas_used=30_000)
+    d = _run(intent, deltas, _outer({"to": TREASURY, "data": "0x", "value": 10 ** 15}),
+             holder=TREASURY)
+    assert d.allowed is True, d.reason
 
 
 # --- parity: the existing shapes, with and without via_account ----------------------------
@@ -282,8 +381,11 @@ def _erc20_overspend_case():
 def test_existing_shapes_give_identical_verdicts_through_an_account(case):
     intent, deltas, inner = case()
     direct_tx = dict(inner, chainId=4663, nonce=5, gas=200_000, maxFeePerGas=10 ** 8)
-    direct = _run(intent, deltas, direct_tx, holder=ACCOUNT)
-    via = _run(_via(intent), deltas, _outer(inner), holder=TREASURY)
+    account = ACCOUNT if intent.chain == "base" else ACCOUNT_RH
+    rpc = AccountRpc(token=(BASE_ID if intent.chain == "base" else RH_ID, COLLECTION, TOKEN_ID))
+    direct = _run(intent, deltas, direct_tx, holder=account, rpc=rpc)
+    via = _run(_via(intent, account=account), deltas, _outer(inner, to=account), holder=TREASURY,
+               rpc=rpc)
     assert (via.allowed, via.lane, via.amount_usd, via.agent_id) == \
         (direct.allowed, direct.lane, direct.amount_usd, direct.agent_id), (direct.reason, via.reason)
     assert via.reason == direct.reason

@@ -35,6 +35,45 @@ API_KEY_PREFIX = "rob_"
 #: without a restart, and the DB lookup is one indexed row.
 _CACHE_TTL_SEC = 60.0
 
+#: Bumped on every revocation in this process (API2): a cached key validated
+#: before the bump is re-read from the database, so a revoke takes effect at
+#: once in this process and within ``_CACHE_TTL_SEC`` in any other.
+_revocation_epoch = 0
+
+
+def _now() -> float:
+    return time.monotonic()
+
+
+def note_key_revoked() -> None:
+    """Invalidate every cached key validation (called on a revoke)."""
+    global _revocation_epoch
+    _revocation_epoch += 1
+
+
+async def validate_api_key_cached(cache: Dict[str, Dict[str, Any]],
+                                  api_key: str) -> Optional[Dict[str, Any]]:
+    """``validate_api_key`` behind ``cache``, bounded by TTL and revocation.
+
+    The ONE cache rule for both key validators (this middleware and
+    ``AuthenticationMiddleware``): an entry lives ``_CACHE_TTL_SEC`` and dies
+    on any revocation. Only a successful validation is cached.
+    """
+    cache_key = hashlib.sha256(api_key.encode()).hexdigest()
+    now = _now()
+    cached = cache.get(cache_key)
+    if (cached and cached.get("_expires_at", 0) > now
+            and cached.get("_epoch") == _revocation_epoch):
+        return cached
+    info = await validate_api_key(api_key)
+    if info is None:
+        cache.pop(cache_key, None)
+        return None
+    info = dict(info, _expires_at=now + _CACHE_TTL_SEC,
+                _epoch=_revocation_epoch)
+    cache[cache_key] = info
+    return info
+
 
 def looks_like_api_key(value: Optional[str]) -> bool:
     """Whether ``value`` is shaped like a self-service POLYROB API key.
@@ -118,17 +157,7 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
         if not api_key:
             return await call_next(request)
 
-        cache_key = hashlib.sha256(api_key.encode()).hexdigest()
-        now = time.monotonic()
-        info = None
-        cached = self._cache.get(cache_key)
-        if cached and cached.get("_expires_at", 0) > now:
-            info = cached
-        else:
-            info = await validate_api_key(api_key)
-            if info is not None:
-                info = dict(info, _expires_at=now + _CACHE_TTL_SEC)
-                self._cache[cache_key] = info
+        info = await validate_api_key_cached(self._cache, api_key)
 
         if info is not None:
             from api.auth_state import set_auth_state

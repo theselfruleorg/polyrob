@@ -110,3 +110,60 @@ describe("070 E.31 — a busy 429 has console words", () => {
     expect(serverAnswer({ error: "other" }, "fallback")).toBe("other");
   });
 });
+
+describe("FE13 — a FastAPI 422 detail reads as words", () => {
+  const V422 = { detail: [
+    { loc: ["body", "amount"], msg: "Input should be a valid number", type: "float_parsing" },
+    { loc: ["body", "to"], msg: "Field required", type: "missing" },
+  ] };
+
+  it("detailText keeps the msg sentences of an array detail", async () => {
+    const { detailText } = await import("../static/app/http.js");
+    expect(detailText(V422.detail)).toBe("Input should be a valid number Field required");
+    expect(detailText({ message: "nope" })).toBe("nope");
+    expect(detailText("plain")).toBe("plain");
+    expect(detailText(undefined)).toBe("");
+  });
+
+  it("serverAnswer never shows JSON or [object Object] for a 422", async () => {
+    const { serverAnswer } = await import("../static/app/http.js");
+    const out = serverAnswer(V422, "fallback");
+    expect(out).toBe("Input should be a valid number Field required");
+    expect(out).not.toContain("{");
+    expect(serverAnswer({ error: "bad", detail: [{ msg: "why" }] })).toBe("bad why");
+  });
+
+  it("an upload refused with a 422 array names the reason", async () => {
+    const { uploadOne } = await import("../static/app/file-attach.js");
+    const fetcher = async () => ({ ok: false, status: 422, json: async () => V422 });
+    const res = await uploadOne("s1", new File(["x"], "a.txt"), { attach_failed: "failed {name}" }, { fetcher });
+    expect(res.ok).toBe(false);
+    expect(res.message).toBe("Input should be a valid number Field required");
+    expect(res.message).not.toContain("[object Object]");
+  });
+});
+
+describe("FE10 — only the latest read draws", () => {
+  it("an overtaken answer that lands last is stale", async () => {
+    const { latestOnly } = await import("../static/app/http.js");
+    const gates = [];
+    const read = latestOnly((cls) => new Promise((resolve) => gates.push(() => resolve(cls))));
+    const first = read("money");
+    const second = read("work");
+    await new Promise((r) => setTimeout(r, 0));
+    gates[1](); // the newer answer arrives first
+    gates[0](); // the older answer arrives last
+    expect(await second).toEqual({ stale: false, value: "work" });
+    expect(await first).toEqual({ stale: true });
+  });
+
+  it("an overtaken error is dropped; the latest error rejects", async () => {
+    const { latestOnly } = await import("../static/app/http.js");
+    let n = 0;
+    const read = latestOnly(async () => { n += 1; throw new Error(`e${n}`); });
+    const a = read();
+    const b = read();
+    expect(await a).toEqual({ stale: true });
+    await expect(b).rejects.toThrow("e2");
+  });
+});

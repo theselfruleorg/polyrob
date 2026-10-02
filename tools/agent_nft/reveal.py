@@ -251,8 +251,16 @@ async def run(tool, params, execution_context):
         except Exception as exc:  # noqa: BLE001
             from core.wallet.broadcast.evm import broadcast_failure_text
             return tool._ar(error="ALERT agent_nft_collection_reveal: " + broadcast_failure_text(exc))
-        receipt = await asyncio.to_thread(rail.await_receipt, tx_hash)
-        paid_usd = await asyncio.to_thread(_paid_usd, rpc, tx_hash, tx, decision.amount_usd)
+        # CLI1: a cancel in the receipt wait or the paid-fee read records the
+        # broadcast first, at the worst-case fee (never under) — the ONE seam.
+        from tools.defi.receipt_wait import record_on_interrupt
+        with record_on_interrupt(
+                tx_hash, gate=gate,
+                record_kw=dict(venue="defi", action="agent_nft_collection_reveal",
+                               amount_usd=decision.amount_usd or 0.0, counterparty=collection,
+                               idempotency_key=idem, result_ref=tx_hash, chain=chain)):
+            receipt = await asyncio.to_thread(rail.await_receipt, tx_hash)
+            paid_usd = await asyncio.to_thread(_paid_usd, rpc, tx_hash, tx, decision.amount_usd)
         gate.record(venue="defi", action="agent_nft_collection_reveal", amount_usd=paid_usd,
                     counterparty=collection, idempotency_key=idem, result_ref=tx_hash, chain=chain)
     if not receipt.succeeded:

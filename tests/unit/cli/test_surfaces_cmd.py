@@ -107,7 +107,7 @@ def test_probe_never_sends(env, monkeypatch):
 
 def test_add_writes_through_the_env_writer_and_never_echoes(env, monkeypatch):
     async def _http(method, url, **kw):
-        return 200, {"username": "rob"}, ""
+        return 200, {"username": "rob", "flags": 1 << 19}, ""
 
     monkeypatch.setattr("surfaces.discord.probe.http_json", _http)
     res = _run("add", "discord", input=f"{SECRET}\n")

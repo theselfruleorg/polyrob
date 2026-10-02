@@ -10,9 +10,30 @@ executor through ``surfaces._actor`` — core must never import surfaces
 (layering ratchet).
 """
 import logging
-from typing import Any, Callable, Optional
+from typing import Any, Callable, List, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def split_for_surface(surface_id: str, text: str) -> List[str]:
+    """*text* in chunks that fit ``surface_id``'s per-message limit (OS1).
+
+    The limit is the catalog's ``max_message_chars`` — the ONE number per
+    platform. A reply over it (``/help`` is ~6,600 chars) used to go out whole:
+    Discord answered 400, WhatsApp an error, and the user got nothing. An
+    unknown surface gets one chunk.
+    """
+    text = text or ""
+    try:
+        from core.surfaces.catalog import get as _spec
+        spec = _spec(surface_id)
+        limit = int(spec.max_message_chars) if spec is not None else 0
+    except Exception:
+        limit = 0
+    if limit <= 0 or len(text) <= limit:
+        return [text]
+    from core.surfaces.surface import split_message
+    return [c for c in split_message(text, limit) if c] or [text]
 
 
 async def route_and_act(container: Any, task_agent: Any, inbound: Any,
@@ -56,13 +77,15 @@ class TextSink:
     thing that differed was the client method it called.
     """
 
-    def __init__(self, send, *, label: str) -> None:
+    def __init__(self, send, *, label: str, surface_id: str = "") -> None:
         self._send = send
         self._label = label
+        self._surface_id = surface_id
 
     async def send_message(self, chat_id, text) -> bool:
         try:
-            await self._send(str(chat_id), str(text))
+            for chunk in split_for_surface(self._surface_id, str(text)):
+                await self._send(str(chat_id), chunk)
             return True
         except Exception:
             logger.warning("%s.send_message failed for %s", self._label, chat_id,
@@ -100,14 +123,24 @@ class BaseHarness:
     async def _before_route(self, target) -> None:
         """Transport hook run before routing (e.g. a typing indicator)."""
 
+    def _reply_target(self, inbound) -> Any:
+        """Where a reply to *inbound* goes; handed to ``_deliver_to`` and
+        ``_before_route``. Default: the chat id. A transport with threads
+        (Slack, OS7) returns its own shape."""
+        return inbound.identity.source.chat_id
+
     async def _route(self, inbound) -> None:
-        target = inbound.identity.source.chat_id
+        target = self._reply_target(inbound)
 
         async def _deliver(text: str) -> None:
-            try:
-                await self._deliver_to(target, text)
-            except Exception:
-                logger.warning("%s deliver failed", self.surface_id, exc_info=True)
+            # OS1: split to the platform's limit; stop at the first failed
+            # chunk (the rest would arrive without its start).
+            for chunk in split_for_surface(self.surface_id, text):
+                try:
+                    await self._deliver_to(target, chunk)
+                except Exception:
+                    logger.warning("%s deliver failed", self.surface_id, exc_info=True)
+                    return
 
         try:
             await self._before_route(target)
@@ -145,7 +178,8 @@ def register_surface_and_sink(container: Any, surface: Any, *, sink_name: str,
     from core.surfaces.registry import register_surface
     register_surface(container, surface)
     if container.get_service(sink_name) is None:
-        container.register_service(sink_name, TextSink(send, label=sink_label))
+        container.register_service(sink_name, TextSink(
+            send, label=sink_label, surface_id=str(getattr(surface, "surface_id", "") or "")))
 
 
 async def fetch_capped(url: str, *, allowed_hosts: tuple,

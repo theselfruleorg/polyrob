@@ -26,6 +26,7 @@ import {
   eventMs,
   mmss,
   narrationLine,
+  wireSession,
 } from "../static/app/transcript.js";
 
 const COPY = {
@@ -858,5 +859,223 @@ describe("070 W0.12 — the stored first line", () => {
     // a real repeat, later, is a new message
     t.apply({ type: "user_message", timestamp: 9000, data: { text: "are u here?" } });
     expect(thread.querySelectorAll(".turn-you").length).toBe(2);
+  });
+});
+
+
+// FE1 / FE18 (2026-10-03 audit) — a reconnect backfills again; the live notice
+// clears only on a join the server acked without a refusal.
+function fakeSessionSocket() {
+  const handlers = {};
+  const emitted = [];
+  return {
+    handlers, emitted,
+    on(name, fn) { handlers[name] = fn; },
+    emit(name, body, ack) { emitted.push({ name, body, ack }); },
+    fire(name, body) { handlers[name] && handlers[name](body); },
+  };
+}
+
+describe("FE1 — a reconnect backfills again", () => {
+  const T0 = 1790000000;
+  const now = () => (T0 + 999) * 1000;
+  const ev = (id, ts, call) => ({ _id: id, type: "tool_result", timestamp: ts,
+    data: { call_id: call, action_name: "read_file", narration: `step ${call}` } });
+
+  it("the reply written while the socket was down is drawn after the reconnect", async () => {
+    const thread = makeThread();
+    const tx = new Transcript(thread, { ...COPY, live_unavailable: "Live updates are off." },
+      { sessionId: "s1", now });
+    const socket = fakeSessionSocket();
+    let refills = 0;
+    let missed = [];
+    wireSession(socket, tx, "s1", {
+      refill: async () => { refills += 1; tx.applyAll(missed); },
+    });
+    // first load: the page buffers, joins, backfills, flushes
+    tx.startBuffer();
+    socket.fire("connect");
+    expect(refills).toBe(0);
+    tx.applyAll([ev("e1", T0, "a")]);
+    tx.flush();
+    // the socket drops; a reply is written meanwhile; the socket comes back
+    socket.fire("disconnect");
+    missed = [ev("e1", T0, "a"), ev("e2", T0 + 5, "b")];
+    socket.fire("connect");
+    // a live event that arrives during the re-backfill waits for it
+    socket.fire("feed_update", ev("e3", T0 + 6, "c"));
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(refills).toBe(1);
+    const lines = [...thread.querySelectorAll(".act-what")].map((n) => n.textContent);
+    expect(lines).toEqual(["step a", "step b", "step c"]);
+    expect(tx.buffer).toBe(null);
+    const joins = socket.emitted.filter((e) => e.name === "join_session");
+    expect(joins.length).toBe(2);
+  });
+
+  it("a connect while the first backfill loads only rejoins", () => {
+    const tx = new Transcript(makeThread(), COPY, { sessionId: "s1", now });
+    const socket = fakeSessionSocket();
+    let refills = 0;
+    wireSession(socket, tx, "s1", { refill: async () => { refills += 1; } });
+    tx.startBuffer();
+    socket.fire("connect");
+    socket.fire("connect");
+    expect(refills).toBe(0);
+  });
+});
+
+describe("FE18 — the live notice clears on an acked join", () => {
+  const copy = { ...COPY, live_unavailable: "Live updates are off.", live_busy: "Too many reconnects." };
+  const notice = (thread) => {
+    const n = thread.querySelector('[data-read-notice="live"]');
+    return n ? n.textContent : "";
+  };
+
+  it("a rate-limited retry keeps the notice until the server acks the join", () => {
+    const thread = makeThread();
+    const tx = new Transcript(thread, copy, { sessionId: "s1" });
+    const socket = fakeSessionSocket();
+    const timers = [];
+    wireSession(socket, tx, "s1", { later: (fn, ms) => timers.push([fn, ms]) });
+    tx.startBuffer();
+    socket.fire("connect");
+    socket.fire("error", { code: "rate_limited", retry_after: 30 });
+    socket.emitted[0].ack(); // the refused join's ack arrives after its refusal
+    expect(notice(thread)).toBe("Too many reconnects.");
+    expect(timers[0][1]).toBe(30000);
+    timers[0][0]();
+    // the retried join is sent, not yet acked: the notice stays
+    expect(socket.emitted.length).toBe(2);
+    expect(notice(thread)).toBe("Too many reconnects.");
+    socket.emitted[1].ack();
+    expect(notice(thread)).toBe("");
+  });
+
+  it("a refused retry keeps the notice", () => {
+    const thread = makeThread();
+    const tx = new Transcript(thread, copy, { sessionId: "s1" });
+    const socket = fakeSessionSocket();
+    const timers = [];
+    wireSession(socket, tx, "s1", { later: (fn, ms) => timers.push([fn, ms]) });
+    tx.startBuffer();
+    socket.fire("connect");
+    socket.fire("error", { code: "rate_limited", retry_after: 30 });
+    timers[0][0]();
+    socket.fire("error", { code: "rate_limited", retry_after: 30 });
+    socket.emitted[1].ack();
+    expect(notice(thread)).toBe("Too many reconnects.");
+  });
+});
+
+describe("FE6 — two owner lines with distinct ids are two bubbles", () => {
+  const T0 = 1790000000;
+  const now = () => (T0 + 999) * 1000;
+
+  it("'yes' twice within a minute, two ids, draws two bubbles", () => {
+    const thread = makeThread();
+    const tx = new Transcript(thread, COPY, { sessionId: "s1", now });
+    tx.apply({ _id: "u1", type: "user_message", timestamp: T0, data: { text: "yes" } });
+    tx.apply({ _id: "u2", type: "user_message", timestamp: T0 + 10, data: { text: "yes" } });
+    expect(thread.querySelectorAll(".turn-you").length).toBe(2);
+  });
+
+  it("the during copy and its user_message still merge across two ids", () => {
+    const thread = makeThread();
+    const tx = new Transcript(thread, COPY, { sessionId: "s1", now });
+    tx.apply({ _id: "d1", type: "user_message_during_execution", timestamp: T0, data: { message_text: "yes" } });
+    tx.apply({ _id: "u1", type: "user_message", timestamp: T0 + 1, data: { text: "yes" } });
+    expect(thread.querySelectorAll(".turn-you").length).toBe(1);
+    // a second "yes" (its own pair) is a second bubble
+    tx.apply({ _id: "d2", type: "user_message_during_execution", timestamp: T0 + 5, data: { message_text: "yes" } });
+    tx.apply({ _id: "u2", type: "user_message", timestamp: T0 + 6, data: { text: "yes" } });
+    expect(thread.querySelectorAll(".turn-you").length).toBe(2);
+  });
+
+  it("the same id applied again (a re-backfill) stays one bubble", () => {
+    const thread = makeThread();
+    const tx = new Transcript(thread, COPY, { sessionId: "s1", now });
+    const e = { _id: "u1", type: "user_message", timestamp: T0, data: { text: "yes" } };
+    tx.apply(e);
+    tx.applyAll([e]);
+    expect(thread.querySelectorAll(".turn-you").length).toBe(1);
+  });
+});
+
+describe("FE12 — the receipt clock ticks", () => {
+  it("a live working turn's elapsed time advances in place", () => {
+    const thread = makeThread();
+    const T0 = 1790000000;
+    let nowMs = (T0 + 3) * 1000;
+    const tx = new Transcript(thread, COPY, { sessionId: "s1", now: () => nowMs, live: true });
+    tx.apply({ type: "tool_execution", timestamp: T0, data: { call_id: "a", action_name: "read_file" } });
+    const receipt = thread.querySelector(".receipt");
+    expect(receipt.textContent).toContain("Working for 3s");
+    const stop = receipt.querySelector("button");
+    nowMs = (T0 + 75) * 1000;
+    tx.tick();
+    expect(receipt.textContent).toContain("Working for 1m 15s");
+    // the buttons were not rebuilt (a focused Stop keeps its focus)
+    expect(receipt.querySelector("button")).toBe(stop);
+  });
+
+  it("a finished turn does not tick", () => {
+    const thread = makeThread();
+    const T0 = 1790000000;
+    let nowMs = (T0 + 3) * 1000;
+    const tx = new Transcript(thread, COPY, { sessionId: "s1", now: () => nowMs, live: true });
+    tx.apply({ type: "tool_execution", timestamp: T0, data: { call_id: "a", action_name: "read_file" } });
+    tx.apply({ type: "task_complete", timestamp: T0 + 2, data: {} });
+    const before = thread.querySelector(".receipt").textContent;
+    nowMs = (T0 + 90) * 1000;
+    tx.tick();
+    expect(thread.querySelector(".receipt").textContent).toBe(before);
+  });
+});
+
+describe("FE11 — a sub-cent cost is never a confident $0.00", () => {
+  it("costLabel writes a sub-cent cost out in full", () => {
+    expect(costLabel(0.004)).toBe("$0.004");
+    expect(costLabel(0.004)).not.toBe("$0.00");
+    expect(costLabel(1234.5)).toBe("$1,234.50");
+  });
+});
+
+describe("WS4 — a feed_gap refills after its window", () => {
+  const T0 = 1790000000;
+  const now = () => (T0 + 999) * 1000;
+  const ev = (id, ts, call) => ({ _id: id, type: "tool_result", timestamp: ts,
+    data: { call_id: call, action_name: "read_file", narration: `step ${call}` } });
+  const settle = async () => { for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0)); };
+
+  it("waits retry_after, refills once, draws the dropped event once", async () => {
+    const thread = makeThread();
+    const tx = new Transcript(thread, COPY, { sessionId: "s1", now });
+    const socket = fakeSessionSocket();
+    const timers = [];
+    let refills = 0;
+    wireSession(socket, tx, "s1", {
+      later: (fn, ms) => timers.push([fn, ms]),
+      refill: async () => { refills += 1; tx.applyAll([ev("e1", T0, "a"), ev("e2", T0 + 1, "b")]); },
+    });
+    tx.applyAll([ev("e1", T0, "a")]);
+    tx.flush();
+    socket.fire("feed_gap", { session_id: "s1", retry_after: 60 });
+    socket.fire("feed_gap", { session_id: "s1", retry_after: 60 }); // debounced
+    socket.fire("feed_gap", { session_id: "other", retry_after: 60 }); // not this chat
+    expect(timers.length).toBe(1);
+    expect(timers[0][1]).toBe(60000);
+    expect(refills).toBe(0);
+    timers[0][0]();
+    await settle();
+    expect(refills).toBe(1);
+    const lines = [...thread.querySelectorAll(".act-what")].map((n) => n.textContent);
+    expect(lines).toEqual(["step a", "step b"]);
+    expect(tx.buffer).toBe(null);
+    // after the refill a new gap arms again; the wait is bounded
+    socket.fire("feed_gap", { session_id: "s1", retry_after: 99999 });
+    expect(timers.length).toBe(2);
+    expect(timers[1][1]).toBe(300000);
   });
 });

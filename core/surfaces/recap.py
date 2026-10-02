@@ -41,6 +41,36 @@ _OVERLAP_RATIO = 0.85
 
 _WORD_RE = re.compile(r"[a-z0-9]{3,}")
 
+#: OB20: a lead verb used as a LABEL ("Confirmed: …", "Done — …") introduces a
+#: statement, not narration about the turn.
+_LABEL_AFTER_LEAD_RE = re.compile(r"^\s*(?::|—|–|-\s)")
+
+#: A "fact token" — anything carrying a digit (an amount, a time, a hash, an
+#: address, a version). New ones mean the text reports something the bubble
+#: did not, so it is an answer however it opens.
+_FACT_RE = re.compile(r"[\w.:/$#-]*\d[\w.:/$#-]*")
+
+
+def _fact_tokens(text: str) -> set:
+    out = set()
+    for t in _FACT_RE.findall(text.lower()):
+        t = t.strip(".:-/#")
+        if len(t) >= 2:
+            out.add(t)
+    return out
+
+
+def _narration(a: str, bubble: str) -> bool:
+    """The lead-verb rule (OB20, 2026-10-03 audit): it used to hide real answers
+    such as "Confirmed: the 0.5 ETH transfer landed in block 19,234,001"."""
+    m = _RECAP_LEAD_RE.match(a)
+    if not m:
+        return False
+    if _LABEL_AFTER_LEAD_RE.match(a[m.end():]):
+        return False
+    return not (_fact_tokens(a) - _fact_tokens(bubble))
+
+
 #: Words that carry no topical signal, so they must not inflate the overlap.
 _STOPWORDS = frozenset(
     "the and for with that this from was were has have had are you your not "
@@ -59,8 +89,10 @@ def is_redundant_recap(answer: Optional[str], bubble_text: Optional[str]) -> boo
     Three ways to qualify, in order of confidence:
 
     1. it is byte-identical to what was already shown;
-    2. it opens with bookkeeping narration ("Answered the owner's question…")
-       and is short enough to be narration rather than substance;
+    2. it opens with bookkeeping narration ("Answered the owner's question…"),
+       is short enough to be narration rather than substance, and reports no
+       new fact (a lead verb used as a label, or a new number/hash/address,
+       makes it an answer — OB20);
     3. it introduces no content word the bubble did not already carry.
     """
     a = (answer or "").strip()
@@ -69,7 +101,7 @@ def is_redundant_recap(answer: Optional[str], bubble_text: Optional[str]) -> boo
         return False
     if a == b:
         return True
-    if len(a) <= _MAX_NARRATION_CHARS and _RECAP_LEAD_RE.match(a):
+    if len(a) <= _MAX_NARRATION_CHARS and _narration(a, b):
         return True
     # A restatement says nothing new. Require the answer to be no longer than the
     # bubble as well: a longer text sharing the bubble's vocabulary is usually an

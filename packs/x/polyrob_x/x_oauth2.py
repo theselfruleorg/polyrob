@@ -37,6 +37,13 @@ call; a store record newer than the verdict (the owner re-logged in from a
 process that could not clear it) re-arms the refresh. A successful
 login/import/refresh clears the verdict.
 
+Only a CALL refreshes. Building a client (``refresh=False``) reads the stored
+token and never spends the refresh token: X rotates it on every refresh, so
+every short-lived process that built a ``TwitterTool`` (a deploy import gate, a
+CLI run on the box) used to spend it, with its log discarded (2026-10-02: the
+login died at 18:29Z while every service was stopped). Each refresh line and
+each refusal names the process that made it.
+
 ⚠️ Nothing here logs a token value. Presence, expiry and scope only.
 """
 from __future__ import annotations
@@ -399,14 +406,22 @@ def _refresh_locked(store: "XOAuth2Store", *, transport: Any = None) -> dict:
         body = _post_token({"grant_type": "refresh_token",
                             "refresh_token": prior["refresh_token"]}, transport=transport)
     except ReloginNeeded as e:
+        logger.warning("x oauth2: X refused the refresh token (by %s): %s", _process_tag(), e)
         _record_relogin(str(e))
         raise
     rec = _record_from_response(body, source="refresh", prior=prior)
     store.save(rec)
     _clear_relogin()
-    logger.info("x oauth2: token refreshed (expires in %ds, scope=%s)",
+    logger.info("x oauth2: token refreshed by %s (expires in %ds, scope=%s)", _process_tag(),
                 int(rec["expires_at"] - time.time()), rec.get("scope") or "?")
     return rec
+
+
+def _process_tag() -> str:
+    """Which process spent the refresh token: ``<argv0>[pid] uid=<uid>``."""
+    import sys
+    name = os.path.basename((sys.argv or [""])[0] or "") or "python"
+    return f"{name}[{os.getpid()}] uid={os.getuid() if hasattr(os, 'getuid') else '?'}"
 
 
 def import_pair(access_token: str, refresh_token: str = "", *,
@@ -452,13 +467,17 @@ def _seed_from_env(store: XOAuth2Store) -> Optional[dict]:
 
 def resolve_access_token(*, force_refresh: bool = False,
                          store: Optional[XOAuth2Store] = None,
-                         transport: Any = None) -> Optional[str]:
+                         transport: Any = None,
+                         refresh: bool = True) -> Optional[str]:
     """The current user-context access token, refreshed if needed; None if none.
 
     Order: store (refresh when within :data:`REFRESH_SKEW_SEC` of expiry or
     ``force_refresh``) → env seed (access+refresh) → static env access token.
     A failed refresh returns the OLD token (if any) and logs the reason; the
     caller's 401 is the honest signal.
+
+    ``refresh=False`` (a client being BUILT, not a call being made) returns the
+    stored token as it is, expired or not, and never spends the refresh token.
     """
     store = store or XOAuth2Store()
     with _refresh_lock(store):
@@ -473,6 +492,9 @@ def resolve_access_token(*, force_refresh: bool = False,
         if rec is not None:
             expires_at = float(rec.get("expires_at") or 0)
             due = force_refresh or (expires_at - time.time()) < REFRESH_SKEW_SEC
+            if not refresh and not force_refresh:
+                tok = (rec.get("access_token") or "").strip()
+                return tok or None
             held = relogin_verdict(rec) if due else None
             if due and held is not None:
                 # The refresh token is known dead: re-POSTing it cannot help and

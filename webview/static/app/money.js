@@ -28,6 +28,7 @@
  * the other four panes of this one page, each drawn from its own reader.
  */
 import { postJson } from "./http.js";
+import { fmtSignedUsd, fmtUsd } from "./format.js";
 import { bindTokenActions, lifecycleWords, loadTokens, tokensSection,
          trackedSection } from "./money-tokens.js";
 
@@ -64,22 +65,21 @@ export function relTime(ts, copy, nowMs) {
   return fill(copy && copy.when_day, "count", Math.floor(hours / 24));
 }
 
-/** A USD figure a person reads. A sub-cent value is written out in full, never
- *  rounded to `$0.00` — the two-decimal format renders every worthless token as
- *  the one number that means worthless. `null` is the caller's to dash. */
-export function fmtUsd(n) {
-  if (n === null || n === undefined || !Number.isFinite(n)) return null;
-  const neg = n < 0;
-  const a = Math.abs(n);
-  let body;
-  if (a !== 0 && a < 0.01) {
-    body = a.toFixed(12).replace(/0+$/, "").replace(/\.$/, "");
-  } else {
-    body = a.toLocaleString("en-US", {
-      minimumFractionDigits: 2, maximumFractionDigits: 2,
-    });
-  }
-  return (neg ? "-$" : "$") + body;
+// FE11: the USD formatter lives in format.js, shared with the transcript.
+export { fmtUsd, fmtSignedUsd };
+
+/** FE9: share ONE in-flight read between callers, and forget it when it
+ *  fails — a cached rejection would leave Cash and Limits unreadable until a
+ *  page reload. A good answer is kept. Exported for tests. */
+export function shareOnce(load) {
+  let promise = null;
+  return () => {
+    if (!promise) {
+      promise = Promise.resolve().then(load);
+      promise.catch(() => { promise = null; });
+    }
+    return promise;
+  };
 }
 
 /** A token amount a person reads, with thousands separators. `null` when the
@@ -246,7 +246,9 @@ export function positionsSection(data, copy) {
     if (worth !== null) { total += row.worth_now; anyPriced = true; }
     tr.appendChild(valueCell(worth, row.worth_now_reason, copy.col_worth, copy));
 
-    tr.appendChild(valueCell(row.since_entry, row.since_entry_reason,
+    // FE2: the signed USD P&L through the one formatter — never the raw
+    // float (`6773.123456789012`), the $7-vs-$6,780 misreading class.
+    tr.appendChild(valueCell(fmtSignedUsd(row.since_entry), row.since_entry_reason,
                              copy.col_since, copy));
     tbody.appendChild(tr);
   });
@@ -1276,8 +1278,7 @@ function bind() {
 
   // The ledger backs BOTH Cash and Limits — read it once and share the promise
   // (the reader fires a network balance probe, so a second call would double it).
-  let ledgerPromise = null;
-  const getLedger = () => (ledgerPromise || (ledgerPromise = loadLedger()));
+  const getLedger = shareOnce(loadLedger);
 
   function withState(paneId, stateId, msg, run) {
     const pane = byId(paneId);

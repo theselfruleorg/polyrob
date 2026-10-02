@@ -63,6 +63,13 @@ _TOPIC_APPROVAL_FOR_ALL = "0x17307eab39ab6107e8899845ad3d59bd9653f200f220920489c
 # Reusing the ERC-20 `topics[1] == holder` filter reads these backwards.
 _TOPIC_TRANSFER_SINGLE = "0xc3d58168c5ae7397731d063d5bbf3d657854427343f4c083240f7aacaa2d0f62"
 _TOPIC_TRANSFER_BATCH = "0x4a39dc06d4c0dbc64b70af90fd698a233a518aa5d07e595d983b8c0526c8f7fb"
+# ERC-6909 (C17; Uniswap v4 claims). Distinct topic0s, so no count ambiguity:
+#   Transfer   (caller, from indexed, to indexed, id indexed, amount)  — 4 topics
+#   Approval   (owner indexed, spender indexed, id indexed, amount)    — 4 topics
+#   OperatorSet(owner indexed, spender indexed, bool approved)         — 3 topics
+_TOPIC_6909_TRANSFER = "0x1b3d7edb2e9c0b0e7c525b20aaaef0f5940d2ed71663c7d39266ecafac728859"
+_TOPIC_6909_APPROVAL = "0xb3fd5071835887567a0671151121894ddccc2842f1d10bedad13e0d17cace9a7"
+_TOPIC_6909_OPERATOR_SET = "0xceb576d9f15e4e200fdb5096d64d5dfd667e16def20c1eefd14256d8e3faa267"
 
 #: ERC-1155 `TransferBatch` arrays are bounded so a pathological log cannot turn
 #: one simulation into an unbounded allocation. A batch beyond this is malformed
@@ -125,6 +132,11 @@ class Deltas:
     #: ``(permit2_contract, token, spender, amount)`` from a Permit2
     #: ``Approval``/``Permit`` whose owner is the holder (CR-H06).
     holder_permit2_grants: Tuple[Tuple[str, str, str, int], ...] = ()
+    #: C17 — ``(contract, spender, id, amount)`` from an ERC-6909 ``Approval`` whose owner is the
+    #: holder (amount 0 = a revoke). An ERC-6909 ``OperatorSet`` lands in ``holder_operator_grants``
+    #: and an ERC-6909 ``Transfer`` in ``holder_nft_out`` / ``holder_nft_in`` (standard
+    #: ``"erc6909"``): a claim token has no price, so an undeclared move refuses like an NFT's.
+    holder_6909_approvals: Tuple[Tuple[str, str, int, int], ...] = ()
     #: gasUsed of the simulated tx entry. The rail sizes the broadcast gas
     #: limit from it (a fixed limit out-of-gas-reverts a swap and burns the
     #: fee). None when the node did not report it — never 0.
@@ -334,6 +346,7 @@ def simulate(tx: dict, *, holder: str, chain: str,
                   holder_operator_grants=events.operator_grants,
                   holder_nft_approvals=events.nft_approvals,
                   holder_permit2_grants=events.permit2_grants,
+                  holder_6909_approvals=events.approvals_6909,
                   gas_used=onchain._hex_int(tx_entry.get("gasUsed")),
                   return_data=tx_entry.get("returnData"),
                   logs=tuple(raw_logs),
@@ -371,6 +384,7 @@ class _HolderEvents:
     operator_grants: Tuple[Tuple[str, str, bool], ...] = ()
     nft_approvals: Tuple[Tuple[str, str, int], ...] = ()
     permit2_grants: Tuple[Tuple[str, str, str, int], ...] = ()
+    approvals_6909: Tuple[Tuple[str, str, int, int], ...] = ()
     #: Non-empty names a known event that touches the holder and could not be
     #: parsed (CR-L17); the simulation refuses on it.
     unreadable: str = ""
@@ -419,6 +433,7 @@ def _holder_events(raw_logs, holder: str) -> _HolderEvents:
     operator_grants = []
     nft_approvals = []
     permit2_grants = []
+    approvals_6909 = []
     unreadable = ""
 
     def _is_holder(topic: str) -> bool:
@@ -462,6 +477,42 @@ def _holder_events(raw_logs, holder: str) -> _HolderEvents:
                     raw = data[2:] if data.startswith("0x") else data
                     permit2_grants.append(
                         (contract, _addr_of("0x" + raw[0:64]), _addr_of("0x" + raw[64:128]), 0))
+                continue
+
+            # -- ERC-6909 (C17): OperatorSet / Approval / Transfer -------------
+            if len(topics) == 3 and topic0 == _TOPIC_6909_OPERATOR_SET:
+                if _is_holder(topics[1]):
+                    operator_grants.append(
+                        (contract, _addr_of(topics[2]),
+                         bool(int(data, 16) if data not in ("", "0x") else 0)))
+                continue
+            if len(topics) == 4 and topic0 == _TOPIC_6909_APPROVAL:
+                if _is_holder(topics[1]):
+                    raw = data[2:] if data.startswith("0x") else data
+                    try:
+                        amount = int(raw[:64], 16) if raw else 0
+                    except ValueError:
+                        amount = 1  # unreadable amount: treat as a grant
+                    approvals_6909.append(
+                        (contract, _addr_of(topics[2]), int(topics[3], 16), amount))
+                continue
+            if len(topics) == 4 and topic0 == _TOPIC_6909_TRANSFER:
+                # Transfer(caller, from indexed, to indexed, id indexed, amount): data = caller, amount
+                raw = data[2:] if data.startswith("0x") else data
+                if _is_holder(topics[1]) or _is_holder(topics[2]):
+                    try:
+                        if len(raw) < 128:
+                            raise ValueError("ERC-6909 Transfer data too short")
+                        amount = int(raw[64:128], 16)
+                    except Exception:
+                        unreadable = unreadable or f"an unreadable ERC-6909 transfer on {contract}"
+                        continue
+                    if _is_holder(topics[1]):
+                        nft_out.append((contract, "erc6909", _addr_of(topics[2]),
+                                        int(topics[3], 16), amount))
+                    else:
+                        nft_in.append((contract, "erc6909", _addr_of(topics[1]),
+                                       int(topics[3], 16), amount))
                 continue
 
             # -- 3 topics: the fungible shapes + the blanket grant ------------
@@ -541,4 +592,5 @@ def _holder_events(raw_logs, holder: str) -> _HolderEvents:
         nft_out=tuple(nft_out), nft_in=tuple(nft_in),
         operator_grants=tuple(operator_grants),
         nft_approvals=tuple(nft_approvals),
-        permit2_grants=tuple(permit2_grants), unreadable=unreadable)
+        permit2_grants=tuple(permit2_grants), approvals_6909=tuple(approvals_6909),
+        unreadable=unreadable)

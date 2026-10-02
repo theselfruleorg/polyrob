@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from typing import Awaitable, Callable, Optional
 from urllib.parse import quote
 
@@ -31,6 +32,9 @@ OPEN_PATH = "/v1.0/gateway/connections/open"
 
 #: Reconnect backoff (seconds): doubles from the first value to the cap.
 _BACKOFF = (1.0, 60.0)
+#: OS10: a session must stay up this long before the reconnect delay resets.
+#: A server that accepts and closes at once otherwise drew a 1 s reconnect loop.
+HEALTHY_SESSION_S = 60.0
 
 
 def open_request(client_id: str, client_secret: str) -> dict:
@@ -150,9 +154,9 @@ class DingTalkStream:
         delay = _BACKOFF[0]
         first = True
         while not self._stopping.is_set():
+            started = time.monotonic()
             try:
                 await self._session(handler)
-                delay = _BACKOFF[0]
                 first = False
             except asyncio.CancelledError:
                 raise
@@ -161,8 +165,13 @@ class DingTalkStream:
                     # A refused credential on the first open fails loudly.
                     raise RuntimeError(f"dingtalk stream failed: {type(e).__name__}"
                                        + (f" ({e})" if str(e).startswith("dingtalk") else ""))
+                if time.monotonic() - started >= HEALTHY_SESSION_S:
+                    delay = _BACKOFF[0]     # it worked for a while: start over
                 logger.warning("dingtalk stream dropped (%s) — retry in %.0fs",
                                type(e).__name__, delay)
+            else:
+                if time.monotonic() - started >= HEALTHY_SESSION_S:
+                    delay = _BACKOFF[0]
             if self._stopping.is_set():
                 break
             try:

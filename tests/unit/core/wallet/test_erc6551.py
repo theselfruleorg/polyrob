@@ -258,7 +258,8 @@ class ClockRpc(FakeRpc):
 
 def test_approval_kinds_names_permit2():
     """The agent-NFT package calls the table complete only when this names permit2."""
-    assert erc6551.APPROVAL_KINDS == ("erc20", "erc721", "operator", "permit2")
+    assert erc6551.APPROVAL_KINDS == ("erc20", "erc721", "operator", "permit2", "erc6909",
+                                      "erc6909_operator")
 
 
 def test_the_scan_asks_for_the_permit2_topics():
@@ -352,3 +353,64 @@ def test_an_unreadable_signer_read_raises_never_answers_false():
         erc6551.read_is_valid_signer(rpc, ACCOUNT, SPENDER)
     with pytest.raises(erc6551.Erc6551Error):              # "0x" / nothing: refuse to guess
         erc6551.read_token(FakeRpc(calls={(ACCOUNT, abi.selector("token()")): "0x"}), ACCOUNT)
+
+
+# --- C17: ERC-6909 allowances and operators (Uniswap v4 claims) ----------------------------
+
+def test_the_6909_literals_are_their_signatures():
+    from eth_utils import keccak
+    assert erc6551.TOPIC_6909_APPROVAL == "0x" + keccak(
+        text="Approval(address,address,uint256,uint256)").hex()
+    assert erc6551.TOPIC_6909_OPERATOR_SET == "0x" + keccak(
+        text="OperatorSet(address,address,bool)").hex()
+
+
+def _6909(block, tid, amount, index=0):
+    return _log(block, NFT, erc6551.TOPIC_6909_APPROVAL, erc6551._pad_topic(SPENDER), _word(tid),
+                data=_word(amount), index=index)
+
+
+def _6909_op(block, approved):
+    return _log(block, NFT, erc6551.TOPIC_6909_OPERATOR_SET, erc6551._pad_topic(SPENDER),
+                data=_word(int(approved)))
+
+
+def test_6909_rows_are_scanned_and_a_revoke_clears_them():
+    rows = erc6551.open_approvals(FakeRpc(logs=[_6909(5, 3, 100), _6909_op(6, True)]), ACCOUNT, 0,
+                                  live=False)
+    assert sorted((r.kind, r.token_id, r.amount) for r in rows) == [
+        ("erc6909", 3, 100), ("erc6909_operator", None, None)]
+    rows = erc6551.open_approvals(FakeRpc(logs=[_6909(5, 3, 100), _6909(7, 3, 0), _6909_op(6, True),
+                                                _6909_op(8, False)]), ACCOUNT, 0, live=False)
+    assert rows == []
+
+
+def test_the_scan_asks_for_the_6909_topics():
+    seen = []
+
+    class Spy(FakeRpc):
+        def __call__(self, method, params):
+            if method == "eth_getLogs":
+                seen.append(params[0]["topics"][0])
+            return super().__call__(method, params)
+    erc6551.open_approvals(Spy(), ACCOUNT, 0, live=False)
+    assert erc6551.TOPIC_6909_APPROVAL in seen[0] and erc6551.TOPIC_6909_OPERATOR_SET in seen[0]
+
+
+def test_6909_live_confirmation():
+    allowance = abi.selector("allowance(address,address,uint256)")
+    is_op = abi.selector("isOperator(address,address)")
+    rpc = FakeRpc(logs=[_6909(5, 3, 100), _6909_op(6, True)],
+                  calls={(NFT, allowance): _word(40), (NFT, is_op): _word(0)})
+    rows = erc6551.open_approvals(rpc, ACCOUNT, 0)
+    assert [(r.kind, r.amount, r.verified) for r in rows] == [("erc6909", 40, True)]
+    rpc = FakeRpc(logs=[_6909(5, 3, 100)], calls={(NFT, allowance): RuntimeError("down")})
+    rows = erc6551.open_approvals(rpc, ACCOUNT, 0)
+    assert len(rows) == 1 and rows[0].verified is False
+
+
+def test_6909_revoke_encoders():
+    assert erc6551.encode_erc6909_revoke(SPENDER, 3) == abi.encode_call(
+        "approve", [{"type": "address"}, {"type": "uint256"}, {"type": "uint256"}], [SPENDER, 3, 0])
+    assert erc6551.encode_erc6909_operator_revoke(SPENDER) == abi.encode_call(
+        "setOperator", [{"type": "address"}, {"type": "bool"}], [SPENDER, False])

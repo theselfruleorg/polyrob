@@ -128,3 +128,16 @@ def test_pre_route_drop_records_reason(tele_db):
     rows = _rows(tele_db)
     assert rows[0]["kind"] == "access_denied"
     assert json.loads(rows[0]["attrs"])["reason"] == "raw_allowlist"
+
+
+def test_an_unresolved_owner_tenant_is_not_cached(monkeypatch):
+    """AC7: an unresolved owner degrades to "" and is NOT cached — the owner
+    bound a moment later must stamp the next row, not "" for life."""
+    import core.surfaces.access_log as al
+    monkeypatch.setattr(al, "_OWNER_TENANT", None)
+    owner = {"id": None}
+    monkeypatch.setattr("core.instance.resolve_owner_user_id",
+                        lambda: owner["id"])
+    assert al._owner_tenant() == ""
+    owner["id"] = "u_owner"
+    assert al._owner_tenant() == "u_owner"

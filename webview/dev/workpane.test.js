@@ -379,3 +379,43 @@ describe("070 W0.16 — the drawer toggle", () => {
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
   });
 });
+
+describe("FE17 — a refresh keeps what the person opened", () => {
+  const settle = async () => { for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0)); };
+
+  it("the open folder and an open sub-folder survive a redraw", async () => {
+    const view = { folderOpen: false, openDirs: new Set(), showAll: new Set() };
+    const trees = {
+      "": { children: [{ name: "src", type: "dir" }, { name: "a.txt", type: "file" }] },
+      src: { children: [{ name: "main.py", type: "file" }] },
+    };
+    const data = () => ({
+      artifacts: [], inbound: { children: [] }, sessionId: "s1", view,
+      folder: { children: [], total: 2, truncated: false, shared: false },
+      fetchTree: async (path) => trees[path],
+    });
+    const { files, filesState } = frame();
+    renderFiles(files, filesState, data(), COPY);
+    files.querySelector(".folder-link").click();
+    await settle();
+    [...files.querySelectorAll("button")].find((b) => b.textContent === "src/").click();
+    await settle();
+    expect(files.textContent).toContain("main.py");
+    // the 5 s refresh redraws the pane from fresh reads
+    renderFiles(files, filesState, data(), COPY);
+    await settle();
+    expect(files.querySelector(".folder-link").getAttribute("aria-expanded")).toBe("true");
+    expect(files.textContent).toContain("main.py");
+  });
+
+  it("a 'show all' stays shown after a redraw", () => {
+    const view = { folderOpen: false, openDirs: new Set(), showAll: new Set() };
+    const many = Array.from({ length: 11 }, (_, i) => ({ name: `w${i}.py`, path: `w${i}.py`, kind: "code" }));
+    const { files, filesState } = frame();
+    const rows = () => [...files.querySelectorAll("tr")].filter((r) => r.textContent.match(/^w\d+\.py/));
+    renderFiles(files, filesState, { artifacts: many, inbound: { children: [] }, view }, COPY);
+    [...files.querySelectorAll("button")].find((b) => b.textContent === "Show all 11").click();
+    renderFiles(files, filesState, { artifacts: many, inbound: { children: [] }, view }, COPY);
+    expect(rows().length).toBe(11);
+  });
+});

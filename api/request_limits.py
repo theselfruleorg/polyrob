@@ -32,6 +32,37 @@ def max_body_bytes() -> int:
 # `tests/test_home_binding_ratchet.py` exists for. Call `max_body_bytes()`.
 BODY_DEADLINE_SECONDS = 30
 MAX_ACTIVE_BODY_READS = 16
+#: API7: one client (trusted client IP) may hold at most this many of the
+#: global body-read slots, so a single slow-body sender cannot take all of them.
+MAX_ACTIVE_BODY_READS_PER_CLIENT = 4
+
+#: Methods that carry no body unless a length or a transfer coding says so.
+_BODYLESS_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "DELETE"})
+
+
+def _declares_no_body(scope, lengths, headers) -> bool:
+    """API7: a request with no body never needs an upload slot.
+
+    ``Content-Length: 0`` says so outright; a GET/HEAD/OPTIONS/DELETE with no
+    length and no ``Transfer-Encoding`` has no body under HTTP/1.1. Such a
+    request (``/health``, every read) used to queue behind the slots too.
+    """
+    if lengths:
+        return int(lengths[0]) == 0
+    if any(k.lower() == b"transfer-encoding" for k, _ in headers):
+        return False
+    return str(scope.get("method", "")).upper() in _BODYLESS_METHODS
+
+
+def _client_key(scope):
+    """The trusted client identity for the per-client slot bound, or None."""
+    try:
+        from starlette.requests import Request
+
+        from api.dependencies import get_trusted_client_ip
+        return get_trusted_client_ip(Request(scope))
+    except Exception:
+        return None
 
 
 class RequestBodyLimitMiddleware:
@@ -43,13 +74,16 @@ class RequestBodyLimitMiddleware:
     """
 
     def __init__(self, app, max_bytes=None, timeout=BODY_DEADLINE_SECONDS,
-                 concurrency=MAX_ACTIVE_BODY_READS):
+                 concurrency=MAX_ACTIVE_BODY_READS,
+                 per_client=MAX_ACTIVE_BODY_READS_PER_CLIENT):
         self.app = app
         # Resolved at construction (not import) so the derived upload cap is
         # read after env layering — see max_body_bytes().
         self.max_bytes = max_body_bytes() if max_bytes is None else max_bytes
         self.timeout = timeout
         self.slots = asyncio.Semaphore(concurrency)
+        self.per_client = per_client
+        self.client_slots = {}
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -63,14 +97,31 @@ class RequestBodyLimitMiddleware:
                 return await self._reject(413, scope, receive, send)
         except ValueError:
             return await self._reject(400, scope, receive, send)
+        if _declares_no_body(scope, lengths, headers):
+            return await self.app(scope, receive, send)
+        client = _client_key(scope)
+        if client is not None and self.client_slots.get(client, 0) >= self.per_client:
+            return await self._reject(503, scope, receive, send)
         try:
             await asyncio.wait_for(self.slots.acquire(), timeout=0.05)
         except asyncio.TimeoutError:
             return await self._reject(503, scope, receive, send)
+        if client is not None:
+            self.client_slots[client] = self.client_slots.get(client, 0) + 1
+
+        def free_slot():
+            self.slots.release()
+            if client is not None:
+                left = self.client_slots.get(client, 1) - 1
+                if left > 0:
+                    self.client_slots[client] = left
+                else:
+                    self.client_slots.pop(client, None)
+
         try:
             spool = tempfile.SpooledTemporaryFile(max_size=256 * 1024)
         except Exception:
-            self.slots.release()
+            free_slot()
             return await self._reject(503, scope, receive, send)
         released = False
 
@@ -81,7 +132,7 @@ class RequestBodyLimitMiddleware:
                 try:
                     spool.close()
                 finally:
-                    self.slots.release()
+                    free_slot()
 
         try:
             size = 0

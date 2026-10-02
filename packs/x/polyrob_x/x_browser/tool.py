@@ -559,7 +559,13 @@ class XBrowserTool(BaseTool):
         user_id = self._user_id(execution_context)
         if not self.session_store.exists(user_id):
             return ActionResult(
-                extracted_content="no X session stored — run `polyrob x-account capture-session`.",
+                # 2026-10-02: the agent read this as "the owner's /x login did not
+                # take". The browser session and the API login are two credentials.
+                extracted_content=("no X BROWSER session stored (the browser rail) — the owner "
+                                   "restores it on the box with `polyrob x-account "
+                                   "capture-session`. This is NOT the API login: /x login "
+                                   "renews only the API login (DMs), whose state "
+                                   "`/x status` shows."),
                 include_in_memory=True)
         try:
             driver, release = await self._open_driver(user_id)

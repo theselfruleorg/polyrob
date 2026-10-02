@@ -156,6 +156,9 @@ CREDENTIAL_NAME_GLOBS: tuple[str, ...] = (
     # verification it could grant itself.
     "wallet/token_pins.db*",
     "wallet/token_provenance.db*",
+    # The owner's collection pins (`/nft trust`): a pin the agent could write would let it
+    # vouch for a contract and act from its accounts.
+    "wallet/collection_pins.json*",
     # Minor #6 (2026-07-16): trailing `*` also catches the `.hwm` (high-water-mark)
     # sidecar `wallet/audit.jsonl.hwm` written alongside the audit log itself —
     # same money-policy-state rationale as the exact-match audit file.

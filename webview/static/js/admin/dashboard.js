@@ -7,7 +7,7 @@
     'use strict';
 
     // Use shared utilities
-    const { apiCall, formatNumber, formatCurrency, formatTime, truncateText } = AdminUtils;
+    const { apiCall, formatNumber, formatCurrency, formatTime, truncateText, h } = AdminUtils;
 
     // Load dashboard stats
     async function loadDashboardStats() {
@@ -56,20 +56,17 @@
             return;
         }
 
-        let html = '';
-        for (const [key, count] of Object.entries(data)) {
-            const percentage = total > 0 ? (count / total) * 100 : 0;
-            html += `
-                <div class="breakdown-item">
-                    <span class="breakdown-label">${key}</span>
-                    <div class="breakdown-bar">
-                        <div class="breakdown-bar-fill ${type}-${key}" style="width: ${percentage}%"></div>
-                    </div>
-                    <span class="breakdown-count">${formatNumber(count)}</span>
-                </div>
-            `;
-        }
-        container.innerHTML = html;
+        // FE16: server keys are written as text, never parsed as HTML.
+        const items = Object.entries(data).map(([key, count]) => {
+            const percentage = total > 0 ? (Number(count) / total) * 100 : 0;
+            const fill = h('div', { class: `breakdown-bar-fill ${type}-${key}` });
+            fill.style.width = `${Number.isFinite(percentage) ? percentage : 0}%`;
+            return h('div', { class: 'breakdown-item' },
+                h('span', { class: 'breakdown-label', text: key }),
+                h('div', { class: 'breakdown-bar' }, fill),
+                h('span', { class: 'breakdown-count', text: formatNumber(count) }));
+        });
+        container.replaceChildren(...items);
     }
 
     // Render alerts
@@ -81,19 +78,15 @@
             return;
         }
 
-        let html = '';
-        for (const alert of alerts) {
+        const items = alerts.map((alert) => {
             const icon = alert.severity === 'high' ? '!' :
                         alert.severity === 'warning' ? '?' : 'i';
-            html += `
-                <div class="alert-item severity-${alert.severity}">
-                    <span class="alert-icon">${icon}</span>
-                    <span class="alert-message">${alert.message}</span>
-                    <span class="alert-count">${alert.count}</span>
-                </div>
-            `;
-        }
-        container.innerHTML = html;
+            return h('div', { class: `alert-item severity-${alert.severity}` },
+                h('span', { class: 'alert-icon', text: icon }),
+                h('span', { class: 'alert-message', text: alert.message }),
+                h('span', { class: 'alert-count', text: alert.count }));
+        });
+        container.replaceChildren(...items);
     }
 
     // Load activity feed
@@ -108,18 +101,14 @@
                 return;
             }
 
-            let html = '';
-            for (const event of events) {
-                const typeClass = event.event_type.replace('_', '-');
-                html += `
-                    <div class="activity-item">
-                        <span class="activity-time">${formatTime(event.timestamp)}</span>
-                        <span class="activity-type ${event.event_type}">${event.event_type.replace('_', ' ')}</span>
-                        <span class="activity-action">${truncateText(event.action, 50)}</span>
-                    </div>
-                `;
-            }
-            container.innerHTML = html;
+            const items = events.map((event) => {
+                const type = String(event.event_type || '');
+                return h('div', { class: 'activity-item' },
+                    h('span', { class: 'activity-time', text: formatTime(event.timestamp) }),
+                    h('span', { class: `activity-type ${type}`, text: type.replace('_', ' ') }),
+                    h('span', { class: 'activity-action', text: truncateText(event.action, 50) }));
+            });
+            container.replaceChildren(...items);
 
         } catch (error) {
             console.error('Failed to load activity feed:', error);

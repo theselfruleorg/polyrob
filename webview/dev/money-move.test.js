@@ -81,3 +81,27 @@ describe("make a move", () => {
     expect(s.querySelector("#money-move-result").textContent).toContain("SENT");
   });
 });
+
+describe("FE7 — a failed pickers read is named", () => {
+  it("a refused read says so instead of an empty Chain list with no word", async () => {
+    const s = section();
+    s.dataset.pickers_failed = "could not read the chains";
+    await mount(s, { fetcher: async () => ({ ok: false, status: 500, json: async () => ({}) }) });
+    const note = s.querySelector("[data-pickers-failed]");
+    expect(note).not.toBeNull();
+    expect(note.textContent).toBe("could not read the chains");
+  });
+
+  it("a transport failure says so too", async () => {
+    const s = section();
+    s.dataset.pickers_failed = "could not read the chains";
+    await mount(s, { fetcher: async () => { throw new Error("offline"); } });
+    expect(s.querySelector("[data-pickers-failed]").textContent).toBe("could not read the chains");
+  });
+
+  it("a good read draws no failure note", async () => {
+    const s = section();
+    await mount(s, { fetcher: jsonOk(PICKERS) });
+    expect(s.querySelector("[data-pickers-failed]")).toBeNull();
+  });
+});

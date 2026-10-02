@@ -42,6 +42,24 @@ _INBOUND_LOCK = KeyedLock()
 # other instance stops.
 _CONFLICT_BACKOFF_SEC = 30
 
+#: TG1 (audit 2026-10-03): the update kinds this harness consumes. An EDIT is
+#: deliberately absent: Telegram gives an edit a NEW ``update_id``, so it passed
+#: the dedup and routed as a fresh message — editing an old ``/send … go`` moved
+#: the money a second time. ``handle_update`` also drops an edit that arrives
+#: anyway (a webhook, an old subscription).
+_ALLOWED_UPDATES = ("message", "channel_post", "callback_query")
+_EDIT_UPDATE_KINDS = ("edited_message", "edited_channel_post")
+
+#: TG5: the offset lives in memory, so a crash after a long inline verb (a
+#: receipt wait) replays every unacknowledged update on restart. The shared
+#: store's 5-minute default is Telegram's webhook retry horizon, not a restart
+#: horizon; one day covers both.
+_TG_DEDUP_WINDOW_S = 24 * 3600.0
+
+#: TG4: never sleep longer than this on a flood-control ``retry_after``.
+_FLOOD_WAIT_CAP_SEC = 300.0
+
+
 
 try:  # class-identity check when aiogram is present; string fallback otherwise
     from aiogram.exceptions import TelegramConflictError as _TelegramConflictError
@@ -197,7 +215,7 @@ _USAGE = {
     "/paid": "<status|enable|disable|price <verb> <usd>|asset <id>|offers|"
              "cancel <id>>",
     "/prefs": "[all]",
-    "/kb": "<query>",
+    "/kb": "[list [collection] | search <query> | <words>]",
     "/files": "[n]",
     "/dev": "[message]",
     "/help": "[verb]",
@@ -411,8 +429,8 @@ _OWNER_ADMIN_COMMANDS = ("/inbox", "/book",
 #: durable autonomous work — scheduling a recurring run, cancelling a goal,
 #: declaring an owner ask satisfied — from inside a room where a member can
 #: read the ids off the screen and talk the owner into typing one. The
-#: ratchet test (test_room_refusal_covers_every_mutating_verb) now derives the
-#: requirement instead of trusting this list to be remembered.
+#: ratchet (tests/unit/surfaces/telegram/test_room_refusal_ratchet.py) now
+#: derives the requirement instead of trusting this list to be remembered.
 #:
 #: `/contacts` is here too: a transcript with a third party is private
 #: correspondence, and the room is the one place a shoulder-surfer is
@@ -436,6 +454,23 @@ _ROOM_REFUSED_COMMANDS = frozenset({
     "/cards",     # a card confirm runs a money line — never from a room
     "/check",     # 071: an owner read; in a room the agent answers via wallet_holdings
 })
+
+
+#: TG7 (audit 2026-10-03): a room-reachable READ verb whose SUBVERBS write.
+#: `/avatar` shows the face from a room; `/avatar set|clear` changes it, and
+#: like every other owner write never runs from a room.
+_ROOM_REFUSED_SUBVERBS = {
+    "/avatar": frozenset({"set", "clear"}),
+}
+
+
+def _room_refused_line(cmd: str, text: str) -> bool:
+    """The room refusal for one LINE: the verb, or a refused subverb of it."""
+    if _room_refused(cmd):
+        return True
+    words = (text or "").split()
+    sub = words[1].lower() if len(words) > 1 else ""
+    return sub in _ROOM_REFUSED_SUBVERBS.get(cmd, frozenset())
 
 
 def _owner_verbs() -> frozenset:
@@ -539,11 +574,18 @@ def derive_webhook_path() -> str:
     return raw if raw.startswith("/") else "/" + raw
 
 
+#: TG11: strong references for turn tasks spawned here. A bare
+#: ``create_task`` result is held only weakly by the loop and can be collected
+#: mid-run; ``core.async_bridge.spawn_retained`` is the one idiom.
+_TURN_TASKS: set = set()
+
+
 def _spawn(coro, spawn: Optional[Callable[[Any], Any]]) -> None:
     if spawn is not None:
         spawn(coro)
     else:
-        asyncio.create_task(coro)
+        from core.async_bridge import spawn_retained
+        spawn_retained(coro, _TURN_TASKS)
 
 
 def _last_error_text(task_agent: Any, session_id: str) -> str:
@@ -889,8 +931,7 @@ def _record_owner_line(task_agent: Any, result: InboundResult, *, session_id: st
         from core.surfaces.owner_thread import record_owner_in
         # `via` is the surface the line ACTUALLY travelled on — this harness
         # serves several chat surfaces, so "telegram" would be a lie elsewhere.
-        via = str(getattr(getattr(inbound.identity, "source", None), "surface_id", "") or "telegram")
-        via = "console" if via == "webview" else via
+        via = _seat_via(result)
         record_owner_in(getattr(task_agent, "container", None),
                         inbound.identity.user_id, text, via=via,
                         session_id=session_id or "", mid=_inbound_mid(result),
@@ -1497,11 +1538,19 @@ def _config_reply(user_id: str, data_dir: str, instance_id: str, args: list) -> 
     return f"✅ Set {key} = {value}{applies}.{notes}"
 
 
-async def _kb_reply(user_id: str, query: str) -> str:
+async def _kb_reply(user_id: str, args: list) -> str:
     """QW-4 (proposal 021): owner KB read from the phone — the same
-    ``modules.memory.registry.kb_search`` primitive ``polyrob kb search`` uses.
-    Before this verb, "ingested into KB" was write-only theatre from the
-    owner's seat (assessment 2026-07-19 §2 touchpoint 4)."""
+    ``modules.memory.registry`` primitives ``polyrob kb`` uses. Before this
+    verb, "ingested into KB" was write-only theatre from the owner's seat
+    (assessment 2026-07-19 §2 touchpoint 4).
+
+    CLI7 (audit 2026-10-03): ``args`` is parsed by the ONE grammar
+    (``core.kb_grammar``) the REPL parses — `/kb` lists, `/kb list [coll]`,
+    `/kb search <q>`, and a bare `/kb <words>` searches."""
+    from core.kb_grammar import KB_USAGE, LIST, USAGE, parse_kb_args
+    cmd = parse_kb_args(list(args or []))
+    if cmd.action == USAGE:
+        return KB_USAGE
     from agents.task.constants import AutonomyConfig
     if not AutonomyConfig.kb_enabled():
         # D72: name what the owner can DO, not the env flag. He is on a phone;
@@ -1510,6 +1559,21 @@ async def _kb_reply(user_id: str, query: str) -> str:
                 "search. Turn it on with `polyrob config set KB_ENABLED true` "
                 "(it applies on my next restart).")
     import modules.memory.registry as _reg
+    if cmd.action == LIST:
+        try:
+            sources = await _reg.kb_list_sources(user_id=user_id,
+                                                 collection=cmd.collection)
+        except Exception as e:
+            return f"KB list failed: {e}"
+        where = f" in collection {cmd.collection!r}" if cmd.collection else ""
+        if not sources:
+            return f"No sources in the knowledge base{where}."
+        shown = [f"• `{src}`" for src in list(sources)[:30]]
+        more = len(sources) - len(shown)
+        return "\n".join([f"KB sources ({len(sources)}){where}:"] + shown
+                         + ([f"… and {more} more"] if more > 0 else [])
+                         + ["Search: /kb <words>"])
+    query = cmd.query
     try:
         result = await _reg.kb_search(query, user_id=user_id, limit=5)
     except Exception as e:
@@ -1579,10 +1643,19 @@ async def _files_reply(user_id: str, args) -> str:
     return "\n".join(out)
 
 
-def _pause_reply(data_dir: str, cmd: str, args: list) -> str:
+def _seat_via(result: Any) -> str:
+    """The seat a line ACTUALLY arrived on, for an audit `via`. This harness is
+    the shared inbound actor (console, discord, slack … reach it too), so a
+    literal "telegram" is a lie on every other seat (CLI14)."""
+    src = getattr(getattr(getattr(result, "inbound", None), "identity", None), "source", None)
+    via = str(getattr(src, "surface_id", "") or "telegram")
+    return "console" if via == "webview" else via
+
+
+def _pause_reply(data_dir: str, cmd: str, args: list, *, via: str = "telegram") -> str:
     """`/pause`, `/halt` (alias) and `/resume` from the phone — thin over the
     ONE owner-admin pause API (031); the reply is the VERIFIED (read-back)
-    state, never a checkmark on a write."""
+    state, never a checkmark on a write. ``via`` is the seat (``_seat_via``)."""
     from core.surfaces.owner_admin import (pause_autonomy, render_pause_result,
                                            render_resume_result, resume_autonomy_scopes)
     from core.surfaces.owner_intent import parse_pause_args
@@ -1594,10 +1667,10 @@ def _pause_reply(data_dir: str, cmd: str, args: list) -> str:
         if minutes is not None:
             return "⚠️ /resume takes scopes only (no duration) — e.g. /resume trading"
         res = resume_autonomy_scopes(data_dir, scopes=None if scopes == ("all",) else scopes,
-                                     via="telegram")
+                                     via=via)
         return render_resume_result(res, halt_hint="/pause")
     res = pause_autonomy(data_dir, scopes=scopes, duration_minutes=minutes,
-                         reason=f"{cmd} {' '.join(args)}".strip(), via="telegram")
+                         reason=f"{cmd} {' '.join(args)}".strip(), via=via)
     return render_pause_result(res, resume_hint="/resume")
 
 
@@ -1840,7 +1913,10 @@ async def _handle_owner_admin(task_agent: Any, result: InboundResult, cmd: str) 
             text, img = await _owner_ops.avatar_change(data_dir, args)
         else:
             text, img = _owner_ops.avatar_reply(data_dir, args)
-        if img:
+        from core.surfaces.room_keys import is_group_session_key
+        # TG7: in a room the text answer goes to the owner's DM; the photo
+        # would go to the ROOM's chat id, so a room read sends none.
+        if img and not is_group_session_key(result.decision.session_key):
             await _send_photo_best_effort(task_agent, result, img)
         return text
 
@@ -1868,9 +1944,8 @@ async def _handle_owner_admin(task_agent: Any, result: InboundResult, cmd: str) 
         return _config_reply(user_id, data_dir, instance_id, args)
 
     if cmd == "/kb":
-        if not args:
-            return "Usage: /kb <query> — search the knowledge base"
-        return await _kb_reply(user_id, " ".join(args))
+        # CLI7: the ONE grammar (core.kb_grammar), shared with the REPL.
+        return await _kb_reply(user_id, args)
 
     if cmd == "/files":
         return await _files_reply(user_id, args)
@@ -1882,7 +1957,7 @@ async def _handle_owner_admin(task_agent: Any, result: InboundResult, cmd: str) 
         return await perform_dev_command(strip_dev_prefix(result.inbound.text))
 
     if cmd in ("/halt", "/resume", "/pause"):
-        return _pause_reply(data_dir, cmd, args)
+        return _pause_reply(data_dir, cmd, args, via=_seat_via(result))
 
     # G13: the owner write verbs that used to exist only on the CLI seat. Thin
     # plumbing over the same primitives, kept in owner_ops so this file (already
@@ -1964,7 +2039,10 @@ async def _handle_owner_admin(task_agent: Any, result: InboundResult, cmd: str) 
         if cmd == "/goal":
             return owner_ops.goal_reply(user_id, data_dir, args, board=board)
         if cmd == "/wallet":
-            return owner_ops.wallet_reply(args, user_id=user_id, data_dir=data_dir)
+            # TG3: `/wallet balances` makes blocking RPC reads (urllib, up to
+            # ~20 s); on the poll loop they stalled every chat and every turn.
+            return await asyncio.to_thread(owner_ops.wallet_reply, args,
+                                           user_id=user_id, data_dir=data_dir)
         if cmd == "/invoices":
             return await owner_ops.invoices_reply(user_id, args)
         return await owner_ops.settle_reply(user_id, args)
@@ -2008,28 +2086,32 @@ async def _handle_owner_admin(task_agent: Any, result: InboundResult, cmd: str) 
             # Owner complaint, 2026-09-12: "the whole command should be
             # highlighted so I could tap on it. now I need to copy and type in
             # the id". Telegram auto-links the VERB `/approve` but not its
-            # argument, so the one tappable thing on screen was the half that
-            # does nothing. When exactly ONE thing is waiting there is no id to
-            # disambiguate — so the bare verb decides it, and the tap is the
-            # whole interaction.
+            # argument, so every item is listed with its ONE-token tap.
+            # ⚠️ CLI4 (audit 2026-10-03): the bare verb used to DECIDE when
+            # exactly one item waited. On the console (which shares this
+            # handler) that approved an item the owner never saw, and the REPL
+            # lists. A bare verb now always shows; only an id or a tap decides.
             if not pending.items:
                 return (pending.degraded_line()
                         or "Nothing pending — there is nothing waiting on you.")
-            if len(pending.items) > 1:
-                _lines = [f"{len(pending.items)} pending — tap the one you mean:"]
-                for _it in pending.items:
-                    _lines.append(
-                        f"  {self_evolution.pending_tap_token(cmd.lstrip('/'), _it)}"
-                        f" — {_it['kind']}:{_it['id']}")
+            _n = len(pending.items)
+            _lines = [f"{_n} pending — tap {'it' if _n == 1 else 'the one you mean'}"
+                      f" to {cmd.lstrip('/')}:"]
+            for _it in pending.items:
+                _preview = " ".join(str(_it.get("preview") or "").split())
+                if len(_preview) > 120:
+                    _preview = _preview[:117] + "…"
+                _lines.append(
+                    f"  {self_evolution.pending_tap_token(cmd.lstrip('/'), _it)}"
+                    f" — {_it['kind']}:{_it['id']}"
+                    + (f" — {_preview}" if _preview else ""))
+            if _n > 1:
                 _lines.append(f"All of them: {cmd}_all")
-                if pending.degraded_line():
-                    _lines.append(pending.degraded_line())
-                return "\n".join(_lines)
-            target = str(pending.items[0]["id"])
-            match = pending.items[0]
-        else:
-            target = args[0]
-            match = None
+            if pending.degraded_line():
+                _lines.append(pending.degraded_line())
+            return "\n".join(_lines)
+        target = args[0]
+        match = None
         # 035 P1-10: `/approve all` — decide the whole queue from the phone. The
         # owner surface where friction costs most is the one where typing an id
         # is hardest. 2026-09-15: "the whole queue" now means the UNION it is
@@ -2205,17 +2287,48 @@ def _room_member_help(task_agent: Any, result: InboundResult):
 _BACKGROUND_COMMANDS: set = set()
 
 
+def _record_undelivered_reply(user_id: str, cmd: str, text: str, exc: BaseException) -> None:
+    """TG12: a command reply that could not be SENT — after a money verb that
+    already executed, the result the owner never saw — becomes an ``owner_notice``
+    row `/missed` reads (marker: ``user_delivery.NOTICE_MARKERS[2]``), never
+    only a log line. Fail-open."""
+    logger.error("telegram: %s reply undelivered (%s) — recorded for /missed",
+                 cmd, exc, exc_info=True)
+    from core import event_log
+    from core.event_kinds import OWNER_NOTICE
+    from core.surfaces.user_delivery import NOTICE_MARKERS
+    # `emit` is the fail-open record (core.event_log) — it never raises.
+    event_log.emit(OWNER_NOTICE, source="telegram", user_id=str(user_id or ""),
+                   attrs={"text": f"{NOTICE_MARKERS[2]}; source=telegram {cmd}] "
+                                  f"{str(text or '')[:1900]}"})
+
+
+#: TG2 (audit 2026-10-03): every owner money verb whose `go` form waits on a
+#: chain receipt (up to 120 s) or on the owner's own tap. Awaited on the poll
+#: loop, any of them froze the bot — `/cancel` included — for the whole wait.
+#: verb -> the word the "started" reply names.
+_BACKGROUND_MONEY_VERBS = {
+    "/bridge": "Bridge", "/send": "Send", "/swap": "Swap",
+    "/lp": "Liquidity move", "/claim": "Claim", "/nft": "NFT transaction",
+    "/launch": "Launch", "/deploy": "Deploy", "/identity": "Identity registration",
+    "/pay": "Payment",
+}
+
+
 def _runs_in_background(cmd: str, result: InboundResult) -> bool:
-    """An owner verb that may wait minutes: an EXECUTING `/bridge` (it may wait
-    on the owner's tap) or `/send` (it waits up to 120 s for a receipt). Only
-    with a trailing `go`: the bare form is a quote and answers inline. Also
-    `/avatar set`, which fetches an image (or an NFT's metadata) off the box."""
+    """An owner verb that may wait minutes: an EXECUTING money verb
+    (:data:`_BACKGROUND_MONEY_VERBS` — it waits for a receipt, or on the
+    owner's tap). Only with a `go` word: the bare form is a quote and answers
+    inline. A card confirm re-enters here with the line the card carries, so
+    it follows the same rule. Also `/avatar set`, which fetches an image (or
+    an NFT's metadata) off the box."""
     words = (result.inbound.text or "").split()
     if cmd == "/avatar":  # `/avatar set <url|nft:…>` fetches over the network
         return len(words) > 1 and words[1].lower() == "set"
-    if cmd not in ("/bridge", "/send", "/swap"):
+    if cmd not in _BACKGROUND_MONEY_VERBS:
         return False
-    return bool(words) and words[-1].lower() in ("go", "execute", "confirm")
+    from core.surfaces.cards import executes
+    return executes(words[1:])
 
 
 async def _handle_command(task_agent: Any, result: InboundResult, spawn, deliver=None,
@@ -2253,7 +2366,8 @@ async def _handle_command(task_agent: Any, result: InboundResult, spawn, deliver
     # `/trade …` got it. The room is also the one place a shoulder-surfer or a
     # screen-share is guaranteed. One sentence, to the DM, naming where to do it.
     from core.surfaces.room_keys import is_group_session_key
-    if is_group_session_key(result.decision.session_key) and _room_refused(cmd):
+    if (is_group_session_key(result.decision.session_key)
+            and _room_refused_line(cmd, result.inbound.text)):
         logger.info("telegram: %s refused from room %s", cmd,
                     result.decision.session_key)
         return (f"🔒 `{cmd}` is not available from a group chat — do this in our "
@@ -2270,7 +2384,11 @@ async def _handle_command(task_agent: Any, result: InboundResult, spawn, deliver
                 logger.error("owner admin command %s failed: %s", cmd, e, exc_info=True)
                 text = f"Command failed: {str(e)[:200]} (details in the server log)"
             if text:
-                await deliver(text)
+                try:
+                    await deliver(text)
+                except Exception as e:   # TG12: the result must not vanish
+                    _record_undelivered_reply(result.inbound.identity.user_id, cmd,
+                                              str(text), e)
 
         from core.async_bridge import spawn_retained
         spawn_retained(_run_and_report(), _BACKGROUND_COMMANDS)
@@ -2279,7 +2397,7 @@ async def _handle_command(task_agent: Any, result: InboundResult, spawn, deliver
         # not held by the autonomous ceiling, so there is nothing to approve.
         if cmd == "/avatar":
             return "⏳ Fetching the image — I will send the result here."
-        what = {"/send": "Send", "/swap": "Swap"}.get(cmd, "Bridge")
+        what = _BACKGROUND_MONEY_VERBS.get(cmd, "Bridge")
         return (f"⏳ {what} started — I will send the result here "
                 f"(it can take up to two minutes to confirm).")
     if cmd == "/cards":
@@ -2791,7 +2909,7 @@ class TelegramHarness:
             # as today, if getMe() is unavailable (e.g. a test double Bot).
             logger.warning("telegram get_me (bot_username/bot_id resolve) failed: %s", e)
             asyncio.get_running_loop().call_later(
-                60, lambda: asyncio.ensure_future(self._refresh_identity())
+                60, lambda: _spawn(self._refresh_identity(), None)
             )
         await self._publish_command_menu()
         if self.webhook_base:
@@ -2906,11 +3024,22 @@ class TelegramHarness:
         transient_streak = 0
         while self._running:
             try:
-                updates = await self.bot.get_updates(offset=offset, timeout=self.poll_timeout)
+                updates = await self.bot.get_updates(offset=offset, timeout=self.poll_timeout,
+                                                     allowed_updates=list(_ALLOWED_UPDATES))
                 transient_streak = 0
             except asyncio.CancelledError:
                 break
             except Exception as e:  # fail-open: a transient getUpdates error must not kill the loop
+                from surfaces.telegram.surface import _retry_after_seconds
+                _flood = _retry_after_seconds(e)
+                if _flood is not None:
+                    # TG4: flood control states how long to wait; a flat 1 s
+                    # retry would only deepen the limit.
+                    wait = min(max(_flood, 1.0), _FLOOD_WAIT_CAP_SEC)
+                    logger.warning("telegram get_updates flood control — waiting %.0fs", wait)
+                    record_poll_error("telegram", e)
+                    await asyncio.sleep(wait)
+                    continue
                 # A getUpdates CONFLICT means another bot instance is long-polling the
                 # SAME token (only one may). Retrying every second + dumping a full
                 # traceback each time floods the journal and changes nothing — so log
@@ -3149,6 +3278,11 @@ class TelegramHarness:
         """Process one raw Telegram update. Always returns {"ok": True} so a webhook
         gets a fast 200; errors are swallowed (fail-open)."""
         try:
+            if any(k in update for k in _EDIT_UPDATE_KINDS):
+                # TG1: an edit is never a new message. Routing it re-ran the
+                # edited line — a money `go` included — under a fresh update_id.
+                _record_drop(update, _tg_user_id(update), "edited_message")
+                return {"ok": True}
             if "callback_query" in update:  # 064 F2: a button press = the presser typing it
                 from surfaces.telegram.actions import accept_callback
                 update = await accept_callback(self.bot, update)
@@ -3391,7 +3525,8 @@ class TelegramHarness:
                             result.decision.session_key, chat_id,
                             "⚠️ Something went wrong handling that — please try again.")
 
-                asyncio.create_task(_wrapped())
+                from core.async_bridge import spawn_retained
+                spawn_retained(_wrapped(), _TURN_TASKS)   # TG11: a strong reference
 
             # 004: deliver an agent turn's final reply to the chat. The spawned run
             # (_run_and_deliver) extracts the real answer after run_session and calls this;
@@ -3486,11 +3621,19 @@ class TelegramHarness:
                                                        actions_from_text)
                     from surfaces.telegram import card_ops
                     _cmd = getattr(result.decision, "command", None)
-                    _mid = await _send_telegram_text(  # 064 F2: /pending's own tokens as buttons
-                        self.bot, reply_chat_id, reply_text(reply),
-                        actions=(card_ops.reply_actions(reply)
-                                 or (actions_from_text(reply_text(reply))
-                                     if _cmd in DECISION_LIST_COMMANDS else None)))
+                    try:
+                        _mid = await _send_telegram_text(  # 064 F2: /pending's own tokens as buttons
+                            self.bot, reply_chat_id, reply_text(reply),
+                            actions=(card_ops.reply_actions(reply)
+                                     or (actions_from_text(reply_text(reply))
+                                         if _cmd in DECISION_LIST_COMMANDS else None)))
+                    except Exception as e:
+                        # TG12: the verb already RAN (a money `go` included);
+                        # its answer must reach /missed, not only the log.
+                        _record_undelivered_reply(result.inbound.identity.user_id,
+                                                  str(_cmd or "command"),
+                                                  reply_text(reply), e)
+                        return {"ok": True}
                     card_ops.record_ref(reply, reply_chat_id, _mid)
                     # A tapped decision button is spent: take the keyboard off the
                     # message it sat on, so it cannot be tapped again (064 F2
@@ -3608,7 +3751,8 @@ def build_telegram_harness(container, task_agent, *, token, webhook_base=None, b
         from aiogram import Bot  # lazy: only needed when actually starting the surface
         bot = Bot(token)
 
-    dedup = UpdateDedup(os.path.join(data_dir, "tg_dedup.db"))
+    dedup = UpdateDedup(os.path.join(data_dir, "tg_dedup.db"),
+                        window_seconds=_TG_DEDUP_WINDOW_S)
     user_directory = container.get_service("user_directory")
     if user_directory is None:
         user_directory = UserDirectory(os.path.join(data_dir, "users.db"))

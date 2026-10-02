@@ -178,9 +178,12 @@ def test_a_pinned_token_into_an_undeployed_account_of_its_collection_refuses(mon
     assert rpc.reads == []                                # decided without a read
 
 
-def test_an_ordinary_nft_into_an_undeployed_pinned_account_is_a_deposit(monkeypatch):
+def test_an_ordinary_nft_into_the_account_of_an_unminted_pinned_token_refuses(monkeypatch):
+    """C5: whoever mints #4242 later owns what sits in its account — any asset, an ordinary NFT
+    too (``ownerOf`` cannot be read here, which also refuses)."""
     _pinned(monkeypatch)
-    assert _run(NFT, erc6551.account_address(4663, PINNED_A, 4242), CodeRpc("0x")).allowed is True
+    d = _run(NFT, erc6551.account_address(4663, PINNED_A, 4242), CodeRpc("0x"))
+    assert d.allowed is False and "not minted yet" in d.reason, d.reason
 
 
 def test_a_pinned_token_to_an_ordinary_address_passes(monkeypatch):

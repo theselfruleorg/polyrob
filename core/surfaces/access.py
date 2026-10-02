@@ -62,6 +62,19 @@ from core.surfaces.catalog import forgeable_ids as _forgeable_ids  # noqa: E402
 FORGEABLE_NETWORK_SURFACES = _forgeable_ids()
 
 
+def is_forgeable_surface(surface: str) -> bool:
+    """True when ``surface``'s sender address is forgeable — read LIVE.
+
+    ⚠️ AC6: :data:`FORGEABLE_NETWORK_SURFACES` is a snapshot taken at import;
+    a pack surface with ``forgeable=true`` that loads later is missing from it.
+    The access decision reads the catalog each time (core rows are always in
+    it, so this can only widen the refusal, never narrow it).
+    """
+    from core.surfaces import catalog
+    sid = (surface or "").strip().lower()
+    return sid in FORGEABLE_NETWORK_SURFACES or sid in catalog.forgeable_ids()
+
+
 class AccessTier(str, Enum):
     OWNER = "owner"
     CORRESPONDENT = "correspondent"
@@ -294,7 +307,7 @@ def resolve_access_tier(
         if _is_owner_or_paired(
                 container, uid, src,
                 allow_local=surface in _LOCAL_OWNER_SURFACES,
-                allow_pairing=surface not in FORGEABLE_NETWORK_SURFACES):
+                allow_pairing=not is_forgeable_surface(surface)):
             return AccessTier.OWNER
 
         # Non-owner: routable ONLY as a known correspondent (active binding).
@@ -315,5 +328,5 @@ def resolve_access_tier(
         return AccessTier.DENIED
 
 
-__all__ = ["AccessTier", "FORGEABLE_NETWORK_SURFACES", "is_room_owner",
+__all__ = ["AccessTier", "FORGEABLE_NETWORK_SURFACES", "is_forgeable_surface", "is_room_owner",
            "resolve_access_tier"]

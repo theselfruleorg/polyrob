@@ -176,3 +176,47 @@ def admin_bot_db_path() -> Optional[str]:
     except Exception:
         return None
     return None
+
+
+def admin_instance() -> str:
+    """The instance id a REPL owner verb acts on — the instance axis of this seam.
+
+    The twin of :func:`admin_owner_tenant` (CLI2, 2026-10-03): ``polyrob owner
+    pending`` reads the review queue under ``admin_instance_id`` — the instance
+    the DEPLOYED service runs, adopted from its env file when the shell is
+    silent — while the REPL ``/pending``, ``/approve`` and ``/reject`` read
+    ``resolve_instance_id`` (the default in an owner's SSH shell), so they listed
+    and decided another instance's queue. A box with nothing deployed is
+    unchanged: both answers are ``resolve_instance_id``'s.
+    """
+    from core.admin_data_home import AmbiguousDataHome, admin_instance_id
+    try:
+        return admin_instance_id()
+    except AmbiguousDataHome as exc:   # an unreadable env file refuses, never guesses
+        raise click.ClickException(str(exc))
+
+
+def admin_owner_tenant(session_user_id: Optional[str] = None) -> str:
+    """The owner tenant a REPL owner verb acts on — the tenant axis of this seam.
+
+    CLI2 (2026-10-03): the REPL owner verbs read the shell session's tenant
+    (``local`` in an owner's SSH shell on the box) while ``polyrob owner …`` and
+    ``/status`` read ``core.admin_data_home.admin_owner_principal`` — the tenant
+    the DEPLOYED service writes under. ``/pending``, ``/goals``, ``/inbox`` and
+    ``/cards`` therefore listed nothing, and ``/allow`` wrote rows the service
+    never reads.
+
+    The session's tenant is the shell's own owner unless it says otherwise; that
+    owner is replaced by the deployment's. An explicit OTHER tenant (a profile
+    or a test bound to a named user) is kept. A box with nothing deployed is
+    unchanged: both answers are ``resolve_owner_user_id``'s.
+    """
+    from core.admin_data_home import AmbiguousDataHome, admin_owner_principal
+    from core.instance import resolve_owner_user_id
+    uid = (session_user_id or "").strip()
+    if uid and uid != resolve_owner_user_id():
+        return uid
+    try:
+        return admin_owner_principal()
+    except AmbiguousDataHome as exc:
+        raise click.ClickException(str(exc))

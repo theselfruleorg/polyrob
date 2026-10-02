@@ -47,7 +47,7 @@ logger = logging.getLogger(__name__)
 #: Ops that move money or consume a nonce run one at a time.
 _MONEY_OPS = frozenset({
     "evm.send", "x402.authorize", "deposit.sweep", "evm.verdict",
-    "venue.sign", "eip8004.feedback_auth",
+    "venue.sign", "eip8004.feedback_auth", "journal.sign",
 })
 #: A grant covers the approved amount plus this slack (prices move between the
 #: refusal and the retry). Above it the owner is asked again.
@@ -533,6 +533,25 @@ class SignerService:
         self.store.log_decision(op="venue.sign", digest=None, allowed=True, peer_uid=peer_uid,
                                 reason=f"hyperliquid {action.get('type')}")
         return {"signature": sig}
+
+    # -- C1: the account journal entry ---------------------------------------
+
+    def _op_journal_sign(self, body, peer_uid):
+        """EIP-191 over EXACTLY one account journal template (``account_journal``) by the
+        operational EVM key — the NFT owner that signs the entry. Any other bytes refuse: the
+        owner key is an ERC-1271 signer of every account it owns, so this op signs nothing else."""
+        protocol.check_keys(body, required=("message",))
+        from core.wallet.account_journal import is_journal_template
+        message = body["message"]
+        data = message.encode("utf-8") if isinstance(message, str) else b""
+        if not is_journal_template(data):
+            raise _Refuse(protocol.UNKNOWN_SHAPE, "the message is not the account journal template")
+        signer = self.wallet.operational_signer()
+        sig = signer.sign_message(data)
+        account = message.split("\n")[1].split("=", 1)[1].lower()
+        self.store.log_decision(op="journal.sign", digest=None, allowed=True, peer_uid=peer_uid,
+                                reason=f"journal {account}")
+        return {"signature": sig, "address": signer.address}
 
     # -- 066 P3: EIP-8004 feedback authorization ---------------------------
 

@@ -27,6 +27,7 @@ and unnecessary in this module).
 import logging
 import asyncio
 import os
+import re
 
 from pathlib import Path
 
@@ -123,6 +124,20 @@ def _data_dir() -> str:
     return webgate.data_dir()
 
 
+_ABS_PATH_RE = re.compile(r"(?<![\w.])(?:[A-Za-z]:)?(?:[\\/][^\s'\"\\/:,;]+){2,}[\\/]?")
+
+
+def _safe_reason(exc: BaseException, limit: int = 200) -> str:
+    """A short, single-line reason for a JSON answer — the exception type and
+    its message with every absolute path cut to its last part, so a read error
+    names WHAT failed without printing the host's file layout (audit WR8)."""
+    text = str(exc)
+    text = _ABS_PATH_RE.sub(
+        lambda m: re.split(r"[\\/]", m.group(0).rstrip("/\\"))[-1] or "…", text)
+    text = " ".join(f"{type(exc).__name__}: {text}".split())
+    return text[:limit]
+
+
 def _cron_enabled_status() -> tuple:
     """``(enabled, error)`` — cron flag plus a short reason when the CHECK
     itself failed (import/read error), so "cron is off" and "the cron check
@@ -131,7 +146,7 @@ def _cron_enabled_status() -> tuple:
         from tools.cronjob_tools import cron_enabled
         return bool(cron_enabled()), None
     except Exception as exc:
-        return False, f"{type(exc).__name__}: {exc}"[:200]
+        return False, _safe_reason(exc)
 
 
 def _cron_enabled() -> bool:
@@ -218,19 +233,8 @@ def _memory_provider_status() -> tuple:
         from modules.memory.backend_factory import maybe_register_memory_backend
         return maybe_register_memory_backend(data_dir=_data_dir()), None
     except Exception as exc:
-        return None, f"{type(exc).__name__}: {exc}"[:200]
-
-
-def _memory_provider():
-    """The active external MemoryProvider, or None — reuse the registry/factory.
-
-    Prefers a provider already registered by an agent in this process; otherwise
-    constructs the configured backend read-only via the same factory the agent
-    uses. Fail-open to None (Memory page then shows an empty state). Kept as
-    the monkeypatch seam the routes/tests use; the reason-carrying variant is
-    :func:`_memory_provider_status`.
-    """
-    return _memory_provider_status()[0]
+        logger.warning("memory backend construction failed", exc_info=True)
+        return None, _safe_reason(exc)
 
 
 def _split_snippets(raw: str) -> list:
@@ -386,8 +390,12 @@ async def api_memory(request: Request, q: str = "", limit: int = 10):
     provenance the page used to lack. Legacy stampless rows stay bare.
     """
     mode = "search" if (q or "").strip() else "browse"
-    provider = _memory_provider()
+    provider, mem_error = _memory_provider_status()
     if provider is None:
+        if mem_error:
+            # WV4: a backend that could not be BUILT is not "no memories".
+            return JSONResponse({"items": None, "count": None, "mode": mode,
+                                 "limit": limit, "error": mem_error})
         return JSONResponse({"items": [], "count": 0, "mode": mode, "limit": limit})
     user_id = _effective_user_id(request)  # raises 403 outside this try — must not be fail-open-swallowed
     try:
@@ -395,7 +403,7 @@ async def api_memory(request: Request, q: str = "", limit: int = 10):
     except Exception as exc:
         # 030 D4: a failed recall read is NOT "no memories" — name it (still 200).
         return JSONResponse({"items": [], "count": 0, "mode": mode, "limit": limit,
-                             "error": f"{type(exc).__name__}: {exc}"[:200]})
+                             "error": _safe_reason(exc)})
     items = _split_snippets(raw)
     return JSONResponse({"items": items, "count": len(items), "mode": mode, "limit": limit})
 
@@ -427,7 +435,7 @@ async def api_goals(request: Request):
     except Exception as exc:
         # 030 D4: a failed read is NOT "no goals" — name it (still 200).
         return JSONResponse({"enabled": True, "goals": [], "counts": {}, "asks": [],
-                             "error": f"{type(exc).__name__}: {exc}"[:200]})
+                             "error": _safe_reason(exc)})
 
 
 @router.get("/api/webgate/cron")
@@ -443,7 +451,7 @@ async def api_cron(request: Request):
     except Exception as exc:
         # 030 D4: a failed read is NOT "no cron jobs" — name it (still 200).
         return JSONResponse({"enabled": True, "jobs": [],
-                             "error": f"{type(exc).__name__}: {exc}"[:200]})
+                             "error": _safe_reason(exc)})
 
 
 @router.get("/api/webgate/identity")
@@ -457,20 +465,65 @@ async def api_identity(request: Request):
     home = _data_dir()
     owner = _effective_user_id(request)
     instance_id = resolve_instance_id()
-    try:
-        soul = load_self_context(home) or None
-    except Exception:
-        soul = None
-    try:
-        self_doc = load_self_doc(home, owner, instance_id) or None
-    except Exception:
-        self_doc = None
+    # The core loaders never raise: an unreadable doc reads as "" exactly like
+    # an absent one. Probe the files they read so a doc that EXISTS but cannot
+    # be read is named (``*_error``) instead of rendering "nothing written yet"
+    # — an Edit opened over that empty state would propose an empty doc over
+    # the real one (2026-10-03 audit WV2).
+    soul, soul_error = _identity_read(
+        lambda: load_self_context(home), _soul_doc_paths(home))
+    self_doc, self_error = _identity_read(
+        lambda: load_self_doc(home, owner, instance_id),
+        _self_doc_paths(home, owner, instance_id))
     return JSONResponse({
         "soul": soul,
         "self": self_doc,
+        "soul_error": soul_error,
+        "self_error": self_error,
         "instance_id": instance_id,
         "owner": owner,
     })
+
+
+def _soul_doc_paths(home) -> list:
+    from core.instance import _SELF_CONTEXT_DOCS, _SELF_CONTEXT_SUBDIR
+    base = Path(home) / _SELF_CONTEXT_SUBDIR
+    return [base / name for name in _SELF_CONTEXT_DOCS]
+
+
+def _self_doc_paths(home, owner, instance_id) -> list:
+    try:
+        from core.instance import _SELF_DOC_NAME, self_tier_root
+        return [self_tier_root(home, str(owner), instance_id) / _SELF_DOC_NAME]
+    except Exception:
+        return []  # an unsafe/anonymous tenant has no SELF doc to probe
+
+
+def _doc_unreadable(paths) -> "str | None":
+    """The reason the first EXISTING doc in *paths* cannot be read, else None.
+    A missing doc is not an error — it is the genuine empty state."""
+    for path in paths:
+        try:
+            if not path.exists():
+                continue
+            path.read_text(encoding="utf-8")
+        except Exception as exc:
+            logger.warning("identity doc unreadable: %s", path, exc_info=True)
+            return _safe_reason(exc)
+    return None
+
+
+def _identity_read(load, paths) -> tuple:
+    """``(text or None, error or None)`` for one identity doc tier."""
+    try:
+        text = load() or None
+    except Exception as exc:
+        return None, _safe_reason(exc)
+    if text is None:
+        error = _doc_unreadable(paths)
+        if error:
+            return None, error
+    return text, None
 
 
 # --- avatar — the instance's image slot (core/avatar.py) -------------------- #
@@ -903,6 +956,9 @@ async def api_config_set(request: Request, key: str):
         body = await request.json()
     except Exception:
         body = {}
+    if not isinstance(body, dict):
+        # Audit WR12: a list/string body is a bad request, not an AttributeError 500.
+        return JSONResponse({"error": "JSON body must be an object"}, status_code=400)
     res = config_service.set_value(
         key, str(body.get("value", "")),
         scope=body.get("scope"), user_id=user_id, home_dir=_data_dir(),
@@ -1018,20 +1074,27 @@ async def api_preferences_patch(request: Request):
                 else:
                     queued.append({"key": key, "entry": entry, "error": result})
             applied_additions: list = []
+            add_error = None
             if added:
                 updated = sorted(set(current) | set(added))
                 ok_add, add_err = write_preference(_data_dir(), user_id, key, updated)
                 if ok_add:
                     applied_additions = added
+                else:
+                    # Audit WR5: an addition that did not persist is a gate the
+                    # owner believes is on and is not — never report success.
+                    add_error = str(add_err or "the addition was not saved")
             value, source = display_effective(key, user_id, _data_dir())
             console_write(CONSOLE_PREF_WRITE, user_id=user_id,
                           attrs={"key": key, "queued": len(queued),
-                                 "applied_additions": len(applied_additions)})
+                                 "applied_additions": len(applied_additions),
+                                 "ok": add_error is None})
             return JSONResponse({
-                "ok": True, "key": key, "queued": queued,
+                "ok": add_error is None, "key": key, "queued": queued,
                 "applied_additions": applied_additions,
+                "error": add_error,
                 "value": value, "source": source,
-            }, status_code=202)
+            }, status_code=202 if add_error is None else 400)
         # Pure addition (or no-op) — falls through to the normal direct-apply.
     ok, err = write_preference(_data_dir(), user_id, key, body.get("value"))
     if not ok:
@@ -1165,17 +1228,29 @@ def _decide_pending(kind: str, item_id: str, kw: dict, *, approved: bool) -> tup
     return fn(kind, item_id, **kw)
 
 
+def _decide_pending_safely(kind: str, item_id: str, kw: dict, *, approved: bool) -> tuple:
+    """``(ok, message, error)`` — a decider whose store refuses (a locked
+    ``goals.db``) is "nothing was decided" in words, never a 500 (audit WR9)."""
+    try:
+        ok, msg = _decide_pending(kind, item_id, kw, approved=approved)
+        return ok, msg, None
+    except Exception as exc:
+        logger.warning("pending decide %s/%s failed", kind, item_id, exc_info=True)
+        from webview.copy import t
+        return False, t("inbox.unreachable"), _safe_reason(exc)
+
+
 @router.post("/api/webgate/pending/{kind}/{item_id}/promote", dependencies=webgate.MUTATION_DEPS)
 async def api_pending_promote(request: Request, kind: str, item_id: str):
     """Owner decision: promote a pending proposal to active. 403 in read-only;
     tenant-scoped (a tenant can only act on its OWN queue). A miss/failure is
     ``{ok:false, message}``, never a 500 — the aggregator is the authority."""
     kw = _pending_kwargs(request)
-    ok, msg = _decide_pending(kind, item_id, kw, approved=True)
+    ok, msg, error = _decide_pending_safely(kind, item_id, kw, approved=True)
     console_write(CONSOLE_PENDING_DECIDE, user_id=kw["user_id"],
                   attrs={"kind": kind, "item_id": item_id,
                          "approved": True, "ok": bool(ok)})
-    return JSONResponse({"ok": ok, "message": msg})
+    return JSONResponse({"ok": ok, "message": msg, "error": error})
 
 
 @router.post("/api/webgate/pending/{kind}/{item_id}/reject", dependencies=webgate.MUTATION_DEPS)
@@ -1183,11 +1258,11 @@ async def api_pending_reject(request: Request, kind: str, item_id: str):
     """Owner decision: reject (archive) a pending proposal. Same gating as
     promote."""
     kw = _pending_kwargs(request)
-    ok, msg = _decide_pending(kind, item_id, kw, approved=False)
+    ok, msg, error = _decide_pending_safely(kind, item_id, kw, approved=False)
     console_write(CONSOLE_PENDING_DECIDE, user_id=kw["user_id"],
                   attrs={"kind": kind, "item_id": item_id,
                          "approved": False, "ok": bool(ok)})
-    return JSONResponse({"ok": ok, "message": msg})
+    return JSONResponse({"ok": ok, "message": msg, "error": error})
 
 
 # --------------------------------------------------------------------------- #
@@ -1541,7 +1616,7 @@ async def api_invoices(request: Request, status: str = ""):
         return JSONResponse({"user_id": user_id, "invoices": None, "count": None,
                              "outstanding_usd_total": None,
                              "outstanding_count": None, "truncated": False,
-                             "error": f"{type(exc).__name__}: {exc}"[:200]})
+                             "error": _safe_reason(exc)})
     if not ok:
         return JSONResponse({"user_id": user_id, "invoices": None, "count": None,
                              "outstanding_usd_total": None,
@@ -1583,8 +1658,10 @@ async def api_invoice_settle(request: Request, request_id: str):
     async def _settle(db):
         from modules.x402.invoicing import (list_payment_requests,
                                             settle_payment_request)
+        # Audit WR10: resolve among EVERY pending row the outstanding total
+        # counts, not the first 200 — an older invoice must stay settleable.
         rows = await list_payment_requests(user_id=user_id, status="pending",
-                                           limit=200, db=db)
+                                           limit=_OUTSTANDING_SCAN_LIMIT, db=db)
         resolved, err = owner_ops.resolve_prefix(
             request_id, [str(r["request_id"]) for r in rows])
         if err:
@@ -1604,7 +1681,7 @@ async def api_invoice_settle(request: Request, request_id: str):
         ok, out = await _with_owner_money_db(_settle)
     except Exception as exc:
         return JSONResponse(
-            {"ok": False, "message": f"settle failed: {exc}"[:300]},
+            {"ok": False, "message": f"settle failed: {_safe_reason(exc, 280)}"},
             status_code=500)
     if not ok:
         return JSONResponse({"ok": False, "message": str(out)},
@@ -1635,7 +1712,7 @@ async def api_doctor(request: Request):
         # 2026-09-21: this used to be `checks = []` — a confident "nothing to
         # report" over a report that could not be built. Name the fault.
         checks = None
-        checks_error = f"{type(e).__name__}: {e}"
+        checks_error = _safe_reason(e)
         logger.warning("api_doctor: doctor_report failed — %s", checks_error, exc_info=True)
     provider, model = _provider_model()
     rob_local = local_flag_on(env, absent_means_on=False)

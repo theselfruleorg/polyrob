@@ -101,7 +101,7 @@ def register(reg, Command) -> None:
         usage="<url> [max_usd] [go] [id=<name>]", group="money", help_long=_usage(pay_ops),
         elsewhere="`/pay` on Telegram."))
     reg.register(Command(
-        "nft", h_nft, "Collectibles I hold: agent NFTs and their accounts, send, list, info, transfer, revoke",
+        "nft", h_nft, "Collectibles I hold: agent NFTs and their accounts, trust, send, list, info, transfer, revoke",
         usage="[send <id> <to> [go]]|list|info|transfer|revoke …", group="money", help_long=_usage(nft_ops),
         elsewhere="`/nft` on Telegram and `polyrob wallet nft`."))
     reg.register(Command(

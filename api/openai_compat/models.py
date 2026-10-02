@@ -1,12 +1,49 @@
 """OpenAI-compatible request/response schemas for POLYROB's /v1 endpoint."""
-from typing import List, Optional
+from typing import Any, List, Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+#: Content-part types whose text the agent turn can carry.
+TEXT_PART_TYPES = frozenset({"text", "input_text"})
 
 
 class ChatMessage(BaseModel):
+    """One OpenAI chat message.
+
+    API13: OpenAI allows ``content`` as a string, an ARRAY of content parts
+    (``[{"type": "text", "text": ...}, {"type": "image_url", ...}]``) or
+    ``null`` (an assistant tool-call turn). ``content: str`` refused the last
+    two with a 400, which broke the OpenAI SDK and LangChain. The text parts
+    are joined here; the types of any other part are kept in
+    ``non_text_parts`` so the route can REFUSE them instead of dropping them.
+    """
     role: str
     content: str = ""
+    non_text_parts: List[str] = Field(default_factory=list, exclude=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _flatten_content(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+        data.pop("non_text_parts", None)  # derived, never client-supplied
+        content = data.get("content")
+        if content is None:
+            data["content"] = ""
+        elif isinstance(content, list):
+            texts, other = [], []
+            for part in content:
+                if isinstance(part, str):
+                    texts.append(part)
+                elif isinstance(part, dict) and part.get("type") in TEXT_PART_TYPES:
+                    texts.append(str(part.get("text") or ""))
+                else:
+                    other.append(str(part.get("type", "unknown"))
+                                 if isinstance(part, dict) else "unknown")
+            data["content"] = "\n".join(t for t in texts if t)
+            data["non_text_parts"] = other
+        return data
 
 
 #: OpenAI request fields POLYROB CANNOT honour, mapped to the reason (B18).

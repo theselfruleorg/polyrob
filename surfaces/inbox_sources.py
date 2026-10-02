@@ -145,12 +145,10 @@ def collect_tool_approvals(user_id: str, *, data_dir: str) -> List[Item]:
 def collect_correspondents(user_id: str, *, data_dir: str) -> List[Item]:
     """Third parties whose replies stay unroutable until the owner decides.
 
-    The registry is PROBED first, deliberately.
-    ``core.surfaces.owner_admin.pending_correspondent_items`` catches its own
-    read failure and returns what it collected, which would present an
-    unreadable registry as an empty one. The probe is the read that is allowed
-    to raise; the listing itself is still that shared builder, not a second
-    copy of the filter.
+    ``core.surfaces.owner_admin.pending_correspondent_items`` RAISES on an
+    unreadable registry (AC1), so the failure reaches the inbox as an
+    unreadable source, never as an empty one. The listing is that shared
+    builder, not a second copy of the filter.
     """
     from core.surfaces.correspondents import CorrespondentRegistry
     from core.surfaces.owner_admin import pending_correspondent_items
@@ -158,7 +156,6 @@ def collect_correspondents(user_id: str, *, data_dir: str) -> List[Item]:
     if path is None:
         return []
     registry = CorrespondentRegistry(path)
-    registry.list(user_id=user_id)  # the probe — an unreadable store raises here
     out: List[Item] = []
     for row in pending_correspondent_items(registry, user_id) or []:
         preview = str(row.get("preview") or "")

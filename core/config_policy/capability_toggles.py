@@ -50,11 +50,12 @@ def coding_tools_enabled() -> bool:
 def email_provider(env=None) -> str:
     """Which transport backs the agent's email: ``smtp`` | ``agentmail``.
 
-    An explicit ``EMAIL_PROVIDER`` always wins; any other value (incl. the
-    ``auto`` default) resolves to ``agentmail`` iff ``AGENTMAIL_API_KEY`` is set
-    — the one-env-var "agent has its own inbox by default" path — else ``smtp``
-    (legacy GMAIL_* IMAP/SMTP, byte-identical). Unknown values fall back to
-    ``smtp`` so a typo can never route mail to an unintended provider.
+    ``EMAIL_PROVIDER=smtp`` or ``=agentmail`` always wins. Every other value —
+    the ``auto`` default, a blank, AND an unknown value such as a typo — is
+    treated as ``auto``: ``agentmail`` iff ``AGENTMAIL_API_KEY`` is set (the
+    one-env-var "agent has its own inbox by default" path), else ``smtp``
+    (legacy GMAIL_* IMAP/SMTP). The surface probe, the tool and the status
+    seat all read this one function.
     """
     src = os.environ if env is None else env
     raw = (src.get("EMAIL_PROVIDER") or "auto").strip().lower()

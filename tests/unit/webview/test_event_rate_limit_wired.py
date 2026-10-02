@@ -20,7 +20,38 @@ async def test_emit_feed_event_drops_over_limit(monkeypatch):
     for i in range(5):
         await server._emit_feed_event({"type": "x", "i": i}, room)
 
-    assert len(emitted) == 3, f"expected exactly 3 emits (the cap), got {len(emitted)}"
+    updates = [e for e in emitted if e[0] == "feed_update"]
+    assert len(updates) == 3, f"expected exactly 3 emits (the cap), got {len(updates)}"
+
+
+@pytest.mark.asyncio
+async def test_a_dropped_event_signals_one_feed_gap(monkeypatch):
+    """WS4: the limiter used to drop silently and the client never refetched.
+    The first drop emits ONE feed_gap (with retry_after); the next allowed
+    event re-arms it."""
+    import webview.server as server
+
+    emitted = []
+
+    async def _fake_emit(event, data=None, room=None):
+        emitted.append((event, data, room))
+
+    allow = {"ok": False}
+    monkeypatch.setattr(server._sio, "emit", _fake_emit)
+    monkeypatch.setattr(server, "check_event_rate_limit", lambda room: allow["ok"])
+    room = "ws4-gap-session"
+    server._gapped_rooms.discard(room)
+    for _ in range(3):
+        assert await server._emit_feed_event({"type": "x"}, room) is False
+    gaps = [e for e in emitted if e[0] == "feed_gap"]
+    assert gaps == [("feed_gap", {"session_id": room,
+                                  "retry_after": server.RATE_LIMIT_WINDOW}, room)]
+    allow["ok"] = True
+    assert await server._emit_feed_event({"type": "x"}, room) is True
+    allow["ok"] = False
+    await server._emit_feed_event({"type": "x"}, room)
+    assert [e[0] for e in emitted].count("feed_gap") == 2
+    server._gapped_rooms.discard(room)
 
 
 @pytest.mark.asyncio

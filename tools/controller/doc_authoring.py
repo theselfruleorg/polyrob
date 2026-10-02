@@ -19,6 +19,7 @@ from typing import Optional
 
 from pydantic import BaseModel
 
+from core.instance import OWNER_DOC_MAX_CHARS, SELF_DOC_MAX_CHARS
 from core.runtime_paths import data_dir_or_home
 from tools.controller.types import ActionResult
 from tools.controller._helpers import self_mod_emitter
@@ -243,7 +244,7 @@ class DocAuthoringMixin:
 
 		class SelfContextManageAction(BaseModel):
 			action: _Literal["update", "patch", "read", "promote"]
-			content: Optional[str] = None      # update: full self.md body (≤2200 chars)
+			content: Optional[str] = None      # update: full self.md body (≤SELF_DOC_MAX_CHARS)
 			old_string: Optional[str] = None   # patch: exact text to replace
 			new_string: Optional[str] = None   # patch: replacement
 			replace_all: bool = False
@@ -261,7 +262,7 @@ class DocAuthoringMixin:
 			"place for an owner instruction (use `owner_doc_manage`) and NOT for a "
 			"typed setting like reply length or tone (use `preferences`). "
 			"action='read' "
-			"returns the current text; action='update' replaces it (≤2200 chars — "
+			f"returns the current text; action='update' replaces it (≤{SELF_DOC_MAX_CHARS} chars — "
 			"consolidate, don't sprawl); action='patch' edits by exact-string replace; "
 			"action='promote' activates your pending draft (owner-only). On your owner's own "
 			"turn an update/patch applies now; otherwise it is queued for review. This is NOT your core "
@@ -434,7 +435,7 @@ class DocAuthoringMixin:
 			"directive belongs, so it survives the turn. For a TYPED setting "
 			"(reply length, tone, digest, quotas, caps) use `preferences` instead — "
 			"it applies immediately and is actually enforced (a small owner.md, "
-			"≤4000 chars). "
+			f"≤{OWNER_DOC_MAX_CHARS} chars). "
 			"action='read' returns it; action='update' replaces it (consolidate, keep "
 			"only durable facts); action='patch' edits by exact-string replace; "
 			"action='promote' activates your pending draft (owner-only). On your owner's own "

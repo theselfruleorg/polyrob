@@ -2,8 +2,8 @@
 
 ``GET /api/webgate/log?class=&raw=&diagnostics=&limit=`` — read-only. It reads
 the ONE activity stream :mod:`webview.activity` already builds (the per-session
-feed plus the durable rows, backfilled by ``activity_backfill``), scopes it to
-the caller's tenant, and stamps each event with the client-facing class
+feed plus the durable rows: the cold backfill merged with the live hub), scopes
+it to the caller's tenant, and stamps each event with the client-facing class
 :func:`core.activity_class.classify` gives it. It records nothing.
 
 Four honest-state rules this endpoint keeps:
@@ -12,7 +12,8 @@ Four honest-state rules this endpoint keeps:
    :func:`webview.pages._effective_user_id`, which 403s an unbound own_ops
    console and a multitenant caller with no identity. Only events recorded for
    that tenant are returned — the global stream is never leaked whole.
-   ⚠️ An event with an EMPTY ``user_id`` belongs to this tenant too: the
+   ⚠️ On a single-owner console (and for the instance owner on a multitenant
+   one) an event with an EMPTY ``user_id`` belongs to this tenant too: the
    snapshot's own tenant filter is ``(user_id = ? OR user_id = '')``
    (``core/status_snapshot.py``), because several writers record a
    single-owner instance's rows with no tenant stamp. Filtering them out made
@@ -55,19 +56,37 @@ def _truthy(value: Any) -> bool:
 
 
 def _recent_events(limit: int) -> List[Dict[str, Any]]:
-    """The activity stream's own events, newest window first.
+    """The activity stream's own events, oldest first, at most *limit*.
 
-    Reuses the exact data path ``activity_backfill`` uses — the live hub ring
-    buffer, falling back to a cold backfill over the stores — so the Log reads
-    the same events the legacy ``/activity`` page did, with no second reader.
-    May raise; the caller turns that into an honest ``unreadable`` answer.
+    ALWAYS the cold backfill over the stores MERGED with the live hub ring,
+    deduplicated by event id (audit WV3). The hub holds only what arrived
+    since this process started, so reading the cold window only when the ring
+    was empty lost everything before a restart the moment the first live
+    event landed. May raise; the caller turns that into an honest
+    ``unreadable`` answer.
     """
     from webview import activity
-    hub = activity.get_hub()
-    events = hub.recent(limit)
-    if not events:
-        events = activity._cold_backfill(limit)
-    return events
+    merged: Dict[Any, Dict[str, Any]] = {}
+    for event in activity._cold_backfill(limit) + activity.get_hub().recent(limit):
+        if not isinstance(event, dict):
+            continue
+        key = event.get("id") or ("anon", id(event))
+        merged[key] = event  # the live copy wins over the cold one
+    events = sorted(merged.values(), key=lambda ev: ev.get("ts") or 0.0)
+    return events[-limit:]
+
+
+def _own_untenanted_rows(user_id: str) -> bool:
+    """Do rows with NO tenant stamp belong to *user_id*? On a single-owner
+    console, yes (rule 1). On a multitenant console only the instance owner
+    owns them — another tenant must never read them (audit WR6)."""
+    from webview import webgate
+    if not webgate.is_multitenant():
+        return True
+    try:
+        return str(user_id) == str(webgate.local_owner_id())
+    except Exception:
+        return False
 
 
 @router.get("/api/webgate/log")
@@ -96,11 +115,12 @@ async def api_log(
         events = _recent_events(window)
     except Exception as exc:
         logger.warning("activity log read failed for tenant %s", user_id, exc_info=True)
+        from webview.pages import _safe_reason
         return JSONResponse({
             "entries": None,
             "classes": list(CLIENT_CLASSES),
             "filtered_out": None,
-            "unreadable": f"{type(exc).__name__}: {exc}"[:200],
+            "unreadable": _safe_reason(exc),
             "user_id": user_id,
         })
 
@@ -109,6 +129,7 @@ async def api_log(
     #: another tenant's events plus the diagnostics the switch is hiding. The
     #: count is what turns "a quiet day" into "a filtered view".
     filtered_out = 0
+    own_untenanted = _own_untenanted_rows(user_id)
     for event in events:
         if not isinstance(event, dict):
             continue
@@ -116,7 +137,7 @@ async def api_log(
         # a single-owner instance writes — the same rule the status snapshot
         # applies. Another tenant's row is dropped and COUNTED.
         row_user = str(event.get("user_id") or "")
-        if row_user and row_user != user_id:
+        if (row_user and row_user != user_id) or (not row_user and not own_untenanted):
             filtered_out += 1
             continue
         kind = str(event.get("kind") or "")

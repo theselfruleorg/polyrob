@@ -147,6 +147,10 @@ def _attachments(em: Message) -> list:
     return out
 
 
+#: Headers that mark a mail as machine-sent (OS5).
+_AUTO_HEADERS = ("Auto-Submitted", "Precedence", "X-Autoreply", "X-Autorespond")
+
+
 def normalize_email_message(em: Message) -> dict:
     """Map a parsed email to the normalized dict ``process_email`` consumes. Pure."""
     return {
@@ -157,6 +161,9 @@ def normalize_email_message(em: Message) -> dict:
         "in_reply_to": (em.get("In-Reply-To") or "").strip(),
         "references": (em.get("References") or "").strip(),
         "attachments": _attachments(em),
+        # OS5: the RFC 3834 / de-facto auto-reply markers, read by
+        # ``inbound.is_auto_generated`` so an auto-responder is never answered.
+        "headers": {k: str(em.get(k) or "") for k in _AUTO_HEADERS if em.get(k)},
     }
 
 
@@ -278,7 +285,11 @@ class EmailHarness:
             # transport handle. Both are idempotent.
             self._attempts.pop(key, None)
             self._record_handled(key)
-            self.fetcher.mark_handled(handle)
+            mark_async = getattr(self.fetcher, "mark_handled_async", None)
+            if callable(mark_async):
+                await mark_async(handle)   # EM1: IMAP stays off the loop
+            else:
+                self.fetcher.mark_handled(handle)
         return routed
 
     def _record_handled(self, key: str) -> None:

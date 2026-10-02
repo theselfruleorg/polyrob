@@ -4,9 +4,11 @@
 the ledger rows :mod:`core.artifacts` recorded for the session, each with its
 ``kind`` (page/code/report/data/file), any published ``url``, and a freshly
 computed ``verdict`` (``ok``/``changed``/``missing``/``unknown``). It reads the
-ONE ledger the tools write on every produced file; it never records anything.
+ONE ledger the tools write on every produced file; it never records anything —
+the verdict is computed with ``record=False`` (no ``verified_at`` write) and
+off the event loop, because a changed file is re-hashed (audit WR1).
 
-Two honest-state rules this endpoint keeps:
+Three honest-state rules this endpoint keeps:
 
 1. A session with no recorded artifacts is an empty list, NOT an error — the
    agent that wrote nothing is a fact, not a failure.
@@ -22,6 +24,7 @@ Tenant scoping is :func:`webview.pages._effective_user_id`, which 403s an
 unbound own_ops console and a multitenant caller with no identity — so this
 never lists the instance owner's files to a caller who is not them.
 """
+import asyncio
 import logging
 import os
 from typing import Optional
@@ -87,12 +90,19 @@ async def api_artifacts(request: Request, session_id: Optional[str] = None) -> J
         except Exception:
             logger.debug("artifact rows: no workspace for %s", clean_id, exc_info=True)
 
+    def _verdicts() -> list:
+        out = []
+        for art in rows:
+            try:
+                verdict = ledger.verdict(art, record=False)
+            except Exception:
+                verdict = "unknown"
+            out.append(verdict)
+        return out
+
+    verdicts = await asyncio.to_thread(_verdicts) if rows else []
     artifacts = []
-    for art in rows:
-        try:
-            verdict = ledger.verify(art.id, str(user_id))
-        except Exception:
-            verdict = "unknown"
+    for art, verdict in zip(rows, verdicts):
         artifacts.append({
             "id": art.id,
             "name": os.path.basename(art.path or ""),

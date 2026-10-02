@@ -43,6 +43,12 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)  # x402 flow
 
         token = auth_header[7:]
+        # API6: only a JWT-shaped token (three dot-separated parts) is ours to
+        # judge. A `Bearer rob_…` API key or the operator service token was
+        # 401'd here as "Invalid token" before the key validators and the
+        # fallback gate (both further in) could accept it.
+        if token.count(".") != 2:
+            return await call_next(request)
 
         try:
             # Decode JWT

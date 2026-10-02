@@ -372,16 +372,31 @@ export function renderIdentity(root, data, copy, opts = {}) {
   root.appendChild(faceSec);
 
   // The persona you wrote — READ-ONLY. It is the one document Rob never edits.
+  // WV2: a failed read of either document is "could not read" with its reason
+  // — never "nothing written yet", which reads as an empty document.
   const soulSec = section(copy && copy.id_persona_title, copy && copy.id_persona_aside);
-  const soul = el("div", "entry");
-  soul.appendChild(el("p", "entry-body",
-    (data.soul && String(data.soul)) || (copy && copy.id_persona_empty) || ""));
-  soulSec.appendChild(soul);
+  if (data.soul_error) {
+    soulSec.appendChild(dashedEntry(String(data.soul_error), copy,
+      "id_persona_unreadable", "id_unreadable_why"));
+  } else {
+    const soul = el("div", "entry");
+    soul.appendChild(el("p", "entry-body",
+      (data.soul && String(data.soul)) || (copy && copy.id_persona_empty) || ""));
+    soulSec.appendChild(soul);
+  }
   root.appendChild(soulSec);
 
   // What Rob has learned about itself — a reviewable change. Editing it proposes
   // a new version into the review queue; it is never live until you keep it.
   const selfSec = section(copy && copy.id_learned_title, copy && copy.id_learned_aside);
+  if (data.self_error) {
+    // No Edit on an unread document: a save would propose an empty doc over
+    // the real one.
+    selfSec.appendChild(dashedEntry(String(data.self_error), copy,
+      "id_learned_unreadable", "id_unreadable_why"));
+    root.appendChild(selfSec);
+    return "identity";
+  }
   const self = el("div", "entry");
   self.appendChild(el("p", "entry-body",
     (data.self && String(data.self)) || (copy && copy.id_learned_empty) || ""));

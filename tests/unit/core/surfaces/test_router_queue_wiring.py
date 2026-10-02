@@ -155,3 +155,35 @@ def test_media_column_added_to_a_preexisting_queue_db(tmp_path):
                      dest="1", payload="t", media=[{"kind": "image", "path": "/x.png"}])
     row = q.claim_due(9999999999.0)[0]
     assert row["media"]
+
+
+@pytest.mark.asyncio
+async def test_two_identical_replies_are_two_queued_messages(tmp_path, monkeypatch):
+    """OB2: the second identical reply in a session ("Done.") used to collide
+    with the first row's key and was reported queued but never sent."""
+    monkeypatch.setenv("OUTBOUND_QUEUE_ENABLED", "true")
+    reg = SessionChatRegistry(os.path.join(tmp_path, "reg.db"))
+    reg.bind("sk", "sid", "u1", "wa", "123")
+    q = OutboundDeliveryQueue(os.path.join(tmp_path, "o.db"))
+    r = MessageRouter(reg)
+    r.attach_queue(q)
+    r.subscribe("wa", _Surface())
+    assert await r.publish(OutboundMessage(session_key="sk", text="Done.")) is True
+    row = q.claim_due(now=1e12)[0]
+    q.mark_delivered(row["id"])
+    assert await r.publish(OutboundMessage(session_key="sk", text="Done.")) is True
+    assert q.counts()["pending"] == 1
+
+
+@pytest.mark.asyncio
+async def test_two_identical_cross_process_sends_both_queue(tmp_path):
+    """OB2: send_message_ex's cross-process fallback keyed on hash(text) too."""
+    reg = SessionChatRegistry(os.path.join(tmp_path, "reg.db"))
+    q = OutboundDeliveryQueue(os.path.join(tmp_path, "o.db"))
+    r = MessageRouter(reg)
+    r.attach_queue(q)
+    assert await r.send_message_ex("1", "Done.", surface_id="email") == "queued"
+    row = q.claim_due(now=1e12)[0]
+    q.mark_delivered(row["id"])
+    assert await r.send_message_ex("1", "Done.", surface_id="email") == "queued"
+    assert q.counts()["pending"] == 1

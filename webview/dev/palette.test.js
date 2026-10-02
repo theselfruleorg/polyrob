@@ -28,6 +28,7 @@ import {
   normalizeQuery,
   render,
   verbRow,
+  loadVerbs as fetchVerbTable,
 } from "../static/app/palette.js";
 
 // Read the REAL committed artifact, so this suite also proves it loads and is
@@ -270,5 +271,26 @@ describe("the copy crosses from Python on data attributes", () => {
 
   it("is empty, not broken, when the element is missing", () => {
     expect(copyFrom(null)).toEqual({});
+  });
+});
+
+
+describe("FE8 — a failed verb table is not cached", () => {
+  it("a failed read says unreadable, and the next open reads again", async () => {
+    let calls = 0;
+    const fetcher = async () => {
+      calls += 1;
+      if (calls === 1) return { ok: false, status: 503, json: async () => ({}) };
+      return { ok: true, status: 200, json: async () => ({ group_order: ["g"], verbs: [{ name: "/go", group: "g" }] }) };
+    };
+    const first = await fetchVerbTable(fetcher);
+    expect(first.unreadable).toBe(true);
+    const box = document.createElement("div");
+    expect(render(box, first, "/go", { unknown: "unknown", unreadable: "could not read" })).toBe("unreadable");
+    expect(box.textContent).toBe("could not read");
+    const second = await fetchVerbTable(fetcher);
+    expect(second.unreadable).toBeUndefined();
+    expect(second.verbs.length).toBe(1);
+    expect(calls).toBe(2);
   });
 });

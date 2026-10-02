@@ -62,6 +62,11 @@ _RUNTIME_HEAD = bytes.fromhex("363d3d373d3d3d363d73")
 _RUNTIME_LEN = 10 + 20 + 15 + 128
 
 # Account-admin selectors (050 §7.3 rule 4). `execute` with operation != 0 is refused separately.
+# C14 — the agent NEVER locks an account: `lock` is in this denylist, so no guarded call (direct,
+# through `execute`, nested or batched) can set one. A sale on a marketplace needs the collection's
+# lock (polyrob-desk SPEC I19: a non-owner transfer requires locked-now), so the agent cannot sell
+# its NFT on a marketplace; it moves only by an owner transfer (`agent_nft_withdraw_token`, always
+# owner-approved). An owner-approved `lock` verb is added only if the owner asks for one.
 ADMIN_SELECTORS: Dict[str, str] = {
     abi.selector("lock(uint256)"): "lock",
     abi.selector("setPermissions(address[],bool[])"): "setPermissions",
@@ -106,9 +111,16 @@ TOPIC_PERMIT2_PERMIT = "0xc6a377bfc4eb120024a8ac08eef205be16b817020812c73223e81d
 #: ``Lockdown(address indexed owner, address token, address spender)`` — sets the amount to 0.
 TOPIC_PERMIT2_LOCKDOWN = "0x89b1add15eff56b3dfe299ad94e01f2b52fbcb80ae1a3baea6ae8c04cb2b98a4"
 
+#: ERC-6909 (multi-token; Uniswap v4 claims) — ``Approval(address indexed owner, address indexed
+#: spender, uint256 indexed id, uint256 amount)`` and ``OperatorSet(address indexed owner, address
+#: indexed spender, bool approved)``. Both survive a sale like any approval (C17).
+TOPIC_6909_APPROVAL = "0xb3fd5071835887567a0671151121894ddccc2842f1d10bedad13e0d17cace9a7"
+TOPIC_6909_OPERATOR_SET = "0xceb576d9f15e4e200fdb5096d64d5dfd667e16def20c1eefd14256d8e3faa267"
+
 #: The approval kinds :func:`open_approvals` scans. The agent-NFT package reads this to decide whether
 #: the table it shows is COMPLETE ("permit2" present) or must say "incomplete".
-APPROVAL_KINDS: Tuple[str, ...] = ("erc20", "erc721", "operator", "permit2")
+APPROVAL_KINDS: Tuple[str, ...] = ("erc20", "erc721", "operator", "permit2", "erc6909",
+                                   "erc6909_operator")
 
 
 class Erc6551Error(RuntimeError):
@@ -167,6 +179,27 @@ def collection_account_addresses(chain_id: int, collection: str, max_supply: int
                                    str(implementation).lower(), int(salt))
 
 
+@functools.lru_cache(maxsize=8)
+def _collection_account_index(chain_id: int, collection_lower: str, max_supply: int,
+                              implementation_lower: str, salt: int) -> Dict[str, int]:
+    return {account_address(chain_id, collection_lower, k, salt=salt,
+                            implementation=implementation_lower).lower(): k
+            for k in range(0, max_supply + 1)}
+
+
+def collection_account_token_id(chain_id: int, collection: str, max_supply: int, address: str, *,
+                                implementation: str = ACCOUNT_V3_IMPL,
+                                salt: int = ACCOUNT_SALT) -> Optional[int]:
+    """The token id ``k`` whose account (this registry/implementation/salt) is *address*, or None.
+    The inverse of :func:`collection_account_addresses`; built on the first hit, then cached."""
+    a = str(address or "").lower()
+    if a not in collection_account_addresses(chain_id, collection, max_supply,
+                                             implementation=implementation, salt=salt):
+        return None
+    return _collection_account_index(int(chain_id), str(collection).lower(), int(max_supply),
+                                     str(implementation).lower(), int(salt)).get(a)
+
+
 def encode_create_account(chain_id: int, token_contract: str, token_id: int,
                           salt: int = ACCOUNT_SALT) -> str:
     return abi.encode_call(
@@ -215,6 +248,8 @@ def decode_execute_batch(data: str) -> List[Tuple[str, int, str, int]]:
 
 
 def encode_lock(locked_until: int) -> str:
+    """``lock(lockedUntil)`` calldata — for tests and reads of what a lock looks like. No verb
+    sends it: ``lock`` is an account-admin selector the guard refuses (C14)."""
     return abi.encode_call("lock", [{"type": "uint256"}], [int(locked_until)])
 
 
@@ -389,11 +424,13 @@ def read_is_trusted_forwarder(rpc: Rpc, account: str, forwarder: str) -> bool:
 
 @dataclass(frozen=True)
 class OpenApproval:
-    kind: str                 # "erc20" | "erc721" | "operator" (ApprovalForAll: 721 or 1155) | "permit2"
+    #: "erc20" | "erc721" | "operator" (ApprovalForAll: 721 or 1155) | "permit2" | "erc6909"
+    #: (ERC-6909 per-id allowance) | "erc6909_operator" (ERC-6909 OperatorSet)
+    kind: str
     contract: str             # the token (for "permit2": the ERC-20 whose Permit2 allowance this is)
     spender: str              # spender / approved / operator
-    token_id: Optional[int]   # erc721 only
-    amount: Optional[int]     # erc20 / permit2 (live allowance when verified)
+    token_id: Optional[int]   # erc721 / erc6909
+    amount: Optional[int]     # erc20 / permit2 / erc6909 (live allowance when verified)
     block: int
     verified: bool            # True = confirmed by a live read; False = the live read failed (kept: fail closed)
     expiration: Optional[int] = None  # permit2 only (unix seconds)
@@ -415,7 +452,8 @@ def _scan_logs(rpc: Rpc, account: str, since_block: int, to_block: int, step: in
         got = rpc("eth_getLogs", [{
             "fromBlock": hex(start), "toBlock": hex(end),
             "topics": [[TOPIC_APPROVAL, TOPIC_APPROVAL_FOR_ALL, TOPIC_PERMIT2_APPROVAL,
-                        TOPIC_PERMIT2_PERMIT, TOPIC_PERMIT2_LOCKDOWN], _pad_topic(account)],
+                        TOPIC_PERMIT2_PERMIT, TOPIC_PERMIT2_LOCKDOWN, TOPIC_6909_APPROVAL,
+                        TOPIC_6909_OPERATOR_SET], _pad_topic(account)],
         }])
         if not isinstance(got, list):
             raise Erc6551Error(f"eth_getLogs {start}-{end} returned no list — refusing to report 'none'")
@@ -461,7 +499,18 @@ def open_approvals(rpc: Rpc, account: str, since_block: int, *, to_block: Option
                 last[("permit2", token.lower(), spender.lower())] = OpenApproval(
                     "permit2", token, spender, None, amount, block, False, expiration) if amount else None
             continue
-        if topics[0] == TOPIC_APPROVAL_FOR_ALL and len(topics) == 3:
+        if topics[0] == TOPIC_6909_OPERATOR_SET and len(topics) == 3:
+            op = _topic_addr(topics[2])
+            approved = int(data[:64] or "0", 16) != 0
+            last[("erc6909_operator", contract.lower(), op.lower())] = OpenApproval(
+                "erc6909_operator", contract, op, None, None, block, False) if approved else None
+        elif topics[0] == TOPIC_6909_APPROVAL and len(topics) == 4:
+            spender = _topic_addr(topics[2])
+            tid = int(topics[3], 16)
+            amount = int(data[:64] or "0", 16)
+            last[("erc6909", contract.lower(), spender.lower(), tid)] = OpenApproval(
+                "erc6909", contract, spender, tid, amount, block, False) if amount else None
+        elif topics[0] == TOPIC_APPROVAL_FOR_ALL and len(topics) == 3:
             op = _topic_addr(topics[2])
             approved = int(data[:64] or "0", 16) != 0
             last[("operator", contract.lower(), op.lower())] = OpenApproval(
@@ -521,6 +570,17 @@ def encode_erc721_revoke(token_id: int) -> str:
                            ["0x" + "00" * 20, int(token_id)])
 
 
+def encode_erc6909_revoke(spender: str, token_id: int) -> str:
+    """ERC-6909 ``approve(spender, id, 0)`` (``TxIntent.erc6909_revokes``)."""
+    return abi.encode_call("approve", [{"type": "address"}, {"type": "uint256"}, {"type": "uint256"}],
+                           [spender, int(token_id), 0])
+
+
+def encode_erc6909_operator_revoke(spender: str) -> str:
+    """ERC-6909 ``setOperator(spender, false)`` (``TxIntent.nft_operator_ops`` with False)."""
+    return abi.encode_call("setOperator", [{"type": "address"}, {"type": "bool"}], [spender, False])
+
+
 def _still_open(rpc: Rpc, account: str, r: OpenApproval, *, now: Optional[int] = None) -> Optional[OpenApproval]:
     if r.kind == "permit2":
         amount, expiration, _nonce = read_permit2_allowance(rpc, account, r.contract, r.spender)
@@ -531,6 +591,15 @@ def _still_open(rpc: Rpc, account: str, r: OpenApproval, *, now: Optional[int] =
         amount = int(_call(rpc, r.contract, "allowance", [{"type": "address"}, {"type": "address"}],
                            [account, r.spender], [{"type": "uint256"}]))
         return OpenApproval(r.kind, r.contract, r.spender, None, amount, r.block, True) if amount else None
+    if r.kind == "erc6909":
+        amount = int(_call(rpc, r.contract, "allowance",
+                           [{"type": "address"}, {"type": "address"}, {"type": "uint256"}],
+                           [account, r.spender, int(r.token_id)], [{"type": "uint256"}]))
+        return OpenApproval(r.kind, r.contract, r.spender, r.token_id, amount, r.block, True) if amount else None
+    if r.kind == "erc6909_operator":
+        ok = bool(_call(rpc, r.contract, "isOperator", [{"type": "address"}, {"type": "address"}],
+                        [account, r.spender], [{"type": "bool"}]))
+        return OpenApproval(r.kind, r.contract, r.spender, None, None, r.block, True) if ok else None
     if r.kind == "operator":
         ok = bool(_call(rpc, r.contract, "isApprovedForAll", [{"type": "address"}, {"type": "address"}],
                         [account, r.spender], [{"type": "bool"}]))

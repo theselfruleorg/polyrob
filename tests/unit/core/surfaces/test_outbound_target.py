@@ -25,3 +25,29 @@ def test_owner_beats_allowlist_lookup():
     tier = resolve_target_tier(surface="email", target="me@x.com", user_id="rob",
                                allowlist=_AL([]), owner_targets={"email": "me@x.com"})
     assert tier == "owner"
+
+
+# --- OB3 (2026-10-03 audit) ------------------------------------------------------
+
+import pytest as _pytest
+
+
+@_pytest.mark.parametrize("target", [
+    "victim@gmail.com, x@corp.io",
+    "victim@gmail.com;x@corp.io",
+    "victim@gmail.com\r\nBcc: x@corp.io",
+    "x@corp.io victim@gmail.com",
+])
+def test_domains_policy_refuses_more_than_one_address(target):
+    from core.surfaces.outbound_target import resolve_target_tier
+    assert resolve_target_tier(surface="email", target=target, user_id="u",
+                               allowlist=None, owner_targets={},
+                               policy="domains", domains=("corp.io",)) == "denied"
+
+
+@_pytest.mark.parametrize("target", ["x@corp.io", "Bob <bob@Corp.io>", "a@mail.corp.io"])
+def test_domains_policy_still_opens_one_address(target):
+    from core.surfaces.outbound_target import resolve_target_tier
+    assert resolve_target_tier(surface="email", target=target, user_id="u",
+                               allowlist=None, owner_targets={},
+                               policy="domains", domains=("corp.io",)) == "open"

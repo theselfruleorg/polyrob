@@ -89,6 +89,11 @@ def _payment_header(payer="0xPayerAddress000000000000000000000001"):
     return base64.b64encode(json.dumps(payload).encode()).decode()
 
 
+#: API10: settlement happens only for a NEW `message/send`.
+_NEW_SEND = {"jsonrpc": "2.0", "id": 1, "method": "message/send", "params": {
+    "message": {"role": "user", "parts": [{"kind": "text", "text": "hi"}]}}}
+
+
 def _client(monkeypatch, mixed_case_tx, captured):
     monkeypatch.setenv("X402_PAYMENT_RECIPIENT", "0x" + "1" * 40)
     monkeypatch.setenv("X402_DEFAULT_CHAIN", "base")
@@ -127,7 +132,7 @@ def test_middleware_normalizes_tx_hash_case_before_recording(monkeypatch):
     captured = {}
     client = _client(monkeypatch, mixed_case_tx, captured)
 
-    resp = client.post("/a2a/rpc", json={"x": 1}, headers={"X-PAYMENT": _payment_header()})
+    resp = client.post("/a2a/rpc", json=_NEW_SEND, headers={"X-PAYMENT": _payment_header()})
 
     assert resp.status_code == 200, resp.text
     assert captured.get("transaction_hash") == mixed_case_tx.lower()
@@ -143,7 +148,7 @@ def test_middleware_store_is_idempotent_on_already_lowercase_hash(monkeypatch):
     captured = {}
     client = _client(monkeypatch, already_lower_tx, captured)
 
-    resp = client.post("/a2a/rpc", json={"x": 1}, headers={"X-PAYMENT": _payment_header()})
+    resp = client.post("/a2a/rpc", json=_NEW_SEND, headers={"X-PAYMENT": _payment_header()})
 
     assert resp.status_code == 200, resp.text
     assert captured.get("transaction_hash") == already_lower_tx

@@ -904,11 +904,16 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
                 usd=decision.amount_usd, tx_ref=tx_hash, lane=decision.lane,
                 cap_used_usd=_used, cap_limit_usd=_limit), settled=False)
 
-            receipt = await asyncio.to_thread(rail.await_receipt, tx_hash)
-            gate.record(venue="defi", action="wrap",
+            _rec = dict(venue="defi", action="wrap",
                         amount_usd=decision.amount_usd or 0.0,
                         counterparty=str(wrapped), idempotency_key=idem,
                         result_ref=tx_hash, chain=params.chain)
+            receipt = await self._await_receipt_or_record(
+                rail, tx_hash, gate=gate, record_kw=_rec,
+                execution_context=execution_context,
+                notice_kw=dict(verb="wrap", route=params.chain, chain=params.chain,
+                               amount_in=_label, usd=decision.amount_usd))
+            gate.record(**_rec)
             self._notify_tx(execution_context, tx_notify.TxNotice(
                 verb="wrap", route=params.chain, chain=params.chain, amount_in=_label,
                 usd=decision.amount_usd, tx_ref=tx_hash,
@@ -1044,11 +1049,16 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
                 usd=decision.amount_usd, tx_ref=tx_hash, lane=decision.lane,
                 cap_used_usd=_used, cap_limit_usd=_limit), settled=False)
 
-            receipt = await asyncio.to_thread(rail.await_receipt, tx_hash)
-            gate.record(venue="defi", action="unwrap",
+            _rec = dict(venue="defi", action="unwrap",
                         amount_usd=decision.amount_usd or 0.0,
                         counterparty=str(wrapped), idempotency_key=idem,
                         result_ref=tx_hash, chain=params.chain)
+            receipt = await self._await_receipt_or_record(
+                rail, tx_hash, gate=gate, record_kw=_rec,
+                execution_context=execution_context,
+                notice_kw=dict(verb="unwrap", route=params.chain, chain=params.chain,
+                               amount_in=_label, usd=decision.amount_usd))
+            gate.record(**_rec)
             self._notify_tx(execution_context, tx_notify.TxNotice(
                 verb="unwrap", route=params.chain, chain=params.chain, amount_in=_label,
                 usd=decision.amount_usd, tx_ref=tx_hash,
@@ -1129,8 +1139,15 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
                 tx = rail.build_native_transfer(to=to, amount_wei=amount_raw)
             else:
                 tx = rail.build_erc20_transfer(token=token, to=to, amount_raw=amount_raw)
+            journal_entry, journal_skipped = None, ""
             if held is not None:
-                tx, acct_state = account_mode.wrap(rail, tx, held, self._account_rpc)
+                # J1: the journal entry rides the same account batch (a pinned JournalLog).
+                journal_entry, journal_skipped = account_mode.prepare_journal(
+                    held, signer, kind="tend",
+                    text=f"transfer {params.amount:g} {shown} -> {to} on {params.chain}",
+                    rpc=self._account_rpc)
+                tx, acct_state = account_mode.wrap(rail, tx, held, self._account_rpc,
+                                                   journal=journal_entry)
         except Exception as exc:
             return self._ar(error=f"could not build the transaction: {exc}")
         idem = _intent_idem("transfer", params.chain, tx, execution_context)
@@ -1141,7 +1158,8 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
             idempotency_key=idem)
         guard_kw = {}
         if held is not None:
-            intent = account_mode.intent_for(intent, held, acct_state)
+            intent = account_mode.intent_for(intent, held, acct_state,
+                                             journal=journal_entry is not None)
             if self._account_rpc is not None:
                 guard_kw["account_rpc"] = self._account_rpc
 
@@ -1204,12 +1222,17 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
                 usd=decision.amount_usd, tx_ref=tx_hash, lane=decision.lane,
                 cap_used_usd=_used, cap_limit_usd=_limit), settled=False)
 
-            receipt = await asyncio.to_thread(rail.await_receipt, tx_hash)
-            gate.record(venue="defi", action="transfer",
+            _rec = dict(venue="defi", action="transfer",
                         amount_usd=decision.amount_usd or 0.0,
                         counterparty=to, idempotency_key=idem, result_ref=tx_hash,
                         chain=params.chain,
                         account=(held.account if held is not None else None))
+            receipt = await self._await_receipt_or_record(
+                rail, tx_hash, gate=gate, record_kw=_rec,
+                execution_context=execution_context,
+                notice_kw=dict(verb="transfer", route=params.chain, chain=params.chain,
+                               amount_in=_label, usd=decision.amount_usd))
+            gate.record(**_rec)
             self._notify_tx(execution_context, tx_notify.TxNotice(
                 verb="transfer", route=params.chain, chain=params.chain, amount_in=_label,
                 usd=decision.amount_usd, tx_ref=tx_hash,
@@ -1224,7 +1247,8 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
                 held, signer, kind="tend",
                 text=(f"transfer {params.amount:g} {shown} -> {to} on {params.chain}: "
                       f"tx {tx_hash} ({receipt.status})"),
-                refs=(tx_hash,))
+                refs=(tx_hash,), entry=journal_entry, landed=receipt.status != "failed",
+                skipped=journal_skipped, rpc=self._account_rpc)
         if receipt.succeeded:
             return self._ar(content=header + (
                 f"  RESULT: SENT AND CONFIRMED\n"
@@ -1256,6 +1280,15 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
         except Exception:
             logger.debug("defi: owner notice skipped (fail-open)", exc_info=True)
 
+    async def _await_receipt_or_record(self, rail, tx_hash, *, gate, record_kw: dict,
+                                       execution_context, notice_kw: dict):
+        """CLI1: the receipt wait — a thin delegator over the ONE seam,
+        :func:`tools.defi.receipt_wait.await_receipt_or_record`."""
+        from tools.defi.receipt_wait import await_receipt_or_record
+        return await await_receipt_or_record(
+            rail, tx_hash, gate=gate, record_kw=record_kw, tool=self,
+            execution_context=execution_context, notice_kw=notice_kw)
+
     async def _run_guarded(self, *, intent, tx, rail, gate, signer, execution_context,
                      header: str, dry_run: bool, venue_action: str, idem: str,
                      counterparty: str, amount_in_label: Optional[str] = None,
@@ -1263,7 +1296,8 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
                      asset: Optional[str] = None,
                      position_ctx: Optional[dict] = None,
                      charge_grant: bool = False,
-                     held=None, journal_kind: str = "tend"):
+                     held=None, journal_kind: str = "tend", journal_entry=None,
+                     journal_skipped: str = ""):
         """authorize -> broadcast -> confirm -> record, under one reservation.
 
         Extracted so approve/revoke/swap share EXACTLY the transfer path's
@@ -1324,7 +1358,22 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
             lane=decision.lane, cap_used_usd=_used, cap_limit_usd=_limit),
             settled=False)
 
-        receipt = await asyncio.to_thread(rail.await_receipt, tx_hash)
+        # CLI1: the row a cancel during the receipt wait records (no positions —
+        # nothing is measured yet). The same amount rule as the record below.
+        _interrupted_rec = dict(
+            venue="defi", action=venue_action,
+            amount_usd=(0.0 if (venue_action in ("approve", "revoke")
+                                and not charge_grant)
+                        else (decision.amount_usd or 0.0)),
+            counterparty=counterparty, idempotency_key=idem,
+            result_ref=tx_hash, chain=intent.chain, asset=asset,
+            account=(held.account if held is not None else None))
+        receipt = await self._await_receipt_or_record(
+            rail, tx_hash, gate=gate, record_kw=_interrupted_rec,
+            execution_context=execution_context,
+            notice_kw=dict(verb=venue_action, route=_route_label, chain=_route_label,
+                           amount_in=amount_in_label, amount_out=amount_out_label,
+                           usd=decision.amount_usd))
         # 2026-08-26 exit untying: an approve/revoke is a PRECONDITION, not a
         # spend — value leaves on the swap, which records the real number. The
         # old accounting charged one ticket to the daily cap twice (approve +
@@ -1438,7 +1487,8 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
                 held, signer, kind=journal_kind,
                 text=(f"{venue_action} {amount_in_label or ''} -> {amount_out_label or counterparty} "
                       f"on {intent.chain}: tx {tx_hash} ({receipt.status})"),
-                refs=(tx_hash,))
+                refs=(tx_hash,), entry=journal_entry, landed=receipt.status != "failed",
+                skipped=journal_skipped, rpc=self._account_rpc)
         if receipt.succeeded:
             return self._ar(content=header + (
                 f"  RESULT: CONFIRMED\n  tx: {tx_hash}\n  block: {receipt.block_number}") + journal)
@@ -2074,15 +2124,29 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
                 f"approve-spend-reset batch from an account needs them to be the same contract. "
                 f"Nothing was broadcast."))
         rail = (self._rail_factory or EvmRail)(chain=params.chain, signer=signer)
+        journal_entry, journal_skipped, journal_kind = None, "", "tend"
         try:
             tx = rail.build_call(to=route.to, data=route.calldata,
                                  value=route.value_raw)
+            if held is not None:
+                # J1: the journal entry is signed now and rides the same account batch.
+                kind_probe = "journal-kind"   # a probe intent, never sent
+                journal_kind = account_mode.swap_kind(tx_guard.TxIntent(
+                    chain=params.chain, token=(None if native_in else token_in), to=spender,
+                    amount_raw=amount_in_raw, max_spend_usd=params.max_spend_usd,
+                    inflow_token=token_out, idempotency_key=kind_probe))
+                journal_entry, journal_skipped = account_mode.prepare_journal(
+                    held, signer, kind=journal_kind,
+                    text=(f"swap {params.amount_in:g} {in_label[:8]} -> "
+                          f"{id_out.symbol or token_out} on {params.chain}"),
+                    rpc=self._account_rpc)
             if held is not None and native_in:
-                tx, acct_state = account_mode.wrap(rail, tx, held, self._account_rpc)
+                tx, acct_state = account_mode.wrap(rail, tx, held, self._account_rpc,
+                                                   journal=journal_entry)
             elif held is not None:
                 tx, acct_state = account_mode.wrap_batch(
                     rail, token=token_in, spender=spender, grant_raw=amount_in_raw,
-                    spend=tx, held=held, rpc=self._account_rpc)
+                    spend=tx, held=held, rpc=self._account_rpc, journal=journal_entry)
         except Exception as exc:
             return self._ar(error=f"could not build the transaction: {exc}")
         idem = _intent_idem("swap", params.chain, tx, execution_context)
@@ -2116,7 +2180,8 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
             # someone else, or encodes minOut 0) is refused before signing.
             min_inflow_raw=amount_out_min)
         if held is not None:
-            intent = account_mode.intent_for(intent, held, acct_state, batch=not native_in)
+            intent = account_mode.intent_for(intent, held, acct_state, batch=not native_in,
+                                             journal=journal_entry is not None)
 
         out_human = route.amount_out_raw / (10 ** id_out.decimals)
         min_human = amount_out_min / (10 ** id_out.decimals)
@@ -2191,8 +2256,8 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
                     "in_decimals": in_decimals,
                     "out_decimals": id_out.decimals,
                 },
-                held=held,
-                journal_kind=(account_mode.swap_kind(intent) if held is not None else "tend"))
+                held=held, journal_kind=journal_kind, journal_entry=journal_entry,
+                journal_skipped=journal_skipped)
 
     @BaseTool.action(
         "Swap one SPL token for another on SOLANA via the Jupiter aggregator. "

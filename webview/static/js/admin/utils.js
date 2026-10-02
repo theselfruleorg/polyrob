@@ -173,6 +173,32 @@
         return confirm(message);
     }
 
+    /**
+     * FE16: build an element from nodes — server fields are TEXT, never HTML.
+     * `props`: {class, title, href, style, text}; children: strings become
+     * text nodes, nodes are appended, null/undefined/false are skipped.
+     */
+    function h(tag, props, ...children) {
+        const node = document.createElement(tag);
+        const p = props || {};
+        if (p.class) node.className = String(p.class);
+        if (p.title !== undefined && p.title !== null) node.title = String(p.title);
+        if (p.href) node.setAttribute('href', String(p.href));
+        if (p.style) node.setAttribute('style', String(p.style));
+        if (p.colspan) node.setAttribute('colspan', String(p.colspan));
+        if (p.text !== undefined && p.text !== null) node.textContent = String(p.text);
+        for (const child of children) {
+            if (child === null || child === undefined || child === false) continue;
+            node.appendChild(typeof child === 'object' ? child : document.createTextNode(String(child)));
+        }
+        return node;
+    }
+
+    /** Replace a table body with ONE message row (text, never HTML). */
+    function messageRow(tbody, colspan, cls, text) {
+        tbody.replaceChildren(h('tr', null, h('td', { colspan, class: cls, text })));
+    }
+
     // Export to global AdminUtils namespace
     window.AdminUtils = {
         apiCall,
@@ -187,7 +213,9 @@
         truncateText,
         formatId,
         showAlert,
-        showConfirm
+        showConfirm,
+        h,
+        messageRow
     };
 
 })();

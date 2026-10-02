@@ -137,3 +137,26 @@ async def test_deliver_callback_is_threaded_and_reaches_send_immediate(tmp_path,
                          task_agent=object())
     assert seen.get("delivered") is True
     assert wa.immediate == ["run failed: honest breadcrumb"]
+
+
+@pytest.mark.asyncio
+async def test_failed_media_hydration_is_logged_not_swallowed(tmp_path, monkeypatch, caplog):
+    """OB21: hydration was wrapped in `except: pass` — no trace of a lost photo."""
+    calls = []
+    async def fake_route(container, inbound, **k):
+        from core.surfaces.dispatcher import RouteDecision, RouteKind
+        return RouteDecision(RouteKind.TASK_AGENT, "sk")
+    async def fake_act(task_agent, result, **k): calls.append(result.inbound.text); return None
+    monkeypatch.setattr("core.surfaces.inbound_webhook.route_inbound", fake_route)
+    monkeypatch.setattr("core.surfaces.inbound_webhook.act_on_inbound", fake_act)
+
+    class _Hydr(_WA):
+        async def hydrate_media(self, media):
+            raise RuntimeError("media endpoint 500")
+
+    wa = _Hydr(IdempotencyStore(os.path.join(tmp_path, "h.db")))
+    with caplog.at_level("WARNING"):
+        await wa.handle_post(None, {"x-sig": "ok"}, b'{"id": "m9", "text": "pic"}',
+                             task_agent=object())
+    assert calls == ["pic"]                       # the turn still runs
+    assert "media hydration failed" in caplog.text

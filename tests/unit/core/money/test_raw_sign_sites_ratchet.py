@@ -43,6 +43,9 @@ ALLOWED = {
         "EIP-3009 authorization under the signer's x402 caps"),
     ("core/signer/server.py", "SignerService._op_eip8004_feedback_auth", "sign_message"): (
         "signs ONLY the EIP-8004 FeedbackAuth typed shape; not a payment"),
+    ("core/signer/server.py", "SignerService._op_journal_sign", "sign_message"): (
+        "EIP-191 over ONLY the account journal template (is_journal_template); a _MONEY_OPS op, "
+        "so refused under the signer's pause; not a payment"),
     ("core/signer/shadow.py", "ShadowEvmSigner.sign_message", "sign_message"): _SIGNER,
     ("core/signer/shadow.py", "ShadowEvmSigner.sign_transaction", "sign_transaction"): _SIGNER,
     ("core/signer/shadow.py", "ShadowEvmSigner.sign_typed_data", "sign_typed_data"): _SIGNER,

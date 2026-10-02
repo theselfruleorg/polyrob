@@ -17,7 +17,7 @@ def test_relogin_needed_names_since_and_remedy():
 def test_valid_login_shows_expiry_and_scope():
     out = xs.lines_from({"stored": True, "expires_in_sec": 1800, "has_refresh_token": True,
                          "client_id_set": True, "scope": "dm.read tweet.read"})
-    assert out[0] == "X login (OAuth 2.0, DMs): valid, access token expires in 30m"
+    assert out[0] == "X login (OAuth 2.0, DMs): valid, renews itself (access token: 30m left)"
     assert "X login scope: dm.read tweet.read" in out
 
 

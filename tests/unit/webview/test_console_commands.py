@@ -120,3 +120,31 @@ def test_console_cancel_permitted_for_a_non_owner_on_their_own_session(srv, monk
     reply = asyncio.run(srv._maybe_handle_console_command("sess1", "u_stranger", "/cancel"))
     assert reply.startswith("Task cancelled.") and "/pause" in reply
     assert fake.cancelled == ["sess1"]
+
+
+# ---------------------------------------------------------------------------
+# Audit 2026-10-03 CLI11/CLI12.
+# ---------------------------------------------------------------------------
+
+def test_unknown_command_shaped_verb_gets_the_help_answer(srv, monkeypatch, tmp_path):
+    """CLI11: a typo verb is answered like Telegram answers it, never an agent turn."""
+    monkeypatch.setattr(srv, "_in_process_task_agent", lambda: _Agent(str(tmp_path)))
+    reply = asyncio.run(srv._maybe_handle_console_command("s", "rob", "/statsu"))
+    assert reply and "Unknown command /statsu" in reply and "/help" in reply
+    from webview.console_commands import looks_like_console_verb
+    assert looks_like_console_verb("/statsu") is True
+    assert looks_like_console_verb("/etc/passwd?") is False
+
+
+def test_a_routing_failure_on_a_known_verb_is_an_error_reply(srv, monkeypatch, tmp_path):
+    """CLI12: the verb line never goes to the agent as prose when routing raises."""
+    monkeypatch.setattr(srv, "_in_process_task_agent", lambda: _Agent(str(tmp_path)))
+    import surfaces.telegram.harness as harness
+
+    async def _boom(*a, **k):
+        raise RuntimeError("routing broke")
+
+    monkeypatch.setattr(harness, "_handle_command", _boom)
+    reply = asyncio.run(srv._maybe_handle_console_command(
+        "s", "rob", "/send 1 native to 0xabc on base go"))
+    assert reply is not None and reply.startswith("/send could not run here")

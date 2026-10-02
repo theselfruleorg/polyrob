@@ -7,9 +7,11 @@ from surfaces._probe import ProbeResult, http_json, missing
 
 
 async def probe(env) -> ProbeResult:
+    # OS13: the ONE resolver the tool and the status seat use; a local
+    # re-derivation answered differently for an unknown EMAIL_PROVIDER value.
+    from core.config_policy.capability_toggles import email_provider
     agentmail = (env.get("AGENTMAIL_API_KEY") or "").strip()
-    provider = (env.get("EMAIL_PROVIDER") or "auto").strip().lower()
-    if provider == "agentmail" or (provider == "auto" and agentmail):
+    if email_provider(env) == "agentmail":
         if not agentmail:
             return ProbeResult.unavailable("missing AGENTMAIL_API_KEY")
         status, payload, err = await http_json(

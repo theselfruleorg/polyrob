@@ -120,6 +120,19 @@ class DeadTargetStore:
             (surface, _norm_addr(address)),
         )
 
+    def count_for_surface(self, surface: str) -> int:
+        """How many targets on *surface* are marked dead (OB14: the surface-health
+        view probed for this method and, absent, always showed 0). Raises on a
+        store fault — an unreadable registry is not an empty one."""
+        from core.sqlite_util import execute_retry
+        row = execute_retry(
+            self._db,
+            "SELECT COUNT(*) AS n FROM dead_targets WHERE surface=?",
+            (surface,),
+            fetch="one",
+        )
+        return int(row["n"]) if row else 0
+
     def list_all(self) -> List[dict]:
         from core.sqlite_util import execute_retry
         rows = execute_retry(

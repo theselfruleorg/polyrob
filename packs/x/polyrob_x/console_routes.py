@@ -89,13 +89,17 @@ async def oauth_callback(request: Request, state: str = "", code: str = "",
                             f"X login NOT renewed — {result.reason}.")
         return _page("X login not renewed", "The login could not be completed.",
                      result.reason, status=400)
-    hours = result.expires_in // 3600
-    minutes = (result.expires_in % 3600) // 60
+    # 2026-10-03: the page said "Access token valid for 1h 59m" and the owner
+    # read it as "log in again every 2 hours". X access tokens live 2 hours and
+    # the agent renews them itself; the owner logs in again only when X refuses
+    # the refresh token (the agent then says so).
     await _notify_owner(result.owner_user_id,
-                        "X login renewed. The token refreshes itself from now on"
+                        "X login renewed. You do not need to do it again: I renew the "
+                        "2-hour access token myself. I will tell you if X ever refuses it"
                         + (f" (scope: {result.scope})." if result.scope else "."))
     return _page("X login renewed", "X login renewed — you can close this tab.",
-                 f"Access token valid for {hours}h {minutes:02d}m; it refreshes itself.")
+                 "You do not need to log in again: the agent renews the 2-hour access "
+                 "token itself, and tells you if X ever refuses it.")
 
 
 @router.get("/oauth/status")

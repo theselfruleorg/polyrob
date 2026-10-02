@@ -13,6 +13,7 @@ from typing import Optional
 from core.config_policy import dead_target_registry_enabled
 from core.surfaces.dead_targets import ROOM_DEATH_REASONS, classify_dead_error
 from core.surfaces.envelopes import OutboundMessage
+from core.surfaces.outbound_queue import message_key
 from core.surfaces.room_keys import is_group_session_key
 from core.surfaces.session_chat_registry import (
     SessionChatRegistry, row_from_session_key,
@@ -80,7 +81,8 @@ class MessageRouter:
                            idem, e, exc_info=True)
             return False
 
-    def _record_room_reply(self, msg, surface_id, chat_id, text: str) -> None:
+    def _record_room_reply(self, msg, surface_id, chat_id, text: str,
+                           msg_key: Optional[str] = None) -> None:
         """Write a DELIVERED room reply into the room log. Fail-open."""
         if self._room_ledger is None or not is_group_session_key(msg.session_key):
             return
@@ -98,7 +100,7 @@ class MessageRouter:
             record_outbound_to_ledger(
                 self._room_ledger, surface=surface_id, chat_id=chat_id,
                 thread_id=_thread, text=text, ts=_t.time(),
-                reply_to=msg.reply_to, media=bool(msg.media))
+                reply_to=msg.reply_to, media=bool(msg.media), message_key=msg_key)
         except Exception as e:  # never let bookkeeping undo a delivery
             logger.debug("room reply not recorded (fail-open): %s", e)
 
@@ -293,12 +295,17 @@ class MessageRouter:
             if not ok:
                 logger.warning("room reply suppressed: %s", why)
                 return False
+        # OB2/OB18: ONE key per message, minted once — the queue row and the
+        # room-log row both key on it, so a fall-through retry is one log line.
+        idem = message_key(msg.session_key, scrubbed)
         # Durable path (final messages only): enqueue instead of sending directly.
         from core.surfaces.config import SurfaceConfig
         if (self._queue is not None and not msg.partial
                 and SurfaceConfig.outbound_queue_enabled()):
-            turn = msg.stream_id or msg.session_key
-            idem = f"{msg.session_key}#{turn}#{hash(scrubbed) & 0xffffffff}"
+            # OB2: `idem` is one key per MESSAGE (fresh id + sha256 of the
+            # body). The old `session#turn#hash(text)` used the constant session
+            # key as the "turn" and a per-process salted hash(), so a second
+            # identical reply in a session was reported queued and never sent.
             accepted = False
             try:
                 accepted = self._queue_accepted(
@@ -313,7 +320,7 @@ class MessageRouter:
                 if accepted:
                     if _room_gated:
                         self._room_caps.record_reply(surface_id, chat_id)
-                    self._record_room_reply(msg, surface_id, chat_id, scrubbed)
+                    self._record_room_reply(msg, surface_id, chat_id, scrubbed, idem)
                     self._record_effect("router_publish", surface_id, chat_id, scrubbed)
                     return True  # durable acceptance IS delivery (dispatcher retries)
                 # D5: the enqueue was a no-op AND no live row stands behind the
@@ -339,7 +346,7 @@ class MessageRouter:
                 if ok and _room_gated:
                     self._room_caps.record_reply(surface_id, chat_id)
                 if ok:
-                    self._record_room_reply(msg, surface_id, chat_id, scrubbed)
+                    self._record_room_reply(msg, surface_id, chat_id, scrubbed, idem)
                     self._record_effect("router_publish", surface_id, chat_id, scrubbed)
                 if self._dt is not None and dead_target_registry_enabled():
                     if not ok:
@@ -447,7 +454,7 @@ class MessageRouter:
             if self._queue is not None:
                 accepted = False
                 try:
-                    idem = f"direct:{surface_id}:{chat_id}#{hash(text) & 0xffffffff}"
+                    idem = message_key(f"direct:{surface_id}:{chat_id}", text)  # OB2
                     accepted = self._queue_accepted(
                         idem, session_key=f"direct:{surface_id}:{chat_id}",
                         surface_id=surface_id, dest=chat_id, payload=text,

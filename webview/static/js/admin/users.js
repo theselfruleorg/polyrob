@@ -7,7 +7,7 @@
     'use strict';
 
     // Use shared utilities
-    const { apiCall, formatWallet, formatDate, formatCredits } = AdminUtils;
+    const { apiCall, formatWallet, formatDate, formatCredits, h, messageRow } = AdminUtils;
 
     // State
     let currentPage = 0;
@@ -57,34 +57,22 @@
                 return;
             }
 
-            let html = '';
-            for (const user of users) {
+            // FE16: server fields are written as text, never parsed as HTML.
+            const rows = users.map((user) => {
                 const blockedClass = user.is_blocked ? 'blocked-indicator' : '';
-                html += `
-                    <tr>
-                        <td class="wallet ${blockedClass}">
-                            ${user.is_blocked ? '[B] ' : ''}${formatWallet(user.wallet_address)}
-                        </td>
-                        <td>
-                            <span class="tier tier-${user.tier}">${user.tier}</span>
-                        </td>
-                        <td>
-                            <span class="role role-${user.role}">${user.role}</span>
-                        </td>
-                        <td class="credits">${formatCredits(user.balance)}</td>
-                        <td>
-                            <span class="token-count">
-                                ${user.den_token_count > 0 ? '&#10004;' : '&#10008;'} ${user.den_token_count || 0}
-                            </span>
-                        </td>
-                        <td>${formatDate(user.created_at)}</td>
-                        <td class="actions">
-                            <a href="/admin/users/${user.user_id}" class="btn-view">View</a>
-                        </td>
-                    </tr>
-                `;
-            }
-            tbody.innerHTML = html;
+                return h('tr', null,
+                    h('td', { class: `wallet ${blockedClass}`,
+                              text: `${user.is_blocked ? '[B] ' : ''}${formatWallet(user.wallet_address)}` }),
+                    h('td', null, h('span', { class: `tier tier-${user.tier}`, text: user.tier })),
+                    h('td', null, h('span', { class: `role role-${user.role}`, text: user.role })),
+                    h('td', { class: 'credits', text: formatCredits(user.balance) }),
+                    h('td', null, h('span', { class: 'token-count',
+                        text: `${user.den_token_count > 0 ? '\u2714' : '\u2718'} ${user.den_token_count || 0}` })),
+                    h('td', { text: formatDate(user.created_at) }),
+                    h('td', { class: 'actions' },
+                        h('a', { class: 'btn-view', href: `/admin/users/${encodeURIComponent(user.user_id)}`, text: 'View' })));
+            });
+            tbody.replaceChildren(...rows);
 
             // Update pagination (estimate total based on results)
             totalUsers = users.length < pageSize ? (currentPage * pageSize + users.length) : ((currentPage + 2) * pageSize);
@@ -92,7 +80,7 @@
 
         } catch (error) {
             console.error('Failed to load users:', error);
-            tbody.innerHTML = `<tr><td colspan="7" class="empty-state">Error: ${error.message}</td></tr>`;
+            messageRow(tbody, 7, 'empty-state', `Error: ${error.message}`);
         }
     }
 

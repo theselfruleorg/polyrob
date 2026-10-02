@@ -257,3 +257,43 @@ def test_a_mixed_log_set_routes_each_event_to_its_own_field():
     assert d.holder_nft_out == ((NFT.lower(), "erc721", OTHER.lower(), 42, 1),)
     assert d.holder_nft_in == ((NFT.lower(), "erc1155", OTHER.lower(), 7, 2),)
     assert d.holder_operator_grants == ((NFT.lower(), MARKET.lower(), True),)
+
+
+# --- C17: ERC-6909 (Uniswap v4 claims) ---------------------------------------
+
+T6909_TRANSFER = "0x1b3d7edb2e9c0b0e7c525b20aaaef0f5940d2ed71663c7d39266ecafac728859"
+T6909_APPROVAL = "0xb3fd5071835887567a0671151121894ddccc2842f1d10bedad13e0d17cace9a7"
+T6909_OPERATOR_SET = "0xceb576d9f15e4e200fdb5096d64d5dfd667e16def20c1eefd14256d8e3faa267"
+
+
+def test_the_6909_topics_are_their_signatures():
+    from eth_utils import keccak
+    assert T6909_TRANSFER == "0x" + keccak(text="Transfer(address,address,address,uint256,uint256)").hex()
+    assert simulation._TOPIC_6909_TRANSFER == T6909_TRANSFER
+    assert simulation._TOPIC_6909_APPROVAL == T6909_APPROVAL
+    assert simulation._TOPIC_6909_OPERATOR_SET == T6909_OPERATOR_SET
+
+
+def _6909_transfer(frm, to, token_id, amount, caller=MARKET):
+    return {"address": NFT, "data": "0x" + _topic_addr(caller)[2:] + _raw_word(amount),
+            "topics": [T6909_TRANSFER, _topic_addr(frm), _topic_addr(to), _word(token_id)]}
+
+
+def test_6909_transfers_are_measured_both_ways():
+    d = _sim(_entry(_6909_transfer(HOLDER, OTHER, 7, 500)))
+    assert d.holder_nft_out == ((NFT.lower(), "erc6909", OTHER.lower(), 7, 500),)
+    d = _sim(_entry(_6909_transfer(OTHER, HOLDER, 7, 500)))
+    assert d.holder_nft_in == ((NFT.lower(), "erc6909", OTHER.lower(), 7, 500),)
+    d = _sim(_entry(_6909_transfer(OTHER, MARKET, 7, 500, caller=HOLDER)))
+    assert d.holder_nft_out == () and d.holder_nft_in == ()        # the caller alone moved nothing of ours
+
+
+def test_6909_approvals_and_operators_are_measured():
+    approval = {"address": NFT, "data": _word(300),
+                "topics": [T6909_APPROVAL, _topic_addr(HOLDER), _topic_addr(MARKET), _word(7)]}
+    op = {"address": NFT, "data": _word(1),
+          "topics": [T6909_OPERATOR_SET, _topic_addr(HOLDER), _topic_addr(MARKET)]}
+    d = _sim(_entry(approval, op))
+    assert d.holder_6909_approvals == ((NFT.lower(), MARKET.lower(), 7, 300),)
+    assert d.holder_operator_grants == ((NFT.lower(), MARKET.lower(), True),)
+    assert d.holder_nft_approvals == ()                             # never confused with ERC-721

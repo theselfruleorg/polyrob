@@ -375,7 +375,18 @@ async def _perform_deploy(tool, *, execution_context, verb: str, chain: str,
             usd=decision.amount_usd, tx_ref=tx_hash, lane=decision.lane,
             cap_used_usd=_used, cap_limit_usd=_limit), settled=False)
 
-        receipt = await asyncio.to_thread(rail.await_receipt, tx_hash)
+        # CLI1: a cancel during the wait records the broadcast first (one seam).
+        # The landed address is unknown then, so the counterparty is None — the
+        # same answer `_record_spend` gives for a pending deploy.
+        from tools.defi.receipt_wait import await_receipt_or_record
+        receipt = await await_receipt_or_record(
+            rail, tx_hash, gate=gate, tool=tool, execution_context=execution_context,
+            record_kw=dict(venue="defi", action=verb,
+                           amount_usd=decision.amount_usd or 0.0, counterparty=None,
+                           idempotency_key=idem, result_ref=tx_hash, chain=chain),
+            notice_kw=dict(verb=verb, route=chain, chain=chain,
+                           amount_in=(facts.predicted_address if facts else chain),
+                           usd=decision.amount_usd))
 
     # The SETTLED notice is emitted by `_record_spend` below and NOWHERE else
     # (043 T2). It used to fire here, inside the reservation, carrying

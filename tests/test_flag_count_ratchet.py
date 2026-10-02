@@ -32,7 +32,9 @@ from core.flags_catalog import CATALOG
 # AGENT_NFT_GAS_REFILL_CAP_ETH retired with the account gas refill (no operator key to refill).
 # 2026-10-02: 771 -> 772 — FEISHU_WEBHOOK_ALLOW_UNSIGNED, the explicit opt-in for an
 # unsigned (token-only) Feishu webhook, which is now refused by default.
-CEILING = 772  # 2026-09-29 impl handoff E (collection revealer): +2 — CRON_WRITE_JOBS_ENABLED
+# 2026-10-03: 772 -> 773 — VALUELESS_CHAIN_MONEY (C13), the owner's opt-in to a core run on the
+# Robinhood Chain testnet (native at $0, fee bounded in wei); off by default.
+CEILING = 773  # 2026-09-29 impl handoff E (collection revealer): +2 — CRON_WRITE_JOBS_ENABLED
                # (the one scheduled write verb, off by default), the reveal gas cap.
                # 771: 2026-09-29 core handoff W12 / 080 D42a: +2 — the two account gas-refill
                # rows (retired again by 069 v4, above).

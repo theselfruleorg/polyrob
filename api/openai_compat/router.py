@@ -61,11 +61,16 @@ def _chat_once_accepts(param: str, agent) -> bool:
                for p in sig.parameters.values())
 
 
-def _last_user_text(req: ChatCompletionRequest) -> str:
+def _last_user_message(req: ChatCompletionRequest):
     for m in reversed(req.messages):
-        if m.role == "user" and (m.content or "").strip():
-            return m.content
-    return ""
+        if m.role == "user" and ((m.content or "").strip() or m.non_text_parts):
+            return m
+    return None
+
+
+def _last_user_text(req: ChatCompletionRequest) -> str:
+    m = _last_user_message(req)
+    return m.content if m is not None else ""
 
 
 def _sse_data(payload: dict) -> str:
@@ -78,11 +83,16 @@ def _sse_data(payload: dict) -> str:
 STREAM_KEEPALIVE_SEC = 15.0
 
 
-async def _stream_chat_completion(*, chat_id: str, created: int, model: str, reply: str):
+async def _stream_chat_completion(*, chat_id: str, created: int, model: str, reply: str,
+                                  usage: dict = None):
     """Emit OpenAI-compatible SSE chunks.
 
     The underlying chat_once API returns one complete reply today, so this is basic
     streaming compatibility rather than provider token streaming.
+
+    API15: ``usage`` (set when the caller sent ``stream_options.include_usage``)
+    adds OpenAI's final usage chunk — ``choices: []`` plus ``usage`` — before
+    ``[DONE]``.
     """
     yield _sse_data({
         "id": chat_id,
@@ -106,7 +116,34 @@ async def _stream_chat_completion(*, chat_id: str, created: int, model: str, rep
         "model": model,
         "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
     })
+    if usage is not None:
+        yield _sse_data({
+            "id": chat_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model,
+            "choices": [],
+            "usage": usage,
+        })
     yield "data: [DONE]\n\n"
+
+
+def _stream_error_frames(message: str):
+    """API14: a failed streamed turn as OpenAI's in-stream ERROR event.
+
+    The headers already committed a 200, so the failure travels in the body.
+    It used to be sent as assistant CONTENT with ``finish_reason: "stop"`` —
+    a client stored "[error] …" as the model's answer. The OpenAI SDK raises
+    an ``APIError`` on a data frame carrying ``error``.
+    """
+    yield _sse_data({"error": {"message": message, "type": "server_error",
+                               "param": None, "code": "agent_turn_failed"}})
+    yield "data: [DONE]\n\n"
+
+
+def _wants_stream_usage(body: ChatCompletionRequest) -> bool:
+    opts = (body.model_extra or {}).get("stream_options")
+    return isinstance(opts, dict) and bool(opts.get("include_usage"))
 
 
 @router.post("/v1/chat/completions")
@@ -134,6 +171,17 @@ async def chat_completions(
             status_code=400,
             detail=("unsupported request parameter(s) — "
                     + body.unsupported_reason()),
+        )
+
+    # API13: a non-text part (image, audio, file) in the turn that RUNS is
+    # refused with its type — never silently dropped from the request.
+    last = _last_user_message(body)
+    if last is not None and last.non_text_parts:
+        raise HTTPException(
+            status_code=400,
+            detail=("unsupported content part type(s) — "
+                    + ", ".join(sorted(set(last.non_text_parts)))
+                    + ": this endpoint carries text parts only"),
         )
 
     text = _last_user_text(body)
@@ -199,10 +247,22 @@ async def chat_completions(
                 chat_task.cancel()
                 raise
             except Exception as e:
-                logger.error(f"openai-compat streamed chat failed: {e}", exc_info=True)
-                reply = f"[error] agent turn failed: {type(e).__name__}"
+                ref = f"{response_id}"
+                logger.error(f"openai-compat streamed chat failed (ref {ref}): {e}",
+                             exc_info=True)
+                for frame in _stream_error_frames(
+                        f"agent turn failed ({type(e).__name__}); reference {ref}"):
+                    yield frame
+                return
+            usage = None
+            if _wants_stream_usage(body):
+                p_tok = _estimate_tokens(text, model=body.model)
+                c_tok = _estimate_tokens(reply, model=body.model)
+                usage = {"prompt_tokens": p_tok, "completion_tokens": c_tok,
+                         "total_tokens": p_tok + c_tok, "estimated": True}
             async for chunk in _stream_chat_completion(
                 chat_id=response_id, created=created, model=body.model, reply=reply,
+                usage=usage,
             ):
                 yield chunk
 

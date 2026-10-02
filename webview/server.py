@@ -66,7 +66,7 @@ from agents.task.path import pm
 
 from core.version import get_version
 from webview import pack_console, posture_routes, template_globals
-from webview.socket_limits import first_join, forget, limit_key, refusal  # 070 W0.17
+from webview.socket_limits import forget, join_allowed, limit_key, refusal  # 070 W0.17
 from webview.error_page import StarletteHTTPException, error_response  # 070 W0.18
 
 logger = logging.getLogger("webview.server")
@@ -261,8 +261,9 @@ async def startup_event():
     # S8 (2026-09-14): refuse to boot an ANONYMOUS console ('local' posture =
     # every request is the owner) on a server-shaped deployment. Raises, so the
     # boot aborts rather than serving the control plane to the internet.
-    from webview.posture_guard import assert_console_posture, assert_writable_console
+    from webview.posture_guard import assert_console_posture, assert_login_configured, assert_writable_console
     assert_console_posture()
+    assert_login_configured()  # WS5: own_ops/multitenant need a working login
     # W7 (043): a writable console must know WHOSE console it is — unbound, it
     # scopes every read and write to the instance id and renders honest-looking
     # empty lists. Read-only consoles are unaffected.
@@ -288,18 +289,6 @@ async def startup_event():
         logger.error(f"❌ Failed to install session data root — pm() will use "
                      f"its legacy default and may browse the WRONG tree: {e}",
                      exc_info=True)
-
-    # 1. Validate critical environment variables.
-    # JWT is only used by the multitenant auth layer; the single-user webgate
-    # (WEBGATE_MULTITENANT=OFF, the default) has no auth at all, so requiring a
-    # JWT secret it never uses would needlessly block the loopback primitive.
-    if webgate.is_multitenant():
-        jwt_secret = os.environ.get("JWT_SECRET_KEY")
-        if not jwt_secret:
-            raise RuntimeError("❌ JWT_SECRET_KEY not configured - cannot start service")
-        logger.info("✅ JWT authentication configured")
-    else:
-        logger.info("✅ webgate single-user mode: JWT not required (no auth)")
 
     # 2. Initialize DependencyContainer and core services
     try:
@@ -492,6 +481,10 @@ def check_event_rate_limit(session_id: str) -> bool:
     return True
 
 
+#: Rooms that dropped a feed_update and were sent one ``feed_gap`` (WS4).
+_gapped_rooms: set = set()
+
+
 async def _emit_feed_event(entry: dict, room: str) -> bool:
     """Emit one feed_update event to `room`, honoring the per-session event rate
     limit (E5). Returns False (and drops the event) if the session has exceeded
@@ -509,8 +502,14 @@ async def _emit_feed_event(entry: dict, room: str) -> bool:
 
     if not allowed:
         logger.warning("Dropping feed_update for %s: event rate limit exceeded", room)
+        # WS4: tell the room ONCE per gap that it missed events, so the client
+        # refetches the feed after the window; the next allowed emit re-arms it.
+        if room not in _gapped_rooms:
+            _gapped_rooms.add(room)
+            await _sio.emit("feed_gap", {"session_id": room, "retry_after": RATE_LIMIT_WINDOW}, room=room)
         return False
 
+    _gapped_rooms.discard(room)
     await _sio.emit("feed_update", entry, room=room)
     return True
 
@@ -668,31 +667,14 @@ def _check_session_ownership(request: Request, session_id: str) -> tuple[bool, O
     # Get current user
     current_user_id = get_authenticated_user_id(request)
 
-    # Get session owner
     session_owner_id = pm().get_session_user(session_id)
-
-    if webgate.is_own_ops():
-        # own_ops has exactly ONE owner: the authenticated owner-login identity
-        # (upstream route auth already ensures only the owner reaches a
-        # protected route in the first place). That owner owns EVERY session
-        # in this instance, regardless of which surface/identity path tagged
-        # it — e.g. CLI-created sessions are hardcoded to user_id="local"
-        # (core/identity.py), which need not equal the own_ops owner-login id
-        # (webgate.local_owner_id(): a BOUND owner, else "local"). A strict
-        # per-session string match false-denies the owner on their CLI sessions.
-        # So: authenticated-as-owner -> allow unconditionally; anything else
-        # (authenticated as someone/something else) -> deny. This keeps H2b's
-        # real security value (a non-owner identity is still denied) without
-        # the CLI-session false-deny.
-        is_owner = bool(current_user_id) and current_user_id == webgate.local_owner_id()
-        if is_owner:
-            return (True, current_user_id, session_owner_id or current_user_id)
-        return (False, current_user_id, session_owner_id)
-
-    # multitenant: multiple tenants share this instance, so per-session
-    # ownership must be checked strictly.
-    is_owner = (current_user_id == session_owner_id) if session_owner_id else False
-
+    # WV1: the ONE session-open rule (webview/session_access.py) — own_ops: the
+    # owner owns EVERY session (CLI "local", rooms, correspondents); multitenant:
+    # strict per-session match. The middleware and join_session apply it too.
+    from webview.session_access import owner_may_open
+    is_owner = owner_may_open(current_user_id, session_owner_id)
+    if is_owner and webgate.is_own_ops():
+        return (True, current_user_id, session_owner_id or current_user_id)
     return (is_owner, current_user_id, session_owner_id)
 
 ROOT_DIR = Path(__file__).resolve().parent
@@ -1124,9 +1106,8 @@ async def logout(request: Request) -> Response:
     so the own_ops owner had NO way to end the ≤24h owner session: the route
     404'd there). own_ops answers with a real HTTP redirect + `delete_cookie`
     (the auth middleware's own rule: real redirects, never a 200 JS-hack page —
-    the owner cookie is the only credential there). Multitenant keeps the
-    legacy HTML page: the wallet/SIWE JWT also lives in localStorage, which
-    only client-side JS can clear.
+    the owner cookie is the only credential there). Multitenant too (WS1):
+    `Clear-Site-Data` clears the localStorage JWT, no inline script.
     """
     # 043 W5: revoke this token's jti server-side so the cookie cannot be
     # replayed after logout — delete_cookie only removes the browser's copy.
@@ -1137,20 +1118,11 @@ async def logout(request: Request) -> Response:
         return JSONResponse(status_code=503, content={
             "error": "Logout could not be saved. Please retry; your session has not been revoked."
         }, headers={"Retry-After": "5"})
-    if webgate.is_own_ops():
-        response: Response = RedirectResponse(url="/owner-login", status_code=303)
-        response.delete_cookie("auth_token")
-        return response
-    response = HTMLResponse(content="""
-        <html>
-            <head>
-                <script>
-                    localStorage.clear();
-                    window.location.href = '/signin';
-                </script>
-            </head>
-        </html>
-    """)
+    # WS1: both postures answer a real 303 — never an inline <script> (the CSP
+    # blocks it). Clear-Site-Data drops the multitenant JWT from localStorage.
+    target = "/owner-login" if webgate.is_own_ops() else "/signin"
+    response: Response = RedirectResponse(url=target, status_code=303)
+    response.headers["Clear-Site-Data"] = '"cookies", "storage"'
     response.delete_cookie("auth_token")
     return response
 
@@ -1410,6 +1382,18 @@ async def api_workspace_status(request: Request, clean_id: str = Depends(get_cle
         }, status_code=500)
 
 
+def _workspace_target(clean_id: str, user_id, path: str) -> Path:
+    """WS7: ONE containment rule for both workspace file routes."""
+    from webview.workspace_paths import OutsideWorkspace, resolve_in_workspace
+    try:
+        return resolve_in_workspace(pm().get_workspace_dir(clean_id, user_id=user_id), path)
+    except OutsideWorkspace:
+        raise HTTPException(403, "Forbidden: path resolves outside workspace") from None
+    except OSError as e:
+        logger.error(f"Error resolving file path: {e}")
+        raise HTTPException(500, "Error processing file path") from None
+
+
 @_fastapi.get("/api/session/{session_id}/workspace/file")
 async def api_workspace_file(request: Request, path: str, clean_id: str = Depends(get_clean_session_id)) -> Response:  # noqa: WPS110 – param name dictated by API
     """Return the *text* content of a workspace file.
@@ -1426,65 +1410,9 @@ async def api_workspace_file(request: Request, path: str, clean_id: str = Depend
     # Use session owner's ID for data access (allows public viewing)
     user_id = session_owner_id if session_owner_id else current_user_id
 
-    # FIXED: Enhanced security validation against directory traversal attacks
+    # WS7: ONE containment rule (`..`/absolute + resolved relative_to), no substring list.
     import urllib.parse
-
-    # First decode any URL encoding (including double encoding)
-    decoded_path = path
-    for _ in range(3):  # Decode up to 3 levels to catch double/triple encoding
-        try:
-            new_decoded = urllib.parse.unquote(decoded_path)
-            if new_decoded == decoded_path:
-                break  # No more decoding needed
-            decoded_path = new_decoded
-        except Exception:
-            break
-
-    # FIXED: Comprehensive path traversal prevention
-    if any(dangerous in decoded_path.lower() for dangerous in [
-        '..', './', '.\\.', '/.', '\\.',
-        '%2e%2e', '%2f', '%5c',  # URL encoded variants
-        'c:', 'd:', 'windows', 'system32',  # Windows system paths
-        '/etc/', '/proc/', '/sys/', '/root/', '/home/'  # Unix system paths
-    ]):
-        logger.warning(f"Rejected dangerous path: {path} (decoded: {decoded_path})")
-        raise HTTPException(403, "Forbidden: path contains dangerous sequences")
-
-    # Additional check: path cannot start with / or \ (absolute paths)
-    if decoded_path.startswith(('//', '\\\\', '/', '\\')):
-        logger.warning(f"Rejected absolute path: {path} (decoded: {decoded_path})")
-        raise HTTPException(403, "Forbidden: absolute paths not allowed")
-
-    # Normalize the path to remove any remaining relative components
-    import os.path
-    normalized_path = os.path.normpath(decoded_path)
-
-    # Final check: normalized path should not start with .. or contain ..
-    if normalized_path.startswith('..') or '/..' in normalized_path or '\\..' in normalized_path:
-        logger.warning(f"Rejected path after normalization: {normalized_path}")
-        raise HTTPException(403, "Forbidden: path resolves outside workspace")
-
-    workspace_dir = pm().get_workspace_dir(clean_id, user_id=user_id)
-    file_path = workspace_dir / normalized_path
-    
-    # FIXED: Enhanced path resolution with security checks
-    try:
-        file_path = file_path.resolve()
-        
-        # Security: ensure the resolved path is still inside the workspace dir
-        workspace_dir_resolved = workspace_dir.resolve()
-        try:
-            # Use relative_to to check if file_path is under workspace_dir_resolved
-            file_path.relative_to(workspace_dir_resolved)
-        except ValueError:
-            logger.warning(f"Path resolves outside workspace: {file_path} not under {workspace_dir_resolved}")
-            raise HTTPException(403, "Forbidden: path resolves outside workspace")
-            
-    except FileNotFoundError:
-        raise HTTPException(404, "File not found") from None
-    except OSError as e:
-        logger.error(f"Error resolving file path: {e}")
-        raise HTTPException(500, "Error processing file path") from None
+    file_path = _workspace_target(clean_id, user_id, path)
 
     if not file_path.is_file():
         raise HTTPException(400, "Not a file")
@@ -1572,50 +1500,8 @@ async def api_workspace_serve(request: Request, path: str, clean_id: str = Depen
     session_owner_id = pm().get_session_user(clean_id)
     user_id = session_owner_id if session_owner_id else current_user_id
 
-    import urllib.parse
-    import os.path
     import mimetypes
-
-    # Decode URL encoding
-    decoded_path = path
-    for _ in range(3):
-        try:
-            new_decoded = urllib.parse.unquote(decoded_path)
-            if new_decoded == decoded_path:
-                break
-            decoded_path = new_decoded
-        except Exception:
-            break
-
-    # Security: reject dangerous patterns
-    if any(dangerous in decoded_path.lower() for dangerous in [
-        '..', './', '.\\.', '/.', '\\.',
-        '%2e%2e', '%2f', '%5c',
-        'c:', 'd:', 'windows', 'system32',
-        '/etc/', '/proc/', '/sys/', '/root/', '/home/'
-    ]):
-        logger.warning(f"Rejected dangerous path: {path}")
-        raise HTTPException(403, "Forbidden: path contains dangerous sequences")
-
-    if decoded_path.startswith(('//', '\\\\', '/', '\\')):
-        raise HTTPException(403, "Forbidden: absolute paths not allowed")
-
-    normalized_path = os.path.normpath(decoded_path)
-    if normalized_path.startswith('..') or '/..' in normalized_path:
-        raise HTTPException(403, "Forbidden: path resolves outside workspace")
-
-    workspace_dir = pm().get_workspace_dir(clean_id, user_id=user_id)
-    file_path = workspace_dir / normalized_path
-
-    try:
-        file_path = file_path.resolve()
-        workspace_dir_resolved = workspace_dir.resolve()
-        file_path.relative_to(workspace_dir_resolved)
-    except (ValueError, FileNotFoundError):
-        raise HTTPException(404, "File not found")
-    except OSError as e:
-        logger.error(f"Error resolving file path: {e}")
-        raise HTTPException(500, "Error processing file path")
+    file_path = _workspace_target(clean_id, user_id, path)
 
     if not file_path.is_file():
         raise HTTPException(404, "File not found")
@@ -2147,18 +2033,10 @@ async def api_session_debug(session_id: str, request: Request) -> Response:
                 ]
             }
 
-        # Try to load task
+        # WS9: the same in-process reader as /api/session/{id}/task — never a
+        # hard-coded localhost:8008 hop with no credential.
         try:
-            import httpx
-            async with httpx.AsyncClient() as client:
-                task_resp = await client.get(
-                    f"http://localhost:8008/api/session/{session_id}/task",
-                    timeout=2.0
-                )
-                if task_resp.status_code == 200:
-                    debug_info["task"] = task_resp.json()
-                else:
-                    debug_info["task"] = {"error": f"HTTP {task_resp.status_code}"}
+            debug_info["task"] = build_session_task(clean_id)
         except Exception as e:
             debug_info["task"] = {"error": str(e)}
 
@@ -2597,7 +2475,8 @@ async def get_queue_status(session_id: str, request: Request) -> Response:
         for attempt in range(max_retries):
             try:
                 async with httpx.AsyncClient() as client:
-                    response = await client.get(api_url, timeout=5.0)
+                    response = await client.get(  # WS10: forward the credential
+                        api_url, headers=_api_proxy_auth_headers(request), timeout=5.0)
 
                     if response.status_code == 200:
                         data = response.json()
@@ -2806,6 +2685,7 @@ async def disconnect(sid: str) -> None:  # noqa: D401 – Socket.IO callback
         
         # Clean up session tracking
         _session_clients.pop(sess_id, None)
+        _gapped_rooms.discard(sess_id)
     
     logger.debug("Client %s disconnected from %s (remaining=%s)", 
                 sid, sess_id, _session_clients.get(sess_id, 0))
@@ -2816,7 +2696,7 @@ async def join_session(sid, data):
     """Handle a client joining a session via Socket.io."""
     try:
         # 070 W0.17: one count per socket, keyed by the owner; the socket stays.
-        if first_join(sid) and not check_rate_limit(limit_key(sid, _sio.get_environ(sid), _socket_user)):
+        if not join_allowed(sid, lambda: check_rate_limit(limit_key(sid, _sio.get_environ(sid), _socket_user))):
             await _sio.emit("error", refusal("rate_limited", RATE_LIMIT_WINDOW), room=sid)
             return
 
@@ -2834,10 +2714,10 @@ async def join_session(sid, data):
         # requires_owner_login() covers BOTH own_ops (owner-login cookie) and
         # multitenant (wallet/SIWE JWT) — own_ops was left ungated (E4 follow-up).
         if webgate.requires_owner_login():
+            from webview.session_access import owner_may_open  # WV1: the one rule
             current_user_id = _socket_user.get(sid)
             session_owner_id = pm().get_session_user(clean_id)
-            is_owner = bool(current_user_id) and bool(session_owner_id) and current_user_id == session_owner_id
-            if not is_owner:
+            if not owner_may_open(current_user_id, session_owner_id):
                 logger.warning(
                     "join_session denied: sid=%s user=%s session_owner=%s",
                     sid, current_user_id, session_owner_id,
@@ -2861,8 +2741,7 @@ async def join_session(sid, data):
         except (TypeError, ValueError):
             _after_seq = 0
         if _after_seq > 0:
-            if clean_id not in _watch_tasks:
-                _watch_tasks[clean_id] = asyncio.create_task(_feed_watcher(clean_id))
+            _ensure_watcher(clean_id)
             logger.info("join_session: reconnect with after_seq=%d — skipping full replay", _after_seq)
             return
 
@@ -2875,10 +2754,7 @@ async def join_session(sid, data):
         # consumer. So the join now does what a join is for: the room, and the
         # watcher that fills it.
 
-        # Ensure a watcher is running for this session - use clean_id for watcher key
-        if clean_id not in _watch_tasks:
-            _watch_tasks[clean_id] = asyncio.create_task(_feed_watcher(clean_id))
-            logger.debug("Started feed watcher task for session %s", clean_id)
+        _ensure_watcher(clean_id)
 
     except Exception as exc:
         logger.error("Error in join_session handler: %s", exc, exc_info=True)
@@ -2896,7 +2772,7 @@ async def join_activity(sid, data=None):
     room empties (leave_activity/disconnect).
     """
     try:
-        if first_join(sid) and not check_rate_limit(limit_key(sid, _sio.get_environ(sid), _socket_user)):
+        if not join_allowed(sid, lambda: check_rate_limit(limit_key(sid, _sio.get_environ(sid), _socket_user))):
             await _sio.emit("error", refusal("rate_limited", RATE_LIMIT_WINDOW), room=sid)
             return
 
@@ -2944,6 +2820,13 @@ async def leave_activity(sid):
     await _stop_hub_if_activity_empty()
 
 
+def _ensure_watcher(clean_id: str) -> None:
+    """Start the session's feed watcher, or RESTART it when it died (WS3)."""
+    task = _watch_tasks.get(clean_id)
+    if task is None or task.done():
+        _watch_tasks[clean_id] = asyncio.create_task(_feed_watcher(clean_id))
+
+
 async def _feed_watcher(session_id: str) -> None:
     """Watch for changes in a session's feed directory and notify clients.
     
@@ -2960,10 +2843,9 @@ async def _feed_watcher(session_id: str) -> None:
     # Use session_id directly as the room name
     room = session_id
 
-    if not feed_dir.exists():
-        logger.warning("Feed directory %s does not exist, watcher will wait", feed_dir)
-        # Create the directory if it doesn't exist
-        feed_dir.mkdir(parents=True, exist_ok=True)
+    # WS8: a console read never creates a session tree — wait for the agent's.
+    while not feed_dir.exists():
+        await asyncio.sleep(1.0)
 
     # Track processed files to avoid duplicates - use bounded set for memory efficiency
     processed_files = set()

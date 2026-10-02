@@ -80,7 +80,7 @@
    "github_create_issue",
    "aave_supply"
   ],
-  "universe_size": 384
+  "universe_size": 385
  },
  "actions": {
   "": {
@@ -251,6 +251,61 @@
     "room_policy._is_money_call(name, owner)": true
    },
    "owner_tools": [],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": false
+   }
+  },
+  "agent_nft_adopt": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": [
+     "money",
+     "action"
+    ],
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": "spend",
+    "write_row": {
+     "agent_nft": "money"
+    }
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "effects.WRITE_ACTIONS",
+    "payment_tools.PAYMENT_APPROVAL_TOOLS",
+    "spend_lane.ALWAYS_OWNER_APPROVED_VERBS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": true,
+    "authority.money_action(name)": true,
+    "authority.money_tool(owner)": true,
+    "metering_gate.MONEY_TOOLS∋owner": true,
+    "room_policy._is_money_call(name, None)": true,
+    "room_policy._is_money_call(name, owner)": true
+   },
+   "owner_tools": [
+    "agent_nft"
+   ],
    "room": {
     "is_room_denied_call(name, None)": true,
     "is_room_denied_call(name, owner)": true

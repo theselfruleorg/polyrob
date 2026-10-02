@@ -53,7 +53,8 @@ def h_inbox(ctx: CommandContext) -> None:
     """What is waiting on you, blocking first — and which lists refused."""
     from core.surfaces.inbox_render import render_inbox
 
-    user_id = ctx.user_id or "local"
+    from cli._admin_home import admin_owner_tenant
+    user_id = admin_owner_tenant(ctx.user_id)
     try:
         body = build(user_id, _home(ctx))
     except Exception as exc:  # the composer itself refused: say so, never zero
@@ -75,7 +76,8 @@ async def h_book(ctx: CommandContext) -> None:
     from core.surfaces.inbox_render import render_book
     from tools.defi.book import read_book
 
-    user_id = ctx.user_id or "local"
+    from cli._admin_home import admin_owner_tenant
+    user_id = admin_owner_tenant(ctx.user_id)
     try:
         body = await read_book(user_id, _home(ctx))
     except Exception as exc:

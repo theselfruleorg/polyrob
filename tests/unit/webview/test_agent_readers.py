@@ -72,7 +72,7 @@ def memory_client(monkeypatch):
     from modules.memory.sqlite_memory_provider import SqliteMemoryProvider
     d = tempfile.mkdtemp()
     provider = SqliteMemoryProvider(db_path=os.path.join(d, "memory.db"))
-    monkeypatch.setattr("webview.pages._memory_provider", lambda: provider)
+    monkeypatch.setattr("webview.pages._memory_provider_status", lambda: (provider, None))
     return provider
 
 
@@ -96,7 +96,7 @@ def test_memory_search_returns_tenant_scoped_rows(memory_client, monkeypatch):
 
 
 def test_memory_search_names_a_missing_provider_never_a_confident_empty(monkeypatch):
-    monkeypatch.setattr("webview.pages._memory_provider", lambda: None)
+    monkeypatch.setattr("webview.pages._memory_provider_status", lambda: (None, None))
     monkeypatch.setattr("webview.pages._effective_user_id", lambda request: "u1")
     app = FastAPI()
     app.include_router(mod.api_router)
