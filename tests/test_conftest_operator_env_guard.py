@@ -26,7 +26,7 @@ from tests.conftest import _OPERATOR_ENV_VARS
 
 def _catalogued_wallet_flags() -> list:
     from core.flags_catalog import CATALOG
-    return [name for name, _group, _default, _desc in CATALOG
+    return [name for name, *_ in CATALOG
             if name.startswith("AGENT_WALLET_") and "<" not in name]
 
 
@@ -74,3 +74,40 @@ def test_guard_restores_a_raw_write():
         f"the restore fixture did not undo a raw write of {var} "
         f"(got {os.environ.get(var)!r}, expected {before!r})"
     )
+
+
+def test_guard_restores_profile_activation_paths(tmp_path, monkeypatch):
+    """A profile selection must not redirect a later test's default home."""
+    from core.profiles import activate_profile
+    from tests.conftest import _restore_operator_env_vars
+
+    base = tmp_path / "home"
+    (base / "profiles" / "scout").mkdir(parents=True)
+    monkeypatch.setenv("POLYROB_HOME", str(base))
+    for name in ("POLYROB_PROFILES_ROOT", "POLYROB_PROFILE_RESOLVED",
+                 "POLYROB_PROFILE", "POLYROB_PROFILE_SOURCE",
+                 "POLYROB_DATA_DIR", "POLYROB_PROJECT_DIR"):
+        monkeypatch.delenv(name, raising=False)
+    names = ("POLYROB_HOME", "POLYROB_PROFILES_ROOT", "POLYROB_PROFILE_RESOLVED",
+             "POLYROB_PROFILE", "POLYROB_PROFILE_SOURCE",
+             "POLYROB_DATA_DIR", "POLYROB_PROJECT_DIR")
+    before = {name: os.environ.get(name) for name in names}
+    guard = _restore_operator_env_vars.__wrapped__()
+    next(guard)
+    try:
+        selected = activate_profile("scout")
+        assert selected is not None
+        assert os.environ["POLYROB_HOME"] == str(base / "profiles" / "scout")
+        assert os.environ["POLYROB_PROFILES_ROOT"] == str(base / "profiles")
+        assert os.environ["POLYROB_PROFILE_RESOLVED"] == "1"
+        next(guard, None)
+        for name in ("POLYROB_HOME", "POLYROB_PROFILES_ROOT", "POLYROB_PROFILE_RESOLVED"):
+            assert os.environ.get(name) == before[name], name
+    finally:
+        # Keep the regression safe even while the restore guard is broken.
+        guard.close()
+        for name, value in before.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value

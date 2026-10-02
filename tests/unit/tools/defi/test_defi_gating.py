@@ -50,21 +50,20 @@ def test_impersonal_reads_stay_available_while_tainted():
 
 
 # --------------------------------------------------------------------------
-# Flag: OFF by default and NOT in the POLYROB_LOCAL safe group
+# Flag: ON by default (071 D1 — read-only), and an explicit false still wins
 # --------------------------------------------------------------------------
 
-def test_flag_defaults_off(monkeypatch):
+def test_flag_defaults_on(monkeypatch):
     from tools.defi import defi_data_enabled
     monkeypatch.delenv("DEFI_DATA_ENABLED", raising=False)
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
-    assert defi_data_enabled() is False
+    assert defi_data_enabled() is True
 
 
-def test_flag_does_not_ride_the_local_safe_group(monkeypatch):
-    """Production runs POLYROB_LOCAL=1 with a live mainnet wallet — joining the
-    safe group would auto-enable this there at the next deploy."""
+def test_flag_explicit_off_wins_even_under_local(monkeypatch):
+    """The operator can still remove the read tool, POLYROB_LOCAL or not."""
     from tools.defi import defi_data_enabled
-    monkeypatch.delenv("DEFI_DATA_ENABLED", raising=False)
+    monkeypatch.setenv("DEFI_DATA_ENABLED", "false")
     monkeypatch.setenv("POLYROB_LOCAL", "1")
     assert defi_data_enabled() is False
 
@@ -77,7 +76,7 @@ def test_flag_honours_explicit_opt_in(monkeypatch):
 
 def test_register_is_a_noop_when_disabled(monkeypatch):
     from tools.defi import register_defi_data_tool
-    monkeypatch.delenv("DEFI_DATA_ENABLED", raising=False)
+    monkeypatch.setenv("DEFI_DATA_ENABLED", "false")
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
     assert register_defi_data_tool() is False
 
@@ -103,7 +102,7 @@ def test_register_when_forced_classifies_and_registers():
 
 
 def test_not_in_default_toolset_when_disabled(monkeypatch):
-    monkeypatch.delenv("DEFI_DATA_ENABLED", raising=False)
+    monkeypatch.setenv("DEFI_DATA_ENABLED", "false")
     monkeypatch.delenv("POLYROB_AGENT_TOOLSET", raising=False)
     from agents.task.tool_defaults import _dynamic_default_tools
     assert "defi_data" not in _dynamic_default_tools()

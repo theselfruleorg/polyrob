@@ -122,3 +122,16 @@ def test_feed_events_still_rejects_unknown_type(monkeypatch, tmp_path):
 
     resp = client.get(f"/api/session/{sid}/feed/events?event_type=bogus_kind")
     assert resp.status_code == 400, resp.text
+
+
+@pytest.mark.parametrize("kind", [
+    "agent_message", "task_complete", "tool_started", "document_uploaded",
+    "user_message_during_execution", "session_completion", "llm_started",
+])
+def test_feed_events_accepts_the_types_the_transcript_draws(monkeypatch, tmp_path, kind):
+    """070 W0.10: every type the transcript draws can be filtered (was a 400)."""
+    sid = f"sess-e2-{kind}"
+    _make_feed(tmp_path, monkeypatch, sid)
+    client = _client(monkeypatch)
+    resp = client.get(f"/api/session/{sid}/feed/events?event_type={kind}")
+    assert resp.status_code == 200, resp.text

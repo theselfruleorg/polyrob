@@ -6,34 +6,21 @@ stop it, and how you know it stopped.
 
 ## Stop everything
 
-Say it. In Telegram — typed or as a voice note — any of these pauses everything,
-with no model call in the way:
+Send `/pause` (or its alias `/halt`). It is a slash command on purpose: it runs
+with no model call, no queue and no tool in the way, and it works the same on
+Telegram, in the `polyrob` REPL and in the console. You get the verified state
+back within a second or two:
 
 ```
-stop
-stop everything
-Stop all ghosts today, please
-autonomy off
-halt
-pause
-```
-
-The five stop words are `stop`, `halt`, `pause`, `freeze` and `standby`; a few
-phrases (`stop everything`, `shut it down`, `stand down`, `autonomy off`, `kill
-switch`) mean a full stop on their own. A negation or a question never counts
-("why did you stop?", "don't stop the exit monitor").
-
-You get the verified state back within a second or two:
-
-```
-⏸ Paused everything (since 14:12 UTC, by owner via telegram:voice).
+⏸ Paused everything (since 14:12 UTC, by owner via telegram).
 Still on: this chat, crash/security/credit alerts.
 Resume with /resume. /status shows this first.
 ```
 
-The same words work in the `polyrob` REPL. The slash verb `/pause` (and its
-alias `/halt`) does the same on Telegram, in the REPL and in the console; on the
-box:
+Plain words are never commands. "stop", "pause the buyback" or "resume where you
+left off" — typed or spoken — is a message to the agent like any other. The agent
+can pause and resume through its owner-only `autonomy_control` action, but that
+path needs a working model; `/pause` does not. On the box:
 
 ```bash
 polyrob autonomy pause
@@ -67,14 +54,9 @@ plain word does not cover: `all`, `trading`, `streams`, `planner`, `cron`,
 silently widens to "everything". Durations are `90m`, `6h`, `2d`. The CLI form
 is `polyrob autonomy pause trading --for 6h`.
 
-In prose, a scoped ask ("stop trading for 6 hours", "stop rendering videos")
-goes to the agent, which narrows it through its owner-only `autonomy_control`
-action and quotes the result. If the model is unavailable, or the session is too
-busy to take your message, everything is paused instead — the safe default — and
-the reply says so.
-
-The preference `pause.phrases` adds your own object-free words: with
-`['ghosts', 'bots']`, "stop the ghosts" still means stop everything.
+In prose, a scoped ask ("stop trading for 6 hours") goes to the agent, which
+narrows it through its owner-only `autonomy_control` action and quotes the
+result. Nothing acts on the sentence before the agent reads it.
 
 ### Narrow pauses with their own verbs
 
@@ -95,11 +77,9 @@ polyrob owner resume           # alias of `polyrob autonomy resume`
 polyrob autonomy resume
 ```
 
-The resume words are `resume`, `unpause` and `unfreeze`. ("continue" is the
-everyday "keep going" word and lifts a pause only next to an autonomy word, as
-in "continue autonomy".) Those words only act when something is paused;
-otherwise they are just chat. The reply is the verified state:
-`▶ Autonomy RESUMED.` or `▶ Resumed; still paused: streams.`
+The reply is the verified state: `▶ Autonomy RESUMED.` or
+`▶ Resumed; still paused: streams.` A sentence such as "resume the buyback" is
+chat for the agent, never a switch.
 
 ## Pause versus off
 
@@ -114,7 +94,7 @@ polyrob autonomy status
 
 Use `pause` to stop what is happening now; use `off` when you do not want the
 loops to start at all. What each mode moves:
-[configuration.md §5](configuration.md#5-the-autonomy-dial).
+[configuration.md §6](configuration.md#6-the-autonomy-dial).
 
 ## Where the state lives
 
@@ -135,8 +115,19 @@ so.
   by owner via telegram` or `▶ RUNNING — 0 goal run(s), 0 cron run(s), loops
   alive 3/3`.
 - A `pause_violation` CRITICAL health item names any autonomous activity
-  recorded after the pause (goal runs, cron runs, self-wakes, social writes,
-  wallet spend). Treat it as an incident.
+  recorded after the pause (goal runs, cron runs, self-wakes, wallet spend, and
+  every outward write the pause covers — a post, a message, a publish, a money
+  move — whichever tool made it). Treat it as an incident.
+- Whatever tool it uses, an autonomous run is refused a post, a message, a
+  publish or a money move while your pause covers it (`social`, `oversight`,
+  `apps`, or everything); the refusal is recorded. Running code, editing its own
+  skills and plain web requests are recorded but not stopped by a scoped pause.
+  Your own requests are never blocked — including money: when YOU ask, in chat
+  or with an owner verb (`/send`, `/bridge`, `/pay`), the pause and the
+  autonomous ceiling do not apply. The per-transaction and daily caps always do.
+- `/why [n]` lists the last refusals (default 5, at most 20): when, which
+  tool, and the gate's reason word for word. It reads the recorded refusals, so
+  the answer does not depend on the agent's own summary.
 - `polyrob autonomy status --json` exposes the record under `pause`.
 
 Any maintenance or alerting loop you run on the box reads the same record: while
@@ -248,9 +239,8 @@ Each item in `/pending` prints its own pair of one-tap tokens, like
 token is an address, not a secret: it is resolved against the live queue every
 time, so a stale one decides nothing.
 
-You can also just reply **approve** or **reject** in words. That only counts
-when something is actually waiting, and only when the whole message is the
-decision — "I approve of that plan" is a sentence for the agent, not a vote.
+A plain "approve" or "reject" is a message to the agent, not a decision: only
+the slash verbs and the tap tokens decide an item.
 
 On the command line the same queue is `polyrob owner pending`, and
 `polyrob owner promote|reject <kind> <id>` (or `… promote all`) decides it.
@@ -272,6 +262,11 @@ the retry prompt as *the owner answered: …*. Without it the run learns only
 that it may proceed, not what you decided — which is how the same ask comes
 back a second time. The answer is kept on the ask too, so you can see later
 what you said.
+
+When the agent asks a question with lettered options (`A) … or B) …`), the
+Telegram notice carries one answer button per option. A button sends
+`/fulfill_<id>_<letter>`; that is the same as `/fulfill <id>` with the option's
+own text as your answer. A button only answers the ask the notice is about.
 
 ## Apps
 
@@ -302,17 +297,49 @@ vhost and certificate: [deployment-postures.md](deployment-postures.md).
 
 Four rails shipped as AGENT actions with no human seat at all: the owner could
 watch them and could not run them. Each now has the same shape as `/bridge` —
-a **quote by default**, and an explicit `go` to execute. Typing `go` is a
-deliberate second act, never the approval: every cap, the durable owner queue
-and the pause record still apply underneath, unchanged.
+a **quote by default**, and an explicit `go` to execute. Typing `go` is YOUR
+act: you typed the amount and the address, so there is no second tap, and the
+pause and the autonomous ceiling (which bound what I do on my own) do not
+apply. The per-transaction cap, the daily cap and the simulation always do, and
+the quote shows them before you type `go`.
 
 ```
+/send <amount> <native|token-address> to <address> on <chain> [max <usd>] [go]   # send
+/swap <amount> <native|token> to <token> on <chain> [slippage <bps>] [max <usd>] [go]
+/cards                              # open action cards: confirm, refresh, cancel, answer
 /claim <token> [go]                 # collect the creator fees a launchpad owes me
 /nft list|info|transfer|revoke      # what I hold, send one, retire an approval
 /dapp list|revoke <id>              # web pages my wallet is armed for
 /identity register|set-uri [go]     # my own ERC-8004 registration
-/contacts [<surface> <address>]     # who I have written to, and one transcript
+/contacts [<surface> <address>]     # third parties I have written to, and one transcript
+/thread [n | <hours>h]              # OUR conversation, every session and rail (you are not a contact)
+/wallet tokens                      # which tokens I trust and why; what is quarantined
+/wallet trust|untrust <chain> <address> [go]   # your word on one token
+/writeoff <chain> <address> [go]    # write a holding off: the loss is its recorded cost
+/unquarantine <chain> <address> [go]           # undo a look-alike's quarantine
 ```
+
+**Build it with buttons.** Send `/send` or `/swap` with nothing after it: I answer with
+buttons — the chain, then the token, then the recipient (from sends you confirmed
+before) or the token to buy, then the amount (a share of the balance). The last tap
+gets the real quote. Nothing moves until you tap Confirm on that quote.
+
+**Action cards.** A quote no longer ends with a line to type again. It is a
+card with **Confirm**, **Refresh** and **Cancel** buttons (Telegram), the same
+buttons in the console chat and Inbox, and the typed tokens in the terminal
+(`/card_<id>_ok`). Confirm runs the exact line the quote showed — the stored
+address, never a re-typed one — once, and for `/send` and `/swap` at most the
+quote + 5%: if the price moved further, nothing moves and the card says so. A
+decided card loses its buttons. In the console, Money › Moves › *Make a move* builds a
+send or swap from pickers (chain, a token I trust, a recent recipient) and answers with
+the same card. The agent uses cards too: `propose_action` puts a
+money verb to you whose only button gets the real quote (the agent never writes a
+confirm), and `present_choice` asks you to pick one of a few options and waits for
+the tap. `/cards` lists what is open.
+
+A token-identity question ("which PNL is real?") arrives in `/pending` with a
+*trust it* and a *not trusted* tap per contract — see
+[payments.md §10.4b](payments.md#104b-which-tokens-the-agent-trusts).
 
 Three things worth knowing before you use them:
 
@@ -333,8 +360,8 @@ private chat, like the rest of the money and control verbs.
 
 ## See also
 
-- [configuration.md §5](configuration.md#5-the-autonomy-dial) — the four autonomy axes
+- [configuration.md §1](configuration.md#1-the-six-axes) — the six axes, and §6 the autonomy dial
 - [cli.md](cli.md#polyrob-owner) — every `polyrob owner` verb
 - [security-model.md](security-model.md) — what stops the agent when you are not watching
 - [payments.md](payments.md) — money caps, approval lanes and the spend ledger
-- [configuration.md §7](configuration.md#7-surfaces-and-who-may-talk-to-it) — the delivery-rail bounds and their flags
+- [configuration.md §8](configuration.md#8-surfaces-and-who-may-talk-to-it) — the delivery-rail bounds and their flags

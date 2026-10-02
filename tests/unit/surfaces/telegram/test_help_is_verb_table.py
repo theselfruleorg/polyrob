@@ -87,7 +87,9 @@ def test_every_line_is_a_routable_verb_or_a_declared_subverb():
     subverbs = {line.split(" ")[0]
                 for lines in _SUBVERBS.values() for line in lines}
     for name, _ in _command_lines():
-        assert name in _COMMANDS or name in subverbs, f"stale help row {name}"
+        # command_names(): _COMMANDS plus the verbs a pack registered (`/x`).
+        from core.surfaces.dispatcher import command_names
+        assert name in command_names() or name in subverbs, f"stale help row {name}"
 
 
 def test_the_sections_are_group_order():

@@ -24,6 +24,7 @@ def _client(monkeypatch, tmp_path, user_id="u1"):
     monkeypatch.setattr(pages.webgate, "data_dir", lambda: str(tmp_path))
     app = FastAPI()
     app.include_router(pages.router)
+    app.include_router(pages.money_router)  # 067 P5a: Money readers
     # 043 phase 5: pages.router carries the /api/webgate/* endpoints; the
     # WEBVIEW_UI legacy switch and webview.legacy were removed.
     return TestClient(app), pages

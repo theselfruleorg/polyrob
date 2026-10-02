@@ -81,6 +81,11 @@ def normalize_for_chain(chain: str, addr: str) -> str:
     if family == "svm":
         if not isinstance(addr, str):
             raise ValueError(f"not a Solana address: {addr!r}")
+        # Surrounding whitespace only — it is not a base58 character, so it can
+        # never have been part of the key, and stripping it can only turn a
+        # refusal into the address the caller meant. The BODY is still returned
+        # byte-for-byte: base58 is case-sensitive and nothing else is touched.
+        addr = addr.strip()
         if addr.startswith("0x"):
             raise ValueError(
                 f"{addr!r} is a hex address, but {chain} uses base58 account "

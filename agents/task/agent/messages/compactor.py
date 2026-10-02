@@ -14,6 +14,8 @@ from modules.llm.messages import (
     make_control_message,
 )
 
+from agents.task.agent.messages.retrieval import drop_usage_anchor
+
 logger = logging.getLogger(__name__)
 
 
@@ -43,6 +45,17 @@ _MIN_KEEP_RECENT = 10        # floor for the protected tail
 _THRASH_SAVINGS_FLOOR = 0.10 # if last 2 compactions each saved < this, stop trying (B4)
 _STATIC_FALLBACK_CAP = 8000  # char ceiling for the deterministic fallback summary (A6)
 _COMPACTED_MARKER = "[COMPACTED SESSION HISTORY]"
+# F11 warm summariser: stamped on the CLIENT (the F4 `apply_cache_ttl` pattern) the
+# first time a provider refuses the warm shape, so one refusal is paid once per
+# session instead of once per compaction. A client is a plain object; the manager
+# has __slots__ and no free attribute to spare.
+_WARM_UNAVAILABLE_ATTR = "_polyrob_compaction_warm_unavailable"
+# The instruction's pointer at the conversation when it rides as real messages
+# rather than being inlined as text.
+_CONVERSATION_ABOVE = (
+    "Conversation to summarize: EVERY message above this one in this request, "
+    "oldest first. Summarize those messages."
+)
 # T1.3 — anti-injection framing (reference compaction-guard parity). See
 # core.config_policy.compaction_prompt_guard for the gate + rationale. Guard OFF
 # must reproduce the pre-T1.3 prompt/rebuild bytes exactly, so these are only
@@ -85,7 +98,10 @@ def _head_tail(text: str, cap: int) -> str:
 
 
 class CompactorMixin:
-	# Empty slots so the composed MessageManager keeps its own __slots__ (no __dict__).
+	# F29: empty slots so the composed MessageManager keeps its own __slots__ and
+	# never grows a __dict__. This is only TRUE while EVERY class in the MRO
+	# declares one — three mixins omitted it until 2026-09-22, so the claim in
+	# this comment was false for as long as it had been written.
 	__slots__ = ()
 
 	def clear_history_keep_system(self, keep_last_n: int = 2) -> None:
@@ -111,7 +127,9 @@ class CompactorMixin:
 			if len(self.history.messages) >= keep_last_n:
 				messages_to_keep.extend(list(self.history.messages)[-keep_last_n:])
 
-			# Clear and re-add kept messages
+			# Clear and re-add kept messages. F6: the provider-usage anchor covered
+			# a prefix that no longer exists.
+			drop_usage_anchor(self, "clear_history_keep_system")
 			self.history.messages.clear()
 			for managed_msg in messages_to_keep:
 				self.history.messages.append(managed_msg)
@@ -121,47 +139,56 @@ class CompactorMixin:
 			self.logger.info(f"Cleared history, kept {len(messages_to_keep)} messages ({self.history.total_tokens} tokens)")
 
 	def emergency_context_prune(self) -> None:
-		"""Emergency pruning of message history to recover from context overflow.
+		"""Last-resort cut of the CONVERSATION when the window is already over.
 
-		Keeps only:
-		1. System message
-		2. Initial task (first human message)
-		3. Last N messages with complete tool call pairs
+		Contract: keep the last ``min_recent_messages`` (3) messages, extended
+		backwards as far as needed so no ``AIMessage(tool_calls)`` -> ``ToolMessage``
+		pair is split. Nothing else in ``history.messages`` survives.
 
-		CRITICAL: Preserves complete AIMessage+ToolMessage pairs to prevent sequence validation errors.
-		Hierarchical memory will be re-injected on next LLM call.
+		The system prompt and the initial task are NOT part of that budget and are
+		not at risk: they live in the FOUNDATION (``_system_message`` /
+		``_initial_task_message``, stored beside the deque exactly so it cannot
+		evict them) and ``get_messages_for_llm`` re-prepends them on the next call,
+		together with the pinned skills / self-context / project-context / tool
+		catalog. H-MEM is re-injected the same way.
+
+		F30: this used to open by scanning the deque for a ``SystemMessage`` at
+		index 0 and for "the first HumanMessage", to preserve them. Neither is ever
+		there — the foundation has been stored separately for a year — so the scan
+		was dead, and worse, its docstring promised a 5-message floor the code
+		never delivered (the two foundation slots it "kept" were phantom, leaving
+		~3). The promise now matches the code.
 		"""
 		self.logger.warning("🚨 EMERGENCY CONTEXT PRUNING INITIATED")
+
+		# F15: try the deterministic pass BEFORE the destructive one. This prune
+		# keeps three messages; ageing keeps every turn and drops only the bulk of
+		# the old tool results. If that is enough to get back under the emergency
+		# band, the conversation survives.
+		if self.age_old_tool_results():
+			from agents.task.constants import COMPACTION_EMERGENCY_PCT
+			usage_now = self._context_usage_percent_or_none()
+			if usage_now is not None and usage_now < COMPACTION_EMERGENCY_PCT:
+				self.logger.warning(
+					f"✅ Ageing old tool results cleared the emergency "
+					f"({usage_now:.1f}% of the window, under {COMPACTION_EMERGENCY_PCT}%) — "
+					f"keeping the whole conversation instead of pruning to 3 messages"
+				)
+				return
 
 		messages = list(self.history.messages)
 		original_count = len(messages)
 		original_tokens = self.history.total_tokens
 
-		if original_count <= 5:
+		# Keep last N messages with complete tool call pairs.
+		min_recent_messages = 3
+
+		if original_count <= min_recent_messages:
 			self.logger.info("Message count already minimal, skipping prune")
 			return
 
 		preserved = []
-
-		# Keep system message (if exists) - but it's stored separately, not in history.messages
-		# This is just for safety in case old code added it
 		remaining_messages = messages
-		if messages and isinstance(messages[0].message if hasattr(messages[0], 'message') else messages[0], SystemMessage):
-			preserved.append(messages[0])
-			remaining_messages = messages[1:]
-
-		# Keep initial task (first human message) - but it's also stored separately
-		# This is for safety in case old code added it
-		for i, managed_msg in enumerate(remaining_messages):
-			msg = managed_msg.message if hasattr(managed_msg, 'message') else managed_msg
-			if isinstance(msg, HumanMessage):
-				preserved.append(managed_msg)
-				remaining_messages = remaining_messages[i+1:]
-				break
-
-		# ✅ FIX: Keep last N messages with complete tool call pairs
-		# Start with last 3 messages and expand if needed to complete pairs
-		min_recent_messages = 3
 		recent_messages = []
 
 		# Work backwards from the end to collect complete tool call pairs
@@ -210,7 +237,8 @@ class CompactorMixin:
 
 		preserved.extend(recent_messages)
 
-		# Reconstruct history
+		# Reconstruct history. F6: the anchored prefix is gone.
+		drop_usage_anchor(self, "emergency_context_prune")
 		self.history.messages.clear()
 		self.history.total_tokens = 0
 
@@ -233,6 +261,72 @@ class CompactorMixin:
 			f"   Tokens: {original_tokens:,} → {new_tokens:,} (freed {original_tokens - new_tokens:,})\n"
 			f"   Usage: {self.get_context_usage_percent():.1f}%"
 		)
+
+	# ------------------------------------------------------------------ #
+	# F15 — deterministic ageing INSIDE the rebuild (no LLM call)
+	# ------------------------------------------------------------------ #
+	def _context_usage_percent_or_none(self) -> Optional[float]:
+		"""The one gauge, or None when this host cannot answer.
+
+		``CompactorMixin`` is composed STANDALONE by several test harnesses that do
+		not bring ``TokenCounterMixin``. A re-measure that cannot be taken must read
+		as "no evidence we are under the band" (do the expensive thing), never as an
+		exception inside compaction.
+		"""
+		reader = getattr(self, "get_context_usage_percent", None)
+		if not callable(reader):
+			return None
+		try:
+			return float(reader())
+		except Exception:
+			return None
+
+	def age_old_tool_results(self) -> int:
+		"""Demote long OLD tool results in place. Returns the tokens freed.
+
+		A 40k-char ``web_fetch`` from 30 steps ago used to ride every request
+		verbatim, at cache-read price, until the 85 % band fired the expensive LLM
+		compaction. This pass replaces it with its first line plus the NAMED pointer
+		the offload path already wrote — deterministically, with no LLM call.
+
+		It runs ONLY at a compaction boundary, which is already a cold prefix, so it
+		costs no extra cache miss. It is also the cheapest thing that can be tried
+		first: if it frees enough, the expensive step never happens.
+
+		The deque is NOT cut. Each ``ManagedMessage`` keeps its position and its
+		``tool_call_id``; only the content (and its token count) shrinks, so no
+		``AIMessage(tool_calls)`` is left without its answer and no cached prefix
+		BEHIND the aged message moves.
+		"""
+		from agents.task.agent.messages.filters import age_old_tool_results as _age
+		try:
+			with self._history_lock:
+				managed = list(self.history.messages)
+				current = [m.message for m in managed]
+				aged = _age(current)
+				freed = 0
+				changed = 0
+				for holder, before, after in zip(managed, current, aged):
+					if after is before:
+						continue
+					was = int(getattr(holder.metadata, "input_tokens", 0) or 0)
+					now = self._count_message_tokens(after)
+					holder.message = after
+					holder.metadata.input_tokens = now
+					freed += max(0, was - now)
+					changed += 1
+				if not changed:
+					return 0
+				self.history.total_tokens = max(0, self.history.total_tokens - freed)
+			# The provider billed a prefix that no longer exists byte-for-byte.
+			drop_usage_anchor(self, "tool-result ageing")
+			self.logger.info(
+				f"🧹 Aged {changed} old tool result(s), freeing ~{freed:,} tokens "
+				f"(no LLM call)")
+			return freed
+		except Exception as e:
+			self.logger.debug(f"tool-result ageing skipped: {e}")
+			return 0
 
 	# ------------------------------------------------------------------ #
 	# Compaction tail sizing (C3) + anti-thrash (B4)
@@ -273,6 +367,17 @@ class CompactorMixin:
 		savings = list(getattr(self, "_compaction_savings", []))
 		savings.append(max(0.0, saved))
 		self._compaction_savings = savings[-2:]
+
+	def last_compaction_savings(self) -> Optional[float]:
+		"""F11: the fraction the LAST compaction cut (0.0-1.0), or None.
+
+		The step ladder's progress rule reads this to decide whether a compaction
+		inside the cooldown window has earned a second run. Same number the
+		anti-thrash counter uses — one measurement of "did compaction help", not
+		two. None means no compaction has completed in this session yet.
+		"""
+		savings = getattr(self, "_compaction_savings", None) or []
+		return float(savings[-1]) if savings else None
 
 	# ------------------------------------------------------------------ #
 	# Pre-compaction checkpoint (C2 — scoped-down lineage)
@@ -345,9 +450,26 @@ class CompactorMixin:
 		Returns:
 			True if compaction (or static fallback) was performed, False otherwise.
 		"""
+		original_tokens = self.history.total_tokens
+
+		# F15: the cheapest pass first. Demote long OLD tool results to one line +
+		# a pointer, then RE-MEASURE: if that alone brings the context back under
+		# the band that called us, the expensive LLM summariser never runs and the
+		# raw conversation survives intact (DSH compaction-basic:323-327).
+		if self.age_old_tool_results():
+			from agents.task.constants import COMPACTION_LLM_PCT
+			usage_now = self._context_usage_percent_or_none()
+			if usage_now is not None and usage_now < COMPACTION_LLM_PCT:
+				self._record_compaction_savings(original_tokens, self.history.total_tokens)
+				self.logger.info(
+					f"✅ Ageing old tool results was enough: {original_tokens:,} → "
+					f"{self.history.total_tokens:,} tokens ({usage_now:.1f}% of the window, "
+					f"under the {COMPACTION_LLM_PCT}% band) — skipping the LLM summariser"
+				)
+				return True
+
 		original_messages = [m.message for m in self.history.messages]
 		original_count = len(original_messages)
-		original_tokens = self.history.total_tokens
 
 		if original_count < 15:
 			self.logger.debug("Not enough messages to compact")
@@ -487,14 +609,20 @@ class CompactorMixin:
 		windows = self._window_messages(messages, _SUMMARIZE_INPUT_BUDGET_CHARS)
 		if len(windows) > 1:
 			self.logger.info(f"Compaction input large; summarizing in {len(windows)} iterative windows")
+		warm = self._warm_summarization_available(compaction_llm)
 		running = prior_summary
 		for window in windows:
-			prompt = self._build_compaction_prompt(window, prior_summary=running)
+			prompt = self._build_compaction_prompt(window, prior_summary=running,
+			                                       inline_conversation=not warm)
 			import time as _time
 			_t0 = _time.time()
 			# tools=None is explicit: a summarisation call never carries the step's
 			# toolset (2026-09-20: 176 stale schemas rode the compaction prompt).
-			response = await compaction_llm.ainvoke([HumanMessage(content=prompt)], tools=None)
+			if warm:
+				response = await self._invoke_warm_summarization(
+					compaction_llm, window, prompt, prior_summary=running)
+			else:
+				response = await compaction_llm.ainvoke([HumanMessage(content=prompt)], tools=None)
 			# A3: meter this aux LLM call through the single deduction path (fail-open).
 			from modules.llm.aux_metering import meter_aux_llm
 			await meter_aux_llm(
@@ -507,6 +635,81 @@ class CompactorMixin:
 			)
 			running = response.content if hasattr(response, 'content') else str(response)
 		return running or ""
+
+	# ------------------------------------------------------------------ #
+	# F11 — the summariser is a WARM-prefix call, not a cold one
+	# ------------------------------------------------------------------ #
+	def _warm_summarization_available(self, compaction_llm) -> bool:
+		"""Can this summarisation ride the prefix the step call just cached?
+
+		Three conditions, all necessary:
+
+		* the flag (``COMPACTION_WARM_PREFIX``, default ON);
+		* the summariser is the SESSION'S OWN client — a different model has a
+		  different cache entry, so the warm shape would only add bytes (Pi solves
+		  the same problem with ``cacheRetention:"none"``; POLYROB has no such knob);
+		* this client has not already refused the shape (see
+		  :meth:`_invoke_warm_summarization`).
+		"""
+		from agents.task.constants import compaction_warm_prefix
+		if not compaction_warm_prefix():
+			return False
+		if compaction_llm is None or compaction_llm is not getattr(self, "llm", None):
+			return False
+		return not getattr(compaction_llm, _WARM_UNAVAILABLE_ATTR, False)
+
+	def _warm_prefix_messages(self, window: list, instruction: str) -> list:
+		"""``foundation + window + ONE instruction`` — the DSH summariser shape.
+
+		Everything but the last message is bytes the provider just served for the
+		step call, so only the instruction is cold. The instruction is LAST on
+		purpose: anything appended after the cached prefix is the only thing that
+		cannot be reused.
+
+		The foundation slots are read through the ONE table that names them in wire
+		order (``foundation_replay.FOUNDATION_SLOTS``), not re-listed here: a ninth
+		slot must not have to be remembered in two places. H-MEM is deliberately
+		absent — under the default tail placement it is not a foundation block at
+		all, and it changes every step, so it is never part of a cached prefix.
+		"""
+		from agents.task.agent.messages.foundation_replay import FOUNDATION_SLOTS
+		foundation = []
+		for _key, attr, _tokens, _origin in FOUNDATION_SLOTS:
+			message = getattr(self, attr, None)
+			if message is not None:
+				foundation.append(message)
+		return foundation + list(window) + [HumanMessage(content=instruction)]
+
+	async def _invoke_warm_summarization(self, compaction_llm, window: list, prompt: str,
+	                                     prior_summary: Optional[str] = None):
+		"""Send the warm shape; fall back to the cold one ONCE per client.
+
+		A provider can refuse a request that carries ``tool_use``/``tool_result``
+		turns without a ``tools`` definition (Anthropic does). That is a property of
+		the client, not of this conversation, so the first refusal marks the client
+		and every later compaction in the session goes straight to the cold shape —
+		the Bedrock self-healing pattern, one probe, not one per compaction. A
+		TRANSIENT failure (rate limit, connection, timeout) is re-raised untouched:
+		``llm_compact_history`` must still see it as "retry next step", and it says
+		nothing about whether the shape is supported.
+		"""
+		try:
+			return await compaction_llm.ainvoke(
+				self._warm_prefix_messages(window, prompt), tools=None)
+		except _TRANSIENT_COMPACTION_ERRORS:
+			raise
+		except Exception as e:
+			try:
+				setattr(compaction_llm, _WARM_UNAVAILABLE_ATTR, True)
+			except Exception:
+				pass
+			self.logger.warning(
+				f"Warm-prefix summarisation refused ({type(e).__name__}: {e}); "
+				"using the cold shape for the rest of this session"
+			)
+			cold = self._build_compaction_prompt(window, prior_summary=prior_summary,
+			                                     inline_conversation=True)
+			return await compaction_llm.ainvoke([HumanMessage(content=cold)], tools=None)
 
 	def _rebuild_with_summary(self, summary_text: str, summarized_count: int, recent_messages: list) -> None:
 		"""Replace the summarized middle with one compacted message + recent tail.
@@ -526,6 +729,8 @@ class CompactorMixin:
 		        f"{guard_line}"
 		        f"[END COMPACTED HISTORY - Recent conversation follows]")
 		compacted_msg = make_control_message(body, MessageOrigin.COMPACTION_SUMMARY)
+		# F6: the summarized middle is gone; the anchored prefix no longer exists.
+		drop_usage_anchor(self, "compaction rebuild")
 		self.history.messages.clear()
 		self.history.total_tokens = 0
 		self._add_message_with_tokens(compacted_msg, _internal=True)
@@ -552,7 +757,10 @@ class CompactorMixin:
 					low = line.lower()
 					if "error" in low or "exception" in low or "traceback" in low:
 						errors.append(line.strip()[:200])
-			elif role == "Human":
+			elif role == "Human" and getattr(msg, "origin", MessageOrigin.USER) == MessageOrigin.USER:
+				# C3: only a genuine user turn is a user ask. A runtime nudge,
+				# self-wake, recall or bridge rides a Human wire role too, and
+				# promoting one to "Active Task" hands the runtime the owner's voice.
 				snippet = content.strip()
 				if snippet:
 					user_asks.append(snippet[:300])
@@ -575,7 +783,8 @@ class CompactorMixin:
 		]
 		return "\n".join(sections)[:_STATIC_FALLBACK_CAP]
 
-	def _build_compaction_prompt(self, messages: list, prior_summary: Optional[str] = None) -> str:
+	def _build_compaction_prompt(self, messages: list, prior_summary: Optional[str] = None,
+	                             inline_conversation: bool = True) -> str:
 		"""Build a STRUCTURED summarization prompt from the full middle (A1/A2/A3/A4).
 
 		Args:
@@ -647,6 +856,17 @@ class CompactorMixin:
 		else:
 			conversation_section = f"Conversation to summarize:\n{conversation}"
 
+		# F11 warm summariser: the conversation rides this request as REAL messages
+		# (the bytes the provider just cached for the step call), so the instruction
+		# points AT them instead of repeating them. The security preamble still
+		# applies — the framing is what stops the summarised turns reading as
+		# instructions, and it is needed more here, not less.
+		if not inline_conversation:
+			conversation_section = (
+				f"{_COMPACTION_SECURITY_PREAMBLE}\n{_CONVERSATION_ABOVE}"
+				if compaction_prompt_guard() else _CONVERSATION_ABOVE
+			)
+
 		return f"""Summarize the conversation below into a STRUCTURED running memory.
 Fill every section; write "(none)" where empty. Preserve concrete data, IDs, file
 paths, tool outcomes, and decisions verbatim where short.
@@ -681,6 +901,6 @@ survives compaction instead of being silently dropped once the raw history is go
 STRUCTURED SUMMARY:"""
 
 	# (check_and_compact_if_needed removed 2026-06-29 dead-loop prune: it had ZERO
-	#  callers. The live compaction policy is the hardcoded 85/95/70 thresholds in
-	#  agent/core/step.py, not CompactionManager.should_compact_messages — this method
-	#  was a dead alternate path that never ran.)
+	#  callers. The live — and, since F11(d), the ONLY — compaction policy is the
+	#  85/95/70 ladder in agent/core/step.py. The second window-scaled policy it used
+	#  to be measured against was deleted with its class on 2026-09-22.)

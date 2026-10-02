@@ -279,7 +279,7 @@ def test_identity_endpoint_null_when_absent(monkeypatch):
 
 # 043 §9 phase 4: the /identity PAGE (and its avatar block / ui.show_avatar
 # gating) is deleted — the persona/avatar now render on the new Agent
-# destination's Identity tab over /api/webgate/identity + /pfp.json (the endpoint
+# destination's Identity tab over /api/webgate/identity + /avatar.json (the endpoint
 # tests above stay). The read-only-endpoint invariant below is unchanged.
 
 

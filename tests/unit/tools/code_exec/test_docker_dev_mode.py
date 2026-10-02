@@ -1,7 +1,7 @@
 """WS-1 (computer-use parity): posture-gated dev mode for the docker sandbox.
 
 At AGENT_COMPUTE_POSTURE >= 1 an entitled session gets an INSTALLABLE sandbox:
-a writable `/install` dir (session-bound `<workspace>/.pylibs` bind), `python -s`
+a writable `/install` dir (a per-workspace bind OUTSIDE the workspace — H02), `python -s`
 with `PYTHONPATH=/install` instead of the env-ignoring `python -I`, and
 `HOME=/install` + `PIP_TARGET=/install` so a plain `pip install X` lands
 somewhere importable. The posture-0 path must stay BYTE-IDENTICAL (python -I,
@@ -68,7 +68,9 @@ def test_non_dev_argv_keeps_isolated_python_and_no_install_mount():
 def test_dev_argv_uses_python_s_with_install_mount_and_env():
     argv = _argv(ExecutionRequest(language="python", code="print(1)", dev_mode=True))
     assert argv[-4:] == ["python", "-s", "-c", "print(1)"]
-    assert "-v" in argv and "/tmp/ws/.pylibs:/install" in argv
+    src = DockerBackend._install_dir_path("/tmp/ws")
+    assert f"type=bind,src={src},dst=/install" in argv
+    assert not src.startswith("/tmp/ws" + os.sep)  # H02: never inside the workspace
     for expected in ("HOME=/install", "PYTHONPATH=/install", "PIP_TARGET=/install"):
         assert expected in argv, f"missing -e {expected}"
 
@@ -108,7 +110,8 @@ def test_dev_mode_does_not_relax_the_hardening_flags():
 
 def test_ensure_install_dir_creates_worldwritable_pylibs(tmp_path):
     host = DockerBackend._ensure_install_dir(str(tmp_path))
-    assert host == os.path.join(str(tmp_path), ".pylibs")
+    assert host == DockerBackend._install_dir_path(str(tmp_path))
+    assert not host.startswith(str(tmp_path) + os.sep)  # H02: outside the workspace
     assert os.path.isdir(host)
     mode = stat.S_IMODE(os.stat(host).st_mode)
     assert mode & 0o777 == 0o777  # container uid (e.g. 65534) must be able to write
@@ -123,8 +126,9 @@ async def test_persistent_dev_setup_mounts_install_dir(monkeypatch, tmp_path):
     b = DockerBackend(session_id=f"t-{uuid.uuid4().hex}", docker_runner=fake, dev_mode=True)
     await b.setup()
     run_d = next(a for a in fake.log if a[:2] == ["run", "-d"])
-    assert f"{tmp_path}/.pylibs:/install" in run_d
-    assert os.path.isdir(tmp_path / ".pylibs")
+    src = DockerBackend._install_dir_path(str(tmp_path))
+    assert f"type=bind,src={src},dst=/install" in run_d
+    assert os.path.isdir(src)
 
 
 @pytest.mark.asyncio

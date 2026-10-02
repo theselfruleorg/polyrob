@@ -82,44 +82,6 @@ def test_render_resume_result_states(home, monkeypatch):
     assert "ENVIRONMENT" in oa.render_resume_result(res, halt_hint="/pause")
 
 
-def test_owner_pause_phrases_reads_the_pref_and_fails_open(home, monkeypatch):
-    from core.surfaces import owner_admin as oa
-    assert oa.owner_pause_phrases("rob", str(home)) == ()
-    monkeypatch.setattr("core.prefs.resolve", lambda key, uid, hd, **kw: ["ghosts", "bots"])
-    assert oa.owner_pause_phrases("rob", str(home)) == ("ghosts", "bots")
-    monkeypatch.setattr("core.prefs.resolve", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x")))
-    assert oa.owner_pause_phrases("rob", str(home)) == ()
-
-
-def test_apply_owner_intent_is_the_one_decision_path(home):
-    """The Telegram gate and the REPL gate are thin over this."""
-    from core.surfaces import owner_admin as oa
-    from core.surfaces.owner_intent import owner_stop_intent
-    from core.autonomy_control import read_state
-    dd = str(home)
-    assert oa.apply_owner_intent(None, dd, via="t", resume_hint="/r", halt_hint="/p") == (None, None)
-    # "continue" with nothing paused is chat
-    assert oa.apply_owner_intent(owner_stop_intent("continue"), dd, via="t", resume_hint="/r",
-                                 halt_hint="/p") == (None, None)
-    # scoped goes to the agent unless a safe-default reason is given
-    scoped = owner_stop_intent("stop trading")
-    assert oa.apply_owner_intent(scoped, dd, via="t", resume_hint="/r", halt_hint="/p") == (None, None)
-    reply, res = oa.apply_owner_intent(scoped, dd, via="t", resume_hint="/r", halt_hint="/p",
-                                       force_full_reason="My model is unavailable")
-    assert reply.startswith("⚠️ My model is unavailable") and res.effective
-    assert read_state(dd).scopes == ("all",) and read_state(dd).reason == "stop trading"
-    oa.resume_autonomy_scopes(dd)
-    # full stop with a prose duration
-    reply, res = oa.apply_owner_intent(owner_stop_intent("stop everything for 2 hours"), dd,
-                                       via="repl", resume_hint="/resume", halt_hint="/pause")
-    assert reply.startswith("⏸ Paused everything") and "120 min" in reply
-    assert read_state(dd).via == "repl"
-    # resume lifts it
-    reply, res = oa.apply_owner_intent(owner_stop_intent("resume"), dd, via="repl",
-                                       resume_hint="/resume", halt_hint="/pause")
-    assert reply.startswith("▶ Autonomy RESUMED") and not read_state(dd).paused
-
-
 def test_render_results_are_seat_aware_and_honest(home, monkeypatch):
     from core.surfaces import owner_admin as oa
     res = oa.pause_autonomy(str(home), scopes=("all",), via="cli")
@@ -135,9 +97,3 @@ def test_render_results_are_seat_aware_and_honest(home, monkeypatch):
     res = oa.resume_autonomy_scopes(str(home), scopes=("streams",))
     text = oa.render_resume_result(res, halt_hint="/pause")
     assert "ENVIRONMENT" in text and "STREAM_SEEDING_PAUSE" in text
-
-
-def test_owner_pause_phrases_splits_multi_word_entries(home, monkeypatch):
-    from core.surfaces import owner_admin as oa
-    monkeypatch.setattr("core.prefs.resolve", lambda key, uid, hd, **kw: ["dev loop", "Bots"])
-    assert oa.owner_pause_phrases("rob", str(home)) == ("dev", "loop", "bots")

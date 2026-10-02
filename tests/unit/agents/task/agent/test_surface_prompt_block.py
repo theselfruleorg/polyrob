@@ -104,6 +104,7 @@ def test_surface_profile_reads_capabilities_from_the_bound_surface():
         "chat_instructions": "",
         # 046: and no paid room actions — that note is rendered for ROOMS only.
         "chat_paid_actions": "",
+        "correspondent": False,
     }
 
 

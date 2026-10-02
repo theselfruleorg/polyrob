@@ -116,6 +116,16 @@ class ToolManagementMixin:
 								tool = browser
 								self.logger.debug("Got browser from browser_manager")
 
+				# M04: a tool that acts AS the instance (X, mailbox, GitHub, public
+				# URLs, MCP, durable autonomous work) loads for the OWNER tenant only.
+				# Checked on a FOUND tool, so a missing one still names its flag.
+				if tool:
+					from tools.controller.tool_load_report import shared_identity_refusal
+					_sid_gap = shared_identity_refusal(tool_id, getattr(self, 'user_id', None))
+					if _sid_gap:
+						self._record_tool_load_failure(tool_id, _sid_gap)
+						continue
+
 				# Add the tool if found
 				if tool:
 					# ENSURE TOOL IS INITIALIZED BEFORE USE
@@ -240,10 +250,18 @@ class ToolManagementMixin:
 						# the prompt/skills teach, leaving only the collision-prone fuzzy
 						# suffix match to rescue calls. The fuzzy match STAYS as a compat
 						# shim for sessions/histories that reference the old double name.
-						if action_name == name or action_name.startswith(f"{name}_"):
-							namespaced_name = action_name
-						else:
-							namespaced_name = f"{name}_{action_name}"
+						# The rule lives in core.action_names so every ledger reader
+						# builds the same key (coding-agent review B1).
+						from core.action_names import namespaced_action_name
+						namespaced_name = namespaced_action_name(name, action_name)
+
+						# 067 P2: a pack tool's action registers only while its pack is
+						# loaded and the action has a policy row (fail closed per action).
+						from core.packs.state import action_refusal
+						refusal = action_refusal(name, namespaced_name)
+						if refusal:
+							self.logger.error(f"Action '{namespaced_name}' not registered: {refusal}")
+							continue
 
 						# Validate the namespaced name doesn't conflict
 						existing = self.registry.get_action(namespaced_name)
@@ -353,10 +371,8 @@ class ToolManagementMixin:
 				# `{name}_{action}`, so a tool whose action is ALREADY tool-prefixed
 				# (e.g. perplexity / perplexity_search) was never actually removed —
 				# list_tools reported it gone while its actions stayed callable.
-				if action_name == name or action_name.startswith(f"{name}_"):
-					full_name = action_name
-				else:
-					full_name = f"{name}_{action_name}"
+				from core.action_names import namespaced_action_name
+				full_name = namespaced_action_name(name, action_name)
 				# Use Registry's thread-safe remove method
 				if hasattr(self.registry, 'remove_action'):
 					self.registry.remove_action(full_name)

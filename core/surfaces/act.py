@@ -36,7 +36,7 @@ async def act_on_inbound(task_agent: Any, result: InboundResult, **kwargs) -> Op
     misconfiguration, not a case to fail-open on."""
     if _INBOUND_ACTOR is None:
         raise RuntimeError(
-            "no inbound actor registered — import surfaces.telegram.harness "
-            "(it registers the shared dispatch at import) before handling inbound messages"
+            "no inbound actor registered — import surfaces._actor "
+            "(ensure_registered() wires the shared dispatch) before handling inbound messages"
         )
     return await _INBOUND_ACTOR(task_agent, result, **kwargs)

@@ -780,7 +780,11 @@ class KnowledgeTool(BaseTool):
             return ActionResult(
                 extracted_content="No KB results found.", include_in_memory=True
             )
-        return ActionResult(extracted_content=result, include_in_memory=True)
+        # M03: indexed documents are DATA (fetched pages, agent output, uploads)
+        # — framed exactly as session_search(collection=…) frames the same store.
+        from core.security.untrusted_wrap import wrap_untrusted
+        return ActionResult(extracted_content=wrap_untrusted("knowledge_base", result),
+                            include_in_memory=True)
 
     @BaseTool.action(
         "List ingested sources in the knowledge base.",

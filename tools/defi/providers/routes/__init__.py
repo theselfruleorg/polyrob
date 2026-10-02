@@ -260,6 +260,23 @@ def _verified_floor(quote: "RouteQuote", slippage_bps: int) -> Optional[int]:
     return theirs
 
 
+def _same_token(a, b) -> bool:
+    if is_native(a) or is_native(b):
+        return is_native(a) and is_native(b)
+    return str(a or "").lower() == str(b or "").lower() and bool(a)
+
+
+def _matches_request(quote: "RouteQuote", token_in, token_out,
+                     amount_in_raw) -> bool:
+    """Is *quote* a quote for exactly the trade that was asked for?"""
+    try:
+        return (_same_token(quote.token_in, token_in)
+                and _same_token(quote.token_out, token_out)
+                and int(quote.amount_in_raw) == int(amount_in_raw))
+    except (TypeError, ValueError):
+        return False
+
+
 def best_route_with_reason(chain: str, token_in: str, token_out: str,
                            amount_in_raw: int, *, holder: str, slippage_bps: int,
                            providers: Optional[Sequence[RouteProvider]] = None
@@ -299,6 +316,14 @@ def best_route_with_reason(chain: str, token_in: str, token_out: str,
 
         if quote.amount_out_raw <= 0:
             logger.warning("route provider %s quoted zero output — refused", name)
+            continue
+        if not _matches_request(quote, token_in, token_out, amount_in_raw):
+            # CR-H03: a quote for another pair or another size carries a floor
+            # for another trade.
+            logger.error("route provider %s quoted %s->%s for %s, not the "
+                         "requested %s->%s for %s — REFUSED", name,
+                         quote.token_in, quote.token_out, quote.amount_in_raw,
+                         token_in, token_out, amount_in_raw)
             continue
         if not _calldata_ok(quote.calldata):
             logger.warning("route provider %s returned malformed calldata — refused", name)

@@ -17,11 +17,34 @@ from modules.llm.messages import (
     AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage,
     MessageOrigin, make_control_message,
 )
-from agents.task.constants import hmem_tail_placement
+from agents.task.agent.messages.foundation_layers import foundation_messages
+from agents.task.constants import hmem_tail_placement  # module-level: tests monkeypatch it
+
+
+def drop_usage_anchor(manager: Any, reason: str = "") -> None:
+	"""F6 seam: drop the provider-usage anchor because the history was cut.
+
+	A module-level delegator rather than a direct ``self.reset_usage_anchor(...)``
+	call, because ``CompactorMixin``/``PersistenceMixin`` are composed STANDALONE
+	by several test harnesses that do not compose ``MessageRetrievalMixin``. A
+	missing anchor is not an error — the fingerprint would have failed the anchor
+	closed anyway; this call just keeps the reason in the log.
+	"""
+	reset = getattr(manager, "reset_usage_anchor", None)
+	if callable(reset):
+		try:
+			reset(reason)
+		except Exception:  # pragma: no cover - an observation never fails a run
+			pass
 
 
 class MessageRetrievalMixin:
 	"""Message retrieval + LLM-request assembly for MessageManager."""
+	# F29: empty slots so the composed MessageManager keeps its own
+	# __slots__ and never grows a __dict__. This mixin omitted it, which
+	# silently defeated the whole tuple.
+	__slots__ = ()
+
 
 	def get_messages(self) -> List[BaseMessage]:
 		"""Get current message list with foundation messages always prepended.
@@ -38,42 +61,10 @@ class MessageRetrievalMixin:
 		  [2+] Recent messages (auto-evicts oldest)
 		"""
 		
-		# Build foundation messages (stored separately, never evicted)
-		foundation = [self._system_message]
-
-		# Runtime identity (model/provider actually running), pinned right after the
-		# system message so the agent answers "what model are you" from this line, not
-		# by reading env/config. Empty/unset => skipped. Matches get_messages_for_llm().
-		if getattr(self, '_runtime_identity_message', None) is not None:
-			foundation.append(self._runtime_identity_message)
-
-		# 014-C1: <environment> block (where the agent lives), pinned after runtime
-		# identity and before self-context, matching get_messages_for_llm().
-		if getattr(self, '_environment_message', None) is not None:
-			foundation.append(self._environment_message)
-
-		# polyrob Phase C: SOUL/IDENTITY self-context, pinned right after the system
-		# message (identity precedes task), matching get_messages_for_llm().
-		if getattr(self, '_self_context_message', None) is not None:
-			foundation.append(self._self_context_message)
-
-		# C9: project context (CLAUDE.md/AGENTS.md/.cursorrules) pinned AFTER
-		# self-context and BEFORE the initial task, matching get_messages_for_llm().
-		if getattr(self, '_project_context_message', None) is not None:
-			foundation.append(self._project_context_message)
-
-		if self._initial_task_message is not None:
-			foundation.append(self._initial_task_message)
-
-		# Skills (PR13) - pinned in the foundation after the task, matching
-		# get_messages_for_llm() so logs and guidance-position math see the same layout.
-		if getattr(self, '_skill_message', None) is not None:
-			foundation.append(self._skill_message)
-
-		# S1 (dynamic tool rig): <tool-catalog> pinned after skills, matching
-		# get_messages_for_llm().
-		if getattr(self, '_tool_catalog_message', None) is not None:
-			foundation.append(self._tool_catalog_message)
+		# Build foundation messages (stored separately, never evicted). 060 WS-2:
+		# the order is FOUNDATION_LAYERS — the SAME table get_messages_for_llm() and
+		# the F13 replay read — so logs and guidance-position math see the wire layout.
+		foundation = foundation_messages(self)
 
 		# Get conversation messages from history (recent messages in deque)
 		conversation_messages = [m.message for m in self.history.messages]
@@ -110,6 +101,19 @@ class MessageRetrievalMixin:
 		return msg
 
 
+	def push_control_message(self, message: BaseMessage) -> None:
+		"""Append a control message to the DURABLE history (061).
+
+		The one-shot ``push_ephemeral_message`` rides exactly one LLM call; the
+		owner-thread tail must survive a 2-4 step turn (the turn that answers
+		"explain better" reads it on step 3), so it lands in history like any
+		other message and compacts with it. Fail-open.
+		"""
+		try:
+			self._add_message_with_tokens(message, _internal=True)
+		except Exception as e:
+			self.logger.debug(f"Failed to add control message: {e}")
+
 	def push_ephemeral_message(self, message: BaseMessage) -> None:
 		"""Queue a one-shot message to be included on the next LLM call only.
 
@@ -138,6 +142,31 @@ class MessageRetrievalMixin:
 			self.logger.debug(f"Queued ephemeral message of type {type(message).__name__}")
 		except Exception as e:
 			self.logger.debug(f"Failed to queue ephemeral message: {e}")
+
+	def drop_queued_state_messages(self) -> int:
+		"""F16(ii): remove any QUEUED (or in-flight) state message from the rail.
+
+		The state message describes THIS step. A call that failed transiently
+		re-queues its ephemerals (``restore_ephemeral_on_failure``) so a
+		correspondent reply is never lost — but a stale state message must not ride
+		along beside the fresh one, or the model reads two "CURRENT STATE" blocks.
+		Called by ``add_state_message`` before it queues the new one, so the
+		invariant is simply: at most one state message, and it is the current one.
+
+		Returns the number dropped (0 on the ordinary path).
+		"""
+		dropped = 0
+		for name in ('_ephemeral_messages', '_ephemeral_pending'):
+			queue = getattr(self, name, None)
+			if not queue:
+				continue
+			kept = [m for m in queue
+			        if not (getattr(m, "metadata", None) or {}).get("state_message")]
+			dropped += len(queue) - len(kept)
+			setattr(self, name, kept)
+		if dropped:
+			self.logger.debug(f"Dropped {dropped} stale state message(s) from the ephemeral rail")
+		return dropped
 
 	def commit_ephemeral_consumption(self) -> None:
 		"""P2-14: drop the pending (delivered) ephemerals. Call once the LLM has
@@ -176,47 +205,12 @@ class MessageRetrievalMixin:
 
 		This ensures H-MEM can never be lost because it's in the protected foundation layer.
 		"""
-		# Build foundation (never repaired): system, task, memory
-		foundation = []
-
-		# 1.1: System message (always first - instructions)
-		foundation.append(self._system_message)
-
-		# 1.1a: Runtime identity (model/provider actually running), pinned right after
-		# the system prompt so the agent answers its model from THIS line, not by
-		# reading env/config. Kept out of the system prompt (cacheable). Unset => skip.
-		if getattr(self, '_runtime_identity_message', None) is not None:
-			foundation.append(self._runtime_identity_message)
-
-		# 1.1a-bis (014-C1): <environment> block — where the agent lives. Pinned
-		# after runtime identity, before self-context. Unset (server) => skipped.
-		if getattr(self, '_environment_message', None) is not None:
-			foundation.append(self._environment_message)
-
-		# 1.1b: polyrob Phase C - SOUL/IDENTITY self-context, pinned in the foundation
-		# right after the system prompt (NOT embedded in it, so the system prompt stays
-		# stable/cacheable). Identity precedes the task. Empty/unset => skipped.
-		if getattr(self, '_self_context_message', None) is not None:
-			foundation.append(self._self_context_message)
-
-		# 1.1c: C9 - project context (CLAUDE.md/AGENTS.md/.cursorrules), pinned AFTER
-		# self-context and BEFORE the initial task. CLI-only; empty/unset => skipped.
-		if getattr(self, '_project_context_message', None) is not None:
-			foundation.append(self._project_context_message)
-
-		# 1.2: Initial task message (if exists - defines what user wants)
-		if self._initial_task_message is not None:
-			foundation.append(self._initial_task_message)
-
-		# 1.2b: Skills (PR13) - pinned in the foundation, NOT the system prompt, so the
-		# system prompt stays stable/cacheable and skills read as a distinct block.
-		if getattr(self, '_skill_message', None) is not None:
-			foundation.append(self._skill_message)
-
-		# 1.2c: S1 dynamic tool rig - the honest <tool-catalog> block, pinned after
-		# skills for the same cacheability rationale. Empty/unset => skipped.
-		if getattr(self, '_tool_catalog_message', None) is not None:
-			foundation.append(self._tool_catalog_message)
+		# Build foundation (never repaired). 060 WS-2: ONE table
+		# (foundation_layers.FOUNDATION_LAYERS) is the order — system prompt, runtime
+		# identity, <environment>, self-context, project context, the initial task,
+		# skills, <tool-catalog>. Each block stays out of the system prompt so the
+		# prompt is cacheable; an unset block is skipped.
+		foundation = foundation_messages(self)
 
 		# 1.3: Hierarchical memory.
 		# Placement (Phase 0.1): legacy = pinned in the foundation ahead of the
@@ -227,6 +221,8 @@ class MessageRetrievalMixin:
 		# cacheable prefix. Either way it is NEVER subject to tool-sequence repair.
 		memory_injected = False
 		hmem_msg = None  # held for tail placement
+		# 060 WS-2: the one tier decision the assembly makes itself (VOLATILE H-MEM
+		# rides the tail, outside the cached prefix, unless HMEM_TAIL_PLACEMENT=false).
 		tail_placement = hmem_tail_placement()
 
 		# FIX #1: Explicit warnings when H-MEM cannot be injected (was silently skipped)
@@ -294,9 +290,10 @@ class MessageRetrievalMixin:
 		self.logger.debug(f"After repair: foundation={len(foundation)}, conversation={len(conversation)}")
 
 		# B2/B3 (Reference-parity media hygiene, see docs/REFERENCE_VS_ROB_CONTEXT_SYSTEM_2026-06.md §9):
-		# dedup byte-identical tool outputs, and strip base64 from every image-bearing turn
-		# EXCEPT the most recent. Conversation only — foundation (system/task/H-MEM/skills)
-		# is never touched. Both are idempotent and fail-soft no-ops when nothing matches.
+		# dedup byte-identical tool outputs, and retire old base64 images in batches
+		# (F7 step function: MEDIA_KEEP_MAX / MEDIA_RETIRE_BATCH / MEDIA_KEEP_FLOOR).
+		# Conversation only — foundation (system/task/H-MEM/skills) is never touched.
+		# Both are idempotent and fail-soft no-ops when nothing matches.
 		try:
 			from agents.task.agent.messages.filters import dedup_tool_results, strip_historical_media
 			conversation = dedup_tool_results(conversation)
@@ -304,20 +301,39 @@ class MessageRetrievalMixin:
 		except Exception as e:
 			self.logger.debug(f"media-hygiene pass skipped: {e}")
 
-		# Combine foundation + conversation (+ H-MEM tail suffix when relocated).
-		# The tail suffix goes AFTER the repaired conversation so it never participates
-		# in tool-sequence repair (same protection it had in the foundation), while
-		# keeping the foundation+conversation prefix cache-stable across steps.
-		messages = foundation + conversation
+		# The H-MEM tail suffix goes AFTER the repaired conversation so it never
+		# participates in tool-sequence repair (same protection it had in the
+		# foundation), while keeping the foundation+conversation prefix cache-stable.
 		if hmem_msg is not None:
-			messages.append(hmem_msg)
+			conversation.append(hmem_msg)
 
-		# Model-specific handling
+		# Model-specific handling (F16(iii)).
+		# deepseek-reasoner refuses two successive messages of the same role, so
+		# same-role runs are merged. The merge used to run over the WHOLE assembled
+		# list, which let a streak that starts in the pinned foundation absorb
+		# whatever the conversation currently begins with — so the foundation's
+		# merged bytes, the one block the prompt cache exists to hold, changed with
+		# the tail. Merge each layer on its own instead: the foundation's merged form
+		# now depends only on the foundation. The seam is still resolved (below), but
+		# that is the ONE boundary message it can touch, not the whole prefix.
 		# Message types imported at module level from modules.llm.messages
 		if self.model_name == 'deepseek-reasoner':
-			messages = self.merge_successive_messages(messages, HumanMessage)
-			messages = self.merge_successive_messages(messages, AIMessage)
-			self.logger.debug("Applied deepseek-reasoner message merging")
+			conversation = self.merge_successive_messages(conversation, HumanMessage)
+			conversation = self.merge_successive_messages(conversation, AIMessage)
+			foundation = self.merge_successive_messages(foundation, HumanMessage)
+			foundation = self.merge_successive_messages(foundation, AIMessage)
+			foundation, conversation = self._merge_layer_seam(foundation, conversation)
+			self.logger.debug("Applied deepseek-reasoner message merging (per layer)")
+
+		messages = foundation + conversation
+
+		# F12: record where the foundation ENDS on the provider wire, so the
+		# Anthropic breakpoint placer can pin one cache_control marker there.
+		# SystemMessages are excluded because Anthropic carries the system prompt
+		# in its own `system` parameter — the wire `messages` array starts at the
+		# first non-system foundation row.
+		self._last_foundation_len = sum(
+			1 for m in foundation if not isinstance(m, SystemMessage))
 
 		# Step 5: Log the final message structure for debugging
 		if self.use_native_tools:
@@ -358,13 +374,41 @@ class MessageRetrievalMixin:
 				f"Content preview: {system_content[:200]}"
 			)
 
+		# F6: remember whether THIS request carried the H-MEM tail, so a usage
+		# anchor taken from its prompt_tokens does not double-count the block.
+		self._hmem_in_last_prompt = bool(memory_injected)
+
 		self.logger.debug(f"Final messages for LLM: {len(messages)} messages")
 		self.logger.debug("✅ System message validation passed")
 		return messages
 
 
+	def _merge_layer_seam(self, foundation: List[BaseMessage],
+	                      conversation: List[BaseMessage]) -> tuple:
+		"""Resolve a same-role pair that straddles the foundation/conversation seam.
+
+		F16(iii). Merging each layer on its own leaves exactly one place where two
+		successive same-role messages can still meet: the last foundation message
+		and the first conversation message. ``deepseek-reasoner`` rejects that pair,
+		so fold the conversation head into the foundation tail — and ONLY that pair.
+		A run that starts in the foundation can no longer swallow the tail.
+
+		Returns the (foundation, conversation) pair, unchanged when there is nothing
+		to merge (different roles, an AIMessage carrying tool_calls, either side
+		empty).
+		"""
+		if not foundation or not conversation:
+			return foundation, conversation
+		head, tail = foundation[-1], conversation[0]
+		if type(head) is not type(tail) or not isinstance(head, (HumanMessage, AIMessage)):
+			return foundation, conversation
+		merged = self.merge_successive_messages([head, tail], type(tail))
+		if len(merged) != 1:
+			return foundation, conversation  # refused (e.g. tool_calls) — leave it
+		return foundation[:-1] + merged, conversation[1:]
+
 	def note_call_usage(self, *, output_tokens: int = 0, input_tokens: int = 0,
-	                    cached_tokens: int = 0) -> None:
+	                    cached_tokens: int = 0, cache_creation_tokens: int = 0) -> None:
 		"""Record one completed LLM call's shape (057 WS-B).
 
 		Fed from the ONE billing choke point in ``next_action_internal`` — the
@@ -374,6 +418,20 @@ class MessageRetrievalMixin:
 		and the last call's UNCACHED input (80% of prod input is cache-served at
 		1/50th price and also ~1/50th of the latency, so counting the whole
 		prompt overstates the wait).
+
+		F6 extends the SAME write-back (there is no second reader of the usage
+		block) with the USAGE ANCHOR: the provider's own ``prompt_tokens`` for the
+		request that just went out, the number of history messages it covered, and
+		a cheap fingerprint of those messages. ``get_actual_token_count`` then
+		reports ``anchor + estimate(the delta since)`` instead of estimating the
+		whole prompt from ``len(text)/N`` — an estimator with no tokenizer for
+		Anthropic, which decides the 85 %/95 % compaction band and the pre-call
+		safety check. The fingerprint FAILS CLOSED: any splice, eviction or
+		compaction of the covered prefix invalidates the anchor and the pure
+		estimate is used again, byte-identical to the pre-F6 number.
+
+		Also records the last call's cache split so ``context_usage()`` can show
+		what the provider actually served from cache.
 		"""
 		try:
 			if output_tokens and output_tokens > 0:
@@ -382,8 +440,78 @@ class MessageRetrievalMixin:
 				self._recent_output_tokens = recent[-2:]
 			if input_tokens and input_tokens > 0:
 				self._last_uncached_input = max(0, int(input_tokens) - int(cached_tokens or 0))
+				self._set_usage_anchor(int(input_tokens))
+			self._last_call_usage = {
+				"prompt_tokens": int(input_tokens or 0),
+				"completion_tokens": int(output_tokens or 0),
+				"cached_tokens": int(cached_tokens or 0),
+				"cache_creation_tokens": int(cache_creation_tokens or 0),
+				"uncached_tokens": max(0, int(input_tokens or 0) - int(cached_tokens or 0)),
+			}
 		except Exception:  # pragma: no cover - an observation never fails a run
 			self.logger.debug("note_call_usage skipped", exc_info=True)
+
+	# ------------------------------------------------------------------ #
+	# F6: the provider-usage anchor
+	# ------------------------------------------------------------------ #
+	def _history_fingerprint(self, covered: int) -> int:
+		"""A cheap content-shape hash over the first ``covered`` history messages.
+
+		Built from each message's class, its recorded token count and its
+		``tool_call_id`` — all already computed, so this costs no tokenizer work
+		and no string materialization (a base64 screenshot must not be re-rendered
+		once per gauge read). Any insert, removal or reorder inside the covered
+		span changes it, which is the whole point: the anchor must fail closed.
+		"""
+		digest = 1469598103934665603  # FNV-1a 64-bit offset basis
+		for managed in list(self.history.messages)[:covered]:
+			message = getattr(managed, "message", managed)
+			metadata = getattr(managed, "metadata", None)
+			shape = (
+				type(message).__name__,
+				int(getattr(metadata, "input_tokens", 0) or 0),
+				getattr(message, "tool_call_id", None),
+			)
+			digest = ((digest ^ hash(shape)) * 1099511628211) & 0xFFFFFFFFFFFFFFFF
+		return digest
+
+	def _set_usage_anchor(self, prompt_tokens: int) -> None:
+		"""Pin the provider's prompt_tokens to the history it covered."""
+		covered = len(self.history.messages)
+		self._usage_anchor = (
+			int(prompt_tokens),
+			covered,
+			self._history_fingerprint(covered),
+			bool(getattr(self, "_hmem_in_last_prompt", False)),
+		)
+
+	def reset_usage_anchor(self, reason: str = "") -> None:
+		"""Drop the anchor — the covered prefix no longer exists.
+
+		Called from every place that clears, rebuilds or batch-evicts the history
+		(compaction, the emergency prune, the loop-recovery clear, F10 eviction).
+		The fingerprint would catch these anyway; dropping it explicitly keeps the
+		reason in the log instead of leaving a silent estimate swap.
+		"""
+		if getattr(self, "_usage_anchor", None) is not None:
+			self._usage_anchor = None
+			self.logger.debug(f"usage anchor dropped{f': {reason}' if reason else ''}")
+
+	def usage_anchor(self) -> Optional[tuple]:
+		"""The VALID anchor, or None.
+
+		Returns ``(prompt_tokens, covered, hmem_included)`` when the covered prefix
+		is still byte-shape-identical to what the provider billed; None otherwise.
+		"""
+		anchor = getattr(self, "_usage_anchor", None)
+		if not anchor:
+			return None
+		prompt_tokens, covered, fingerprint, hmem_included = anchor
+		if covered > len(self.history.messages):
+			return None
+		if self._history_fingerprint(covered) != fingerprint:
+			return None
+		return prompt_tokens, covered, hmem_included
 
 	def _timeout_by_output(self, use_vision: bool) -> float:
 		"""057 WS-B: timeout scaled by EXPECTED OUTPUT, not by input.
@@ -502,7 +630,18 @@ class MessageRetrievalMixin:
 		State messages are typically HumanMessages containing browser state or
 		other contextual information. This method removes them after processing
 		to prevent history bloat.
+
+		F16(ii): under ``STATE_MESSAGE_EPHEMERAL`` (default ON) there is nothing to
+		remove — the state message rode the one-shot ephemeral rail and never
+		entered ``history`` — so this is a NO-OP kept for its five callers in
+		``core/step.py``. It must return before the legacy shape fallback below,
+		which would otherwise delete an unrelated HumanMessage (a user's multimodal
+		turn) now that no tagged message is ever in history.
 		"""
+		from agents.task.constants import state_message_ephemeral
+		if state_message_ephemeral():
+			return
+
 		# SECURITY FIX: Protect iteration and removal with lock
 		with self._history_lock:
 			if not self.history.messages:

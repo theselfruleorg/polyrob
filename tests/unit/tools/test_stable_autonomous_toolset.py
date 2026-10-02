@@ -20,11 +20,19 @@ def smtp_rejected(monkeypatch):
     monkeypatch.setenv("POLYROB_LOCAL", "1")
 
 
-def test_legacy_default_still_drops_email(monkeypatch, smtp_rejected):
-    monkeypatch.delenv("STABLE_AUTONOMOUS_TOOLSET", raising=False)
+def test_legacy_drop_only_when_explicitly_off(monkeypatch, smtp_rejected):
+    monkeypatch.setenv("STABLE_AUTONOMOUS_TOOLSET", "false")
     import agents.task.constants as c
     monkeypatch.setattr(c, "autonomous_mode_tools", lambda: ("filesystem", "email", "task"))
     assert "email" not in effective_autonomous_tools()
+
+
+def test_default_keeps_the_toolset_frozen(monkeypatch, smtp_rejected):
+    """2026-09-22 harness/cache review F2: the default is the frozen set."""
+    monkeypatch.delenv("STABLE_AUTONOMOUS_TOOLSET", raising=False)
+    import agents.task.constants as c
+    monkeypatch.setattr(c, "autonomous_mode_tools", lambda: ("filesystem", "email", "task"))
+    assert effective_autonomous_tools() == ("filesystem", "email", "task")
 
 
 def test_stable_toolset_keeps_the_bytes_frozen(monkeypatch, smtp_rejected):

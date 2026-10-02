@@ -80,15 +80,13 @@ def test_budget_line_absent_when_disabled(monkeypatch, tmp_path):
 
 
 def test_retrieval_injects_environment_between_identity_and_self_context():
-    # Foundation-order contract without constructing a full MessageManager:
-    # both retrieval paths must reference the environment slot, and the
-    # injection must sit AFTER runtime_identity and BEFORE self_context
-    # (source-introspection style, per test_orchestrator_uses_server_default).
-    import inspect
-    import agents.task.agent.messages.retrieval as retrieval
-    src = inspect.getsource(retrieval)
-    assert src.count("_environment_message") >= 2  # get_messages + get_messages_for_llm
-    ident = src.index("_runtime_identity_message")
-    env = src.index("_environment_message")
-    self_ctx = src.index("_self_context_message")
+    # Foundation-order contract without constructing a full MessageManager.
+    # 060 WS-2: both retrieval paths derive the order from ONE table
+    # (foundation_layers.FOUNDATION_LAYERS); the environment slot sits AFTER
+    # runtime identity and BEFORE self-context there.
+    from agents.task.agent.messages.foundation_layers import FOUNDATION_LAYERS
+    attrs = [layer.attr for layer in FOUNDATION_LAYERS]
+    ident = attrs.index("_runtime_identity_message")
+    env = attrs.index("_environment_message")
+    self_ctx = attrs.index("_self_context_message")
     assert ident < env < self_ctx

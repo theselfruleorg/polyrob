@@ -17,6 +17,8 @@ import asyncio
 import logging
 import os
 import re
+import shutil
+import tempfile
 import time
 from typing import Any, Callable, Dict, Optional
 
@@ -30,6 +32,9 @@ _BAD_TERMINAL_STAGES = frozenset({
     "BUILD_ERROR", "RUNTIME_ERROR", "CONFIG_ERROR", "NO_APP_FILE",
     "STOPPED", "DELETED", "PAUSED",
 })
+
+#: Cap on the staged upload tree (M15). A Space repo far past this is not an app.
+_UPLOAD_MAX_MB = 500
 
 _DEFAULT_RUNTIME_WAIT_SEC = 300.0
 _DEFAULT_POLL_INTERVAL_SEC = 5.0
@@ -199,10 +204,34 @@ class HFSpacesBroker:
         token = self.resolve_token()
         if not token:
             raise BrokerError("HF_TOKEN is not set")
-        # SECURITY (P1 finalization): the workspace is published to a PUBLIC Space,
-        # so refuse if it carries a credential file or a file with a credential
-        # shape — BEFORE any network call. Names only in the error (never values).
-        offenders = scan_workspace_for_secrets(workspace_dir)
+        # SECURITY (M15): never upload the LIVE workspace. It is staged first
+        # through the ONE ship-tree policy (core/ship_tree.py via the app-service
+        # snapshot): symlinks are not followed, `.git`/caches never ship, and
+        # every file is copied O_NOFOLLOW — so the digest, the scan and the
+        # upload all describe the SAME bytes.
+        stage_root = tempfile.mkdtemp(prefix="polyrob-hf-")
+        try:
+            return await self._deploy_staged(space_repo=space_repo, token=token,
+                                             workspace_dir=workspace_dir,
+                                             stage=os.path.join(stage_root, "space"),
+                                             secrets=secrets)
+        finally:
+            shutil.rmtree(stage_root, ignore_errors=True)
+
+    async def _deploy_staged(self, *, space_repo: str, token: str, workspace_dir: str,
+                             stage: str, secrets: Optional[Dict[str, str]]) -> str:
+        from core.app_service.snapshot import snapshot_tree
+        try:
+            _bytes, _files, skipped = snapshot_tree(workspace_dir, stage, max_mb=_UPLOAD_MAX_MB)
+        except (ValueError, OSError) as e:
+            raise BrokerError(f"cannot stage the workspace for upload: {e}") from None
+        # SECURITY (P1 finalization): the tree is published to a PUBLIC Space,
+        # so refuse if the workspace carries a credential file or a staged file
+        # has a credential shape — BEFORE any network call. Names only in the
+        # error (never values). The content scan runs over the STAGED tree:
+        # exactly what would be uploaded.
+        offenders = [s.rsplit(" (", 1)[0] for s in skipped if s.endswith("(credential)")]
+        offenders += [o for o in scan_workspace_for_secrets(stage) if o not in offenders]
         if offenders:
             raise BrokerError(
                 "refusing to publish: workspace contains likely secrets in "
@@ -218,7 +247,7 @@ class HFSpacesBroker:
             api.create_repo(repo_id=space_repo, repo_type="space",
                             space_sdk="docker", exist_ok=True)
             api.upload_folder(repo_id=space_repo, repo_type="space",
-                              folder_path=workspace_dir)
+                              folder_path=stage)
             for key, value in (secrets or {}).items():
                 api.add_space_secret(repo_id=space_repo, key=key, value=value)
             await self._wait_for_running(api, space_repo)

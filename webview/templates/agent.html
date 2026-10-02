@@ -5,7 +5,7 @@
   server-rendered; every pane below it is drawn client-side by
   webview/static/app/agent.js from the tenant-scoped Agent readers
   (/api/webgate/{doctor,capabilities,memory/search,flags,identity,preferences,
-  ledger}, /pfp.json, /api/webgate/knowledge/kb). The tabs are panes on this one
+  ledger}, /avatar.json, /api/webgate/knowledge/kb). The tabs are panes on this one
   page, not six routes: agent.js reveals the pane whose `data-pane` matches the
   active tab and hides the rest, so /agent answers with the whole screen and the
   switch is client-side.
@@ -16,7 +16,7 @@
   names carry an UNDERSCORE, not a hyphen: `dataset` camel-cases a hyphen away,
   and the JS keys the words by the copy name, which is snake_case.
 
-  The four posture axes ride here as DATA (server-computed from
+  The posture axes ride here as DATA (server-computed from
   build_posture_card), so a person reads one plain sentence per axis and the
   state it is in — never the same axis twice in two vocabularies, which is what
   doctor and /autonomy print on one screen today.
@@ -37,9 +37,9 @@
         <a href="#advanced" data-tab="advanced">{{ t('agent.tab_advanced') }}</a>
       </nav>
 
-      {# Overview — health leads, then the face, then the four posture axes, then
+      {# Overview — health leads, then the face, then the posture axes, then
          what Rob is connected to. Drawn by agent.js from /api/webgate/doctor +
-         /pfp.json; the posture axes render from the data attributes below. #}
+         /avatar.json; the posture axes render from the data attributes below. #}
       <div data-pane="overview">
         <div id="agent-ov-health"></div>
         <div id="agent-ov-face"></div>
@@ -97,10 +97,9 @@
         <div id="agent-adv-diag"></div>
       </div>
 
-      <p class="sources">{{ t('agent.sources')|safe }}</p>
     </div>
 
-    {# The words agent.js renders, and the posture values it renders once as four
+    {# The words agent.js renders, and the posture values it renders once as one
        sentences. read_only rides here so the module draws no write control it
        cannot act on. #}
     <div id="agent-copy" hidden
@@ -125,22 +124,20 @@
          data-posture_loop="{{ posture.loop }}"
          data-posture_compute="{{ posture.compute }}"
          data-posture_compute_locked="1"
+         data-posture_builder="{{ posture.builder }}"
+         data-posture_builder_note="{{ posture.builder_note }}"
          data-ov_health_title="{{ t('agent.ov_health_title') }}"
          data-ov_health_aside="{{ t('agent.ov_health_aside') }}"
          data-ov_health_unreadable="{{ t('agent.ov_health_unreadable') }}"
          data-ov_health_unreadable_why="{{ t('agent.ov_health_unreadable_why') }}"
          data-ov_health_ok_title="{{ t('agent.ov_health_ok_title') }}"
          data-ov_health_none="{{ t('agent.ov_health_none') }}"
-         data-ov_health_ok_body="{{ t('agent.ov_health_ok_body') }}"
          data-ov_report_link="{{ t('agent.ov_report_link') }}"
          data-ov_unverified="{{ t('agent.ov_unverified') }}"
          data-ov_identity_no_avatar="{{ t('agent.ov_identity_no_avatar') }}"
-         data-ov_identity_kept="{{ t('agent.ov_identity_kept') }}"
-         data-ov_identity_draft="{{ t('agent.ov_identity_draft') }}"
-         data-ov_identity_traits="{{ t('agent.ov_identity_traits') }}"
-         data-ov_identity_voice="{{ t('agent.ov_identity_voice') }}"
+         data-ov_identity_default="{{ t('agent.ov_identity_default') }}"
+         data-ov_identity_source="{{ t('agent.ov_identity_source') }}"
          data-ov_identity_made="{{ t('agent.ov_identity_made') }}"
-         data-ov_identity_instance="{{ t('agent.ov_identity_instance') }}"
          data-ov_identity_unreadable="{{ t('agent.ov_identity_unreadable') }}"
          data-ov_identity_unreadable_why="{{ t('agent.ov_identity_unreadable_why') }}"
          data-ov_posture_title="{{ t('agent.ov_posture_title') }}"
@@ -154,24 +151,20 @@
          data-ov_axis_compute_title="{{ t('agent.ov_axis_compute_title') }}"
          data-ov_axis_compute_why="{{ t('agent.ov_axis_compute_why') }}"
          data-ov_axis_compute_locked="{{ t('agent.ov_axis_compute_locked') }}"
+         data-ov_axis_builder_title="{{ t('agent.ov_axis_builder_title') }}"
+         data-ov_axis_builder_why="{{ t('agent.ov_axis_builder_why') }}"
          data-ov_connected_title="{{ t('agent.ov_connected_title') }}"
          data-ov_models_label="{{ t('agent.ov_models_label') }}"
          data-ov_memory_label="{{ t('agent.ov_memory_label') }}"
          data-ov_change="{{ t('agent.ov_change') }}"
+         data-memory_backend_sqlite="{{ t('agent.memory_backend.sqlite') }}"
+         data-memory_backend_local_vector="{{ t('agent.memory_backend.local_vector') }}"
+         data-memory_backend_none="{{ t('agent.memory_backend.none') }}"
          data-id_loading="{{ t('agent.id_loading') }}"
          data-id_unreadable="{{ t('agent.id_unreadable') }}"
          data-id_unreadable_why="{{ t('agent.id_unreadable_why') }}"
          data-id_face_title="{{ t('agent.id_face_title') }}"
          data-id_face_body="{{ t('agent.id_face_body') }}"
-         data-id_reroll="{{ t('agent.id_reroll') }}"
-         data-id_reroll_done="{{ t('agent.id_reroll_done') }}"
-         data-id_reroll_failed="{{ t('agent.id_reroll_failed') }}"
-         data-id_keep="{{ t('agent.id_keep') }}"
-         data-id_keep_hint="{{ t('agent.id_keep_hint') }}"
-         data-id_keep_done="{{ t('agent.id_keep_done') }}"
-         data-id_keep_failed="{{ t('agent.id_keep_failed') }}"
-         data-id_kept_title="{{ t('agent.id_kept_title') }}"
-         data-id_kept_body="{{ t('agent.id_kept_body') }}"
          data-id_persona_title="{{ t('agent.id_persona_title') }}"
          data-id_persona_aside="{{ t('agent.id_persona_aside') }}"
          data-id_persona_empty="{{ t('agent.id_persona_empty') }}"

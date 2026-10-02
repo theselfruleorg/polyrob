@@ -172,6 +172,14 @@ def build_recap(user_id: str, data_home: Optional[str] = None,
             what = attrs.get("kind") or attrs.get("action") or "self_modification"
             ident = attrs.get("skill_id") or attrs.get("id") or ""
             text = f"{what} {ident}".strip()
+        elif raw_kind == "user_delivery":
+            # 061 §2.6: render what was SAID, not the literal kind name. A
+            # quiet-held row keeps its body under `held_text`.
+            body = str(attrs.get("text") or attrs.get("held_text") or "").strip()
+            outcome = str(attrs.get("outcome") or "")
+            src = str(ev.get("source") or attrs.get("source") or "")
+            text = (f"told you ({src}{', ' + outcome if outcome and outcome != 'sent' else ''}): "
+                    f"{body[:200]}" if body else f"user_delivery {outcome}".strip())
         else:
             text = raw_kind
         entries.append(RecapEntry(ts=float(ev.get("ts") or now), kind=raw_kind, text=text))

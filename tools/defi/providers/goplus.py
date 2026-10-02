@@ -84,6 +84,97 @@ def _solana_status(raw: Any) -> Optional[str]:
     return text if text in ("0", "1") else None
 
 
+def _nonempty(raw: Any) -> Optional[bool]:
+    """True/False for a list/dict/"0"/"1" shape, None when unreadable."""
+    if isinstance(raw, dict) and "status" in raw:
+        status = _solana_status(raw)
+        return None if status is None else status == "1"
+    if isinstance(raw, (list, tuple, dict)):
+        return bool(raw)
+    status = _solana_status(raw)
+    return None if status is None else status == "1"
+
+
+def _fee_numbers(raw: Any):
+    """Every numeric value under a key naming a fee rate / basis points."""
+    if isinstance(raw, dict):
+        for k, v in raw.items():
+            key = str(k).lower()
+            if isinstance(v, (dict, list)):
+                yield from _fee_numbers(v)
+            elif "fee_rate" in key or "basis_point" in key or key == "fee":
+                try:
+                    yield float(v)
+                except (TypeError, ValueError):
+                    yield None
+    elif isinstance(raw, list):
+        for v in raw:
+            yield from _fee_numbers(v)
+
+
+def _transfer_fee_active(raw: Any) -> Optional[bool]:
+    """A Token-2022 TransferFee config that CHARGES something.
+
+    ⚠️ Shape not verified against a live Token-2022 response (CR-L10, 2026-09-23).
+    GoPlus documents ``transfer_fee`` as an object that is empty when the
+    extension is absent; its inner keys are read loosely. A non-empty config
+    whose fee rates all read 0 is benign; any other non-empty config (including
+    one whose rates we cannot parse) is treated as ACTIVE — fail closed.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, dict) and not raw:
+        return False
+    if isinstance(raw, list) and not raw:
+        return False
+    if not isinstance(raw, (dict, list)) or (isinstance(raw, dict) and set(raw) == {"status"}):
+        return _nonempty(raw)
+    rates = list(_fee_numbers(raw))
+    if rates and all(r is not None and r == 0 for r in rates):
+        return False
+    return True
+
+
+def _default_state_frozen(raw: Any) -> Optional[bool]:
+    """Token-2022 DefaultAccountState = Frozen: every new holder account starts
+    frozen, so a buy lands in an account that cannot sell.
+
+    ⚠️ Shape not verified live (CR-L10). Read as the SPL ``AccountState`` enum
+    (0 uninitialized, 1 initialized, 2 frozen) or its name; any other value is
+    UNREADABLE (a missing check), never "not frozen".
+    """
+    if isinstance(raw, dict):
+        raw = raw.get("status", raw.get("state"))
+    if raw is None:
+        return None
+    text = str(raw).strip().lower()
+    if text in ("2", "frozen"):
+        return True
+    if text in ("0", "1", "initialized", "uninitialized", ""):
+        return False if text else None
+    return None
+
+
+#: CR-L10: Token-2022 extensions that are ACTIVE now, not merely upgradable.
+#: The ``*_upgradable`` rows above say someone can change the extension later;
+#: these say it already bites — a fee skimmed on every transfer, a hook program
+#: that can refuse the sell, an account born frozen. field -> (flag, reader).
+#: Absent fields are reported as MISSING (a check that did not run).
+_SOLANA_ACTIVE = {
+    "transfer_fee": ("transfer_fee_active", _transfer_fee_active),
+    "transfer_hook": ("transfer_hook_active", _nonempty),
+    "default_account_state": ("default_account_frozen", _default_state_frozen),
+}
+
+#: ⚠️ Speculative field name (CR-L10): GoPlus's documented field for a Token-2022
+#: PermanentDelegate is ``balance_mutable_authority`` (read in `_SOLANA_RISKS`).
+#: A payload that names it explicitly is honoured too, but its absence is NOT
+#: reported as a missing check — we do not know the API sends it.
+_SOLANA_OPTIONAL = {
+    "permanent_delegate": ("permanent_delegate", _nonempty),
+}
+
+
 def parse_solana_screen(payload: Optional[Dict[str, Any]]) -> ScreenVerdict:
     """Enumerated Solana verdict. Fails CLOSED, like the EVM parser.
 
@@ -114,9 +205,23 @@ def parse_solana_screen(payload: Optional[Dict[str, Any]]) -> ScreenVerdict:
         checks[field] = "yes" if status == "1" else "no"
         if status == "1":
             flags.append(flag)
+    for field, (flag, read) in list(_SOLANA_ACTIVE.items()) + list(_SOLANA_OPTIONAL.items()):
+        raw = data.get(field)
+        active = read(raw) if raw is not None else None
+        if active is None:
+            if field in _SOLANA_ACTIVE:
+                missing.append(field)
+            continue
+        checks[field] = "yes" if active else "no"
+        if active:
+            flags.append(flag)
     if not checks:
         return ScreenVerdict(available=False)
-    return ScreenVerdict(available=True, checks=checks, flags=flags, missing=missing)
+    meta = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+    from core.wallet.tokens import clean_name, clean_symbol
+    return ScreenVerdict(available=True, checks=checks, flags=flags, missing=missing,
+                         symbol=clean_symbol(meta.get("symbol")) or None,
+                         name=clean_name(meta.get("name")) or None)
 
 
 def api_url(chain: str) -> Optional[str]:
@@ -283,6 +388,33 @@ def parse_holders(payload: Optional[Dict[str, Any]]) -> HolderReport:
 # Network boundary — never exercised by unit tests.
 # --------------------------------------------------------------------------
 
+def _fetch(url: str, address: str, timeout: float):
+    """``(status_code, payload)`` for one screener call, shared by ``screen``
+    and ``holders`` (071 R8: ``token_info`` asked the SAME endpoint twice for
+    the same token). Only a 200 answer is cached (60 s, ``core.intel.cache``);
+    a failure is never cached, so an outage cannot outlive itself."""
+    from core.intel.cache import cache_for
+    cache = cache_for("screen")
+    key = ("goplus", url, address if not str(address).startswith("0x")
+           else str(address).lower())
+    hit = cache.get_with_age(key)
+    if hit is not None:
+        return 200, hit[0]
+    from tools.defi.providers import _http
+    # Pooled client — see the ~6 s per-connection note in _http.
+    r = _http.client().get(url, params={"contract_addresses": address},
+                           timeout=timeout)
+    if r.status_code != 200:
+        return r.status_code, None
+    payload = r.json()
+    # 071 review: GoPlus answers HTTP 200 with an error code in the body (e.g.
+    # 4029 rate-limited). Only a SUCCESS body (code 1) is cached.
+    code = payload.get("code") if isinstance(payload, dict) else None
+    if isinstance(payload, dict) and (code in (1, "1") or (code is None and payload.get("result"))):
+        cache.put(key, payload)
+    return 200, payload
+
+
 def screen(chain: str, address: str, timeout: float = 8.0) -> ScreenVerdict:
     url = api_url(chain)
     if not url:
@@ -291,12 +423,10 @@ def screen(chain: str, address: str, timeout: float = 8.0) -> ScreenVerdict:
     row = chains.get(chain)
     parse = parse_solana_screen if (row and row.family == "svm") else parse_screen
     try:
-        import httpx
-        r = httpx.get(url, params={"contract_addresses": address},
-                      timeout=timeout, headers={"user-agent": "polyrob-defi/1.0"})
-        if r.status_code != 200:
+        status, payload = _fetch(url, address, timeout)
+        if status != 200:
             return ScreenVerdict(available=False)
-        return parse(r.json())
+        return parse(payload)
     except Exception:
         logger.debug("goplus: screen failed for %s/%s", chain, address, exc_info=True)
         return ScreenVerdict(available=False)
@@ -320,13 +450,11 @@ def holders(chain: str, address: str, timeout: float = 8.0) -> HolderReport:
             "the Solana screener reports mint/freeze AUTHORITIES, not holder "
             "rows — holder concentration is not available from this source"))
     try:
-        import httpx
-        r = httpx.get(url, params={"contract_addresses": address},
-                      timeout=timeout, headers={"user-agent": "polyrob-defi/1.0"})
-        if r.status_code != 200:
+        status, payload = _fetch(url, address, timeout)
+        if status != 200:
             return HolderReport(available=False,
-                                reason=f"the screener answered HTTP {r.status_code}")
-        return parse_holders(r.json())
+                                reason=f"the screener answered HTTP {status}")
+        return parse_holders(payload)
     except Exception as exc:
         logger.debug("goplus: holders failed for %s/%s", chain, address, exc_info=True)
         return HolderReport(available=False,

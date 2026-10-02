@@ -67,11 +67,19 @@ def search_files(
     output_mode="content",
     max_results=200,
     respect_gitignore=True,
+    allow=None,
+    refused=None,
 ):
     """Search ``root`` recursively for ``pattern`` (regex).
 
     output_mode="content" -> list[Match]; "files" -> list[str] of unique paths.
     Bounded by ``max_results``. Binary/undecodable files are skipped.
+
+    ``allow(path) -> bool`` is the caller's READ POLICY, applied to EVERY file
+    the walk reaches (codex review 2026-09-25: only the start directory was
+    confined, so a recursive grep read credential files and followed symlinks
+    out of the workspace). A refused path is appended to ``refused`` (a list)
+    so the caller can say so instead of reporting "no matches".
     """
     rx = re.compile(pattern)
     matches = []
@@ -82,7 +90,16 @@ def search_files(
     # a file yields nothing, so `path=<file>` answered "(no matches)" for a line
     # that was there. A path that is neither raises, naming it — a silent empty
     # list reads as "not found" and cost the agent a false conclusion.
+    def _allowed(path):
+        if allow is None or allow(path):
+            return True
+        if refused is not None:
+            refused.append(path)
+        return False
+
     if os.path.isfile(root):
+        if not _allowed(root):
+            return []
         try:
             with open(root, "r", encoding="utf-8") as f:
                 for i, line in enumerate(f, start=1):
@@ -115,6 +132,8 @@ def search_files(
             if glob and not fnmatch.fnmatch(fn, glob):
                 continue
             full = os.path.join(dirpath, fn)
+            if not _allowed(full):
+                continue
             try:
                 with open(full, "r", encoding="utf-8") as f:
                     for i, line in enumerate(f, start=1):

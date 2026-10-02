@@ -149,6 +149,31 @@ def _pair_results_to_calls(result, tool_calls_to_pass, source_for=None,
 	return paired
 
 
+def _mark_results_committed(manager, result, tool_calls_to_pass) -> None:
+	"""F14: record that every result in ``result`` went out as a ``ToolMessage``.
+
+	The next step's state message used to re-render each ``ActionResult`` as
+	``Action result i/N: …`` even though the native tool-calling path had already
+	committed the same bytes. Every provider POLYROB ships uses that path, so the
+	uncached suffix of every tool step was double-sized; the second copy is the one
+	that escaped ``TOOL_RESULT_MAX_TOKENS`` in the 2026-09-20 incident.
+
+	Recorded by the IDENTITY of the list, not as a bare boolean: several paths
+	replace ``Agent._last_result`` with a FRESH list whose entries never became
+	ToolMessages (the stop notice, a run-budget halt, a step-level exception), and
+	those must still render. A result that carries no ``tool_call_id`` belonging to
+	this step's calls was not paired either, so the list is left unmarked and the
+	legacy render stands. Fail-open: an observation never fails a step.
+	"""
+	try:
+		results = result or []
+		ids = {tc.get("id") for tc in (tool_calls_to_pass or []) if tc.get("id")}
+		if results and all(getattr(r, "tool_call_id", None) in ids for r in results):
+			manager._results_in_tool_messages = result
+	except Exception:  # pragma: no cover - bookkeeping is never load-bearing
+		logger.debug("F14: could not mark results as committed", exc_info=True)
+
+
 class ResultProcessingMixin:
 	"""Tool-message construction + action-result processing for Agent."""
 
@@ -273,6 +298,10 @@ class ResultProcessingMixin:
 				)
 				self.logger.info(f"[ATOMIC] ✅ Added AIMessage + {len(tool_responses)} ToolMessages atomically")
 
+				# F14: these bytes are now in history once. The next state message
+				# must not print them a second time.
+				_mark_results_committed(self.message_manager, result, tool_calls_to_pass)
+
 				# Complete the step in tracker
 				if self.tool_call_tracker:
 					self.tool_call_tracker.complete_step()
@@ -307,6 +336,55 @@ class ResultProcessingMixin:
 
 		return True
 
+	def _stamp_result_sources(self, result, model_output, tool_calls_to_pass) -> None:
+		"""C5: record the untrusted source on every result that lacks a stamp.
+
+		A result that carries a ``tool_call_id`` naming a call gets that call's
+		source — exact. A result that cannot be paired by id (the non-native
+		path) is paired by the step's actions: when ANY action this step is
+		untrusted, every unpaired result is stamped with that untrusted source.
+		Over-wrapping is harmless; an unwrapped browser page is the failure
+		mode. Gated by UNTRUSTED_TOOL_RESULT_WRAP (off ⇒ nothing stamped).
+		Never raises.
+		"""
+		try:
+			from agents.task.agent.core.untrusted_render import SOURCE_KEY, wrap_enabled
+			if not wrap_enabled() or not result:
+				return
+			from core.security.untrusted_wrap import is_untrusted_tool
+
+			def _tool_of(name):
+				try:
+					ra = self.controller.get_action_details(name) if self.controller else None
+					return getattr(ra, 'tool', None) if ra else None
+				except Exception:
+					return None
+
+			name_by_id = {tc.get('id'): tc.get('name') for tc in (tool_calls_to_pass or [])
+			              if isinstance(tc, dict) and tc.get('id')}
+			step_untrusted = None
+			for action in (getattr(model_output, 'action', None) or []):
+				try:
+					name = next(iter(action.model_dump(exclude_unset=True)), None)
+				except Exception:
+					name = None
+				if name:
+					tool = _tool_of(name)
+					if is_untrusted_tool(name, tool):
+						step_untrusted = (name, tool)
+						break
+			for ar in result:
+				meta = getattr(ar, 'metadata', None)
+				if isinstance(meta, dict) and meta.get(SOURCE_KEY):
+					continue
+				name = name_by_id.get(getattr(ar, 'tool_call_id', None))
+				if name:
+					stamp_result_source(ar, name, _tool_of(name))
+				elif step_untrusted is not None:
+					stamp_result_source(ar, *step_untrusted)
+		except Exception as e:  # framing is best-effort, never fatal
+			self.logger.debug(f"untrusted source stamping skipped: {e}")
+
 	async def _process_action_results(self, result, model_output, tool_calls_to_pass):
 		"""Phase 3b: record action results into context (large-result handling + atomic tool-message pairing). Returns the result list, or None to abort on corrupted state."""
 		if model_output and hasattr(model_output, 'action') and model_output.action:
@@ -317,6 +395,12 @@ class ResultProcessingMixin:
 			# This offloads content >10K to files, preventing context overflow
 			# Must happen BEFORE tool responses are added to message history
 			self._handle_large_action_results(result)
+
+			# C5: stamp every untrusted result's source HERE, for both paths. The
+			# native path also stamps inside _pair_results_to_calls; the non-native
+			# (text-parsed) path had no tool-call ids, so nothing was stamped and the
+			# next state message rendered browser/MCP/web output unwrapped.
+			self._stamp_result_sources(result, model_output, tool_calls_to_pass)
 
 			# Atomic message addition: AIMessage + all ToolMessages added together
 			if not await self._add_tool_messages(result, model_output, tool_calls_to_pass):

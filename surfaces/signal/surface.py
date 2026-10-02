@@ -37,6 +37,21 @@ def target_from_session_key(session_key: str) -> str:
     return _p(session_key)
 
 
+def parse_attachments(data: dict) -> list:
+    """``dataMessage.attachments`` → ``Media`` (064 F3). The signal-cli
+    attachment id rides as ``ref``; the daemon's ``getAttachment`` turns it into
+    bytes only if the tier absorbs the file."""
+    from core.surfaces.media import Media, kind_for_mime
+    out = []
+    for a in data.get("attachments") or []:
+        if not isinstance(a, dict) or not a.get("id"):
+            continue
+        mime = a.get("contentType") or None
+        out.append(Media(kind=kind_for_mime(mime), mime=mime, ref=str(a["id"]),
+                         filename=a.get("filename") or None))
+    return out
+
+
 def parse_envelope(envelope: dict, account: str,
                    user_directory: Any = None) -> Optional[InboundMessage]:
     """signal-cli envelope → InboundMessage (dataMessage only), or None.
@@ -57,7 +72,8 @@ def parse_envelope(envelope: dict, account: str,
     if not sender or sender == account:
         return None
     text = str(data.get("message") or "").strip()
-    if not text:
+    media = parse_attachments(data)
+    if not text and not media:
         return None
 
     group_info = data.get("groupInfo") or {}
@@ -91,6 +107,7 @@ def parse_envelope(envelope: dict, account: str,
                           display_name=envelope.get("sourceName")),
         idempotency_key=f"{sender}:{envelope.get('timestamp')}",
         raw=envelope,
+        media=media,
         mentions_bot=None,
     )
 

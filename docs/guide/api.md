@@ -139,7 +139,7 @@ when their flag is on, in which case the whole path space is absent rather than
 | `/api/admin/*` | Tenant administration: users, credits, roles, blocks, billing failures | always (admin role required) |
 | `/api/mcp/*` | Outbound MCP server management | always |
 | `/api/skills/*` | Read, edit, delete and fork a skill | always |
-| `/api/polymarket/*`, `/api/hyperliquid/*` | Venue configuration, read data, and gated execution | always (the venues' own flags gate live trading) |
+| `/api/packs/markets/polymarket/*`, `/api/packs/markets/hyperliquid/*` | Venue configuration, read data, and gated execution | when the `markets` pack is installed and enabled (the venues' own flags gate live trading) |
 | `/a2a/*`, `/.well-known/agent.json` | The A2A protocol surface | always |
 | `/eip8004/*` | ERC-8004 identity, reputation and validation | always (discovery-only until `EIP8004_ENABLED`) |
 | `/webhooks/{surface_id}` | Inbound webhook verify and delivery | always (404 with an empty surface registry) |
@@ -189,6 +189,11 @@ POST /api/task/sessions
 }
 ```
 
+When the process that serves the request has no language model, a session that would start at
+once is refused before anything is created or charged: `503` with
+`{"detail": {"code": "no_model", "message": "no language model in this process"}}`. A request
+with `"auto_start": false` or `"wait_for_uploads": true` is not refused.
+
 ### Get session status
 
 ```
@@ -199,6 +204,10 @@ Returns a user-facing status (`active`/`idle`/`stopped`), whether the caller can
 it, the resolved model/tools, timestamps, and the `webview_url` for live monitoring.
 
 ### Send a message to a running session
+
+The caller's line is recorded in that tenant's owner thread (`via=api`; the
+console's own calls land as `via=console`), so a later session can read it —
+see [conversation.md](conversation.md).
 
 ```
 POST /api/task/sessions/{session_id}/messages
@@ -445,11 +454,20 @@ key that cannot be spoofed with `X-Forwarded-For`. The full money model is in
 ## Trading venues
 
 ```
-/api/polymarket/{configure,status,trading-limits,disable,enable,credentials,tools,execute,audit,stats}
-/api/hyperliquid/{configure,status,trading-limits,demo-mode,enabled,credentials,tools,execute,audit,stats}
-/api/hyperliquid/{markets/perpetual,markets/spot,price/{coin},orderbook/{coin},funding/{coin}}
-/api/hyperliquid/{account,balances/spot,orders/open}
+/api/packs/markets/polymarket/{configure,status,trading-limits,disable,enable,credentials,tools,execute,audit,stats}
+/api/packs/markets/hyperliquid/{configure,status,trading-limits,demo-mode,enabled,credentials,tools,execute,audit,stats}
+/api/packs/markets/hyperliquid/{markets/perpetual,markets/spot,price/{coin},orderbook/{coin},funding/{coin}}
+/api/packs/markets/hyperliquid/{account,balances/spot,orders/open}
 ```
+
+The venues come from the `markets` pack (`packs/markets`). Every pack
+router mounts under `/api/packs/<pack id>`; up to and including 1.1.0 these
+routes were `/api/polymarket/*` and `/api/hyperliquid/*`. **Deprecated:** 1.2.0 still
+serves the old paths (same handlers, same auth), with a `Deprecation: true` header, a
+`Link: <new path>; rel="successor-version"` header and `X-Polyrob-Removed-In: 1.3.0`;
+they are not in the OpenAPI schema and 1.3.0 removes them. Without the pack (or with
+`POLYROB_PACKS_DISABLED=markets`) the routes are absent and `polyrob pack list`
+names why.
 
 These routes configure credentials and read market data. **Mounting them does
 not arm live trading** — an order is validated and returned as a dry run unless

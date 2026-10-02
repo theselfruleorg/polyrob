@@ -17,14 +17,17 @@ the convention ``create_llm_client`` uses) and read their config block from
 ``profiles.extra_llm_config_blocks``).
 
 This module is imported lazily (inside ``create_llm_client``) so the provider
-SDKs it drags in never load at CLI entry-point import time.
+SDKs it drags in never load at CLI entry-point import time. ⚠️ 058 T7.2:
+``AnthropicCompatClient`` lives in ``modules/llm/compat_anthropic.py`` because
+its base class imports the ``anthropic`` SDK at module level — an extra since
+T1.4 — and an OpenAI-compatible deployment must not need it. The name is still
+importable from here (module ``__getattr__``) for back-compat.
 """
 from __future__ import annotations
 
 import os
 from typing import Dict, Optional
 
-from modules.llm.anthropic_client import AnthropicClient
 from modules.llm.llm_client import LLMClient
 from modules.llm.llm_client_registry import get_default_model
 from modules.llm.model_registry import get_model_config
@@ -139,69 +142,10 @@ class OpenAICompatClient(OpenRouterClient):
         return self._spec.headers()
 
 
-class AnthropicCompatClient(AnthropicClient):
-    """Anthropic-messages-compatible client driven by a ProviderSpec."""
-
-    def __init__(self, config: BotConfig, name: str):
-        # Skip AnthropicClient.__init__ (it reads the 'anthropic' config block);
-        # call the grandparent LLMClient initializer directly.
-        LLMClient.__init__(self, config=config, name=name)
-        self._client = None
-        self._spec = _spec_for(name)
-        self._PROVIDER_LABEL = self._spec.display_name
-
-        cfg = config.get_llm_config().get(self._spec.name, {}) or {}
-        self.api_key = _resolve_key(self._spec, cfg)
-        self.model_type = cfg.get("model") or get_default_model(self._spec.name)
-        self.last_response = None
-
-        model_config = get_model_config(self.model_type)
-        if model_config:
-            self.max_tokens = model_config.max_completion_tokens or 8192
-        else:
-            self.max_tokens = 8192
-            self.logger.info(
-                f"Model '{self.model_type}' not in registry — using defaults "
-                f"(declare it under 'models:' in providers.yaml to list it)"
-            )
-        self.supports_vision = self._resolve_supports_vision()
-        self.temperature = 0.7
-
-    def _resolve_supports_vision(self, model_type: Optional[str] = None) -> bool:
-        mc = get_model_config(model_type or self.model_type)
-        if mc:
-            return mc.capabilities.supports_vision
-        return self._spec.supports_vision
-
-    def _profile_base_url(self) -> Optional[str]:
-        # api_key is passed so a key-prefix rule can redirect the host
-        # (a Kimi Code key must not go to the legacy platform endpoint).
-        return self._spec.resolved_base_url(api_key=self.api_key)
-
-    def _validate_llm_config(self) -> None:
-        if self._spec.auth_type is AuthType.NONE:
-            return
-        if not self.api_key or self.api_key == _NO_KEY_SENTINEL:
-            hint = f" (set {self._spec.env_key})" if self._spec.env_key else ""
-            raise ServiceError(f"{self._spec.display_name} API key not provided{hint}")
-
-    async def _setup_client(self) -> None:
-        import anthropic
-        try:
-            kwargs = {}
-            if self._spec.bearer_auth:
-                # z.ai's Anthropic-compatible endpoint authenticates with
-                # Authorization: Bearer, not x-api-key.
-                kwargs["auth_token"] = self.api_key
-            else:
-                kwargs["api_key"] = self.api_key
-            base_url = self._profile_base_url()
-            if base_url:
-                kwargs["base_url"] = base_url
-            headers = self._spec.headers()
-            if headers:
-                kwargs["default_headers"] = headers
-            self._client = anthropic.AsyncAnthropic(**kwargs)
-            self.logger.debug(f"{self._spec.display_name} client setup completed")
-        except Exception as e:
-            raise ServiceError(f"Failed to set up {self._spec.display_name} client: {e}")
+def __getattr__(name: str):
+    # Back-compat: `from modules.llm.compat_clients import AnthropicCompatClient`
+    # still works, but only resolves (and imports the SDK) when asked for.
+    if name == "AnthropicCompatClient":
+        from modules.llm.compat_anthropic import AnthropicCompatClient
+        return AnthropicCompatClient
+    raise AttributeError(name)

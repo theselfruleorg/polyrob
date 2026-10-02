@@ -16,6 +16,18 @@ _PRODUCER = re.compile(
     r"(?:\.record|_emit|_emit_governance_event)\(\s*[\"']([a-z0-9_]+)[\"']")
 
 
+#: A module that defines its OWN ``record(...)`` method is not a telemetry
+#: producer through that name — the call shape belongs to its own store. Without
+#: this guard the scan read `core/surfaces/owner_thread.py`'s
+#: ``store.record("out", ...)`` (a conversation direction, not an event kind) as
+#: two unregistered kinds and failed on main, 2026-09-22. Narrow on purpose: the
+#: guard drops only the ``.record`` shape for such a file; `_emit` and
+#: `_emit_governance_event` in the same file are still checked, and every real
+#: telemetry producer calls a record it does not define.
+_DEFINES_OWN_RECORD = re.compile(r"^\s*def record\(", re.M)
+_RECORD_CALL = re.compile(r"\.record\(\s*[\"']([a-z0-9_]+)[\"']")
+
+
 def _tracked_py():
     out = subprocess.run(["git", "ls-files", "*.py"], cwd=REPO,
                          capture_output=True, text=True, check=True).stdout
@@ -30,7 +42,11 @@ def test_every_produced_kind_is_known():
         if not py.exists():  # tracked but deleted in the working tree
             continue
         src = py.read_text(encoding="utf-8", errors="replace")
-        for kind in _PRODUCER.findall(src):
+        found = _PRODUCER.findall(src)
+        if _DEFINES_OWN_RECORD.search(src):
+            own = set(_RECORD_CALL.findall(src))
+            found = [k for k in found if k not in own]
+        for kind in found:
             if kind not in KNOWN_KINDS:
                 unknown.setdefault(kind, str(py.relative_to(REPO)))
     assert unknown == {}, (

@@ -107,6 +107,58 @@ def test_wallet_dir_is_exempt_from_group_write(home):
     assert r.ok, [o.render() for o in r.offenders]
 
 
+def test_verdicts_key_is_exempt_from_group_write(home):
+    """`verdicts.key` is 0600 BY DESIGN — group-write is the defect, not the fix.
+
+    `core/credential_verdicts.py::_digest_key` trusts the per-install HMAC key only
+    while nobody else can read it (`st.st_mode & 0o077 == 0`) and falls back to a
+    process-lifetime random key otherwise. Flagging it produced a permanent WARN
+    whose stated remedy would either do nothing (the deploy pass is `chgrp`, not
+    `chmod`) or, applied by hand, destroy that property (prod 2026-09-22 21:46Z);
+    a permanent WARN with an inert remedy teaches the owner to skip the health
+    block.
+
+    Asserted as the precise property rather than `report.ok`, so it means the same
+    thing under any uid — the sibling wallet test's `ok` assertion cannot pass as
+    root, where the fixture's own tree is root-owned.
+    """
+    _clean_tree(home)
+    key = home / "verdicts.key"
+    key.write_text("k" * 64)
+    os.chmod(key, 0o600)
+    r = audit_data_perms(str(home), group=_own_group())
+    named = [o.render() for o in r.offenders if o.path == str(key)]
+    assert named == [], named
+
+
+def test_the_exemption_is_the_top_level_file_only(home):
+    """A same-named file NESTED elsewhere is still judged — the exemption is the
+    one key at the data-home root, not any file wearing its name."""
+    _clean_tree(home)
+    sub = home / "sessions"
+    sub.mkdir()
+    os.chmod(sub, 0o2770)
+    impostor = sub / "verdicts.key"
+    impostor.write_text("k" * 64)
+    os.chmod(impostor, 0o600)
+    r = audit_data_perms(str(home), group=_own_group())
+    hits = [o for o in r.offenders if o.path == str(impostor)]
+    assert hits, [o.render() for o in r.offenders]
+    assert REASON_NOT_GROUP_WRITABLE in hits[0].reasons
+
+
+def test_a_directory_named_like_the_exempt_file_is_not_exempt(home):
+    """The exemption applies to a FILE; a directory of that name is judged."""
+    _clean_tree(home)
+    d = home / "verdicts.key"
+    d.mkdir()
+    os.chmod(d, 0o700)
+    r = audit_data_perms(str(home), group=_own_group())
+    hits = [o for o in r.offenders if o.path == str(d)]
+    assert hits, "a directory must not inherit the file exemption"
+    assert REASON_NOT_GROUP_WRITABLE in hits[0].reasons
+
+
 def test_wrong_group_is_named(home):
     _clean_tree(home)
     r = audit_data_perms(str(home), group=_own_group())

@@ -180,6 +180,47 @@ PUBLIC_ADDRESS_RE = re.compile(
 )
 
 
+#: M13 — shapes the battery used to miss entirely.
+#:
+#: A Telegram bot token, bare (``123456789:AA…``, 35-char secret) or inside the
+#: Bot API URL (``/bot123456789:AA…/sendMessage``), where no key NAME precedes it.
+TELEGRAM_BOT_TOKEN_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:bot)?\d{5,12}:[A-Za-z0-9_-]{30,}(?![A-Za-z0-9_-])"
+)
+
+#: A Google API key (``AIza`` + 35), e.g. in a ``?key=AIza…`` URL the KV rule
+#: misses when the name is just ``key``.
+GOOGLE_API_KEY_RE = re.compile(r"(?<![A-Za-z0-9_-])AIza[0-9A-Za-z_-]{35}(?![0-9A-Za-z_-])")
+
+#: A RAW EVM private key (32 bytes hex, optional ``0x``) — but ONLY right after a
+#: key-context label (``Private key: 0x…``, ``signing key = …``). ``0x`` + 64 hex
+#: is ALSO a transaction hash, a block hash and a storage slot, which this
+#: battery sees constantly in persisted content; redacting every one would
+#: destroy the agent's own records. The label is kept, the hex is redacted.
+#: ``private_key=…`` (no space) was already KV's.
+EVM_KEY_CONTEXT_RE = re.compile(
+    r"(?i)(\b(?:private|priv|secret|signing|wallet)[ _-]?key\b"
+    r"(?:\s*\([^)\n]{0,16}\))?(?:\s+(?:is|was))?\s*[:=]?\s*[\"'`]?)"
+    r"(?:0x)?[0-9a-fA-F]{64}(?![0-9a-fA-F])"
+)
+
+#: A Solana 64-byte secret key in base58 (86-88 chars). A Solana TRANSACTION
+#: SIGNATURE is also 64 bytes of base58, so a run preceded (within 32 chars on
+#: its line) by a signature/tx word, or sitting in a URL path, is left alone —
+#: see :func:`_solana_secret_replacement`. Residual: a bare list of signatures
+#: with no label redacts.
+SOLANA_SECRET_RE = re.compile(r"(?<![1-9A-HJ-NP-Za-km-z])[1-9A-HJ-NP-Za-km-z]{86,88}"
+                              r"(?![1-9A-HJ-NP-Za-km-z])")
+_SOLANA_SIG_CONTEXT_RE = re.compile(r"(?i)(?:sig|signature|tx|txid|txn|hash|transaction)\b|/$")
+
+
+def _solana_secret_replacement(match: "re.Match", redacted: str) -> str:
+    before = match.string[max(0, match.start() - 32):match.start()].rsplit("\n", 1)[-1]
+    if before.endswith("/") or _SOLANA_SIG_CONTEXT_RE.search(before):
+        return match.group(0)
+    return redacted
+
+
 def _kv_replacement(match: "re.Match", redacted: str) -> str:
     """The KV substitution, with the public-address exemption.
 
@@ -195,8 +236,9 @@ def _kv_replacement(match: "re.Match", redacted: str) -> str:
 def apply_ssot_shapes(text: str, redacted: str = REDACTED) -> str:
     """Apply the ordered high-confidence shape battery to *text*.
 
-    ONE home for the substitution sequence (PEM → Bearer → RPC-path-key → KV →
-    provider-key → polyrob-key → AWS → JWT) so the persisted-content scrubber
+    ONE home for the substitution sequence (PEM → Bearer → Telegram bot token →
+    Google key → context-anchored EVM key → RPC-path-key → KV → provider-key →
+    polyrob-key → AWS → JWT → Solana secret → opaque token) so the persisted-content scrubber
     (core/secret_scrub.py), the logging filter (core/security_logging_filter.py)
     and the display scrubber (cli/ui/secrets.py) can never drift again — the
     logging filter had already dropped the JWT rung, so OAuth tokens survived
@@ -206,6 +248,9 @@ def apply_ssot_shapes(text: str, redacted: str = REDACTED) -> str:
     """
     out = PEM_RE.sub(redacted, text)
     out = BEARER_RE.sub(redacted, out)
+    out = TELEGRAM_BOT_TOKEN_RE.sub(redacted, out)
+    out = GOOGLE_API_KEY_RE.sub(redacted, out)
+    out = EVM_KEY_CONTEXT_RE.sub(lambda m: f"{m.group(1)}{redacted}", out)
     # BEFORE the KV rule: an `?api-key=` URL is KV's job, but a path-form RPC key
     # must be claimed while the whole URL is still intact (KV would otherwise
     # have eaten the query string of a URL that carries both).
@@ -215,6 +260,7 @@ def apply_ssot_shapes(text: str, redacted: str = REDACTED) -> str:
     out = POLYROB_KEY_RE.sub(redacted, out)
     out = AWS_RE.sub(redacted, out)
     out = JWT_RE.sub(redacted, out)
+    out = SOLANA_SECRET_RE.sub(lambda m: _solana_secret_replacement(m, redacted), out)
     # LAST: the opaque-token rule is the loosest of the battery, so every
     # named-shape rule gets first refusal on a match.
     out = OPAQUE_TOKEN_RE.sub(redacted, out)

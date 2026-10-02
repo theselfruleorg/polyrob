@@ -5,7 +5,7 @@ It coordinates all components and provides a unified API for the task agent.
 
 Responsibilities:
     - Session lifecycle (create, load, save)
-    - Coordinate PhaseManager, ContextRetriever, CompactionManager
+    - Coordinate PhaseManager and ContextRetriever
     - Provide unified API for agent integration
     - Persist hierarchical memory to disk
 
@@ -37,7 +37,6 @@ from core.exceptions import ComponentError
 from .hierarchical_memory import HierarchicalMemory
 from .phase_manager import PhaseManager
 from .context_retriever import ContextRetriever
-from .compaction_manager import CompactionManager
 from .semantic_retriever import SemanticRetriever
 
 logger = logging.getLogger(__name__)
@@ -57,7 +56,6 @@ class SessionData:
         memory: HierarchicalMemory instance
         phase_manager: PhaseManager instance
         context_retriever: ContextRetriever instance
-        compaction_manager: CompactionManager instance
         last_brain_state: Last brain state from agent (for semantic search)
     """
 
@@ -66,13 +64,11 @@ class SessionData:
         memory: HierarchicalMemory,
         phase_manager: PhaseManager,
         context_retriever: ContextRetriever,
-        compaction_manager: CompactionManager,
         user_id: Optional[str] = None,
     ):
         self.memory = memory
         self.phase_manager = phase_manager
         self.context_retriever = context_retriever
-        self.compaction_manager = compaction_manager
         # SECURITY (P1 finalization): the tenant this cached session belongs to.
         # The `_sessions` dict is process-global and keyed by session_id ALONE, so
         # the load_session cache-hit path must verify this matches the requesting
@@ -127,8 +123,6 @@ class TaskContextManager(BaseComponent):
     Configuration:
         HIERARCHICAL_MEMORY_ENABLED: Enable/disable system (default: true)
         COMPACTION_ENABLED: Enable message compaction (default: true)
-        CONTEXT_SOFT_THRESHOLD: Soft limit ratio (default: 0.70)
-        CONTEXT_HARD_THRESHOLD: Hard limit ratio (default: 0.85)
 
     Attributes:
         config: Bot configuration
@@ -160,8 +154,6 @@ class TaskContextManager(BaseComponent):
         # Configuration
         self.enabled = config.get("HIERARCHICAL_MEMORY_ENABLED", True)
         self.compaction_enabled = config.get("COMPACTION_ENABLED", True)
-        self.soft_threshold = config.get("CONTEXT_SOFT_THRESHOLD", 0.70)
-        self.hard_threshold = config.get("CONTEXT_HARD_THRESHOLD", 0.85)
 
         # Phase 3: Semantic retrieval configuration
         # Uses FREE local embeddings (SentenceTransformer), no API costs
@@ -169,10 +161,6 @@ class TaskContextManager(BaseComponent):
         self.semantic_top_k = config.get("SEMANTIC_TOP_K", 3)
         self.semantic_min_similarity = config.get("SEMANTIC_MIN_SIMILARITY", 0.65)
         
-        # FIX #6 (Nov 26, 2025): Context-aware compaction scaling
-        # Model context window for adaptive thresholds (None = use defaults)
-        self.context_window = config.get("MODEL_CONTEXT_WINDOW", None)
-
         # H-MEM Paper Section 3.3: Memory Update Mechanisms
         # OPTIMIZATION (Nov 14, 2025): More aggressive consolidation
         self.reflection_enabled = config.get("REFLECTION_ENABLED", True)
@@ -244,7 +232,6 @@ class TaskContextManager(BaseComponent):
         logger.info(
             f"TaskContextManager initialized: enabled={self.enabled}, "
             f"compaction={self.compaction_enabled}, "
-            f"thresholds={self.soft_threshold}/{self.hard_threshold}, "
             f"semantic={self.semantic_enabled}, "
             f"reflection={self.reflection_enabled}, "
             f"forgetting={self.forgetting_enabled}"
@@ -260,8 +247,7 @@ class TaskContextManager(BaseComponent):
 
             self.logger.info(
                 f"Task Context Manager initialized | "
-                f"Compaction: {'enabled' if self.compaction_enabled else 'disabled'} | "
-                f"Thresholds: {self.soft_threshold:.0%}/{self.hard_threshold:.0%}"
+                f"Compaction: {'enabled' if self.compaction_enabled else 'disabled'}"
             )
 
         except Exception as e:
@@ -345,6 +331,8 @@ class TaskContextManager(BaseComponent):
                 logger.info("✅ H-MEM cross-phase search: embedding mode (local model)")
                 return semantic_retriever
             except Exception as e:
+                # 058 T1.5: an ImportError here is numpy missing (an extra); the
+                # exception text names polyrob[memory-vector], so the WARN does.
                 logger.warning(f"SemanticRetriever init failed, falling back to lexical: {e}")
                 # Fall through to lexical under auto; under explicit `embeddings` the
                 # caller asked for embeddings only — but a failed init is better served
@@ -397,18 +385,11 @@ class TaskContextManager(BaseComponent):
             semantic_top_k=self.semantic_top_k,
             enable_cross_phase_search=self.semantic_enabled
         )
-        compaction_manager = CompactionManager(
-            soft_threshold=self.soft_threshold,
-            hard_threshold=self.hard_threshold,
-            context_window=self.context_window  # FIX #6: Pass context window for adaptive scaling
-        )
-
         # Store session data
         session_data = SessionData(
             memory=memory,
             phase_manager=phase_manager,
             context_retriever=context_retriever,
-            compaction_manager=compaction_manager,
             user_id=user_id,
         )
         self._sessions[session_id] = session_data
@@ -471,18 +452,11 @@ class TaskContextManager(BaseComponent):
                 semantic_top_k=self.semantic_top_k,
                 enable_cross_phase_search=self.semantic_enabled
             )
-            compaction_manager = CompactionManager(
-                soft_threshold=self.soft_threshold,
-                hard_threshold=self.hard_threshold,
-                context_window=self.context_window  # FIX #6: Pass context window
-            )
-
             # Store session data
             session_data = SessionData(
                 memory=memory,
                 phase_manager=phase_manager,
                 context_retriever=context_retriever,
-                compaction_manager=compaction_manager,
                 user_id=user_id,
             )
             self._sessions[session_id] = session_data

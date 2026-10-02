@@ -156,9 +156,19 @@ def project_scope() -> SkillScope:
     return SkillScope(name="project", root=root, writable=False, trusted=trusted)
 
 
+def pack_scopes() -> List[SkillScope]:
+    """067 P2: one read-only, trusted ``pack:<id>`` scope per LOADED pack that
+    ships a skills directory (a first-party pack ships in a hashed wheel, like
+    builtin). A pack's skills exist only while the pack is loaded."""
+    from core.packs.state import skill_dirs
+    return [SkillScope(name=f"pack:{pack_id}", root=root, writable=False, trusted=True)
+            for pack_id, root in skill_dirs()]
+
+
 def resolve_scopes() -> List[SkillScope]:
-    """All skill scopes in precedence order: project > user > builtin."""
-    return [project_scope(), user_scope(), builtin_scope()]
+    """All skill scopes in precedence order: project > user > builtin > pack:<id>.
+    External (ecosystem) roots come after these (``SkillManager``)."""
+    return [project_scope(), user_scope(), builtin_scope(), *pack_scopes()]
 
 
 def scan_exempt(scope: SkillScope) -> bool:

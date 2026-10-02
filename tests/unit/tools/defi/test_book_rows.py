@@ -374,3 +374,21 @@ async def test_read_book_joins_the_rail_written_store(monkeypatch, tmp_path):
                              ledger_path=str(ledger))
     assert other["rows"][0]["entry"] is None
     assert other["rows"][0]["entry_reason"] == NO_ENTRY_RECORDED_REASON
+
+
+def test_a_quarantined_lookalike_row_says_so_and_keeps_its_cost():
+    """W0: the book carries the tracked position's lifecycle, so a look-alike the
+    identity gate quarantined reads as one — with its cost basis intact."""
+    from core.open_positions import PositionEntry
+    chains_out = {"base": {"verdict": "clean",
+                           "report": {"matched": [f"PONS {A1} — 1 (ledger 1) ✓"]},
+                           "portfolio_text": f"  {A1}  1 PONS  = $2.00", "error": None}}
+    entry = PositionEntry(chain="base", address=A1.lower(), symbol="PONS", qty=1.0,
+                          entry_usd=134.54, entry_ts=1.0, status="quarantined",
+                          status_reason="look-alike")
+    [row] = book_rows(chains_out, [_pos("PONS", A1, 1.0)], {A1.lower(): entry})
+    d = row.to_dict()
+    assert d["lifecycle"] == "quarantined" and d["lifecycle_reason"] == "look-alike"
+    assert d["entry"] == 134.54 and d["since_entry"] == pytest.approx(2.0 - 134.54)
+    [plain] = book_rows(chains_out, [_pos("PONS", A1, 1.0)])
+    assert plain.to_dict()["lifecycle"] is None

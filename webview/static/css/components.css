@@ -930,8 +930,7 @@ select.form-control {
     font-family: var(--font-family-mono);
     font-size: var(--font-size-lg);
     font-weight: bold;
-    text-transform: uppercase;
-    letter-spacing: 2px;
+    letter-spacing: 0.5px;
 }
 
 .error-body {
@@ -987,7 +986,6 @@ select.form-control {
 .error-section .section-title {
     color: var(--color-accent-blue);
     font-size: var(--font-size-xs);
-    text-transform: uppercase;
     letter-spacing: 1px;
     margin-bottom: var(--spacing-sm);
 }

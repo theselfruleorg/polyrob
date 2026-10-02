@@ -11,7 +11,7 @@ from modules.llm.adapters import BaseChatModel
 from core.base_component import BaseComponent
 from core.config import BotConfig
 from core.container import DependencyContainer
-from core.exceptions import LLMError, LLMConfigError, ServiceError
+from core.exceptions import LLMError, ServiceError
 
 from modules.llm.llm_client import LLMClient
 from modules.llm.manager_inventory import InventoryMixin

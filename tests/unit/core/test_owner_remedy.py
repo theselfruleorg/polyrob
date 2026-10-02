@@ -27,9 +27,11 @@ class TestChatVerbs:
     def test_the_verb_set_is_the_routing_ssot_not_a_copy(self):
         """A second hand-maintained list is how a verb becomes unroutable while
         still being advertised. Resolve against the dispatcher's tuple."""
-        from core.surfaces.dispatcher import _COMMANDS
+        from core.surfaces.dispatcher import _COMMANDS, command_names
 
-        assert R.chat_verbs() == frozenset(_COMMANDS)
+        # the literal tuple plus every pack-contributed verb (067 P5a, e.g. /x)
+        assert R.chat_verbs() == command_names()
+        assert frozenset(_COMMANDS) <= R.chat_verbs()
 
 
 class TestCliCommands:
@@ -42,8 +44,10 @@ class TestCliCommands:
 
     def test_the_command_set_is_the_lazy_subcommand_ssot(self):
         from cli.polyrob import _LAZY_SUBCOMMANDS
+        from core.packs.state import cli_command_owners
 
-        assert R.cli_commands() == frozenset(_LAZY_SUBCOMMANDS)
+        # 067 P3b: plus every installed pack's [cli] commands (e.g. x, x-account).
+        assert R.cli_commands() == frozenset(_LAZY_SUBCOMMANDS) | set(cli_command_owners())
 
 
 class TestTheValidator:

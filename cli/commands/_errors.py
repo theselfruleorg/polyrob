@@ -123,9 +123,28 @@ def require_extra_or_exit(extra: str, modules=None) -> None:
 
     try:
         require_extra(extra, modules=modules)
+        return
     except ImportError as exc:
-        click.echo(click.style("[polyrob] ERROR: ", fg="red") + str(exc), err=True)
-        raise SystemExit(1)
+        first_error = exc
+
+    # 062: on a machine where lazy installs are ON (a self-hoster's own box),
+    # OFFER to install it rather than only naming it. The offer goes through
+    # the same allowlisted, lock-constrained installer every other first use
+    # uses — `ensure` is a no-op on a server, where the deploy owns the venv.
+    try:
+        import core.lazy_deps as _lazy
+        feature = _lazy.feature_for_extra(extra)
+        if feature:
+            _lazy.ensure(feature)
+            require_extra(extra, modules=modules)
+            return
+    except Exception:
+        # Any failure here (declined, offline, still missing) falls through to
+        # the original, honest "install the extra" message below.
+        pass
+
+    click.echo(click.style("[polyrob] ERROR: ", fg="red") + str(first_error), err=True)
+    raise SystemExit(1)
 
 
 def echo_create_session_error(exc: BaseException, user_id: str = "local") -> None:

@@ -15,6 +15,8 @@ from tools.controller.registry.service import Registry
 from tools.controller.service import Controller
 
 
+
+
 def _bare_controller(data_dir):
     c = object.__new__(Controller)
     c.logger = logging.getLogger("preferences-test")
@@ -308,7 +310,8 @@ async def test_contract_propose_default_review_on_quarantines_genuine_turn_too(m
     # Default (OWNER_RULES_IMMEDIATE unset -> False): even a genuine owner turn
     # quarantines pending review, so the polarity flip stays opt-in for one
     # release (035 §6).
-    monkeypatch.delenv("OWNER_RULES_IMMEDIATE", raising=False)
+    # ⚠️ unset now means ON (flipped 2026-09-21) — say "false" to mean the queue.
+    monkeypatch.setenv("OWNER_RULES_IMMEDIATE", "false")
     action = _register(monkeypatch, tmp_path)
     res = await action.function(
         action.param_model(operation="contract_propose", text="Keep replies concise."),

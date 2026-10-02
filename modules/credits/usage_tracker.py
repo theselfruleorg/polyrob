@@ -183,6 +183,22 @@ class LLMUsageTracker:
         self._tier_cache[user_id] = tier
         return tier
 
+    def _is_x402_prepaid(self, session_id: str) -> bool:
+        """This call belongs to an x402-SETTLED request (CR-M15).
+
+        True inside the middleware's paid-request context, or for a session
+        that already metered under one (its budget accumulator holds it), so
+        a paid session keeps its prepaid, budget-capped billing for its whole
+        run. The stored profile tier is never consulted.
+        """
+        try:
+            from core.billing_context import is_prepaid
+            if is_prepaid():
+                return True
+        except Exception:
+            return False
+        return session_id in getattr(self, "_x402_session_tokens", {})
+
     def _enforce_x402_budget(self, user_id: str, session_id: str, tokens_this_call: int) -> None:
         """Halt an x402 request once its cumulative tokens exceed the prepaid budget.
 
@@ -192,8 +208,8 @@ class LLMUsageTracker:
         on a request than it collected. Per-session (one x402 session = one bounded
         request); raises InsufficientCreditsError, which the step loop treats as fatal.
         """
-        from modules.x402.x402_integration import get_x402_max_tokens_per_request
-        budget = get_x402_max_tokens_per_request()
+        from core.billing_context import prepaid_budget
+        budget = prepaid_budget()
         if budget <= 0:
             return
         # Bound the accumulator dict before inserting a new session.
@@ -230,7 +246,10 @@ class LLMUsageTracker:
         error: Optional[str] = None,
         metadata: Optional[Dict] = None,
         cache_creation_tokens: int = 0,
-        request_id: Optional[str] = None
+        request_id: Optional[str] = None,
+        billed_cost_usd: Optional[float] = None,
+        cache_discount_usd: Optional[float] = None,
+        cache_creation_1h_tokens: int = 0,
     ) -> UsageRecord:
         """
         Record LLM usage across ALL systems atomically.
@@ -279,6 +298,9 @@ class LLMUsageTracker:
             # can never go negative on a mis-reported split.
             cache_creation_tokens = max(0, min(cache_creation_tokens or 0,
                                                max(0, input_tokens - cached_tokens)))
+            # F4: the 1h slice is a subset of the write; never more than it.
+            cache_creation_1h_tokens = max(0, min(cache_creation_1h_tokens or 0,
+                                                  cache_creation_tokens))
 
             # 2. Create token usage object (using LLM module's TokenUsage)
             tokens = TokenUsage(
@@ -286,11 +308,27 @@ class LLMUsageTracker:
                 completion_tokens=output_tokens,
                 total_tokens=input_tokens + output_tokens,
                 cached_tokens=cached_tokens,
-                cache_creation_tokens=cache_creation_tokens
+                cache_creation_tokens=cache_creation_tokens,
+                cache_creation_1h_tokens=cache_creation_1h_tokens,
             )
 
             # 3. Calculate costs (SINGLE SOURCE OF TRUTH)
             costs = await self._calculate_costs(model, tokens, provider)
+
+            # F23: a provider that TELLS us what it billed outranks our estimate.
+            # Every other cost in the tree is recomputed from the model catalog's
+            # per-token table; on a router (OpenRouter) that table cannot model
+            # the upstream it picked, its discounts, or a `cache_discount` at all.
+            # The estimate is kept in metadata so the two stay comparable.
+            estimated_cost_usd = costs.api_cost_usd
+            costs = self._apply_billed_cost(costs, billed_cost_usd)
+            if costs.api_cost_usd != estimated_cost_usd or cache_discount_usd is not None:
+                metadata = dict(metadata or {})
+                metadata["estimated_cost_usd"] = estimated_cost_usd
+                if costs.api_cost_usd != estimated_cost_usd:
+                    metadata["billed_cost_usd"] = costs.api_cost_usd
+                if cache_discount_usd is not None:
+                    metadata["cache_discount_usd"] = cache_discount_usd
 
             # 4. Use the caller-supplied STABLE idempotency key when given (G-26
             # reachability fix); otherwise fall back to a fresh uuid (legacy --
@@ -327,9 +365,20 @@ class LLMUsageTracker:
             # api_cost_usd into usage_records, which the autonomy budget gate
             # reads) and never deducts. Tier lookup still runs (db-only) so the
             # x402/admin ledger + prepaid-budget legs below stay intact.
+            #
+            # CR-M15: "x402" (prepaid, per-token-free, budget-capped) is decided
+            # from THIS request — it settled an x402 payment (the middleware's
+            # context flag), or this session already ran as one — never from the
+            # stored profile tier. A wallet that paid once keeps tier='x402' on
+            # its profile; a later SIWE login under that tier must pay per token.
             charged_tier = None
             if costs.credits_charged > 0:
-                charged_tier = await self._get_user_tier(user_id)
+                if self._is_x402_prepaid(session_id):
+                    charged_tier = "x402"
+                else:
+                    charged_tier = await self._get_user_tier(user_id)
+                    if charged_tier == "x402":
+                        charged_tier = "credits"
                 if charged_tier not in ("x402", "admin") \
                         and getattr(self, "balance", None) is not None:
                     await self._deduct_from_balance(record)
@@ -429,6 +478,35 @@ class LLMUsageTracker:
             user_cost_usd=user_cost_usd
         )
 
+    @staticmethod
+    def _apply_billed_cost(costs: CostBreakdown,
+                           billed_cost_usd: Optional[float]) -> CostBreakdown:
+        """Replace the ESTIMATED api cost with what the provider says it billed.
+
+        F23. The credit arithmetic is rerun off the real figure — charging a
+        user a markup on a number the provider contradicted would be the same
+        bug in the other direction. Returns ``costs`` unchanged when no usable
+        billed figure is offered: None means "not reported", which must never
+        be read as $0.
+        """
+        if billed_cost_usd is None or isinstance(billed_cost_usd, bool):
+            return costs
+        try:
+            api_cost_usd = float(billed_cost_usd)
+        except (TypeError, ValueError):
+            return costs
+        if api_cost_usd != api_cost_usd or api_cost_usd < 0:   # NaN / negative
+            return costs
+        credits_raw = (api_cost_usd / LLMUsageTracker.CREDIT_VALUE_USD) * costs.markup_multiplier
+        credits_charged = max(LLMUsageTracker.MIN_CREDIT_CHARGE, math.ceil(credits_raw))
+        return CostBreakdown(
+            api_cost_usd=api_cost_usd,
+            markup_multiplier=costs.markup_multiplier,
+            credits_raw=credits_raw,
+            credits_charged=credits_charged,
+            user_cost_usd=credits_charged * LLMUsageTracker.CREDIT_VALUE_USD,
+        )
+
     def _generate_request_id(self) -> str:
         """Generate unique request ID for deduplication."""
         return uuid.uuid4().hex
@@ -471,6 +549,12 @@ class LLMUsageTracker:
             # Full cost breakdown for transparency
             "credits_raw": record.costs.credits_raw,
             "user_cost_usd": record.costs.user_cost_usd,
+            # F17: the cache-WRITE split, beside the reads already in the column
+            # set. A write costs MORE than an uncached token, so a cache_ratio
+            # that cannot see it reads identically whether the cache paid for
+            # itself or not.
+            "cache_creation_tokens": record.tokens.cache_creation_tokens,
+            "cache_creation_1h_tokens": getattr(record.tokens, "cache_creation_1h_tokens", 0),
             **(record.metadata or {})
         }
 
@@ -478,9 +562,10 @@ class LLMUsageTracker:
             INSERT OR IGNORE INTO usage_records (
                 user_id, session_id, resource_type,
                 cost, input_tokens, output_tokens, cached_tokens,
+                cache_creation_tokens,
                 api_cost_usd, markup_multiplier,
                 request_id, metadata, timestamp
-            ) VALUES (?, ?, 'llm_call', ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ) VALUES (?, ?, 'llm_call', ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
         """
         insert_params = (
             record.user_id,
@@ -489,6 +574,7 @@ class LLMUsageTracker:
             record.tokens.prompt_tokens,  # LLM module uses prompt_tokens
             record.tokens.completion_tokens,  # LLM module uses completion_tokens
             record.tokens.cached_tokens,
+            record.tokens.cache_creation_tokens,
             record.costs.api_cost_usd,
             record.costs.markup_multiplier,
             record.request_id,
@@ -714,6 +800,7 @@ class LLMUsageTracker:
                 SUM(input_tokens) as total_input,
                 SUM(output_tokens) as total_output,
                 SUM(cached_tokens) as total_cached,
+                SUM(cache_creation_tokens) as total_cache_write,
                 SUM(api_cost_usd) as total_api_cost,
                 COUNT(*) as call_count
             FROM usage_records
@@ -745,7 +832,9 @@ class LLMUsageTracker:
                 "tokens": {
                     "input": record['total_input'] or 0,
                     "output": record['total_output'] or 0,
-                    "cached": record['total_cached'] or 0
+                    "cached": record['total_cached'] or 0,
+                    # F17: cache WRITES, the other half of the cache story.
+                    "cache_write": record['total_cache_write'] or 0
                 },
                 "credits_charged": record['total_credits'],
                 "user_cost_usd": user_cost,

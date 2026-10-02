@@ -96,6 +96,9 @@ def h_reject(ctx) -> None:
 
     pending_set = _union()
     match = next((it for it in pending_set.items if str(it["id"]) == target), None)
+    if match is None:  # a tapped `/approve_p_<hex>` names the item by its short alias
+        from core.self_evolution import resolve_pending_alias
+        match = resolve_pending_alias(target, list(pending_set.items))
     if match is None:
         degraded = pending_set.degraded_line()
         tail = f"\n{degraded}" if degraded else ""

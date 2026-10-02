@@ -5,7 +5,7 @@ license: MIT
 metadata:
   polyrob-priority: '1'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":["x_browser_x_signup_start","x_browser_x_login_check","x402_wallet_status","twitter_whoami","agent_status"],"keywords":["set yourself up","set up yourself","initialise yourself","initialize yourself","self deploy","self-deploy","bootstrap","onboarding","are you ready","readiness","fresh instance","new instance","first run","provision your","create your x account","your own email","fund you","funding address"],"task_patterns":["(set|setting) (your|its)?self up","(initiali[sz]e|bootstrap|provision) (yourself|the (agent|instance))","(are you|is (it|everything)) (ready|configured|set up)","readiness (check|table|report)","what (do you|does it) (need|still need) (from me|to (start|run|operate))"],"tool_ids":[]}'
+  polyrob-triggers: '{"action_names":[],"keywords":["set yourself up","set up yourself","initialise yourself","initialize yourself","self deploy","self-deploy","bootstrap","onboarding","are you ready","readiness","fresh instance","new instance","first run","provision your","create your x account","your own email","fund you","funding address"],"task_patterns":["(set|setting) (your|its)?self up","(initiali[sz]e|bootstrap|provision) (yourself|the (agent|instance))","(are you|is (it|everything)) (ready|configured|set up)","readiness (check|table|report)","what (do you|does it) (need|still need) (from me|to (start|run|operate))"],"tool_ids":[]}'
   polyrob-version: '1'
 ---
 # Self-deploy — bring yourself online
@@ -21,9 +21,9 @@ Three rules for the whole procedure:
    the owner for something a tool can tell you, and never ask twice for a
    thing you were already given.
 2. **Provision before you ask.** If a lever exists that lets you create the
-   thing yourself (an inbox, an X account, a goal, a cron job), pull it. Ask
-   only for what needs a human: a secret you cannot mint, money, a CAPTCHA,
-   an env flag (flags are frozen at process start and the env files are
+   thing yourself (an inbox, a goal, a cron job), pull it. An X account is
+   NOT such a lever — see Step 2. Ask only for what needs a human: a secret
+   you cannot mint, money, a CAPTCHA (you never solve one), an env flag (flags are frozen at process start and the env files are
    hard-denied to you — an env change is ALWAYS an owner edit + restart).
 3. **Report facts, not hopes.** Every line of the readiness table is one of
    `ready` / `missing → <exact remedy>` / `unverified (<reason>)`. A check
@@ -36,11 +36,11 @@ Run these and keep the raw lines; they are the evidence for the table.
 | What | Verb | What to read |
 |---|---|---|
 | Config + loops + wallet balance | `agent_status` | `posture:` (mode/local/compute), `autonomy_loops:`, `wallet:`, `wallet_addresses:` |
-| Identity (email, X API, avatar, ERC-8004) | the `identity` lines of `agent_status` (or ask the owner for `polyrob doctor`) | `email:` ready or `none → remedy`; `x:` `api configured @handle` / `PARTIAL — missing …` / `no api keys` |
+| Identity (email, X API, avatar, ERC-8004) | the `identity` lines of `agent_status` (or ask the owner for his `/status` on a chat seat) | `email:` ready or `none → remedy`; `x:` `api configured @handle` / `PARTIAL — missing …` / `no api keys` |
 | Which tools you actually hold | the `<tool-catalog>` in your context | `loaded` / `loadable` / `gated:<reason> + remedy`. A `gated` money tool is an OWNER decision — never a thing to work around |
 | Wallet addresses, both families | `x402_wallet_status` | the EVM address and the SEPARATE Solana address. Read them from the tool; never from memory |
 | On-chain balances per chain | `defi_data.portfolio(chain=…)` for each money chain you will use | the `gas (…)` row: a number, `UNKNOWN` (read failed) or `EMPTY` (a real zero) — three different facts |
-| X browser session | `x_login_check` (if `x_browser` is loaded) | logged in as @handle, or no session |
+| X browser session | `x_login_check` (only if `x_browser` is loaded — the owner chose that rail) | logged in as @handle, or no session |
 | X API rail | `twitter_whoami` (if `twitter` is loaded) | the authenticated handle, or "missing credentials" |
 | Standing work | `goal_list` / `cronjob_list` (if loaded) | an EMPTY board on a fresh instance is expected, not a stall |
 
@@ -62,14 +62,21 @@ signup, and the owner needs it to know who is writing.
 
 - `x: api configured @handle` → done. The API rail is the one that can post
   **polls**, search, and read mentions; prefer it for everything.
-- X API keys absent, `x_browser` loadable and you have an email → call
-  `x_signup_start`. It is ALWAYS owner-queued (creating an identity is the
-  owner's decision) — the owner approves once. It WILL pause on a CAPTCHA
-  or a phone check; that pause is the design, not a failure. Report exactly
-  what the result says: the live @handle, whether the handle you requested
-  was applied, and whether the automation disclosure reached the bio. If it
-  says the disclosure was NOT applied, put that on the owner's list —
-  X's automation rules want it on the profile before you post.
+- An API login that has died (a 401, an expired OAuth 2.0 login) → the
+  owner's remedy is `/x login`, a one-tap OAuth re-login link. Put that on
+  the owner's list; do not reach for the browser.
+- No X account and no API keys → this is an OWNER decision, not a default
+  step. ⚠️ X suspends accounts it catches under browser automation, so the
+  browser rail (`x_browser`, including `x_signup_start`) runs only when the
+  owner explicitly chose it. Put "X account: none — create one yourself, or
+  tell me to register it through the browser rail" on the owner's list.
+  Only after the owner tells you to, call `x_signup_start`: it is ALWAYS
+  owner-queued, and it pauses on a CAPTCHA or a phone check — the OWNER
+  clears that; you never solve a CAPTCHA. Report exactly what the result
+  says: the live @handle, whether the handle you requested was applied, and
+  whether the automation disclosure reached the bio. If it says the
+  disclosure was NOT applied, put that on the owner's list — X's automation
+  rules want it on the profile before you post.
 - After the account exists, polls and search still need API keys. Tell the
   owner in one paragraph: sign in to developer.x.com AS the agent's account,
   create a project + app with **Read and write** user permissions, generate
@@ -80,21 +87,35 @@ signup, and the owner needs it to know who is writing.
 
 **Standing work.** Only if `goals`/`cron` show as loaded AND the owner has
 told you what your mission is. Create the objective(s) with `goal_create`
-(an objective/goal you write yourself can never carry a money tool — that is
-by design; the owner grants money tools with `polyrob goals create --tools`
-or `/trade`). Arm any monitor loop with `cronjob_schedule`. Never seed work
+(whether a goal you write yourself may carry a money tool is the owner's
+money regime; the owner grants money tools with `/trade`, or
+`/cron add … tools=defi_trade`). Arm any monitor loop with
+`cronjob_schedule`. Never seed work
 the owner did not name.
 
 **Identity docs.** If the owner gives you durable facts about who you are or
 how they want you to operate, write them through `owner_doc_manage` /
-`self_context_manage` / `preferences(contract_propose=…)` — never as loose
-files. They land in `.pending/` for the owner to promote; say so.
+`self_context_manage` / `preferences(operation="contract_propose", text=…)`
+— never as loose files (`text` is the FULL owner doc: keep every existing
+line). On the owner's own turn, with `OWNER_RULES_IMMEDIATE` on (the
+default), the write applies immediately; on a forged or autonomous turn it
+is queued in `/pending`. Report what the result says — applied or queued.
 
 ## Step 3 — Ask the owner, once, for exactly what is missing
 
-Bundle every human-only item into ONE message. Per item: what is missing,
-why you need it, the exact key name or command, and what you will do the
-moment it lands. Typical items:
+Raise ONE `owner_ask` for all of it (a durable ask the owner answers with
+`/fulfill` or in chat; in an autonomous run, never a question in a message —
+the run cannot wait for a reply). Its shape is fixed by the tool:
+
+- `question` — ONE question, at most 600 characters, answerable in a word or
+  two ("Can you add the missing keys and fund the wallet? A) today B) later").
+- `why` — the list (at most 1200 characters): per item, what is missing, why
+  you need it, the exact key name or owner verb, and what you will do the
+  moment it lands.
+
+In a live chat with the owner, also send the same list once with
+`send_message`. Never name a `polyrob …` shell command on a chat seat.
+Typical items:
 
 - **Model key** — if `agent_status` shows no usable provider you would not be
   running; skip. If a cheaper aux model is wanted, name the flag
@@ -129,7 +150,7 @@ READINESS — <instance> @ <date>
 model        ready      <provider/model from agent_status>
 wallet       ready      evm 0x…  solana …   (base $X gas Y · robinhood gas Z · solana N SOL)
 email        ready      <address>
-x            ready      api @handle, writes ON · browser session @handle
+x            ready      api @handle, writes ON · browser rail: off (owner's choice)
 autonomy     ready      mode=autonomous posture=full goals=on cron=on
 trading      ready      defi_trade/solana_swap/launchpad loaded; ceiling $A/tx, $B/day
 standing     ready      objective "<title>" · cron "<task>" every Nh

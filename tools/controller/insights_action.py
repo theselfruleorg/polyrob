@@ -40,13 +40,21 @@ def register_insights_action(controller) -> None:
 			return ActionResult(extracted_content="No insights available.", include_in_memory=False)
 		rate = round(summary["reuse_rate"] * 100)
 		top = ", ".join(f"{t['skill_id']}({t['loads']})" for t in summary["top"][:5]) or "—"
+		# 033: your own outward acts over the last 7 days, by effect class.
+		try:
+			import time as _time
+			from core.effects import outward_counts, outward_line
+			outward = outward_line(outward_counts(str(user_id or ""), _time.time() - 7 * 86400))
+		except Exception:
+			outward = "unavailable (event log unreadable)"
 		return ActionResult(
 			extracted_content=(
 				f"## Skill insights\n"
 				f"- authored skills: {summary['authored_total']}\n"
 				f"- reused at least once: {summary['authored_reused']} ({rate}%)\n"
 				f"- by author: {summary['by_author']}\n"
-				f"- most-used: {top}"
+				f"- most-used: {top}\n"
+				f"- outward acts (7d): {outward}"
 			),
 			include_in_memory=True,
 		)

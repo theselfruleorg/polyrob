@@ -7,7 +7,8 @@ allowed and the denied principal:
    ``webgate.local_owner_id()`` — the INSTANCE OWNER's health, goals, cron and
    money — and served it to any authenticated tenant.
 2. ``POST /api/pfp/{generate,randomize,keep}`` re-rolled and one-way-LOCKED the
-   instance avatar with no owner gate at all.
+   instance avatar with no owner gate at all. (Those routes are deleted with the
+   generator; the console only READS the avatar slot now — ``test_avatar_routes``.)
 3. ``GET /api/webgate/{pause,halt}`` read the instance pause record with no
    ``Request`` — so a multitenant tenant with no identity still got an answer.
 4. ``GET /api/session/{id}/debug`` dumped another tenant's session tree (paths,
@@ -71,44 +72,6 @@ def test_doctor_denies_a_multitenant_caller_with_no_identity(monkeypatch, tmp_pa
     assert TestClient(app).get("/api/webgate/doctor").status_code == 403
     monkeypatch.delenv("POLYROB_POSTURE", raising=False)
     importlib.reload(wg)
-
-
-# --- 2. pfp setup ---------------------------------------------------------- #
-
-@pytest.fixture()
-def _pfp_app(monkeypatch, tmp_path):
-    import webview.pages as pages
-    monkeypatch.setattr(pages, "_pfp_data_dir", lambda: str(tmp_path))
-    app = FastAPI()
-    app.include_router(pages.router)
-    return TestClient(app)
-
-
-def test_pfp_setup_refuses_a_multitenant_tenant(monkeypatch, _pfp_app):
-    """The avatar is the INSTANCE's identity and `keep` is one-way — a tenant
-    must never be able to re-roll or lock it."""
-    monkeypatch.setenv("POLYROB_POSTURE", "multitenant")
-    import webview.webgate as wg
-    importlib.reload(wg)
-    try:
-        for path in ("/api/pfp/generate", "/api/pfp/randomize", "/api/pfp/keep"):
-            assert _pfp_app.post(path).status_code == 403, path
-    finally:
-        monkeypatch.delenv("POLYROB_POSTURE", raising=False)
-        importlib.reload(wg)
-
-
-def test_pfp_setup_runs_on_the_owner_console(monkeypatch, _pfp_app):
-    monkeypatch.setenv("POLYROB_POSTURE", "local")
-    import webview.webgate as wg
-    importlib.reload(wg)
-    try:
-        resp = _pfp_app.post("/api/pfp/generate")
-        assert resp.status_code == 200
-        assert resp.json()["ok"] in (True, False)  # ran; the store decides
-    finally:
-        monkeypatch.delenv("POLYROB_POSTURE", raising=False)
-        importlib.reload(wg)
 
 
 # --- 3. pause / halt reads -------------------------------------------------- #

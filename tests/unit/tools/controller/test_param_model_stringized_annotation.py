@@ -43,7 +43,7 @@ async def test_create_dispatches_model_not_kwargs(tmp_path):
     reg = Registry()
     tool = _goal_tool(tmp_path)
     _register(reg, tool, "goal_create", GoalCreateAction)
-    ctx = ActionExecutionContext(session_id="s", user_id="u")
+    ctx = ActionExecutionContext(session_id="s", user_id="u", role="orchestrator")
 
     result = await reg.execute_action(
         "goal_create", {"title": "Test goal alpha", "body": "verify"}, execution_context=ctx
@@ -59,7 +59,7 @@ async def test_list_dispatches_model_not_kwargs(tmp_path):
     tool = _goal_tool(tmp_path)
     _register(reg, tool, "goal_create", GoalCreateAction)
     _register(reg, tool, "goal_list", GoalListAction)
-    ctx = ActionExecutionContext(session_id="s", user_id="u")
+    ctx = ActionExecutionContext(session_id="s", user_id="u", role="orchestrator")
 
     await reg.execute_action("goal_create", {"title": "alpha goal", "body": ""}, execution_context=ctx)
     result = await reg.execute_action("goal_list", {}, execution_context=ctx)

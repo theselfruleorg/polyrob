@@ -15,7 +15,7 @@ def _enable_full(monkeypatch):
 CASES = [
     # (import path, callable, env var)
     ("agents.task.constants", "message_autonomous_allowlisted", "MESSAGE_AUTONOMOUS_ALLOWLISTED"),
-    ("tools.twitter_tool", "twitter_write_enabled", "TWITTER_ENABLED"),
+    ("polyrob_x.twitter_tool", "twitter_write_enabled", "TWITTER_ENABLED"),  # X pack
     ("core.surfaces.config", "SurfaceConfig.email_surface_enabled", "EMAIL_SURFACE_ENABLED"),
     ("core.surfaces.config", "SurfaceConfig.group_chat_enabled", "GROUP_CHAT_ENABLED"),
     ("core.surfaces.config", "SurfaceConfig.correspondent_access_enabled", "CORRESPONDENT_ACCESS_ENABLED"),
@@ -26,7 +26,8 @@ CASES = [
 
 def _resolve(path, name):
     import importlib
-    mod = importlib.import_module(path)
+    # 067 P3b: a pack's module (polyrob_x) is skipped when the pack is absent.
+    mod = pytest.importorskip(path) if path.startswith("polyrob_") else importlib.import_module(path)
     obj = mod
     for part in name.split("."):
         obj = getattr(obj, part)

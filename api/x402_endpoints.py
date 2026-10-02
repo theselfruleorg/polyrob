@@ -40,6 +40,7 @@ router = APIRouter(prefix="/x402", tags=["x402-payments"])
 _PUBLIC_INVOICE_RATE_LIMITER = SlidingWindowLimiter(
     max_calls=int(os.environ.get("X402_PUBLIC_RATE_PER_WINDOW", "20")),
     window_seconds=int(os.environ.get("X402_PUBLIC_RATE_WINDOW_SEC", "60")),
+    name="x402_public",  # 045 lane 4: a trip records one rate_limited row
 )
 
 

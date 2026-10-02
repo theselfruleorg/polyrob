@@ -43,19 +43,40 @@ def _mentions_bot(d: dict, bot_user_id: str) -> bool:
     return f"<@{bot_user_id}>" in content or f"<@!{bot_user_id}>" in content
 
 
+#: Hosts a Discord attachment URL may point at (064 F3).
+ATTACHMENT_HOSTS = ("cdn.discordapp.com", "media.discordapp.net")
+
+
+def parse_attachments(d: dict) -> list:
+    """MESSAGE_CREATE ``attachments`` → ``Media`` (064 F3). The URL is kept as
+    ``url``; the bytes are fetched only if the tier absorbs them."""
+    from core.surfaces.media import Media, kind_for_mime
+    out = []
+    for a in d.get("attachments") or []:
+        if not isinstance(a, dict) or not a.get("url"):
+            continue
+        mime = a.get("content_type") or None
+        out.append(Media(kind=kind_for_mime(mime), mime=mime, url=str(a["url"]),
+                         filename=a.get("filename") or None,
+                         ref=str(a.get("id") or "") or None))
+    return out
+
+
 def parse_message_create(d: dict, bot_user_id: str,
                          user_directory: Any = None) -> Optional[InboundMessage]:
     """MESSAGE_CREATE payload → InboundMessage, or None to ignore.
 
-    Ignores: own messages, other bots, empty content. ``guild_id`` present →
-    chat_type "group" (mention-gated by the dispatcher); else DM.
+    Ignores: own messages, other bots, a message with neither content nor an
+    attachment (064 F3: a photo with no caption is a message). ``guild_id``
+    present → chat_type "group" (mention-gated by the dispatcher); else DM.
     """
     author = d.get("author") or {}
     author_id = str(author.get("id") or "")
     if not author_id or author_id == str(bot_user_id) or author.get("bot"):
         return None
     text = str(d.get("content") or "").strip()
-    if not text:
+    media = parse_attachments(d)
+    if not text and not media:
         return None
 
     channel_id = str(d.get("channel_id") or "")
@@ -86,6 +107,7 @@ def parse_message_create(d: dict, bot_user_id: str,
         reply_to=str((d.get("message_reference") or {}).get("message_id") or "")
         or None,
         raw=d,
+        media=media,
         mentions_bot=_mentions_bot(d, bot_user_id),
     )
 

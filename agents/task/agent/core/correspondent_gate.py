@@ -42,180 +42,31 @@ logger = logging.getLogger(__name__)
 # pre-hook receives). Includes standalone actions (registered directly, with no
 # owning container tool_id) plus enumerated verbs kept for defense-in-depth even
 # when tool-id resolution is unavailable. Crypto READ verbs are deliberately absent.
+#
+# 067 P1: a DERIVED view of the per-action policy table (core/verb_policy.py;
+# the rows and their per-verb rationale are in core/verb_policy_rows.py) — block
+# a verb there with ``correspondent_blocked``. The legacy tool_id tokens
+# (``code_execution``, ``hyperliquid``, ...) and the bare venue verbs
+# (``place_limit_order``, ...) are RESERVED rows, kept so ``is_high_impact(tool_id)``
+# stays truthy and the substring layer below keeps its anchors. The namespaced
+# venue trade verbs (``hyperliquid_place_limit_order``, ...) have their own rows,
+# so the name layer alone blocks every emitted money write and the substring
+# layer is redundant for every emitted verb (pinned by
+# tests/unit/core/test_action_name_parity.py); it stays as defense-in-depth.
 # ---------------------------------------------------------------------------
-_HIGH_IMPACT_NAMES = frozenset({
-    # Delegation actions (registered directly, not container tools).
-    "delegate_task", "subtask", "parallel_subtasks",
-    # Identity / self-evolution actions (registered directly).
-    "skill_manage", "self_context_manage",
-    # owner-UX P2 T2: agent-callable config/contract action (registered
-    # directly, no owning tool_id) — a correspondent-tainted session must not
-    # read OR change tenant preferences / propose operating-contract rules.
-    "preferences",
-    # Gated outbound message-to-target action (registered directly, no owning
-    # tool_id) — owner/allowlist-checked send to telegram/email/whatsapp.
-    "message",
-    # Own-holdings read (proposal 023 T1). defi_data is otherwise a read tool
-    # whose impersonal verbs stay available while tainted, but "what and how
-    # much do I hold" is exactly the reconnaissance an attacker wants before
-    # attempting a drain. NAMESPACED runtime name — container-tool actions
-    # register as {tool_id}_{action}, so a bare "portfolio" would never match
-    # (the live x402_request bug, audit 2026-08-07 P0-2).
-    "defi_data_portfolio",
-    # 2026-09-15: the non-fungible twin of the holdings read. "What collectibles
-    # do you own" is the SAME pre-drain reconnaissance, and a collection name is
-    # often more identifying than a balance. NAMESPACED runtime name -- a bare
-    # "nft_holdings" would match nothing (the live x402_request bug, P0-2).
-    "defi_data_nft_holdings",
-    # The non-fungible WRITE verbs. `defi_trade` is already a high_impact
-    # tool_id, so the wired hook would block these by tool-id resolution — but
-    # that resolution DEGRADES to the name-only path when the owning tool
-    # cannot be resolved, and `tests/unit/core/test_money_verb_registration.py`
-    # asserts the name-only predicate for exactly that reason. Enumerated, so
-    # the block does not depend on a resolver succeeding.
-    "defi_trade_nft_transfer",
-    "defi_trade_nft_revoke_approval",
-    # 046: an injected third party must never be able to publish -- or rewrite
-    # -- the agent's permanent on-chain identity.
-    "defi_trade_register_agent",
-    "defi_trade_set_agent_uri",
-    # 023 T3: the on-chain money verb. tx_guard refuses a tainted turn anyway,
-    # but the enumerated name is the layer that survives a tool-id resolver
-    # fault — and this is an irreversible, self-custodial send.
-    "defi_trade_transfer",
-    # 023 T4 (2026-08-14 review fix): the swap/allowance verbs shipped with
-    # only tool-id resolution between a tainted session and a swap — the exact
-    # single point of failure these name entries exist to remove. Same
-    # rationale as transfer: irreversible, self-custodial value movement
-    # (an approval is a standing claim whose drain lands in a later tx).
-    "defi_trade_swap", "defi_trade_solana_swap", "defi_trade_bridge",
-    "defi_trade_approve_token", "defi_trade_revoke_approval",
-    # 2026-09-13: wrap is 1:1 into the same wallet, so it moves no value OUT --
-    # but it is a signed native-value send, and a tainted session must not be
-    # able to spend the wallet's gas or reshape its holdings between an owner's
-    # turns. Enumerated by name for the same reason as its siblings: so a tool-id
-    # resolver fault is not the only thing standing in the way.
-    "defi_trade_wrap",
-    "defi_trade_unwrap",
-    # 042: deployment and the generic contract call. `call` in particular is the
-    # widest money verb in the tree -- it executes calldata supplied at the call
-    # site -- so a session holding a third party's text is exactly the session
-    # that must never reach it.
-    "defi_trade_deploy_token", "defi_trade_deploy_contract", "defi_trade_call",
-    "defi_data_lp_positions", "defi_trade_lp_add", "defi_trade_lp_remove", "defi_trade_lp_collect",
-    "defi_trade_solana_deploy_token",
-    # 042: the launchpad writes. Enumerated by NAME as well as by tool-id
-    # membership, for the same reason as their siblings: so a tool-id resolver
-    # fault is not the only thing standing in the way.
-    "launchpad_launch", "launchpad_buy", "launchpad_sell", "launchpad_claim",
-    # 042: a tainted session must never arm a wallet inside a web page.
-    "dapp_browser_dapp_connect",
-    # I-6: read-only runtime introspection (registered directly, no owning
-    # tool_id) — reveals wallet balance + tenant ledger, the same money data the
-    # gate deliberately blocks via x402_pay/x402_invoice tool-id membership.
-    # Info-disclosure only, but a correspondent-tainted turn must not read it.
-    "agent_status",
-    # 031: the owner pause record. A tainted turn must not RESUME autonomy (the
-    # action refuses resume on its own too); pausing is the safe direction, but
-    # a third party steering the pause state at all is not the owner driving.
-    "autonomy_control",
-    # Task 13 (Phase 3 R3): read-only tenant usage rollup + suggested-invoice
-    # draft (registered directly, no owning tool_id). Same info-disclosure
-    # reasoning as agent_status — a tainted session must not read cost data
-    # or see an invoice-draft suggestion (a social-engineering target: a
-    # forged correspondent could otherwise fish for "how much would you
-    # invoice me").
-    "usage_summary",
-    # ── Directly-registered actions (no owning tool_id, so Layer 2 can NEVER cover
-    # them — name-matched or nothing). Each discloses owner/tenant data to a session
-    # whose latest input is attacker-authored; with the D1 reply exemption on, what
-    # they return can be echoed straight back to the tainting party.
-    #
-    # owner.md: the owner's preferences, timezone, projects — the richest PII target
-    # in the process, plus a write path. Its own forged-turn guard keys on
-    # is_sub_agent/leaf/turn_kind, none of which correspondent injection sets, so this
-    # entry is the ONLY thing in front of it.
-    "owner_doc_manage",
-    # Who we have talked to and what was said, across sessions. Gated on
-    # CORRESPONDENT_ACCESS_ENABLED — the very flag that makes taint a concept — so it
-    # is live in every deployment where this gate matters at all.
-    "contact_history",
-    # Cross-session recall: past sessions' content, and the tenant run ledger with
-    # per-run spend + task text (the same money-adjacent data agent_status and
-    # usage_summary are already gated for).
-    "session_search", "memory_search", "recent_activity",
-    # 2026-09-15 (owner rail "fix tg chat reading"): read-only view of the group
-    # ledger for allowlisted rooms. The owner's own room lines are in there —
-    # the same disclosure class as contact_history, not a live-history fetch.
-    "room_read",
-    # Materializes a tool into the session mid-turn. USING the loaded tool stays
-    # gated, but a tainted turn must not widen the surface that the next (untainted)
-    # turn inherits — the owner clears taint without being told the toolset grew.
-    "load_tool",
-    # Aspirational coding/self-evolution action names (no tool yet; harmless tokens).
-    "self_modify", "mcp_install",
-    # WS-5: self_env self-maintenance verbs (posture 2). Owner-only via the posture
-    # gate already, but a tainted session must never reach them either.
-    "self_env_install_dep", "self_env_patch_source", "self_env_restart_service",
-    "self_env_git_pull", "self_env_read_source", "shell_run",
-    # WS-2/3: process job-manager verbs — enumerated by NAME (parity with shell_run)
-    # so a tool-id-resolver fault can't let a tainted session kill/inspect the owner's
-    # background shell jobs.
-    "process_kill", "process_log", "process_poll", "process_list",
-    # P1-4: code-exec verb enumerated by NAME (parity with shell_run) so a resolver
-    # fault can't open arbitrary code execution to a tainted session (the code_execution
-    # tool_id below only helps when resolution succeeds).
-    # ⚠️ NAMESPACED — the code_execution tool's method is `run_code`, which registers
-    # as `code_execution_run_code`; the bare name matched nothing, so this "parity"
-    # layer defended nothing and tool-id resolution was the single point of failure.
-    "code_execution_run_code",
-    # hf_deploy verbs enumerated by NAME (parity with run_code/shell_run) so a
-    # resolver fault can't let a tainted session publish/delete a PUBLIC HF Space
-    # (the hf_deploy tool_id below only helps when resolution succeeds). Namespaced.
-    "hf_deploy_deploy", "hf_deploy_undeploy",
-    # P1-4: the agent money verb — x402_invoice tool, verb x402_request — mints a
-    # payment request. The canonical forged-email social-engineering target; must be
-    # unreachable while correspondent-tainted (x402_fetch/x402_pay already are).
-    # Namespaced: the runtime name is `x402_invoice_x402_request`.
-    "x402_invoice_x402_request",
-    # The x402_invoice tool's READ verbs — enumerated by NAME (parity with the request
-    # verb / agent_status / usage_summary) so a resolver fault can't let a tainted
-    # session read the full treasury/runtime ledger (accounting) or the invoice list
-    # incl. payer contacts (x402_invoices) — the same "fish for what you'd invoice me"
-    # disclosure the gate blocks by tool-id when resolution succeeds. Namespaced.
-    "x402_invoice_accounting", "x402_invoice_x402_invoices",
-    # P1-4: outbound-egress verbs whose query params are an exfil channel (parity with
-    # web_fetch/browser, which are already blocked). anysite/perplexity reach the
-    # outside world with attacker-influenced arguments.
-    "anysite_api", "perplexity_search",
-    # P1-4: curated-memory write persists into FUTURE sessions' prompts — a durable
-    # injection-persistence channel if written while tainted. Gate the whole action
-    # (read too) — fail-closed; the owner clears taint by replying.
-    "memory",
-    # Crypto trade verbs (hyperliquid + polymarket share these). Reads (get_*) are
-    # intentionally excluded so a tainted session can still fetch prices/history.
-    "place_limit_order", "place_market_order", "cancel_order", "cancel_all_orders",
-    "update_leverage", "approve_agent", "revoke_agent",
-    # git/github write verbs — also covered by tool-id resolution, kept here so a
-    # resolver fault can't open the money/ship-code path.
-    "git_push", "github_open_pr", "github_merge_pr", "github_pr_comment",
-    "github_issue_create",
-    # The auto-paying x402 action (tool_id x402_pay, method x402_fetch) — runtime
-    # name is namespaced. (The "x402_pay_" prefix in _HIGH_IMPACT_PREFIXES also
-    # catches it, but an entry should name the thing it actually gates.)
-    "x402_pay_x402_fetch",
-    # Legacy tool_id tokens kept so is_high_impact(tool_id) stays truthy for callers/
-    # tests that probe by tool_id. Real per-verb coverage of these tools comes from
-    # HIGH_IMPACT_TOOL_IDS resolution below.
-    "code_execution", "coding", "cronjob", "goal", "x402_pay",
-    "hyperliquid", "polymarket", "email", "twitter", "browser", "web_fetch",
-    "git", "github", "process", "tool_manage", "mcp",
-    "x402_invoice", "anysite", "perplexity",  # P1-4 legacy tool_id tokens
-    "hf_deploy",  # legacy tool_id token (deploy/undeploy — see HIGH_IMPACT_TOOL_IDS)
-})
+from core.lazy_views import lazy_module_getattr, view
+from core.verb_policy import ids_where as _verb_ids_where
 
-# Back-compat public name (tests / other callers import HIGH_IMPACT_TOOLS).
-HIGH_IMPACT_TOOLS = _HIGH_IMPACT_NAMES
+# 067 P4 prerequisite: LAZY (``core/lazy_views.py``), built on first read after the
+# pack loader's phase 1 (the module ``__getattr__`` at the end of this file).
+def _high_impact_names():
+    return _verb_ids_where(correspondent_blocked=True)
+
+
+# Back-compat public name HIGH_IMPACT_TOOLS (tests / other callers import it) is the
+# SAME object as _HIGH_IMPACT_NAMES.
+def _high_impact_tools():
+    return view(__name__, "_HIGH_IMPACT_NAMES")
 
 # ---------------------------------------------------------------------------
 # Layer 2 — tool_ids whose EVERY action is high-impact, resolved at hook time from
@@ -231,7 +82,9 @@ HIGH_IMPACT_TOOLS = _HIGH_IMPACT_NAMES
 # now explicit in the table (`readable_while_tainted`).
 from core.tool_capabilities import ids_with as _ids_with
 
-HIGH_IMPACT_TOOL_IDS = _ids_with("high_impact")
+# 067 P4 prerequisite: LAZY, like _HIGH_IMPACT_NAMES (the ``__getattr__`` at the end).
+def _high_impact_tool_ids():
+    return _ids_with("high_impact")
 
 # Substrings that mark a high-impact action even if the exact name isn't enumerated
 # (e.g. provider-prefixed MCP/web tools that reach the outside world). NOTE: do NOT add
@@ -269,7 +122,7 @@ def is_high_impact(action_name: Optional[str]) -> bool:
     if not action_name:
         return False
     name = str(action_name).strip().lower()
-    if name in _HIGH_IMPACT_NAMES:
+    if name in view(__name__, "_HIGH_IMPACT_NAMES"):
         return True
     if any(sub in name for sub in _HIGH_IMPACT_VERB_SUBSTRINGS):
         return True
@@ -286,7 +139,7 @@ def is_high_impact_call(action_name: Optional[str], tool_id: Optional[str] = Non
     """
     if is_high_impact(action_name):
         return True
-    if tool_id and str(tool_id).strip().lower() in HIGH_IMPACT_TOOL_IDS:
+    if tool_id and str(tool_id).strip().lower() in view(__name__, "HIGH_IMPACT_TOOL_IDS"):
         return True
     return False
 
@@ -461,3 +314,11 @@ def make_correspondent_gate_hook(
                     f"high-impact action.")
         return None
     return _hook
+
+
+# 067 P4 prerequisite: the name layer, built on first read.
+__getattr__ = lazy_module_getattr(__name__, {
+    "_HIGH_IMPACT_NAMES": _high_impact_names,
+    "HIGH_IMPACT_TOOLS": _high_impact_tools,
+    "HIGH_IMPACT_TOOL_IDS": _high_impact_tool_ids,
+})

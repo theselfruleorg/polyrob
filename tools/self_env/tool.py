@@ -134,6 +134,10 @@ class SelfEnvTool(BaseTool):
                           f"(core/security/): {rel_path}")
         if "wallet" in parts and "core" in parts:
             return None, f"refusing to patch wallet authority source: {rel_path}"
+        # 067 P1b: the refusals moved from core/wallet/ to the money kernel;
+        # the guard follows them, or the move would open a self-patch bypass.
+        if "money" in parts and "core" in parts:
+            return None, f"refusing to patch money kernel source: {rel_path}"
         if "llm_auth" in parts:
             return None, ("refusing to patch the credential-layer source "
                           f"(core/llm_auth/): {rel_path}")

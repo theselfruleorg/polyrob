@@ -19,8 +19,8 @@ build leaves the agent completely unchanged):
 - ``message_manager.llm``             — the compaction/aux LLM (``compactor.py`` reads
                                         ``self.llm``) — otherwise post-swap compaction
                                         would still run/bill on the OLD model
-- ``message_manager`` token budgets + ``compaction_manager`` — re-derived for the new
-                                        context window via ``recalibrate_for_model``
+- ``message_manager`` token budgets — re-derived for the new context window via
+                                        ``recalibrate_for_model``
 - the pinned runtime-identity foundation line — refreshed so the agent reports the
                                         NEW model on the next turn
 - native tools — reconciled for the new provider (best-effort, AFTER the SSOT block)

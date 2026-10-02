@@ -1,0 +1,137 @@
+# The data half of the X pack (067 P3b): read by core.packs.manifest WITHOUT
+# importing this package, registered in the loader's phase 1.
+id = "x"
+version = "1.2.0"
+summary = "X (Twitter): the API tool, the browser rail, the DM surface, cron post delivery"
+pack_api = 1
+requires_core = "==1.2.*"
+requires_packs = []
+tier = "first-party"
+# 067 (one install): the core extra that carries this pack's SDKs. The pack
+# ships inside polyrob; without the extra it loads and names `polyrob[twitter]`.
+extra = "twitter"
+capabilities = ["tools", "high_impact", "surface", "console_routes", "owner_verbs"]
+# cron `deliver=twitter` — the PUBLIC-post sink (the "x" DM surface is a
+# surface row below and is delivered through the outbound router).
+delivery_channels = ["twitter"]
+
+[cli]
+commands = ["x", "x-account"]
+
+# The console routers (polyrob_x.console_routes) are owner-only; this EXACT GET
+# path is the one public carve-out: X redirects the owner's browser here after
+# `/x login`. Its proof is the single-use, owner-bound, 10-minute OAuth `state`.
+[console]
+public_paths = ["/oauth/callback"]
+
+# --- twitter: the X API tool -------------------------------------------------
+# post/reply/quote — outbound comms. Reads work with valid creds; writes stay
+# TWITTER_ENABLED-gated per action. The CLI serves it only while X credentials
+# are configured (the live gate, polyrob_x:twitter_gate).
+[tools.twitter]
+# 067 (one install): without this module the tool is withheld and names the pack's extra.
+requires = ["tweepy"]
+capabilities = ["high_impact", "shared_identity", "writes_social", "writes_comms"]
+untrusted_output = true
+cli = "static"
+permissions = ["network.read", "network.write", "social.post"]
+gate = { tier = "disabled", label = "TWITTER_ENABLED", remedy = "owner configures X user credentials; TWITTER_ENABLED=true unlocks writes" }
+
+[tools.twitter.verbs.twitter_get_dms]
+effect = "none"
+[tools.twitter.verbs.twitter_get_mentions]
+effect = "none"
+[tools.twitter.verbs.twitter_get_timeline]
+effect = "none"
+[tools.twitter.verbs.twitter_get_tweets]
+effect = "none"
+[tools.twitter.verbs.twitter_get_user]
+effect = "none"
+[tools.twitter.verbs.twitter_search]
+effect = "none"
+[tools.twitter.verbs.twitter_whoami]
+effect = "none"
+[tools.twitter.verbs.twitter_post]
+effect = "social"
+[tools.twitter.verbs.twitter_thread]
+effect = "social"
+[tools.twitter.verbs.twitter_reply]
+effect = "social"
+[tools.twitter.verbs.twitter_quote]
+effect = "social"
+[tools.twitter.verbs.twitter_retweet]
+effect = "social"
+[tools.twitter.verbs.twitter_unretweet]
+effect = "social"
+[tools.twitter.verbs.twitter_like]
+effect = "social"
+[tools.twitter.verbs.twitter_unlike]
+effect = "social"
+[tools.twitter.verbs.twitter_follow]
+effect = "social"
+[tools.twitter.verbs.twitter_unfollow]
+effect = "social"
+[tools.twitter.verbs.twitter_mute]
+effect = "social"
+[tools.twitter.verbs.twitter_unmute]
+effect = "social"
+[tools.twitter.verbs.twitter_block]
+effect = "social"
+[tools.twitter.verbs.twitter_delete_tweet]
+effect = "social"
+# A DM is comms on a social tool: an explicit row may name a class below the
+# tool's top ceiling.
+[tools.twitter.verbs.twitter_dm]
+effect = "comms"
+# Inherits the tool's ceiling by design (tests/test_effect_classification_ratchet.py
+# INHERIT_BY_DESIGN); the row exists because a pack's unrowed action is refused.
+[tools.twitter.verbs.twitter_poll_results]
+
+# --- x_browser: posting, DMs and self-registration through a real browser ----
+# delegate_blocked (account creation + posting is never a leaf child's job)
+# beyond the browser row. OFF unless X_BROWSER_ENABLED (the live gate).
+[tools.x_browser]
+capabilities = ["high_impact", "delegate_blocked", "shared_identity", "writes_social"]
+untrusted_output = true
+cli = "static"
+permissions = ["network.read", "network.write", "social.post"]
+gate = { flag = "X_BROWSER_ENABLED", tier = "disabled", label = "X_BROWSER_ENABLED + captured X session", remedy = "owner enables X_BROWSER_ENABLED and runs `polyrob x-account capture-session`" }
+
+[tools.x_browser.verbs.x_browser_x_login_check]
+effect = "none"
+[tools.x_browser.verbs.x_browser_x_post]
+effect = "social"
+approval = ["recommended"]
+# Registering an X account is an identity-creating act: owner-queued even
+# under autonomous mode.
+[tools.x_browser.verbs.x_browser_x_signup_start]
+effect = "social"
+approval = ["always_queued"]
+[tools.x_browser.verbs.x_browser_x_reply]
+approval = ["recommended"]
+[tools.x_browser.verbs.x_browser_x_dm]
+approval = ["recommended"]
+# Inherits the ceiling by design (INHERIT_BY_DESIGN).
+[tools.x_browser.verbs.x_browser_x_read_dms]
+
+# --- the X DM chat surface (polling) -----------------------------------------
+# Security columns reviewed with the core catalog (064 F1): the sender id is
+# platform-authenticated (not forgeable) but the configured owner id does NOT
+# alias the owner principal (alias_owner stays core-only).
+[surfaces.x]
+label = "X (Twitter) DMs"
+module = "polyrob_x.surface"
+enabled_flag = "X_SURFACE_ENABLED"
+owner_env = "OWNER_X_ID"
+owner_seat = true
+forgeable = false
+transport = "poll"
+cron_target = true
+region = "global"
+max_message_chars = 10000
+credentials = ["TWITTER_API_KEY", "TWITTER_API_SECRET_KEY", "TWITTER_ACCESS_TOKEN", "TWITTER_ACCESS_TOKEN_SECRET"]
+alt_required = [["TWITTER_OAUTH2_ACCESS_TOKEN"]]
+cli_command = "polyrob_x.commands.x:x"
+state_dbs = ["x_dedup.db"]
+display = "x-dm"
+auto_start = false

@@ -182,7 +182,8 @@ async def get_user_permissive(request: Request) -> str:
     blocked.
 
     Auth resolution order (matches original A2A logic exactly):
-    1. x402 payment (``request.state.payment_method == "x402"``)
+    1. a contributed auth method (067 P5a) — today x402 payment
+       (``request.state.payment_method == "x402"``)
        a. Use ``request.state.user_id`` if already set by middleware.
        b. Derive from ``request.state.payer_address`` via
           ``generate_user_id_from_wallet``.
@@ -193,21 +194,13 @@ async def get_user_permissive(request: Request) -> str:
     Raises:
         HTTPException 401: if none of the above paths resolves a user.
     """
-    # Path 1 — x402 payment
-    if (
-        hasattr(request.state, "payment_method")
-        and request.state.payment_method == "x402"
-    ):
-        user_id = getattr(request.state, "user_id", None)
+    # Path 1 — contributed auth methods (067 P5a, ``api/contributions.py``):
+    # today the x402 payment path (``api/money_contributions.x402_user``).
+    from api.contributions import auth_methods
+    for _name, method in auth_methods():
+        user_id = method(request)
         if user_id:
             return user_id
-        # Fallback to wallet-derived ID if middleware didn't set it
-        from core.identity import generate_user_id_from_wallet
-
-        payer_address = getattr(request.state, "payer_address", None)
-        if payer_address:
-            return generate_user_id_from_wallet(payer_address)
-        return "x402_user"
 
     # Path 2 — JWT user_id (not the synthetic "api_user" placeholder)
     user_id = getattr(request.state, "user_id", None)

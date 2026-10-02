@@ -54,16 +54,6 @@ def env_halt_active() -> bool:
     return "all" in _env_scopes()
 
 
-def env_entry_pause_active() -> bool:
-    """True when ``TREASURY_ENTRY_PAUSE`` is set in the environment."""
-    return "trading" in _env_scopes()
-
-
-def env_stream_pause_active() -> bool:
-    """True when ``STREAM_SEEDING_PAUSE`` is set in the environment."""
-    return "streams" in _env_scopes()
-
-
 # ---- THE owner pause API (031) ---------------------------------------------------
 
 def pause_state(data_dir: Optional[str] = None) -> PauseState:
@@ -83,37 +73,6 @@ def resume_autonomy_scopes(data_dir: Optional[str], *, scopes=None, via: str = "
                            set_by: str = "owner") -> PauseResult:
     """Lift the pause (``scopes=None`` = everything) or drop the given scopes."""
     return _resume(data_dir, scopes=tuple(scopes) if scopes else None, set_by=set_by, via=via)
-
-
-def apply_owner_intent(intent, data_dir: Optional[str], *, via: str, resume_hint: str,
-                       halt_hint: str, force_full_reason: Optional[str] = None
-                       ) -> Tuple[Optional[str], Optional[PauseResult]]:
-    """The ONE decision path behind the prose stop gates (Telegram text/voice,
-    the REPL): ``(reply, result)`` or ``(None, None)`` when the message should
-    go to the agent unchanged.
-
-    * ``full_stop`` → pause everything (with the parsed duration).
-    * ``resume``    → lift the pause when one is on; otherwise "continue" is chat.
-    * ``scoped``    → the agent narrows it — unless *force_full_reason* is given
-      (model dead / session busy), in which case everything is paused as the safe
-      default and the reason leads the reply.
-    """
-    if intent is None:
-        return None, None
-    if intent.kind == "scoped":
-        if not force_full_reason:
-            return None, None
-        res = pause_autonomy(data_dir, scopes=("all",), reason=intent.raw, via=via)
-        return (f"⚠️ {force_full_reason}, so I paused everything as the safe default.\n"
-                + render_pause_result(res, resume_hint=resume_hint)), res
-    if intent.kind == "resume":
-        if not pause_state(data_dir).paused:
-            return None, None
-        res = resume_autonomy_scopes(data_dir, via=via)
-        return render_resume_result(res, halt_hint=halt_hint), res
-    res = pause_autonomy(data_dir, scopes=("all",), duration_minutes=intent.duration_minutes,
-                         reason=intent.raw, via=via)
-    return render_pause_result(res, resume_hint=resume_hint), res
 
 
 def _scope_words(scopes) -> str:
@@ -166,23 +125,6 @@ def render_resume_result(res: PauseResult, *, halt_hint: str) -> str:
     if not res.removed and not res.written:
         return "Autonomy was not paused."
     return f"▶ Autonomy RESUMED. Pause again with {halt_hint}."
-
-
-def owner_pause_phrases(user_id: Optional[str], home_dir: Optional[str]) -> Tuple[str, ...]:
-    """The owner's extra object-free stop words (``pause.phrases`` pref, 031) for
-    :func:`core.surfaces.owner_intent.owner_stop_intent`. Fail-open to none — the
-    gate must work when the pref store does not."""
-    try:
-        from core import prefs
-        out = prefs.resolve("pause.phrases", user_id, home_dir, default=[]) or []
-        words: List[str] = []
-        for entry in out:  # "dev loop" -> "dev", "loop": the parser matches per word
-            words.extend(w for w in str(entry).lower().split() if w)
-        return tuple(dict.fromkeys(words))
-    except Exception:
-        logger.warning("pause.phrases pref read failed — using the built-in set only",
-                       exc_info=True)
-        return ()
 
 
 # ---- legacy API (kept for every existing seat; thin over the record) ----------
@@ -304,6 +246,7 @@ def owner_access_summary() -> Dict[str, Any]:
     import os
 
     from core.instance import resolve_owner_principal
+    from core.surfaces.catalog import owner_seat_ids
     from core.surfaces.config import SurfaceConfig
     # STRICT: report only an EXPLICITLY-bound owner (None = running on the
     # auto-derived instance-id default), so the summary reflects real config.
@@ -322,68 +265,9 @@ def owner_access_summary() -> Dict[str, Any]:
         "correspondent_access_enabled": SurfaceConfig.correspondent_access_enabled(),
         "require_approval": SurfaceConfig.correspondent_require_approval(),
         "max_new_correspondents_per_day": SurfaceConfig.correspondent_max_new_per_day(),
-        "surfaces": {
-            "telegram": SurfaceConfig.telegram_surface_enabled(),
-            "whatsapp": SurfaceConfig.whatsapp_surface_enabled(),
-            "email": SurfaceConfig.email_surface_enabled(),
-        },
+        # Every owner seat in the catalog (064 F1) — this listed three of the
+        # seven surfaces before; discord/slack/signal/x were silently absent.
+        "surfaces": {sid: SurfaceConfig.surface_enabled(sid)
+                     for sid in owner_seat_ids()},
         "owner_by_email": False,  # v1: hard OFF (forgeable From:)
     }
-
-
-# --- the plain-word pending decision (2026-09-15) -----------------------------
-#
-# The proactive pending notice told the owner, in its own last line, to
-# `Reply "approve" / "reject"`. Nothing parsed that word. It fell through to the
-# agent as ordinary chat, and the agent has no promote verb of any kind — the
-# whole point of the quarantine is that only the owner can lift it. So the
-# instruction on the owner's screen did nothing at all.
-#
-# Two ways to make it honest: delete the promise, or keep it. We keep it. A word
-# is the cheapest owner action there is, and the owner reads this on a phone.
-#
-# The matcher is deliberately narrow. It reads the WHOLE message, not a
-# substring, so "I approve of that plan" or "reject the third candidate token"
-# is never a decision — it is a sentence for the agent. The caller ALSO requires
-# a non-empty queue, so the word only decides when there is something to decide.
-
-#: Words that carry the decision.
-#: ⚠️ "ok" and "yes" are deliberately ABSENT. They are the commonest
-#: conversational filler there is, and a decision word has to be one the owner
-#: could only have meant as a decision — approving a self-modification by
-#: accident is not a recoverable mistake.
-_APPROVE_WORDS = frozenset({"approve", "approved", "accept", "accepted"})
-_REJECT_WORDS = frozenset({"reject", "rejected", "decline", "declined", "discard"})
-#: Words that may surround the decision without changing it.
-_DECISION_FILLER = frozenset({"yes", "no", "please", "pls", "them", "it", "these",
-                              "those", "that", "this", "do", "just", "go", "ahead",
-                              "the", "proposals", "proposal", "changes", "change"})
-#: The whole-queue word.
-_DECISION_ALL = frozenset({"all", "everything", "every"})
-
-#: Beyond this many words it is a sentence, not a decision.
-_DECISION_MAX_WORDS = 5
-
-
-def parse_pending_decision(text: str) -> Optional[Tuple[str, Optional[str]]]:
-    """``("/approve", "all")``, ``("/reject", None)`` … or ``None``.
-
-    ``None`` means "this is not a decision" — the message belongs to the agent.
-    The second element is ``"all"`` when the owner named the whole queue, and
-    ``None`` when they did not (the caller then decides the single waiting item,
-    or asks which one).
-    """
-    import re as _re
-
-    words = [w for w in _re.split(r"[^a-z]+", (text or "").strip().lower()) if w]
-    if not words or len(words) > _DECISION_MAX_WORDS:
-        return None
-    approve = bool(_APPROVE_WORDS & set(words))
-    reject = bool(_REJECT_WORDS & set(words))
-    if approve == reject:          # neither, or both — not a decision
-        return None
-    unknown = set(words) - _APPROVE_WORDS - _REJECT_WORDS - _DECISION_FILLER - _DECISION_ALL
-    if unknown:
-        return None
-    target = "all" if (_DECISION_ALL & set(words)) else None
-    return ("/approve" if approve else "/reject"), target

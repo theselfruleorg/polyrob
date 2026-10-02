@@ -71,17 +71,27 @@ with `ruff check . --fix`.
 
 | Extra | What it pulls in |
 |---|---|
-| `server` | FastAPI, Uvicorn, WebSocket support |
+| *(none)* | The base: the OpenAI SDK (serves OpenAI, OpenRouter, NVIDIA, DeepSeek and every OpenAI-compatible endpoint), pydantic, Pillow, rich, click — 24 names |
+| `gemini` | The Google Gemini SDK (12 exclusive packages) |
+| `anthropic` | The Anthropic SDK (also the z.ai / Anthropic-transport seats) |
+| `server` | FastAPI, Uvicorn, WebSocket support, python-magic (the upload MIME sniffer) |
 | `browser` | Playwright (headless Chromium automation) |
-| `memory-vector` | Semantic vector recall (sentence-transformers + sqlite-vec) |
+| `docs` | pypdf + python-docx (PDF / DOCX reading) |
+| `media` | numpy (the Pillow avatar renderer), imageio (GIFs), qrcode (invoice cards) |
+| `anysite` | The AnySite scraping CLI |
+| `memory-vector` | Semantic vector recall (sentence-transformers + apsw + sqlite-vec + numpy) |
 | `crypto` | web3, eth-account, x402 payment support |
+| `solana` | Solana signing and trading |
 | `telegram` | aiogram Telegram surface |
 | `twitter` | Twitter/X API client |
 | `voice` | Voice transcription (faster-whisper) |
 | `dev` | pytest, ruff, build tooling |
 | `all` | Everything above |
 
-Install only what you need, e.g. `pip install -e ".[server,browser]"`.
+Install only what you need, e.g. `pip install -c requirements.lock -e ".[server,browser]"`.
+On a dev machine an optional extra installs itself on first use (`core/lazy_deps.py`,
+on under `POLYROB_LOCAL`); the `tests/test_base_deps_ratchet.py` ratchet means a new
+base dependency needs a deliberate edit.
 
 ---
 

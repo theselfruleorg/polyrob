@@ -60,7 +60,19 @@ SELF_DOC_MAX_CHARS = 2200
 # facts/preferences about the OWNER (a USER.md-equivalent). Terser than SELF so it
 # stays terse and always-injectable; over-cap is an ERROR on write, never a silent
 # truncate. Rides the same identity seam + quarantine-then-promote flow.
-OWNER_DOC_MAX_CHARS = 1600
+#
+# ⚠️ 2026-09-21: this was 1600, and 1600 made the doc a FORGETTING mechanism. On
+# 09-20 the agent needed three attempts to record one owner rule (1695/1600, then
+# 1612/1600) and only fit it by deleting text from the 09-17 and 09-18 rules —
+# their enforcement anchors ("self-test #11 + cron 41370b02653a") are simply gone
+# from prod's owner.md. A cap that forces an eviction per arrival turns every new
+# owner instruction into the silent loss of an older one. Prod sat at 1563/1600,
+# i.e. one rule from the next eviction. Raised to the CONTRACT_DOC_MAX_CHARS line
+# (~1000 tokens of a ~7k foundation) — this is always-injectable owner intent, the
+# highest-value content in the block. ⚠️ The cap is read on BOTH sides:
+# `load_owner_doc` replaces an over-cap doc with [BLOCKED…], so the whole
+# owner-facts block vanishes from the prompt rather than truncating.
+OWNER_DOC_MAX_CHARS = 4000
 
 # Operator-authored self-context docs, read in this order (identity first).
 _SELF_CONTEXT_DOCS = ("identity.md", "operating.md")
@@ -189,6 +201,14 @@ def load_owner_doc(home_dir: Path | str, user_id: Optional[str],
             return _OWNER_BLOCKED_PLACEHOLDER
     except Exception:
         return _OWNER_BLOCKED_PLACEHOLDER
+    # 060 WS-6: only the ACTIVE rules are injected; the `## Superseded` section
+    # is history (kept, dated, never evicted) and never steers a session.
+    try:
+        from core.doc_claims import owner_rules_supersede, split_superseded
+        if owner_rules_supersede():
+            text = split_superseded(text)[0].strip()
+    except Exception:
+        pass
     if len(text) > OWNER_DOC_MAX_CHARS:
         return _OWNER_BLOCKED_PLACEHOLDER
     return text
@@ -399,7 +419,15 @@ def resolve_owner_user_id(env: Optional[Mapping[str, str]] = None) -> str:
 # to the owner principal. Telegram signs its sender ids; email ``From:`` and WhatsApp
 # are forgeable, so they are deliberately NOT aliased (AGENTS.md keeps owner-by-email
 # OFF in v1 — a forged sender must never become an owner command-turn).
-_OWNER_ALIAS_SURFACES: FrozenSet[str] = frozenset({"telegram"})
+#: Derived from the catalog's ``alias_owner`` rows (064 F1) — telegram only. F1
+#: deliberately kept this identical: widening it changes WHO is the owner and is
+#: its own reviewed change (a pairing row stays the path on every other surface).
+def _alias_surfaces() -> FrozenSet[str]:
+    from core.surfaces.catalog import alias_owner_ids
+    return alias_owner_ids()
+
+
+_OWNER_ALIAS_SURFACES: FrozenSet[str] = _alias_surfaces()
 
 
 def resolve_owner_telegram_id(env: Optional[Mapping[str, str]] = None) -> Optional[str]:
@@ -717,47 +745,6 @@ def load_self_context(home_dir: Path | str) -> str:
     return out
 
 
-# ---------------------------------------------------------------------------
-# Instance avatar (pfp) — instance-scoped, fail-open.
-#
-# The pfp is the bot INSTANCE's one face, so it is keyed by ``instance_id`` ONLY
-# (unlike ``self_tier_root`` which is per-(instance,user) because SELF docs are
-# per-correspondent). It lives *inside* ``identity/{instance_id}/`` so it is part
-# of the persistent identity tier, guarded by ``is_safe_tenant_id``. Avatar
-# creation is OPTIONAL/deferrable — a missing or corrupt pfp is a valid state, so
-# every accessor is fail-open and never raises.
-# ---------------------------------------------------------------------------
-_PFP_SUBDIR = "pfp"
-_PFP_PNG = "pfp.png"
-_PFP_META = "pfp.json"
-
-
-def pfp_dir(home_dir: Path | str, instance_id: str = DEFAULT_INSTANCE_ID) -> Path:
-    """Directory holding the instance's frozen avatar: ``<home>/identity/{instance_id}/pfp``.
-
-    Unsafe ``instance_id`` degrades to :data:`DEFAULT_INSTANCE_ID` (mirrors
-    ``self_tier_root``'s instance handling) rather than traversing.
-    """
-    safe_instance = str(instance_id) if is_safe_tenant_id(instance_id) else DEFAULT_INSTANCE_ID
-    return Path(home_dir) / _SELF_CONTEXT_SUBDIR / safe_instance / _PFP_SUBDIR
-
-
-def pfp_path(home_dir: Path | str, instance_id: str = DEFAULT_INSTANCE_ID) -> Path:
-    """Canonical still-PNG path for the instance avatar (may not exist yet)."""
-    return pfp_dir(home_dir, instance_id) / _PFP_PNG
-
-
-def load_pfp_meta(home_dir: Path | str, instance_id: str = DEFAULT_INSTANCE_ID) -> Optional[dict]:
-    """Parsed ``pfp.json`` identity blob, or ``None`` if absent/unreadable. Never raises."""
-    p = pfp_dir(home_dir, instance_id) / _PFP_META
-    try:
-        if not p.is_file():
-            return None
-        return json.loads(p.read_text(encoding="utf-8"))
-    except Exception:  # fail-open: a missing/corrupt avatar is a valid state
-        return None
-
-
 # --- ERC-8004 identity record (046) ------------------------------------------
 # What this instance ACTUALLY registered on-chain, written only after a
 # confirmed receipt. It is the evidence that lets the served registration file
@@ -822,18 +809,6 @@ def save_erc8004_record(home_dir: Path | str,
     return rec
 
 
-def voice_signature(home_dir: Path | str, instance_id: str = DEFAULT_INSTANCE_ID) -> Optional[dict]:
-    """The persisted, engine-agnostic voice signature ``{pitch, rate, timbre}`` or ``None``.
-
-    This is what the future voice-interface app reads to speak in the agent's voice.
-    """
-    meta = load_pfp_meta(home_dir, instance_id)
-    if not isinstance(meta, dict):
-        return None
-    v = meta.get("voice")
-    return v if isinstance(v, dict) else None
-
-
 __all__ = [
     "AgentIdentity",
     "BotInstance",
@@ -860,10 +835,6 @@ __all__ = [
     "load_contract_doc",
     "self_tier_root",
     "is_safe_tenant_id",
-    "pfp_dir",
-    "pfp_path",
-    "load_pfp_meta",
-    "voice_signature",
     "erc8004_record_path",
     "load_erc8004_record",
     "save_erc8004_record",

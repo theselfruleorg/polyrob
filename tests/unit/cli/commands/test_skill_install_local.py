@@ -208,3 +208,14 @@ def test_install_meta_file_not_copied_into_active_dir(_isolated_skill_usage_stor
     active = mgr._user_root("7") / "cleanmeta"
     assert (active / "SKILL.md").is_file()
     assert not (active / ".install-meta.json").exists()
+
+
+@pytest.mark.parametrize("hidden", ["\u202e", "\u200b", "\u202a"])
+def test_install_local_rejects_bidi_or_zero_width_resource(tmp_path, monkeypatch, hidden):
+    """067 P0.3: a resource gets the same unicode/bidi-aware scan as SKILL.md —
+    a bidi override or zero-width char in references/x.md refuses the install."""
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "home"))
+    src = _mkskill(tmp_path, "bidiref", ref=f"# Notes\nharmless{hidden}looking text")
+    with pytest.raises(InstallError) as ei:
+        install_local(src, user_id="7", trust="prompt")
+    assert "references/R.md" in str(ei.value)

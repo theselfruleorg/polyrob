@@ -46,7 +46,7 @@ Set at least one provider key (`OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `OPENA
 docker compose up
 ```
 
-This builds the image (if not cached), installs the `server`, `browser`, and `memory-vector` extras, runs `python -m playwright install --with-deps chromium`, and starts the FastAPI server. Docker sets `UVICORN_PORT=8000` and maps 8000:8000; `curl http://localhost:8000/docs` works.
+This builds the image (if not cached), installs the `server`, `browser`, `memory-vector`, `docs` and `media` extras, runs `python -m playwright install --with-deps chromium`, and starts the FastAPI server. Docker sets `UVICORN_PORT=8000` and maps 8000:8000; `curl http://localhost:8000/docs` works.
 
 For detached (background) mode:
 
@@ -67,18 +67,32 @@ curl http://localhost:8000/docs
 
 The `Dockerfile` builds a production image with:
 
-- `polyrob[server,browser,memory-vector]` extras installed
+- `polyrob[server,browser,memory-vector,docs,media]` extras installed
 - Playwright Chromium binary pre-installed
 - `python main.py` as the entrypoint (`UVICORN_PORT=8000` set by the image)
 
-⚠️ **The image is API-only.** `.[server,browser,memory-vector]` does not carry the
+⚠️ **The image is API-only.** `.[server,browser,memory-vector,docs,media]` does not carry the
 `telegram`, `crypto`, `solana`, `twitter` or `voice` extras, and the entrypoint is
 `python main.py` (the FastAPI app). So a compose deployment gives you REST, A2A and
 the OpenAI-compatible `/v1` surface, plus the browser and vector-memory extras — it
 does **not** run `polyrob telegram`, the email surface, or any money verb. For those,
-use a host install: `pip install -c requirements.lock ".[server,browser,crypto,solana,telegram,twitter,voice]"`
-from the repo root (that is the extras set a production deployer installs), or add
-the extras to your own image.
+use a host install from the repo root — the extras set a production deployer installs,
+hash-checked against the lock, then the project itself:
+`pip install --require-hashes -r requirements.txt && pip install --no-deps --no-build-isolation -e .`
+— or add the extras to your own image.
+
+**Optional extras on a server.** An extra you did not install arrives on first use
+through the trusted lazy install (`LAZY_DEPS_MODE=trusted`, the default): the exact,
+hashed files of the release lock, into a separate overlay (the venv itself is
+never changed). On a plain server it installs in process into `~/.polyrob/pylibs`. On a
+server that holds a wallet seed, provision the seedless installer unit once (the
+`polyrob-deps` user and its systemd units, as the production deployer does): the agent then only requests a
+feature through `/var/lib/polyrob-deps/requests`, and the separate `polyrob-deps`
+user installs it, wheel-only, into that protected overlay. This directory is a
+sibling of the shared data home (`/srv/rob-deps` for a data home of `/srv/rob`),
+under a root-owned parent that is not group/world writable. The agent can read
+the overlay and write only its request spool. Without that unit, a custody server refuses lazy installs and names
+the extra to add. `LAZY_DEPS_MODE=off` seals it.
 
 The `docker-compose.yml` file:
 
@@ -131,6 +145,12 @@ shape; running more has two preconditions and a real ceiling, both described in
 Docker is one way; systemd is the other, and it is what a multi-surface deployment
 usually wants, because each surface is its own long-running process. Create one
 unit per process you need:
+
+> **Single-user machine?** `polyrob service install` writes a systemd **user**
+> unit (or a launchd agent on macOS) that runs `polyrob gateway` — every enabled
+> surface from one unit, no root, no unit file to author. The table below is for
+> a SERVER, where each surface is its own system unit under its own hardened
+> identity. Do not use both on one box.
 
 | Process | Command | What it is |
 |---|---|---|
@@ -250,16 +270,42 @@ file is NOT portable. Hand it over as plain Playwright storage state instead:
 # on the desktop (visible browser), sign in as the agent's account:
 polyrob x-account capture-session --out x-session.json
 scp x-session.json server:/tmp/
-# on the server, as the agent identity, stored under the server's own key:
-sudo -u polyrob-agent -H env POLYROB_DATA_DIR=/var/lib/polyrob \
-  /opt/polyrob/venv/bin/polyrob x-account import-session /tmp/x-session.json --handle <handle>
+# on the server: load the SERVICE env (its MCP_ENCRYPTION_KEY, owner id and
+# data home), then run as the agent identity so the store stays writable by it:
+cd /opt/polyrob && set -a && . /etc/polyrob/polyrob.env && set +a
+sudo -E -u polyrob-agent venv/bin/polyrob x-account import-session /tmp/x-session.json --handle <handle>
 rm /tmp/x-session.json   # it is the login in plain text
 ```
+
+⚠️ Load `/etc/polyrob/polyrob.env` first. Without it the CLI would encrypt the
+session with a different key under a different owner id, and the agent would keep
+reporting "no X session stored". On a deployed box every `polyrob x-account` verb
+refuses when `MCP_ENCRYPTION_KEY` or `POLYROB_OWNER_USER_ID` is missing, and prints
+this recipe.
 
 No desktop install? `import-session --auth-token <v> --ct0 <v>` takes the two
 login cookies straight from a signed-in browser (DevTools → Application →
 Cookies → x.com). Either way `polyrob x-account status` shows the stored
 handle and the agent's `x_login_check` verifies it live.
+
+**Renewing the X OAuth 2.0 login (DMs).** DMs use an OAuth 2.0 user token that
+the agent refreshes by itself. When X refuses the refresh token (for example after
+you regenerate the app's client secret), `/status` and `polyrob doctor` show
+"re-login needed" and the DM rails fall back to the OAuth 1.0a keys. To renew it
+from chat, send `/x login`. To renew it on the box, register
+`http://127.0.0.1:8765/callback` as a callback URL of the X app, open a tunnel from
+your laptop (`ssh -L 8765:127.0.0.1:8765 <server>`), and run:
+
+```sh
+cd /opt/polyrob && set -a && . /etc/polyrob/polyrob.env && set +a
+sudo -E -u polyrob-agent venv/bin/polyrob x-account oauth-login --no-browser
+sudo -E -u polyrob-agent venv/bin/polyrob x-account oauth-status   # expect: valid, no re-login line
+```
+
+Open the printed URL on your laptop and approve as the agent's account. After
+you change the client secret, restart every polyrob unit that reads the env file,
+not only `polyrob.service` (for example `systemctl restart polyrob.service
+polyrob-email.service`). A unit that keeps the old secret refreshes with it.
 
 `polyrob doctor`, `/status` and the agent's own tool catalog all report the rail
 in one of three states: `none (custody)` with the install remedy, `configured,

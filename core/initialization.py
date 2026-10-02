@@ -28,16 +28,15 @@ from modules.database import DatabaseManager
 from modules.memory import MemoryManager
 from modules.memory.cache_manager import CacheManager
 
-# LLM Clients
+# LLM Clients — only the names this module USES. The provider clients
+# (Anthropic/OpenAI/DeepSeek/Gemini) import their SDKs at module load and, since
+# 058, those SDKs are optional extras: naming them here eager-imported every one
+# of them through the lazy `modules.llm` package, and a venv without `[gemini]`
+# (prod) crashed the DB-migration runner on 2026-09-21. `LLMManager` builds the
+# provider clients itself, on demand, with its own fallback.
 from modules.llm import (
     LLMClient,
-    AnthropicClient,
-    OpenAIClient,
-    DeepSeekClient,
-    GeminiClient,
-    AVAILABLE_MODELS,
-    create_llm_client,
-    LLMManager  # Add import for LLMManager
+    LLMManager,
 )
 
 # External Tools - import from tools package to use centralized descriptors
@@ -435,7 +434,12 @@ async def initialize_modules(container: DependencyContainer) -> None:
 async def initialize_tools(container: DependencyContainer) -> None:
     """Initialize tools with proper error handling."""
     logger.info("➤ Tool initialization started")
-    
+
+    # 067 P2 phase 2: enabled packs register their tools before the loop reads the
+    # descriptors (per-pack fail-closed, recorded in core.packs.state).
+    from core.packs.loader import load_packs
+    load_packs()
+
     results = {'success': [], 'failed': []}
 
     # Follow init order (sorted by dependency priority) instead of TOOL_COMPONENTS.
@@ -455,6 +459,9 @@ async def initialize_tools(container: DependencyContainer) -> None:
                 tool_class = component_class
                 break
                 
+        if not tool_class:
+            # A class registered after tools/__init__ built TOOL_COMPONENTS (a pack).
+            tool_class = get_tool_class(tool_name)
         if not tool_class:
             logger.warning(f"  ⚠ No tool class found for {tool_name}, skipping")
             continue
@@ -653,7 +660,15 @@ async def initialize_auth_services(container: DependencyContainer) -> None:
         # Wallet Generator (only if master_seed configured)
         from core.payment_config import resolve_master_seed
         _resolved_seed = resolve_master_seed()
-        if _resolved_seed:
+        from core.signer import MODE_REMOTE, signer_mode
+        if signer_mode() == MODE_REMOTE:
+            # 066 §5.5: the deposit seed lives in polyrob-signer; this process
+            # asks it for addresses and sweeps and never holds the seed.
+            from modules.payments.wallet_generator import RemoteDepositWalletGenerator
+            wallet_generator = RemoteDepositWalletGenerator()
+            container.register_service('wallet_generator', wallet_generator)
+            logger.info("  ✓ Wallet generator initialized (remote: polyrob-signer)")
+        elif _resolved_seed:
             from modules.payments.wallet_generator import DepositWalletGenerator
             wallet_generator = DepositWalletGenerator(master_seed=_resolved_seed)
             container.register_service('wallet_generator', wallet_generator)
@@ -731,9 +746,6 @@ async def initialize_auth_services(container: DependencyContainer) -> None:
         # registering it in the same phase it always did.
         await initialize_user_mcp_service(container)
 
-        # Note: Polymarket tool is initialized in initialize_tools() phase
-        # with init_priority=55. It self-registers polymarket_db in container.
-
         logger.info("✓ Auth services initialized successfully")
 
     except Exception as e:
@@ -799,11 +811,11 @@ async def initialize_agents(container: DependencyContainer) -> None:
 
     # Library-logger pinning happens in core.logging.setup_logging (quiet_noisy_libraries).
 
-    # Initialize shared components (character_manager, system_prompt_manager) first
+    # Initialize shared components (character_manager) first
     try:
         from agents import initialize_shared_components
         await initialize_shared_components(container)
-        logger.info("  ✓ Shared components (character_manager, system_prompt_manager) initialized")
+        logger.info("  ✓ Shared components (character_manager) initialized")
     except Exception as e:
         logger.error(f"  ❌ Failed to initialize shared components: {e}")
         # Don't raise - these are important but we can continue without them
@@ -908,18 +920,11 @@ async def _cleanup_component_type(container: DependencyContainer, component_type
             ]
             
         elif component_type == 'tools':
-            # Cleanup polymarket tool (registered as 'polymarket' by initialize_tools)
-            polymarket_tool = container.get_service('polymarket')
-            if polymarket_tool and hasattr(polymarket_tool, 'cleanup'):
-                try:
-                    await polymarket_tool.cleanup()
-                    logger.info("✓ polymarket cleaned up")
-                except Exception as e:
-                    logger.error(f"Error cleaning up polymarket: {e}")
-
+            # Every registered service with a cleanup() — pack tools included
+            # (the markets pack's polymarket tool used to be cleaned by name here).
             components = [
                 tool for tool in container.services.values()
-                if tool is not None and tool is not polymarket_tool
+                if tool is not None
             ]
             
         elif component_type == 'modules':
@@ -968,8 +973,6 @@ async def cleanup_tools(container: DependencyContainer) -> None:
         # Get all registered tools (use canonical names, not aliases)
         tools_to_cleanup = [
             'filesystem',
-            'twitter_tool',
-            'perplexity_tool',
             'email_tool',
             'browser_manager',  # Use canonical name, not browser_tool alias
             'rate_limit_manager',

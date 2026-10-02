@@ -5,8 +5,8 @@
  * one screen, six panes:
  *
  *   - Overview — the ranked health block leads (the same build_status_snapshot
- *     every seat renders), then Rob's face and name, then the four posture axes
- *     as four plain sentences (never printed twice in two vocabularies, which is
+ *     every seat renders), then Rob's face and name, then the posture axes
+ *     as one sentence per axis (never printed twice in two vocabularies, which is
  *     what doctor and /autonomy do today), then what it is connected to.
  *   - Identity — the name and face, the persona you wrote (read-only, frozen),
  *     and what Rob has learned about itself as a reviewable change. An edit is
@@ -113,7 +113,7 @@ function section(titleText, asideText) {
 
 // --- Overview --------------------------------------------------------------- #
 // The ranked health block leads (this IS A8's health card), then the face and
-// name, then the four posture axes, then what Rob is connected to.
+// name, then the posture axes, then what Rob is connected to.
 
 //: The health severity → entry class. Health items are only crit or warn today
 //: (core.status_snapshot); an unknown severity is drawn as unknown, never green.
@@ -155,9 +155,11 @@ export function renderHealth(root, doctor, copy) {
   items.forEach((it) => ledger.appendChild(healthItem(it, copy)));
   // The "and everything else answered" entry, with the link to the full report.
   const ok = el("div", "entry is-running");
+  // "Everything checked out" only when nothing was left unchecked; otherwise
+  // the rest is fine and the unchecked sections are named below.
+  const unchecked = (health.unverified_words || health.unverified || []).length > 0;
   ok.appendChild(el("h3", "entry-title",
-    items.length ? (copy && copy.ov_health_ok_title) : (copy && copy.ov_health_none)));
-  ok.appendChild(el("p", "entry-body", (copy && copy.ov_health_ok_body) || ""));
+    (items.length || unchecked) ? (copy && copy.ov_health_ok_title) : (copy && copy.ov_health_none)));
   const actions = el("div", "entry-actions");
   const link = el("a", "btn btn-quiet", (copy && copy.ov_report_link) || "");
   link.href = "#advanced";
@@ -165,28 +167,16 @@ export function renderHealth(root, doctor, copy) {
   ok.appendChild(actions);
   ledger.appendChild(ok);
   sec.appendChild(ledger);
-  // What could not be checked is named, never dropped.
-  const unver = health.unverified || [];
+  // What could not be checked is named, never dropped — in the owner's words
+  // (`unverified_words`); the raw "<section> (<reason>)" stays in the report.
+  const unver = (health.unverified_words && health.unverified_words.length)
+    ? health.unverified_words
+    : (health.unverified || []).map((s) => String(s).split(" (")[0]);
   if (unver.length) {
     sec.appendChild(el("p", "entry-meta",
       format(copy && copy.ov_unverified, { sources: unver.join(", ") })));
   }
   return "health";
-}
-
-/** A record's fields as one plain line (`tier 2, eyes round, …`). Numbers are
- *  rounded so a float does not run to fifteen digits; an empty record is "". */
-export function describeRecord(record) {
-  if (!record || typeof record !== "object") return "";
-  return Object.keys(record)
-    .map((key) => {
-      const raw = record[key];
-      const value = typeof raw === "number" ? Number(raw.toFixed(2)) : raw;
-      return (value === null || value === undefined || value === "")
-        ? "" : `${key} ${value}`;
-    })
-    .filter(Boolean)
-    .join(", ");
 }
 
 /** A date in the record's own words, from an ISO timestamp. Empty when it is
@@ -199,38 +189,32 @@ export function madeOn(iso) {
 }
 
 /**
- * Draw Rob's face and name from `/pfp.json` — the record `modules/pfp/store`
- * actually writes.
- *
- * ⚠️ A1 (2026-09-21 audit): this used to read `pfp.description || pfp.tagline`,
- * two keys the store has never written, so every instance WITH a face was told
- * "Rob has no face yet" beside its own rendered face. The record's real keys
- * are `traits`, `voice`, `locked`, `instance_id` and `created_at`, and `locked`
- * is the one-way keep — the difference between a draft and a permanent
- * identity, which the console never showed at all.
+ * Draw Rob's face and name from `/avatar.json` — the one avatar slot
+ * (`core/avatar.py`). The console only SHOWS the face; it is set from the CLI
+ * (`polyrob avatar set`), Telegram or the agent.
  *
  * Three answers, and they are not interchangeable:
- *   - `no_face`    — `/pfp.json` answered 404. There is genuinely no avatar.
- *   - `unreadable` — something IS there and could not be read. Saying "no face"
- *                    here would be a confident wrong answer over a real file.
- *   - `face`       — the record, with kept or draft stated.
+ *   - `no_face`    — the slot says `none`. There is genuinely no avatar.
+ *   - `unreadable` — the read failed, or the slot says `unreadable` (an image
+ *                    with a broken record). Saying "no face" here would be a
+ *                    confident wrong answer over a real file.
+ *   - `face`       — the image, with where it came from and when it was set;
+ *                    the default mark (`is_default`) says it is the default.
  */
-export function renderFace(root, pfp, copy) {
+export function renderFace(root, av, copy) {
   root.replaceChildren();
   const sec = el("div", "section");
   const row = el("div", "section-head");
   const face = el("div", "face");
   face.setAttribute("aria-hidden", "true");
 
-  const missing = Boolean(pfp && String(pfp.error) === "404");
-  const traits = pfp && !pfp.error ? pfp.traits : null;
-  const voice = pfp && !pfp.error ? pfp.voice : null;
-  const readable = Boolean(pfp && !pfp.error && (traits || voice));
-  const answer = missing ? "no_face" : (readable ? "face" : "unreadable");
+  const state = av && !av.error ? String(av.state || "") : "";
+  const answer = state === "none" ? "no_face" : (state === "set" ? "face" : "unreadable");
 
   if (answer === "face") {
     const img = document.createElement("img");
-    img.src = "/pfp.png";
+    // The hash busts the cache when the image changes; the URL stays the same.
+    img.src = av.sha256 ? `/avatar.png?v=${String(av.sha256).slice(0, 12)}` : "/avatar.png";
     img.alt = "";
     img.width = 64; img.height = 64;
     face.appendChild(img);
@@ -243,36 +227,24 @@ export function renderFace(root, pfp, copy) {
     body.appendChild(el("p", "entry-body", (copy && copy.ov_identity_no_avatar) || ""));
   } else if (answer === "unreadable") {
     body.appendChild(el("p", "entry-body", (copy && copy.ov_identity_unreadable) || ""));
-    const reason = pfp && pfp.error;
+    const reason = av && (av.error || av.detail);
     if (reason) {
       const details = el("details");
       details.appendChild(el("summary", null, (copy && copy.ov_identity_unreadable_why) || ""));
       details.appendChild(el("p", "entry-meta", String(reason)));
       body.appendChild(details);
     }
+  } else if (av.is_default) {
+    body.appendChild(el("p", "entry-body", (copy && copy.ov_identity_default) || ""));
   } else {
-    // The one fact the owner most needs: is this permanent, or still a draft?
-    const kept = Boolean(pfp.locked);
-    body.appendChild(el("p", "entry-body",
-      (copy && (kept ? copy.ov_identity_kept : copy.ov_identity_draft)) || ""));
-    const traitLine = describeRecord(traits);
-    if (traitLine) {
-      body.appendChild(el("p", "entry-meta",
-        format(copy && copy.ov_identity_traits, { traits: traitLine })));
+    if (av.source) {
+      body.appendChild(el("p", "entry-body",
+        format(copy && copy.ov_identity_source, { source: String(av.source) })));
     }
-    const voiceLine = describeRecord(voice);
-    if (voiceLine) {
-      body.appendChild(el("p", "entry-meta",
-        format(copy && copy.ov_identity_voice, { voice: voiceLine })));
-    }
-    const when = madeOn(pfp.created_at);
+    const when = madeOn(av.set_at);
     if (when) {
       body.appendChild(el("p", "entry-meta",
         format(copy && copy.ov_identity_made, { when })));
-    }
-    if (pfp.instance_id) {
-      body.appendChild(el("p", "entry-meta",
-        format(copy && copy.ov_identity_instance, { instance: pfp.instance_id })));
     }
   }
 
@@ -282,7 +254,7 @@ export function renderFace(root, pfp, copy) {
   return answer;
 }
 
-//: The four posture axes, in order, and the copy that names each. The effective
+//: The posture axes, in order, and the copy that names each. The effective
 //: value rides on the copy node as data (server-computed from build_posture_card),
 //: so a person reads ONE sentence per axis and the state it is in — never the
 //: same axis twice in two vocabularies, which is the defect this replaces.
@@ -291,9 +263,10 @@ const _POSTURE_AXES = [
   { key: "mode", value: "posture_mode" },
   { key: "loop", value: "posture_loop" },
   { key: "compute", value: "posture_compute" },
+  { key: "builder", value: "posture_builder" },
 ];
 
-/** The four posture axes as four entries. Each is a plain title, its consequence,
+/** The posture axes as entries, one each. Each is a plain title, its consequence,
  *  and the state it is in (a value, shown once). Compute is frozen at import, so
  *  its entry says so rather than offering a control that would not work. */
 export function postureEntries(copy) {
@@ -312,12 +285,19 @@ export function postureEntries(copy) {
       meta.appendChild(document.createTextNode(" "));
       meta.appendChild(el("span", "unknown-why", (copy && copy.ov_axis_compute_locked) || ""));
     }
+    // The builder axis carries the card's own clamp sentence (a `ship` request
+    // with no domain runs as `build`); shown verbatim so this seat never reads
+    // `ship` where every other seat reads the clamp.
+    if (axis.key === "builder" && copy && copy.posture_builder_note) {
+      meta.appendChild(document.createTextNode(" "));
+      meta.appendChild(el("span", "unknown-why", copy.posture_builder_note));
+    }
     entry.appendChild(meta);
     return entry;
   });
 }
 
-/** Draw the four posture axes into *root*. */
+/** Draw the posture axes into *root*. */
 export function renderPosture(root, copy) {
   root.replaceChildren();
   const sec = section(copy && copy.ov_posture_title, copy && copy.ov_posture_aside);
@@ -356,7 +336,10 @@ export function renderConnected(root, doctor, copy) {
   };
   const model = [doctor.provider, doctor.model].filter(Boolean).join(" ");
   rowOf(copy && copy.ov_models_label, model);
-  rowOf(copy && copy.ov_memory_label, doctor.memory_backend);
+  // The backend id in words (`agent.memory_backend.<id>`); an id with no word
+  // is a dash, never the raw id.
+  rowOf(copy && copy.ov_memory_label,
+    doctor.memory_backend ? copy && copy["memory_backend_" + doctor.memory_backend] : "");
   table.appendChild(tbody);
   sec.appendChild(table);
   const actions = el("div", "entry-actions");
@@ -383,35 +366,9 @@ export function renderIdentity(root, data, copy, opts = {}) {
     return "unreadable";
   }
 
-  // The face — a ONE-TIME ceremony (A19). `keep` is one-way: once the record
-  // is locked there is nothing left to offer, and drawing a reroll over a kept
-  // identity would be a control that can only ever refuse. The lock is read
-  // from the record itself (`/pfp.json`'s `locked`), never assumed.
-  const pfp = opts.pfp || null;
-  const kept = Boolean(pfp && !pfp.error && pfp.locked);
-  const hasFace = Boolean(pfp && !pfp.error && (pfp.traits || pfp.voice));
+  // The face — read-only here. It is set from the CLI, Telegram or the agent,
+  // so this section says what it is and where to change it; no control.
   const faceSec = section(copy && copy.id_face_title, copy && copy.id_face_body);
-  if (kept) {
-    const done = el("div", "entry");
-    done.dataset.kept = "1";
-    done.appendChild(el("h3", "entry-title", (copy && copy.id_kept_title) || ""));
-    done.appendChild(el("p", "entry-body", (copy && copy.id_kept_body) || ""));
-    faceSec.appendChild(done);
-  } else if (!readOnly) {
-    const actions = el("div", "entry-actions");
-    const btn = el("button", "btn btn-quiet", (copy && copy.id_reroll) || "");
-    btn.type = "button";
-    btn.dataset.reroll = "1";
-    actions.appendChild(btn);
-    if (hasFace) {
-      const keep = el("button", "btn btn-primary", (copy && copy.id_keep) || "");
-      keep.type = "button";
-      keep.dataset.keep = "1";
-      actions.appendChild(keep);
-    }
-    faceSec.appendChild(actions);
-    if (hasFace) faceSec.appendChild(el("p", "entry-meta", (copy && copy.id_keep_hint) || ""));
-  }
   root.appendChild(faceSec);
 
   // The persona you wrote — READ-ONLY. It is the one document Rob never edits.
@@ -1026,7 +983,7 @@ async function getJson(url, fetcher) {
 }
 
 export const loadDoctor = (f) => getJson("/api/webgate/doctor", f);
-export const loadPfp = (f) => getJson("/pfp.json", f);
+export const loadAvatar = (f) => getJson("/avatar.json", f);
 export const loadIdentity = (f) => getJson("/api/webgate/identity", f);
 export const loadCapabilities = (f) => getJson("/api/webgate/capabilities", f);
 export const loadMemory = (q, f) =>
@@ -1086,51 +1043,6 @@ export async function forgetNote(noteId, copy, opts = {}) {
     return { ok: Boolean(resp.ok && body && body.ok), message };
   } catch (err) {
     console.error("[agent] the forget did not reach the console", err);
-    return { ok: false, message: (copy && copy.unreachable) || "" };
-  }
-}
-
-/**
- * Re-roll the face (a draft ceremony). Returns `{ok, message}`.
- *
- * ⚠️ A19: `ok` is the BODY's own verdict, never the HTTP status. These routes
- * answer a refusal as 200 `{"ok": false, "message": …}` (and, since the
- * 2026-09-21 pass, 409 with the same shape), so deriving success from the
- * status reported a refused re-roll as a completed one.
- */
-export async function rerollFace(copy, opts = {}) {
-  try {
-    const { ok, body } = await postJson("/api/pfp/randomize", {},
-      { fetcher: opts.fetcher });
-    const message = (body && (body.message || body.error || body.detail))
-      || (ok ? (copy && copy.id_reroll_done) : (copy && copy.id_reroll_failed)) || "";
-    const accepted = body && Object.prototype.hasOwnProperty.call(body, "ok")
-      ? Boolean(body.ok) : Boolean(ok);
-    return { ok: accepted, message };
-  } catch (err) {
-    console.error("[agent] the reroll did not reach the console", err);
-    return { ok: false, message: (copy && copy.unreachable) || "" };
-  }
-}
-
-/**
- * Keep the draft — lock the identity PERMANENTLY (A19). Returns `{ok, message}`.
- *
- * ⚠️ One-way. The server is the only authority on whether it took: `ok` comes
- * from `body.ok`, and a 409 (already kept, or nothing to keep) renders the
- * server's own refusal rather than a cheerful "kept".
- */
-export async function keepFace(copy, opts = {}) {
-  try {
-    const { ok, body } = await postJson("/api/pfp/keep", {},
-      { fetcher: opts.fetcher });
-    const message = (body && (body.message || body.error || body.detail))
-      || (ok ? (copy && copy.id_keep_done) : (copy && copy.id_keep_failed)) || "";
-    const accepted = body && Object.prototype.hasOwnProperty.call(body, "ok")
-      ? Boolean(body.ok) : Boolean(ok);
-    return { ok: accepted, message };
-  } catch (err) {
-    console.error("[agent] the keep did not reach the console", err);
     return { ok: false, message: (copy && copy.unreachable) || "" };
   }
 }
@@ -1196,10 +1108,10 @@ function bind() {
   // A1: the avatar read is caught on its own. A doctor failure must not take
   // the face down with it, and a face read that failed is `unreadable` — never
   // the "no face yet" sentence, which is a different fact.
-  Promise.all([loadDoctor(), loadPfp().catch((err) => ({ error: String(err && err.message) }))])
-    .then(([doctor, pfp]) => {
+  Promise.all([loadDoctor(), loadAvatar().catch((err) => ({ error: String(err && err.message) }))])
+    .then(([doctor, av]) => {
       if (ovHealth) renderHealth(ovHealth, doctor, copy);
-      if (ovFace) renderFace(ovFace, pfp, copy);
+      if (ovFace) renderFace(ovFace, av, copy);
       if (ovConnected) renderConnected(ovConnected, doctor, copy);
     })
     .catch((err) => {
@@ -1215,11 +1127,8 @@ function bind() {
   lazy.identity = () => {
     if (!idRoot) return;
     idRoot.replaceChildren(noticeEntry(copy.id_loading));
-    // A19: the keep state is the avatar record's, not the identity doc's, so
-    // both are read. A failed pfp read renders as "no lock we could see" —
-    // the controls stay, and the server is still the only authority.
-    Promise.all([loadIdentity(), loadPfp().catch((err) => ({ error: String(err && err.message) }))])
-      .then(([data, pfp]) => renderIdentity(idRoot, data, copy, { readOnly, pfp }))
+    loadIdentity()
+      .then((data) => renderIdentity(idRoot, data, copy, { readOnly }))
       .catch((err) => renderIdentity(idRoot,
         { error: (err && String(err.message)) || "error" }, copy, { readOnly }));
   };
@@ -1249,27 +1158,6 @@ function bind() {
         if (line) line.textContent = message;
         if (!ok) save.disabled = false;
         return;
-      }
-      const reroll = ev.target.closest("button[data-reroll]");
-      if (reroll) {
-        reroll.disabled = true;
-        const { message } = await rerollFace(copy);
-        const answer = el("p", "entry-meta", message);
-        reroll.closest(".section").appendChild(answer);
-        reroll.disabled = false;
-        return;
-      }
-      // A19: Keep is ONE-WAY. On success the whole tab is redrawn from the
-      // record, so the permanent state is what the server says it is — this
-      // never paints "kept" from the click alone.
-      const keep = ev.target.closest("button[data-keep]");
-      if (keep) {
-        keep.disabled = true;
-        const { ok, message } = await keepFace(copy);
-        const sec = keep.closest(".section");
-        if (sec) sec.appendChild(el("p", "entry-meta", message));
-        if (ok) lazy.identity();
-        else keep.disabled = false;
       }
     });
   }

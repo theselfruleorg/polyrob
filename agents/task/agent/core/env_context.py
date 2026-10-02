@@ -91,6 +91,15 @@ def build_environment_context(session_id: str, user_id: Optional[str],
             "facts the owner's /status shows — trust it over anything remembered.",
             "</environment>",
         ]
+        # 062: how this install was made, and what it cannot do. Without these
+        # the agent can report a refusal but never explain it.
+        try:
+            from core.install_facts import install_lines
+            for _line in install_lines():
+                lines.insert(-2, _line)
+        except Exception:
+            pass
+
         from core.config_policy.policy import run_budget_usd
         _budget = run_budget_usd()
         if _budget > 0:

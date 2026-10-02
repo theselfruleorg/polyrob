@@ -249,8 +249,9 @@ def test_high_impact_blocks_NAMESPACED_crypto_trade_verbs():
 
 def test_namespaced_crypto_read_verbs_stay_allowed():
     for name in ("polymarket_get_orderbook", "hyperliquid_get_positions",
-                 "get_trade_history", "polymarket_data", "hyperliquid_data",
-                 "hyperliquid_get_open_orders"):
+                 "get_trade_history", "polymarket_data", "hyperliquid_data"):
+        # hyperliquid_get_open_orders is an OWN-ACCOUNT read: correspondent_blocked
+        # since the 2026-09-29 review (test_markets_own_account_reads_blocked.py).
         assert not is_high_impact(name), name
 
 

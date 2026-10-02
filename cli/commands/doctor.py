@@ -17,6 +17,7 @@ from agents.task.constants import _FALSEY
 from cli.config_store import resolve_provider_model
 from core.path_safety import is_within_root
 from core.runtime_paths import resolve_runtime_paths
+from core.security.custody_env import custody_environ
 from modules.llm.profiles import PROFILES, credential_status
 
 
@@ -55,12 +56,37 @@ def python_version_line() -> str:
 
 def server_extra_line() -> str:
     """[server]-extra presence (O6) — `polyrob serve` raises a raw ImportError
-    without it; say so BEFORE the user hits that."""
-    missing = [m for m in ("fastapi", "uvicorn") if importlib.util.find_spec(m) is None]
+    without it; say so BEFORE the user hits that. Probes come from the ONE map
+    (`core.optional_extras.MODULES_FOR_EXTRA`) — 058 put python-magic in this
+    extra, and a server without it REFUSES uploads."""
+    from core.optional_extras import MODULES_FOR_EXTRA
+    missing = [m for m in MODULES_FOR_EXTRA["server"] if importlib.util.find_spec(m) is None]
     if not missing:
         return "server extra: present (`polyrob serve` available)"
     return ("server extra: absent (" + ", ".join(missing) + " missing) — "
             "run `pip install 'polyrob[server]'` before `polyrob serve`")
+
+
+def optional_extras_line(rob_local: bool = False) -> str:
+    """058: which optional extras this install carries, and how a missing one
+    arrives — on first use (``LAZY_DEPS_MODE`` trusted|legacy) or by `pip install`
+    (mode ``off``). One line, never a guess: an extra is present only when EVERY
+    probe module imports.
+
+    067 P0.2: the mode is the one the runtime resolves (``lazy_deps_mode()``,
+    default ``trusted`` on the CLI AND on a server), not a re-derivation from the
+    legacy ``LAZY_DEPS_ENABLED`` boolean. ``rob_local`` is kept for the caller's
+    signature; the mode no longer depends on it."""
+    from core.config_policy.capability_toggles import lazy_deps_mode
+    from core.optional_extras import MODULES_FOR_EXTRA, extra_available
+    watched = ("gemini", "anthropic", "docs", "media", "memory-vector", "browser", "crypto")
+    present = [e for e in watched if e in MODULES_FOR_EXTRA and extra_available(e)]
+    absent = [e for e in watched if e in MODULES_FOR_EXTRA and not extra_available(e)]
+    mode = lazy_deps_mode()
+    how = (f"install on first use (LAZY_DEPS_MODE={mode})" if mode != "off"
+           else "pip install 'polyrob[<extra>]' (LAZY_DEPS_MODE=off — a server adds it to PROD_EXTRAS)")
+    return (f"optional extras: present {', '.join(present) or '—'} · absent "
+            f"{', '.join(absent) or '—'} · a missing one: {how}")
 
 
 def a2a_v1_line(env: dict) -> str:
@@ -119,6 +145,18 @@ def playwright_line(env: dict) -> str:
             "`python -m playwright install chromium`")
 
 
+def packs_line() -> str:
+    """067 P2: installed / loaded / disabled / refused packs (``polyrob pack doctor``
+    has the detail). Loads the enabled packs, as a session would."""
+    try:
+        from core.packs.loader import load_packs
+        from core.packs.state import summary_line
+        load_packs()
+        return summary_line()
+    except Exception as e:  # noqa: BLE001
+        return f"packs: unavailable ({type(e).__name__}: {e})"
+
+
 def browser_rail_line() -> str:
     """The browser RAIL (custody-aware), distinct from the playwright INSTALL line
     above. A custody process cannot launch the chromium the line above found; it
@@ -131,6 +169,19 @@ def browser_rail_line() -> str:
     except Exception as e:  # never fail doctor on a probe
         return f"browser rail: unreadable ({type(e).__name__})"
     return f"browser rail: {rail.line()}"
+
+
+def x_oauth2_doctor_line(env: dict) -> str:
+    """The X OAuth 2.0 login (the DM rail): re-login needed (an open ``x_oauth2``
+    credential verdict, with its since + remedy) / stored / env token / none.
+    The SAME line `/status` renders (``core.status_snapshot.x_oauth2_line``),
+    read from the report's data home. Never raises."""
+    try:
+        from core.status_snapshot import x_oauth2_line
+        line, _state = x_oauth2_line(doctor_data_home(env))
+        return line
+    except Exception as e:  # never fail doctor on a probe
+        return f"X login (OAuth 2.0, DMs): unreadable ({type(e).__name__})"
 
 
 def live_activity_line() -> str:
@@ -228,62 +279,31 @@ def setup_lines(env: dict) -> list[str]:
 
     # avatar
     try:
-        from core.instance import pfp_path, resolve_instance_id
-        instance_id = resolve_instance_id(env)
-        png = pfp_path(Path(data_home), instance_id)
-        if png.is_file():
-            out.append(f"avatar: generated ({png})")
+        from core.avatar import load_avatar
+        from core.instance import resolve_instance_id
+        st = load_avatar(Path(data_home), resolve_instance_id(env))
+        if st.is_set and st.is_default:
+            out.append("avatar: the default polyrob mark (optional — `polyrob avatar set <image>`)")
+        elif st.is_set:
+            out.append(f"avatar: set ({st.source or 'unknown source'})")
+        elif st.state == "unreadable":
+            out.append(f"avatar: unreadable — {st.detail}")
         else:
-            out.append("avatar: not generated (optional — `polyrob pfp generate` or /pfp)")
+            out.append("avatar: not set (optional — `polyrob avatar set <image>`)")
     except Exception:
         out.append("avatar: unknown")
 
-    # surfaces (env-detectable configuration signals only).
-    # `polyrob gateway` gates telegram/discord/slack on their *_SURFACE_ENABLED flag
-    # (see cli/commands/gateway.py ~123-139/196/313/333) — a stale token alone does
-    # NOT make the gateway start the surface. Their standalone commands
-    # (`polyrob telegram`/`discord`/`slack`) DO run off the token alone (they
-    # `os.environ.setdefault(..._SURFACE_ENABLED, "true")` before starting), so a
-    # token-only reading is still actionable, just not via the gateway. The four
-    # flag-only surfaces (email/signal/x-dm/whatsapp) have no separate token signal
-    # to cross-check, so their semantics are unchanged.
+    # surfaces — ONE reader (`cli.surfaces_config`), shared with
+    # `polyrob service`, which has to answer the same question to decide
+    # whether a background service is worth offering.
     try:
-        def _flag_on(v) -> bool:
-            # Mirror core.env.bool_env/parse_bool's falsey-DENYlist semantics (any
-            # value not in _FALSEY is truthy) — NOT an allow-list. An allow-list here
-            # previously gave backward guidance: e.g. DISCORD_SURFACE_ENABLED=enabled
-            # actually starts the surface (bool_env), but an allow-list read it as off.
-            raw = str(v or "").strip().lower()
-            return raw not in _FALSEY
-
-        token_surfaces = (
-            ("telegram", "TELEGRAM_SURFACE_ENABLED", "TELEGRAM_BOT_TOKEN"),
-            ("discord", "DISCORD_SURFACE_ENABLED", "DISCORD_BOT_TOKEN"),
-            ("slack", "SLACK_SURFACE_ENABLED", "SLACK_BOT_TOKEN"),
-        )
-        flag_only_surfaces = (
-            ("email", "EMAIL_SURFACE_ENABLED"),
-            ("signal", "SIGNAL_SURFACE_ENABLED"),
-            ("x-dm", "X_SURFACE_ENABLED"),
-            ("whatsapp", "WHATSAPP_SURFACE_ENABLED"),
-        )
-        configured: list[str] = []
-        for name, flag_key, token_key in token_surfaces:
-            flag_on = _flag_on(env.get(flag_key))
-            has_token = bool((env.get(token_key) or "").strip())
-            if flag_on and has_token:
-                configured.append(name)
-            elif flag_on:
-                configured.append(f"{name} (enabled, token missing)")
-            elif has_token:
-                configured.append(f"{name} (token only — set {flag_key} to run via gateway)")
-        for name, flag_key in flag_only_surfaces:
-            if _flag_on(env.get(flag_key)):
-                configured.append(name)
+        from cli.surfaces_config import describe_surfaces
+        configured = describe_surfaces(env)
         if configured:
             out.append(f"surfaces: {', '.join(configured)}")
         else:
-            out.append("surfaces: none configured (optional — see `polyrob gateway --help`)")
+            out.append("surfaces: none configured (optional — `polyrob setup` or "
+                       "`polyrob gateway --help`)")
     except Exception:
         out.append("surfaces: unknown")
 
@@ -296,18 +316,87 @@ def setup_lines(env: dict) -> list[str]:
     except Exception:
         out.append("persona: unknown")
 
-    # SOUL / identity docs
+    # SOUL / identity docs. 062 seeds these at init, so "a file exists" no
+    # longer means "the owner wrote it" — compare against the digest the
+    # install recorded. A seeded default rendering as "authored" would be a
+    # confident lie in exactly the place the owner looks to find out.
     try:
         base = Path(data_home) / "identity"
         present = [n for n in ("identity.md", "operating.md")
                    if (base / n).is_file() and (base / n).read_text().strip()]
-        if present:
-            out.append(f"identity docs: authored ({', '.join(present)})")
+        if not present:
+            out.append("identity docs: none (author with `polyrob soul init`)")
+        elif _identity_is_seed(base / "identity.md"):
+            out.append("identity docs: seeded default, unedited "
+                       "(make it yours — `polyrob soul init --force`)")
         else:
-            out.append("identity docs: default (optional — author with `polyrob soul init`)")
+            out.append(f"identity docs: authored ({', '.join(present)})")
     except Exception:
         out.append("identity docs: unknown")
+
+    # bootstrap record — what the install actually did (062). "absent" and
+    # "unreadable" are different answers and the module keeps them apart.
+    try:
+        from core.bootstrap_marker import describe as describe_bootstrap
+        out.append(describe_bootstrap())
+    except Exception:
+        out.append("bootstrap: unknown")
+
+    # background service
+    try:
+        out.append(_service_line())
+    except Exception:
+        out.append("service: unknown")
     return out
+
+
+def _identity_is_seed(identity_md) -> bool:
+    """True when identity.md is still byte-for-byte the digest init recorded."""
+    import hashlib
+    try:
+        from core.bootstrap_marker import read_marker
+        status, data = read_marker()
+        if status != "ok" or not data:
+            return False
+        recorded = data.get("soul_seed_sha256") or ""
+        if not recorded:
+            return False
+        actual = hashlib.sha256(identity_md.read_bytes()).hexdigest()
+        return actual == recorded
+    except Exception:
+        return False
+
+
+def _service_line() -> str:
+    """Whether the agent keeps running after the terminal closes.
+
+    ⚠️ Two different things can be true here, and reading only one of them is
+    how a DEPLOYED box came to report "service: not installed" while
+    ``polyrob.service`` was the process asking. A single-user install owns a
+    systemd USER unit (or a launchd agent); a server owns ``polyrob*`` SYSTEM
+    units. Report whichever exists, and both when both do.
+    """
+    from cli.commands.service import (LAUNCHD_LABEL, UNIT_NAME,
+                                      _launchd_plist_path, _platform,
+                                      _systemd_unit_path)
+    found = []
+    plat = _platform()
+    if plat == "linux" and _systemd_unit_path().is_file():
+        found.append(f"{UNIT_NAME} (user)")
+    elif plat == "macos" and _launchd_plist_path().is_file():
+        found.append(f"{LAUNCHD_LABEL} (launchd)")
+    try:
+        from cli.commands.update import _detect_polyrob_units
+        system_units = _detect_polyrob_units()
+    except Exception:
+        system_units = []
+    if system_units:
+        found.append(", ".join(system_units) + " (system)")
+    if found:
+        return "service: " + "; ".join(found) + " — `polyrob service status`"
+    if plat == "unsupported":
+        return "service: unsupported on this platform (run `polyrob gateway` yourself)"
+    return "service: not installed (optional — `polyrob service install`)"
 
 
 # --- credential source provenance (W1.3) --------------------------------------
@@ -709,7 +798,11 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
         try:
             from core.wallet import derivation as _deriv
             _scheme = _deriv.resolve_scheme(env=env)
-            _deriv.derive_key((env.get("AGENT_WALLET_MASTER_SEED") or "").strip(), "treasury", _scheme)
+            # CR-L30: the SAME normalization the runtime applies (never a bare
+            # .strip(), which named a different legacy address than the agent).
+            from core.wallet.config import normalize_master_seed
+            _deriv.derive_key(normalize_master_seed(env.get("AGENT_WALLET_MASTER_SEED"), env=env) or "",
+                              "treasury", _scheme)
             # H14c: report caps too, so "on" is informative — and flag "no daily
             # cap" as the real (unlimited) posture, mirroring the wallet view (M13).
             # H3 (2026-08-22): delegate to the SAME parsers load_wallet_config()
@@ -802,20 +895,23 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
                 lines.append("sqlite-vec: loadable")
             except Exception:
                 lines.append(
-                    "sqlite-vec: NOT loadable (local_vector degrades to FTS5 — install apsw + sqlite-vec)"
+                    "sqlite-vec: NOT loadable (local_vector degrades to FTS5 — pip install 'polyrob[memory-vector]')"
                 )
         else:
             lines.append(
-                "sqlite-vec: NOT loadable (local_vector degrades to FTS5 — install apsw + sqlite-vec)"
+                "sqlite-vec: NOT loadable (local_vector degrades to FTS5 — pip install 'polyrob[memory-vector]')"
             )
     except Exception:
         lines.append(
-            "sqlite-vec: NOT loadable (local_vector degrades to FTS5 — install apsw + sqlite-vec)"
+            "sqlite-vec: NOT loadable (local_vector degrades to FTS5 — pip install 'polyrob[memory-vector]')"
         )
 
     # Embedder presence — importlib probe, no model instantiated.
     has_embedder = importlib.util.find_spec("sentence_transformers") is not None
-    lines.append(f"embedder: {'present' if has_embedder else 'absent'}")
+    lines.append("embedder: present" if has_embedder
+                 else "embedder: absent (vector recall runs keyword-only — pip install 'polyrob[memory-vector]')")
+    lines.append(optional_extras_line(rob_local))
+    lines.append(packs_line())
 
     # Environment checks (3.3, 2026-07-14 review): python floor, [server] extra,
     # playwright browser, and DB-schema-vs-code — each a single honest line.
@@ -823,6 +919,7 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
     lines.append(server_extra_line())
     lines.append(playwright_line(env))
     lines.append(browser_rail_line())
+    lines.append(x_oauth2_doctor_line(env))
     lines.append(schema_status_line(env))
     lines.append(live_activity_line())
 
@@ -1129,7 +1226,7 @@ def _changed_from_default(r, dynamic_default) -> bool:
 
 def flags_report(env: dict, local_absent_means_on: bool = True, *,
                  group: str | None = None, search: str | None = None,
-                 changed: bool = False) -> list[str]:
+                 changed: bool = False, show_all: bool = True) -> list[str]:
     """Resolved env-flag registry dump (SA-05), grouped, secrets masked.
 
     Pure over ``env`` for explicit values; posture/local-derived DEFAULTS come
@@ -1151,9 +1248,14 @@ def flags_report(env: dict, local_absent_means_on: bool = True, *,
     whose effective value differs from their default, plus the frozen/INERT
     rows (always interesting). A filtered report with zero matching flags
     collapses to the one-line "no flags match" message.
+
+    067 F1: ``show_all=False`` keeps only the PUBLIC tier (``core.flags_catalog``
+    tier column) plus any flag explicitly set in ``env`` or reported INERT, and
+    ends with one line naming how many rows it hid. The CLI passes False for a
+    bare ``--flags``; every filter (and ``--all``) searches all tiers.
     """
     from core.config_policy.flag_defaults import dynamic_flag_default
-    from core.flags import resolve_all
+    from core.flags import REGISTRY, resolve_all
 
     group_needle = group.lower() if group else None
     search_needle = search.lower() if search else None
@@ -1186,6 +1288,7 @@ def flags_report(env: dict, local_absent_means_on: bool = True, *,
                          "env value for those flags cannot be detected")
         emitted_group = None
         matched = 0
+        hidden = 0
         for r in resolve_all(env, dynamic_default=dynamic_flag_default):
             if group_needle is not None and group_needle not in r.group.lower():
                 continue
@@ -1195,6 +1298,10 @@ def flags_report(env: dict, local_absent_means_on: bool = True, *,
                             and not _frozen_values_agree(r.value, frozen_truth[r.name]))
             if (changed and not frozen_inert
                     and not _changed_from_default(r, dynamic_flag_default)):
+                continue
+            if (not show_all and not frozen_inert and r.source != "env"
+                    and REGISTRY[r.name].tier != "public"):
+                hidden += 1
                 continue
             if r.group != emitted_group:
                 emitted_group = r.group
@@ -1211,6 +1318,9 @@ def flags_report(env: dict, local_absent_means_on: bool = True, *,
             os.environ.pop("POLYROB_LOCAL", None)
     if filtering and matched == 0:
         return [_NO_FLAGS_MATCH]
+    if hidden:
+        lines.append(f"({hidden} advanced/internal flags at their default are hidden "
+                     "— --all shows every flag; --search/--group/--changed search all)")
     return lines
 
 
@@ -1246,7 +1356,11 @@ def perms_report(*, strict: bool = False, as_json: bool = False) -> int:
 
 @click.command("doctor")
 @click.option("--flags", "show_flags", is_flag=True,
-              help="Dump every registered env flag with its resolved value and source.")
+              help="Dump the public env flags (plus any you set) with their "
+                   "resolved value and source.")
+@click.option("--all", "flag_all", is_flag=True,
+              help="With --flags: every registered flag, advanced and internal "
+                   "tiers included. Implies --flags.")
 @click.option("--group", "flag_group", metavar="SUBSTRING", default=None,
               help="Only flag groups whose name contains SUBSTRING "
                    "(case-insensitive). Implies --flags.")
@@ -1271,8 +1385,9 @@ def perms_report(*, strict: bool = False, as_json: bool = False) -> int:
                    "its state/reason/data + ranked health) plus the rendered "
                    "prose. --full adds the whole check transcript; --flags mode "
                    "emits {\"report\": [lines]} only.")
-def doctor(show_flags: bool, flag_group: str | None, flag_search: str | None,
-           flag_changed: bool, show_full: bool, show_perms: bool,
+def doctor(show_flags: bool, flag_all: bool, flag_group: str | None,
+           flag_search: str | None, flag_changed: bool, show_full: bool,
+           show_perms: bool,
            perms_strict: bool, as_json: bool):
     """Health snapshot first (pause state, ranked issues, every status
     section) — the same view `polyrob autonomy status` renders. The full
@@ -1285,14 +1400,17 @@ def doctor(show_flags: bool, flag_group: str | None, flag_search: str | None,
     setup_project_path()
     setup_sqlite_compat()
     load_env(local_mode=True)
-    show_flags = show_flags or bool(flag_group) or bool(flag_search) or flag_changed
+    show_flags = (show_flags or flag_all or bool(flag_group) or bool(flag_search)
+                  or flag_changed)
 
     if show_perms:
         raise SystemExit(perms_report(strict=perms_strict, as_json=as_json))
 
     if show_flags:
-        report = flags_report(dict(os.environ), group=flag_group,
-                              search=flag_search, changed=flag_changed)
+        report = flags_report(
+            custody_environ(), group=flag_group, search=flag_search,
+            changed=flag_changed,
+            show_all=bool(flag_all or flag_group or flag_search or flag_changed))
         if as_json:
             import json as _json
             click.echo(_json.dumps({"report": report}, indent=2))
@@ -1321,7 +1439,7 @@ def _emit_doctor(show_full: bool, as_json: bool) -> None:
         # same thing it does on the text view: the transcript is detail, so it
         # is computed (and shipped) only when asked for.
         payload = {"status": status, "snapshot": _snapshot_json()}
-        payload["report"] = (doctor_report(dict(os.environ)) if show_full
+        payload["report"] = (doctor_report(custody_environ()) if show_full
                              else [DOCTOR_FULL_POINTER])
         payload["full"] = bool(show_full)
         click.echo(_json.dumps(payload, indent=2, default=str))
@@ -1330,7 +1448,7 @@ def _emit_doctor(show_full: bool, as_json: bool) -> None:
         click.echo(line)
     click.echo("")
     if show_full:
-        for line in doctor_report(dict(os.environ)):
+        for line in doctor_report(custody_environ()):
             click.echo(line)
     else:
         click.echo(DOCTOR_FULL_POINTER)

@@ -40,7 +40,7 @@ def test_scan_parses_transfer_logs_with_correct_amount():
     # on. `amount_usd` is unchanged and is display-only.
     assert out == [{
         "tx_hash": "0xabc", "from": from_addr, "amount_raw": 12_340000,
-        "amount_usd": 12.34, "block": 100,
+        "amount_usd": 12.34, "block": 100, "log_index": None,
     }]
 
 

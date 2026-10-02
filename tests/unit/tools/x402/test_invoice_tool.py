@@ -299,7 +299,7 @@ def test_invoice_card_render_failure_is_fail_open(monkeypatch, tmp_path):
     import modules.x402.invoicing as inv
     monkeypatch.setattr(inv, "create_payment_request", fake_create)
 
-    import modules.pfp.cards as cards
+    import modules.cards.cards as cards
 
     def boom(*a, **kw):
         raise RuntimeError("render exploded")

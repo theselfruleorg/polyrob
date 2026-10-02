@@ -21,28 +21,34 @@ import { describe, it, expect } from "vitest";
 import {
   buildFiles,
   copyFrom,
-  flattenTree,
+  bindToggle,
+  drawFolder,
+  folderLinkLabel,
   renderFiles,
   renderTimeline,
+  timelineCount,
   timelineLines,
   toSeconds,
   verdictLabel,
 } from "../static/app/workpane.js";
 
+// The page hands these over as data-* on #workpane-copy; the Python ratchet
+// tests/unit/webview/test_js_copy_handover.py is the hand-over check.
 const COPY = {
   files_title: "Files",
-  files_empty: "This chat has not made or been given any files yet.",
-  files_unreadable: "I could not read this chat's folder.",
-  files_tree_unreadable: "I could not read this chat's folder, so I am showing only what it recorded as finished.",
-  files_ledger_unreadable: "I could not read the record of what this chat finished, so I cannot tell which of these are ready for you.",
-  tier_folder: "In this chat's folder",
-  tier_folder_why: "everything it holds right now",
+  files_empty: "No files yet.",
+  files_unreadable: "I could not load this chat's files.",
+  files_tree_unreadable: "I could not load all files. These are only the finished ones.",
+  files_ledger_unreadable: "I cannot tell which of these files are finished.",
   tier_ready: "Ready for you",
-  tier_ready_why: "Finished things",
-  tier_working: "Working files",
-  tier_working_why: "What Rob made to do the job, not for you",
-  tier_given: "Things you gave Rob",
-  tier_given_why: "What you handed it",
+  tier_working: "Rob's working files",
+  tier_given: "From you",
+  show_all: "Show all {count}",
+  shared_link: "Browse the shared folder ({count})",
+  shared_link_more: "Browse the shared folder ({count} or more)",
+  folder_link: "Browse this chat's folder ({count})",
+  shared_title: "Shared files",
+  shared_note: "Every chat and job writes here. These are not only this chat's files.",
   verdict_ok: "ready",
   verdict_changed: "changed since it was made",
   verdict_missing: "no longer there",
@@ -50,27 +56,21 @@ const COPY = {
   timeline_title: "Timeline",
   timeline_empty: "Nothing has happened in this chat yet.",
   timeline_unreadable: "I could not read what this chat did.",
-  timeline_count: "{count} actions",
+  timeline_count: "{count} steps",
+  timeline_count_one: "1 step",
   // The narrator's fallback keys, the same ones the transcript reads.
   act_did_work: "Ran a tool",
   act_failed: "An action did not finish",
 };
 
-/** A workspace tree with a deliverable, a working file and an inbound file. */
-const TREE = {
-  name: "workspace",
-  type: "dir",
-  children: [
-    { name: "summary.md", type: "file" },
-    { name: "scratch.py", type: "file" },
-    { name: "inbound", type: "dir", children: [{ name: "photo.jpg", type: "file" }] },
-  ],
-};
-
-/** The ledger's typed rows — `path` is a basename, as artifacts_api emits. */
+/** The ledger's typed rows — `name` is the basename, `path` workspace-relative. */
 const ARTIFACTS = [
-  { id: "a1", path: "summary.md", kind: "report", url: null, verdict: "ok" },
+  { id: "a1", name: "summary.md", path: "summary.md", kind: "report", url: null, verdict: "ok" },
+  { id: "a2", name: "scratch.py", path: "scratch.py", kind: "code", url: null, verdict: "ok" },
 ];
+
+/** The `?path=inbound&depth=1` tree. */
+const INBOUND = { name: "inbound", type: "dir", children: [{ name: "photo.jpg", type: "file" }] };
 
 function frame() {
   document.body.innerHTML =
@@ -84,42 +84,91 @@ function frame() {
   };
 }
 
-describe("the workspace tree flattens to file paths", () => {
-  it("walks directories but emits only files, relative to the root", () => {
-    expect(flattenTree(TREE)).toEqual([
-      "summary.md",
-      "scratch.py",
-      "inbound/photo.jpg",
-    ]);
-  });
-
-  it("is an empty list for an empty or missing tree, never a crash", () => {
-    expect(flattenTree({ children: [] })).toEqual([]);
-    expect(flattenTree(null)).toEqual([]);
-    expect(flattenTree(undefined)).toEqual([]);
-  });
-});
-
-describe("Files merges the tree and the ledger into three tiers", () => {
-  it("puts a deliverable in ready, a scratch file in working, inbound in given", () => {
-    const built = buildFiles(TREE, ARTIFACTS);
+describe("Files: this chat's files come from the ledger (070 W0.15)", () => {
+  it("ledger rows only", () => {
+    const built = buildFiles(ARTIFACTS, null);
     expect(built.ready.map((a) => a.name)).toEqual(["summary.md"]);
-    expect(built.ready[0].verdict).toBe("ok");
-    expect(built.working.map((f) => f.name)).toEqual(["scratch.py"]);
-    expect(built.given.map((f) => f.name)).toEqual(["photo.jpg"]);
+    expect(built.working.map((a) => a.name)).toEqual(["scratch.py"]);
+    expect(built.given).toEqual([]);
   });
 
-  it("never doubles a deliverable into working", () => {
-    // summary.md is BOTH a tree file and a ledger row; it must appear once.
-    const built = buildFiles(TREE, ARTIFACTS);
-    expect(built.working.some((f) => f.name === "summary.md")).toBe(false);
+  it("kinds split ready and working", () => {
+    const built = buildFiles([
+      { name: "p.html", kind: "page" }, { name: "r.md", kind: "report" },
+      { name: "d.csv", kind: "data" }, { name: "c.py", kind: "code" },
+      { name: "f.bin", kind: "file" },
+    ], null);
+    expect(built.ready.map((a) => a.name)).toEqual(["p.html", "r.md", "d.csv"]);
+    expect(built.working.map((a) => a.name)).toEqual(["f.bin", "c.py"]); // newest first
   });
 
-  it("is safe with no ledger at all — every tree file is a working file", () => {
-    const built = buildFiles(TREE, null);
-    expect(built.ready).toEqual([]);
-    expect(built.working.map((f) => f.name)).toEqual(["summary.md", "scratch.py"]);
-    expect(built.given.map((f) => f.name)).toEqual(["photo.jpg"]);
+  it("inbound is given", () => {
+    const built = buildFiles([], INBOUND);
+    expect(built.given).toEqual([{ name: "photo.jpg", path: "inbound/photo.jpg" }]);
+  });
+
+  it("a shared tree draws the link with its count", () => {
+    const { files, filesState } = frame();
+    renderFiles(files, filesState, {
+      artifacts: [], inbound: { children: [] },
+      folder: { children: [], total: 50, truncated: false, shared: true },
+    }, COPY);
+    expect(filesState.textContent).toBe(COPY.files_empty);
+    expect(files.querySelector(".folder-link").textContent).toBe("Browse the shared folder (50)");
+    expect(folderLinkLabel({ total: 3, shared: false }, COPY)).toBe("Browse this chat's folder (3)");
+  });
+
+  it("an empty folder of this chat draws no link", () => {
+    const { files, filesState } = frame();
+    renderFiles(files, filesState, {
+      artifacts: [], inbound: { children: [] },
+      folder: { children: [], total: 0, truncated: false, shared: false },
+    }, COPY);
+    expect(files.querySelector(".folder-link")).toBeNull();
+  });
+
+  it("a truncated count says more", () => {
+    expect(folderLinkLabel({ total: 500, truncated: true, shared: true }, COPY))
+      .toBe("Browse the shared folder (500 or more)");
+  });
+
+  it("working caps at 8 with show all", () => {
+    const many = Array.from({ length: 11 }, (_, i) => ({ name: `w${i}.py`, path: `w${i}.py`, kind: "code" }));
+    const { files, filesState } = frame();
+    renderFiles(files, filesState, { artifacts: many, inbound: { children: [] } }, COPY);
+    const rows = () => [...files.querySelectorAll("tr")].filter((r) => r.textContent.match(/^w\d+\.py/));
+    expect(rows().length).toBe(8);
+    const btn = [...files.querySelectorAll("button")].find((b) => b.textContent === "Show all 11");
+    expect(btn).toBeTruthy();
+    btn.click();
+    expect(rows().length).toBe(11);
+  });
+
+  it("ledger unreadable shows given and the named failure", () => {
+    const { files, filesState } = frame();
+    const drew = renderFiles(files, filesState, {
+      artifacts: null, artifactsUnreadable: true, inbound: INBOUND,
+    }, COPY);
+    expect(drew).toBe("partial");
+    expect(files.textContent).toContain(COPY.files_ledger_unreadable);
+    expect(files.textContent).toContain("photo.jpg");
+    expect(files.textContent).toContain(COPY.tier_given);
+    expect(files.textContent).not.toContain(COPY.tier_working);
+  });
+
+  it("the shared folder opens on click, with its note, capped", async () => {
+    const children = Array.from({ length: 10 }, (_, i) => ({ name: `f${i}`, type: i === 0 ? "dir" : "file" }));
+    const asked = [];
+    const list = document.createElement("div");
+    await drawFolder(list, "", {
+      sessionId: "s1",
+      fetchTree: async (path) => { asked.push(path); return { children }; },
+    }, COPY, true);
+    expect(asked).toEqual([""]);
+    expect(list.textContent).toContain(COPY.shared_title);
+    expect(list.textContent).toContain(COPY.shared_note);
+    expect(list.textContent).toContain("Show all 10");
+    expect(list.querySelector("button").textContent).toBe("f0/");
   });
 });
 
@@ -136,100 +185,54 @@ describe("a verdict is the ledger's typed value, never a guess", () => {
   });
 });
 
-describe("renderFiles distinguishes the three answers", () => {
-  it("lists a workspace file and a typed artifact WITH its verdict", () => {
+describe("renderFiles distinguishes the answers", () => {
+  it("lists the ledger rows WITH their verdict and what you gave", () => {
     const { files, filesState } = frame();
-    const drew = renderFiles(files, filesState, {
-      tree: TREE, artifacts: ARTIFACTS,
-    }, COPY);
+    const drew = renderFiles(files, filesState, { artifacts: ARTIFACTS, inbound: INBOUND }, COPY);
     expect(drew).toBe("rows");
     const text = files.textContent;
-    // the deliverable, with its verdict:
     expect(text).toContain("summary.md");
-    expect(text).toContain("ready"); // verdict_ok
-    // the working file:
     expect(text).toContain("scratch.py");
-    // the thing you gave it:
     expect(text).toContain("photo.jpg");
-    // and the verdict rode a row it can be read off of:
     const deliverable = files.querySelector('tr[data-verdict="ok"]');
-    expect(deliverable).not.toBeNull();
     expect(deliverable.querySelector(".why").textContent).toBe("ready");
   });
 
-  it("an empty workspace is the empty state, not a blank", () => {
+  it("no files is the empty state, not a blank", () => {
     const { files, filesState } = frame();
-    const drew = renderFiles(files, filesState, {
-      tree: { name: "workspace", type: "dir", children: [], empty: true },
-      artifacts: [],
-    }, COPY);
+    const drew = renderFiles(files, filesState, { artifacts: [], inbound: { children: [] } }, COPY);
     expect(drew).toBe("empty");
     expect(filesState.hidden).toBe(false);
     expect(filesState.textContent).toBe(COPY.files_empty);
-    expect(files.children.length).toBe(0);
   });
 
   it("says it could not read rather than showing an empty list", () => {
     const { files, filesState } = frame();
     const drew = renderFiles(files, filesState, {
-      tree: null, artifacts: null,
+      artifacts: null, inbound: null, inboundUnreadable: true,
     }, COPY);
     expect(drew).toBe("unreadable");
     expect(files.querySelector(".entry.is-unknown")).not.toBeNull();
     expect(files.textContent).toContain(COPY.files_unreadable);
-    expect(files.textContent).not.toBe(COPY.files_empty);
   });
 
-  it("treats a tree ERROR flag as unreadable, not empty", () => {
+  it("the three why lines are gone", () => {
     const { files, filesState } = frame();
-    const drew = renderFiles(files, filesState, {
-      tree: { name: "workspace", type: "dir", children: [], error: "boom" },
-      artifacts: null,
-    }, COPY);
-    expect(drew).toBe("unreadable");
+    renderFiles(files, filesState, { artifacts: ARTIFACTS, inbound: INBOUND }, COPY);
+    const heads = [...files.querySelectorAll("tr")].filter((r) => !r.querySelector(".val"));
+    heads.forEach((h) => expect(h.querySelector(".why")).toBeNull());
   });
 });
 
-describe("one source unreadable is named, never a confident-empty", () => {
-  it("FOLDER unreadable, ledger fine: names the folder read, still shows deliverables", () => {
+describe("the inbound read failing is named, never a confident-empty", () => {
+  it("names the failure and still shows the ledger rows", () => {
     const { files, filesState } = frame();
     const drew = renderFiles(files, filesState, {
-      tree: null, // the folder read failed
-      artifacts: ARTIFACTS, // the ledger read fine
+      artifacts: ARTIFACTS, inbound: null, inboundUnreadable: true,
     }, COPY);
     expect(drew).toBe("partial");
-    // the folder read that failed is NAMED, not silently empty:
-    expect(files.querySelector(".entry.is-unknown")).not.toBeNull();
     expect(files.textContent).toContain(COPY.files_tree_unreadable);
-    // the deliverables we DO have are still shown, with their verdict:
     expect(files.textContent).toContain("summary.md");
-    const deliverable = files.querySelector('tr[data-verdict="ok"]');
-    expect(deliverable).not.toBeNull();
-    expect(deliverable.querySelector(".why").textContent).toBe("ready");
-  });
-
-  it("LEDGER unreadable, folder fine: names the ledger read and does NOT relabel a deliverable as working", () => {
-    const { files, filesState } = frame();
-    const drew = renderFiles(files, filesState, {
-      tree: TREE, // the folder read fine (summary.md is a real deliverable in it)
-      artifacts: null, // the ledger read failed
-      artifactsUnreadable: true,
-    }, COPY);
-    expect(drew).toBe("partial");
-    // the ledger read that failed is NAMED:
-    expect(files.querySelector(".entry.is-unknown")).not.toBeNull();
-    expect(files.textContent).toContain(COPY.files_ledger_unreadable);
-    // summary.md (a real deliverable) must NOT be relabeled under "Working files":
-    expect(files.textContent).not.toContain(COPY.tier_working);
-    // the folder's files sit under the NEUTRAL heading instead:
-    expect(files.textContent).toContain(COPY.tier_folder);
-    expect(files.textContent).toContain("summary.md");
-    expect(files.textContent).toContain("scratch.py");
-    // no verdict is guessed while the ledger is unknown:
-    expect(files.querySelector("tr[data-verdict]")).toBeNull();
-    // inbound is folder-derived and stays its own honest tier:
-    expect(files.textContent).toContain("photo.jpg");
-    expect(files.textContent).toContain(COPY.tier_given);
   });
 });
 
@@ -299,6 +302,33 @@ describe("the Timeline is one narrated line per action", () => {
   });
 });
 
+describe("the timeline counts the same steps as the thread", () => {
+  it("the timeline skips send_message and done", () => {
+    const lines = timelineLines([
+      { type: "tool_result", timestamp: 1, data: { call_id: "a", action_name: "read_file", narration: "Read a file", success: true } },
+      { type: "tool_result", timestamp: 2, data: { call_id: "b", action_name: "send_message", narration: "x", success: true } },
+      { type: "tool_result", timestamp: 3, data: { call_id: "c", action_name: "done", narration: "y", success: true } },
+    ], COPY, 0);
+    expect(lines.map((l) => l.line)).toEqual(["Read a file"]);
+  });
+
+  it("dedupes by event id first, then call id", () => {
+    const e = { _id: "x1", type: "tool_result", timestamp: 1, data: { narration: "One line" } };
+    const lines = timelineLines([e, { ...e }], COPY, 0);
+    expect(lines.length).toBe(1);
+  });
+});
+
+describe("070 E.13 — the Timeline counts steps, singular-safe", () => {
+  it("one step is singular, many are steps, never actions", () => {
+    expect(timelineCount(1, COPY)).toBe("1 step");
+    expect(timelineCount(3, COPY)).toBe("3 steps");
+    expect(timelineCount(0, COPY)).toBe("0 steps");
+    expect(timelineCount("—", COPY)).toBe("— steps");
+    expect(timelineCount(3, COPY)).not.toMatch(/action/);
+  });
+});
+
 describe("timestamps in seconds or milliseconds", () => {
   it("normalises a millisecond timestamp to seconds", () => {
     expect(toSeconds(1_700_000_000_000)).toBe(1_700_000_000);
@@ -319,5 +349,33 @@ describe("the copy crosses from Python on data attributes", () => {
 
   it("is empty, not broken, when the element is missing", () => {
     expect(copyFrom(null)).toEqual({});
+  });
+
+  it("a partial read shows the inbound sentence", () => {
+    const node = document.createElement("div");
+    node.setAttribute("data-files_tree_unreadable",
+      "I could not load all files. These are only the finished ones.");
+    const { files, filesState } = frame();
+    renderFiles(files, filesState, { artifacts: ARTIFACTS, inboundUnreadable: true }, copyFrom(node));
+    const entry = files.querySelector(".entry.is-unknown");
+    expect(entry).not.toBeNull();
+    expect(entry.textContent).toContain("I could not load all files.");
+  });
+});
+
+
+describe("070 W0.16 — the drawer toggle", () => {
+  it("opens and closes the pane, and Escape closes it", () => {
+    document.body.innerHTML =
+      '<button id="t" aria-expanded="false"></button><aside id="p"></aside>';
+    const toggle = document.getElementById("t");
+    const pane = document.getElementById("p");
+    bindToggle(toggle, pane);
+    toggle.click();
+    expect(pane.classList.contains("is-open")).toBe(true);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    expect(pane.classList.contains("is-open")).toBe(false);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
   });
 });

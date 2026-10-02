@@ -176,7 +176,7 @@ def test_an_unbound_console_draws_the_badge_uncertain(monkeypatch):
     assert badge is not None
     assert "is-uncertain" in badge.get("class", [])
     truth = soup.select_one(".head-truth").get_text(" ", strip=True)
-    assert "unreadable" in truth
+    assert "I could not check" in truth
 
 
 def test_the_page_says_WHY_it_could_not_read_them(monkeypatch):

@@ -64,6 +64,34 @@ works as an override — for exactly two hours.
 Scopes to request: `dm.read dm.write tweet.read users.read offline.access`
 (`offline.access` is what makes X issue a refresh token at all).
 
+### Renewing the login from your phone: `/x login`
+
+X revokes the pair when the app's secret is regenerated or the owner revokes
+access, and the refresh then fails for good. You do not need a shell to fix
+it: send **`/x login`** to your agent (Telegram, the terminal chat, or the
+console chat). It answers with a one-time X link. Open it, approve as the
+agent's X account, and X sends your browser back to the console, which stores
+the new pair and says "X login renewed — you can close this tab". You also get
+the "X login renewed" message in chat. **`/x status`** (or bare `/x`) shows the
+state of the API login and the browser session, without any secret.
+
+One-time setup on a deployed instance:
+
+```sh
+# 1. developer.x.com → your app → User authentication settings → Callback URI:
+#    add EXACTLY this URL (keep the 127.0.0.1 one if you also use oauth-login)
+https://<your console host>/api/packs/x/oauth/callback
+
+# 2. the same URL in the instance env — both the agent and the console read it
+X_OAUTH2_REDIRECT_URI=https://<your console host>/api/packs/x/oauth/callback
+```
+
+Then restart both services. Without the flag, `/x login` answers with this
+remedy and does nothing else. The link works once and expires after ten
+minutes; the callback is the console's only unauthenticated route of a pack,
+and its proof is that one-time link, not a console login (the tab X opens may
+have none). The console reaches it even when it runs read-only.
+
 An empty result, or a result containing only the account's own sent messages,
 means only that the configured API access tier returned no inbound events. It
 must not be reported as an empty X inbox. DM lookup requires user-context OAuth,

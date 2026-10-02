@@ -30,57 +30,67 @@ _LAZY_SUBCOMMANDS = {
     "run": "cli.commands.run:run",
     "session": "cli.commands.session:session",
     "sessions": "cli.commands.session:session",  # product vocabulary alias
+    "rails": "cli.commands.rails:rails",  # 036: standing work (rails + grants)
     "model": "cli.commands.model:model",
     "models": "cli.commands.model:model",  # product vocabulary alias
     "skills": "cli.commands.skills:skills",
     "skill": "cli.commands.skill_install:skill",
     "tools": "cli.commands.tools:tools",
     "init": "cli.commands.init:init_cmd",
+    "setup": "cli.commands.init:init_cmd",  # the word every other agent CLI uses
+    "service": "cli.commands.service:service",  # 062: run the agent in the background
+    "uninstall": "cli.commands.uninstall:uninstall_cmd",  # 062
     "config": "cli.commands.config:config",
     "profile": "cli.commands.profile:profile",
     "profiles": "cli.commands.profile:profile",  # product vocabulary alias
     "auth": "cli.commands.auth:auth",
     "keys": "cli.commands.keys:keys",  # 043 A30: the owner's API-key seat
     "doctor": "cli.commands.doctor:doctor",
-    "telegram": "cli.commands.telegram:telegram",
-    "whatsapp": "cli.commands.whatsapp:whatsapp",
-    "email": "cli.commands.email:email",
     "owner": "cli.commands.owner:owner",
     "kb": "cli.commands.kb:kb",
     "serve": "cli.commands.serve:serve",
     "dashboard": "cli.commands.dashboard:dashboard",
     "webgate": "cli.commands.dashboard:dashboard",  # alias
     "surface": "cli.commands.surface:surface",
+    "surfaces": "cli.commands.surfaces:surfaces",  # 064 F6: list / add / probe from the catalog
     "gateway": "cli.commands.gateway:gateway",
     "goals": "cli.commands.goals:goals",
     "cron": "cli.commands.cron:cron",
     "autonomy": "cli.commands.autonomy:autonomy",  # 030 WS-E4 intent verbs
     "apps": "cli.commands.apps:apps",  # 032 durable app service (owner seat + supervisor)
     "subagents": "cli.commands.subagents:subagents",
+    "workers": "cli.commands.workers:workers",  # 041 phase 2: named workers (owner seat)
     "todos": "cli.commands.todos:todos",
     "update": "cli.commands.update:update_cmd",
-    "pfp": "cli.commands.pfp:pfp",
+    "avatar": "cli.commands.avatar:avatar",  # the avatar slot (core/avatar.py)
     "soul": "cli.commands.soul:soul",
     "persona": "cli.commands.persona:persona",  # F4: the character-authoring seat
-    "identity": "cli.commands.identity:identity",  # 043 A14: soul/persona/pfp umbrella
+    "identity": "cli.commands.identity:identity",  # 043 A14: soul/persona/avatar umbrella
     "journey": "cli.commands.journey:journey",
     "finance": "cli.commands.finance:finance",
     "wallet": "cli.commands.wallet:wallet_cmd",
     "datagen": "cli.commands.datagen:datagen",
     "knowledge": "cli.commands.knowledge:knowledge",  # hidden deprecated alias for `kb export` (030 D10)
     "approvals": "cli.commands.approvals:approvals",
-    "discord": "cli.commands.discord:discord",
-    "slack": "cli.commands.slack:slack",
-    "signal": "cli.commands.signal:signal",
-    "x": "cli.commands.x:x",
-    "x-account": "cli.commands.x_account:x_account",
     "browser": "cli.commands.browser:browser",  # 049: the isolated browser service (custody)
+    "pack": "cli.commands.pack:pack",  # 067 P2: installed packs
 }
+
+
+def _surface_commands() -> dict:
+    """``polyrob <surface>`` for every CORE chat surface — from its catalog row
+    (064 F1). A pack surface's command is a pack CLI command (067 P3b), served
+    through ``_pack_commands`` and the pack's own gating."""
+    from core.surfaces.catalog import cli_commands
+    return cli_commands(core_only=True)
+
+
+_LAZY_SUBCOMMANDS.update(_surface_commands())
 
 # --- Help-surface layout (027 WP6, regrouped 043 A14) ---
 # canonical name -> alias names. Aliases stay invocable but render on the
 # canonical row ("session (alias: sessions)"), never as duplicate entries.
-# `soul`/`persona`/`pfp` fold onto `identity` (the new umbrella group, A14);
+# `soul`/`persona`/`avatar` fold onto `identity` (the new umbrella group, A14);
 # `approvals` folds onto `owner` (a display-only alias line for now — `owner
 # approvals` as a real subcommand is phase 3 create work, 043 §4.1); `skill`
 # (the single-skill install pipeline) folds onto `skills`.
@@ -89,9 +99,10 @@ _COMMAND_ALIASES = {
     "model": ("models",),
     "dashboard": ("webgate",),
     "profile": ("profiles",),
-    "identity": ("soul", "persona", "pfp"),
+    "identity": ("soul", "persona", "avatar"),
     "owner": ("approvals",),
     "skills": ("skill",),
+    "setup": ("init",),
 }
 _RELATED_COMMANDS = {name: _COMMAND_ALIASES.pop(name) for name in ("identity", "owner", "skills")}
 _DISPLAY_FOLDS = {**_COMMAND_ALIASES, **_RELATED_COMMANDS}
@@ -102,17 +113,17 @@ _ALIAS_NAMES = {alias for aliases in _DISPLAY_FOLDS.values() for alias in aliase
 # never silently vanish from --help.
 _HELP_GROUPS = [
     ("Start here",
-     ["run", "chat", "init", "auth", "keys", "doctor", "config", "model", "update", "version"]),
+     ["run", "chat", "setup", "auth", "keys", "doctor", "config", "model",
+      "update", "uninstall", "version"]),
     ("Surfaces",
-     ["gateway", "telegram", "whatsapp", "email", "discord", "slack", "signal",
-      "x", "serve", "dashboard"]),
+     ["gateway", "surfaces", *_surface_commands(), "serve", "dashboard", "service"]),
     ("Autonomy & work",
-     ["goals", "cron", "session", "subagents", "skills", "surface", "todos",
-      "apps", "autonomy", "tools", "kb", "browser"]),
+     ["goals", "cron", "session", "subagents", "workers", "skills", "surface", "todos",
+      "apps", "autonomy", "tools", "kb", "browser", "rails"]),
     ("Money",
      ["wallet", "finance", "journey"]),
     ("Owner",
-     ["owner", "identity", "profile"]),
+     ["owner", "identity", "profile", "pack"]),
 ]
 
 
@@ -129,16 +140,33 @@ class _LazyGroup(click.Group):
         super().__init__(*args, **kwargs)
         self.lazy_subcommands = dict(lazy_subcommands or {})
 
+    def _lazy_map(self) -> dict:
+        # A surface catalog row added after import (a test, a plugin) still
+        # gets its command: the surface half is re-read on each lookup.
+        return {**_surface_commands(), **self.lazy_subcommands}
+
+    @staticmethod
+    def _pack_commands() -> dict:
+        """067 P2: command name -> pack id, from the installed packs' pack.toml
+        (read in ``main()``'s phase 1; nothing is imported). Core names win."""
+        from core.packs.state import cli_command_owners
+        return cli_command_owners()
+
     def list_commands(self, ctx):
-        return sorted(set(super().list_commands(ctx)) | set(self.lazy_subcommands))
+        return sorted(set(super().list_commands(ctx)) | set(self._lazy_map())
+                      | set(self._pack_commands()))
 
     def get_command(self, ctx, cmd_name):
-        if cmd_name in self.lazy_subcommands:
+        if cmd_name in self._lazy_map():
             return self._load_lazy(cmd_name)
-        return super().get_command(ctx, cmd_name)
+        cmd = super().get_command(ctx, cmd_name)
+        if cmd is None and cmd_name in self._pack_commands():
+            from cli.commands.pack import PackCommand
+            cmd = PackCommand(cmd_name, self._pack_commands()[cmd_name])
+        return cmd
 
     def _load_lazy(self, cmd_name):
-        modname, attr = self.lazy_subcommands[cmd_name].split(":", 1)
+        modname, attr = self._lazy_map()[cmd_name].split(":", 1)
         cmd = getattr(importlib.import_module(modname), attr)
         if not isinstance(cmd, click.Command):
             raise TypeError(
@@ -161,7 +189,12 @@ class _LazyGroup(click.Group):
             return
 
         listed = set()
-        sections = list(_HELP_GROUPS)
+        # 067 P3b: a pack surface's command (X's `polyrob x`) sits with the core
+        # surface commands, not in "Other".
+        from core.surfaces.catalog import cli_commands as _all_surface_commands
+        sections = [(title, names + [n for n in _all_surface_commands() if n not in names])
+                    if title == "Surfaces" else (title, names)
+                    for title, names in _HELP_GROUPS]
         leftover = [n for n in sorted(available)
                     if not any(n in names for _, names in sections)]
         if leftover:
@@ -278,8 +311,20 @@ def chat_cmd(plain, model, provider, toolset):
     _start_repl(**values)
 
 
+def _register_pack_policies() -> None:
+    """067 P2 phase 1: pack POLICY rows (data from each ``pack.toml``; no pack
+    code runs) register here, before a subcommand imports the policy views.
+    Never stops the CLI — a refused pack is named in ``polyrob pack doctor``."""
+    try:
+        from core.packs.loader import register_policies
+        register_policies()
+    except Exception as exc:  # noqa: BLE001
+        print(f"polyrob: pack discovery failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+
+
 def main():
     """Entry point for [project.scripts]."""
+    _register_pack_policies()
     cli()
 
 

@@ -100,8 +100,7 @@ class RegistrationFile(BaseModel):
     #: The agent's face. ⚠️ OMITTED (None) rather than guessed when there is
     #: nowhere public to serve it from — this field was hardcoded to a
     #: `rob-logo.png` that does not exist anywhere in the tree, so every file
-    #: ever served pointed at a 404. A broken link is worse than no link, and
-    #: `metadata.avatar` below keeps the face reproducible either way.
+    #: ever served pointed at a 404. A broken link is worse than no link.
     image: Optional[str] = Field(None, description="Agent image URL")
     trustMode: str = Field(
         default="local",
@@ -124,10 +123,10 @@ class RegistrationFile(BaseModel):
     #: Whether this agent is currently serving.
     active: bool = Field(default=True, description="Agent is active")
 
-    #: Free-form, spec-permitted. Carries `avatar` = the frozen Mindprint
-    #: {generator, seed, variant} so the face is REPRODUCIBLE by anyone holding
-    #: the open engine even when `image` had to be omitted. That is a stronger
-    #: claim than a hosted PNG makes: a URL can rot or be swapped; a seed cannot.
+    #: Free-form, spec-permitted. Carries `avatar` = {source, sha256} of the
+    #: instance's avatar image (`core/avatar.py`), so a consumer can check that
+    #: the image it fetched is the one the agent declared — a URL can be
+    #: swapped; a hash cannot.
     metadata: Optional[Dict[str, Any]] = Field(
         None, description="Additional agent metadata")
     

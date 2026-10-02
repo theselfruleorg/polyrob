@@ -373,3 +373,20 @@ async def test_status_reports_graduation_progress(monkeypatch):
     res = await tool.launchpad_status(StatusParams(token=TOKEN))
     assert "graduation:" in res.extracted_content
     assert "on the curve" in res.extracted_content
+
+
+# --- 2026-09-29 review E1: the launchpad slippage cap matches every other verb
+
+
+@pytest.mark.parametrize("model,kw", [
+    (TradeParams, dict(token=TOKEN, amount=1.0, max_spend_usd=5.0)),
+    (LaunchParams, dict(name="Rob Coin", symbol="ROB", max_spend_usd=5.0)),
+])
+def test_launchpad_slippage_is_capped_at_1000_bps(model, kw):
+    """CR-M12 capped every swap verb at 1000 bps; the launchpad kept 5000 (50%)."""
+    from pydantic import ValidationError
+    assert model(slippage_bps=1000, **kw).slippage_bps == 1000
+    with pytest.raises(ValidationError):
+        model(slippage_bps=1001, **kw)
+    with pytest.raises(ValidationError):
+        model(slippage_bps=5000, **kw)

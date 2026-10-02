@@ -255,6 +255,51 @@ def ix_set_authority(*, account, current_authority, authority_type: int,
     ])
 
 
+def ix_system_transfer(*, source, destination, lamports: int):
+    """``SystemInstruction::Transfer`` (u32 tag 2, then u64 lamports)."""
+    if int(lamports) <= 0:
+        raise SplBuildError("a transfer must move more than zero lamports")
+    if int(lamports) >= 2 ** 64:
+        raise SplBuildError(f"{lamports} lamports does not fit in a u64")
+    data = struct.pack("<I", 2) + struct.pack("<Q", int(lamports))
+    return _instruction(SYSTEM_PROGRAM, data, [
+        _meta(source, signer=True, writable=True),
+        _meta(destination, signer=False, writable=True),
+    ])
+
+
+def ix_transfer_checked(*, source, mint, destination, owner, amount: int,
+                        decimals: int, token_program: str = TOKEN_PROGRAM):
+    """``TokenInstruction::TransferChecked`` (index 12).
+
+    The CHECKED form on purpose: the program itself refuses unless *mint* is the
+    source account's mint and *decimals* is the mint's, so a mis-sized amount
+    fails on-chain instead of moving 1000x what was meant.
+    """
+    if int(amount) <= 0:
+        raise SplBuildError("a transfer must move more than zero units")
+    if int(amount) >= 2 ** 64:
+        raise SplBuildError(f"{amount} raw units does not fit in a u64")
+    if not 0 <= int(decimals) <= 255:
+        raise SplBuildError(f"decimals {decimals} is not a u8")
+    data = bytes([12]) + struct.pack("<Q", int(amount)) + bytes([int(decimals)])
+    return _instruction(token_program, data, [
+        _meta(source, signer=False, writable=True),
+        _meta(mint, signer=False, writable=False),
+        _meta(destination, signer=False, writable=True),
+        _meta(owner, signer=True, writable=False),
+    ])
+
+
+def associated_token_address(owner, mint, token_program: str) -> str:
+    """The associated token account of *owner* for *mint* under *token_program*."""
+    from solders.pubkey import Pubkey
+    ata, _bump = Pubkey.find_program_address(
+        [_pubkey_bytes(owner), _pubkey_bytes(token_program), _pubkey_bytes(mint)],
+        Pubkey.from_string(ATA_PROGRAM))
+    return str(ata)
+
+
 def _spl_discriminate(namespace: str) -> bytes:
     """``sha256(namespace)[:8]`` — the SPL interface discriminator convention.
 
@@ -366,12 +411,8 @@ def build_fixed_supply_mint(*, payer: str, decimals: int, supply_raw: int,
     raises ``SignerError: not enough signers`` — use ``sign_transaction_with``.
     """
     try:
-        from solders.hash import Hash
         from solders.keypair import Keypair
-        from solders.message import MessageV0
         from solders.pubkey import Pubkey
-        from solders.signature import Signature
-        from solders.transaction import VersionedTransaction
     except ImportError as exc:                     # pragma: no cover - env guard
         raise SplBuildError(
             "solders is not installed — pip install 'polyrob[solana]'") from exc
@@ -406,14 +447,26 @@ def build_fixed_supply_mint(*, payer: str, decimals: int, supply_raw: int,
                          new_authority=None),
     ]
 
+    tx = _compile_unsigned(payer_key, instructions, recent_blockhash,
+                           too_big="the name, symbol or uri is too long")
+    return tx, mint_kp, mint, ata
+
+
+def _compile_unsigned(payer_key, instructions, recent_blockhash, *, too_big: str):
+    """An unsigned v0 transaction with *payer_key* as fee payer, size-checked."""
+    from solders.hash import Hash
+    from solders.message import MessageV0
+    from solders.signature import Signature
+    from solders.transaction import VersionedTransaction
+
     # Empty ALT list, for the reason relay_svm records: a mis-decoded lookup
     # table silently resolves an account index to the WRONG account in a
-    # transaction we then sign. This one measures ~734 bytes and needs none.
+    # transaction we then sign.
     message = MessageV0.try_compile(
         payer_key, instructions, [], Hash.from_string(str(recent_blockhash)))
-    if str(message.account_keys[0]) != str(payer):
+    if str(message.account_keys[0]) != str(payer_key):
         raise SplBuildError(
-            f"the compiled fee payer is {message.account_keys[0]}, not {payer}")
+            f"the compiled fee payer is {message.account_keys[0]}, not {payer_key}")
 
     placeholders = [Signature.default()] * message.header.num_required_signatures
     tx = VersionedTransaction.populate(message, placeholders)
@@ -421,10 +474,52 @@ def build_fixed_supply_mint(*, payer: str, decimals: int, supply_raw: int,
     if size > MAX_TX_BYTES:
         raise SplBuildError(
             f"REFUSED: the compiled transaction is {size} bytes, over Solana's "
-            f"{MAX_TX_BYTES}-byte limit — the name, symbol or uri is too long. "
-            f"This path deliberately does not compress with address-lookup "
-            f"tables.")
-    return tx, mint_kp, mint, ata
+            f"{MAX_TX_BYTES}-byte limit — {too_big}. This path deliberately "
+            f"does not compress with address-lookup tables.")
+    return tx
+
+
+def build_send(*, payer: str, to: str, amount_raw: int, recent_blockhash: str,
+               mint: Optional[str] = None, decimals: Optional[int] = None,
+               token_program: Optional[str] = None):
+    """``(tx, destination_account)`` — send native SOL or an SPL token.
+
+    Native (``mint=None``): ONE System ``Transfer`` of *amount_raw* lamports to
+    *to*.
+
+    SPL: the recipient's associated token account is created IDEMPOTENTLY (a
+    no-op when it exists; the payer funds its rent when it does not), then ONE
+    ``TransferChecked`` from our associated account. ``destination_account`` is
+    the recipient's associated account. Exactly one signer: the payer.
+    """
+    try:
+        from solders.pubkey import Pubkey
+    except ImportError as exc:                     # pragma: no cover - env guard
+        raise SplBuildError(
+            "solders is not installed — pip install 'polyrob[solana]'") from exc
+
+    payer_key = Pubkey.from_string(str(payer))
+    if mint is None:
+        instructions = [ix_system_transfer(source=payer, destination=to,
+                                           lamports=int(amount_raw))]
+        destination = str(to)
+    else:
+        if decimals is None:
+            raise SplBuildError("an SPL send needs the mint's decimals")
+        if token_program not in (TOKEN_PROGRAM, TOKEN_2022_PROGRAM):
+            raise SplBuildError(f"unknown token program {token_program!r}")
+        source = associated_token_address(payer, mint, token_program)
+        create_ix, destination = ix_create_ata_idempotent(
+            payer=payer, owner=to, mint=mint, token_program=token_program)
+        instructions = [
+            create_ix,
+            ix_transfer_checked(source=source, mint=mint, destination=destination,
+                                owner=payer, amount=int(amount_raw),
+                                decimals=int(decimals), token_program=token_program),
+        ]
+    tx = _compile_unsigned(payer_key, instructions, recent_blockhash,
+                           too_big="a two-instruction send cannot be this large")
+    return tx, destination
 
 
 def decode_mint_account(info: Any) -> Optional[dict]:
@@ -446,6 +541,16 @@ def decode_mint_account(info: Any) -> Optional[dict]:
         if not fields:
             return None
         out = {
+            # What kind of account this is ("mint" | "account" | …) and which
+            # token program owns it. A caller about to SEND must know both: a
+            # token account is not a mint, and the associated account address
+            # differs by program.
+            "type": (parsed.get("parsed") or {}).get("type"),
+            "program": (TOKEN_2022_PROGRAM if parsed.get("program") == "spl-token-2022"
+                        else TOKEN_PROGRAM),
+            "extensions": tuple(
+                (str(e.get("extension") or ""), dict(e.get("state") or {}))
+                for e in (fields.get("extensions") or []) if isinstance(e, dict)),
             "decimals": fields.get("decimals"),
             "supply": int(fields.get("supply") or 0),
             "mint_authority": fields.get("mintAuthority"),

@@ -168,7 +168,9 @@ def _emit_live(ctx: Any, servers: List[Dict[str, Any]]) -> None:
 
 def _emit_config(ctx: Any, enabled: bool, servers: Dict[str, Any]) -> None:
     if not enabled and not servers:
-        ctx.emit(candy.empty("MCP servers", "MCP disabled (set MCP_ENABLED=true)", yet=False), title="mcp")
+        from core.remedy import flag_remedy
+        ctx.emit(candy.empty("MCP servers", f"MCP disabled ({flag_remedy('MCP_ENABLED')})",
+                             yet=False), title="mcp")
         return
     if not servers:
         ctx.emit(candy.empty("MCP servers configured", yet=False), title="mcp")

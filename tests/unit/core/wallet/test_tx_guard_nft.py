@@ -49,6 +49,7 @@ def _authorize(intent, deltas, *, tx=None, gate=None, price=1.0):
         halted_fn=lambda: False,
         entry_paused_fn=lambda: False,
         forged_fn=lambda ctx, tool: False,
+        account_rpc=lambda m, p: "0x",  # every destination is an EOA (W2 reads its code)
     )
 
 

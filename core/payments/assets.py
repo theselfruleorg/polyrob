@@ -172,6 +172,16 @@ _DDL = """CREATE TABLE IF NOT EXISTS payment_assets (
     verified_at REAL NOT NULL DEFAULT 0)"""
 
 
+def _store_address(chain: str, address: Optional[str]) -> Optional[str]:
+    """The address as stored. An EVM address is case-insensitive hex and is kept
+    lowercase; a Solana mint is base58, where case IS the value — lowercasing it
+    names a different (almost always nonexistent) account."""
+    addr = (address or "").strip()
+    if not addr:
+        return None
+    return addr if (chain or "").strip().lower() == "solana" else addr.lower()
+
+
 def store_path(data_home: Optional[str] = None) -> str:
     """``<data_home>/payment_assets.db``.
 
@@ -209,7 +219,7 @@ class AssetStore:
                    liquidity_floor_usd=excluded.liquidity_floor_usd,
                    verified_at=excluded.verified_at""",
             (asset.asset_id.strip().lower(), asset.chain.strip().lower(),
-             (asset.address or "").strip().lower() or None,
+             _store_address(asset.chain, asset.address),
              int(asset.decimals), asset.symbol, asset.rail,
              str(int(asset.min_amount_raw)), float(asset.liquidity_floor_usd),
              float(asset.verified_at)))

@@ -26,12 +26,12 @@ between two parties instead of checking a claim against itself.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import time
-import uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +109,46 @@ def envelope_snapshot(env: "Envelope", address: str) -> Dict[str, Any]:
     }
 
 
+def origin_of(url: Optional[str]) -> Optional[str]:
+    """The web origin of ``url`` in ``location.origin`` form, or None.
+
+    ``scheme://host[:port]`` — the host in its wire (IDNA) form, the port only
+    when it is not the scheme default — so the Python check and the page-side
+    ``location.origin`` gate compare the same string. Anything that is not an
+    anonymous http(s) URL (``about:blank``, ``data:``, userinfo) has no origin
+    a wallet may be armed for.
+    """
+    from urllib.parse import urlsplit
+
+    from core.security.pinned_resolver import url_host_key
+    try:
+        parts = urlsplit(str(url or ""))
+        scheme = (parts.scheme or "").lower()
+        if scheme not in ("http", "https") or parts.username or parts.password:
+            return None
+        host = url_host_key(str(url))
+        if not host:
+            return None
+        port = parts.port
+    except Exception:
+        return None
+    if ":" in host:
+        host = f"[{host}]"
+    default = 443 if scheme == "https" else 80
+    return f"{scheme}://{host}" + (f":{port}" if port and port != default else "")
+
+
+def calldata_words(data: str) -> Dict[str, Any]:
+    """The full calldata as the owner should see it: selector + 32-byte words.
+
+    Not an ABI decode (the page's ABI is unknown), but every argument word is
+    shown, never a 10-character selector alone.
+    """
+    body = (data or "0x")[10:] if len(data or "") >= 10 else ""
+    words = [body[i:i + 64] for i in range(0, len(body), 64)]
+    return {"selector": (data or "0x")[:10], "args": words}
+
+
 def _error(code: int, message: str) -> str:
     return json.dumps({"error": {"code": code, "message": message}})
 
@@ -130,8 +170,33 @@ class WalletBridge:
 
     def __init__(self, *, envelope: Envelope, wallet, execution_context=None,
                  container=None, rail_factory=None, guard_fn=None,
-                 price_fn=None, rpc_fn=None, approver=None, persist_fn=None):
+                 price_fn=None, rpc_fn=None, approver=None, persist_fn=None,
+                 armed_origin: Optional[str] = None,
+                 taint_probe: Optional[Callable[[], bool]] = None,
+                 turn_kind_probe: Optional[Callable[[], Optional[str]]] = None):
         self.envelope = envelope
+        #: The ONE origin this envelope was armed for (from dapp_connect's url).
+        #: A request from any other origin, a sub-frame or another tab is
+        #: refused before it is even parsed (H03b). None = never armed = every
+        #: request refused.
+        self.armed_origin = armed_origin
+        #: Is the SESSION correspondent-tainted right now? The page can ask for
+        #: a transaction long after the arming turn, including while a third
+        #: party's message is in context. A probe that raises reads as tainted.
+        self._taint_probe = taint_probe
+        #: The LIVE turn kind of the session (CR-L18) — ``_forged_turn_kind``
+        #: read at request time, not the arming turn's frozen context. A page
+        #: asks long after arming; a later self-wake / delegation-result /
+        #: group turn must be judged as what it is. A probe that raises refuses.
+        self._turn_kind_probe = turn_kind_probe
+        #: Set by ``dapp_connect`` before the binding is exposed: until
+        #: ``attach_page`` binds the tab, no transaction may be signed (the
+        #: window between ``expose_binding`` and ``attach_page``).
+        self.require_attached_page = False
+        #: The page the wallet was armed on. When known, only its main frame
+        #: may call the binding, and leaving the origin revokes the envelope.
+        self._page = None
+        self._refused_origins: set = set()
         self._wallet = wallet
         self._ctx = execution_context
         self._container = container
@@ -165,8 +230,79 @@ class WalletBridge:
 
     # -- the binding ------------------------------------------------------
 
-    async def handle(self, _source, raw) -> str:
+    # -- where a request may come from (H03b) ------------------------------
+
+    def attach_page(self, page) -> None:
+        """Bind the envelope to ``page`` and revoke it when the page leaves the
+        armed origin. The binding and the init script are CONTEXT-wide, so
+        without this a later page — or the same tab after a navigation — would
+        inherit a live wallet it was never armed for."""
+        self._page = page
+        try:
+            page.on("framenavigated", self._on_frame_navigated)
+        except Exception as exc:
+            logger.warning("dapp bridge: cannot watch navigation (%s)", exc)
+            raise
+
+    def _on_frame_navigated(self, frame) -> None:
+        page = self._page
+        try:
+            if page is None or frame is not page.main_frame:
+                return
+            where = origin_of(getattr(frame, "url", None))
+        except Exception:
+            where = None
+        if where == self.armed_origin or self.envelope.revoked:
+            return
+        self.envelope.revoked = True
+        self._refuse(UNAUTHORIZED, "navigated-away", (
+            f"the page left {self.armed_origin} for {where or 'a non-web page'}; "
+            f"the wallet was revoked. Re-arm with dapp_connect on the new origin."))
+
+    def _source_refusal(self, source) -> Optional[str]:
+        """Why a binding call from ``source`` is refused, or None."""
+        if not self.armed_origin:
+            return "this wallet session is not bound to any origin"
+        if not isinstance(source, dict):
+            return "the request carries no frame"
+        frame, page = source.get("frame"), source.get("page")
+        if frame is None or page is None:
+            return "the request carries no frame"
+        try:
+            if frame is not page.main_frame:
+                return "requests from an embedded frame are refused"
+            if self._page is not None and page is not self._page:
+                return "requests from another tab are refused"
+            where = origin_of(frame.url)
+        except Exception:
+            return "the request's frame could not be identified"
+        if where != self.armed_origin:
+            return (f"this wallet is armed for {self.armed_origin}, not "
+                    f"{where or 'a non-web page'}")
+        return None
+
+    def _tainted(self) -> bool:
+        probe = self._taint_probe
+        if probe is None:
+            return False
+        try:
+            return bool(probe())
+        except Exception:
+            logger.warning("dapp bridge: taint probe failed; treating as tainted",
+                           exc_info=True)
+            return True
+
+    async def handle(self, source, raw) -> str:
         """Playwright binding entry point. NEVER raises into the page."""
+        why = self._source_refusal(source)
+        if why is not None:
+            # Recorded once per offending origin, so a hostile frame cannot
+            # flood the envelope (and its durable mirror) with refusals.
+            key = why
+            if key not in self._refused_origins and len(self._refused_origins) < 32:
+                self._refused_origins.add(key)
+                return self._refuse(UNAUTHORIZED, "wrong-origin", why)
+            return _error(UNAUTHORIZED, why)
         try:
             payload = json.loads(raw) if isinstance(raw, str) else (raw or {})
             method = str(payload.get("method") or "")
@@ -240,6 +376,15 @@ class WalletBridge:
                 "from a page"))
 
         if method == "eth_sendTransaction":
+            if self.require_attached_page and self._page is None:
+                return self._refuse(USER_REJECTED, "not-attached", (
+                    "the wallet is not yet bound to its tab; nothing can be "
+                    "signed until dapp_connect finishes"))
+            if self._tainted():
+                return self._refuse(USER_REJECTED, "tainted", (
+                    "this session has a third party's message in context "
+                    "(correspondent-tainted); the wallet will not sign for a "
+                    "page until the owner's next turn"))
             return await self._send_transaction(params)
 
         if method in READ_METHODS:
@@ -332,27 +477,31 @@ class WalletBridge:
             return self._refuse(USER_REJECTED, "bad-value",
                                 "value is not a hex quantity")
 
+        from tools.defi.call_verb import typed_verb_only_refusal
+        pinned_err = typed_verb_only_refusal(to)
+        if pinned_err:
+            return self._refuse(USER_REJECTED, "typed-verb-only", pinned_err)
+
         signer = self._wallet.operational_signer()
         gate = self._wallet.policy
-        idem = f"dapp:{self.envelope.chain}:{to}:{data[:10]}:{uuid.uuid4().hex[:8]}"
         rail = (self._rail_factory or EvmRail)(chain=self.envelope.chain,
                                                signer=signer)
 
         reply, pending = await self._attempt(
             rail=rail, gate=gate, signer=signer, to=to, data=data,
-            value_wei=value_wei, idem=idem)
+            value_wei=value_wei)
         if reply is not None:
             return reply
 
         approved_usd = float(pending.amount_usd or 0.0)
-        if not await self._await_owner(to, data, pending):
+        if not await self._await_owner(to, data, pending, value_wei=value_wei):
             return self._refuse(USER_REJECTED, "owner-declined", (
                 f"{pending.reason} — and the owner did not approve it within "
                 f"{self.envelope.approval_timeout_sec:.0f}s"))
 
         reply, pending = await self._attempt(
             rail=rail, gate=gate, signer=signer, to=to, data=data,
-            value_wei=value_wei, idem=idem, owner_approved_usd=approved_usd)
+            value_wei=value_wei, owner_approved_usd=approved_usd)
         if reply is not None:
             return reply
         # Still only the ceiling in the way after re-pricing, and the re-priced
@@ -362,7 +511,46 @@ class WalletBridge:
             f"now prices at ${float(pending.amount_usd or 0.0):.4f} — that is "
             f"not what he approved. Ask again."))
 
-    async def _attempt(self, *, rail, gate, signer, to, data, value_wei, idem,
+    def _live_context(self):
+        """The arming context with the LIVE turn kind stamped in (CR-L18).
+
+        Returns ``(ctx, None)`` or ``(None, why)``. The more restrictive of the
+        frozen and the live kind wins: a forged arming turn stays forged.
+
+        Every page request is marked ``PAGE_REQUEST_KEY`` and carries no
+        ``owner_grant``: the page, not the owner, asks for it, so the pause and
+        the autonomous ceiling bind even when the owner armed the session in
+        the owner's own turn. Above the ceiling the owner approves it here, per request
+        (``_await_owner``).
+        """
+        from core.money.authority import PAGE_REQUEST_KEY
+        from core.wallet.tx_guard import OWNER_GRANT_KEY
+        probe = self._turn_kind_probe
+        live = None
+        if probe is not None:
+            try:
+                live = probe()
+            except Exception as exc:
+                return None, (f"the session's live turn could not be read ({exc}); "
+                              f"the wallet will not sign for a page it cannot "
+                              f"attribute to a genuine turn")
+        if self._ctx is None:
+            if probe is None:
+                return None, None
+            return None, ("no agent turn is attached to this wallet session; "
+                          "failing closed")
+        import copy
+        frozen = dict(getattr(self._ctx, "metadata", None) or {})
+        frozen.pop(OWNER_GRANT_KEY, None)
+        ctx = copy.copy(self._ctx)
+        try:
+            ctx.metadata = {**frozen, "turn_kind": frozen.get("turn_kind") or live,
+                            PAGE_REQUEST_KEY: True}
+        except Exception as exc:
+            return None, f"could not stamp the live turn ({exc}); failing closed"
+        return ctx, None
+
+    async def _attempt(self, *, rail, gate, signer, to, data, value_wei,
                        owner_approved_usd=None):
         """``(reply, pending)`` — exactly one is None.
 
@@ -377,15 +565,36 @@ class WalletBridge:
         """
         from core.wallet import tx_guard
         from tools.controller.action_registration import (
-            _is_forged_or_autonomous_turn)
+            _is_autonomous_goal_turn, _is_forged_or_autonomous_turn)
 
         authorize = self._guard_fn or tx_guard.authorize
+
+        from tools.defi.call_verb import intent_idempotency_key
+
+        ctx, why = self._live_context()
+        if why is not None:
+            return self._refuse(USER_REJECTED, "turn-unknown", why), None
+
+        # 068 N1: a page-built transaction cannot be classified as "acquires only
+        # the target" — its effect is whatever the page encoded. A run bound to a
+        # target_token never signs one.
+        from core.wallet.buy_target import target_from_context
+        _run_target = target_from_context(ctx) or target_from_context(self._ctx)
+        if _run_target is not None:
+            return self._refuse(USER_REJECTED, "target-bound", (
+                f"this run declares its target token as {_run_target['address']} "
+                f"on {_run_target['chain']}; a dapp transaction cannot be proven "
+                f"to acquire only that contract, so it is refused. Use "
+                f"defi_trade.swap (or call with receive_token = the target).")), None
 
         try:
             tx = rail.build_call(to=to, data=data, value=value_wei)
         except Exception as exc:
             return self._refuse(USER_REJECTED, "build-failed",
                                 f"could not build the transaction: {exc}"), None
+        idem = intent_idempotency_key(
+            "dapp", chain=self.envelope.chain, to=to, data=data,
+            value_wei=value_wei, tx=tx, execution_context=self._ctx)
 
         async with gate.reserve():
             remaining = self.envelope.remaining_usd()
@@ -407,9 +616,10 @@ class WalletBridge:
                 idempotency_key=idem)
 
             decision = authorize(intent, tx, holder=signer.address, gate=gate,
-                                 execution_context=self._ctx, tool_self=self,
+                                 execution_context=ctx, tool_self=self,
                                  price_fn=self._price_fn,
-                                 forged_fn=_is_forged_or_autonomous_turn)
+                                 forged_fn=_is_forged_or_autonomous_turn,
+                                 autonomous_ok_fn=_is_autonomous_goal_turn)
 
             if not decision.allowed:
                 if decision.lane != "owner_queue":
@@ -457,8 +667,15 @@ class WalletBridge:
         self._notify(to, data, decision, tx_hash)
         return _result(tx_hash), None
 
-    async def _await_owner(self, to: str, data: str, decision) -> bool:
-        """Block the page's promise on the durable owner queue, with a deadline."""
+    async def _await_owner(self, to: str, data: str, decision, *,
+                           value_wei: int = 0) -> bool:
+        """Block the page's promise on the durable owner queue, with a deadline.
+
+        The grant is keyed on the FULL call — a hash of the whole calldata and
+        the value — not only the selector, so an approval for one call cannot
+        be redeemed by a different call to the same function. The owner sees
+        every argument word, not a truncated selector.
+        """
         import asyncio
 
         approver = self._approver
@@ -466,17 +683,25 @@ class WalletBridge:
             try:
                 from tools.controller.approval_queue import OwnerQueueApprover
                 approver = OwnerQueueApprover(
-                    user_id=getattr(self._ctx, "user_id", None))
+                    user_id=getattr(self._ctx, "user_id", None),
+                    taint_probe=self._taint_probe)
             except Exception as exc:
                 logger.warning("dapp bridge: no owner queue (%s)", exc)
                 return False
-        summary = {"chain": self.envelope.chain, "to": to,
-                   "selector": data[:10], "usd": decision.amount_usd,
-                   "via": "dapp browser"}
+        calldata_sha256 = hashlib.sha256(
+            (data or "0x").lower().encode("ascii", "replace")).hexdigest()
+        key = {"chain": self.envelope.chain, "to": to,
+               "selector": data[:10], "usd": decision.amount_usd,
+               "value_wei": str(int(value_wei or 0)),
+               "calldata_sha256": calldata_sha256,
+               "origin": self.armed_origin,
+               "via": "dapp browser"}
+        summary = dict(key)
+        summary.update(calldata_words(data))
         try:
             return bool(await asyncio.wait_for(
                 approver.request("dapp_browser_dapp_connect", summary,
-                                 self._ctx, hash_params=summary),
+                                 self._ctx, hash_params=key),
                 timeout=self.envelope.approval_timeout_sec))
         except asyncio.TimeoutError:
             return False

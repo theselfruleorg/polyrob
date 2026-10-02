@@ -110,16 +110,6 @@ TOOL_DESCRIPTORS: Dict[str, ToolDescriptor] = {
     # ---------------------------------------------------------------------
     # SEARCH TOOLS (init_priority 20-29)
     # ---------------------------------------------------------------------
-    'perplexity': ToolDescriptor(
-        name='perplexity',
-        description='AI-powered search via Perplexity API',
-        category=ToolCategory.SEARCH,
-        required_services=['rate_limit_manager'],
-        optional_services=['cache_manager'],
-        required_config=['perplexity_api_key'],
-        init_priority=20,
-        is_optional=True,
-    ),
 
     'web_fetch': ToolDescriptor(
         name='web_fetch',
@@ -135,25 +125,7 @@ TOOL_DESCRIPTORS: Dict[str, ToolDescriptor] = {
     # ---------------------------------------------------------------------
     # COMMUNICATION TOOLS (init_priority 30-39)
     # ---------------------------------------------------------------------
-    'twitter': ToolDescriptor(
-        name='twitter',
-        description=('X account API: public/account reads, legacy DM events, encrypted '
-                     'X Chat inbox/thread reads, and gated post/engagement/DM writes. '
-                     'Prefer anysite for broad public discovery; use x_browser when '
-                     'the visible inbox is authoritative.'),
-        category=ToolCategory.COMMUNICATION,
-        required_services=['rate_limit_manager'],
-        optional_services=['cache_manager', 'database_manager'],
-        required_config=[],  # Uses OAuth tokens from DB
-        init_priority=30,
-        is_optional=True,
-        rate_limited=True,
-        rate_limit_settings={
-            'default_wait': 900,  # 15 minutes
-            'requests_per_minute': 300,
-            'burst_limit': 50
-        }
-    ),
+    # 'twitter': registered by the x pack (067 P3b).
 
     'email': ToolDescriptor(
         name='email',
@@ -208,74 +180,8 @@ TOOL_DESCRIPTORS: Dict[str, ToolDescriptor] = {
         init_priority=50,
         is_optional=True,
     ),
-
-    'anysite': ToolDescriptor(
-        name='anysite',
-        description="Query AnySite's 200+ sources / 1,200+ endpoints (LinkedIn, X, Reddit, YouTube, GitHub, SEC, web scraper) via the anysite CLI",
-        category=ToolCategory.INTEGRATION,
-        is_optional=True,
-        init_priority=52,
-    ),
-
-    'polymarket_data': ToolDescriptor(
-        name='polymarket_data',
-        description='Polymarket prediction markets - read-only market data & research (no wallet)',
-        category=ToolCategory.INTEGRATION,
-        required_services=['rate_limit_manager'],
-        optional_services=['cache_manager'],
-        required_config=[],
-        init_priority=53,  # before the trade tool
-        is_optional=True,
-        rate_limited=True,
-        rate_limit_settings={'requests_per_minute': 60, 'burst_limit': 10, 'default_wait': 60},
-    ),
-
-    'polymarket': ToolDescriptor(
-        name='polymarket',
-        description='Polymarket prediction markets - trading and market data',
-        category=ToolCategory.INTEGRATION,
-        required_services=['rate_limit_manager'],
-        optional_services=['cache_manager', 'database_manager'],
-        required_config=[],  # Credentials stored in DB, not config
-        init_priority=55,  # After MCP
-        is_optional=True,
-        rate_limited=True,
-        rate_limit_settings={
-            'requests_per_minute': 60,
-            'burst_limit': 10,
-            'default_wait': 60
-        }
-    ),
-
-    'hyperliquid_data': ToolDescriptor(
-        name='hyperliquid_data',
-        description='Hyperliquid perps/spot - read-only market data & account state (no signing)',
-        category=ToolCategory.INTEGRATION,
-        required_services=['rate_limit_manager'],
-        optional_services=['cache_manager'],
-        required_config=[],
-        init_priority=54,  # before the trade tool
-        is_optional=True,
-        rate_limited=True,
-        rate_limit_settings={'requests_per_minute': 120, 'burst_limit': 20, 'default_wait': 30},
-    ),
-
-    'hyperliquid': ToolDescriptor(
-        name='hyperliquid',
-        description='Hyperliquid perpetuals and spot trading - market data and execution',
-        category=ToolCategory.INTEGRATION,
-        required_services=['rate_limit_manager'],
-        optional_services=['cache_manager', 'database_manager'],
-        required_config=[],  # Credentials stored in DB, not config
-        init_priority=56,  # After polymarket
-        is_optional=True,
-        rate_limited=True,
-        rate_limit_settings={
-            'requests_per_minute': 120,
-            'burst_limit': 20,
-            'default_wait': 30
-        }
-    ),
+    # polymarket / polymarket_data / hyperliquid / hyperliquid_data: registered by the
+    # markets pack (067 P4, polyrob_markets.registration).
 }
 
 
@@ -357,7 +263,6 @@ def get_agent_usable_tools() -> Dict[str, ToolDescriptor]:
 
     Excludes:
     - Internal verification tools (collabland, alchemy)
-    - Tools shown as MCP servers (polymarket)
     - Internal verification tools and tools represented elsewhere
     - Internal tools not meant for user selection (task)
     """
@@ -365,7 +270,7 @@ def get_agent_usable_tools() -> Dict[str, ToolDescriptor]:
     usable_categories = {ToolCategory.CORE, ToolCategory.BROWSER, ToolCategory.SEARCH, ToolCategory.COMMUNICATION, ToolCategory.INTEGRATION}
 
     # Specific exclusions
-    # NOTE: polymarket/hyperliquid are live in-process tools (see TOOL_DESCRIPTORS above),
+    # NOTE: polymarket/hyperliquid are live in-process tools (registered by the markets pack),
     # NOT MCP — the old "polymarket is MCP-only" note was stale. They are selectable but
     # high-risk and stay out of the DEFAULT tool lists (opt-in only).
     # twitter is loadable (G1 full write surface, gated by TWITTER_ENABLED) — it is
@@ -465,6 +370,14 @@ def register_optional_tool(
             "add a row to core/tool_capabilities.py::TOOL_CAPABILITIES (empty frozenset() "
             "if it genuinely has no money/high-impact/exec/delegation-blocking traits)"
         )
+    # 033: a write-capable row must also name its effect ceiling (writes_*), or
+    # every write it makes is invisible to the effect recorder and the pause gate.
+    from core.tool_capabilities import lacks_effect_ceiling
+    if lacks_effect_ceiling(display):
+        raise ValueError(
+            f"tool {name!r} (display {display!r}) can move money, run code or write "
+            "externally but carries no writes_* effect capability — add its "
+            "ceiling to core/tool_capabilities.py (033)")
     if name not in TOOL_DESCRIPTORS:
         TOOL_DESCRIPTORS[name] = descriptor
     register_tool_class(name, tool_cls)

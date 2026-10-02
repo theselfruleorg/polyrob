@@ -78,10 +78,27 @@ def test_dashboard_posture_flag_wins_over_host():
     from webview import webgate
 
     runner = CliRunner()
-    with patch("uvicorn.run"), patch("webbrowser.open"):
+    with patch("uvicorn.run") as run, patch("webbrowser.open"):
         result = runner.invoke(
             dashboard, ["--host", "0.0.0.0", "--posture", "local", "--no-browser"]
         )
 
-    assert result.exit_code == 0, result.output
     assert webgate.posture() == "local"
+    # Security review 2026-09-23 (Low): the no-login posture never binds a
+    # non-loopback address — the explicit pair is REFUSED, not served.
+    assert result.exit_code != 0
+    assert "refusing to bind 0.0.0.0" in result.output
+    run.assert_not_called()
+
+
+def test_dashboard_local_non_loopback_bind_allowed_by_override(monkeypatch):
+    from cli.commands.dashboard import dashboard
+
+    monkeypatch.setenv("WEBVIEW_ALLOW_LOCAL_POSTURE", "1")
+    runner = CliRunner()
+    with patch("uvicorn.run") as run, patch("webbrowser.open"):
+        result = runner.invoke(
+            dashboard, ["--host", "0.0.0.0", "--posture", "local", "--no-browser"]
+        )
+    assert result.exit_code == 0, result.output
+    run.assert_called_once()

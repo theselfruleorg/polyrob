@@ -72,7 +72,7 @@ def register(reg, Command) -> None:
     reg.register(
         Command("deploy", h_deploy,
                 "Deploy a fixed-supply token (quotes unless you add 'go')",
-                usage="<SYMBOL> <supply> <name…> [on <chain>] [vanity <hex>] [go]", group="money")
+                usage="<SYMBOL> <supply> <name…> [on <chain>] [go]", group="money")
     )
 
     reg.register(Command("lp", h_lp, "Uniswap liquidity (dry-run unless go)",

@@ -72,3 +72,40 @@ def apply_session_output_budget(llm, session_id: Optional[str]) -> int:
     if cap <= 0 or not is_autonomous_session(session_id):
         return 0
     return apply_output_budget(llm, cap)
+
+
+def apply_session_cache_ttl(llm, session_id: Optional[str]) -> Optional[str]:
+    """Stamp the Anthropic prompt-cache TTL for this session's class — F4.
+
+    ``ANTHROPIC_CACHE_TTL=auto`` (the default) buys the **1h** cache window for
+    an interactive turn and keeps the API-default **5m** one for an autonomous
+    run. An owner's chat is bursty: the next turn lands minutes later, by which
+    time a 5-minute cache has expired and the whole tools+system prefix is
+    re-paid at full price. A cron/goal run is one burst that never returns, so
+    the longer window would only pay the 2x cache-WRITE premium for nothing.
+
+    The agents-tier half of the seam: ``modules/llm/cache_hints.py`` owns the
+    stamp and the reader (``modules`` may not import ``agents``), this owns the
+    session-class decision. Returns the ttl in force, or None.
+    """
+    from modules.llm.cache_hints import apply_cache_ttl, resolve_cache_ttl
+    ttl = resolve_cache_ttl(is_autonomous_session(session_id))
+    return apply_cache_ttl(llm, ttl)
+
+
+def correspondent_facing(orchestrator) -> bool:
+    """True when a third party's text drives this session: it was CREATED for a
+    correspondent (``_correspondent_session``, stamped at creation and restored
+    from the session's ``creator`` on recreate — H16) or it is currently
+    correspondent-TAINTED (``_correspondent_tainted``). Owner-only state (the
+    owner thread, owner asks) never enters such a session.
+
+    Fail-CLOSED on a probe error: this guards disclosure, not a budget.
+    """
+    if orchestrator is None:
+        return False
+    try:
+        return bool(getattr(orchestrator, "_correspondent_session", False)
+                    or getattr(orchestrator, "_correspondent_tainted", False))
+    except Exception:  # pragma: no cover - defensive
+        return True

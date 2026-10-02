@@ -29,9 +29,9 @@ def test_doctor_plain_hides_transcript_by_default(tmp_path, monkeypatch):
     result = CliRunner().invoke(cli, ["doctor"])
     assert result.exit_code == 0, result.output
     assert "run `polyrob doctor --full` for every check" in result.output
-    # The check-transcript detail (skill compliance line) stays out of the
-    # default view.
-    assert "skills:" not in result.output
+    # The raw check transcript stays out; the bullet-prefixed rules snapshot
+    # may independently disclose unavailable skill activation inventory.
+    assert not any(line.startswith("skills:") for line in result.output.splitlines())
 
 
 def test_doctor_full_contains_the_check_transcript(tmp_path, monkeypatch):
@@ -42,6 +42,7 @@ def test_doctor_full_contains_the_check_transcript(tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
     lines = result.output.splitlines()
     assert any(ln.startswith("provider credentials") for ln in lines)
+    assert any(ln.startswith("skills:") for ln in lines)
 
 
 def test_doctor_json_gains_a_status_key(tmp_path, monkeypatch):

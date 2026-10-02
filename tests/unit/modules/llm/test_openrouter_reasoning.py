@@ -54,9 +54,15 @@ def test_request_extras_applies_routing_then_reasoning(monkeypatch):
     monkeypatch.setenv("OPENROUTER_PROVIDER_SORT", "latency")
     monkeypatch.setenv("OPENROUTER_REASONING_MAX_TOKENS", "3000")
     out = apply_request_extras({"max_tokens": 8192}, client=None, max_tokens=8192)
-    assert out["extra_body"] == {"provider": {"sort": "latency"}, "reasoning": {"max_tokens": 3000}}
+    # F23 (2026-09-22): `usage.include` now rides every OpenRouter request so the
+    # response reports the cost OpenRouter actually billed. It is accounting
+    # only — it changes no routing, no sampling and no prompt bytes.
+    assert out["extra_body"] == {"provider": {"sort": "latency"},
+                                 "reasoning": {"max_tokens": 3000},
+                                 "usage": {"include": True}}
     monkeypatch.delenv("OPENROUTER_PROVIDER_SORT"); monkeypatch.delenv("OPENROUTER_REASONING_MAX_TOKENS")
-    assert "extra_body" not in apply_request_extras({"max_tokens": 8192}, None, 8192)
+    assert apply_request_extras({"max_tokens": 8192}, None, 8192)["extra_body"] == {
+        "usage": {"include": True}}
 
 
 def test_request_extras_stamps_the_prefix_identity_on_the_client():
@@ -89,3 +95,28 @@ def test_reasoning_disabled_overrides_the_budget(monkeypatch):
     assert reasoning_extra_body(8192) is None
     monkeypatch.delenv("OPENROUTER_REASONING_ENABLED")
     assert reasoning_extra_body(8192) is None
+
+
+# --- F23: read what OpenRouter actually BILLED, instead of estimating it -----
+
+def test_usage_accounting_is_requested_on_every_call():
+    from modules.llm.openrouter_reasoning import apply_usage_accounting
+    params = {}
+    apply_usage_accounting(params)
+    assert params["extra_body"]["usage"] == {"include": True}
+
+
+def test_usage_accounting_does_not_clobber_a_sibling_extra_body_key():
+    from modules.llm.openrouter_reasoning import apply_usage_accounting
+    params = {"extra_body": {"provider": {"sort": "latency"}}}
+    apply_usage_accounting(params)
+    assert params["extra_body"]["provider"] == {"sort": "latency"}
+    assert params["extra_body"]["usage"] == {"include": True}
+
+
+def test_usage_accounting_is_idempotent():
+    from modules.llm.openrouter_reasoning import apply_usage_accounting
+    params = {}
+    apply_usage_accounting(params)
+    apply_usage_accounting(params)
+    assert params["extra_body"] == {"usage": {"include": True}}

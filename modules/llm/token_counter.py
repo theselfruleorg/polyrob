@@ -38,6 +38,9 @@ class TokenUsage:
     # G3 (telemetry audit 2026-07-04): cache-WRITE (creation) tokens, billed at a
     # provider surcharge (Anthropic 1.25x). Included in prompt_tokens; default 0.
     cache_creation_tokens: int = 0
+    # F4 (2026-09-22): the subset of cache_creation_tokens written with a 1h
+    # window (Anthropic 2.0x). Default 0 = every write was a 5m write.
+    cache_creation_1h_tokens: int = 0
 
     @property
     def billable_tokens(self) -> int:

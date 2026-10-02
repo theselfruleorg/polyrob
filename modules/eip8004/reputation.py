@@ -136,9 +136,23 @@ class ReputationManager:
 
         # Sign with the agent's private key. Fail CLOSED — never emit a "0x"
         # placeholder that downstream verification might wave through.
+        # 066 P3: under WALLET_SIGNER=remote the EIP-8004 key lives in
+        # polyrob-signer, which signs ONLY this FeedbackAuth shape.
+        from core.signer import MODE_REMOTE, signer_mode
+        if signer_mode() == MODE_REMOTE:
+            from core.signer.client import SignerClient, SignerError
+            try:
+                signature = SignerClient(timeout=15.0).call(
+                    "eip8004.feedback_auth", {"typed": typed_data})["signature"]
+            except SignerError as e:
+                raise ValueError(f"EIP8004 signing refused by polyrob-signer: {e}")
+            return FeedbackAuth(agentId=self.config.agent_id, clientAddress=client_address,
+                                expiresAt=expires_at, nonce=nonce, signature=signature)
         if not ETH_ACCOUNT_AVAILABLE:
             raise ValueError("EIP8004 signing unavailable: eth_account not installed")
-        private_key = os.environ.get("EIP8004_AGENT_PRIVATE_KEY")
+        # 066 P0.2: taken out of os.environ at wallet load; read the held copy.
+        from core.security.custody_env import custody_secret
+        private_key = custody_secret("EIP8004_AGENT_PRIVATE_KEY")
         if not private_key:
             raise ValueError(
                 "EIP8004 signing unavailable: EIP8004_AGENT_PRIVATE_KEY not configured"

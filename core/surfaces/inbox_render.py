@@ -328,15 +328,62 @@ def render_book(body: Mapping[str, Any], *, width: int = WIDTH,
             line += f" — {' '.join(str(entry['error']).split())}"
         out += _wrap(line.strip(), "    ", width)
         report = entry.get("report") or {}
+        # 068/W1: one symbol, two contracts — FIRST, where the choice is made.
+        for row in report.get("collisions") or []:
+            if str(row).strip():
+                out += _wrap(str(row), "      ", width)
         for key, label in _ISSUE_SECTIONS:
             rows = report.get(key) or []
             for row in rows:
                 out += _wrap(f"{label}: {row}", "      ", width)
 
+    out += _lifecycle_lines(body, width)
     if verdict == "disagreement":
         out += [""]
-        out += _wrap("The chain is the truth; the ledger is my memory of it, "
-                     "and the memory is wrong. I will not trade, rewrite the "
-                     "ledger, or say anything in public about my positions "
-                     "until this is settled.", "  ", width)
+        out += _wrap(BOOK_DISAGREEMENT_NOTE, "  ", width)
     return "\n".join(out)
+
+
+#: What a DISAGREEMENT verdict does — and does not — do. The old line promised
+#: "I will not trade … until this is settled", and no trade verb reads the
+#: verdict (token-management evaluation P0-8). The true behavior, said plainly.
+BOOK_DISAGREEMENT_NOTE = (
+    "The chain is the truth; the ledger is my memory of it, and where they "
+    "disagree the memory is wrong. This verdict does not stop a trade — the "
+    "identity check and the caps decide that — so I correct the ledger before "
+    "I report or claim anything about these positions.")
+
+_LIFECYCLE_WORDS = {"quarantined": "quarantined (a look-alike, not the real token)",
+                    "written_off": "written off"}
+
+
+def _lifecycle_lines(body: Mapping[str, Any], width: int) -> list:
+    """W1: positions that are not simply open, and what the rail tracks that
+    the ledger does not list — the store the identity gate reads."""
+    out: list = []
+    closed = [r for r in body.get("rows") or ()
+              if str(r.get("lifecycle") or "open") != "open"]
+    if closed:
+        out += ["", "  Not open:"]
+        for r in closed:
+            out += _wrap(f"{r.get('symbol') or '?'} {r.get('address')} — "
+                         f"{_LIFECYCLE_WORDS.get(r.get('lifecycle'), r.get('lifecycle'))}"
+                         + (f" ({r['lifecycle_reason']})" if r.get("lifecycle_reason") else ""),
+                         "    ", width)
+    tracked = list(body.get("tracked") or ())
+    if tracked:
+        out += ["", "  Tracked by the rail, not in my ledger:"]
+        for r in tracked:
+            cost = r.get("entry")
+            state = str(r.get("lifecycle") or "open")
+            line = (f"{r.get('symbol') or '?'} on {r.get('chain') or '?'} "
+                    f"{r.get('address')} — {_LIFECYCLE_WORDS.get(state, state)}"
+                    + (f", cost ${float(cost):,.2f}" if cost is not None
+                       else ", basis unknown")
+                    + (f" ({r['lifecycle_reason']})" if r.get("lifecycle_reason") else ""))
+            out += _wrap(line, "    ", width)
+            if state in ("open", "quarantined"):
+                out += _wrap(f"write off: /writeoff {r.get('chain')} {r.get('address')}"
+                             + (f"   undo: /unquarantine {r.get('chain')} {r.get('address')}"
+                                if state == "quarantined" else ""), "      ", width)
+    return out

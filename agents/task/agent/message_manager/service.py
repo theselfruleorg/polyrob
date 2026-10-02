@@ -65,6 +65,39 @@ logger = logging.getLogger(__name__)
 # Token counting is now centralized in modules/llm
 # No local fallbacks needed
 
+
+def _catalog_lines_by_tool(text: Optional[str]) -> Dict[str, str]:
+	"""Map tool id -> its catalog line.
+
+	The ``<tool-catalog>`` is ONE line per tool (``- <id>: <desc> [<status>]``,
+	rendered by ``tools/tool_disclosure.py::render_tool_catalog``). The header and
+	the closing tag carry no id and are ignored — they are static.
+	"""
+	out: Dict[str, str] = {}
+	for line in (text or "").splitlines():
+		if not line.startswith("- "):
+			continue
+		tool_id, sep, _rest = line[2:].partition(":")
+		if not sep:
+			continue
+		out[tool_id.strip()] = line
+	return out
+
+
+def tool_catalog_delta(previous: Optional[str], current: Optional[str]) -> List[str]:
+	"""The catalog lines that CHANGED between two renders (F8), in render order.
+
+	A tool that disappeared from the render is named too — an absent line is not
+	the same claim as an unchanged one.
+	"""
+	before = _catalog_lines_by_tool(previous)
+	after = _catalog_lines_by_tool(current)
+	changed = [line for tool_id, line in after.items() if before.get(tool_id) != line]
+	changed += [f"- {tool_id}: [no longer listed in the tool catalog]"
+	            for tool_id in before if tool_id not in after]
+	return changed
+
+
 class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, FiltersMixin, GuidanceMixin, MessageBuildersMixin, MessageRetrievalMixin):
 	__slots__ = (
 		'llm', 'system_prompt_class', 'history', 'task', 'action_descriptions',
@@ -75,7 +108,6 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		'logger', 'use_native_tools',
 		'tool_call_tracker',  # Tool call tracker for ID management
 		'task_context_manager',  # Phase 2: Hierarchical memory system
-		'compaction_manager',  # FIX (Jan 2026): CompactionManager for context-aware compaction
 		'mcp_servers',  # MCP server info for dynamic prompt generation
 		'_ephemeral_messages',  # One-shot messages to include on next LLM call
 		'_model_name',  # Cached model name
@@ -90,8 +122,12 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		'_skill_message_tokens',  # Token cost of the pinned skill message
 		'_tool_catalog_message',  # S1 dynamic tool rig: honest <tool-catalog> foundation block
 		'_tool_catalog_tokens',  # Token cost of the pinned tool-catalog message
+		'_worker_catalog_message',  # 041 phase 2: approved named workers, foundation-pinned
+		'_worker_catalog_tokens',   # Token cost of the pinned worker-catalog message
 		'_self_context_message',     # polyrob: frozen SOUL/identity doc pinned in the foundation
 		'_self_context_tokens',     # Token cost of the pinned self-context message
+		'_self_context_blocks',     # 060 WS-1: the unwelded self-context, one message per block
+		'_self_context_blocks_tokens',  # their summed token cost
 		'_project_context_message', # C9: auto-loaded CLAUDE.md/AGENTS.md frozen foundation message
 		'_project_context_tokens',  # Token cost of the pinned project-context message
 		'_runtime_identity_message', # model/provider the agent actually runs (swap-refreshable)
@@ -103,6 +139,37 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		'_compaction_checkpoint_dir',  # C2: explicit checkpoint dir override (else pm() history dir)
 		'_recent_output_tokens',  # 057 WS-B: last-2 completion-token counts (output-scaled timeout)
 		'_last_uncached_input',   # 057 WS-B: last call's prompt tokens NOT served from cache
+		'_usage_anchor',          # F6: (prompt_tokens, covered, fingerprint, hmem_included)
+		'_last_call_usage',       # F6: the last call's provider-reported token split
+		'_hmem_in_last_prompt',   # F6: did the last assembly carry the H-MEM tail
+		'_last_foundation_len',   # F12: wire foundation rows (system excluded)
+		'_foundation_tool_names', # F13: persisted tool emit order to replay
+		# F29: twelve attributes were assigned all over the mixins and declared
+		# NOWHERE. Because GuidanceMixin/MessageBuildersMixin/MessageRetrievalMixin
+		# omitted `__slots__`, every instance carried a `__dict__` anyway — so the
+		# "no __dict__" comments in four modules were false and the memory saving
+		# this tuple exists for was never collected. Declared here, the mixins
+		# closed below, a typo is an AttributeError again.
+		'_environment_message',   # 014-C1 <environment> foundation block
+		'_environment_tokens',    # its token cost
+		'_ephemeral_pending',     # P2-14: ephemerals held until the LLM responded
+		'_history_budget_tokens', # 057 WS-B autonomous history budget (0 = off)
+		'_history_secret_scrub',  # HISTORY_SECRET_SCRUB, resolved once
+		'_hmem_token_memo',       # P7: (key, tokens) for the last H-MEM string
+		'_persona_block',         # S1 chat persona forwarded to SystemPrompt
+		'_surface_profile',       # G6 bound chat surface capabilities
+		'_tool_catalog_source',   # S1: last catalog text, for the no-op check
+		'_tool_additions_announced',  # F9: late action names already surfaced by a
+		                          # <tool-addition> message (announce each ONCE)
+		'_tool_schema_tokens',    # P4: emitted `tools` param cost
+		'_verbosity',             # C2 style.verbosity
+		'_results_in_tool_messages',  # F14: the result list the last step committed as ToolMessages
+		'tool_ids',               # session's loaded tool ids (None = undeclared)
+		# Stamped from OUTSIDE (agent/core/construction.py) so the compaction
+		# aux-LLM call can be metered against the same user/agent as the main one.
+		'usage_tracker',
+		'metering_user_id',
+		'metering_agent_id',
 	)
 
 	def __init__(
@@ -268,11 +335,6 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		# Store task context manager for hierarchical memory (Phase 2)
 		self.task_context_manager = task_context_manager
 
-		# FIX (Jan 2026): Initialize CompactionManager for context-aware compaction
-		# This is now the single source of truth for compaction thresholds and logic
-		from modules.memory.task.compaction_manager import CompactionManager
-		self.compaction_manager = CompactionManager.for_model(self._model_name)
-
 		# Store MCP server info for dynamic prompt generation
 		self.mcp_servers = mcp_servers or {}
 
@@ -299,12 +361,26 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		# foundation user message (set later), same rationale as skills. Empty => inert.
 		self._tool_catalog_message: Optional[BaseMessage] = None
 		self._tool_catalog_tokens: int = 0
+		# 041 phase 2: the <worker-catalog> block (set at session start only when
+		# WORKERS_ENABLED and >=1 approved worker). Empty => inert, byte-identical.
+		self._worker_catalog_message: Optional[BaseMessage] = None
+		self._worker_catalog_tokens: int = 0
+
+		# F9 (063 WS-4): the late action names already surfaced to the provider by
+		# a <tool-addition> message. Announcing one twice would append a second
+		# durable message for a tool the model already holds.
+		self._tool_additions_announced: set = set()
 
 		# polyrob Phase C: SOUL/IDENTITY self-context is pinned as a frozen foundation
 		# user message (set later), NOT embedded in the system prompt — same rationale
 		# as skills (keeps the system prompt stable/cacheable). Empty => inert.
 		self._self_context_message: Optional[BaseMessage] = None
 		self._self_context_tokens: int = 0
+		# 060 WS-1: the same tier unwelded — one SELF_CONTEXT message per declared
+		# block (awareness, SOUL, owner rules, contract, SELF doc). Exactly one of
+		# the two self-context slots is set; see set_self_context_blocks().
+		self._self_context_blocks: Optional[tuple] = None
+		self._self_context_blocks_tokens: int = 0
 
 		# C9: auto-loaded project context (CLAUDE.md/AGENTS.md/.cursorrules) is pinned
 		# as a frozen foundation message (set later), CLI-only, default-OFF on server.
@@ -327,6 +403,16 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		# SECURITY FIX: Initialize lock to protect deque operations from race conditions
 		# This prevents data corruption when list/deque conversions happen during concurrent access
 		self._history_lock = threading.RLock()  # RLock allows reentrant locking
+
+		# 057 WS-B / F6: what the PROVIDER said about the last call. The anchor is
+		# the provider's own prompt_tokens pinned to the history it covered, so the
+		# gauge stops estimating the whole prompt from len(text)/N. None => no call
+		# has completed yet, and every gauge falls back to the pure estimate.
+		self._recent_output_tokens: List[int] = []
+		self._last_uncached_input: int = 0
+		self._usage_anchor = None
+		self._last_call_usage: Dict[str, int] = {}
+		self._hmem_in_last_prompt: bool = False
 
 		# Initialize system message - CRITICAL FIX: Store separately from history to prevent deque eviction
 		# The system message is NOT added to self.history.messages because the deque has a max length
@@ -464,24 +550,26 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		self._provider_name = value
 
 	def recalibrate_for_model(self, model_name: str) -> None:
-		"""Recompute token budgets + compaction manager for a newly-swapped model.
+		"""Recompute the token budgets for a newly-swapped model.
 
 		Init-time values (``max_input_tokens``/``safe_input_tokens``/
-		``completion_reserve`` and the ``CompactionManager``) are sized for the
-		ORIGINAL model. After a live ``swap_model`` they must be re-derived for the
-		new model's context window. Reuses ``_calculate_token_limits`` (the init-time
-		SSOT formula) so the math isn't duplicated, and rebuilds the compaction
-		manager the same way ``__init__`` does. Unlike ``recalibrate_token_counts``
-		(shrink-only, for a smaller fallback), this always adopts the new model's
-		budget in either direction.
+		``completion_reserve``) are sized for the ORIGINAL model. After a live
+		``swap_model`` they must be re-derived for the new model's context window.
+		Reuses ``_calculate_token_limits`` (the init-time SSOT formula) so the math
+		isn't duplicated. Unlike ``recalibrate_token_counts`` (shrink-only, for a
+		smaller fallback), this always adopts the new model's budget in either
+		direction.
+
+		F11(d): there is ONE compaction policy — the >=85/95 % ladder in
+		``agent/core/step.py`` over ``get_estimated_context_usage``. The second,
+		window-scaled ``CompactionManager`` (0.35/0.45) that used to be rebuilt here
+		was consulted by nothing and is deleted.
 		"""
 		self._model_name = model_name
 		# Re-derive from the new model (None override => auto-calc from the registry,
 		# still honouring the TASK_MAX_INPUT_TOKENS env cap inside the helper).
 		self.max_input_tokens, self.safe_input_tokens, self.completion_reserve = \
 			self._calculate_token_limits(self.llm, None)
-		from modules.memory.task.compaction_manager import CompactionManager
-		self.compaction_manager = CompactionManager.for_model(self._model_name)
 		self.logger.info(
 			f"Recalibrated for swapped model {model_name}: "
 			f"max_input={self.max_input_tokens}, safe_input={self.safe_input_tokens}, "
@@ -542,6 +630,48 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		return instance
 
 
+	def _evict_oldest_batch(self, maxlen: int) -> int:
+		"""F10: drop a BATCH of the oldest messages when the history saturates.
+
+		Replaces the deque's own one-per-append left-eviction. The batch is
+		``max(8, maxlen // 10)``, never cuts inside an
+		``AIMessage(tool_calls)`` -> ``ToolMessage`` pair (``pair_safe_left_cut``),
+		decrements ``total_tokens`` for every message it drops, and emits ONE
+		WARNING naming the count and the reason — the silent version of this was
+		invisible in every prod log.
+
+		Caller holds ``_history_lock``. Returns the number of messages evicted.
+		"""
+		from agents.task.agent.messages.filters import (
+			EVICTION_BATCH_DIVISOR, EVICTION_MIN_BATCH, pair_safe_left_cut,
+		)
+		msgs = self.history.messages
+		batch = max(EVICTION_MIN_BATCH, int(maxlen) // EVICTION_BATCH_DIVISOR)
+		# Always leave at least one message behind: an empty conversation is a
+		# different failure from a trimmed one.
+		cut = pair_safe_left_cut(msgs, min(batch, max(0, len(msgs) - 1)))
+		cut = min(cut, max(0, len(msgs) - 1))
+		if cut <= 0:
+			return 0
+
+		# F6: the provider-usage anchor covers a prefix that is about to be cut.
+		self.reset_usage_anchor("history eviction")
+
+		freed = 0
+		for _ in range(cut):
+			evicted = msgs.popleft()
+			metadata = getattr(evicted, 'metadata', None)
+			if metadata:
+				freed += metadata.input_tokens
+		self.history.total_tokens = max(0, self.history.total_tokens - freed)
+		self.logger.warning(
+			f"History saturated at {maxlen} messages — evicted the {cut} oldest "
+			f"({freed:,} tokens) in one batch. Those turns are gone from the "
+			f"conversation (long-term memory keeps its own copy); the prompt "
+			f"prefix is cold for one step and warm again after it."
+		)
+		return cut
+
 	def _add_message_with_tokens(self, message: BaseMessage, position: Optional[int] = None, _internal: bool = False) -> None:
 		"""Add message with token count metadata and auto-trim if needed.
 
@@ -574,16 +704,14 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 			managed_msg = ManagedMessage(message=message, metadata=metadata)
 			maxlen = self.history.max_messages
 			if position is None:
-				# A deque(maxlen).append() auto-evicts the leftmost message when full
-				# WITHOUT decrementing total_tokens, and the trim loop below can't
-				# compensate (len can never EXCEED maxlen). Subtract the soon-to-be
-				# evicted message's tokens first so total_tokens doesn't drift upward.
+				# F10: a deque(maxlen).append() auto-evicts the leftmost message on
+				# EVERY append once the history is full — the conversation shifts
+				# left by one each step, so no provider ever sees the same prefix
+				# twice, and it happened with no log line and no summary. Cut a
+				# BATCH instead: one cold prefix, then a run of warm steps.
 				msgs = self.history.messages
 				if maxlen and msgs and len(msgs) >= maxlen:
-					ev = msgs[0]
-					if getattr(ev, 'metadata', None):
-						self.history.total_tokens = max(
-							0, self.history.total_tokens - ev.metadata.input_tokens)
+					self._evict_oldest_batch(maxlen)
 				msgs.append(managed_msg)
 			else:
 				# FIXED: deque with maxlen doesn't support insert() when full
@@ -707,6 +835,18 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 			self._skill_message = None
 			self._skill_message_tokens = 0
 
+	def set_worker_catalog_message(self, content: Optional[str]) -> None:
+		"""041 phase 2: pin the approved named workers as a WORKER_CATALOG-origin
+		foundation message (``<worker-catalog>`` envelope). Set once at session
+		start; falsy content clears it (the inert default)."""
+		if content and content.strip():
+			self._worker_catalog_message = make_control_message(
+				content, MessageOrigin.WORKER_CATALOG)
+			self._worker_catalog_tokens = self._count_message_tokens(self._worker_catalog_message)
+		else:
+			self._worker_catalog_message = None
+			self._worker_catalog_tokens = 0
+
 	def set_tool_catalog_message(self, content: Optional[str]) -> None:
 		"""S1 (dynamic tool rig): pin the honest <tool-catalog> block as a foundation
 		user message instead of the system prompt.
@@ -726,6 +866,44 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 			self._tool_catalog_message = None
 			self._tool_catalog_tokens = 0
 
+	def update_tool_catalog(self, content: Optional[str]) -> None:
+		"""F8: deliver a catalog CHANGE as a tail delta instead of rewriting [7].
+
+		The catalog carries LIVE gate status and is re-rendered every step, so the
+		in-place rewrite in :meth:`set_tool_catalog_message` moved a foundation
+		message mid-session — and every provider cache serves only the leading
+		bytes two requests share, so one flipped status re-billed the whole
+		conversation behind it (063 WS-4 / F8).
+
+		The FIRST render stays the foundation baseline (it is the stable one).
+		A later render that differs pushes ONE durable ``<tool-catalog-update>``
+		control message naming only the tool lines that changed; ``[7]`` is never
+		touched again. ``_tool_catalog_source`` advances either way, so the same
+		delta is never pushed twice. Gated ``TOOL_CATALOG_TAIL_UPDATES`` by the
+		caller (``agents/task/agent/core/runtime_catalog.py``); ``false`` keeps the
+		in-place rewrite.
+		"""
+		if content is None:
+			return
+		previous = getattr(self, '_tool_catalog_source', None)
+		if content == previous:
+			return
+		if self._tool_catalog_message is None or not previous:
+			# No baseline yet — this render IS the session's foundation snapshot.
+			self.set_tool_catalog_message(content)
+			return
+		changed = tool_catalog_delta(previous, content)
+		# Advance the source even when the diff is empty (a header-only change),
+		# so the next render compares against what was actually rendered.
+		self._tool_catalog_source = content
+		if not changed:
+			return
+		body = "\n".join(changed)
+		self.push_control_message(make_control_message(
+			f"<tool-catalog-update>\n{body}\n</tool-catalog-update>\n"
+			"This supersedes the earlier catalog lines for these tools.",
+			MessageOrigin.TOOL_CATALOG))
+
 	def set_self_context_message(self, content: Optional[str]) -> None:
 		"""polyrob Phase C: pin the SOUL/IDENTITY self-context as a frozen foundation
 		user message instead of the system prompt.
@@ -742,6 +920,39 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		else:
 			self._self_context_message = None
 			self._self_context_tokens = 0
+		# The two self-context slots are alternatives (060 WS-1): never both.
+		self._self_context_blocks = None
+		self._self_context_blocks_tokens = 0
+
+	def set_self_context_blocks(self, blocks) -> None:
+		"""060 WS-1: pin the self-context tier as its declared blocks.
+
+		``blocks`` is an ordered sequence of ``(name, text)`` pairs (see
+		``foundation_layers.SELF_CONTEXT_BLOCKS``). Each non-empty block becomes
+		its OWN SELF_CONTEXT-origin foundation message, so the owner's rules are
+		no longer welded inside the operator-frozen SOUL block: each is capped,
+		dated and reported on its own. ``SELF_CONTEXT_COMBINED=true`` re-joins
+		them into the one pre-060 message, byte-identical (the same
+		``"\\n\\n".join`` over the same order). No non-empty block => inert.
+		"""
+		from agents.task.agent.messages.foundation_layers import self_context_combined
+		# Truthiness, not strip(): the combined join must stay byte-identical to
+		# the pre-060 `"\n\n".join(p for p in (...) if p)`.
+		texts = [(str(name), text) for name, text in (blocks or ())
+		         if isinstance(text, str) and text]
+		if self_context_combined():
+			self.set_self_context_message("\n\n".join(t for _n, t in texts))
+			return
+		texts = [(n, t) for n, t in texts if t.strip()]
+		self._self_context_message = None
+		self._self_context_tokens = 0
+		if not texts:
+			self._self_context_blocks = None
+			self._self_context_blocks_tokens = 0
+			return
+		messages = tuple(make_control_message(t, MessageOrigin.SELF_CONTEXT) for _n, t in texts)
+		self._self_context_blocks = messages
+		self._self_context_blocks_tokens = sum(self._count_message_tokens(m) for m in messages)
 
 	def set_project_context_message(self, content: Optional[str]) -> None:
 		"""C9: pin the auto-loaded project context (CLAUDE.md/AGENTS.md/.cursorrules) as a
@@ -814,29 +1025,6 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 			
 		safe_paths = sanitize_paths(file_paths)
 		content = f'Here are file paths you can use: {safe_paths}'
-		msg = HumanMessage(content=content)
-		self._add_message_with_tokens(msg)
-
-	def add_new_task(self, new_task: str) -> None:
-		"""Add a new task message with properly escaped task text.
-		
-		Args:
-			new_task: The new task description
-		"""
-		# Reuse the same escaping function from task_instructions
-		def escape_task_text(text: str) -> str:
-			if not text:
-				return ""
-			# Replace potential control sequences
-			escaped = (text.replace('"""', '\"\"\"')  # Escape triple quotes
-					  .replace('\\', '\\\\')        # Escape backslashes
-					  .replace('{', '{{')           # Escape curly braces for f-strings
-					  .replace('}', '}}'))
-			return escaped
-		
-		# Apply escaping directly instead of extracting from another message
-		safe_task = escape_task_text(new_task)
-		content = f'Your new ultimate task is: """{safe_task}""". Take the previous context into account and finish your new ultimate task. '
 		msg = HumanMessage(content=content)
 		self._add_message_with_tokens(msg)
 

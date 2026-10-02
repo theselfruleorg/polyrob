@@ -61,6 +61,10 @@ DELEGATION_ACTION_NAMES: frozenset = frozenset({
     "subtask", "parallel_subtasks", "delegate_task",
     "preferences",
     "autonomy_control",  # 031: a leaf never touches the owner pause record
+    # 2026-09-29 review F13: owner-facing moves. A leaf reports to its parent,
+    # never to the owner — each refuses a leaf at call time; excluding them here
+    # keeps the schemas (and the temptation) out of the child's tool list.
+    "owner_ask", "present_choice", "propose_action",
 })
 
 _BLOCKED_TOOLS_ENV = "DELEGATE_BLOCKED_TOOLS"

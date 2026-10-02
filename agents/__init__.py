@@ -18,15 +18,12 @@ logger = logging.getLogger(__name__)
 # name -> (relative module, attribute) resolved lazily by __getattr__
 _LAZY_ATTRS = {
     "BaseAgent": (".base_agent", "BaseAgent"),
-    "SystemPromptManager": (".prompt", "SystemPromptManager"),
-    "BasePromptManager": (".prompt", "BasePromptManager"),
     "CharacterManager": (".personality.character_manager", "CharacterManager"),
     "TaskAgent": (".task_agent_lite", "TaskAgent"),
 }
 
 if TYPE_CHECKING:  # static analysis / IDEs only — no runtime import
     from .base_agent import BaseAgent
-    from .prompt import SystemPromptManager, BasePromptManager
     from .personality.character_manager import CharacterManager
     from .task_agent_lite import TaskAgent
 
@@ -73,21 +70,11 @@ def _build_agent_metadata():
 
 async def initialize_shared_components(container: DependencyContainer) -> None:
     """Initialize shared components used by agents."""
-    from .prompt import SystemPromptManager
+    # SystemPromptManager was retired 2026-09-29 (review F16): nothing read its
+    # prompts (the task agent builds its own SystemPrompt), and its cleanup
+    # rewrote data/prompts/system_prompts.json on every shutdown.
     from .personality.character_manager import CharacterManager
     try:
-        # Initialize required shared components first
-        if not container.has_service('system_prompt_manager'):
-            logger.debug("Creating system prompt manager")
-            system_prompt_manager = SystemPromptManager(
-                name='system_prompt_manager',
-                config=container.config,
-                container=container
-            )
-            await system_prompt_manager.initialize()
-            container.register_service('system_prompt_manager', system_prompt_manager)
-            logger.info("✓ System prompt manager initialized")
-
         # Initialize character manager
         if not container.has_service('character_manager'):
             logger.debug("Creating character manager")
@@ -140,10 +127,6 @@ __all__ = [
 
     # Main agents
     'TaskAgent',
-
-    # Prompt system
-    'SystemPromptManager',
-    'BasePromptManager',
 
     # Character system
     'CharacterManager',

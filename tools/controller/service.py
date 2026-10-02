@@ -35,9 +35,10 @@ from tools.controller.action_registration import ActionRegistrationMixin
 from tools.controller.tool_management import ToolManagementMixin
 from tools.controller.execution import ExecutionMixin
 from tools.controller.introspection import IntrospectionMixin
+from tools.controller.tool_call_bridge import ToolCallBridgeMixin
 
 
-class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, ActionRegistrationMixin):
+class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, ToolCallBridgeMixin, ActionRegistrationMixin):
 	def __init__(
 		self,
 		exclude_actions: Optional[List[str]] = None,
@@ -195,6 +196,30 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, Action
 		from tools.controller.wallet_authority import make_wallet_authority_hook
 		self.register_pre_tool_call_hook(make_wallet_authority_hook(self), fail_mode="closed")
 
+		# 022: the send-time gate. Every outbound verb (tools/controller/
+		# financial_claim_gate.py::OUTBOUND_TEXT_FIELDS) that claims money moved
+		# must be backed by a settled record, or the send is refused by name.
+		from tools.controller.financial_claim_gate import make_financial_claim_hook
+		self.register_pre_tool_call_hook(make_financial_claim_hook(self), fail_mode="closed")
+
+		# A refused money verb holds the rest of its run off every public rail:
+		# the record hook taints the run, the gate refuses a non-owner send
+		# (tools/controller/refusal_taint_gate.py). Owner sends still go.
+		from tools.controller.refusal_taint_gate import (
+			make_refusal_taint_gate_hook, make_refusal_taint_record_hook)
+		self.register_pre_tool_call_hook(make_refusal_taint_gate_hook(self), fail_mode="closed")
+		self.register_post_tool_call_hook(make_refusal_taint_record_hook(self), fail_mode="open")
+
+		# 033: the ONE effect classification. The gate (pre, fail-closed) refuses an
+		# autonomous social/comms/public/money write while the owner's pause covers
+		# it, BEFORE any approval ask is queued; the recorder (post, fail-open) writes
+		# one `external_write` row per outward act, on the failure path too.
+		# Registered here, never on an instance: a delegated sub-agent builds a fresh
+		# Controller, so a hook attached post-hoc would miss delegated work.
+		from tools.controller.effect_hooks import make_effect_gate_hook, make_effect_record_hook
+		self.register_pre_tool_call_hook(make_effect_gate_hook(self), fail_mode="closed")
+		self.register_post_tool_call_hook(make_effect_record_hook(self), fail_mode="open")
+
 		# Approval seam (Item 7E): gate the resolved action set through an
 		# ApprovalProvider (default AutoApprover = allow). Empty set => no-op.
 		# owner-UX P2 T4: the full composition — the FROZEN env+posture set
@@ -293,6 +318,7 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, Action
 					)
 				except Exception as e:
 					self.logger.error(f"Failed to wire autonomous approval lanes: {e}")
+					self._deny_all_fallback(_required, "autonomous approval lanes")
 			else:
 				# H9: fail-CLOSED. An unknown APPROVAL_PROVIDER resolves to deny-by-default
 				# (not skip-registration), so a misconfigured provider can never silently
@@ -319,6 +345,7 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, Action
 					)
 				except Exception as e:
 					self.logger.error(f"Failed to wire approval gating: {e}")
+					self._deny_all_fallback(_required, "approval gating")
 
 		# Payment approval mode (Task 9 / G-2, T7 review fix): outward-facing
 		# payment-CREATION actions (core.config_policy.PAYMENT_APPROVAL_TOOLS)
@@ -338,8 +365,8 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, Action
 			# owner tap. Returns None for everything else, so the lane below is
 			# unchanged for every other verb and every other deployment.
 			from core.config_policy.spend_lane import (
-				DEFI_SPEND_VERBS, autonomous_ceiling_usd, spend_exemption,
-				tiered_spend_lane_enabled)
+				DEFI_SPEND_VERBS, autonomous_ceiling_usd, is_simulation,
+				spend_exemption, tiered_spend_lane_enabled)
 			_payment_tools = set(PAYMENT_APPROVAL_TOOLS)
 			_receive_tools = _payment_tools & set(PAYMENT_RECEIVE_APPROVAL_TOOLS)
 			_spend_tools = _payment_tools - _receive_tools
@@ -348,6 +375,9 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, Action
 			_payment_tools = set()
 			_receive_tools = set()
 			_spend_tools = set()
+			# CR-L20: an unresolvable lane has no tool list to deny, so deny
+			# every MONEY action instead — never leave them ungated.
+			self._deny_money_fallback("payment approval lane resolution")
 		if _payment_tools:
 			_pay_mode = payment_approval_mode()
 			if _pay_mode == "approve":
@@ -391,6 +421,7 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, Action
 					)
 				except Exception as e:
 					self.logger.error(f"Failed to wire payment approval gating (spend lane): {e}")
+					self._deny_all_fallback(_payment_tools, "payment approval gating")
 			else:  # "auto" — spend verbs STILL owner_queue pre-approved (hard line);
 				# only the receive-side subset act-and-reports.
 				if _spend_tools:
@@ -434,6 +465,7 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, Action
 						)
 					except Exception as e:
 						self.logger.error(f"Failed to wire payment approval gating (spend lane): {e}")
+						self._deny_all_fallback(_spend_tools, "payment approval gating")
 				if _receive_tools:
 					try:
 						from tools.controller.approval_queue import make_payment_auto_notify_hook
@@ -471,7 +503,7 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, Action
 							self.container, _tiered_notify,
 							taint_probe=lambda: bool(
 								getattr(_orch, "_correspondent_tainted", False)),
-							skip_fn=lambda _a, params: bool(params.get("dry_run", True)),
+							skip_fn=is_simulation,  # H03a: a verb with no dry_run is never one
 							# 039 Unit A: audit event only. The owner MESSAGE now comes
 							# from core/wallet/tx_notify.py, which knows the chain, the
 							# amounts, the hash, the cap headroom and the settled
@@ -504,6 +536,20 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, Action
 		# action_registration.py size-ceiling escape hatch.
 		from tools.controller.room_read_action import register_room_read_action
 		register_room_read_action(self)
+		# F9 (063 WS-4): the `tool_call` bridge, gated TOOL_SCHEMAS_FROZEN. Must be
+		# registered BEFORE the first schema emit — the Registry only arms the
+		# freeze when the bridge exists, or a late tool would be unreachable. Own
+		# module for the same reason as the three above: action_registration.py is
+		# at its size ceiling.
+		self._register_tool_call_bridge()
+		# 061: a decision an autonomous run needs is a durable ASK (any session,
+		# any toolset — the exit-rail cron loads no `goal` tool). Same escape hatch.
+		from tools.controller.owner_ask_action import register_owner_ask_action
+		register_owner_ask_action(self)
+		# 2026-09-27: action cards from the agent (present_choice / propose_action).
+		# Same escape hatch as owner_ask.
+		from tools.controller.card_actions import register_card_actions
+		register_card_actions(self)
 
 		# NOTE: Backward compat aliases are registered LAZILY after task tool loads
 		# NOT here in __init__ - aliases to non-existent actions cause confusion
@@ -593,6 +639,49 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, Action
 	@_transform_tool_result_hooks.setter
 	def _transform_tool_result_hooks(self, value):
 		self._hooks.transform = value if value is not None else []
+
+	def _deny_all_fallback(self, tools, lane: str) -> None:
+		"""Security analysis 2026-09-23 (Low): an approval lane whose wiring RAISED
+		used to leave its tools UNGATED with only an error log. Fail closed: deny
+		every one of them this session, naming the fault, rather than run a money
+		or gated verb with no approval at all."""
+		gated = frozenset(t for t in (tools or ()) if t)
+		if not gated:
+			return
+		reason = (f"denied: the {lane} could not be wired this session, so this "
+		          "action has no approval path — refusing rather than running it "
+		          "ungated (see the controller error log)")
+
+		def _deny(action_name, params, context):
+			return reason if action_name in gated else None
+
+		try:
+			self.register_pre_tool_call_hook(_deny, fail_mode="closed")
+			self.logger.error(f"🔒 {lane} unwired — deny-all fallback for {sorted(gated)}")
+		except Exception as e:  # nothing left to fall back to; make it loud
+			self.logger.critical(f"{lane}: deny-all fallback could not register: {e}")
+
+	def _deny_money_fallback(self, lane: str) -> None:
+		"""CR-L20: the payment lane could not even RESOLVE its tool list, so
+		:meth:`_deny_all_fallback` has nothing to name. Deny every action the
+		capability table classifies as money (``core.wallet.authority.
+		money_action``) instead; a probe error there denies too (fail closed)."""
+		reason = (f"denied: the {lane} failed this session, so no money action "
+		          "has an approval path — refusing rather than running it "
+		          "ungated (see the controller error log)")
+
+		def _deny(action_name, params, context):
+			try:
+				from core.wallet.authority import money_action
+				return reason if money_action(str(action_name)) else None
+			except Exception:
+				return reason
+
+		try:
+			self.register_pre_tool_call_hook(_deny, fail_mode="closed")
+			self.logger.error(f"🔒 {lane} failed — deny-all fallback for money actions")
+		except Exception as e:  # nothing left to fall back to; make it loud
+			self.logger.critical(f"{lane}: money deny fallback could not register: {e}")
 
 	def register_pre_tool_call_hook(self, hook: Callable, fail_mode: str = "open") -> None:
 		"""Register a pre-tool-call hook.

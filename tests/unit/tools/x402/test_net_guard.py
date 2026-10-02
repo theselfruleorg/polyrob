@@ -183,3 +183,41 @@ async def test_total_stream_deadline_closes_slow_response(monkeypatch):
         await net_guard.BoundedAsyncTransport(Inner()).handle_async_request(
             httpx.Request('GET', 'https://example.com/paid'))
     assert closed
+
+
+def test_pinned_transport_refuses_a_different_host_instead_of_sending_unpinned():
+    """Low (2026-09-23): a host mismatch used to fall through UNPINNED — a fresh
+    DNS lookup, i.e. the rebinding window. It must fail closed."""
+    import asyncio
+
+    import httpx
+
+    class _Inner(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request):
+            raise AssertionError("an unpinned request reached the network layer")
+
+    t = net_guard.PinnedAsyncTransport("api.example.com", "93.184.216.34", inner=_Inner())
+    req = httpx.Request("GET", "https://other.example.com/paid")
+    with pytest.raises(httpx.ConnectError):
+        asyncio.run(t.handle_async_request(req))
+
+
+def test_pinned_transport_pins_an_idn_host():
+    """H14: the Unicode hostname from urlparse and httpx's IDNA wire host must be
+    recognised as the SAME host, with the wire form on SNI."""
+    import asyncio
+
+    import httpx
+
+    sent = {}
+
+    class _Inner(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request):
+            sent["url"] = str(request.url)
+            sent["sni"] = request.extensions.get("sni_hostname")
+            return httpx.Response(200, content=b"ok")
+
+    t = net_guard.PinnedAsyncTransport("bücher.de", "93.184.216.34", inner=_Inner())
+    asyncio.run(t.handle_async_request(httpx.Request("GET", "https://bücher.de/x")))
+    assert sent["url"].startswith("https://93.184.216.34/")
+    assert sent["sni"] == "xn--bcher-kva.de"

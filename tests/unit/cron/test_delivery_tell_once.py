@@ -100,3 +100,26 @@ async def test_the_echo_still_goes_out_when_the_run_stayed_quiet(monkeypatch):
 
 def test_already_told_is_its_own_class_not_a_failure():
     assert delivery.delivery_outcome("x", "already_told") == "already_told"
+
+
+@pytest.mark.asyncio
+async def test_a_public_channel_is_not_an_echo_of_the_owner_dm(monkeypatch):
+    """2026-09-29: the report body IS the run's send_message, which the owner
+    already read — so for an owner sink the tell-once skip holds, but a public
+    pack channel (the X post sink) is a different recipient and still posts."""
+    posted = []
+
+    async def _channel(task_agent, job, final, target):
+        posted.append((target, final))
+        return "sent"
+
+    monkeypatch.setattr(delivery, "allowed_targets",
+                        lambda: ("telegram", "email", "twitter"))
+    monkeypatch.setattr(delivery, "_deliver_channel", _channel)
+    monkeypatch.setattr(delivery, "_event_log_for_read", lambda: _Log([_row("s-1")]))
+    monkeypatch.setattr(delivery, "_mark_surfaced", lambda sid, uid=None: None)
+    out = await delivery.deliver_result_ex(object(), _Job(), "the post",
+                                           target="twitter", session_id="s-1",
+                                           record="never published")
+    assert out == "sent"
+    assert posted == [("twitter", "the post")]  # no record on a public sink

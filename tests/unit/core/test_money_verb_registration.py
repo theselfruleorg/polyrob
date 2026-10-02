@@ -95,3 +95,15 @@ def test_the_solana_swap_verb_is_registered_everywhere():
     assert name in DEFI_SPEND_VERBS
     assert name in _HIGH_IMPACT_NAMES        # listed explicitly, not just matched
     assert is_high_impact(name)              # and the predicate honours it
+
+
+def test_every_money_lane_row_is_a_money_write_blocked_while_tainted():
+    """067 P1: the lanes are fields of one row now, so check the row agrees with
+    itself — a verb on a spend lane or an approval lane is a ``money`` write and
+    carries its own correspondent block."""
+    from core.verb_policy import VERB_POLICY
+    bad = sorted(
+        n for n, row in VERB_POLICY.items()
+        if (row.lane != "none" or row.approval_owner is not None)
+        and not (row.effect == "money" and row.correspondent_blocked))
+    assert not bad, f"money-lane rows that are not blocked money writes: {bad}"

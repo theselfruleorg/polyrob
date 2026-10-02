@@ -3,6 +3,7 @@ FastAPI application factory for POLYROB platform.
 Serves AutoV2 HTTP API endpoints.
 """
 
+import hmac
 import os
 import sys
 from core.security.session_tokens import decode_session_token
@@ -12,7 +13,7 @@ import asyncio
 from typing import Optional, Dict, Any, TYPE_CHECKING
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, HTTPException, Header
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
@@ -32,6 +33,11 @@ try:
     sys.modules['sqlite3'] = pysqlite3
 except ImportError:
     pass
+
+# 067 P2 phase 1: pack POLICY rows register before any policy view is built
+# (``core/packs/loader.py``); no pack code runs here.
+from core.packs.loader import register_policies as _register_pack_policies
+_register_pack_policies()
 
 # Import core components
 from core.config import BotConfig
@@ -336,6 +342,15 @@ def _as_int(value):
 _SERVICE_TOKEN_HEADER_WARNED = False
 
 
+def _token_eq(provided, expected) -> bool:
+    """Constant-time compare of a presented secret against the configured one.
+
+    Bytes, so a non-ASCII value cannot raise inside ``compare_digest``.
+    """
+    return hmac.compare_digest(str(provided or "").encode("utf-8"),
+                               str(expected or "").encode("utf-8"))
+
+
 def _warn_service_token_header_once(logger) -> None:
     """Log the service-token header rename ONCE per process.
 
@@ -416,7 +431,7 @@ async def fallback_auth_middleware(request: Request, call_next):
             provided_token = auth_header
             # Also check if X-API-KEY contains a JWT
             is_jwt_token = auth_header.count('.') == 2
-            if not is_jwt_token and api_token and auth_header == api_token:
+            if not is_jwt_token and api_token and _token_eq(auth_header, api_token):
                 _warn_service_token_header_once(logger)
             logger.debug(f"🔑 Using X-API-KEY header, is_jwt={is_jwt_token}")
         elif bearer_header and bearer_header.startswith("Bearer "):
@@ -499,7 +514,7 @@ async def fallback_auth_middleware(request: Request, call_next):
                 # Fall through to check if it's an API key
 
         # Check against API_AUTH_TOKEN (for non-JWT tokens)
-        if provided_token != api_token:
+        if not _token_eq(provided_token, api_token):
             logger.warning(f"Invalid API key attempt for {path}")
             return JSONResponse(
                 status_code=401,
@@ -659,22 +674,12 @@ def create_app() -> FastAPI:
         else:
             logger.warning("⚠️ JWT_SECRET_KEY not set - authentication disabled (development only)")
 
-    # Add x402 payment middleware (runs BEFORE JWT middleware due to LIFO order)
-    # This allows x402 payments to bypass JWT auth for pay-per-request access
-    # Uses fastapi-x402 library for proper on-chain verification via Coinbase facilitator
-    x402_enabled = os.environ.get("X402_ENABLED", "false").lower() == "true"
-    if x402_enabled:
-        try:
-            from modules.x402.middleware import X402PaymentMiddleware, install_auth_state_writer
-            from api.auth_state import set_auth_state
-
-            # R-4 inversion: modules/x402 no longer imports api.auth_state; the
-            # api tier installs the canonical C4 writer at mount time.
-            install_auth_state_writer(set_auth_state)
-            app.add_middleware(X402PaymentMiddleware, enabled=True)
-            logger.info("✅ x402 payment middleware enabled (using fastapi-x402)")
-        except ImportError as e:
-            logger.warning(f"Could not add x402 middleware: {e}")
+    # Payment middleware slot (067 P5a, ``api/contributions.py``): the x402
+    # middleware runs BEFORE JWT middleware due to LIFO order, so x402 payments
+    # bypass JWT auth for pay-per-request access. Contributed by the money rail
+    # (today ``api/money_contributions.py``; the wallet pack after P5c).
+    from api.contributions import install_middleware as _install_contributed_middleware
+    _install_contributed_middleware(app, "payment", logger)
 
     # Global exception handlers
     @app.exception_handler(StarletteHTTPException)
@@ -842,22 +847,11 @@ def create_app() -> FastAPI:
         app.include_router(auth_router, prefix="/api/auth", tags=["authentication"])
         logger.info("✅ Auth endpoints registered at /api/auth")
 
-    # Mount Payment router (deposits, credits, transactions)
-    try:
-        from api.payment_endpoints import router as payment_router
-        app.include_router(payment_router, prefix="/api", tags=["payments"])
-        logger.info("✅ Payment endpoints registered at /api/payments")
-    except ImportError as e:
-        logger.warning(f"Payment endpoints not available: {e}")
-
-    # Mount x402 router (always register - endpoints self-check if x402 is configured)
-    try:
-        from api.x402_endpoints import router as x402_router
-        app.include_router(x402_router, prefix="/api", tags=["x402"])
-        x402_enabled = os.environ.get("X402_ENABLED", "false").lower() == "true"
-        logger.info(f"✅ x402 endpoints registered at /api/x402 (payments {'enabled' if x402_enabled else 'info-only'})")
-    except ImportError as e:
-        logger.debug(f"x402 endpoints not available: {e}")
+    # Router slots "payments" (deposits, credits, transactions) and "x402"
+    # (/api/x402/*) — contributed by the money rail (067 P5a).
+    from api.contributions import mount_routers as _mount_contributed_routers
+    _mount_contributed_routers(app, "payments", logger)
+    _mount_contributed_routers(app, "x402", logger)
 
     # Mount OpenAI-compatible /v1 router (gated; default OFF). Reuses POLYROB auth +
     # per-request billing + the tool-light chat agent — multi-tenant-safe.
@@ -913,21 +907,8 @@ def create_app() -> FastAPI:
     except ImportError as e:
         logger.warning(f"MCP endpoints not available: {e}")
 
-    # Mount Polymarket router
-    try:
-        from api.polymarket_routes import router as polymarket_router
-        app.include_router(polymarket_router, prefix="/api/polymarket", tags=["polymarket"])
-        logger.info("✅ Polymarket endpoints registered at /api/polymarket")
-    except ImportError as e:
-        logger.warning(f"Polymarket endpoints not available: {e}")
-
-    # Mount Hyperliquid router
-    try:
-        from api.hyperliquid_routes import router as hyperliquid_router
-        app.include_router(hyperliquid_router, tags=["hyperliquid"])
-        logger.info("✅ Hyperliquid endpoints registered at /api/hyperliquid")
-    except ImportError as e:
-        logger.warning(f"Hyperliquid endpoints not available: {e}")
+    # Polymarket / Hyperliquid routes: the markets pack's routers, mounted
+    # with the other pack routers under /api/packs/markets (067 P4).
 
     # Mount Skills management router
     try:
@@ -966,19 +947,9 @@ def create_app() -> FastAPI:
     except ImportError as e:
         logger.warning(f"A2A endpoints not available: {e}")
 
-    # Mount ERC-8004 Trustless Agents router
-    try:
-        from api.eip8004_endpoints import router as eip8004_router
-        app.include_router(eip8004_router, tags=["eip8004-trustless-agents"])
-        
-        eip8004_enabled = os.environ.get("EIP8004_ENABLED", "false").lower() == "true"
-        logger.info(f"✅ ERC-8004 Trustless Agents endpoints registered at /eip8004")
-        logger.info(f"   - Registration: /eip8004/registration.json")
-        logger.info(f"   - Reputation: /eip8004/reputation/*")
-        logger.info(f"   - Validation: /eip8004/validation/*")
-        logger.info(f"   - Status: {'enabled' if eip8004_enabled else 'discovery-only'}")
-    except ImportError as e:
-        logger.warning(f"ERC-8004 endpoints not available: {e}")
+    # Router slot "eip8004" — ERC-8004 Trustless Agents (/eip8004/*), contributed
+    # by the money rail (067 P5a).
+    _mount_contributed_routers(app, "eip8004", logger)
 
     # Mount inbound webhook router (GET verify handshake + POST delegate to WebhookSurface).
     # Empty registry → 404s; mounting is always safe (additive, fail-open).
@@ -989,6 +960,11 @@ def create_app() -> FastAPI:
         logger.info("✅ Inbound webhooks registered at /webhooks/{surface_id}")
     except Exception as e:
         logger.warning("webhooks router not mounted: %s", e)
+
+    # 067 P2: enabled packs' routers, under /api/packs/<id>; a failure is named
+    # in the packs state (``polyrob pack doctor``, the ``packs`` status section).
+    from api.pack_routes import mount_pack_routers
+    mount_pack_routers(app, logger)
 
     # Canonical public chat endpoint — served by the unified task agent (chat_once)
     if API_MODELS_AVAILABLE:

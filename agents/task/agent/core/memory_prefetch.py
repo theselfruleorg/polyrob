@@ -182,6 +182,9 @@ class MemoryPrefetchMixin:
             from core.surfaces.room_policy import is_public_session
             if is_public_session(getattr(self, "orchestrator", None)):
                 return  # 044 T4: no tenant recall into a public room
+            from agents.task.session_class import correspondent_facing
+            if correspondent_facing(getattr(self, "orchestrator", None)):
+                return  # H16: output goes to a correspondent — no owner-tenant state
             n_steps = getattr(self.state, "n_steps", 0)
             # SA-06: an autonomous (goal/cron) session defaults to a recurring
             # cadence — recalling once at step 1 (where the brain enrichment is
@@ -240,6 +243,9 @@ class MemoryPrefetchMixin:
             from core.surfaces.room_policy import is_public_session
             if is_public_session(getattr(self, "orchestrator", None)):
                 return  # 044 T4: no tenant recall into a public room
+            from agents.task.session_class import correspondent_facing
+            if correspondent_facing(getattr(self, "orchestrator", None)):
+                return  # H16: output goes to a correspondent — no owner-tenant state
             from agents.task.goals.autonomy_marker import is_autonomous
             if is_autonomous(self.session_id):
                 return
@@ -279,6 +285,9 @@ class MemoryPrefetchMixin:
                 # handed the owner's last 24 h of autonomous work — trades,
                 # goals, spend — to answer strangers with.
                 return
+            from agents.task.session_class import correspondent_facing
+            if correspondent_facing(getattr(self, "orchestrator", None)):
+                return  # H16: output goes to a correspondent — no owner-tenant state
             from agents.task.goals.autonomy_marker import is_autonomous
             if not is_autonomous(self.session_id):
                 return  # chat sessions use _maybe_inject_episodic_digest instead
@@ -320,6 +329,9 @@ class MemoryPrefetchMixin:
             from core.surfaces.room_policy import is_public_session
             if is_public_session(getattr(self, "orchestrator", None)):
                 return  # 044 T4: no tenant recall into a public room
+            from agents.task.session_class import correspondent_facing
+            if correspondent_facing(getattr(self, "orchestrator", None)):
+                return  # H16: output goes to a correspondent — no owner-tenant state
             from agents.task.goals.autonomy_marker import is_autonomous
             if is_autonomous(self.session_id):
                 return

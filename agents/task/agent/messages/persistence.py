@@ -18,6 +18,8 @@ from modules.llm.messages import (
 
 from agents.task.agent.message_manager.views import MessageHistory, MessageMetadata, ManagedMessage
 
+from agents.task.agent.messages.retrieval import drop_usage_anchor
+
 logger = logging.getLogger(__name__)
 
 # UP-10 2.3: one-time guard so the write-only sqlite mirror warning fires once per
@@ -26,7 +28,10 @@ _warned_sqlite_mirror = False
 
 
 class PersistenceMixin:
-	# Empty slots so the composed MessageManager keeps its own __slots__ (no __dict__).
+	# F29: empty slots so the composed MessageManager keeps its own __slots__ and
+	# never grows a __dict__. This is only TRUE while EVERY class in the MRO
+	# declares one — three mixins omitted it until 2026-09-22, so the claim in
+	# this comment was false for as long as it had been written.
 	__slots__ = ()
 
 	def checkpoint_history(self, filepath: Optional[Path] = None) -> None:
@@ -186,7 +191,9 @@ class PersistenceMixin:
 
 			# SECURITY FIX: Protect clear + restore operations with lock
 			with self._history_lock:
-				# Clear current history
+				# Clear current history. F6: the provider-usage anchor covered a
+				# prefix this restore replaces.
+				drop_usage_anchor(self, "history restore")
 				self.history.messages.clear()
 				self.history.total_tokens = 0
 
@@ -343,6 +350,18 @@ class PersistenceMixin:
 			except Exception as e:
 				self.logger.debug(f"ephemeral persistence skipped: {e}")
 
+			# F13: persist the RENDERED foundation (system prompt, runtime identity,
+			# <environment>, self/project context, initial task, skill + tool catalogs)
+			# and the emitted tool order alongside the history, so a restart can
+			# re-issue the same prefix bytes instead of re-rendering every block from
+			# the live environment. One file — no sidecar. Fail-soft: without the key
+			# load_from_disk simply rebuilds, which is the pre-F13 behaviour.
+			try:
+				from agents.task.agent.messages.foundation_replay import capture_foundation
+				history_data["foundation"] = capture_foundation(self)
+			except Exception as e:
+				self.logger.debug(f"foundation snapshot skipped: {e}")
+
 			# Save to disk
 			save_path.parent.mkdir(parents=True, exist_ok=True)
 			with open(save_path, 'w') as f:
@@ -483,6 +502,16 @@ class PersistenceMixin:
 						f"📂 Restored {restored_ephemeral} pending ephemeral message(s)")
 			except Exception as e:
 				self.logger.debug(f"ephemeral restore skipped: {e}")
+
+			# F13: prefer the persisted foundation bytes over the freshly rendered
+			# ones, so the prompt prefix survives the restart. No-op (and the fresh
+			# render stands) when FOUNDATION_REPLAY is off, when the file predates
+			# F13, when the blob is incomplete, or when model/provider/cwd changed.
+			try:
+				from agents.task.agent.messages.foundation_replay import replay_foundation
+				replay_foundation(self, history_data.get("foundation"), log=self.logger)
+			except Exception as e:
+				self.logger.debug(f"foundation replay skipped: {e}")
 			return True
 
 		except Exception as e:

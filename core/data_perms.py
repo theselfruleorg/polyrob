@@ -19,7 +19,12 @@ than an unbounded one. On a box where the group does not exist — every dev
 checkout — it SKIPS and says so; a skipped audit must never render as a clean
 one.
 
-Rules, per entry (symlinks are never followed and never judged):
+The top-level ``pylibs/`` overlay is excluded from this shared-state walk and
+its entry budget: it belongs to the trusted installer and must NOT be writable
+by the agent or the shared data group. A nested directory with that name is
+still shared state and is audited normally.
+
+Rules, per shared-state entry (symlinks are never followed and never judged):
 
 * every file and directory must have group ``polyrob-data``;
 * every directory must be group-writable AND ``setgid`` (so the group is
@@ -47,6 +52,18 @@ ROOT_SENSITIVE_DIRS = ("auto", "wallet", "locks")
 
 #: Judged on group + root-ownership only — mode 750 is the deploy's rule.
 GROUP_WRITE_EXEMPT_DIRS = ("wallet",)
+
+#: Top-level FILES that are 0600 BY DESIGN, where group-write is the defect and
+#: not the fix. `verdicts.key` is the per-install HMAC key behind
+#: `credential_digest`: `core/credential_verdicts.py::_digest_key` trusts it only
+#: while `st.st_mode & 0o077 == 0` and this process owns it, and falls back to a
+#: process-lifetime random key otherwise. Flagging it produced a WARN whose stated
+#: remedy — re-run the deploy's ownership pass — would either do nothing (the pass
+#: is `chgrp`, not `chmod`) or, if anyone "fixed" it by hand, destroy the exact
+#: property the file exists for. A permanent WARN with an inert or harmful remedy
+#: teaches the owner to skip the health block, which is worse than the warning is
+#: worth. Observed prod 2026-09-22 21:46Z.
+GROUP_WRITE_EXEMPT_FILES = ("verdicts.key",)
 
 #: Never walked: caches and VCS metadata carry no shared state.
 _SKIP_NAMES = frozenset({"__pycache__", ".git", "node_modules"})
@@ -131,9 +148,9 @@ class PermsReport:
 
     @property
     def remedy(self) -> str:
-        return ("re-run the deploy ownership pass, or by hand: "
-                f"chgrp -R {self.group} {self.data_dir} && chmod -R g+rwX {self.data_dir} && "
-                f"find {self.data_dir} -type d -exec chmod g+s {{}} + "
+        return ("re-run the deploy ownership pass via `bash scripts/deploy_when_idle.sh` "
+                "from the maintenance clone; it preserves the private wallet and "
+                "trusted pylibs overlay permissions "
                 "(and run owner CLI verbs as `sudo -u polyrob-agent polyrob …`)")
 
 
@@ -210,7 +227,9 @@ def audit_data_perms(data_dir: str, group: str = DEFAULT_DATA_GROUP,
         reasons: List[str] = []
         if st.st_gid != gid:
             reasons.append(REASON_WRONG_GROUP)
-        if top not in GROUP_WRITE_EXEMPT_DIRS:
+        exempt = top in GROUP_WRITE_EXEMPT_DIRS or (
+            not is_dir and top in GROUP_WRITE_EXEMPT_FILES)
+        if not exempt:
             if not st.st_mode & stat.S_IWGRP:
                 reasons.append(REASON_NOT_GROUP_WRITABLE)
             if is_dir and not st.st_mode & stat.S_ISGID:
@@ -242,7 +261,11 @@ def audit_data_perms(data_dir: str, group: str = DEFAULT_DATA_GROUP,
 
     for dirpath, dirnames, filenames in os.walk(data_dir, topdown=True,
                                                 onerror=None, followlinks=False):
-        dirnames[:] = [d for d in dirnames if d not in _SKIP_NAMES]
+        # Match the deploy ownership pass: only the data-home overlay is private
+        # installer code. Prune before judging/counting it, not just its children.
+        at_root = os.path.normpath(dirpath) == os.path.normpath(data_dir)
+        dirnames[:] = [d for d in dirnames if d not in _SKIP_NAMES
+                       and not (at_root and d == "pylibs")]
         for name, is_dir in [(d, True) for d in dirnames] + [(f, False) for f in filenames]:
             if report.scanned >= budget:
                 report.truncated = True

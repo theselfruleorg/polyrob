@@ -46,6 +46,16 @@ def _reset_ledger():
     artmod.reset_artifact_ledger()
 
 
+@pytest.fixture(autouse=True)
+def _private_data_home(monkeypatch, tmp_path):
+    """The API resolves the session workspace (070 W0.15) — keep it in tmp."""
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "home"))
+    import agents.task.path as pth
+    pth.reset_path_manager()
+    yield
+    pth.reset_path_manager()
+
+
 def test_lists_recorded_artifacts_with_kind_and_verdict(monkeypatch, tmp_path):
     artmod = _ledger_on(tmp_path, monkeypatch)
     import webview.webgate as webgate
@@ -68,7 +78,7 @@ def test_lists_recorded_artifacts_with_kind_and_verdict(monkeypatch, tmp_path):
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["error"] is None
-    kinds = {a["path"]: a["kind"] for a in body["artifacts"]}
+    kinds = {a["name"]: a["kind"] for a in body["artifacts"]}
     assert kinds == {"app.py": artmod.KIND_CODE, "data.csv": artmod.KIND_DATA}
     for a in body["artifacts"]:
         assert a["verdict"] == "ok"  # files still on disk, hash matches
@@ -110,3 +120,43 @@ def test_router_exposes_the_artifacts_path():
     routes = [r for r in mod.router.routes if getattr(r, "path", None) == "/api/webgate/artifacts"]
     assert routes, "artifacts route missing from the router"
     assert "GET" in routes[0].methods
+
+
+# --- 070 W0.15: name = basename; path = relative to THIS chat's workspace ---- #
+
+def _record_in(tmp_path, monkeypatch, files):
+    """Record *files* (relative to the session workspace, or absolute) for one
+    session and return the API body."""
+    monkeypatch.delenv("POLYROB_PROJECT_DIR", raising=False)
+    import agents.task.path as pth
+    pth.reset_path_manager()
+    artmod = _ledger_on(tmp_path, monkeypatch)
+    import webview.webgate as webgate
+    owner = webgate.local_owner_id()
+    clean = pth.pm().clean_session_id("sess-rel")
+    ws = pth.pm().get_workspace_dir(clean, user_id=owner)
+    ledger = artmod.get_artifact_ledger()
+    for rel in files:
+        path = ws / rel if not rel.startswith("/") else type(ws)(rel)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x")
+        ledger.record(owner, str(path), session_id=clean, kind=artmod.kind_for_path(str(path)))
+    resp = _client(monkeypatch, posture="local").get("/api/webgate/artifacts?session_id=sess-rel")
+    return {a["name"]: a for a in resp.json()["artifacts"]}
+
+
+def test_path_is_workspace_relative(monkeypatch, tmp_path):
+    rows = _record_in(tmp_path, monkeypatch, ["out/report.md"])
+    assert rows["report.md"]["path"] == "out/report.md"
+
+
+def test_path_outside_is_null(monkeypatch, tmp_path):
+    outside = tmp_path / "elsewhere" / "notes.md"
+    rows = _record_in(tmp_path, monkeypatch, [str(outside)])
+    assert rows["notes.md"]["path"] is None
+
+
+def test_name_is_basename(monkeypatch, tmp_path):
+    rows = _record_in(tmp_path, monkeypatch, ["a/b/c/deep.csv"])
+    assert set(rows) == {"deep.csv"}
+    assert rows["deep.csv"]["path"] == "a/b/c/deep.csv"

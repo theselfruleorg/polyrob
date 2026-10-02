@@ -110,3 +110,23 @@ class TestExtrasWellFormed:
                 assert _tuple(lo.group(1)) < _tuple(hi.group(1)), (
                     f"{extra}: {base!r} declares an empty window"
                 )
+
+
+class TestImportedDepsHaveAnExtra:
+    """067 P0.4: a third-party module core imports must be in SOME extra, and the
+    one-map (core.optional_extras) must name that extra in its remedy."""
+
+    def test_hf_extra_carries_huggingface_hub(self):
+        from core.optional_extras import MODULES_FOR_EXTRA, extra_for_module
+        assert _bound(_extras()["hf"], "huggingface_hub", ">=") is not None
+        assert extra_for_module("huggingface_hub") == "hf"
+        assert MODULES_FOR_EXTRA["hf"] == ("huggingface_hub",)
+        assert "hf" in _extras()["all"][0]
+
+    def test_browser_extra_carries_psutil(self):
+        from core.optional_extras import extra_for_module
+        assert _bound(_extras()["browser"], "psutil", ">=") is not None
+        assert extra_for_module("psutil") == "browser"
+
+    def test_no_agent_nft_extra_until_the_dist_publishes(self):
+        assert not {"desk", "agent_nft"} & set(_extras())

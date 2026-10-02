@@ -46,6 +46,12 @@ class DiscordHarness(BaseHarness):
     async def _deliver_to(self, target, text: str) -> None:
         await self._client.send_message(target, text)
 
+    async def _fetch_media(self, media) -> Optional[bytes]:
+        """A Discord CDN attachment (public signed URL — no token sent)."""
+        from surfaces._shared import fetch_capped
+        from surfaces.discord.gateway import ATTACHMENT_HOSTS
+        return await fetch_capped(media.url, allowed_hosts=ATTACHMENT_HOSTS)
+
     async def run(self) -> None:
         await self._gateway.run(self.handle_message_create)
 

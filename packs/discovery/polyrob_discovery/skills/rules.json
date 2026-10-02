@@ -1,0 +1,62 @@
+{
+  "web-scraping": {
+    "triggers": {
+      "tool_ids": [
+        "anysite",
+        "browser",
+        "web_fetch"
+      ],
+      "keywords": [
+        "scrape website",
+        "extract data from a website",
+        "extract data from url",
+        "web scraping",
+        "crawl website",
+        "structured data from url",
+        "scrape page",
+        "extract structured data from a site"
+      ],
+      "action_names": [],
+      "task_patterns": [
+        "web.scrap",
+        "extract.*from.*(url|site|website|web ?page)",
+        "scrape.*(site|page|data|url)",
+        "crawl.*(site|page|url)"
+      ]
+    },
+    "priority": 6,
+    "auto_activate": true,
+    "description": "Extract structured data from a URL using anysite (anysite_describe, then anysite_api), web_fetch, or browser with fallback",
+    "version": "2"
+  },
+  "lead-research": {
+    "triggers": {
+      "tool_ids": [
+        "anysite"
+      ],
+      "keywords": [
+        "find leads",
+        "prospect list",
+        "lead research",
+        "find contacts",
+        "qualify leads",
+        "outbound list",
+        "build lead list",
+        "sales prospects"
+      ],
+      "action_names": [],
+      "task_patterns": [
+        "find.*leads",
+        "prospect.*list",
+        "lead.*research",
+        "build.*contact.*list",
+        "qualify.*leads",
+        "outbound.*campaign",
+        "sales.*prospect"
+      ]
+    },
+    "priority": 6,
+    "auto_activate": true,
+    "description": "Find and qualify sales leads using LinkedIn and public data sources, producing a prioritized contact list"
+  }
+}

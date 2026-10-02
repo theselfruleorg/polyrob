@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -78,12 +78,73 @@ def parse_balances(payload: Optional[Dict[str, Any]]) -> Dict[str, int]:
 # Network boundary — never exercised by unit tests.
 # --------------------------------------------------------------------------
 
+#: Page cap for `fetch_all_balances`. Alchemy returns ~100 ERC-20 rows per
+#: page; past this many pages the result is reported INCOMPLETE, never trimmed
+#: silently.
+MAX_PAGES = 10
+
+
+def page_key(payload: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not payload or not isinstance(payload, dict):
+        return None
+    key = (payload.get("result") or {}).get("pageKey")
+    return str(key) if key else None
+
+
+def fetch_all_balances(holder: str, timeout: float = 10.0, *, chain: str = "base",
+                       post=None) -> Optional[Tuple[Dict[str, int], bool]]:
+    """``(holdings, complete)`` following ``pageKey`` to the end, or ``None``.
+
+    071 R4: the single-call read returned the first page only (~100 tokens)
+    while `portfolio` labelled it "complete". ``complete`` is False when the
+    page cap was hit or a later page failed — the rows are real, the picture is
+    partial, and the caller must say so. ``None`` = the FIRST page failed.
+    """
+    fetch = post or _post_page
+    merged: Dict[str, int] = {}
+    key: Optional[str] = None
+    for page in range(MAX_PAGES):
+        payload = fetch(holder, chain, key, timeout)
+        if payload is None:
+            return None if page == 0 else (merged, False)
+        merged.update(parse_balances(payload))
+        key = page_key(payload)
+        if not key:
+            return merged, True
+    return merged, False
+
+
+def _post_page(holder: str, chain: str, key: Optional[str], timeout: float):
+    api_key = os.getenv("ALCHEMY_API_KEY", "").strip()
+    base_url = base_url_for(chain)
+    if not api_key or not base_url:
+        return None
+    url = f"{base_url}/{api_key}"
+    params: list = [holder, "erc20"]
+    if key:
+        params.append({"pageKey": key})
+    try:
+        from tools.defi.providers import _http
+        r = _http.client().post(
+            url, json={"jsonrpc": "2.0", "id": 1, "method": "alchemy_getTokenBalances",
+                       "params": params}, timeout=timeout)
+        if r.status_code != 200:
+            return None
+        return r.json()
+    except Exception as exc:
+        from core.security.redaction import redact_url, scrub_secret
+        logger.debug("alchemy_index: page fetch failed for %s via %s: %s", holder,
+                     redact_url(url), scrub_secret(f"{type(exc).__name__}: {exc}", api_key))
+        return None
+
+
 def fetch_balances(holder: str, timeout: float = 10.0, *,
                    chain: str = "base") -> Optional[Dict[str, int]]:
     """Holdings for *holder* on *chain*, or None when unavailable/failed.
 
     None means "no answer" — the caller must fall back to a candidate-list scan
     and label the coverage partial, never report an empty portfolio.
+    FIRST PAGE ONLY — callers that claim completeness use `fetch_all_balances`.
     """
     key = os.getenv("ALCHEMY_API_KEY", "").strip()
     if not key:
@@ -99,8 +160,9 @@ def fetch_balances(holder: str, timeout: float = 10.0, *,
     # exception text rather than printing a traceback that may embed it.
     url = f"{base_url}/{key}"
     try:
-        import httpx
-        r = httpx.post(
+        from tools.defi.providers import _http
+        # Pooled client — see the ~6 s per-connection note in _http.
+        r = _http.client().post(
             url,
             json={"jsonrpc": "2.0", "id": 1, "method": "alchemy_getTokenBalances",
                   "params": [holder]},

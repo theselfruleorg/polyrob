@@ -18,4 +18,6 @@ from typing import Optional
 def resolve_master_seed() -> Optional[str]:
     """Resolve the payment master seed. PAYMENT_MASTER_SEED wins; MASTER_SEED is
     the back-compat fallback for the pre-existing production deployment."""
-    return os.environ.get("PAYMENT_MASTER_SEED") or os.environ.get("MASTER_SEED") or None
+    # 066 P0.2: both names leave os.environ once the wallet config loads.
+    from core.security.custody_env import custody_secret
+    return custody_secret("PAYMENT_MASTER_SEED") or custody_secret("MASTER_SEED") or None

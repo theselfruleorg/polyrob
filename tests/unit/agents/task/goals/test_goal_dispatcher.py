@@ -497,9 +497,10 @@ async def test_completed_goal_pushes_result_to_owner(tmp_path, monkeypatch):
     # _notify_owner_done (decoupled, GOAL_NOTIFY_ON_DONE) — 2026-07-08.
     await disp._notify_owner_done(goal, "sess-1", "Posted the thread — 3 tweets.")
 
-    assert pushed, "a completed goal must push its result to the owner"
+    assert pushed, "a completed goal must tell the owner it completed"
     assert "Post the announcement" in pushed[0]
-    assert "Posted the thread" in pushed[0]
+    # Owner rule 2026-09-29: done() text is a record, never the delivered body.
+    assert "Posted the thread" not in pushed[0]
 
 
 # --- T2.1 Task 5: dispatcher e2e — a dependent goal never dispatches before

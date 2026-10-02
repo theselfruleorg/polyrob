@@ -147,8 +147,8 @@ async def test_token_info_says_partial_when_checks_did_not_run():
     assert "is_honeypot" in out
     # An unqualified "no risk flags raised" over a payload that never carried
     # is_honeypot is the sentence that makes a partial screen read as clean.
-    assert "no risk flags raised among the checks THAT RAN" in out
-    assert "did NOT run" in out
+    assert "no risk flags among the checks that ran" in out
+    assert "not run:" in out and "not a pass" in out
 
 
 @pytest.mark.asyncio
@@ -156,7 +156,10 @@ async def test_token_info_still_says_clean_when_every_check_ran():
     tool = _tool(
         screen_fn=lambda c, a: ScreenVerdict(
             available=True, checks={"is_honeypot": "0"}, flags=[], missing=[]),
-        holders_fn=lambda c, a: _report())
+        holders_fn=lambda c, a: _report(),
+        # 071 W2: no other screen source in this case — with them, every check
+        # they did not run would (correctly) make the screen PARTIAL.
+        facts_fn=lambda c, a: [])
     out = _text(await tool.token_info(TokenRefParams(chain="base", address=TOKEN)))
     assert "no risk flags raised" in out
     assert "PARTIAL" not in out

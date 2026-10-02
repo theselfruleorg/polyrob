@@ -221,8 +221,6 @@ class PhaseMemory(BaseModel):
         Returns:
             Importance score between 0 and 1
         """
-        import numpy as np
-
         # Validate index
         if finding_idx < 0 or finding_idx >= len(self.key_findings):
             return 0.0
@@ -239,7 +237,10 @@ class PhaseMemory(BaseModel):
             finding_idx < len(self.finding_embeddings) and
             self.finding_embeddings[finding_idx]):
 
-            # Cosine similarity
+            # Cosine similarity. numpy is an extra (058 T1.5) and this is the
+            # only branch that needs it: an embedding can only exist when the
+            # embedder (and so numpy) was present when it was written.
+            import numpy as np
             emb = self.finding_embeddings[finding_idx]
             dot_product = np.dot(query_embedding, emb)
             norm_query = np.linalg.norm(query_embedding)

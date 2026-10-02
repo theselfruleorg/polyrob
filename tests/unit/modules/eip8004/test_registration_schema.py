@@ -15,10 +15,9 @@ publicly-served `/eip8004/registration.json` lie:
   bot's identity is DATA, never framework code.
 
 ⚠️ The `image` rule is the interesting one. When the instance has no public base
-URL there is nowhere to host a face, and the fix is to OMIT `image` and carry the
-avatar's seed instead — a broken image link is worse than no image, and the seed
-keeps the face reproducible by anyone holding the open engine, which is a
-stronger claim than a hosted PNG makes.
+URL there is nowhere to host the avatar, and the fix is to OMIT `image` (or use
+the public https URL it was set from) — a broken image link is worse than no
+image. `metadata.avatar` carries the image's source and sha256.
 """
 import json
 
@@ -37,16 +36,12 @@ def _clean(monkeypatch, tmp_path):
     return tmp_path
 
 
-def _write_pfp(home, instance="rob"):
-    d = home / "identity" / instance / "pfp"
-    d.mkdir(parents=True, exist_ok=True)
-    d.joinpath("pfp.png").write_bytes(b"\x89PNG\r\n\x1a\n")
-    d.joinpath("pfp.json").write_text(json.dumps({
-        "generator": "mindprint@v2", "seed": "POLYROB", "variant": "#a1b2",
-        "seed_hex": "0x1546", "locked": True,
-        "traits": {"tier": "rare"}, "voice": {"pitch": 1.1},
-    }))
-    return d
+PNG = b"\x89PNG\r\n\x1a\n" + b"x" * 8
+
+
+def _write_pfp(home, instance="rob", source="nft:base:0xabc:7"):
+    from core.avatar import set_avatar
+    return set_avatar(home, instance, PNG, source=source)
 
 
 # --- I4: the current schema ------------------------------------------------
@@ -105,7 +100,7 @@ def test_the_description_is_not_hardcoded_prose():
 def test_the_image_is_this_instances_avatar_when_it_can_be_served(_clean):
     _write_pfp(_clean)
     reg = build_registration_file("https://example.test")
-    assert reg.image == "https://example.test/pfp.png"
+    assert reg.image == "https://example.test/avatar.png"
 
 
 def test_the_image_is_never_the_missing_rob_logo():
@@ -115,7 +110,14 @@ def test_the_image_is_never_the_missing_rob_logo():
     assert "rob-logo" not in (reg.image or "")
 
 
-def test_no_avatar_means_no_image_rather_than_a_broken_link(_clean):
+def test_an_unset_slot_publishes_the_default_mark(_clean):
+    reg = build_registration_file("https://example.test")
+    assert reg.image == "https://example.test/avatar.png"
+    assert reg.metadata["avatar"]["source"].startswith("default")
+
+
+def test_no_avatar_means_no_image_rather_than_a_broken_link(_clean, monkeypatch, tmp_path):
+    monkeypatch.setattr("core.avatar.DEFAULT_AVATAR", tmp_path / "missing.png")
     reg = build_registration_file("https://example.test")
     assert reg.image is None
 
@@ -127,21 +129,27 @@ def test_without_a_public_base_url_the_image_is_omitted(_clean):
     assert reg.image is None
 
 
-def test_the_seed_is_carried_so_the_face_stays_reproducible(_clean):
-    """⚠️ Omitting the image must not lose the face. Anyone with the open engine
-    re-renders it EXACTLY from generator+seed+variant."""
+def test_without_a_public_base_url_a_public_source_url_is_the_image(_clean):
+    _write_pfp(_clean, source="url:https://img.example/face.png")
+    reg = build_registration_file("http://localhost:9000")
+    assert reg.image == "https://img.example/face.png"
+
+
+def test_the_source_and_hash_are_carried(_clean):
+    """A consumer can check the image it fetched is the one declared."""
+    import hashlib
     _write_pfp(_clean)
     reg = build_registration_file("http://localhost:9000")
-    dumped = reg.model_dump(exclude_none=True)
-    blob = json.dumps(dumped)
-    assert "mindprint@v2" in blob
-    assert "#a1b2" in blob
-
-
-def test_the_seed_is_absent_when_there_is_no_avatar(_clean):
-    reg = build_registration_file("http://localhost:9000")
+    assert reg.metadata["avatar"] == {"source": "nft:base:0xabc:7",
+                                      "sha256": hashlib.sha256(PNG).hexdigest()}
     blob = json.dumps(reg.model_dump(exclude_none=True))
-    assert "mindprint" not in blob
+    assert "seed" not in blob and "generator" not in blob
+
+
+def test_no_avatar_metadata_when_there_is_no_avatar(_clean, monkeypatch, tmp_path):
+    monkeypatch.setattr("core.avatar.DEFAULT_AVATAR", tmp_path / "missing.png")
+    reg = build_registration_file("http://localhost:9000")
+    assert "avatar" not in (reg.metadata or {})
 
 
 # --- the honesty already pinned must survive -------------------------------

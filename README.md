@@ -48,7 +48,7 @@ Run POLYROB as your personal agent (`POLYROB_LOCAL=true`) and it turns experienc
 capability instead of forgetting it when the task ends.
 
 - **Reflective, hierarchical memory** — findings are organized into phases, consolidated by an LLM, and forgotten by *importance* (`recency + relevance + frequency`), not just age.
-- **Cross-session recall** — SQLite FTS5 keyword search out of the box (zero extra deps), or optional hybrid keyword+vector recall (`sqlite-vec`) that transparently degrades to keyword search if the extension can't load — the agent keeps working either way.
+- **Cross-session recall** — SQLite FTS5 keyword search out of the box (zero extra deps), or optional hybrid keyword+vector recall (`sqlite-vec`, the `[memory-vector]` extra) that transparently degrades to keyword search if the extra is absent or the extension can't load — the agent keeps working either way.
 - **Episodic activity log** — a durable "what happened last time" ledger bridges each new session so it never starts cold.
 - **Writes its own skills** — authored through a scanned, quarantined pipeline; every self-modification is reviewed before it takes effect, so a background turn can never silently rewrite a skill or the agent's identity.
 - **Evolving identity** — a per-user self-doc the agent updates (owner-gated) as it learns how you work.
@@ -72,11 +72,11 @@ explicit approval. See **[docs/guide/skills.md](docs/guide/skills.md)**.
 One agent core, many front doors:
 
 - **Terminal** — run `polyrob` to talk to the agent: live tool transcripts, secret-scrubbed output, resumable sessions, and nearly sixty slash commands (`/inbox`, `/goals`, `/model`, `/memory`, `/pause`, `/autonomy`, `/config`; the full list is in [docs/guide/cli.md](docs/guide/cli.md)).
-- **Web console** — five clear destinations for Chat, Inbox, Work, Money, and Agent. Watch live work, resolve approvals, manage standing jobs and apps, reconcile the agent's ledger, and change its capabilities from one owner surface.
+- **Web console** — five clear destinations for Chat, Inbox, Work, Money, and Rob (the agent itself). Watch live work, resolve approvals, manage standing jobs and apps, reconcile the agent's ledger, and change its capabilities from one owner surface.
 - **REST API + SSE streaming**, plus a drop-in **OpenAI-compatible `/v1`** endpoint — point any OpenAI SDK at `localhost:9000/v1`.
 - **A2A protocol** — Google's Agent-to-Agent standard (Agent Card discovery, JSON-RPC, SSE) so other agents can discover and delegate to yours.
 - **MCP server** — expose polyrob to Claude Desktop, Cursor, or any MCP client as a read-only tool provider (`POST /mcp`, off by default) — it's an MCP client *and* server.
-- **Chat surfaces** — Telegram (live incremental streaming + voice-note transcription), email (IMAP/SMTP), WhatsApp, Discord, Slack, Signal, and X (Twitter) DMs.
+- **Chat surfaces** — Telegram (live incremental streaming + voice-note transcription), email (IMAP/SMTP), WhatsApp, Discord, Slack, Signal, Feishu / Lark, DingTalk, and X (Twitter) DMs.
 
 ## 🖥️ One console for the whole agent
 
@@ -106,7 +106,7 @@ the CLI and API, so a decision made in one surface is visible in the others.
     </td>
     <td width="50%" valign="top">
       <img src="https://raw.githubusercontent.com/theselfruleorg/polyrob/main/docs/assets/console/agent-control.png" alt="POLYROB Agent view showing autonomy controls, capabilities, and health" width="100%"><br>
-      <strong>Agent</strong> — inspect identity, memory, capabilities, health, and the rules that bound autonomous action.
+      <strong>Rob</strong> — inspect identity, memory, capabilities, health, and the rules that bound autonomous action.
     </td>
   </tr>
   <tr>
@@ -123,18 +123,36 @@ read-only mode, and the actions each screen exposes.
 
 ## 🧠 Multi-provider intelligence
 
-- **One agent, every provider** — six built-ins plus flat-rate rows, OAuth subscription plans and your own endpoint, behind a native LLM layer with **no third-party agent framework**. The live list and how to pick one: [docs/guide/configuration.md §3](docs/guide/configuration.md#3-providers-and-models).
+- **One agent, every provider** — six built-ins plus flat-rate rows, OAuth subscription plans and your own endpoint, behind a native LLM layer with **no third-party agent framework**. The live list and how to pick one: [docs/guide/configuration.md §3](docs/guide/configuration.md#4-providers-and-models).
 - **Bring your own endpoint** — declare any OpenAI- or Anthropic-compatible provider in `~/.polyrob/providers.yaml` with **zero code**: a local Ollama/vLLM/LM Studio, Groq/Together/Fireworks, a z.ai GLM Coding Plan, or a corporate gateway. Declared models list and route like built-ins; hostile rows (secret-exfil `env_key`s, metadata endpoints) are refused at load.
 - **Automatic failover** — a rate-limited or failing provider silently retries on a fallback.
 - **Live model switching** — `/model <provider> <model>` mid-session, or per-request override on the `/v1` surface.
-- **Cross-provider prompt caching** — cuts token cost on long sessions, with cached-token metrics surfaced per provider.
+- **Cross-provider prompt caching, on by default** — the prompt is assembled as a stable *prefix*: tool schemas sorted by name, the autonomous tool set held still, the rendered foundation replayed byte-for-byte after a restart. Providers serve the leading bytes from cache instead of re-billing them. Anthropic gets a 5-minute or 1-hour cache window chosen from the session class; OpenRouter, Gemini, OpenAI and DeepSeek each get the treatment their API supports. Cached **and written** tokens are priced, recorded and shown — live as `cache N%` in the status bar, after the fact in `polyrob doctor`.
 - **Optional extended thinking** — per-provider reasoning budgets (Anthropic thinking blocks, DeepSeek CoT, OpenAI reasoning effort), plus a scrubber that keeps leaked reasoning prose out of your history and output.
 
 ---
 
 ## Quick Start
 
-POLYROB targets **Python 3.11+**.
+POLYROB targets **Python 3.11+**. One line, on Linux, macOS or WSL2:
+
+```bash
+curl -fsSL https://polyrob.dev/install.sh | bash
+```
+
+It finds Python, clones the source into `~/.polyrob/src`, builds a virtualenv, puts a `polyrob`
+command on your `PATH`, and runs the setup wizard — the wizard reads `/dev/tty`, so it asks you for
+your provider key right inside the pipe. Prefer to read a script before running it (you should):
+
+```bash
+curl -fsSL https://polyrob.dev/install.sh -o install.sh && less install.sh && bash install.sh
+```
+
+Flags: `--extras server,browser` · `--browser` / `--no-browser` · `--no-setup` · `--no-prompt`
+(fully scripted) · `--branch` / `--commit` (pin a version) · `--uninstall`.
+
+<details>
+<summary>Already a Python user? Install from PyPI instead</summary>
 
 ```bash
 # 1. Install (with all optional features)
@@ -144,8 +162,8 @@ pipx install "polyrob[all]"
 #    pipx isolates the venv, so run playwright FROM polyrob's venv:
 "$(pipx environment --value PIPX_LOCAL_VENVS)/polyrob/bin/playwright" install chromium
 
-# 3. Configure (connects a provider key, writes ~/.polyrob/.env)
-polyrob init
+# 3. Configure (keys, model, persona, owner, autonomy, chat surface)
+polyrob setup
 
 # 4. Sanity-check your setup
 polyrob doctor
@@ -157,6 +175,11 @@ polyrob
 > Plain `pip install polyrob` into your own venv? Then step 2 is just
 > `python -m playwright install chromium` in that venv — and the core agent
 > runs fine without the browser at all.
+
+</details>
+
+Keep it running after you close the terminal with `polyrob service install` (a systemd user unit or
+a launchd agent). Update with `polyrob update --apply`; remove it with `polyrob uninstall`.
 
 Run `polyrob` and you're talking to the agent. Give it a task in plain language and it plans, works,
 and reports back; ask a follow-up and it keeps going. `polyrob doctor` is a real preflight — it
@@ -171,7 +194,7 @@ polyrob autonomy on --global     # writes AUTONOMY_ENABLED=true to ~/.polyrob/.e
 ```
 
 The four axes, what each one moves and how to stop it again:
-[docs/guide/configuration.md §5](docs/guide/configuration.md#5-the-autonomy-dial).
+[docs/guide/configuration.md §5](docs/guide/configuration.md#6-the-autonomy-dial).
 
 <details>
 <summary>Optional: web console & REST API</summary>
@@ -211,7 +234,8 @@ Run `polyrob` and you're in the agent. From inside the session, slash commands g
 
 | In-session command | What it does |
 |---|---|
-| `/compact` | LLM-compresses the context window (e.g. 8,432 → 3,210 tokens) mid-session |
+| `/compact` | Ages old tool results to a one-line pointer first, then LLM-compresses what is left (e.g. 8,432 → 3,210 tokens) mid-session |
+| `/context` | What is in the window right now: per-slot tokens, one-shot ephemerals, and the provider's own last-request prompt / cached / written split |
 | `/usage` | Authoritative token + cost accounting from the local DB |
 | `/model <provider> <model>` | Hot-swap the model without losing the conversation |
 | `/memory search <q>` | Search cross-session memory inline |
@@ -244,10 +268,10 @@ and `polyrob update` (self-update with snapshot, guarded migration, verify and *
 
 | Capability | Detail |
 |---|---|
-| Cross-session recall | SQLite FTS5 (default) or hybrid vector (`sqlite-vec`), tenant-scoped |
+| Cross-session recall | SQLite FTS5 (default) or hybrid vector (`sqlite-vec`, `[memory-vector]`), tenant-scoped |
 | Reflective memory | phase-organized, LLM-consolidated, importance-based forgetting |
-| Adaptive context | LLM-synthesis compaction in the 85–95% band, with anti-thrash cooldown |
-| Prompt caching | per-provider, with cached-token cost metrics |
+| Adaptive context | A 70 / 85 / 95 % ladder — a log line, then a deterministic pass that demotes old tool results, then LLM-synthesis compaction, then a non-LLM emergency prune. Eight-step cooldown with a ≥5 % progress rule and an anti-thrash counter |
+| Prompt caching | On by default per provider, over a prompt prefix guarded by a CI ratchet; Anthropic cache windows chosen by session class; cached *and written* tokens priced and recorded |
 | Extended thinking | optional per-provider reasoning budgets + reasoning-prose scrubber |
 
 **Autonomy** *(personal-agent mode)*
@@ -266,7 +290,7 @@ and `polyrob update` (self-update with snapshot, guarded migration, verify and *
 | Capability | Detail |
 |---|---|
 | Terminal | `polyrob` opens the agent — live tool transcripts, ~60 slash commands, resumable sessions |
-| Web console | Chat, Inbox, Work, Money, and Agent over a real-time Socket.IO surface |
+| Web console | Chat, Inbox, Work, Money, and Rob over a real-time Socket.IO surface |
 | REST API | session lifecycle + mid-run guidance injection + SSE streaming |
 | OpenAI-compatible | drop-in `/v1/chat/completions` + `/v1/models` |
 | A2A protocol | Agent Card discovery, JSON-RPC, SSE — agent-to-agent delegation |
@@ -283,7 +307,7 @@ Multi-provider LLM (**OpenAI · Anthropic · Google Gemini · DeepSeek · OpenRo
 **Perplexity** search · **Twitter/X** · **Gmail / IMAP-SMTP** · **Telegram** · **WhatsApp** ·
 **Discord** · **Slack** · **Signal** ·
 voice transcription (**faster-whisper**) · **A2A** · OpenAI-compatible `/v1` · **agentskills.io**
-skills · **sqlite-vec** + **sentence-transformers** local RAG.
+skills · **sqlite-vec** + **sentence-transformers** local RAG (the `[memory-vector]` extra).
 
 ---
 
@@ -319,15 +343,16 @@ tools (money, comms, code-exec) gated off until a genuine owner turn.
 
 ---
 
-## Crypto & web3 *(optional, off by default)*
+## Crypto & web3 *(optional; nothing that spends is on by default)*
 
-POLYROB can act as an economic agent when you want it to — all of it gated behind flags and off by
-default:
+POLYROB can act as an economic agent when you want it to. Read-only token and wallet reads
+(`token_info`, `/check`) are on by default; everything that spends or signs is gated behind flags
+and off by default:
 
 - **x402 pay-per-request** — USDC micropayments on Base (opt-in Solana settlement) via the x402 protocol; the agent can both charge for its API and pay for external resources, and invoices settle facilitator-free by on-chain detection.
 - **Native agent wallet** — one seed derives per-venue EVM keys *and* a Solana address, with per-transaction and rolling 24h spend caps; testnet by default.
 - **On-chain token sight** — a read-only tool (14 verbs, NFTs included) for token identity, price, liquidity, a safety screen, pool discovery, and the agent's own portfolio across Base, Ethereum, Arbitrum, Polygon and Solana — plus `reconcile`, which diffs the agent's position ledger against actual chain balances. Address is the only identity (a ticker is never resolved for you), and unknown is never rendered as zero.
-- **Guarded on-chain trading** — transfers, exact-amount approvals/revokes and swaps (local Uniswap V3 first, opt-in aggregator fallback) go through one choke point that *simulates* the transaction, measures its real asset and allowance deltas, and refuses unless they match a declared intent. `dry_run` by default, fail-closed gates, and anything above a configurable ceiling waits for an owner approval. Solana swaps (Jupiter) run the same guard order with an authority-grant refusal in place of the allowance check.
+- **Guarded on-chain trading** — transfers, exact-amount approvals/revokes and swaps (local Uniswap V3 first, opt-in aggregator fallback) go through one choke point that *simulates* the transaction, measures its real asset and allowance deltas, and refuses unless they match a declared intent. `dry_run` by default, fail-closed gates, and a spend the agent starts above a configurable ceiling waits for an owner approval and is sent once approved; the owner's own `/send`, `/swap` and `/bridge` (typed, or built and confirmed with buttons) pass the ceiling but stay inside the per-transaction and daily caps. Solana swaps (Jupiter) run the same guard order with an authority-grant refusal in place of the allowance check.
 - **Venue trading** — Hyperliquid (perps) and Polymarket (prediction markets) tools, dry-run by default behind a master + per-venue live switch and per-venue caps.
 - **ERC-8004 trustless agents** — optional on-chain agent identity + portable reputation.
 - **SIWE** wallet auth for the multi-tenant posture.
@@ -373,10 +398,15 @@ tools — is documented end-to-end (all OFF by default) in
 
 ```bash
 pipx install "polyrob[all]"     # recommended — everything
-pip install polyrob             # core agent + keyword memory + CLI  (~50 MB, zero cloud deps)
+pip install polyrob             # core agent + keyword memory + CLI + the OpenAI SDK (~50 MB)
+pip install "polyrob[gemini]"   # the Gemini SDK (anthropic / docs / media / anysite likewise)
 pip install "polyrob[browser]"  # add Playwright browser automation
 pip install "polyrob[server]"   # add FastAPI REST API + web console
 ```
+
+Base carries ONE provider SDK (`openai`, which also serves OpenRouter, NVIDIA and every
+OpenAI-compatible endpoint). On your own machine an optional capability installs itself
+on first use — set a Gemini key and the SDK arrives; on a server the miss names the extra.
 
 Every extra, what it adds and what it costs you in disk:
 [docs/guide/getting-started.md](docs/guide/getting-started.md#extras).
@@ -410,7 +440,7 @@ polyrob/
 ```bash
 git clone https://github.com/theselfruleorg/polyrob
 cd polyrob
-bash install.sh          # scripted: venv + editable install + `polyrob init --no-prompt`
+bash install.sh          # installs THIS tree: venv + editable install + the wizard
 # — or manually:
 python -m venv venv && source venv/bin/activate
 pip install -e ".[dev,all]"
@@ -433,6 +463,7 @@ Architecture overview → **[docs/guide/architecture.md](docs/guide/architecture
 | [docs/guide/getting-started.md](docs/guide/getting-started.md) | Install & first run |
 | [docs/guide/cli.md](docs/guide/cli.md) | Terminal agent commands |
 | [docs/guide/skills.md](docs/guide/skills.md) | Skills — install, author, and manage |
+| [docs/guide/packs.md](docs/guide/packs.md) | Packs — the index, install, enable/disable, the kill list, third-party rules |
 | [docs/guide/api.md](docs/guide/api.md) | REST + A2A + OpenAI-compatible API |
 | [docs/guide/configuration.md](docs/guide/configuration.md) | Configuring the agent — providers, memory, the autonomy dial, tools, surfaces, preferences |
 | [docs/guide/owner-controls.md](docs/guide/owner-controls.md) | Stop, pause and resume from any seat; approvals and the inbox |

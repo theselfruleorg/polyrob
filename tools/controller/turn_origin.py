@@ -191,49 +191,63 @@ def _autonomous_owner_resend_cooldown_refusal(
 	if not _is_forged_or_autonomous_turn(execution_context, controller_self):
 		return None
 	body = (text or "").strip()
+	cooldown = 0.0
+
+	def _refusal():
+		_record_cooldown_suppression(event_log, user_id, surface, body)
+		from tools.controller.types import ActionResult
+		hours = cooldown / 3600
+		repeat = " This exact text" if body else " An autonomous message"
+		return ActionResult(
+			extracted_content=(
+				f"message:{repeat} already reached the owner on {surface} within "
+				f"the last {hours:.1f}h. Call `contact_history` "
+				f"(surface={surface!r}, address=<the owner address>) to see what "
+				f"was already sent — say something materially new, or skip this "
+				f"send entirely rather than repeating it."),
+			include_in_memory=True)
+
 	try:
 		from core.config_policy import owner_message_cooldown_seconds
 		cooldown = owner_message_cooldown_seconds()
 		if cooldown <= 0:
 			return None
 		from tools.controller.message_send import _OWNER_ALIASES
+		from core.surfaces.outbound_target import is_owner_target
 		owner_addr = (owner_targets or {}).get(surface)
 		is_owner_send = owner_addr is not None and (
-			str(target) == str(owner_addr)
+			is_owner_target(surface, target, owner_targets)
 			or (isinstance(target, str) and target.strip().lower() in _OWNER_ALIASES))
 		if not is_owner_send:
 			return None
-		store = container.get_service("conversation_store") if container else None
-		if store is None:
-			return None
-		reader = getattr(store, "outbound_bodies_since", None) if body else None
-		if reader is not None:
+		# 061: the owner thread holds what the owner RECEIVED on EVERY rail
+		# (framework notices included — before this the guard read only the
+		# `message` tool's own rows, so a cron notice never counted). The legacy
+		# conversation store is read only while no thread exists yet.
+		from core.surfaces.owner_thread import recent_outbound_bodies
+		bodies = recent_outbound_bodies(container, user_id or "", cooldown) if container else None
+		if bodies is None:
+			store = container.get_service("conversation_store") if container else None
+			if store is None:
+				return None
+			reader = getattr(store, "outbound_bodies_since", None)
+			if reader is None:
+				count = store.outbound_count_since(user_id or "", surface, owner_addr,
+				                                   cooldown)
+				return None if count <= 0 else _refusal()
+			bodies = reader(user_id or "", surface, owner_addr, cooldown) or []
+		if body:
 			from core.surfaces.user_delivery import content_hash
 			h = content_hash(body)
-			if not any(content_hash((b or "").strip()) == h for b in (reader(
-					user_id or "", surface, owner_addr, cooldown) or [])):
+			if not any(content_hash((b or "").strip()) == h for b in bodies):
 				return None   # materially new — the owner has not seen this
-		else:
-			count = store.outbound_count_since(user_id or "", surface, owner_addr,
-			                                   cooldown)
-			if count <= 0:
-				return None
+		elif not bodies:
+			return None
 	except Exception:
 		logger.debug(
 			"owner resend cooldown check failed (fail-open)", exc_info=True)
 		return None
-	_record_cooldown_suppression(event_log, user_id, surface, body)
-	from tools.controller.types import ActionResult
-	hours = cooldown / 3600
-	repeat = " This exact text" if body else " An autonomous message"
-	return ActionResult(
-		extracted_content=(
-			f"message:{repeat} already reached the owner on {surface} within "
-			f"the last {hours:.1f}h. Call `contact_history` "
-			f"(surface={surface!r}, address=<the owner address>) to see what "
-			f"was already sent — say something materially new, or skip this "
-			f"send entirely rather than repeating it."),
-		include_in_memory=True)
+	return _refusal()
 
 
 def _record_cooldown_suppression(event_log, user_id: str, surface: str,

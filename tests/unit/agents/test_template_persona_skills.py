@@ -27,30 +27,57 @@ def test_social_seeds_discovery_and_account_communication_skills():
     assert {"social-discovery", "x-engagement"} <= set(skills)
 
 
+#: Seeds whose skill ships in a pack (067 P3), and the pack's import name. With
+#: the pack absent the seed is simply not matched at runtime.
+PACK_SKILLS = {"lead-research": "polyrob_discovery", "web-scraping": "polyrob_discovery"}
+
+
+def _skill_sources():
+    """(SKILL.md roots, merged rules): the builtin library plus every loaded pack."""
+    import json
+    import os
+    from pathlib import Path
+    from core.packs.state import skill_dirs
+    base = Path("data/prompts/skills")
+    roots = [base]
+    rules = json.loads((base / "rules.json").read_text())
+    for _pack_id, root in skill_dirs():
+        roots.append(Path(root))
+        extra = Path(root) / "rules.json"
+        if extra.is_file():
+            rules = {**json.loads(extra.read_text()), **rules}
+    return roots, rules
+
+
+def _pack_absent(sid):
+    import importlib.util
+    mod = PACK_SKILLS.get(sid)
+    return mod is not None and importlib.util.find_spec(mod) is None
+
+
 def test_seeded_skill_ids_exist_on_disk():
     """Every seeded skill id must have a SKILL.md (no dangling refs)."""
-    import os
-    base = "data/prompts/skills"
+    roots, _ = _skill_sources()
     for tpl in TEMPLATES.values():
         for sid in tpl.seeded_skills:
-            assert os.path.isfile(os.path.join(base, sid, "SKILL.md")), \
+            if _pack_absent(sid):
+                continue
+            assert any((r / sid / "SKILL.md").is_file() for r in roots), \
                 f"{tpl.name} seeds missing skill {sid}"
 
 
 def test_seeded_skill_ids_have_rules_entry():
-    """Every seeded skill id must have a rules.json entry.
+    """Every seeded skill id must have a rules.json entry (builtin or its pack's).
 
     The runtime force-include path (get_skills_for_session) requires a rules
     entry to match; a SKILL.md-only skill is invisible at runtime.
     """
-    import json
-    import os
-    rules_path = os.path.join("data", "prompts", "skills", "rules.json")
-    with open(rules_path) as fh:
-        rules = json.load(fh)
+    _, rules = _skill_sources()
     for tpl in TEMPLATES.values():
         for sid in tpl.seeded_skills:
+            if _pack_absent(sid):
+                continue
             assert sid in rules, (
-                f"{tpl.name} seeds '{sid}' but rules.json has no entry for it; "
+                f"{tpl.name} seeds '{sid}' but no rules.json has an entry for it; "
                 f"the skill will be invisible at runtime."
             )

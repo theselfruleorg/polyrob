@@ -173,14 +173,16 @@ def wallet_cmd(ctx: click.Context, as_json: bool, no_balances: bool):
         if not enabled:
             hint = (f" (note: {', '.join(bad_caps)} is not a number — fix that too)"
                     if bad_caps else "")
-            msg = "agent wallet not enabled (set AGENT_WALLET_ENABLED=true)" + hint
+            from core.remedy import flag_remedy
+            msg = f"agent wallet not enabled — {flag_remedy('AGENT_WALLET_ENABLED')}" + hint
             click.echo(_json.dumps({"enabled": False, "error": msg}) if as_json else msg)
             return
         if bad_caps:
             msg = (f"agent wallet config error: {', '.join(bad_caps)} is not a number "
                    f"— fix it in ~/.polyrob/.env (or `polyrob wallet set-cap`) [{e}]")
         else:
-            seed = (os.environ.get("AGENT_WALLET_MASTER_SEED") or "").strip()
+            from core.security.custody_env import custody_secret
+            seed = (custody_secret("AGENT_WALLET_MASTER_SEED") or "").strip()
             if not seed or len(seed) < 32:
                 msg = ("agent wallet is ENABLED but AGENT_WALLET_MASTER_SEED is missing/short — "
                        "run `polyrob wallet init` (or set the seed) to fix")
@@ -189,7 +191,8 @@ def wallet_cmd(ctx: click.Context, as_json: bool, no_balances: bool):
         click.echo(_json.dumps({"enabled": True, "error": msg}) if as_json else msg)
         return
     if w is None:
-        msg = "agent wallet not enabled (set AGENT_WALLET_ENABLED=true)"
+        from core.remedy import flag_remedy
+        msg = f"agent wallet not enabled — {flag_remedy('AGENT_WALLET_ENABLED')}"
         click.echo(_json.dumps({"enabled": False, "error": msg}) if as_json else msg)
         return
 
@@ -429,6 +432,34 @@ def _set_cap_pref(kind: str, usd: float, *, yes: bool) -> None:
                 "it stopped below what you asked for. Raise the daily cap first.",
                 fg="yellow"))
     click.echo(_POLICY_GATE_CAVEAT)
+    _warn_signer_cap_drift(kind, effective)
+
+
+def _warn_signer_cap_drift(kind: str, effective) -> None:
+    """068 G7b: a cap raised above the signer's hard cap clears the gate and is
+    refused by `polyrob-signer` (logged in shadow; refused after a cut-over).
+    Say so at the moment the owner raises it. Silent in local mode; a signer
+    that does not answer is said to be unknown, never "fine"."""
+    from core.signer import MODE_LOCAL, signer_mode
+    try:
+        if signer_mode() == MODE_LOCAL:
+            return
+    except Exception:
+        return
+    try:
+        from core.signer.client import SignerClient
+        caps = SignerClient(timeout=3.0).call("ping").get("caps") or {}
+    except Exception as exc:  # noqa: BLE001
+        click.echo(f"  (the signer did not answer ({type(exc).__name__}) — its hard cap "
+                   f"could not be compared; `polyrob doctor` re-checks)")
+        return
+    from core.wallet.signer_cap_drift import CapDrift, _num, drift_remedy, drift_text
+    leg = "daily" if kind == "daily" else "per_tx"
+    d = CapDrift(leg, _num(caps.get("daily_usd" if leg == "daily" else "per_tx_usd")),
+                 _num(effective))
+    if d.drifted:
+        click.echo(click.style("  ⚠ " + drift_text(d), fg="yellow"))
+        click.echo("    " + drift_remedy(d))
 
 
 def run_wallet_init_flow(*, mnemonic, raw_seed, home, assume_yes, data_dir=None):
@@ -447,7 +478,8 @@ def run_wallet_init_flow(*, mnemonic, raw_seed, home, assume_yes, data_dir=None)
     from core.wallet import derivation
     from core.wallet.signer import LocalEoaSigner
 
-    if (os.environ.get("AGENT_WALLET_MASTER_SEED") or "").strip():
+    from core.security.custody_env import custody_secret
+    if (custody_secret("AGENT_WALLET_MASTER_SEED") or "").strip():
         raise click.ClickException(
             "a wallet seed is already configured (AGENT_WALLET_MASTER_SEED is set).\n"
             "To see it: polyrob wallet export.  To replace it, remove the env var first "
@@ -572,14 +604,22 @@ def wallet_export_cmd(venue):
         pass
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         raise click.ClickException("export is interactive-only (needs a TTY; refusing piped output)")
-    seed = (os.environ.get("AGENT_WALLET_MASTER_SEED") or "").strip()
-    if not seed:
+    from core.security.custody_env import custody_secret
+    seed = custody_secret("AGENT_WALLET_MASTER_SEED") or ""
+    if not seed.strip():
         # 2026-09-14: on a systemd deployment the seed lives in the units' env
         # files (`/etc/polyrob/wallet.env`, then the legacy `polyrob.env`), which
         # the operator CLI does not load. Read them here — root-readable only —
         # so the owner can export without sourcing the files by hand. The file
         # is opened, never echoed.
         seed = _seed_from_system_env_files()
+    # CR-L30: the SAME normalization the runtime applies. A bare .strip() here
+    # exported the keys of a DIFFERENT legacy address than the agent used.
+    from core.wallet.config import normalize_master_seed
+    try:
+        seed = normalize_master_seed(seed) or ""
+    except ValueError as e:
+        raise click.ClickException(f"wallet MISCONFIGURED — cannot export: {e} (nothing was printed)")
     if not seed:
         raise click.ClickException(
             "no wallet configured — run `polyrob wallet init` first (on a server: the seed "
@@ -703,7 +743,10 @@ def wallet_init_cmd(mnemonic, raw_seed, yes, data_dir_opt, home_dir_opt):
         data_dir = _P(data_dir_opt)
     else:
         from cli._admin_home import admin_data_dir
-        data_dir = _P(admin_data_dir(write=True))
+        from core.wallet.audit_sink import _wallet_data_dir
+        # `data_dir` here is the WALLET dir (`<home>/wallet`, where the runtime
+        # reads meta.json), not the data home itself.
+        data_dir = _P(_wallet_data_dir(admin_data_dir(write=True)))
     run_wallet_init_flow(mnemonic=mnemonic or None, raw_seed=raw_seed or None, home=home,
                          assume_yes=yes, data_dir=data_dir)
 
@@ -813,6 +856,200 @@ def wallet_book(user_id):
             f"the book could not be read ({exc}). That is UNKNOWN, not a clean "
             f"book — do not trade on it.")
     click.echo(render_book(body))
+
+
+@wallet_cmd.command("pin-token")
+@click.argument("chain")
+@click.argument("address")
+@click.argument("symbol")
+@click.option("--note", default="", help="Why this is the real one (shown in `pins`).")
+@click.option("--yes", "-y", is_flag=True, default=False,
+              help="Skip the confirmation prompt (non-interactive use).")
+def wallet_pin_token(chain, address, symbol, note, yes):
+    """Pin ADDRESS as THE SYMBOL on CHAIN (068 G1). Owner-only.
+
+    A pinned address reads `verified: true` in token_info, and the swap verb
+    REFUSES to buy any other contract that calls itself SYMBOL on that chain.
+    One symbol names one contract per chain: a new pin replaces the old one.
+    There is no agent verb for this on purpose — a pin the agent could write is
+    a verification it could grant itself.
+
+    W1: an alias of the owner's chat verb `/wallet trust <chain> <address>
+    [SYMBOL] go` (Telegram, the REPL, the console) — both write the same store.
+    """
+    from core.wallet import token_pins
+    path = token_pins.token_pins_db_path(_admin_home(write=True))
+    click.echo(f"About to pin {symbol.strip().upper()} on {chain} -> {address}")
+    click.echo(f"  store: {path}")
+    if not yes and not click.confirm("Proceed?", default=False):
+        click.echo("Aborted — no changes written.")
+        return
+    try:
+        row = token_pins.pin(chain, address, symbol, note=note, db_path=path)
+    except ValueError as exc:
+        raise click.ClickException(str(exc))
+    click.echo(click.style(
+        f"Pinned {row['symbol']} on {row['chain']} = {row['address']}. It applies "
+        f"live — no restart.", fg="green"))
+    if row["replaced"]:
+        click.echo(f"  replaced the earlier pin: {row['replaced']}")
+
+
+@wallet_cmd.command("unpin-token")
+@click.argument("chain")
+@click.argument("address")
+def wallet_unpin_token(chain, address):
+    """Remove an owner pin (068 G1)."""
+    from core.wallet import token_pins
+    path = token_pins.token_pins_db_path(_admin_home(write=True))
+    try:
+        removed = token_pins.unpin(chain, address, db_path=path)
+    except ValueError as exc:
+        raise click.ClickException(str(exc))
+    click.echo(f"Removed the pin for {address} on {chain}." if removed
+               else f"No pin for {address} on {chain} — nothing changed.")
+
+
+@wallet_cmd.command("pins")
+@click.option("--chain", default=None, help="Only this chain.")
+def wallet_pins(chain):
+    """List the owner token pins (068 G1). Read-only."""
+    from core.wallet import token_pins
+    path = token_pins.token_pins_db_path(_admin_home(write=False))
+    state, rows, err = token_pins.pins_status(chain=chain, db_path=path)
+    if state == "unreadable":
+        # 068 B1: an unreadable store is not an empty one — and the swap verb
+        # refuses unverified buys while it stays unreadable.
+        raise click.ClickException(
+            f"the token-pin store is UNREADABLE ({err}). That is not 'no pins': "
+            f"buys of unverified tokens are refused until it reads again. Check "
+            f"its owner and mode (the agent identity must be able to read it).")
+    if not rows:
+        click.echo("No owner token pins. (USDC and the wrapped native are pinned "
+                   "by the chain registry.)")
+        return
+    for r in rows:
+        click.echo(f"{r['chain']:<10} {r['symbol']:<10} {r['address']}"
+                   + (f"   — {r['note']}" if r['note'] else ""))
+
+
+_AGENT_IDENTITY_REMEDY = (
+    "the submission journal and the audit ledger are the agent identity's own 0600 files. "
+    "Run the same verb as that identity:\n    sudo -u polyrob-agent polyrob wallet {verb}")
+
+
+def _journal_permission_error(exc: BaseException, verb: str) -> "click.ClickException | None":
+    import sqlite3
+    text = str(exc).lower()
+    if isinstance(exc, PermissionError) or (
+            isinstance(exc, sqlite3.OperationalError)
+            and ("unable to open" in text or "readonly" in text or "permission" in text)):
+        return click.ClickException(
+            f"permission denied ({type(exc).__name__}) — "
+            + _AGENT_IDENTITY_REMEDY.format(verb=verb))
+    return None
+
+
+@wallet_cmd.command("submissions")
+@click.option("--json", "as_json", is_flag=True, help="Machine-readable output.")
+def wallet_submissions(as_json):
+    """Unresolved wallet submissions and the chain evidence for each (068 X2).
+
+    Read-only. Any row listed here blocks EVERY send (on-chain and x402) until
+    it is booked. Release one with `polyrob wallet release-submission <ref>`.
+    """
+    from core.wallet.submission_recovery import recovery_report
+    home = _admin_home(write=False)
+    try:
+        rows = recovery_report(data_dir=home)
+    except Exception as exc:  # noqa: BLE001
+        perm = _journal_permission_error(exc, "submissions")
+        if perm:
+            raise perm
+        raise click.ClickException(
+            f"the submission journal could not be read ({type(exc).__name__}) — that is "
+            f"UNKNOWN, not clear; spending stays blocked")
+    if as_json:
+        click.echo(_json.dumps({"submissions": rows}, indent=2))
+        return
+    if not rows:
+        click.echo("No unresolved submissions — nothing blocks a send.")
+        return
+    click.echo(f"{len(rows)} unresolved submission(s) — EVERY send is blocked until each is booked:")
+    for r in rows:
+        click.echo(f"  {r['reference']}  [{r['chain']}]  {r['outcome']}")
+        click.echo(f"      {r['detail']}")
+    click.echo("Release one (it is BOOKED, never dropped): "
+               "polyrob wallet release-submission <ref> [--charge-usd N | --never-sent --reason …]")
+
+
+@wallet_cmd.command("release-submission")
+@click.argument("reference")
+@click.option("--charge-usd", type=float, default=None,
+              help="Worst-case USD this submission moved (required for a transaction row).")
+@click.option("--never-sent", is_flag=True, default=False,
+              help="Book $0: you KNOW no money moved. Requires --reason.")
+@click.option("--reason", default="", help="Why — recorded in the audit ledger.")
+@click.option("--no-replay-key", is_flag=True, default=False,
+              help="Release a pre-068 x402 row that has no replay key. A retry of "
+                   "that request could pay again. Requires --reason.")
+@click.option("--yes", "-y", is_flag=True, default=False,
+              help="Skip the confirmation prompt (non-interactive use).")
+def wallet_release_submission(reference, charge_usd, never_sent, reason, no_replay_key, yes):
+    """Release a stuck submission by BOOKING it to the audit ledger (068 X2).
+
+    The charge lands in the same ledger the rolling caps read, THEN the row is
+    marked booked — the caps always count the worst case. An `attempt:` row
+    books at least its recorded amount. Refused while the chain evidence says
+    the transaction may still land.
+    """
+    from core.wallet.submission_release import (ReleaseRefused, _find, plan_release)
+    from core.wallet.submission_journal import unresolved
+    from core.wallet.submission_recovery import inspect_submission
+    from dataclasses import asdict
+    home = _admin_home(write=True)
+    try:
+        row = _find(unresolved(home), reference)
+        evidence = asdict(inspect_submission(row))
+        amount = plan_release(row, evidence, charge_usd=charge_usd,
+                              never_sent=never_sent, reason=reason)
+    except ReleaseRefused as exc:
+        raise click.ClickException(str(exc))
+    except Exception as exc:  # noqa: BLE001
+        perm = _journal_permission_error(exc, "release-submission …")
+        if perm:
+            raise perm
+        raise click.ClickException(f"could not read the submission ({type(exc).__name__}: {exc})")
+    click.echo(f"{row['tx_hash']}  [{row['chain']}]  evidence: {evidence.get('outcome')}")
+    click.echo(f"  will BOOK ${amount:,.2f} to the wallet audit ledger (counts against the "
+               f"rolling caps), then release the row")
+    if never_sent:
+        click.echo(click.style("  --never-sent: you assert NO money moved. If it did, the caps "
+                               "under-count it.", fg="yellow"))
+    if not yes and not click.confirm("Proceed?", default=False):
+        click.echo("Aborted — nothing booked, nothing released.")
+        return
+    from core.wallet.submission_release import release_submission
+    try:
+        entry = release_submission(reference, data_dir=home, charge_usd=charge_usd,
+                                   never_sent=never_sent, reason=reason,
+                                   no_replay_key=no_replay_key,
+                                   inspect=lambda r: evidence)
+    except ReleaseRefused as exc:
+        raise click.ClickException(str(exc))
+    except Exception as exc:  # noqa: BLE001
+        perm = _journal_permission_error(exc, "release-submission …")
+        if perm:
+            raise perm
+        raise click.ClickException(f"release failed ({type(exc).__name__}: {exc})")
+    if entry.get("already_booked"):
+        click.echo(click.style(
+            f"{entry['submission_ref']} was already charged "
+            f"(${float(entry.get('amount_usd') or 0):,.2f}); released it without a "
+            f"second charge.", fg="green"))
+        return
+    click.echo(click.style(
+        f"Booked ${entry['amount_usd']:,.2f} and released {entry['submission_ref']}.", fg="green"))
 
 
 @wallet_cmd.command("bridges")
@@ -984,13 +1221,11 @@ def _echo_result(result, *, what: str):
 @click.option("--max-usd", type=float, default=25.0, show_default=True,
               help="The most this deployment may cost. It sends nothing, so "
                    "this bounds the GAS FEE.")
-@click.option("--vanity", default="",
-              help="Mine an address starting with these HEX characters (0-9a-f, "
-                   "max 8 — each one is 16x the work). Uses the deterministic "
-                   "CREATE2 factory, so the address is the same on every chain.")
-@click.option("--salt", default="",
-              help="An explicit 32-byte CREATE2 salt. Same effect as --vanity "
-                   "without the search.")
+# CR-H07: `--vanity`/`--salt` routed the template through the CREATE2 factory,
+# which minted the whole supply to the factory. The verb refuses them; the
+# options stay (hidden) only so an old invocation gets that refusal by name.
+@click.option("--vanity", default="", hidden=True)
+@click.option("--salt", default="", hidden=True)
 @click.option("--uri", default="",
               help="SOLANA only: URI of a JSON metadata file "
                    "({name,symbol,description,image}). This is where the LOGO "
@@ -1015,10 +1250,6 @@ def wallet_deploy_token(symbol, supply, name, chain, decimals, max_usd,
     authority in the same transaction, then reads the mint back and reports what
     is actually true of it. The name and symbol are written ON-CHAIN (Token-2022
     metadata, no Metaplex account); `--uri` points at a JSON file with the logo.
-
-    `--vanity b0b` mines an address starting with those hex characters, through
-    the deterministic factory — which also means the SAME address on every EVM
-    chain for the same bytes.
 
     This does NOT make the token tradable — use `polyrob wallet launch` for that.
     """

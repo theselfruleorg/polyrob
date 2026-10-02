@@ -68,3 +68,32 @@ def test_a_broken_pref_store_falls_back_to_env(home, monkeypatch):
 def test_the_legacy_call_shape_still_works(home):
     """Existing callers pass nothing; they must keep the env behaviour."""
     assert tx_guard.autonomous_max_usd() == 5.0
+
+
+# --- M09 (security analysis 2026-09-23): non-finite values -------------------
+
+@pytest.mark.parametrize("raw", ["nan", "NaN", "inf", "-inf", float("nan"), float("inf")])
+def test_a_non_finite_pref_is_refused(raw):
+    ok, _val, err = prefs.validate_pref("budget.defi_autonomous_usd", raw)
+    assert not ok and "finite" in err
+    ok, _val, _err = prefs.validate_pref("budget.wallet_daily_usd", raw)
+    assert not ok
+
+
+def test_a_nan_ceiling_falls_back_to_the_env_value(home, monkeypatch):
+    """`amount > NaN` is always False: a NaN ceiling waved every spend through."""
+    monkeypatch.setattr(prefs, "resolve", lambda *a, **kw: float("nan"))
+    got = tx_guard.autonomous_max_usd(user_id="u", home_dir=home)
+    assert got == 5.0
+
+
+def test_a_hand_edited_nan_in_the_file_never_reaches_the_guard(home):
+    import math
+    from pathlib import Path
+    prefs.write_preference(home, "u", "budget.defi_autonomous_usd", 100.0)
+    files = [p for p in Path(home).rglob("*.toml")]
+    assert files, "preference file not found"
+    for f in files:
+        f.write_text(f.read_text().replace("100.0", "nan"))
+    got = tx_guard.autonomous_max_usd(user_id="u", home_dir=home)
+    assert math.isfinite(got) and got == 5.0

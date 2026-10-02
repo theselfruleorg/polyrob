@@ -31,18 +31,47 @@ EXTRA_FOR_MODULE: dict[str, str] = {
     "aiogram": "telegram",
     "tweepy": "twitter",
     "faster_whisper": "voice",
+    # 058: the lean base. Each of these left [project].dependencies for the
+    # extra that owns it; core/lazy_deps.py installs it on first use locally.
+    "google": "gemini",            # google.generativeai (+ google.api_core, google.ai)
+    "anthropic": "anthropic",
+    "apsw": "memory-vector",
+    "sqlite_vec": "memory-vector",
+    "numpy": "media",              # also in [memory-vector]; H-MEM names that one itself
+    "pypdf": "docs",
+    "docx": "docs",
+    "imageio": "media",
+    "qrcode": "media",
+    "magic": "server",             # python-magic — the upload MIME sniffer
+    "solders": "solana",           # the Solana rail (solders + solana-py + x402[svm])
+    "solana": "solana",
+    "lark_oapi": "feishu",         # the Feishu / Lark WS long connection (surfaces/feishu/ws.py)
+    "psutil": "browser",           # the orphaned-browser-process reaper
+    "huggingface_hub": "hf",       # the HF Spaces deploy broker (tools/hf_deploy)
 }
 
 # extra name -> modules a preflight should probe for it
 MODULES_FOR_EXTRA: dict[str, tuple[str, ...]] = {
     "browser": ("playwright",),
-    "server": ("fastapi", "uvicorn"),
-    "memory-vector": ("sentence_transformers",),
-    "crypto": ("web3",),
+    "server": ("fastapi", "uvicorn", "magic"),
+    "memory-vector": ("sentence_transformers", "apsw", "sqlite_vec", "numpy"),
+    "crypto": ("web3", "eth_account"),
     "telegram": ("aiogram",),
     "twitter": ("tweepy",),
     "voice": ("faster_whisper",),
+    "gemini": ("google.generativeai",),
+    "anthropic": ("anthropic",),
+    "docs": ("pypdf", "docx"),
+    "media": ("numpy", "imageio", "qrcode"),
+    "solana": ("solders", "solana"),
+    "hf": ("huggingface_hub",),
+    # anysite is a console SCRIPT, not an import — the discovery pack's
+    # polyrob_discovery/anysite/client.py::binary_path
 }
+# A surface extra whose name IS its surface id is added outside the literal:
+# the surface-catalog ratchet reads a literal holding two surface ids
+# ("telegram" above) as a hand-kept surface list.
+MODULES_FOR_EXTRA["feishu"] = ("lark_oapi",)   # surfaces/feishu/ws.py
 
 
 def pip_hint(extra: str) -> str:
@@ -86,10 +115,20 @@ def chromium_missing_hint(error_text: str) -> Optional[str]:
     )
 
 
+def _spec_present(module: str) -> bool:
+    """``find_spec`` that answers False instead of raising: for a DOTTED probe
+    (``google.generativeai``) it raises ModuleNotFoundError when the parent
+    package itself is absent — exactly the bare-install case being probed."""
+    try:
+        return importlib.util.find_spec(module) is not None
+    except (ImportError, ValueError):
+        return False
+
+
 def extra_available(extra: str, modules: Optional[Iterable[str]] = None) -> bool:
     """True when every probe module for ``extra`` is importable."""
     probes = tuple(modules) if modules is not None else MODULES_FOR_EXTRA.get(extra, ())
-    return all(importlib.util.find_spec(m) is not None for m in probes)
+    return all(_spec_present(m) for m in probes)
 
 
 def require_extra(extra: str, modules: Optional[Iterable[str]] = None) -> None:
@@ -99,7 +138,7 @@ def require_extra(extra: str, modules: Optional[Iterable[str]] = None) -> None:
     DB creation, opening browser tabs) so a missing extra fails in one line.
     """
     probes = tuple(modules) if modules is not None else MODULES_FOR_EXTRA.get(extra, ())
-    missing = [m for m in probes if importlib.util.find_spec(m) is None]
+    missing = [m for m in probes if not _spec_present(m)]
     if missing:
         raise ImportError(
             f"this command needs the [{extra}] extra "

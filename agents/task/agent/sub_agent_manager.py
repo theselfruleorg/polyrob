@@ -36,6 +36,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Union, TYPE_CHECKING
 
+# F28: the parent context a child inherits is third-party DATA, not task text.
+# `core.security` is a lower tier than `agents`, so this is a downward import.
+from core.security.untrusted_wrap import wrap_untrusted
+
 if TYPE_CHECKING:
     from agents.task.agent.orchestrator import SessionOrchestrator
     from agents.task.agent.service import Agent
@@ -47,6 +51,7 @@ class SubAgentUsage:
     input_tokens: int = 0
     output_tokens: int = 0
     cached_tokens: int = 0
+    cache_creation_tokens: int = 0   # F17: cache WRITES, billed above base input
     total_tokens: int = 0
     credits_charged: int = 0
     api_cost_usd: float = 0.0
@@ -196,6 +201,11 @@ class SubAgentManager:
         # Track parent-child relationships
         self._parent_map: Dict[str, str] = {}  # child_id -> parent_id
 
+        # 041 phase 2: what each LIVE child is (worker id, goal, start) — the
+        # read side of the Work › Now / REPL `/workers` live lines, and the
+        # key the owner's Stop / Steer act on. Popped when the child ends.
+        self._live_meta: Dict[str, Dict[str, Any]] = {}
+
         # Counter for unique sub-agent IDs
         self._counter = 0
 
@@ -269,7 +279,19 @@ class SubAgentManager:
                             else:
                                 recent_results.append(str(content)[:300])
                     if recent_results:
-                        context_parts.append("**Recent Results:**\n" + "\n".join(recent_results))
+                        # F28: the parent's tool results are the SAME bytes UP-06
+                        # frames everywhere else — a fetched page, an email body,
+                        # an MCP response. Concatenated raw onto the child's task
+                        # they read as operator instructions to a fresh agent that
+                        # has no idea where the text came from. Frame them as DATA.
+                        # ⚠️ Wrap AFTER the [:300] truncation above: wrapping first
+                        # would let the cut land inside the frame and leave an
+                        # opener whose closer never arrives.
+                        context_parts.append(
+                            "**Recent Results:**\n"
+                            + wrap_untrusted("parent_agent_results",
+                                             "\n".join(recent_results))
+                        )
             except Exception as e:
                 self.logger.debug(f"Failed to get parent results: {e}")
 
@@ -279,7 +301,12 @@ class SubAgentManager:
             if workspace.exists():
                 files = [str(f.relative_to(workspace)) for f in workspace.rglob('*') if f.is_file()][:15]
                 if files:
-                    context_parts.append(f"**Workspace Files:** {', '.join(files)}")
+                    # F28: a FILENAME is attacker-authorable too — the parent may
+                    # have written a file whose name a fetched page chose.
+                    context_parts.append(
+                        "**Workspace Files:** "
+                        + wrap_untrusted("parent_workspace_listing", ', '.join(files))
+                    )
         except Exception as e:
             self.logger.debug(f"Failed to list workspace: {e}")
 
@@ -331,6 +358,7 @@ class SubAgentManager:
                     usage.input_tokens = tokens.get('input', 0)
                     usage.output_tokens = tokens.get('output', 0)
                     usage.cached_tokens = tokens.get('cached', 0)
+                    usage.cache_creation_tokens = tokens.get('cache_write', 0)
                     usage.total_tokens = usage.input_tokens + usage.output_tokens
                     usage.llm_calls = first.get('calls', 0)
 
@@ -339,9 +367,10 @@ class SubAgentManager:
                     INSERT INTO usage_records (
                         user_id, session_id, resource_type,
                         cost, input_tokens, output_tokens, cached_tokens,
+                        cache_creation_tokens,
                         api_cost_usd, markup_multiplier,
                         metadata, timestamp
-                    ) VALUES (?, ?, 'sub_agent_aggregate', ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ) VALUES (?, ?, 'sub_agent_aggregate', ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 """, (
                     self.orchestrator.user_id,
                     self.session_id,  # Parent session!
@@ -349,6 +378,7 @@ class SubAgentManager:
                     usage.input_tokens,
                     usage.output_tokens,
                     usage.cached_tokens,
+                    usage.cache_creation_tokens,
                     usage.api_cost_usd,
                     1.0,
                     json.dumps({
@@ -405,7 +435,8 @@ class SubAgentManager:
         """
         return f"{self.session_id}__{sub_agent_id}"
 
-    async def _build_child_controller(self):
+    async def _build_child_controller(self, requested_tools: Optional[List[str]] = None,
+                                      force: bool = False):
         """UP-05: build a least-privilege child Controller for a delegated sub-agent.
 
         Narrows the parent's tool_ids (drops ``code_execution``/``cronjob``) and
@@ -421,7 +452,9 @@ class SubAgentManager:
         back to the shared parent controller (pre-UP-05 behaviour, byte-identical).
         """
         from agents.task.constants import TimeoutConfig
-        if not TimeoutConfig.get_subagent_least_privilege():
+        # A named worker that declares its tools is ALWAYS narrowed (``force``):
+        # sharing the parent controller would hand it everything the parent holds.
+        if not force and not TimeoutConfig.get_subagent_least_privilege():
             return None
 
         from tools.controller.service import Controller
@@ -439,7 +472,7 @@ class SubAgentManager:
         child_role = LEAF
         child_tool_ids = narrow_child_tools(
             parent_tools=parent_tools,
-            requested_tools=None,  # inherit (minus blocklist); future: delegate_task(tools=[...])
+            requested_tools=requested_tools,  # None = inherit (minus blocklist); a worker's own list otherwise
             child_role=child_role,
         )
         exclude = sorted(delegation_exclusions_for_child(child_role))
@@ -604,6 +637,20 @@ class SubAgentManager:
                 virtual_session_id=virtual_session_id,
             )
 
+        # 041 phase 2: an APPROVED worker's own config applies — its
+        # instructions, its pinned step budget, its pinned model and its tool
+        # list (⊆ the parent's minus DELEGATE_BLOCKED, via narrow_child_tools).
+        # None (flag OFF, `executor`, unknown) = the plain delegation, unchanged.
+        from agents.task.agent.profile_store import resolve_worker
+        worker = resolve_worker(profile_id, getattr(self.orchestrator, 'user_id', None))
+        live_goal = task
+        if worker is not None:
+            if worker.max_steps:
+                max_steps = worker.max_steps
+            if worker.instructions:
+                task = (f"<worker-instructions worker=\"{worker.id}\">\n"
+                        f"{worker.instructions}\n</worker-instructions>\n\n{task}")
+
         self.logger.info(f"🚀 Spawning sub-agent {sub_agent_id} (isolated session: {virtual_session_id[:20]}...)")
         self.logger.info(f"   Task: {task[:100]}...")
 
@@ -636,6 +683,10 @@ class SubAgentManager:
                         llm_to_use = parent_agent.llm
                         self.logger.debug(f"Sub-agent {sub_agent_id} inheriting LLM from parent")
                         break
+            # 041 phase 2: a worker's PINNED model, unless the caller named one
+            # (an explicit delegate `model=` is more specific and still wins).
+            if worker is not None and worker.model:
+                llm_to_use = await self._worker_llm(parent_agent_id, worker) or llm_to_use
 
         sub_agent = None
         # Use semaphore to limit concurrency
@@ -655,7 +706,9 @@ class SubAgentManager:
                 # minus code_execution/cronjob; delegation actions excluded for the
                 # leaf child) instead of sharing the parent's full controller. Returns
                 # None when SUBAGENT_LEAST_PRIVILEGE is off => shared parent controller.
-                child_controller = await self._build_child_controller()
+                child_controller = await self._build_child_controller(
+                    requested_tools=(worker.tool_ids if worker is not None else None),
+                    force=bool(worker is not None and worker.tool_ids is not None))
 
                 # Create sub-agent with ISOLATION flags
                 sub_agent = await self.orchestrator.create_agent(
@@ -678,6 +731,8 @@ class SubAgentManager:
                 # Track relationships
                 self._sub_agents[sub_agent_id] = sub_agent
                 self._parent_map[sub_agent_id] = parent_agent_id
+                self._live_meta[sub_agent_id] = {
+                    "worker": profile_id, "goal": live_goal[:200], "started": time.time()}
 
                 # Run sub-agent with timeout
                 timeout = TimeoutConfig.SUB_AGENT_TIMEOUT
@@ -817,7 +872,68 @@ class SubAgentManager:
 
                     # Remove from local tracking
                     self._sub_agents.pop(sub_agent_id, None)
+                self._live_meta.pop(sub_agent_id, None)
     
+    async def _worker_llm(self, parent_agent_id: str, worker: Any) -> Any:
+        """Build the worker's pinned model on the parent's LLM factory (isolated
+        client). None on any failure — the child then inherits the parent's."""
+        agents = getattr(self.orchestrator, 'agents', None) or {}
+        for lookup_id in (parent_agent_id, f"{parent_agent_id}_{self.orchestrator.session_id}"):
+            parent = agents.get(lookup_id)
+            build = getattr(parent, '_create_llm_from_config_async', None)
+            if build is None:
+                continue
+            cfg = {"model": worker.model}
+            if worker.provider:
+                cfg["provider"] = worker.provider
+            try:
+                return await build(cfg, isolated=True)
+            except Exception as e:
+                self.logger.warning(f"worker {worker.id}: model {worker.model} unavailable ({e}); "
+                                    "inheriting the parent's")
+                return None
+        return None
+
+    # --- 041 phase 2: the live worker lines and the owner's Stop / Steer -------
+
+    def live_workers(self) -> List[Dict[str, Any]]:
+        """One row per LIVE child: ``{id, worker, goal, elapsed}`` (a read)."""
+        now = time.time()
+        return [{"id": cid, "worker": meta.get("worker") or "executor",
+                 "goal": meta.get("goal") or "",
+                 "elapsed": max(0.0, now - float(meta.get("started") or now))}
+                for cid, meta in list(self._live_meta.items())]
+
+    def _live_child(self, child_id: str):
+        """Resolve a live child by full id or a unique prefix, else None."""
+        if child_id in self._sub_agents:
+            return child_id, self._sub_agents[child_id]
+        hits = [c for c in self._sub_agents if c.startswith(child_id or "\0")]
+        if len(hits) == 1:
+            return hits[0], self._sub_agents[hits[0]]
+        return None, None
+
+    def stop_child(self, child_id: str) -> Optional[str]:
+        """Owner Stop: the child ends at its next step (``state.stopped`` — the
+        same flag the parent's own stop uses). Returns the id stopped, or None."""
+        cid, agent = self._live_child(child_id)
+        state = getattr(agent, 'state', None) if agent is not None else None
+        if state is None:
+            return None
+        state.stopped = True
+        self.logger.info(f"⏹️ owner stopped sub-agent {cid}")
+        return cid
+
+    async def steer_child(self, child_id: str, text: str) -> Optional[str]:
+        """Owner Steer: one guidance message into the child's own HITL queue
+        (the rail ``/steer`` uses for the parent). Returns the id, or None."""
+        cid, agent = self._live_child(child_id)
+        hitl = getattr(agent, 'hitl_manager', None) if agent is not None else None
+        if hitl is None or not (text or "").strip():
+            return None
+        await hitl.queue_user_message(text.strip(), "comment", {})
+        return cid
+
     async def run_parallel_subtasks(
         self,
         subtasks: List[Dict[str, Any]],

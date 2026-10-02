@@ -32,6 +32,18 @@ from agents.task.constants import (
     format_nag_exempt,
 )
 
+# The ONE brain-state shape (native tools): the SystemPrompt's RESPONSE FORMAT
+# and this per-step reminder must both name it. utils_json.
+# extract_brain_state_from_json reads the nested ``current_state`` object first
+# (a flat object is only a tolerated legacy fallback).
+NATIVE_TOOLS_BRAIN_HINT = (
+    "REMINDER: Your text content must be valid JSON with the brain state nested "
+    "under \"current_state\":\n"
+    '{"current_state": {"evaluation_previous_goal": "...", "memory": "...", '
+    '"next_goal": "...", "reasoning": "..."}}\n'
+    "Then emit your function calls."
+)
+
 # Import POLYROB exceptions
 from core.exceptions import (
     AgentError,
@@ -244,7 +256,8 @@ class NextActionInternalMixin:
 		try:
 			self.message_manager.note_call_usage(
 				output_tokens=output_tokens, input_tokens=input_tokens,
-				cached_tokens=cached_tokens)
+				cached_tokens=cached_tokens,
+				cache_creation_tokens=cache_creation_tokens)
 		except Exception:
 			pass
 
@@ -260,11 +273,17 @@ class NextActionInternalMixin:
 					output_tokens=output_tokens,
 					cached_tokens=cached_tokens,
 					cache_creation_tokens=cache_creation_tokens,
+					cache_creation_1h_tokens=token_usage.get('cache_creation_1h_tokens', 0) or 0,
 					duration_seconds=llm_duration,
 					component="agent",
 					purpose=purpose,
 					success=True,
 					request_id=request_id,
+					# F23: when the provider reports what it actually billed
+					# (OpenRouter's `usage.cost`), that figure outranks our
+					# per-token estimate. None = not reported, never $0.
+					billed_cost_usd=token_usage.get('billed_cost_usd'),
+					cache_discount_usd=token_usage.get('cache_discount_usd'),
 					metadata=_prefix_stamps(self)
 				)
 				self.logger.info(
@@ -301,6 +320,7 @@ class NextActionInternalMixin:
 						prompt_tokens=input_tokens,
 						completion_tokens=output_tokens,
 						cached_tokens=cached_tokens,
+						cache_creation_tokens=cache_creation_tokens,
 						agent_id=self.agent_id,
 						provider=resolve_serving_provider(self.llm, self.model_name)
 					)
@@ -671,11 +691,7 @@ Use double quotes only. Max {self.max_actions_per_step} actions."""
 			# families that need it (T1-10): the prompt is authored for Claude and the
 			# family-note design deliberately gives it none, so the per-step nag was
 			# one wasted uncached message per step there.
-			native_tools_hint = HumanMessage(
-				content="""REMINDER: Your text content must be valid JSON with brain state fields:
-{"memory": "...", "evaluation_previous_goal": "...", "next_goal": "...", "reasoning": "..."}
-Then emit your function calls."""
-			)
+			native_tools_hint = HumanMessage(content=NATIVE_TOOLS_BRAIN_HINT)
 			# Use the new ephemeral message API
 			self.message_manager.push_ephemeral_message(native_tools_hint)
 			format_hint_added = True
@@ -703,7 +719,21 @@ Then emit your function calls."""
 
 		# NOW get final messages with ephemeral message included (one-shot consumption)
 		converted_input_messages = self.message_manager.get_messages_for_llm()
-		
+
+		# F12: hand the client the wire foundation length the assembly just
+		# measured, so the Anthropic breakpoint placer pins one cache_control
+		# marker at the END of the static block instead of spending all three on
+		# the tail. Stamped here — the ONE place the assembled list is produced —
+		# and re-stamped every step, because a billing failover mints a new client
+		# mid-run (the same reason apply_session_cache_ttl re-stamps). Fail-open.
+		try:
+			from modules.llm.cache_hints import apply_foundation_len
+			apply_foundation_len(
+				self.llm, getattr(self.message_manager, '_last_foundation_len', None))
+		except Exception:
+			pass
+
+
 		# Prepare request info for session data
 		request_info = {
 			"model": self.model_name,
@@ -761,7 +791,23 @@ Then emit your function calls."""
 					if supports_native:
 						# Get ALL actions (core + tools) for this provider
 						# Use Controller's high-level API instead of directly accessing registry
-						tools = self.controller.get_all_actions_for_provider(provider)
+						# F13: a session restored from disk asks for the tool order it
+						# emitted BEFORE the restart, so the tools block — the largest
+						# cached bytes in the request — comes back identical. None on a
+						# fresh session ⇒ the plain F1 sorted order.
+						tools = self.controller.get_all_actions_for_provider(
+							provider,
+							preferred_order=getattr(
+								self.message_manager, '_foundation_tool_names', None),
+						)
+						# F13: remember what actually went out, so the next save_to_disk
+						# persists the live order (a tool loaded mid-session included).
+						try:
+							from agents.task.agent.messages.foundation_replay import emitted_tool_names
+							self.message_manager._foundation_tool_names = \
+								emitted_tool_names(tools) or None
+						except Exception:
+							pass
 						# P4 (context-usage audit): stamp the schema list's token cost
 						# onto the gauge — real billed prompt bytes every step that were
 						# invisible to get_actual_token_count. Fail-open; memoized in
@@ -884,7 +930,8 @@ Then emit your function calls."""
 									try:
 										self.message_manager.note_call_usage(
 											output_tokens=output_tokens, input_tokens=input_tokens,
-											cached_tokens=cached_tokens)
+											cached_tokens=cached_tokens,
+											cache_creation_tokens=cache_creation_tokens)
 									except Exception:
 										pass
 
@@ -910,11 +957,15 @@ Then emit your function calls."""
 												output_tokens=output_tokens,
 												cached_tokens=cached_tokens,
 												cache_creation_tokens=cache_creation_tokens,
+												cache_creation_1h_tokens=token_usage.get('cache_creation_1h_tokens', 0) or 0,
 												duration_seconds=llm_duration,
 												component="agent",
 												purpose="next_action",
 												success=True,
 												request_id=request_id,
+												# F23: the provider's billed cost (see the helper above).
+												billed_cost_usd=token_usage.get('billed_cost_usd'),
+												cache_discount_usd=token_usage.get('cache_discount_usd'),
 												metadata=_prefix_stamps(self)
 											)
 

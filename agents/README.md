@@ -42,10 +42,8 @@ agents/
 │                                   # (a specific bot's character is profile
 │                                   #  data under <data_dir>/characters/)
 │
-├── prompt/                         # System-prompt support
-│   ├── __init__.py
-│   ├── base_prompt.py              # BasePromptManager (file-based prompt storage)
-│   └── system.py                   # SystemPromptManager (prompt orchestration)
+├── prompt/                         # Prompt data anchors (DEFAULT_PROMPTS_DIR)
+│   └── __init__.py
 │
 └── task/                           # Task automation subsystem
     ├── __init__.py
@@ -346,15 +344,10 @@ Central orchestrator for character lifecycle (load from file, role/default resol
 
 ## Prompt Engineering System (`prompt/`)
 
-### SystemPromptManager (`prompt/system.py`)
-
-Orchestrates system-prompt generation with character integration. (Note: the *Task* agent builds its
-own session system prompt via `task/agent/prompts.py`; the `prompt/` package provides the shared
-prompt-manager components registered as services.)
-
-### BasePromptManager (`prompt/base_prompt.py`)
-
-Base class for prompt management with file-based prompt storage.
+The *Task* agent builds its own session system prompt via `task/agent/prompts.py`. The
+`prompt/` package only anchors `DEFAULT_PROMPTS_DIR` (`data/prompts/`, the builtin skills).
+`SystemPromptManager`/`BasePromptManager` were retired on 2026-09-29: nothing read their
+prompts, and the manager rewrote `data/prompts/system_prompts.json` on every shutdown.
 
 ## Agent Registry
 
@@ -384,8 +377,8 @@ cheap; `TaskAgent` is only imported when actually resolved.
 
 ```python
 async def initialize_shared_components(container: DependencyContainer):
-    """Initialize shared components used by agents (system prompt + character managers)."""
-    # registers 'system_prompt_manager' and 'character_manager' if absent,
+    """Initialize shared components used by agents (the character manager)."""
+    # registers 'character_manager' if absent,
     # then marks the 'shared_components' group initialized
 ```
 
@@ -442,8 +435,6 @@ character = await character_manager.load_character("researcher")
 __all__ = [
     'BaseAgent',
     'TaskAgent',
-    'SystemPromptManager',
-    'BasePromptManager',
     'CharacterManager',
     'initialize_shared_components',
     'AGENT_COMPONENTS',

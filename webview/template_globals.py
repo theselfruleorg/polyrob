@@ -36,8 +36,10 @@ def _console_nav() -> list:
     a wall of links to unregistered routes.
     """
     try:
+        from webview.copy import t
         from webview.pages_new import NAV
-        return [{"href": item["href"], "label": item["key"].title()} for item in NAV]
+        # The shell's own words (nav.*: "Chat", "Rob"), not the route keys.
+        return [{"href": item["href"], "label": t(f"nav.{item['key']}")} for item in NAV]
     except Exception:  # the shell is optional; a nav we cannot build is no nav
         return []
 
@@ -46,6 +48,10 @@ def register(templates: Any, webgate: Any) -> None:
     """Install every console-wide Jinja global on ``templates``."""
     from webview.theme import theme_preference, show_avatar
     g = templates.env.globals
+    # 070 E.32: the copy layer, so every legacy template (server `_templates`,
+    # `pages._TEMPLATES`) speaks through `t()` like the five destinations do.
+    from webview.copy import t
+    g["t"] = t
     g["theme_preference"] = theme_preference
     g["show_avatar"] = show_avatar
     # UI branding (Workstream D).

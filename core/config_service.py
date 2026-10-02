@@ -84,6 +84,13 @@ class SetResult:
     message: str
     store: str = ""
     applies: str = ""
+    #: The post_write_notes (also appended to ``message``), for a caller that
+    #: renders its own first line (``polyrob config set``, REPL ``/config set``).
+    notes: tuple = ()
+    #: 026 P5: True when the write was also applied to this process's env.
+    live: bool = False
+    #: Closest documented key, on an unknown-key refusal.
+    suggestion: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -103,8 +110,8 @@ def describe(key: str, *, user_id: Optional[str] = None,
     from core.prefs import PREF_SCHEMA
     if key in PREF_SCHEMA:
         return _describe_pref(key, user_id, home_dir, include_chain)
-    from core.flags import REGISTRY
-    if key in REGISTRY:
+    from core.flags import flag_for
+    if flag_for(key) is not None:
         return _describe_flag(key, include_chain)
     raise KeyError(key)
 
@@ -151,8 +158,8 @@ def _describe_pref(key: str, user_id, home_dir, include_chain: bool) -> SettingI
 
 def _describe_flag(key: str, include_chain: bool) -> SettingInfo:
     from core.config_policy.flag_defaults import dynamic_flag_default
-    from core.flags import REGISTRY, is_secret_flag, resolve_flag
-    flag = REGISTRY[key]
+    from core.flags import flag_for, is_secret_flag, resolve_flag
+    flag = flag_for(key)
     resolved = resolve_flag(key, dict(os.environ), dynamic_flag_default)
     secret = is_secret_flag(key)
     chain = ()
@@ -282,6 +289,8 @@ CONSOLE_UNWRITABLE_FLAGS = frozenset({
     "POLYROB_AUTH_STORE",
     "LLM_AUTH_STORE_ENABLED",
     "LLM_CREDENTIAL_BORROW",
+    # 025: turning memory scopes OFF releases every quarantine at once.
+    "MEMORY_SCOPES_ENABLED",
 })
 
 # S8 (agent + wallet security evaluation, 2026-09-14). The set above named four
@@ -320,6 +329,8 @@ _UNWRITABLE_EXACT = frozenset({
     "WEBVIEW_ALLOW_LOCAL_POSTURE",
     "DELEGATE_BLOCKED_TOOLS", "SELF_ENV_ENABLED", "SHELL_TOOLS_ENABLED",
     "ADMIN_WALLETS", "OUTBOUND_POLICY", "X402_PAYMENT_RECIPIENT",
+    # 067 P2: which pack CODE runs in this process (host reach).
+    "POLYROB_PACKS", "POLYROB_PACKS_DISABLED",
 })
 # Flag names only (UPPER_SNAKE). A typed preference key (``budget.wallet_daily_usd``)
 # reads money-shaped but has its OWN trust ladder (guarded ⇒ queued for owner
@@ -354,9 +365,22 @@ def is_console_unwritable(key: str) -> bool:
         return True
 
 
+def closest_key(key: str) -> Optional[str]:
+    """Closest documented key across BOTH namespaces (prefs + catalog flags)."""
+    import difflib
+    try:
+        from core.prefs import PREF_SCHEMA, catalog_names
+        names = list(PREF_SCHEMA.keys()) + list(catalog_names())
+    except Exception:
+        return None
+    hits = difflib.get_close_matches(str(key or ""), names, n=1)
+    return hits[0] if hits else None
+
+
 def set_value(key: str, value: str, *, scope: Optional[str] = None,
               user_id: Optional[str] = None, home_dir=None,
-              confirm: bool = False, surface: str = "local") -> SetResult:
+              confirm: bool = False, surface: str = "local",
+              allow_unknown: bool = False, live: bool = False) -> SetResult:
     """Route one write to the owning store. Never raises.
 
     scope: ``user`` (preferences.toml — required for pref keys), ``project``
@@ -368,10 +392,29 @@ def set_value(key: str, value: str, *, scope: Optional[str] = None,
     (``console``, ``telegram``, …). The credential-surface refusal is enforced
     HERE — in the oracle — not only at the webview call site, so any surface
     that grows a flag-write path inherits it (UX assessment 2026-08-07, Q9).
+
+    026 P2 — this is the ONE write path: ``polyrob config set``, the REPL
+    ``/config set`` and the webview PATCH all call it.
+
+    allow_unknown: the CLI ``--force`` escape hatch — write an uncataloged KEY
+    raw. ``surface="local"`` only. A secret-shaped KEY (``core.secrets``) is
+    writable raw from the local surface without it (a credential needs no
+    catalog row to be stored).
+
+    live: the caller is the process that will READ the flag (the REPL). A key
+    in ``core.config_policy.live_apply.LIVE_APPLY_SAFE`` is then also set in
+    ``os.environ`` (026 P5). Money, approval, ingress and import-frozen flags
+    are never live, whatever the caller asks.
     """
     from core.prefs import PREF_SCHEMA
     if scope is not None and scope not in _SCOPES:
         return SetResult(False, "refused", f"unknown scope: {scope}")
+    # M12 (2026-09-23): a CR/LF/NUL in a value is never legitimate and, in an
+    # env write, splits the line into a second flag. Refused for every store.
+    if value is not None and any(c in str(value) for c in ("\r", "\n", "\0")):
+        return SetResult(False, "invalid",
+                         f"invalid value for {key}: a value must not contain "
+                         "CR, LF or NUL")
     if surface != "local" and is_console_unwritable(key):
         return SetResult(
             False, "refused",
@@ -383,9 +426,60 @@ def set_value(key: str, value: str, *, scope: Optional[str] = None,
         return _set_pref(key, value, user_id, home_dir, confirm)
     from core.flags import REGISTRY, pattern_flag_for
     if key in REGISTRY or pattern_flag_for(key) is not None:
-        return _set_flag(key, value, scope or "project", surface=surface)
+        return _set_flag(key, value, scope or "project", surface=surface, live=live)
+    if surface == "local" and (allow_unknown or _is_secret_shaped(key)):
+        return _set_raw(key, value, scope or "project", forced=allow_unknown)
+    hint = closest_key(key)
+    if hint:
+        return SetResult(False, "refused",
+                         f"unknown key: {key} (did you mean {hint}?)",
+                         suggestion=hint)
     return SetResult(False, "refused",
                      f"unknown key: {key} — not a documented flag or preference")
+
+
+def _is_secret_shaped(key: str) -> bool:
+    try:
+        from core.secrets import is_secret_key
+        return bool(is_secret_key(key))
+    except Exception:
+        return False
+
+
+def _write_env(path: Path, key: str, value: str, scope: str) -> Optional[str]:
+    """The ONE env-file write (0600) + project gitignore housekeeping.
+    Returns an error string, or None on success."""
+    try:
+        from core.env_file import upsert_env_var
+        upsert_env_var(path, key, str(value), secure=True)
+        if scope == "project":
+            try:
+                from core.gitignore import ensure_polyrob_gitignored
+                ensure_polyrob_gitignored(Path.cwd(), require_git_repo=True)
+            except Exception:
+                logger.debug("gitignore guard failed (non-fatal)", exc_info=True)
+    except Exception as e:
+        return f"write failed: {e}"
+    return None
+
+
+def _set_raw(key: str, value: str, scope: str, *, forced: bool) -> SetResult:
+    """An uncataloged KEY from the local surface: ``--force`` or a secret."""
+    if scope == "user":
+        return SetResult(False, "refused",
+                         f"'{key}' is an env key — scope must be project or global")
+    from core.env_file import env_write_error
+    write_err = env_write_error(key, str(value))
+    if write_err:
+        return SetResult(False, "invalid", write_err)
+    path = _env_path(scope)
+    err = _write_env(path, key, value, scope)
+    if err:
+        return SetResult(False, "invalid", err)
+    display = "(set, masked)" if _is_secret_shaped(key) else str(value)
+    tail = " (--force override)" if forced else " (takes effect: restart)"
+    return SetResult(True, "written", f"set {key}={display} in {path}{tail}",
+                     store=str(path), applies="restart")
 
 
 def _set_pref(key: str, value, user_id, home_dir, confirm: bool) -> SetResult:
@@ -411,7 +505,8 @@ def _set_pref(key: str, value, user_id, home_dir, confirm: bool) -> SetResult:
                      store=str(path), applies=spec.applies)
 
 
-def _set_flag(key: str, value: str, scope: str, *, surface: str = "local") -> SetResult:
+def _set_flag(key: str, value: str, scope: str, *, surface: str = "local",
+              live: bool = False) -> SetResult:
     from core.flags import REGISTRY, is_secret_flag, pattern_flag_for
     from core.prefs import shape_of_default, value_matches_shape
     flag = REGISTRY.get(key) or pattern_flag_for(key)
@@ -421,7 +516,9 @@ def _set_flag(key: str, value: str, scope: str, *, surface: str = "local") -> Se
     if scope == "user":
         return SetResult(False, "refused",
                          f"'{key}' is an env flag — scope must be project or global")
-    if not is_secret_flag(key):
+    # A secret-shaped NAME (``core.secrets.is_secret_key`` — e.g. *_TOKENS) is
+    # never shape-validated: the refusal would echo the value back.
+    if not (is_secret_flag(key) or _is_secret_shaped(key)):
         # 026 P1.4: enum-shaped flags reject invalid members with the valid set
         # (a typo'd AUTONOMY_MODE used to write cleanly and silently degrade).
         from core.config_policy.flag_enums import enum_error
@@ -434,28 +531,36 @@ def _set_flag(key: str, value: str, scope: str, *, surface: str = "local") -> Se
                 False, "invalid",
                 f"{key} expects a {shape} value (documented default: "
                 f"{flag.default_doc}); got {value!r}")
+    from core.env_file import env_write_error
+    write_err = env_write_error(key, str(value))
+    if write_err:
+        return SetResult(False, "invalid", write_err)
     path = _env_path(scope)
-    try:
-        from core.env_file import upsert_env_var
-        upsert_env_var(path, key, str(value), secure=True)
-        if scope == "project":
-            try:
-                from core.gitignore import ensure_polyrob_gitignored
-                ensure_polyrob_gitignored(Path.cwd(), require_git_repo=True)
-            except Exception:
-                logger.debug("gitignore guard failed (non-fatal)", exc_info=True)
-    except Exception as e:
-        return SetResult(False, "invalid", f"write failed: {e}")
+    err = _write_env(path, key, value, scope)
+    if err:
+        return SetResult(False, "invalid", err)
     applies = _flag_applies(key)
     note = ""
     if key in _IMPORT_FROZEN_FLAGS:
         note = (" — this value is frozen at import: the running process never "
                 "re-reads it; it takes effect on the next start")
-    display = "(set, masked)" if is_secret_flag(key) else str(value)
-    message = f"set {key}={display} in {path} (takes effect: restart){note}"
-    for extra in post_write_notes(key, str(value), scope, surface=surface):
+    applied_live = False
+    if live and surface == "local":
+        from core.config_policy.live_apply import live_apply_allowed
+        if live_apply_allowed(key):
+            os.environ[key] = str(value)
+            applied_live = True
+            applies = "live"
+    display = ("(set, masked)" if (is_secret_flag(key) or _is_secret_shaped(key))
+               else str(value))
+    effect = ("applies: live in this session + persisted for the next start"
+              if applied_live else "takes effect: restart")
+    message = f"set {key}={display} in {path} ({effect}){note}"
+    notes = tuple(post_write_notes(key, str(value), scope, surface=surface))
+    for extra in notes:
         message += "\n" + extra
-    return SetResult(True, "written", message, store=str(path), applies=applies)
+    return SetResult(True, "written", message, store=str(path), applies=applies,
+                     notes=notes, live=applied_live)
 
 
 def _env_path(scope: str) -> Path:

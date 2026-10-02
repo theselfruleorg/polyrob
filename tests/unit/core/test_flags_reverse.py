@@ -20,11 +20,12 @@ from core.flags import REGISTRY, is_secret_flag, pattern_flag_for
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
-# Shipped source dirs — deliberately excludes tests/, scripts/, docs/, avatar/,
-# deployment/, migrations/ (not agent-runtime config surface).
+# Shipped source dirs — deliberately excludes tests/, scripts/, docs/,
+# deployment/, migrations/ (not agent-runtime config surface). packs/ ships in
+# the wheel, so a pack's env read needs a catalog row too.
 SOURCE_DIRS = (
     "core", "modules", "tools", "agents", "cli", "webview",
-    "surfaces", "cron", "api", "utils",
+    "surfaces", "cron", "api", "utils", "packs",
 )
 
 # The env-read idioms POLYROB uses. Assignment writes (os.environ["X"] = ...)
@@ -34,7 +35,7 @@ READ_RE = re.compile(
         os\.getenv\(\s*['"](?P<g1>[A-Za-z_][A-Za-z0-9_]*)['"]
       | os\.environ\.get\(\s*['"](?P<g2>[A-Za-z_][A-Za-z0-9_]*)['"]
       | os\.environ\[\s*['"](?P<g3>[A-Za-z_][A-Za-z0-9_]*)['"]\s*\](?!\s*=[^=])
-      | \b_?(?:bool|int|float)_env\(\s*['"](?P<g4>[A-Za-z_][A-Za-z0-9_]*)['"]
+      | \b\w*(?:bool|int|float)_env\(\s*['"](?P<g4>[A-Za-z_][A-Za-z0-9_]*)['"]
     )""",
     re.VERBOSE,
 )
@@ -53,6 +54,9 @@ ALLOWLIST = {
     "PYTHONPATH",        # Python runtime path, passed through to the webview child process
     "TERM",              # terminal type (title/theme capability detection)
     "XDG_SESSION_TYPE",  # Wayland/X11 session detection for browser flags
+    "XDG_CONFIG_HOME",   # the freedesktop config root — where a systemd --user
+                         # unit lives (cli/commands/service.py). An OS path, not
+                         # a POLYROB setting.
 }
 
 

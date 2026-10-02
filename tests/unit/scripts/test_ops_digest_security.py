@@ -56,3 +56,20 @@ def test_headline_sec_line_says_unavailable():
     assert "SEC" in line
     assert "unavailable" in line
     assert "0 inbound" not in line
+
+
+def test_sec_line_carries_trips_and_scan_verdict():
+    line = ops_digest.format_security({
+        "inbound": 5, "denied": 1, "refused": 0, "flagged": 0, "unavailable": "",
+        "rate_limited": 2, "scan": "incomplete (pip_audit not run)"})
+    assert "2 rate-limited" in line
+    assert "scan incomplete (pip_audit not run)" in line
+
+
+def test_report_names_unreadable_chat_spend():
+    body = ops_digest.assemble_report({"security": {
+        "inbound": 1, "denied": 0, "refused": 0, "flagged": 0, "unavailable": "",
+        "top_chats_by_volume": [("telegram:-100", 4)],
+        "spend_unavailable": "FileNotFoundError: surfaces.db not found"}})
+    assert "telegram:-100 (4)" in body
+    assert "chat spend: unavailable" in body

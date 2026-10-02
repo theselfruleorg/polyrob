@@ -34,25 +34,17 @@ tools/
 ├── filesystem_docproc.py           # Document-processing helper (used by filesystem)
 ├── user_directory.py               # Per-user directory resolution helper
 ├── email_tool.py                   # Email communication
-├── perplexity_tool.py              # Perplexity AI search integration
-├── twitter_tool.py                 # Twitter/X platform integration
 ├── task_tool.py                    # Task (TODO) management tool
 ├── knowledge_ingest.py             # Knowledge-base ingest tool (KnowledgeTool, gated KB_ENABLED)
 ├── cronjob_tools.py                # Durable cron scheduling tool (gated CRON_ENABLED)
 ├── goal_tools.py                   # Durable goal-board tool (gated GOALS_ENABLED)
 │
-├── anysite/                        # AnySite structured web-data CLI tool (AnysiteTool, anysite_api)
-│   ├── __init__.py
-│   ├── tool.py                     # AnysiteTool (registered in __init__.py)
-│   └── client.py                   # AnySite HTTP client
 ├── web_fetch/                      # Stateless lightweight web fetch (WebFetchTool — always registered)
 │   ├── __init__.py
 │   ├── tool.py                     # WebFetchTool
 │   ├── fetcher.py                  # HTTP fetch
 │   └── render.py                   # HTML → markdown rendering
 │
-├── polymarket/                     # Polymarket market data
-├── hyperliquid/                    # Hyperliquid market data
 ├── code_exec/                      # Sandboxed code execution (gated CODE_EXEC_ENABLED)
 ├── coding/                         # Coding tools (gated CODING_TOOLS_ENABLED)
 ├── oauth/                          # OAuth manager (library)
@@ -214,7 +206,7 @@ content = await context.extract_content()
 await browser.close()
 ```
 
-### 3. Twitter (`twitter_tool.py`)
+### 3. Twitter (`x` pack: `packs/x/polyrob_x/twitter_tool.py`)
 
 Twitter/X platform integration.
 
@@ -235,7 +227,7 @@ async def get_user_timeline(self, username: str) -> List[Dict]
 - Tweet and user data caching
 - Database integration
 
-### 4. Perplexity (`perplexity_tool.py`)
+### 4. Perplexity (`discovery` pack: `packs/discovery/polyrob_discovery/perplexity.py`)
 
 AI-powered search and research.
 
@@ -396,18 +388,24 @@ review the always-registered tools are:
 # tools/__init__.py — always registered
 register_tool_class('filesystem', FileSystem)
 register_tool_class('task', TaskTool)          # the TODO tool (NOT delegation)
-register_tool_class('twitter', TwitterTool)    # guarded import (optional dependency)
 register_tool_class('email', EmailTool)
-register_tool_class('perplexity', PerplexityTool)
 register_tool_class('web_fetch', WebFetchTool) # stateless lightweight web fetch
 register_tool_class('collabland', CollabLandTool)
 register_tool_class('alchemy', AlchemyTool)
 register_tool_class('mcp', MCPTool)
-register_tool_class('anysite', AnysiteTool)
 ```
 
+`anysite` and `perplexity` are not core tools: the `discovery` pack
+(`packs/discovery/`) registers them in the pack loader's phase 2 (067 P3a).
+`twitter` and `x_browser` come from the `x` pack (`packs/x/`,
+067 P3b), with the X DM surface, `polyrob x` / `polyrob x-account` and the
+`twitter` cron delivery channel. `polymarket`, `polymarket_data`, `hyperliquid`
+and `hyperliquid_data` come from the `markets` pack (`packs/markets/`,
+067 P4), with the venue stores, the `/api/packs/markets/*` routes and the six venue
+skills.
+
 Additional tools are registered conditionally (behind feature flags):
-`browser_manager`, `polymarket`, `hyperliquid`, plus `code_exec` (`CODE_EXEC_ENABLED`),
+`browser_manager`, plus `code_exec` (`CODE_EXEC_ENABLED`),
 `coding` (`CODING_TOOLS_ENABLED`), `cronjob` (`CRON_ENABLED`), `goal` (`GOALS_ENABLED`),
 `knowledge` (`KB_ENABLED`, via `register_knowledge_tool`), and the
 x402 paying tool (`X402_CLIENT_ENABLED`). See `tools/__init__.py` for the exact, current set.
@@ -568,8 +566,8 @@ result = await filesystem.process_url({
 ```python
 __all__ = [
     'BaseTool', 'ToolStatus',
-    'FileSystem', 'TaskTool', 'TwitterTool',
-    'PerplexityTool', 'EmailTool',
+    'FileSystem', 'TaskTool',
+    'EmailTool',
     'CollabLandTool', 'AlchemyTool', 'MCPTool',
     'TOOL_COMPONENTS', 'TOOL_DEPENDENCIES', 'TOOL_METADATA',
     'initialize_tool', 'cleanup_tools',

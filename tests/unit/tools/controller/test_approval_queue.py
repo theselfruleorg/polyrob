@@ -210,6 +210,25 @@ async def test_in_band_approval_consumes_the_one_shot_grant(provider, board):
 
 
 @pytest.mark.asyncio
+async def test_in_band_approval_push_does_not_claim_execution(provider, board, monkeypatch):
+    """O3: the push goes out BEFORE the tool runs — it must not say "executed"."""
+    calls = []
+
+    async def _fake_notify(container, user_id, text):
+        calls.append(text)
+
+    monkeypatch.setattr("tools.controller.approval_queue._push_owner_notification", _fake_notify)
+    task = asyncio.create_task(provider.request("x402_request", {"amount_usd": 7}, _ctx()))
+    await asyncio.sleep(0.06)
+    asks = board.asks(user_id="u1", status=ASK_OPEN)
+    board.decide_ask(asks[0].id, user_id="u1", approved=True)
+    assert await asyncio.wait_for(task, timeout=2) is True
+    approved = [t for t in calls if t.startswith("✅")]
+    assert approved and all("executed" not in t for t in approved)
+    assert "running it now" in approved[-1]
+
+
+@pytest.mark.asyncio
 async def test_in_band_approval_is_not_redeemable_as_a_second_grant(provider, board):
     """H4 (behavioral): after an in-band approval, a byte-identical repeat within
     the grant TTL must NOT silently return True off a leftover grant — it queues a
@@ -280,6 +299,8 @@ def autonomous_goal_turn(monkeypatch):
                         lambda ctx, _s: True)
     monkeypatch.setattr("tools.controller.action_registration._is_autonomous_goal_turn",
                         lambda ctx, _s: True)
+    # A goal run can sign only with unattended trading armed (tx_guard step 2).
+    monkeypatch.setenv("DEFI_AUTONOMOUS_TURN_TRADING", "true")
 
 
 @pytest.mark.asyncio
@@ -793,3 +814,127 @@ def test_decide_tool_approval_carries_the_owner_answer(board):
     assert ok, msg
     assert board.get(a.id).payload["answer"] == "the sandbox key"
     assert board.get(g.id).payload["owner_unblocked"]["answer"] == "the sandbox key"
+
+
+# --- M08 (security analysis 2026-09-23): bulk approve holds money + guarded --
+
+import pytest as _pytest
+
+
+@_pytest.mark.parametrize("item,held", [
+    ({"kind": "tool_approval", "tool": "defi_trade_swap"}, True),
+    ({"kind": "tool_approval", "tool": "subscription_renewal"}, True),
+    ({"kind": "tool_approval", "tool": "x402_pay_x402_fetch"}, True),
+    ({"kind": "tool_approval", "tool": "defi_trade"}, True),
+    ({"kind": "tool_approval"}, True),                 # unknown tool -> fail closed
+    ({"kind": "tool_approval", "tool": "twitter_post"}, False),
+    ({"kind": "pref_change", "id": "budget.wallet_daily_usd"}, True),
+    ({"kind": "pref_change", "id": "budget.defi_autonomous_usd"}, True),
+    ({"kind": "pref_change", "id": "approvals.require"}, True),
+    ({"kind": "pref_change", "id": "ui.theme"}, False),
+    ({"kind": "skill", "id": "some-skill"}, False),
+    # 064 D1: the release tap is never bulk-approved; 066 P2: nor a signer ask.
+    ({"kind": "tool_approval", "tool": "release_publish"}, True),
+    ({"kind": "signer_approval", "id": "sig-1"}, True),
+])
+def test_needs_individual_decision(item, held):
+    from tools.controller.approval_queue import needs_individual_decision
+    assert bool(needs_individual_decision(item)) is held
+
+
+@_pytest.mark.parametrize("name,money", [
+    # spend verbs and bare money tool ids
+    ("defi_trade_swap", True), ("defi_trade", True), ("x402_pay_x402_fetch", True),
+    ("hyperliquid_place_market_order", True), ("polymarket_place_limit_order", True),
+    ("launchpad_buy", True), ("agent_nft_collection_mint", True),
+    # the settlement watcher's financial ask, filed outside a Controller
+    ("subscription_renewal", True),
+    # fail closed: no name
+    ("", True),
+    # 067 P0.8: the separate data tools are reads, not money
+    ("polymarket_data_get_markets", False), ("hyperliquid_data_get_all_mids", False),
+    ("twitter_post", False), ("web_fetch_fetch_url", False),
+])
+def test_is_money_action_is_the_authority_predicate(name, money):
+    from core.wallet.authority import money_action
+    from tools.controller.approval_queue import _is_money_action
+    assert _is_money_action(name) is money
+    if name and name != "subscription_renewal":
+        assert bool(money_action(name)) is money  # ONE answer, not two
+
+
+def test_is_money_action_fails_closed(monkeypatch):
+    import core.money.classify as classify
+    from tools.controller.approval_queue import _is_money_action
+
+    def boom(name):
+        raise RuntimeError("capability table unreadable")
+    monkeypatch.setattr(classify, "money_action", boom)
+    assert _is_money_action("twitter_post") is True
+
+
+def test_bulk_approve_skips_a_guarded_budget_raise(tmp_path, monkeypatch):
+    from tools.controller import approval_queue as aq
+
+    class _Pending:
+        items = [{"kind": "pref_change", "id": "budget.wallet_daily_usd"},
+                 {"kind": "skill", "id": "s1"}]
+        unavailable = []
+
+    decided = []
+    monkeypatch.setattr(aq, "all_pending", lambda **kw: _Pending())
+    monkeypatch.setattr(aq, "decide_pending",
+                        lambda kind, item_id, **kw: (decided.append((kind, item_id))
+                                                     or (True, "ok")))
+    ok_n, fail_n, msgs = aq.decide_all_pending(
+        approve=True, user_id="u", home_dir=str(tmp_path), instance_id="i")
+    assert decided == [("skill", "s1")]
+    assert ok_n == 1 and fail_n == 0
+    assert any("NOT approved" in m and "budget.wallet_daily_usd" in m for m in msgs)
+
+
+def test_bulk_approve_holds_subscription_renewal(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from tools.controller import approval_queue as aq
+    monkeypatch.setattr(aq, "all_pending", lambda **kw: SimpleNamespace(
+        items=[{"kind": "tool_approval", "tool": "subscription_renewal", "id": "tap-1"}],
+        unavailable=[]))
+    monkeypatch.setattr(aq, "decide_pending", lambda *a, **k: pytest.fail("renewal approved in bulk"))
+    ok, failed, messages = aq.decide_all_pending(
+        approve=True, user_id="u", home_dir=str(tmp_path), instance_id="i")
+    assert (ok, failed) == (0, 0)
+    assert any("NOT approved" in message for message in messages)
+
+
+@pytest.mark.asyncio
+async def test_a_goal_run_that_cannot_sign_raises_no_ask(provider, board, autonomous_goal_turn,
+                                                          monkeypatch):
+    """Validation 2026-09-27: with DEFI_AUTONOMOUS_TURN_TRADING off, tx_guard step 2
+    refuses every goal-run signature. An ask here was a dead end: the owner tapped,
+    was told 'running it now; the result follows', and no result ever came."""
+    monkeypatch.setenv("DEFI_AUTONOMOUS_TURN_TRADING", "false")
+    monkeypatch.setenv("DEFI_MONITOR_EXITS", "false")
+    assert await provider.request("defi_trade_swap", {"max_spend_usd": 900.0},
+                                  _goal_ctx()) is False
+    assert await provider.request("defi_trade_bridge", {"usd": 91.37}, _goal_ctx()) is False
+    assert board.asks(user_id="u1", status=ASK_OPEN) == []
+
+
+def test_bulk_reject_holds_a_token_identity_question(tmp_path, monkeypatch):
+    """Validation 2026-09-27: rejecting a token-identity item is NOT 'always safe' —
+    each rejected candidate is untrusted, so '/reject all' marked the REAL contract
+    not trusted too, and every later buy of it was refused."""
+    from types import SimpleNamespace
+    from tools.controller import approval_queue as aq
+    monkeypatch.setattr(aq, "all_pending", lambda **kw: SimpleNamespace(
+        items=[{"kind": aq.TOKEN_IDENTITY_ASK_KIND, "id": "ask1.0"},
+               {"kind": "skill", "id": "s1"}],
+        unavailable=[]))
+    decided = []
+    monkeypatch.setattr(aq, "decide_pending",
+                        lambda kind, item_id, **kw: (decided.append((kind, item_id))
+                                                     or (True, "ok")))
+    ok, failed, messages = aq.decide_all_pending(
+        approve=False, user_id="u", home_dir=str(tmp_path), instance_id="i")
+    assert decided == [("skill", "s1")]
+    assert any("ask1.0" in m and "individual" in m for m in messages)

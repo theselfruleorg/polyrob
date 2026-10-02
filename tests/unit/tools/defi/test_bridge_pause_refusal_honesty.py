@@ -20,8 +20,8 @@ import pytest
 
 def _refusal(monkeypatch, *, halted=True):
     import tools.defi.bridge_verb as bv
-    from core.wallet import tx_guard
-    monkeypatch.setattr(tx_guard, "_halted", lambda: halted)
+    from core.config_policy import AutonomyConfig
+    monkeypatch.setattr(AutonomyConfig, "autonomy_halted", staticmethod(lambda: halted))
     return bv._refuse_paused()
 
 
@@ -54,11 +54,12 @@ def test_a_pause_refusal_names_the_remedy(monkeypatch):
     assert "/resume" in text or "resume" in text.lower()
 
 
-def test_a_pause_refusal_says_it_applies_to_the_owner_seat_too(monkeypatch):
-    """The agent told the owner to type /bridge instead. It would have failed
-    identically — the check runs before any seat distinction."""
+def test_a_pause_refusal_says_the_owner_is_not_bound(monkeypatch):
+    """2026-09-26: the pause stops the agent's own work; the owner's own
+    `/bridge … go` passes it (owner_direct_turn). The refusal must say so, so
+    the agent points the owner at his own verb instead of at /resume."""
     text = (_refusal(monkeypatch) or "").lower()
-    assert "/bridge" in text or "your own" in text or "same" in text
+    assert "not bound" in text
 
 
 def test_nothing_refuses_when_not_paused(monkeypatch):

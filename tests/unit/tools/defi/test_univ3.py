@@ -77,7 +77,7 @@ def test_quote_survives_an_rpc_exception():
 def test_exact_input_single_encodes_seven_words_and_no_deadline():
     """SwapRouter02's struct has NO deadline (SwapRouter01 did). An extra word
     shifts every field after it and the call reverts."""
-    data = univ3.build_exact_input_single_data(
+    data = univ3.build_exact_input_single_call(
         token_in="0x" + "11" * 20, token_out="0x" + "22" * 20, fee=500,
         recipient="0x" + "33" * 20, amount_in_raw=1_000_000, amount_out_min_raw=999)
     assert data.startswith(univ3._EXACT_INPUT_SINGLE_SELECTOR)
@@ -90,6 +90,24 @@ def test_exact_input_single_encodes_seven_words_and_no_deadline():
     assert int(words[4], 16) == 1_000_000        # amountIn
     assert int(words[5], 16) == 999              # amountOutMinimum
     assert int(words[6], 16) == 0                # sqrtPriceLimitX96
+
+
+def test_cr_l14_swap_calldata_is_wrapped_in_a_deadline_multicall():
+    """CR-L14: the router calldata is `multicall(deadline, [exactInputSingle])`
+    so an unmined swap reverts after SWAP_DEADLINE_SEC instead of filling late."""
+    from eth_abi import decode
+    kw = dict(token_in="0x" + "11" * 20, token_out="0x" + "22" * 20, fee=500,
+              recipient="0x" + "33" * 20, amount_in_raw=1_000_000,
+              amount_out_min_raw=999)
+    data = univ3.build_exact_input_single_data(now=1_000_000.0, **kw)
+    assert data.startswith("0x5ae401dc")
+    deadline, calls = decode(["uint256", "bytes[]"], bytes.fromhex(data[10:]))
+    assert deadline == 1_000_000 + univ3.SWAP_DEADLINE_SEC
+    assert univ3.SWAP_DEADLINE_SEC <= 600
+    assert len(calls) == 1
+    assert "0x" + calls[0].hex() == univ3.build_exact_input_single_call(**kw)
+    explicit = univ3.build_exact_input_single_data(deadline=42, **kw)
+    assert decode(["uint256", "bytes[]"], bytes.fromhex(explicit[10:]))[0] == 42
 
 
 def test_approve_encodes_the_exact_amount_it_was_given():

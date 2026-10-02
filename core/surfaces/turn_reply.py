@@ -45,6 +45,14 @@ def mark_reply_published(orchestrator, text: str = "") -> None:
             setattr(orchestrator, _TEXT_ATTR, text)
     except Exception:
         logger.debug("turn_reply: reply-text write failed (fail-open)", exc_info=True)
+    # 061: this latch is the ONE place every seat's reply passes, so it is where
+    # an interactive reply joins the owner thread (autonomous replies are
+    # recorded by the delivery rail). Fail-open, never blocks the turn.
+    try:
+        from core.surfaces.user_delivery import record_interactive_reply
+        record_interactive_reply(orchestrator, text)
+    except Exception:
+        logger.debug("turn_reply: owner thread record skipped (fail-open)", exc_info=True)
 
 
 def last_reply_text(orchestrator):

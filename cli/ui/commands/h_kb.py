@@ -41,7 +41,8 @@ async def h_kb(ctx) -> None:
         from cli.commands.kb import _kb_enabled
 
         if not _kb_enabled():
-            ctx.emit("Knowledge base is disabled. (set KB_ENABLED=1)", title="kb")
+            from core.remedy import flag_remedy
+            ctx.emit(f"Knowledge base is disabled. ({flag_remedy('KB_ENABLED')})", title="kb")
             return
     except Exception as exc:  # gate resolution itself failed → treat as disabled
         ctx.emit(f"Knowledge base is unavailable. ({exc})", title="kb")

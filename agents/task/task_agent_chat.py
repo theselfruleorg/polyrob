@@ -446,7 +446,9 @@ class TaskAgentChatMixin:
             session_id = None
 
         # C1: expand @file/@folder/@diff/@url references (opt-in, fail-soft).
-        # Use the session workspace when available; fall back to CWD for new sessions.
+        # Root filesystem refs at the session workspace. A brand-new chat has no
+        # workspace yet, and the process CWD (the install tree on a server) is never a
+        # safe root for a remote caller: refuse @file/@folder/@diff until one exists.
         try:
             from agents.task.constants import AutonomyConfig
             if AutonomyConfig.context_references_enabled():
@@ -454,10 +456,10 @@ class TaskAgentChatMixin:
                     preprocess_context_references,
                 )
                 from agents.task.path import pm
-                import os as _os
-                _root = str(pm().get_workspace_dir(session_id, user_id)) if session_id else _os.getcwd()
+                _root = str(pm().get_workspace_dir(session_id, user_id)) if session_id else None
                 text = preprocess_context_references(
-                    text, root=_root, confine_to_root=True, allow_filesystem=True
+                    text, root=_root, confine_to_root=True,
+                    allow_filesystem=_root is not None,
                 )
         except Exception:
             pass  # fail-soft: leave text unchanged
@@ -525,6 +527,7 @@ class TaskAgentChatMixin:
             if orch and persona:
                 orch._persona_block = persona
 
+        _record_chat_once_owner_line(self, user_id, text, session_id)   # 061
         run_result = await self.run_session(user_id, session_id)
         # Final-review fix (T1.1): a RUN_BUDGET_USD halt ends the turn BEFORE
         # any step runs (or right after one), so `_extract_chat_reply`'s
@@ -544,3 +547,19 @@ class TaskAgentChatMixin:
             if RUN_BUDGET_MARKER in run_result:
                 return run_result
         return self._extract_chat_reply(session_id) or ""
+
+
+def _record_chat_once_owner_line(agent, user_id: str, text: str, session_id: str) -> None:
+    """061: a `chat_once` turn (REST chat, the OpenAI-compatible `/v1` surface)
+    is an owner seat: the authenticated caller's line joins THEIR tenant's thread
+    as `via=api` (the thread is tenant-scoped — a server with many owners has
+    many threads). An anonymous caller leaves no line. Fail-open."""
+    try:
+        from core.identity import is_anonymous
+        if not user_id or is_anonymous(user_id):
+            return
+        from core.surfaces.owner_thread import record_owner_in
+        record_owner_in(getattr(agent, "container", None), str(user_id), text,
+                        via="api", session_id=str(session_id or ""))
+    except Exception:
+        logger.debug("chat_once: owner thread record skipped (fail-open)", exc_info=True)

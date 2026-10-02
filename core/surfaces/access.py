@@ -56,7 +56,10 @@ _LOCAL_OWNER_SURFACES = {"cli", "local", "repl"}
 #: it here would re-open exactly the hole the tier model closes: anyone who can
 #: forge a paired address would reach the obey-path as OWNER. Such a surface is
 #: correspondent-or-denied by construction.
-FORGEABLE_NETWORK_SURFACES = frozenset({"email"})
+#: Derived from the surface catalog's ``forgeable`` rows (064 F1).
+from core.surfaces.catalog import forgeable_ids as _forgeable_ids  # noqa: E402
+
+FORGEABLE_NETWORK_SURFACES = _forgeable_ids()
 
 
 class AccessTier(str, Enum):

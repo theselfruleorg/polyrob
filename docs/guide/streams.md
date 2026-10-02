@@ -25,7 +25,7 @@ polyrob autonomy status      # every axis, the loop state, any active pause
 The goal board and its planner come up with `AUTONOMY_ENABLED` on a local
 install. Cron is a separate switch, `CRON_ENABLED`, which turns on by itself at
 `AUTONOMY_POSTURE=full`. The autonomy axes are explained in
-[configuration.md §5](configuration.md#5-the-autonomy-dial).
+[configuration.md §5](configuration.md#6-the-autonomy-dial).
 
 You can write a goal with autonomy off — the board is just a database. The CLI
 warns you when you do, because nothing will pick it up.
@@ -37,7 +37,8 @@ polyrob autonomy pause            # everything
 polyrob autonomy resume
 ```
 
-In chat, "pause", "stop" and "halt" do the same thing. See
+In chat, `/pause` and `/halt` do the same thing (a plain "stop" is a message
+to the agent, not a switch). See
 [owner-controls.md](owner-controls.md).
 
 ---
@@ -75,7 +76,15 @@ learning loops. Naming the artifact is what turns a claim into a check.
 
 ### From chat
 
-`/task <goal>` starts a job now. `/goals` prints the board summary. `/goal show|ready|pause|resume|retry|cancel <id>` steers one row. `/asks` lists what the
+`/task <goal>` starts a job now. `/goals` prints the board summary. `/goal show|ready|pause|resume|retry|cancel <id>` steers one row.
+
+**`/goal cancel <id>` means never again.** It cancels the row and switches the
+title OFF: no stream seeds it, the planner is told not to propose it, and the
+agent cannot create it (or force it). Add `--once` to stop just this run.
+`/goal allow <id|title>` turns it back on; `/goals` lists what is off in an
+`OFF` section. Each board line also says who asked for the goal — `you launched
+it`, `granted: <stream>`, `you asked for it`, or `I made this one up` — and the
+board sums up as `NOW · STUCK · NEXT · OVER`. `/asks` lists what the
 agent needs from you; `/fulfill <id>` clears it and unblocks the goals behind
 it. The same two asks commands are `polyrob owner asks` and `polyrob owner
 fulfill <id>`, and everything waiting on you is in `polyrob owner inbox`.
@@ -229,10 +238,14 @@ five-field cron expression, or an ISO timestamp for a one-shot. `--max-duration`
 sets the per-run hard cap in seconds (default 180). Jobs are tenant-scoped: you
 can only cancel your own.
 
-From Telegram or the console: `/cron add <schedule> | <task>`, `/cron list`,
-`/cron cancel <id>`, or just ask in plain words ("check the site every morning at
-nine"). The REPL's `/cron` is read-only — schedule and cancel there with
-`polyrob cron`.
+From Telegram or the console: `/cron list`, `/cron show <id>`,
+`/cron add <schedule> | <task> [tools=a,b] [target=<token address> chain=<chain>]`,
+`/cron edit <id> schedule <schedule>` or `/cron edit <id> task <new task>`, and
+`/cron cancel <id>` — or just ask in plain words ("check the site every morning at
+nine"). `tools=` grants the job those tools; `target=` (with its `chain=`) is the
+one token the job may buy. The REPL's `/cron` has the same subverbs, without the
+`|`: `/cron add 30m <task…>` (quote a schedule that has spaces). `/cron edit`
+changes one field and keeps the rest of the job.
 
 Cron needs `CRON_ENABLED`. Two behaviours are worth knowing:
 
@@ -242,6 +255,41 @@ Cron needs `CRON_ENABLED`. Two behaviours are worth knowing:
   review-shaped job skip its paid model call when nothing observable changed
   since the last tick — a $0 tick rather than a model paid to rediscover that.
   A delivery job is never gated.
+
+### Recurring work on the board — rails
+
+A **rail** is an objective with a schedule: on each due tick it seeds its legs
+onto the goal board, where the dispatcher runs them like any other goal (with
+its concurrency, retries and completion judge). Cron runs a *turn* on a clock;
+a rail seeds *work*. Nothing ships one — you create them.
+
+```text
+/rail templates                                   the offers to start from
+/rail new topic-watch topic="AI agents" interval=24h
+/rail                                             ON / OFF / PROPOSED / UNDECLARED
+/rail show topic-watch                            schedule, legs, grants, last seeds
+/rail edit topic-watch schedule "every 12h"
+/rail off topic-watch                             the switch (live legs finish)
+/rail drop topic-watch                            gone; --cancel-live also stops its legs
+```
+
+The same verbs work on Telegram, the console, the REPL and as `polyrob rails …`.
+Schedules use the cron vocabulary above. The tick runs inside the process that
+runs the goal dispatcher, reads the pause first, and waits while you are
+mid-turn.
+
+**A leg never carries tools.** A leg gets the ordinary goal toolset (or the
+rail's rig). To give a rail more — `shell` for a build rail, say — grant it:
+`/rail grant ship-something shell` asks you to confirm, and `/rail revoke` takes
+it away at once. A money tool granted this way does nothing until the money
+regime is armed ([payments.md](payments.md)). Every grant is recorded with who
+made it and when.
+
+The agent may **propose** a rail (`/rail proposals`, then `accept` or
+`dismiss`); a dismissed proposal is never offered again, and accepting one
+grants nothing. `polyrob rails export` writes your rails as YAML and
+`polyrob rails import <file>` reads one back — tools listed in the file become
+*pending* grants that you confirm one by one.
 
 ### Your own stream manifest (optional)
 

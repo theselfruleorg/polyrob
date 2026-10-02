@@ -18,6 +18,9 @@ import logging
 import os
 from typing import Any, Callable, Optional
 
+from core.lazy_views import lazy_module_getattr, view
+from core.verb_policy import ids_where
+
 logger = logging.getLogger(__name__)
 
 
@@ -57,27 +60,15 @@ DEFAULT_ROOM_TOOLS = ("task", "web_fetch", "defi_data")
 #: Action names a room turn may never call, whoever spoke. Groups: deferred
 #: execution (a later owner-tenant run would execute what a stranger planted),
 #: cross-session recall (owner state read back into a public reply), outbound to
-#: other targets, money-adjacent reads, self-modification, control.
-ROOM_DENIED_ACTIONS = frozenset({
-    # deferred execution
-    "goal_create", "goal_ask", "goal_cancel", "cronjob_schedule", "cronjob_cancel",
-    "skill_manage", "self_context_manage", "preferences", "owner_doc_manage",
-    "load_tool", "tool_manage_install", "mcp_install", "self_modify",
-    # recall / owner state
-    "session_search", "memory_search", "memory", "contact_history",
-    "recent_activity", "agent_status", "insights", "usage_summary",
-    # the owner's knowledge base: read AND write (044 C3). `kb_*` is also
-    # denied by PREFIX below, so a future verb cannot be forgotten here.
-    "kb_search", "kb_ingest", "kb_list", "kb_remove",
-    # outbound to anywhere but this room
-    "message", "send_email", "email_send",
-    # money-adjacent
-    "x402_invoice_x402_request", "x402_invoice_accounting", "x402_invoice_x402_invoices",
-    "defi_data_portfolio", "defi_data_positions", "defi_data_reconcile",
-    "defi_data_balances",
-    # delegation / control
-    "delegate_task", "subtask", "parallel_subtasks", "autonomy_control",
-})
+#: other targets, money-adjacent reads, self-modification, control. The owner's
+#: knowledge base (``kb_*``, read AND write, 044 C3) is also denied by PREFIX
+#: below, so a future verb cannot be forgotten here.
+#: 067 P1: a DERIVED view of the per-action policy table (core/verb_policy.py;
+#: rows in core/verb_policy_rows.py) — deny a verb there with ``room_denied``.
+#: 067 P4 prerequisite: LAZY (``core/lazy_views.py``), built on first read after
+#: the pack loader's phase 1 (the module ``__getattr__`` at the end of this file).
+def _room_denied_actions():
+    return ids_where(room_denied=True)
 
 
 #: D60: tool ids a room session may NEVER load, named explicitly, whatever the
@@ -170,37 +161,28 @@ def room_tool_ids() -> list:
 def _is_money_call(name: str, tool_id: Optional[str]) -> bool:
     """Does this call belong to a tool the capability table marks ``money``?
 
-    Resolved by owning tool_id when the caller could resolve one, else by the
-    action-name NAMESPACE (``tools/controller/tool_management.py`` registers every
-    action as ``{tool_id}_{action}``), so the decision survives a controller that
-    cannot answer.
-
-    ⚠️ The namespace fallback matches the LONGEST tool id the name starts with,
-    not any money id: ``polymarket_data`` (read-only market data) and
-    ``polymarket`` (a money tool) share a prefix, so a plain
-    ``startswith("polymarket_")`` would deny every read-only quote as a money
-    verb. Fail-CLOSED: an unreadable capability table denies rather than allows.
+    Resolved by owning tool_id when the caller could resolve one (an EXACT
+    tool id, lower-cased), else by the ONE action predicate
+    ``core.money.classify.money_action`` (verb-policy row, then the LONGEST
+    tool-id namespace — so ``polymarket_data`` reads are not money), so the
+    decision survives a controller that cannot answer. Fail-CLOSED: an
+    unreadable classification denies rather than allows.
     """
     try:
-        from core.tool_capabilities import TOOL_CAPABILITIES, ids_with
-        money = ids_with("money")
-    except Exception as e:  # pragma: no cover - the table is a static dict
+        from core.money.classify import money_action, money_tool_ids
+        if tool_id:
+            return str(tool_id).strip().lower() in money_tool_ids()
+        return bool(money_action(name))
+    except Exception as e:
         logger.warning("room gate: capability table unreadable (denying): %s", e)
         return True
-    if tool_id:
-        return str(tool_id).strip().lower() in money
-    owner = ""
-    for t in TOOL_CAPABILITIES:
-        if (name == t or name.startswith(f"{t}_")) and len(t) > len(owner):
-            owner = t
-    return bool(owner) and owner in money
 
 
 def is_room_denied_call(action_name: Optional[str], tool_id: Optional[str]) -> bool:
     name = str(action_name or "").strip().lower()
     if not name:
         return True  # fail-closed on a nameless call
-    if name in ROOM_DENIED_ACTIONS:
+    if name in view(__name__, "ROOM_DENIED_ACTIONS"):
         return True
     # 044 C3: the owner's knowledge base, by PREFIX — the `knowledge` tool's
     # actions carry no capability bits, so nothing below would catch a verb
@@ -246,3 +228,7 @@ def make_room_gate_hook(get_public: Callable[[], bool],
                     "can do this from their private chat with me.")
         return None
     return _hook
+
+
+# 067 P4 prerequisite: ROOM_DENIED_ACTIONS, built on first read.
+__getattr__ = lazy_module_getattr(__name__, {"ROOM_DENIED_ACTIONS": _room_denied_actions})

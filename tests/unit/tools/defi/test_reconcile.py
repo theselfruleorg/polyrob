@@ -98,14 +98,24 @@ def test_an_unparseable_size_still_yields_the_row():
 # --------------------------------------------------------------------------
 
 def test_the_2026_08_25_incident_is_caught():
-    """Table says flat; chain holds three positions -> three unexplained
-    holdings and a DISAGREEMENT verdict."""
+    """Table says flat; chain holds three positions -> a DISAGREEMENT verdict.
+
+    071 W3: the two PRICED holdings are unexplained by the ledger alone; the
+    UNPRICED one is only caught when the rail store says the rail bought it —
+    without the store an unpriced token in neither book is `unsolicited`."""
+    from tools.defi.reconcile import RailPosition
     holdings = [_held(BASECAT, 28.925134, value=0.89),
                 _held(BOTS, 442232.099224, value=1.26),
                 _held(BASEUNC, 6359.802880, value=None)]
     report = diff([], holdings, quote_addresses=[USDC])
     assert report.verdict == "DISAGREEMENT"
-    assert len(report.unexplained) == 3
+    assert len(report.unexplained) == 2 and len(report.unsolicited) == 1
+    rail = [RailPosition(address=a, symbol="TOK", qty=q) for a, q in
+            ((BASECAT, 28.925134), (BOTS, 442232.099224), (BASEUNC, 6359.802880))]
+    report = diff([], holdings, quote_addresses=[USDC], rail=rail)
+    assert report.verdict == "DISAGREEMENT"
+    assert len(report.unexplained) == 3 and not report.unsolicited
+    assert all("[rail store, not in ledger]" in u for u in report.unexplained)
 
 
 def test_the_reverse_incident_is_caught_too():
@@ -165,11 +175,19 @@ def test_confidently_priced_dust_is_noise_not_a_disagreement():
     assert report.verdict == "CLEAN"
 
 
-def test_unpriced_chain_holdings_are_still_a_disagreement():
-    """BaseUnc had no confident price and was still ledger-real — a missing
-    price must not hide a missing row."""
+def test_unpriced_holding_in_neither_book_is_unsolicited_not_a_disagreement():
+    """071 W3 (TM P0-7): an unpriced airdrop in neither book used to read
+    `unexplained` forever, so a dusted wallet could never be CLEAN and the
+    agent learned to ignore the verdict. Now it is `unsolicited` — named, not
+    an issue. A rail-tracked unpriced holding the ledger omits is still a
+    disagreement: a missing price must not hide a missing row."""
+    from tools.defi.reconcile import RailPosition
     report = diff([], [_held(BASEUNC, 6359.80, value=None)])
-    assert len(report.unexplained) == 1
+    assert report.unexplained == [] and len(report.unsolicited) == 1
+    assert report.verdict == "CLEAN"
+    report = diff([], [_held(BASEUNC, 6359.80, value=None)],
+                  rail=[RailPosition(address=BASEUNC, symbol="BU", qty=6359.80)])
+    assert len(report.unexplained) == 1 and report.verdict == "DISAGREEMENT"
 
 
 def test_a_zero_balance_is_not_a_holding():
@@ -325,3 +343,64 @@ async def test_a_solana_book_cannot_render_clean_over_unchecked_rows(tmp_path, m
         chain="solana", ledger_path=str(ledger))))
     assert "VERDICT: CLEAN" not in out
     assert "not checked here" not in out
+
+
+# --- 2026-09-21: a refused gate is a durable FACT, not a log line ----------------
+#
+# The money rails' step 1 is this verb ("if a real row disagrees, STOP"). On
+# 2026-09-21 it refused every call for 9 h (the ledger had grown past 1 MB) and
+# six rails ran without their gate while every status seat read healthy. A
+# refusal now emits `rail_precondition_failed{tool: reconcile, reason}` so the
+# status snapshot can render a CRIT (tests/unit/core/test_status_snapshot.py).
+
+def _rows(kind):
+    from core.event_log import get_event_log
+    return [r for r in get_event_log().query(limit=50) if r.get("kind") == kind]
+
+
+@pytest.mark.asyncio
+async def test_a_refused_reconcile_is_recorded_as_a_failed_precondition(tmp_path, monkeypatch):
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
+    big = tmp_path / "kb-root-position-ledger.md"
+    big.write_text(("x" * 1_000_001) + LEDGER)  # the table is NOT in the first 1 MB
+    tool = DefiDataTool(holder="0xHOLDER", index_fn=lambda h, chain: {})
+    ctx = type("Ctx", (), {"user_id": "u1", "session_id": "s-1",
+                           "workspace_dir": str(tmp_path)})()
+    res = await tool.reconcile(ReconcileParams(chain="base", ledger_path=str(big)),
+                               execution_context=ctx)
+    assert res.error and "exceeds 1MB" in res.error
+    rows = _rows("rail_precondition_failed")
+    assert len(rows) == 1
+    a = rows[0]["attrs"]
+    assert a["tool"] == "reconcile" and a["chain"] == "base"
+    assert "exceeds 1MB" in a["reason"]
+    assert rows[0]["user_id"] == "u1" and rows[0]["session_id"] == "s-1"
+
+
+@pytest.mark.asyncio
+async def test_a_clean_reconcile_records_no_failed_precondition(tmp_path, monkeypatch):
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
+    (tmp_path / "ledger.md").write_text(FLAT_LEDGER)
+    tool = DefiDataTool(holder="0xHOLDER", index_fn=lambda h, chain: {})
+    res = await tool.reconcile(ReconcileParams(chain="base",
+                                               ledger_path=str(tmp_path / "ledger.md")))
+    assert res.error is None, res.error
+    assert _rows("rail_precondition_failed") == []
+
+
+@pytest.mark.asyncio
+async def test_a_long_run_log_tail_does_not_disable_the_gate(tmp_path, monkeypatch):
+    """2026-09-21: the ledger passed 1 MB because every rail appends its run log
+    BELOW the tables, and the whole-file size cap then refused the money rails'
+    step-1 gate for 9 h. The state table lives at the top; only that section is
+    ever parsed. So the cap now bounds the HEAD that must contain the table, not
+    the file: a legitimate ledger with a long narrative tail reconciles, while a
+    file whose first 1 MB holds no `## Open positions` section still refuses."""
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
+    led = tmp_path / "kb-root-position-ledger.md"
+    led.write_text(FLAT_LEDGER + "\n## Run log\n" + ("- narrative line\n" * 80_000))
+    assert led.stat().st_size > 1_000_000
+    tool = DefiDataTool(holder="0xHOLDER", index_fn=lambda h, chain: {})
+    res = await tool.reconcile(ReconcileParams(chain="base", ledger_path=str(led)))
+    assert res.error is None, res.error
+    assert _rows("rail_precondition_failed") == []

@@ -115,13 +115,17 @@ async def _httpx_fetch(url, *, method="GET", body=None, timeout=None, headers=No
     body (giant / gzip bomb / slow-drip) can't OOM or hang the worker.
     """
     import aiohttp
-    from urllib.parse import urlparse
-    from tools.web_fetch.fetcher import _PinnedResolver
+    from core.security.pinned_resolver import PinnedResolver, url_host_key
 
     total = float(timeout or DEFAULT_TIMEOUT)
-    hostname = urlparse(url).hostname
-    if pinned_ip and hostname:
-        connector = aiohttp.TCPConnector(resolver=_PinnedResolver(hostname, pinned_ip))
+    # The WIRE (IDNA) host — what aiohttp resolves. A Unicode hostname here let
+    # an IDN URL miss the pin and re-resolve freely (H14).
+    hostname = url_host_key(url)
+    if pinned_ip and not hostname:
+        raise ValueError("cannot pin a URL with no usable host")
+    if pinned_ip:
+        connector = aiohttp.TCPConnector(
+            resolver=PinnedResolver(hostname, pinned_ip), use_dns_cache=False)
     else:
         connector = aiohttp.TCPConnector()
 

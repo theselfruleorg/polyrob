@@ -69,13 +69,21 @@ class _Wallet:
         return ME
 
 
-def _quote(out=10_000_000, floor=9_900_000):
+def _quote(out=1_000_000, floor=990_000, *, ti=USDC, to=WSOL, amt=1_000_000):
+    # CR-H03: the quote must be for THE request, and its floor is asserted
+    # against the simulated receipt — the fixture quotes what it was asked
+    # for, with a floor every receipt below clears.
     from tools.defi.providers.jupiter import JupiterQuote
-    return JupiterQuote(chain="solana", token_in=USDC, token_out=WSOL,
-                        amount_in_raw=1_000_000, amount_out_raw=out,
+    return JupiterQuote(chain="solana", token_in=ti, token_out=to,
+                        amount_in_raw=amt, amount_out_raw=out,
                         amount_out_min_raw=floor, venue="jupiter:Orca",
                         raw={"outAmount": str(out),
                              "otherAmountThreshold": str(floor)})
+
+
+def _clean_screen():
+    from tools.defi.providers.base import ScreenVerdict
+    return ScreenVerdict(available=True, checks={"transfer_fee": "no"})
 
 
 def _params(**kw):
@@ -87,13 +95,17 @@ def _params(**kw):
 def _tool(wallet=None, *, deltas=None, **kw):
     from core.wallet.solana_simulation import SolanaDeltas
     deltas = deltas if deltas is not None else SolanaDeltas(
-        ok=True, token_deltas={USDC: -1_000_000})
+        ok=True, fee_lamports=5_000, token_deltas={USDC: -1_000_000}, native_delta=1_000_000)
     defaults = dict(
         wallet=wallet or _Wallet(),
         solana_decimals_fn=lambda m: 6,
-        solana_quote_fn=lambda *a, **k: _quote(),
+        solana_quote_fn=lambda ti, to, amt, **k: _quote(ti=ti, to=to, amt=amt),
         solana_build_fn=lambda *a, **k: b"\x01",
         solana_simulate_fn=lambda **k: deltas,
+        # CR-M05: the blockhash check reads the pinned RPC; fixtures say valid.
+        solana_blockhash_fn=lambda raw: (True, "valid"),
+        # CR-L10: a buy of a non-pinned mint is screened; fixtures screen clean.
+        solana_screen_fn=lambda mint: _clean_screen(),
     )
     defaults.update(kw)
     return DefiTradeTool(**defaults)
@@ -116,7 +128,7 @@ async def test_an_unobserved_outflow_token_refuses():
     the outflow assertion silently not running — the one check that bounds how
     much may leave — so it must refuse, not proceed."""
     from core.wallet.solana_simulation import SolanaDeltas
-    deltas = SolanaDeltas(ok=True, token_deltas={USDC: 4_000_000})
+    deltas = SolanaDeltas(ok=True, fee_lamports=5_000, token_deltas={USDC: 4_000_000})
     tool = _tool(deltas=deltas, price_fn=lambda c, a: 1.0)
     res = await tool.solana_swap(
         _params(token_in=MEME, token_out=USDC, amount_in=1.0,
@@ -131,7 +143,7 @@ async def test_an_unobserved_outflow_token_refuses():
 async def test_an_observed_outflow_token_still_passes():
     """The fail-closed rule must not refuse an ordinary, fully observed swap."""
     from core.wallet.solana_simulation import SolanaDeltas
-    deltas = SolanaDeltas(ok=True, token_deltas={MEME: -1_000_000,
+    deltas = SolanaDeltas(ok=True, fee_lamports=5_000, token_deltas={MEME: -1_000_000,
                                                  USDC: 4_000_000})
     tool = _tool(deltas=deltas, price_fn=lambda c, a: 1.0)
     res = await tool.solana_swap(
@@ -266,7 +278,7 @@ async def test_a_native_sol_sell_is_not_a_rent_drain():
     a SOL drain and cannot tell one from a declared SOL sell on its own.
     """
     from core.wallet.solana_simulation import SolanaDeltas
-    deltas = SolanaDeltas(ok=True,
+    deltas = SolanaDeltas(ok=True, fee_lamports=5_000,
                           native_delta=-930_000_000,          # the sell itself
                           token_deltas={USDC: 186_000_000})   # ~$186 received
     res = await _sol_tool(deltas).solana_swap(_sol_params())
@@ -278,7 +290,7 @@ async def test_a_native_sol_sell_is_observed_through_the_native_delta():
     """The wSOL account never appears, and that must NOT read as unobserved:
     the observation exists, it is just denominated in lamports."""
     from core.wallet.solana_simulation import SolanaDeltas
-    deltas = SolanaDeltas(ok=True, native_delta=-930_000_000,
+    deltas = SolanaDeltas(ok=True, fee_lamports=5_000, native_delta=-930_000_000,
                           token_deltas={USDC: 186_000_000})
     res = await _sol_tool(deltas).solana_swap(_sol_params())
     assert res.error is None or "could not observe" not in res.error
@@ -290,7 +302,7 @@ async def test_folding_native_sol_still_bounds_the_declared_amount():
     the simulation moves 2 SOL must still refuse — otherwise the fix would
     trade one blind spot for a far worse one."""
     from core.wallet.solana_simulation import SolanaDeltas
-    deltas = SolanaDeltas(ok=True,
+    deltas = SolanaDeltas(ok=True, fee_lamports=5_000,
                           native_delta=-2_000_000_000,        # 2 SOL leaves
                           token_deltas={USDC: 400_000_000})
     res = await _sol_tool(deltas).solana_swap(_sol_params(amount=0.93))
@@ -303,7 +315,7 @@ async def test_a_wrapped_wsol_account_and_native_sol_are_summed():
     """A partially-wrapped wallet spends from BOTH: the token account and the
     native balance. Counting only one under-reports the true outflow."""
     from core.wallet.solana_simulation import SolanaDeltas
-    deltas = SolanaDeltas(ok=True,
+    deltas = SolanaDeltas(ok=True, fee_lamports=5_000,
                           native_delta=-500_000_000,
                           token_deltas={WSOL: -1_500_000_000,
                                         USDC: 400_000_000})
@@ -318,7 +330,7 @@ async def test_a_non_sol_swap_still_refuses_an_unexplained_native_move():
     while 0.5 SOL quietly leaves is exactly the drain it exists to catch, and
     the SOL carve-out must not disarm it."""
     from core.wallet.solana_simulation import SolanaDeltas
-    deltas = SolanaDeltas(ok=True,
+    deltas = SolanaDeltas(ok=True, fee_lamports=5_000,
                           native_delta=-500_000_000,
                           token_deltas={MEME: -1_000_000, USDC: 4_000_000})
     tool = _tool(deltas=deltas, price_fn=lambda c, a: 1.0)
@@ -334,7 +346,7 @@ async def test_a_sol_sell_that_moves_nothing_natively_still_refuses():
     """Fold or not, a swap that moves no SOL at all is not a SOL swap. Zero
     must never be mistaken for a small, acceptable outflow."""
     from core.wallet.solana_simulation import SolanaDeltas
-    deltas = SolanaDeltas(ok=True, native_delta=0,
+    deltas = SolanaDeltas(ok=True, fee_lamports=5_000, native_delta=0,
                           token_deltas={USDC: 186_000_000})
     res = await _sol_tool(deltas).solana_swap(_sol_params())
     assert res.error, "no observed SOL outflow must refuse"

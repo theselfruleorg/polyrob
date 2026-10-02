@@ -32,7 +32,12 @@ class _State:
 
 
 def _render(results):
-    return AgentMessagePrompt(state=_State(), result=results).get_user_message(use_vision=False).content
+    # F14: the `Action result N/M:` render is the LEGACY no-native-tools path — on
+    # the native path the results are already in history as ToolMessages and are not
+    # re-rendered at all. These cases pin the legacy render, so say so explicitly.
+    return AgentMessagePrompt(
+        state=_State(), result=results, results_in_tool_messages=False
+    ).get_user_message(use_vision=False).content
 
 
 def test_state_message_honours_the_tool_result_token_cap(monkeypatch):

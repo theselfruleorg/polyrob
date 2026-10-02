@@ -142,6 +142,16 @@ class RunLoopMixin:
 	its constructor core (P9). Agent composes RunLoopMixin; callers use agent.run()
 	unchanged via MRO. Imports above are service.py's (incl. module-level logger)."""
 
+	def _action_registered(self, name: str) -> bool:
+		"""True when *name* is a registered action this run can call (F2). An
+		introspection miss answers False: the caller only uses it to decide
+		whether a nudge toward that action can be satisfied."""
+		try:
+			controller = getattr(self, "controller", None)
+			return bool(controller) and name in set(controller.get_action_names())
+		except Exception:
+			return False
+
 	@controlled_run
 	async def run(self, max_steps: int = 100, _continue_session: bool = False) -> AgentHistoryList:
 			"""Run agent for the task.
@@ -533,24 +543,27 @@ class RunLoopMixin:
 						# AutonomyConfig.verify_before_done() (env VERIFY_BEFORE_DONE, default
 						# off, ON under POLYROB_LOCAL) — off is byte-identical to legacy.
 						from agents.task.constants import AutonomyConfig
-						from agents.task.runtime.edit_verify import edited_since_last_test
+						from agents.task.runtime.edit_verify import (
+							edited_since_last_test, verify_nudge_applies)
+						# F2: name the REAL action (``coding_run_tests``, built by the one
+						# naming rule) and skip the nudge when this run cannot call it —
+						# a nudge toward an unloaded tool cannot be satisfied. A nudge is
+						# a runtime correction, not a failure: it no longer bumps
+						# consecutive_failures (the 2-attempt cap is the bound).
+						from core.action_names import namespaced_action_name
+						_test_action = namespaced_action_name("coding", "run_tests")
 						if (AutonomyConfig.verify_before_done()
 								and self._verify_nudge_count < 2
-								and edited_since_last_test(self.orchestrator)):
+								and self._action_registered(_test_action)
+								and edited_since_last_test(self.orchestrator)
+								and verify_nudge_applies(self.orchestrator)):
 							self._verify_nudge_count += 1
-							self.message_manager.inject_user_guidance([{
-								"text": (
-									"You edited code this run but have no fresh passing test-run "
-									"in your action ledger. Run tests (run_tests) and confirm they "
-									"pass before calling done() again."
-								),
-								"kind": "intervention",
-								"metadata": {
-									"source": "verify_before_done",
-									"attempt": self._verify_nudge_count,
-								},
-							}])
-							self.state.consecutive_failures += 1
+							self.message_manager.inject_runtime_guidance(
+								"You edited code this run but have no fresh passing test run "
+								f"in your action ledger. Call {_test_action} and confirm the "
+								"tests pass before you call done() again.",
+								origin=MessageOrigin.INTERVENTION,
+								source="verify_before_done")
 							continue
 
 						# CO-F1: judge the FINAL answer, not an intermediate step. This

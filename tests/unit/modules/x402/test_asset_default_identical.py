@@ -76,6 +76,6 @@ def test_the_legacy_asset_column_still_reads_usdc_for_a_default_invoice():
 def test_every_new_flag_has_a_catalog_row():
     from core.flags_catalog import CATALOG
     names = {row[0] for row in CATALOG}
-    for flag in ("PAYMENT_ASSETS_ENABLED", "PAYMENT_DEFAULT_ASSET",
-                 "PAYMENT_QUOTE_MAX_AGE_SEC"):
+    # PAYMENT_ASSETS_ENABLED was a row with no reader (067 F2 deleted it).
+    for flag in ("PAYMENT_DEFAULT_ASSET", "PAYMENT_QUOTE_MAX_AGE_SEC"):
         assert flag in names, f"{flag} has no docs/CONFIGURATION.md row"

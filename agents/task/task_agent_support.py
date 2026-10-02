@@ -64,6 +64,17 @@ class SessionRequest:
     temperature: float = 0.0
     use_vision: bool = True
     session_config: Optional[Dict[str, Any]] = None
+    #: 060 WS-5: skill ids the rail pins (`payload.skills`) — seeded into the
+    #: session regardless of keyword matching. None = today's matching only.
+    skills: Optional[List[str]] = None
+    #: 025: the goal this session serves and its memory scope (label + regime),
+    #: minted by the dispatcher / cron runner — never by the agent. None = shared.
+    goal_id: Optional[str] = None
+    memory_scope: Optional[str] = None
+    memory_regime: Optional[str] = None
+    #: 068 G2: the run's declared buy target (``core.wallet.buy_target``), normalized
+    #: by the cron runner / goal dispatcher from ``payload.target_token``.
+    money_target: Optional[Dict[str, str]] = None
 
     def __post_init__(self):
         if self.tools is None:
@@ -118,6 +129,24 @@ def room_session_source(session_source) -> bool:
         logging.getLogger(__name__).debug(
             "public-session stamp probe failed (treating as private): %s", e)
         return False
+
+
+def memory_scope_fields(request: dict) -> dict:
+    """025: the three optional scope keys of a dict-shaped request (absent = None)."""
+    return {k: request.get(k) for k in ("goal_id", "memory_scope", "memory_regime")}
+
+
+def bind_memory_scope(session_id: str, request) -> None:
+    """025: bind *session_id* to its memory scope (from a ``SessionRequest`` or the
+    persisted ``request`` dict on recreate). Flag-off / shared = unbound. Fail-open."""
+    try:
+        from modules.memory.scope import bind_session_scope
+        get = request.get if isinstance(request, dict) else (
+            lambda k: getattr(request, k, None))
+        bind_session_scope(session_id, get("memory_scope"), get("memory_regime"))
+    except Exception as e:  # pragma: no cover - a binding must never break a session
+        import logging
+        logging.getLogger(__name__).debug("memory scope bind skipped: %s", e)
 
 
 def build_session_metadata(session_request, *, effective_tool_ids, public_session) -> dict:

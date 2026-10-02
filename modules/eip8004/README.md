@@ -341,7 +341,7 @@ The registration file is a JSON document that the Identity Registry's `tokenURI`
 | `type` | Yes | Schema identifier, must be `https://eips.ethereum.org/EIPS/eip-8004#registration-v1` |
 | `name` | Yes | Agent name (ERC-721 compatible) |
 | `description` | Yes | Human-readable description of agent capabilities |
-| `image` | No | Agent avatar/logo URL. ⚠️ OMITTED when there is no public base URL to serve it from — a link that does not resolve is worse than an absent field. `metadata.avatar` carries generator/seed/variant so the face stays reproducible either way. |
+| `image` | No | Agent avatar/logo URL. ⚠️ OMITTED when there is no public base URL to serve it from — a link that does not resolve is worse than an absent field. Otherwise `{base}/avatar.png` (or the public https URL the avatar was set from). `metadata.avatar` carries the image's `source` and `sha256`. |
 | `endpoints` | Yes | Array of protocol endpoints |
 | `registrations` | Should | On-chain registration references |
 | `supportedTrust` | No | Trust models this agent supports |

@@ -4,8 +4,7 @@ Task 2 — SKILL_OVERWRITE_PROTECT guard:
 - An agent/background overwrite of an existing ACTIVE skill must be forced to .pending
   (not silently clobber the curated body).
 - Any overwrite (including owner) archives the prior body to .archived/<skill_id>/.
-- BUG 2 fix: overwriting a SYSTEM skill id (in skill_rules) also forces .pending for
-  non-user authors, even if no user-side active file exists yet.
+- BUG 2 fix / D1: a SYSTEM skill id (in skill_rules) is refused for every author.
 - BUG 5 fix: two rapid overwrites of the same skill produce two distinct archive files.
 """
 from agents.task.agent.skill_manager import SkillManager
@@ -50,11 +49,9 @@ def test_owner_overwrite_archives_prior_body(tmp_path, monkeypatch):
 # ── BUG 2 fix: system-skill id shadows must be forced to .pending ────────────
 
 def test_agent_cannot_silently_shadow_system_skill(tmp_path, monkeypatch):
-    """BUG 2: overwriting a curated SYSTEM skill id (present in skill_rules but with NO
-    user-side active file) must be forced to .pending when SKILL_OVERWRITE_PROTECT=true.
-    Before the fix, overwriting_active was always False here (active_file.exists() == False)
-    so a PROVENANCE_AGENT write would land ACTIVE, silently shadowing the system skill.
-    """
+    """BUG 2 / review 2026-09-29 D1: a curated SYSTEM skill id (present in
+    skill_rules) is REFUSED outright — not staged to .pending, where a later
+    promote would replace the system body, triggers and gate."""
     monkeypatch.setenv("SKILL_OVERWRITE_PROTECT", "true")
     sm = _mk(tmp_path)
     # Seed skill_rules to simulate a curated system skill — no actual file on disk.
@@ -64,12 +61,10 @@ def test_agent_cannot_silently_shadow_system_skill(tmp_path, monkeypatch):
         "web-research", body, user_id="u1",
         created_by=PROVENANCE_AGENT, pending=False,
     )
-    assert result.ok, f"expected ok but got errors: {result.errors}"
-    assert result.pending, "overwrite of a system skill id must be forced to .pending"
-    # No active file written.
+    assert not result.ok
+    assert "builtin or pack skill" in result.errors[0]
     assert not (tmp_path / "user_u1" / "web-research" / "SKILL.md").exists()
-    # Pending file IS there.
-    assert (tmp_path / "user_u1" / ".pending" / "web-research" / "SKILL.md").exists()
+    assert not (tmp_path / "user_u1" / ".pending" / "web-research" / "SKILL.md").exists()
 
 
 # ── BUG 5 fix: collision-safe archive names ───────────────────────────────────

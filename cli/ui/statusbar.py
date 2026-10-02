@@ -101,6 +101,17 @@ def _activity_segment(state: SessionState) -> str:
     return ""
 
 
+def _cache_hit(state) -> float:
+    """The session's cache-hit % for the bar, or 0.0 when unknown (F18)."""
+    reader = getattr(state, "cache_hit_percent", None)
+    if not callable(reader):
+        return 0.0
+    try:
+        return float(reader() or 0.0)
+    except Exception:
+        return 0.0
+
+
 def cost_text(state: SessionState) -> str:
     if state.unpriced_calls:
         return (f"${state.cost_estimate_total:.4f} + unknown"
@@ -133,6 +144,12 @@ def _segments(state: SessionState, spinner: str = "") -> List[str]:
 
     if state.ctx_percent:
         segs.append(f"ctx {state.ctx_percent:.0f}%")
+
+    # F18: what the provider actually served from cache. Omitted when unknown —
+    # a seat that never reports the field must not read as a 0 % hit rate.
+    _cache_pct = _cache_hit(state)
+    if _cache_pct > 0:
+        segs.append(f"cache {_cache_pct:.0f}%")
 
     segs.append(cost_text(state))
 
@@ -274,6 +291,11 @@ def status_formatted(
 
     if state.ctx_percent:
         fragments.append((_ctx_class(state.ctx_percent), f"ctx {state.ctx_percent:.0f}%"))
+        fragments.append(("", sep))
+
+    _cache_pct = _cache_hit(state)
+    if _cache_pct > 0:
+        fragments.append(("class:toolbar.cost", f"cache {_cache_pct:.0f}%"))
         fragments.append(("", sep))
 
     fragments.append(("class:toolbar.cost", cost_text(state)))

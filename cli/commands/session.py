@@ -20,6 +20,7 @@ from cli.session_paths import session_directory
 _SESSION_HELP_SECTIONS = [
     ("Inspect", ["list", "show", "history", "tail", "artifacts", "costs", "tools"]),
     ("Control", ["cancel", "pause", "resume", "export"]),
+    ("Housekeeping", ["prune"]),
 ]
 
 
@@ -652,3 +653,75 @@ def session_tools(session_id: str, as_json: bool):
                 click.echo(f"  {name}: {count}")
         else:
             click.echo("  (no tool calls found)")
+
+
+# ---------------------------------------------------------------------------
+# session prune (WS-K2, 2026-09-22)
+# ---------------------------------------------------------------------------
+
+@session.command("prune")
+@click.option("--days", default=None, type=int,
+              help="Keep trees newer than this (default: SESSION_RETENTION_DAYS).")
+@click.option("--dry-run", is_flag=True,
+              help="Name what would go and what is kept, and delete nothing.")
+@click.option("--max", "max_removals", default=None, type=int,
+              help="Remove at most N trees in this run.")
+@click.option("--yes", is_flag=True, help="Do not ask before deleting.")
+def session_prune(days, dry_run: bool, max_removals, yes: bool):
+    """Delete session trees past the retention window.
+
+    Measured on prod 2026-09-22: 2,449 trees, 5.0 GB, 694 of them older than 30
+    days, and no retention policy of any kind.
+
+    A tree is KEPT regardless of age when it holds a registered artifact, when
+    a live goal names it, or when a worker still owns it. An unreadable goal
+    board or artifact registry REFUSES the whole sweep — nothing is deleted on
+    a read that did not answer.
+    """
+    from cli._admin_home import admin_data_dir
+    from core.session_retention import (
+        KEEP_ARTIFACT, KEEP_CAP, KEEP_GOAL, KEEP_RECENT, KEEP_REGISTERED,
+        MAX_REMOVALS_PER_SWEEP, apply_sweep, plan_sweep,
+    )
+
+    data_dir = admin_data_dir(write=not dry_run)
+    try:
+        plan = plan_sweep(data_dir, days=days,
+                          max_removals=(MAX_REMOVALS_PER_SWEEP
+                                        if max_removals is None else int(max_removals)))
+    except RuntimeError as exc:
+        click.echo(click.style(f"refused: {exc}", fg="red"))
+        raise SystemExit(1)
+
+    for err in plan.errors:
+        click.echo(click.style(f"  {err}", dim=True))
+    if not plan.scanned and plan.errors:
+        raise SystemExit(2)
+
+    kept = " · ".join(
+        f"{plan.kept_for(r)} {label}" for r, label in (
+            (KEEP_RECENT, "recent"), (KEEP_ARTIFACT, "hold an artifact"),
+            (KEEP_GOAL, "named by a goal"), (KEEP_REGISTERED, "owned by a worker"),
+            (KEEP_CAP, "over this run's cap"))
+        if plan.kept_for(r))
+    click.echo(click.style(
+        f"{plan.scanned} trees scanned · {len(plan.remove)} to remove · "
+        f"kept: {kept or 'none'}", fg="cyan"))
+
+    if not plan.remove:
+        return
+    for path in plan.remove[:20]:
+        click.echo(f"  {path}")
+    if len(plan.remove) > 20:
+        click.echo(f"  … +{len(plan.remove) - 20} more")
+    if dry_run:
+        return
+    if not yes and not click.confirm(
+            f"Delete {len(plan.remove)} session trees? This cannot be undone"):
+        click.echo("cancelled")
+        return
+    out = apply_sweep(plan)
+    for err in plan.errors:
+        click.echo(click.style(f"  {err}", dim=True))
+    click.echo(click.style(
+        f"removed {out['removed']} · failed {out['failed']}", fg="green"))

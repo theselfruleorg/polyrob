@@ -53,8 +53,14 @@ async def collect_provenance(orchestrator: Any) -> Dict[str, Any]:
     metadata nor the goal/cron board carry cost or step totals.
 
     - spend_usd: ``orchestrator.usage_tracker.get_session_breakdown(session_id)``
-      (the same per-session cost the run-loop's own cost-summary log line uses),
-      read as ``total_user_cost_usd``.
+      read as ``total_api_cost_usd`` — the provider's real charge, the same
+      figure ``core/status_economics.py`` renders. NOT ``total_user_cost_usd``:
+      that is the platform BILLING figure (credits × $0.01, every call rounded
+      UP to a whole credit), ~4× the API cost on the owner's own seat, and until
+      2026-09-21 it fed the rail ledger, the episodic digest, goal-event
+      provenance and the owner digest as an unlabelled "spend". On a single-
+      owner deploy the owner IS the payer. The billed figure is carried
+      separately as ``billed_usd`` for the seats platform billing needs.
     - steps: sum of ``agent.state.n_steps`` across the orchestrator's non-sub-agent
       agents (``orchestrator.agents``, skipping ``agent._is_sub_agent``).
     - artifacts: the evidence pack's bounded, no-LLM collector (B4/D4 — ledger
@@ -82,7 +88,8 @@ async def collect_provenance(orchestrator: Any) -> Dict[str, Any]:
         session_id = getattr(orchestrator, "session_id", None)
         if tracker is not None and session_id:
             breakdown = await tracker.get_session_breakdown(session_id)
-            out["spend_usd"] = float(breakdown.get("total_user_cost_usd", 0.0) or 0.0)
+            out["spend_usd"] = float(breakdown.get("total_api_cost_usd", 0.0) or 0.0)
+            out["billed_usd"] = float(breakdown.get("total_user_cost_usd", 0.0) or 0.0)
     except Exception:
         pass
     try:

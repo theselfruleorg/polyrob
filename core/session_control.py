@@ -72,6 +72,29 @@ class SessionControl:
             conn.execute("UPDATE control SET request=?, acknowledged='pending' WHERE id=1", (command,))
             return row["generation"]
 
+    async def request_and_wait(self, command, timeout=2.0):
+        """Request *command* and wait up to *timeout* s for the step-boundary ack.
+
+        Returns the acknowledged state (``paused``/``running``/``cancelled``),
+        ``"pending"`` when the run has not reached a step boundary yet, or
+        ``None`` when no live run holds this mailbox. The ONE wait loop the CLI
+        ``polyrob session`` verbs and the owner ``/run`` verb share.
+        """
+        import asyncio
+        import time
+
+        generation = self.request(command)
+        if generation is None:
+            return None
+        expected = {"pause": "paused", "cancel": "cancelled", "resume": "running"}[command]
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            row = self.read()
+            if row and row["generation"] == generation and row["acknowledged"] == expected:
+                return expected
+            await asyncio.sleep(0.05)
+        return "pending"
+
     def acknowledge(self, generation, request, state):
         with self._connect() as conn:
             conn.execute("UPDATE control SET acknowledged=? WHERE id=1 AND generation=? AND request=?", (state, generation, request))

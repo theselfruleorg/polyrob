@@ -8,10 +8,12 @@ frontmatter round-trip would silently arm live trading, so pin both the on-disk
 import json
 from pathlib import Path
 
+import pytest
+
 from agents.task.agent.skill_frontmatter import parse_frontmatter, parse_bool
 
-# repo-root anchored (not CWD-relative) so the test is location-robust
-_SKILLS = Path(__file__).resolve().parents[4] / "data" / "prompts" / "skills"
+# 067 P4: both trading skills ship in the markets pack (its skills/ + rules.json).
+_SKILLS = Path(pytest.importorskip("polyrob_markets").__file__).parent / "skills"
 GATED = ("polymarket-trading", "hyperliquid-trading")
 
 

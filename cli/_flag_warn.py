@@ -9,8 +9,9 @@ delegated here).
 
 Contract: WARN, never block — the write is still durable state the loop can
 use the moment the flag turns on. The note goes to STDERR so `--json` output
-stays machine-readable. The remedy line follows the house grammar
-(`polyrob config set KEY true --global`, restart to apply).
+stays machine-readable. The remedy line is ``core.remedy.flag_remedy`` — the
+ONE grammar (`enable: `polyrob config set KEY true --global` (takes effect:
+restart)`).
 """
 from typing import Callable, Optional
 
@@ -32,8 +33,11 @@ def warn_if_flag_off(key: str, consequence: str, *,
             return False
     except Exception:
         pass
-    remedy = remedy or f"polyrob config set {key} true --global"
+    if remedy:
+        line = f"enable: `{remedy}` (takes effect: restart)"
+    else:
+        from core.remedy import flag_remedy
+        line = flag_remedy(key)
     click.echo(click.style(
-        f"note: {key} is off — {consequence} "
-        f"Enable: `{remedy}` (takes effect: restart).", fg="yellow"), err=True)
+        f"note: {key} is off — {consequence} {line}.", fg="yellow"), err=True)
     return True

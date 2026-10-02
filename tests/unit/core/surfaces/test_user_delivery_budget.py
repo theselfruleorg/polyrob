@@ -180,7 +180,7 @@ def test_sent_row_carries_the_text():
 # --- C3: lifecycle chatter stays out of the owner's recovery store ----------
 
 def test_capped_lifecycle_ping_writes_no_owner_notice(monkeypatch):
-    monkeypatch.setenv("USER_DELIVERY_LIFECYCLE_DAILY_CAP", "1")
+    monkeypatch.setattr("core.surfaces.user_delivery._lifecycle_daily_cap", lambda *a, **k: 1)
     sink, ev = _Sink(), _EvLog()
     c = _Container({"telegram_sink": sink})
     assert _deliver(c, "12345", "▶ goal started: one", source="lifecycle",

@@ -67,9 +67,6 @@ from core.config_policy.compute_posture import (  # noqa: F401
     compute_posture_allows,
 )
 from core.config_policy.payment_policy import (  # noqa: F401
-    PAYMENT_APPROVAL_TOOLS,
-    PAYMENT_RECEIVE_APPROVAL_TOOLS,
-    VERB_OWNED_APPROVAL_GATES,
     _FROZEN_APPROVAL_GRANT_TTL_HOURS,
     _FROZEN_PAYMENT_APPROVAL_MODE,
     _FROZEN_PAYMENT_APPROVAL_TIMEOUT_SEC,
@@ -113,3 +110,11 @@ from core.config_policy.autonomy_config import (  # noqa: F401
 from core.config_policy.runtime_gates import (  # noqa: F401
     embedder_needed,
 )
+
+# 067 P4 prerequisite: PAYMENT_APPROVAL_TOOLS, PAYMENT_RECEIVE_APPROVAL_TOOLS and
+# VERB_OWNED_APPROVAL_GATES are lazy views (core/config_policy/payment_tools.py);
+# re-exported lazily so importing this facade does not build them.
+from core.config_policy import payment_tools as _payment_tools  # noqa: E402
+from core.lazy_views import lazy_module_getattr as _lazy, reexport_map as _reexport  # noqa: E402
+
+__getattr__ = _lazy(__name__, {}, _reexport(_payment_tools.__name__, _payment_tools.LAZY_VIEWS))

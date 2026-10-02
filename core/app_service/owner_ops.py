@@ -13,7 +13,11 @@ from core.app_service.registry import (
     STATUS_PENDING, STATUS_STOPPED, AppServiceRegistry,
 )
 
-APPROVE_HINTS = "polyrob apps approve <slug> · /apps approve <slug> · console → Apps"
+# The chat seats (Telegram, REPL, console) name the slash verb and the console;
+# a shell verb there is not a command the owner can type. The `polyrob apps`
+# CLI passes CLI_APPROVE_HINTS instead.
+APPROVE_HINTS = "/apps approve <slug> · console → Apps"
+CLI_APPROVE_HINTS = "polyrob apps approve <slug>"
 
 
 def _emit(kind: str, user_id: str, attrs: Dict[str, Any]) -> None:
@@ -67,7 +71,8 @@ APPS_EMPTY_LINE = ("no apps yet — the agent deploys one with its app_service "
                    "appears here as pending until you approve it")
 
 
-def list_lines(registry: AppServiceRegistry, user_id: str) -> List[str]:
+def list_lines(registry: AppServiceRegistry, user_id: str, *,
+               approve_hint: str = APPROVE_HINTS) -> List[str]:
     rows = registry.list_for(user_id)
     if not rows:
         # C47: ONE empty grammar on every seat (core renders for all four), and
@@ -85,7 +90,7 @@ def list_lines(registry: AppServiceRegistry, user_id: str) -> List[str]:
             tail = f" (health {_hhmm(r['last_health'])})"
         lines.append(f"- {r['slug']} [{r['status']}] {where(r)}{tail}")
     if any(r["status"] == STATUS_PENDING for r in rows):
-        lines.append(f"approve: {APPROVE_HINTS}")
+        lines.append(f"approve: {approve_hint}")
     return lines
 
 
@@ -113,7 +118,11 @@ def approve(registry: AppServiceRegistry, slug: str, user_id: str, *, via: str) 
         return False, f"no app {slug!r} for this tenant"
     if r["status"] != STATUS_PENDING:
         return False, f"{slug!r} is {r['status']}, not pending (approval sticks to the address)"
-    if not registry.mark_approved(slug, user_id):
+    try:
+        signed = registry.mark_approved(slug, user_id)
+    except PermissionError as e:  # this seat cannot read the approval key (H07)
+        return False, f"{slug!r} not approved: {e}"
+    if not signed:
         return False, f"{slug!r} could not be approved (state changed underneath)"
     from core.event_kinds import APP_APPROVED
     _emit(APP_APPROVED, user_id, {"slug": slug, "by": "owner", "via": via})

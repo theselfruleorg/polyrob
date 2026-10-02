@@ -74,6 +74,45 @@ def _write_doc(writer, params, *, user_id: str, created_by: str, immediate: bool
 	return res, None
 
 
+def _sweep_report(controller, rule: str, user_id: str, data_dir: str) -> str:
+	"""060 WS-4: run the core sweep with the skill texts this tier can reach."""
+	from core.instance import resolve_instance_id
+	from core.runtime_paths import cron_db_path, goals_db_path
+	from core.rules_sweep import render_sweep, sweep
+	skills = None
+	try:
+		from agents.task.agent.skill_manager import get_skill_manager
+		sm = get_skill_manager()
+		skills = [(sid, sm._load_skill_content(sid, user_id=user_id) or "")
+		          for sid in sm.get_skill_ids()]
+	except Exception as e:
+		logger.info("rules sweep: skills not swept (%s)", e)
+	result = sweep(rule, user_id=user_id, data_dir=data_dir,
+	               instance_id=resolve_instance_id(), cron_db=cron_db_path(data_dir),
+	               goals_db=goals_db_path(data_dir), skills=skills)
+	return render_sweep(result, rule)
+
+
+def _sweep_new_rules(controller, before: str, after: str, user_id: str,
+                     data_dir: str) -> str:
+	"""After an owner rule is in effect, name what it overrides (advisory).
+	Empty when nothing contradicts it or the sweep cannot run — the write
+	already succeeded, and a sweep fault must not read as a failed write."""
+	try:
+		from core.doc_claims import changed_lines, split_superseded, strip_stamp
+		added = [strip_stamp(l).strip() for l in
+		         changed_lines(split_superseded(before or "")[0], split_superseded(after or "")[0])]
+		if not added:
+			return ""
+		report = _sweep_report(controller, "\n".join(added), user_id, data_dir)
+		if "may contradict it" not in report:
+			return ""
+		return "\n\n" + report
+	except Exception as e:
+		logger.warning("rules sweep after an owner-rule write failed: %s", e)
+		return ""
+
+
 def _applied_now_text(label: str, summary: str) -> str:
 	"""035 P1-11 — report-after. The owner asked for this on THIS turn, so the
 	report belongs in the reply, not in another proactive push competing for the
@@ -91,15 +130,29 @@ def _queued_text(label: str, kind: str, user_id: str, queue_depth: int = 0) -> s
 	can drop: the reply carries the ask, and when the queue has grown it says so
 	and offers the one command that clears it. A queue of four unreviewed
 	proposals is what the incident actually looked like from the owner's side.
+
+	⚠ 2026-09-21: the token printed here was `/approve owner_doc:rob`, which is
+	NOT TAPPABLE. Telegram auto-links exactly one `/word` of `[A-Za-z0-9_]` and
+	the argument is neither linked nor sent, so the only tappable half did
+	nothing. On 09-20 the owner tapped three times over eight minutes and
+	promoted nothing; the rule sat inert for 27 hours while the agent kept
+	breaking it. The decision token is now rendered by the ONE SSOT every other
+	owner surface uses (`self_evolution.pending_tap_token`), so what the owner
+	taps and what the router resolves cannot drift. `/approve all` (a space) had
+	the same defect and becomes `/approve_all`.
 	"""
+	try:
+		from core.self_evolution import pending_tap_token
+		tap = pending_tap_token("approve", {"kind": kind, "id": user_id})
+	except Exception:  # fail-open: name the listing verb, never a dead token
+		tap = "/pending"
 	out = (f"{label} draft saved but NOT YET IN EFFECT — it is queued for your "
 	       f"review and changes nothing until you approve it.\n"
-	       f"To activate: /approve {kind}:{user_id}   "
-	       f"(or `polyrob owner promote {kind} {user_id}`; "
-	       f"`/pending` lists everything waiting).")
+	       f"To activate, tap: {tap}   "
+	       f"(`/pending` lists everything waiting).")
 	if queue_depth > 1:
 		out += (f"\n⚠ {queue_depth} proposals are now waiting on you — "
-		        f"`/approve all` decides every one of them.")
+		        f"/approve_all decides every one of them.")
 	return out
 
 
@@ -210,8 +263,8 @@ class DocAuthoringMixin:
 			"action='read' "
 			"returns the current text; action='update' replaces it (≤2200 chars — "
 			"consolidate, don't sprawl); action='patch' edits by exact-string replace; "
-			"action='promote' activates your pending draft (owner-only). Updates/patches "
-			"are QUARANTINED for review and apply next session. This is NOT your core "
+			"action='promote' activates your pending draft (owner-only). On your owner's own "
+			"turn an update/patch applies now; otherwise it is queued for review. This is NOT your core "
 			"identity/boundaries (those are operator-owned). "
 			"Pass source= (where it came from: 'measured', 'owner said', 'room_read') "
 			"and observed_at=YYYY-MM-DD (defaults to today) so each new or changed line "
@@ -361,7 +414,7 @@ class DocAuthoringMixin:
 		from typing import Literal as _Literal
 
 		class OwnerDocManageAction(BaseModel):
-			action: _Literal["update", "patch", "read", "promote"]
+			action: _Literal["update", "patch", "read", "promote", "sweep"]
 			content: Optional[str] = None      # update: full owner.md body (≤1600 chars)
 			old_string: Optional[str] = None   # patch: exact text to replace
 			new_string: Optional[str] = None   # patch: replacement
@@ -381,16 +434,20 @@ class DocAuthoringMixin:
 			"directive belongs, so it survives the turn. For a TYPED setting "
 			"(reply length, tone, digest, quotas, caps) use `preferences` instead — "
 			"it applies immediately and is actually enforced (a small owner.md, "
-			"≤1600 chars). "
+			"≤4000 chars). "
 			"action='read' returns it; action='update' replaces it (consolidate, keep "
 			"only durable facts); action='patch' edits by exact-string replace; "
-			"action='promote' activates your pending draft (owner-only). Updates/patches "
-			"are QUARANTINED for review and apply next session. "
+			"action='promote' activates your pending draft (owner-only). On your owner's own "
+			"turn an update/patch applies now; otherwise it is queued for review. "
 			"Pass source= (where the fact came from: 'owner said', 'measured', "
 			"'room_read') and observed_at=YYYY-MM-DD (defaults to today) so each new or "
 			"changed line is written with its provenance; that stamp counts toward the "
 			"char cap. A line that CLAIMS something about the world (broken, blocked, "
-			"disabled, lacks permission, since …) may be refused without a source.",
+			"disabled, lacks permission, since …) may be refused without a source. "
+			"action='sweep' with content=<a rule> lists every standing instruction "
+			"that appears to contradict it — owner rules, SOUL, skills, cron/goal task "
+			"text and workspace docs marked `kind: instruction` (records are never "
+			"swept). Advisory: it changes nothing. A rule you record is swept for you.",
 			param_model=OwnerDocManageAction,
 		)
 		async def owner_doc_manage(params: OwnerDocManageAction, execution_context=None) -> ActionResult:
@@ -429,6 +486,14 @@ class DocAuthoringMixin:
 					extracted_content=(body or "(no owner-facts doc yet)"),
 					include_in_memory=True,
 				)
+
+			if params.action == "sweep":
+				if not (params.content or "").strip():
+					return ActionResult(error="sweep requires `content` (the rule to sweep for).",
+					                    include_in_memory=True)
+				return ActionResult(
+					extracted_content=_sweep_report(self, params.content, user_id, data_dir),
+					include_in_memory=True)
 
 			is_forged = _is_forged_or_autonomous_turn(execution_context, self)
 
@@ -471,9 +536,11 @@ class DocAuthoringMixin:
 			_self_mod_ev(params.action, pending=res.pending, created_by=created_by)
 			if not res.pending:
 				from core.self_evolution import summarize_doc_change
+				after = writer.read_active(user_id)
 				return ActionResult(
 					extracted_content=_applied_now_text(
-						"Owner-facts doc", summarize_doc_change(before, writer.read_active(user_id))),
+						"Owner-facts doc", summarize_doc_change(before, after))
+					+ _sweep_new_rules(self, before, after, user_id, data_dir),
 					include_in_memory=True,
 				)
 			try:

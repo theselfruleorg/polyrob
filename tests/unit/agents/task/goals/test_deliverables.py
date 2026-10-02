@@ -166,11 +166,23 @@ def test_completion_text_carries_deliverables_and_link():
     assert "https://app.example.com/session/s-1" in text
 
 
-def test_completion_text_legacy_shape_unchanged():
+def test_completion_text_carries_no_done_record_by_default(monkeypatch):
+    """Owner rule 2026-09-29: done() text is a record, not the delivered answer."""
+    import core.prefs as prefs
+    monkeypatch.setattr(prefs, "done_records_visible", lambda uid, home: False)
     disp = _dispatcher()
     goal = Goal(id="g1", user_id="u1", title="recon")
     text = disp._completion_text(goal, "did the thing")
-    assert text == "✅ Background goal 'recon' completed.\nResult:\ndid the thing"
+    assert text == "✅ Background goal 'recon' completed."
+
+
+def test_completion_text_shows_the_record_when_verbosity_asks(monkeypatch):
+    import core.prefs as prefs
+    monkeypatch.setattr(prefs, "done_records_visible", lambda uid, home: True)
+    disp = _dispatcher()
+    goal = Goal(id="g1", user_id="u1", title="recon")
+    text = disp._completion_text(goal, "did the thing")
+    assert text == "✅ Background goal 'recon' completed.\n\nRecord: did the thing"
 
 
 def test_notify_owner_done_threads_attachments(monkeypatch, tmp_path):

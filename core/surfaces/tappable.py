@@ -51,10 +51,37 @@ def parse_tappable(text: str) -> Tuple[Optional[str], Optional[str]]:
     return None, None
 
 
+#: O14/A4: one option of an owner ask, folded into ONE token —
+#: ``/fulfill_<ask id>_<letter>``. The ask id is the board's hex id (separator
+#: free), the letter one of the options the ask stored when it was raised. A
+#: tap is the owner's TYPED answer; the model never resolves it.
+_ASK_OPTION_RE = re.compile(r"^/fulfill_([0-9a-f]{6,24})_([a-f])$", re.IGNORECASE)
+ASK_OPTION_LETTERS = "ABCDEF"
+
+
+def ask_option_token(ask_id: str, letter: str) -> str:
+    """``/fulfill_<ask id>_<letter>`` (lowercase, the dispatcher's command shape)."""
+    return f"/fulfill_{str(ask_id).lower()}_{str(letter).lower()}"
+
+
+def parse_ask_option(text: str) -> Tuple[Optional[str], Optional[str]]:
+    """``("<ask id>", "A")`` for ``/fulfill_<ask id>_a``, else ``(None, None)``."""
+    token = (text or "").strip().split()[0] if (text or "").strip() else ""
+    m = _ASK_OPTION_RE.match(token)
+    if not m:
+        return None, None
+    return m.group(1).lower(), m.group(2).upper()
+
+
 def is_tappable_token(token: str) -> bool:
     """True when ``token`` is a verb with its argument folded in.
 
     Used by the remedy checker: ``/approve_p_1245c6`` is not an invented verb,
     it is ``/approve`` carrying the item it decides.
     """
-    return parse_tappable(token)[0] is not None
+    if parse_tappable(token)[0] is not None or parse_ask_option(token)[0] is not None:
+        return True
+    # Action cards (2026-09-27): ``/card_<id>_<act>`` names a stored card and
+    # an act; what it does is read from the card row, never from the token.
+    from core.surfaces.cards import parse_card_token
+    return parse_card_token(token)[0] is not None

@@ -103,3 +103,14 @@ def test_digest_covers_what_a_deploy_actually_ships(tmp_path):
     (tmp_path / ".env").write_text("SECRET=1")          # refused by the snapshot
     os.symlink("/etc/hostname", tmp_path / "link")      # refused by the snapshot
     assert _digest(tmp_path) == d2
+
+
+def test_gate_refuses_a_test_entry_with_no_result(tmp_path):
+    # Codex review 2026-09-25: a run_tests cut off before it returned (no
+    # result) counted as green. A missing result proves nothing.
+    from tests.unit.tools.hf_deploy.conftest import GreenLedgerOrch
+    orch = GreenLedgerOrch([("coding_str_replace", None), ("coding_run_tests", None)])
+    orch.agents["a1"].history.history[-1].result = []
+    (tmp_path / "app.py").write_text("x")
+    digest, reason = _gate(orch, tmp_path)
+    assert digest is None and "run_tests" in reason

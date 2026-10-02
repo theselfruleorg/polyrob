@@ -91,6 +91,30 @@ def _blocking(board: Any, goal: Any):
     return out
 
 
+def _off_lines(board: Any, user_id: Optional[str]) -> list:
+    """034 §11.1: the OFF section — what the owner switched off, so "set it up
+    again" is discoverable. A board without the accessor (a fake) has none; an
+    unreadable store SAYS so rather than rendering an empty section."""
+    fn = getattr(board, "suppressions", None)
+    if not callable(fn) or not user_id:
+        return []
+    try:
+        rows = fn(user_id=user_id) or []
+    except Exception as exc:
+        logger.warning("goal suppressions unreadable", exc_info=True)
+        return ["", f"OFF — unavailable ({type(exc).__name__}: {str(exc)[:80]}); "
+                    "I cannot tell what you switched off"]
+    if not rows:
+        return []
+    from core.goal_suppressions import describe
+    out = ["", f"OFF — {len(rows)} (you switched these off; `/goal allow <title>` "
+               "turns one back on)"]
+    out += [f"  ○ {describe(r)}" for r in rows[:_MAX_SHOWN]]
+    if len(rows) > _MAX_SHOWN:
+        out.append(f"  …and {len(rows) - _MAX_SHOWN} more")
+    return out
+
+
 def render_board(board: Any, *, user_id: Optional[str] = None) -> str:
     """One owner-readable board summary. Names no action the owner cannot take."""
     # D7: an unreadable board is not an EMPTY board. This used to swallow the
@@ -103,11 +127,15 @@ def render_board(board: Any, *, user_id: Optional[str] = None) -> str:
         return (f"Goal board: unavailable ({type(exc).__name__}: "
                 f"{str(exc)[:120]}) — this is UNKNOWN, not an empty board.")
     total = sum(counts.values())
+    off = _off_lines(board, user_id)
     if not total:
-        return "No goals yet."
+        return "\n".join(["No goals yet."] + off)
 
+    from core.goal_legibility import bucket_line, origin_tag
     lines = [f"{total} goal(s): " +
              ", ".join(f"{s}={n}" for s, n in sorted(counts.items()))]
+    # 034 §3.2: the owner's four facts over the seven machine statuses.
+    lines.append(bucket_line(counts))
 
     try:
         rows = board.list_recent(user_id=user_id, statuses=_LEAD_ORDER,
@@ -116,9 +144,9 @@ def render_board(board: Any, *, user_id: Optional[str] = None) -> str:
         logger.warning("goal board list_recent failed", exc_info=True)
         lines.append(f"The open rows are unavailable ({type(exc).__name__}: "
                      f"{str(exc)[:80]}) — the counts above are still true.")
-        return "\n".join(lines)
+        return "\n".join(lines + off)
     if not rows:
-        return "\n".join(lines)
+        return "\n".join(lines + off)
 
     rank = {s: i for i, s in enumerate(_LEAD_ORDER)}
     rows = sorted(rows, key=lambda g: rank.get(getattr(g, "status", ""), 99))
@@ -127,7 +155,8 @@ def render_board(board: Any, *, user_id: Optional[str] = None) -> str:
     for goal in rows[:_MAX_SHOWN]:
         gid = (getattr(goal, "id", "") or "")[:8]
         status = getattr(goal, "status", "?")
-        lines.append(f"• {gid} [{status}] {_title(goal)}")
+        # 034 §3.1: who asked for it, derived — never narrated.
+        lines.append(f"• {gid} [{status}] {_title(goal)}  {origin_tag(goal)}")
         if status == "waiting":
             blockers = _blocking(board, goal)
             if isinstance(blockers, _Unreadable):
@@ -149,8 +178,10 @@ def render_board(board: Any, *, user_id: Optional[str] = None) -> str:
     hidden = len(rows) - min(len(rows), _MAX_SHOWN)
     if hidden > 0:
         lines.append(f"…and {hidden} more open goal(s).")
+    lines.extend(off)
     lines.append("")
-    lines.append("Detail: /goal show <id> · asks: /asks · approvals: /pending")
+    lines.append("Detail: /goal show <id> · stop one for good: /goal cancel <id> · "
+                 "asks: /asks · approvals: /pending")
     return "\n".join(lines)
 
 

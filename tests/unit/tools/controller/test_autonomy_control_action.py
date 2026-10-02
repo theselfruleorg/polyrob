@@ -192,3 +192,24 @@ def test_the_tool_description_no_longer_teaches_resume(home):
         "the description must not offer resume as one of this action's verbs"
     assert "cannot lift a pause" in low and "/resume" in low, \
         "it must say who CAN resume, so the agent can relay that instead of trying"
+
+
+def test_the_description_does_not_turn_a_bare_stop_or_a_resume_into_a_pause(home):
+    """O7/A3: "Stop" mid-request and "resume buyback" both became pause(all)."""
+    from tools.controller.autonomy_control_action import register_autonomy_control_action
+    c = _Controller(str(home))
+    register_autonomy_control_action(c)
+    _fn, _model, desc = c.registry.actions["autonomy_control"]
+    low = desc.lower()
+    assert "call this first" not in low
+    assert "only when the owner explicitly asks" in low
+    assert "not a pause" in low and "one short question" in low
+    assert "must never call pause" in low
+
+
+def test_the_system_prompt_scopes_stop_and_forbids_unbacked_state_claims():
+    from agents.task.agent.prompts import SystemPrompt
+    sec = SystemPrompt._get_security_content(None)
+    assert "FIRST" not in sec and "must NEVER call pause" in sec
+    rules = SystemPrompt._get_rules_content(None)
+    assert "A dry run stages nothing" in rules and "quote the id" in rules

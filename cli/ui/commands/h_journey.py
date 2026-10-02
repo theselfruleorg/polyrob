@@ -23,17 +23,6 @@ def _window_seconds(label: str) -> Optional[float]:
     display-window parser, ``cli.ui.commands.window.parse_window_seconds``."""
     from cli.ui.commands.window import parse_window_seconds
     return parse_window_seconds(label)
-    label = label.strip().lower()
-    try:
-        if label.endswith("m"):
-            return float(label[:-1]) * 60
-        if label.endswith("h"):
-            return float(label[:-1]) * 3600
-        if label.endswith("d"):
-            return float(label[:-1]) * 86400
-        return float(label)
-    except Exception:
-        return None
 
 
 def render_journey(*, user_id: str, since_label: str = "7d",

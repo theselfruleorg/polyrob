@@ -51,6 +51,18 @@ logger = logging.getLogger(__name__)
 #: transaction moving more than it said.
 VALUATION_TOLERANCE = 0.01
 
+#: The EVM twin of `solana_tx_inspect.RELAY_PROGRAM_IDS` (CR-M04): the deposit
+#: item may only pay Relay's own contracts. Without the pin, the address the
+#: wallet SENDS to was whatever the quote API said — a tampered quote naming any
+#: EOA passed every check (the guard measures the outflow, which matched), and
+#: phase 2 then reported `in_flight` forever. Same address on every EVM chain
+#: (`api.relay.link/chains` + live quotes, 2026-10-02): the depository every
+#: native quote targets, and the v1 `relayReceiver`.
+RELAY_EVM_DEPOSIT_CONTRACTS = frozenset({
+    "0x4cd00e387622c35bddb9b4c962c136462338bc31",   # RelayDepository
+    "0xa5f565650890fba1824ee0f21ebbbf660a179934",   # RelayReceiver (v1)
+})
+
 
 @dataclass(frozen=True)
 class PreparedLeg:
@@ -90,6 +102,10 @@ def assert_order_matches_request(tx_data: dict, *, origin_chain_id: int,
     if not to.startswith("0x") or len(to) != 42:
         return (f"REFUSED — the deposit item names no usable EVM destination "
                 f"({to!r}). There is nothing safe to sign here.")
+    if to.lower() not in RELAY_EVM_DEPOSIT_CONTRACTS:
+        return (f"REFUSED — the deposit item pays {to}, which is not a pinned "
+                f"Relay deposit contract {sorted(RELAY_EVM_DEPOSIT_CONTRACTS)}. "
+                f"Whatever it is, it is not a Relay deposit. Nothing was signed.")
 
     try:
         chain_id = int(str(tx_data.get("chainId")))
@@ -223,7 +239,10 @@ class EvmOriginLeg:
         try:
             tx_hash = prepared.rail.sign_and_send(prepared.tx)
         except Exception as exc:
-            return SentLeg("error", f"broadcast failed: {exc}")
+            from core.wallet.broadcast.evm import (
+                broadcast_failure_text, outcome_unknown)
+            return SentLeg("unknown" if outcome_unknown(exc) else "error",
+                           broadcast_failure_text(exc))
         return SentLeg("sent", "broadcast accepted", tx_hash=tx_hash)
 
     @staticmethod

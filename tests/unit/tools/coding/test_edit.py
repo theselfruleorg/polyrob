@@ -308,3 +308,63 @@ def test_replace_all_skips_blank_edge_and_interior_whitespace_rungs():
     old_string = "    a  =  1\n    b  =  2"
     with pytest.raises(EditError, match="not found"):
         apply_str_replace_ex(content, old_string, "    a = 10\n    b = 20", replace_all=True)
+
+
+# ---------------------------------------------------------------------------
+# Coding-agent review B5 (2026-09-24): LLM-style patches
+# ---------------------------------------------------------------------------
+
+def test_apply_patch_finds_a_hunk_whose_line_number_is_off():
+    content = "".join(f"line{i}\n" for i in range(1, 21))
+    # The model guessed line 3; the context really sits at line 12.
+    patch = "@@ -3,3 +3,3 @@\n line11\n-line12\n+LINE12\n line13\n"
+    out = apply_patch(content, patch)
+    assert "LINE12" in out and "line12\n" not in out
+    assert out.count("\n") == content.count("\n")
+
+
+def test_apply_patch_accepts_a_bare_blank_context_line():
+    content = "def f():\n    a = 1\n\n    return a\n"
+    # The blank context line arrives as "" (no leading space).
+    patch = "@@ -2,3 +2,3 @@\n     a = 1\n\n-    return a\n+    return a + 1\n"
+    assert apply_patch(content, patch) == "def f():\n    a = 1\n\n    return a + 1\n"
+
+
+def test_apply_patch_tolerates_trailing_whitespace_and_keeps_the_file_text():
+    content = "x = 1   \ny = 2\n"
+    patch = "@@ -1,2 +1,2 @@\n x = 1\n-y = 2\n+y = 3\n"
+    # the context line keeps the FILE's trailing spaces
+    assert apply_patch(content, patch) == "x = 1   \ny = 3\n"
+
+
+def test_apply_patch_refuses_to_guess_between_relocations():
+    content = "a\nX\nb\nc\nd\nX\n"
+    patch = "@@ -3,1 +3,1 @@\n-X\n+Y\n"   # X at lines 2 and 6, not at 3
+    with pytest.raises(EditError, match="matches 2 places"):
+        apply_patch(content, patch)
+
+
+def test_apply_patch_at_its_own_line_wins_over_duplicates():
+    content = "X\nb\nX\n"
+    assert apply_patch(content, "@@ -3,1 +3,1 @@\n-X\n+Y\n") == "X\nb\nY\n"
+
+
+def test_insert_only_hunk_goes_after_the_named_line():
+    # "@@ -2,0 +3,1 @@" = insert after original line 2 (codex review 2026-09-25).
+    assert apply_patch("a\nb\nc\n", "@@ -2,0 +3,1 @@\n+NEW\n") == "a\nb\nNEW\nc\n"
+    assert apply_patch("a\n", "@@ -0,0 +1,1 @@\n+TOP\n") == "TOP\na\n"
+
+
+def test_apply_patch_multi_hunk_carries_the_offset():
+    content = "".join(f"l{i}\n" for i in range(1, 31))
+    patch = ("@@ -1,1 +1,2 @@\n l1\n+inserted\n"
+             "@@ -20,1 +21,1 @@\n-l25\n+L25\n")   # 2nd hint is 5 lines off
+    out = apply_patch(content, patch)
+    assert "l1\ninserted\nl2\n" in out and "L25" in out
+
+
+def test_apply_patch_refuses_a_second_file():
+    patch = ("--- a/x\n+++ b/x\n@@ -1,1 +1,1 @@\n-a\n+b\n"
+             "--- a/y\n+++ b/y\n@@ -1,1 +1,1 @@\n-c\n+d\n")
+    with pytest.raises(EditError, match="more than one file"):
+        apply_patch("a\n", patch)

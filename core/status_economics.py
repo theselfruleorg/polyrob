@@ -98,6 +98,10 @@ def compute_economics(rows: List[Dict[str, Any]], window_sec: int,
     n = len(rows)
     inp = sum(int(r.get("input_tokens") or 0) for r in rows)
     cached = sum(int(r.get("cached_tokens") or 0) for r in rows)
+    # F17: cache WRITES, read from the row metadata (not a column) so this
+    # section never depends on a schema the DB in front of it may predate.
+    cache_write = 0
+    cache_write_rows = 0
     out = sum(int(r.get("output_tokens") or 0) for r in rows)
     cost = sum(float(r.get("api_cost_usd") or 0.0) for r in rows)
     uncached_per_call: List[float] = []
@@ -124,6 +128,10 @@ def compute_economics(rows: List[Dict[str, Any]], window_sec: int,
             md = json.loads(r.get("metadata") or "{}") if isinstance(r.get("metadata"), str) else (r.get("metadata") or {})
         except Exception:
             md = {}
+        cw = md.get("cache_creation_tokens")
+        if isinstance(cw, (int, float)) and not isinstance(cw, bool):
+            cache_write += int(cw)
+            cache_write_rows += 1
         d = md.get("duration_seconds")
         if isinstance(d, (int, float)):
             durations.append(float(d))
@@ -140,6 +148,10 @@ def compute_economics(rows: List[Dict[str, Any]], window_sec: int,
         "cached_tokens": cached,
         "output_tokens": out,
         "cache_ratio": (cached / inp) if inp else None,
+        # None = "no row in this window recorded the number", NEVER 0 — a cache
+        # write nobody measured is not a cache write that did not happen. Rows
+        # written before F17 carry no key at all.
+        "cache_write_tokens": cache_write if cache_write_rows else None,
         "first_call_hit_ratio": (first_hits / first_total) if first_total else None,
         "uncached_per_call_median": _median(uncached_per_call),
         "output_per_call_median": _median(out_per_call),
@@ -171,7 +183,8 @@ def economics_lines(e: Dict[str, Any], label: str) -> List[str]:
     return [
         f"llm usage {label}: {e['calls']} calls · {e['sessions']} sessions · "
         f"${e['cost_usd']:.2f} (≈${e['cost_per_day_usd']:.2f}/day)",
-        f"tokens: in {_k(e['input_tokens'])} ({(cache or 0) * 100:.0f}% cached) · out {_k(e['output_tokens'])} · "
+        f"tokens: in {_k(e['input_tokens'])} ({(cache or 0) * 100:.0f}% cached, "
+        f"writes {_k(e.get('cache_write_tokens'))}) · out {_k(e['output_tokens'])} · "
         f"uncached/call median {_k(e['uncached_per_call_median'])} · out/call median {_k(e['output_per_call_median'])}",
         f"{lat} · first-call cache hit {('n/a' if fch is None else f'{fch * 100:.0f}%')} · "
         f"output truncations {e['truncated']}"
@@ -226,3 +239,28 @@ def runway_health(sec, balance_usd: Optional[float]):
     )
     sec.health.append(item)
     return item
+
+
+def _economics_slot(ctx):
+    """067 P5a: the ``economics`` slot (was ``status_snapshot._attach_economics``).
+    The runway item needs a READ balance; the ledger carries one only when the
+    caller asked for ``include_balances`` (the money slot, built first, hands
+    its ledger on in ``ctx.ledger``) — otherwise the section still renders burn
+    and the runway line is simply absent (never a guessed number). The runway
+    item is added AFTER the guard, so it does not change the section state."""
+    from core.status_snapshot import _guarded
+    sec = _guarded("economics", economics_section, ctx.uid, ctx.data_dir,
+                   now=ctx.now, window_sec=ctx.window_sec)
+    ledger = ctx.ledger
+    if sec.available and isinstance(ledger, dict):
+        bal = (ledger.get("runtime") or {}).get("provider_balance_usd")
+        try:
+            runway_health(sec, bal)
+        except Exception as e:  # never take the section down over the runway line
+            sec.lines.append(f"budget runway: UNKNOWN ({type(e).__name__}: {e})")
+    return sec
+
+
+from core.status_sections import register_status_section  # noqa: E402
+
+register_status_section("economics", _economics_slot)

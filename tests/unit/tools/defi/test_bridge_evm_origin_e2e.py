@@ -15,7 +15,7 @@ from core.wallet import bridge_guard
 from tools.defi import bridge_verb as bv
 
 HOLDER = "0xcAda546f6A6ddDE31B71aB21eF63d3EBF09Fa553"
-DEPOSITORY = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+DEPOSITORY = "0x4cd00e387622c35bddb9b4c962c136462338bc31"  # pinned RelayDepository
 BASE_ID, ROBINHOOD_ID = 8453, 4663
 AMOUNT_ETH = 0.036
 AMOUNT_RAW = 36 * 10 ** 15
@@ -33,17 +33,27 @@ def bound_wallet_owner(monkeypatch):
 class _Gate:
     def __init__(self):
         self.recorded = []
+        self.checked = []
+        self.in_reserve = False
+        self.deny = None  # a reason string makes check() refuse
 
     def reserve(self):
         gate = self
 
         class _CM:
             async def __aenter__(self):
+                gate.in_reserve = True
                 return gate
 
             async def __aexit__(self, *a):
+                gate.in_reserve = False
                 return False
         return _CM()
+
+    def check(self, **kw):
+        import types as _t
+        self.checked.append(dict(kw, in_reserve=self.in_reserve))
+        return _t.SimpleNamespace(allowed=self.deny is None, reason=self.deny or "")
 
     def record(self, **kw):
         self.recorded.append(kw)
@@ -158,7 +168,8 @@ def rig(monkeypatch, tmp_path):
     _Rail.instances.clear()
     monkeypatch.setenv(bv.FLAG, "true")
     monkeypatch.setenv("DEFI_EVM_RPC_BASE", "https://pinned.example/base")
-    monkeypatch.setattr("core.wallet.tx_guard._halted", lambda: False)
+    monkeypatch.setattr("core.config_policy.AutonomyConfig.autonomy_halted",
+                        staticmethod(lambda: False))
     monkeypatch.setattr("core.wallet.tx_guard._entry_paused", lambda: False)
     monkeypatch.setattr("core.autonomy_control.allows",
                         lambda kind: SimpleNamespace(allowed=True, reason="ok"))
@@ -387,3 +398,73 @@ def test_a_refusal_is_stated_exactly_once(rig, monkeypatch):
     text = _run(_Tool(), _params(dry_run=True)).content or ""
     assert text.count("refused by PolicyGate") == 1, text
     assert "RESULT: NOT SENT" in text
+
+
+# --- M10 (security analysis 2026-09-23): check INSIDE the reserve ------------
+
+def test_the_gate_is_checked_inside_the_reserve_before_the_send(rig):
+    tool = _Tool()
+    _run(tool, _params())
+    inside = [c for c in tool.wallet.policy.checked if c["in_reserve"]]
+    assert inside, "gate.check must run inside gate.reserve()"
+    assert inside[-1]["venue"] == "defi"
+    assert inside[-1]["amount_usd"] == pytest.approx(93.6)
+    assert inside[-1]["idempotency_key"] == tool.wallet.policy.recorded[0]["idempotency_key"]
+
+
+def test_a_gate_refusal_inside_the_reserve_sends_nothing(rig, monkeypatch):
+    tool = _Tool()
+    tool.wallet.policy.deny = "daily spend cap $10.00 would be exceeded"
+    sent = []
+    from tools.defi import bridge_evm_leg
+    monkeypatch.setattr(bridge_evm_leg.EvmOriginLeg, "send",
+                        staticmethod(lambda prepared: sent.append(prepared)))
+    r = _run(tool, _params())
+    text = r.content or ""
+    assert "refused by PolicyGate" in text and "NOT SENT" in text
+    assert sent == [] and tool.wallet.policy.recorded == []
+
+
+def _approving(monkeypatch):
+    class _Approver:
+        def __init__(self, **kw):
+            pass
+
+        async def request(self, *a, **k):
+            return True
+    monkeypatch.setattr("tools.controller.approval_queue.OwnerQueueApprover", _Approver)
+
+
+def test_cr_l03_the_leg_is_authorized_again_after_the_owner_wait(rig, monkeypatch):
+    """The owner ask polls; the leg simulated before the wait may be stale, so the
+    guard runs again on a freshly built transaction before the broadcast."""
+    calls = []
+
+    def _authorize(intent, tx, **kw):
+        calls.append(tx)
+        return SimpleNamespace(allowed=False, reason="owner approval required",
+                               lane="owner_queue", amount_usd=93.6, sim_gas_used=100_000)
+    monkeypatch.setattr("core.wallet.tx_guard.authorize", _authorize)
+    _approving(monkeypatch)
+    r = _run(_Tool(), _params())
+    assert len(calls) == 2
+    assert "RESULT: bridged" in (r.content or "")
+
+
+def test_cr_l03_a_refusal_on_the_recheck_broadcasts_nothing(rig, monkeypatch):
+    calls = []
+
+    def _authorize(intent, tx, **kw):
+        calls.append(tx)
+        if len(calls) == 1:
+            return SimpleNamespace(allowed=False, reason="owner approval required",
+                                   lane="owner_queue", amount_usd=93.6,
+                                   sim_gas_used=100_000)
+        return SimpleNamespace(allowed=False, reason="simulation now reverts",
+                               lane="refused", amount_usd=93.6, sim_gas_used=0)
+    monkeypatch.setattr("core.wallet.tx_guard.authorize", _authorize)
+    _approving(monkeypatch)
+    r = _run(_Tool(), _params())
+    assert "re-check after approval" in (r.content or "")
+    assert "RESULT: NOT SENT" in (r.content or "")
+    assert all(i.sent is None for i in _Rail.instances)

@@ -6,7 +6,7 @@ Locally (``POLYROB_DATA_DIR`` unset) the CLI/agent resolves its data home to
 unrelated ``./data`` — so a local ``rob`` session writes goals/cron/memory to
 one place while the webview console reads from another, empty, one.
 
-This mirrors the pattern ``webview.pages._pfp_data_dir`` already uses for the
+This mirrors the pattern ``webview.pages._avatar_data_dir`` already uses for the
 avatar (env wins; else prefer the CLI's ``cwd/.polyrob`` default), extended to
 the general ``_data_dir()`` used by the goals/cron/memory/identity endpoints
 in both ``pages.py`` and ``activity.py``.

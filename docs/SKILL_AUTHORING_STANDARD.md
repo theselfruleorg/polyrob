@@ -7,7 +7,7 @@ Rules for writing durable, safe system skills in this codebase. All shipped `SKI
 ## 1. Shape
 
 - **Start with a single `# Title` heading.** The heading is the skill's human-readable name.
-- **Keep the body focused (hard cap 40,000 chars, warning above 20,000).** Skills are pinned as a `SKILL`-origin foundation message (not the system prompt) — with progressive disclosure ON (default), only a compact `<skill-catalog>` is injected and the full body is pulled on demand via `load_skill`. Large bodies still waste context and degrade focus; aim for the minimum effective instruction set.
+- **Keep the body focused (hard cap 40,000 chars, warning above 20,000).** Skills are pinned as a `SKILL`-origin foundation message (not the system prompt). With progressive disclosure ON (default), the skills that MATCHED the session (trigger matches, rail/persona seeds, `requires` prerequisites) are pinned in full while their bodies fit a 20,000-char budget (`SkillManager.EAGER_INJECT_BUDGET_CHARS`), prerequisites first. A matched skill that does not fit is listed `LOAD FIRST` in the `<skill-catalog>`, and every other skill is a catalog line the agent pulls with `load_skill`. A body over 20,000 chars is therefore never pinned; keep a skill that must be delivered under that size.
 - **Write in the second person, active voice.** "Use `anysite` to query LinkedIn profiles" not "The agent should use anysite to query LinkedIn profiles."
 
 ## 2. Advisory + tool-graceful
@@ -116,14 +116,51 @@ Each new skill needs a `rules.json` entry:
     "triggers": {
         "tool_ids": [],         // subset of VALID_TOOL_IDS; empty = matches regardless of tools
         "keywords": ["..."],    // short phrases that trigger this skill
-        "action_names": [],     // action names that trigger this skill (usually empty)
+        "action_names": [],     // see 9a — never an always-registered action
         "task_patterns": ["..."]  // regex patterns matched against the task string
     },
-    "priority": 6,             // lower = higher priority; 1-5 reserved for core skills
+    "priority": 6,             // lower = higher priority; see 9c for the ranges
     "auto_activate": true,     // must have a SKILL.md body or the rule is pruned at load
-    "description": "..."       // one sentence, also scanned for injection
+    "description": "...",      // one sentence, also scanned for injection
+    "requires": []             // optional prerequisite skill ids, see 9b
 }
 ```
+
+### 9a. How a rule matches
+
+- **Relevance is required.** A skill loads when a `keyword` (word-boundary match) or a `task_pattern` (regex, case-insensitive) hits the task. Only the first 4,000 characters of the task are matched (`SkillManager.MAX_TRIGGER_TASK_CHARS`). A `tool_ids` match alone never loads a skill.
+- **`action_names` alone loads a skill only when `tool_ids` is empty.** Never list an action that is registered in every session (`preferences`, `owner_doc_manage`, `agent_status`, `done`, ...): the skill then matches every session and takes a capped slot. A shipped rule with empty `tool_ids` must keep `action_names` empty (`tests/unit/skills/test_trigger_matching_fixes.py`).
+- **Money gate.** A rule that declares a MONEY tool (`core.tool_capabilities.ids_with("money")`, e.g. `defi_trade`) in `tool_ids` matches only when the session holds a declared money tool or a declared read tool with no `high_impact` capability (e.g. `defi_data`). A declared action tool that moves no funds (`cronjob`) does not open it.
+- **`max_skills` is 2.** Trigger matches compete for two slots by `priority` (then match count).
+
+### 9b. `requires` — prerequisite procedures
+
+```json
+"treasury-trading": { ..., "requires": ["token-identity", "pre-trade-check"] }
+```
+
+- Every loaded skill (matched or seeded) pulls in its `requires` ids, beyond `max_skills`, at most 2 per session (`MAX_PREREQUISITES`).
+- One pass, no recursion: a prerequisite's own `requires` are not expanded.
+- A prerequisite whose effective rule says `auto_activate: false` is not pulled in, and it must pass the money gate for the session.
+- A prerequisite that a SELECTED parent requires does not compete for a capped slot; it is appended instead.
+- Under progressive disclosure, prerequisites are pinned first (see section 1).
+
+### 9c. Priority range
+
+| Priority | Who |
+|---|---|
+| 0-5 | Shipped builtin skills (lower = higher priority); a pack skill carries its own rule priority (5-7 today) |
+| 6 | Agent- and user-authored skills (the writer's default) |
+| 9 | Ecosystem skills from `~/.claude/skills`, `~/.agents/skills` or a trusted project root (catalog only; `EXTERNAL_SKILL_PRIORITY`) |
+
+### 9d. Ids and precedence
+
+- **A user skill can never take a builtin or pack id.** `skill_manage create`, `promote`, `polyrob skill install` and `POST /api/skills` all refuse one (`SkillManager.reserved_skill_ids()`). A legacy user rule under a system id may only disable that skill (`"auto_activate": false`); it never replaces its triggers, `requires`, priority or gate.
+- **One body precedence:** builtin (`data/prompts/skills/`) > the tenant's user skill > pack skill > ecosystem skill. `load_skill`, `resolve_skill_dir` (the `references/` directory) and the catalog use the same order. Among ecosystem roots, project > user; an ecosystem skill never enters the index under a builtin id.
+
+### 9e. `allowed-tools` is advisory
+
+An agentskills.io `allowed-tools` frontmatter field is recorded and one advisory line is appended to the delivered body (`agents/task/agent/skill_allowed_tools.py`). It is NOT enforced: the session's tool set does not change when the skill loads, and the names are often another harness's tool names.
 
 **After editing rules.json:** always re-read it first to avoid clobbering another session's concurrent additions. The file is shared across parallel sessions.
 

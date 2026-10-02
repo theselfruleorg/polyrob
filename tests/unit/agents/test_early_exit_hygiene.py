@@ -104,7 +104,12 @@ def _build_agent(*, validate=True, process_result=AsyncMock()):
 @pytest.mark.asyncio
 async def test_planning_turn_early_return_removes_state_message():
     """(a) _validate_and_intervene -> False must clean up the state message
-    it just added, same as the other early-exit paths."""
+    it just added, same as the other early-exit paths.
+
+    F16(ii): under `STATE_MESSAGE_EPHEMERAL` (default ON) the verb is a no-op —
+    the state message never entered history, so the invariant it protects ("no
+    state message is ever in history") holds by construction. The call site is
+    still required for the flag-OFF path, and that is what this pins."""
     a = _build_agent(validate=False)
     await a._step_impl()
 
@@ -116,7 +121,8 @@ async def test_planning_turn_early_return_removes_state_message():
 @pytest.mark.asyncio
 async def test_corrupted_state_early_return_removes_state_message():
     """(a) _process_action_results -> None (corrupted tool-message pairing)
-    must also clean up the state message."""
+    must also clean up the state message. No-op under F16(ii); the call site
+    is kept for the flag-OFF path."""
     a = _build_agent(validate=True, process_result=AsyncMock(return_value=None))
     await a._step_impl()
 

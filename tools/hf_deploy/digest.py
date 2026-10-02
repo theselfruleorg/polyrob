@@ -81,7 +81,9 @@ def tested_tree_digest(orch, root: str):
     has_green_test = False
     try:
         for _label, name, _action, result in _walk_ledger(orch):
-            if name in _TEST_ACTIONS and not getattr(result, "error", None):
+            # A test with NO result (cut off, never returned) proves nothing —
+            # the same rule edited_since_last_test applies (codex review 2026-09-25).
+            if name in _TEST_ACTIONS and result is not None and not getattr(result, "error", None):
                 has_green_test = True
     except Exception:
         has_green_test = False  # fail-closed for deploy: an unreadable ledger is not proof of green

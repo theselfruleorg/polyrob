@@ -66,6 +66,7 @@ from core.secret_patterns import (
     PUBLIC_ADDRESS_RE as _PUBLIC_ADDRESS_RE,
     apply_ssot_shapes,
 )
+from core.secret_scrub import contains_loaded_seed, scrub_loaded_seed
 
 #: An EVM transaction / block hash (``0x`` + EXACTLY 64 hex) and a canonical
 #: UUID. Both are PUBLIC identifiers: a receipt hash is the proof a money verb
@@ -287,7 +288,9 @@ class SecretScrubbingFilter(logging.Filter):
         rule that un-redacts on one layer and re-redacts on the next has not
         exempted anything (C28, 2026-09-21).
         """
-        scrubbed = self._scrub_ssot_shapes(message)
+        # CR-M08: the LOADED wallet seed (and runs of its words) first — a
+        # library error that echoes a mistyped mnemonic carries no marker word.
+        scrubbed = self._scrub_ssot_shapes(scrub_loaded_seed(message, redacted=_REDACTED))
 
         # Apply the remaining legacy patterns
         for pattern in self.LEGACY_PATTERNS:
@@ -338,12 +341,20 @@ class SecretScrubbingFilter(logging.Filter):
         exc_candidate = ''
         if exc_info:
             try:
-                exc_candidate = str(exc_info[1])
+                # The whole chain: a secret in a __cause__/__context__ message
+                # renders in the traceback even when the outer message is clean.
+                parts, cur, seen = [], exc_info[1], 0
+                while cur is not None and seen < 8:
+                    parts.append(str(cur))
+                    cur = cur.__cause__ or cur.__context__
+                    seen += 1
+                exc_candidate = ' '.join(parts)
             except Exception:
                 exc_candidate = ''
 
         candidate = f"{msg_text}{args_text}{exc_candidate}"
-        if self._has_marker(candidate) or self._MARKERLESS_PRECHECK.search(candidate):
+        if (self._has_marker(candidate) or self._MARKERLESS_PRECHECK.search(candidate)
+                or contains_loaded_seed(candidate)):
             # Scrub the main message
             if msg_text:
                 record.msg = self.scrub_message(msg_text)

@@ -119,12 +119,9 @@ async def _conversation_loop(
                 renderer.on_turn_start(line)
 
             try:
-                # 031: a deterministic owner stop/resume never needs the model.
-                answer = _owner_pause_gate(line, container)
-                if answer is None:
-                    from core.interactive_gate import interactive_turn
-                    with interactive_turn():
-                        answer = await convo.respond(line)
+                from core.interactive_gate import interactive_turn
+                with interactive_turn():
+                    answer = await convo.respond(line)
             except KeyboardInterrupt:
                 # T16: interrupt-and-redirect — when INTERRUPT_REDIRECT is ON, prompt the
                 # user for a redirect instruction instead of silently dropping the turn.
@@ -226,29 +223,6 @@ def _make_repl_sigint_handler(loop, counter):
     return _handler
 
 
-def _owner_pause_gate(line: str, container) -> Optional[str]:
-    """031: the REPL twin of the Telegram owner-intent gate — the ONE decision path
-    (``owner_admin.apply_owner_intent``): a full stop / resume typed in prose is
-    applied to the pause record here, no model call, and the verified state is
-    the answer. Anything else returns ``None`` and goes to the agent. A gate
-    error on a stop-shaped line becomes the answer, never a silent fall-through."""
-    try:
-        from core.runtime_paths import data_dir_or_home
-        from core.surfaces.owner_admin import apply_owner_intent, owner_pause_phrases
-        from core.surfaces.owner_intent import owner_stop_intent
-        dd = data_dir_or_home(getattr(getattr(container, "config", None), "data_dir", None))
-        from core.identity import resolve_identity
-        intent = owner_stop_intent(line, extra_phrases=owner_pause_phrases(resolve_identity(), dd))
-        reply, _res = apply_owner_intent(intent, dd, via="repl", resume_hint="/resume",
-                                         halt_hint="/pause")
-        return reply
-    except Exception as e:
-        if any(w in (line or "").lower() for w in ("stop", "halt", "pause")):
-            return (f"⚠️ I could not apply that stop automatically ({type(e).__name__}: "
-                    f"{str(e)[:120]}). Use /pause to force it.")
-        return None
-
-
 def _make_default_slash_dispatch(convo, container, renderer, *, state=None, session_id="", user_id="local", task_agent=None, orchestrator=None):
     """Build the default registry-backed slash dispatcher for the REPL.
 
@@ -285,7 +259,6 @@ async def _run_persistent_app(
     *,
     completer=None,
     background_poll=None,
-    owner_gate=None,
 ):
     """Run the persistent bottom-anchored Application loop (POLYROB_PERSISTENT_INPUT).
 
@@ -311,11 +284,6 @@ async def _run_persistent_app(
     def _on_submit(text: str) -> bool:
         if approval.submit(text):
             return True
-        if owner_gate is not None and not text.startswith("/"):
-            reply = owner_gate(text)
-            if reply is not None:
-                renderer.print_block(reply)
-                return True
         ctrl = holder.get("ctrl")
         return ctrl.submit(text) if ctrl is not None else False
 
@@ -706,7 +674,7 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
     }
 
     session_id = None
-    _autonomy_handles = None  # started post-agent (local profile only); stopped in finally
+    _autonomy_live = None     # 026 P5.2 live controller (local profile only); stopped in finally
     _prev_sigint = None       # captured when the REPL SIGINT handler is installed; restored in finally
     try:
         # Create the interactive session (suppress init noise). The restore is
@@ -817,7 +785,13 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
             if local_mode_enabled():
                 from core.autonomy_runtime import start_autonomy
                 _data_dir = data_dir_or_home(getattr(container.config, "data_dir", None))
-                _autonomy_handles = start_autonomy(task_agent=task_agent, data_dir=_data_dir)
+                # 026 P5.2: the handle is held by the live controller so REPL
+                # `/autonomy on|off` can start/stop the SAME runtime, no restart.
+                from cli.ui.autonomy_live import LiveAutonomy, bind as _bind_live
+                _autonomy_live = LiveAutonomy(
+                    lambda: start_autonomy(task_agent=task_agent, data_dir=_data_dir))
+                _autonomy_live.start()
+                _bind_live(_autonomy_live)
         except Exception:
             pass
 
@@ -1004,7 +978,6 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
                     convo, _ui_state, _renderer, _slash_dispatch, _poll_usage,
                     completer=_completer_p,
                     background_poll=_autonomy_poll,
-                    owner_gate=lambda text: _owner_pause_gate(text, container),
                 )
                 return
             except Exception as e:
@@ -1068,9 +1041,11 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
                 signal.signal(signal.SIGINT, _prev_sigint)
             except (ValueError, OSError, TypeError):
                 pass
-        if _autonomy_handles is not None:
+        if _autonomy_live is not None:
             try:
-                await _autonomy_handles.stop()
+                from cli.ui.autonomy_live import bind as _bind_live
+                _bind_live(None)
+                await _autonomy_live.stop()   # AutonomyHandles.stop(), bounded
             except Exception:
                 pass
         if session_id:

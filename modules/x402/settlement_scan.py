@@ -51,6 +51,25 @@ def _known_swap_router_addresses(chain: str) -> frozenset:
         return frozenset()
     return frozenset(
         a.lower() for a in (row.univ3_router, row.aggregator_spender) if a)
+def _own_evm_addresses() -> frozenset:
+    """Every EVM address the agent's own wallet derives (all venues),
+    lowercased. Empty when no wallet is readable (fail-open: the check then
+    only narrows nothing)."""
+    try:
+        from core.wallet.agent_wallet import VENUES
+        from core.wallet.factory import get_agent_wallet
+        wallet = get_agent_wallet()
+        if wallet is None:
+            return frozenset()
+        out = set()
+        for venue in VENUES:
+            try:
+                out.add(str(wallet.address_for_venue(venue)).lower())
+            except Exception:
+                continue
+        return frozenset(a for a in out if a)
+    except Exception:
+        return frozenset()
 #: An RPC endpoint for logging — scheme + host only. A provider URL carries its
 #: credential in the PATH (`https://<net>.g.alchemy.com/v2/<api-key>`) or the
 #: query, where every name-keyed secret scrubber misses it. Observed live: the
@@ -154,6 +173,10 @@ async def pending_scan_groups(treasury: str, *, db=None):
         if group not in out:
             out.append(group)
     return out
+
+
+#: CR-L25: at most this many `getTransaction` reads per Solana invoice per tick.
+_SVM_FETCH_CAP = 25
 
 
 def solana_settle_enabled() -> bool:
@@ -481,6 +504,12 @@ class SettlementScanMixin:
             return solana_onchain._rpc(method, params)
 
         settled = unmatched = 0
+        _svm_seen = getattr(self, "_svm_seen_signatures", None)
+        if _svm_seen is None:
+            _svm_seen = self._svm_seen_signatures = set()
+        _svm_refused = getattr(self, "_svm_refused_invoices", None)
+        if _svm_refused is None:
+            _svm_refused = self._svm_refused_invoices = set()
         # Enumerated DIRECTLY, not through `list_payment_requests`: that helper
         # is tenant-scoped and requires a user_id, and a watcher has no single
         # tenant — passing one would silently skip every other. The first real
@@ -504,22 +533,55 @@ class SettlementScanMixin:
             if not request_id:
                 continue
             reference = solana_settlement.reference_for_invoice(request_id)
+            # CR-M19: the pass verifies USDC only, so it may settle only an
+            # invoice denominated in THAT mint, for the invoice's OWN raw
+            # amount. A non-USDC SPL invoice is refused here (it would never
+            # match, or — worse — a USDC payment would settle it).
+            row_mint = str(row.get("asset_address") or "").strip()
+            if row_mint and row_mint.lower() != mint.lower():
+                if request_id not in _svm_refused:
+                    _svm_refused.add(request_id)
+                    logger.warning(
+                        "solana settle: invoice %s is denominated in %s, not the "
+                        "USDC mint this pass verifies — it cannot settle on-chain "
+                        "automatically; settle it by hand", request_id, row_mint)
+                continue
             try:
-                expected_raw = int(round(float(row.get("amount_usd") or 0) * 10 ** 6))
+                if row.get("amount_raw") not in (None, ""):
+                    expected_raw = int(row["amount_raw"])
+                else:   # a pre-046 row: USDC priced in dollars
+                    expected_raw = int(round(float(row.get("amount_usd") or 0) * 10 ** 6))
             except (TypeError, ValueError):
                 continue
+            if expected_raw <= 0:
+                continue
             claimed = False
+            fetched = 0
             try:
                 for signature in solana_settlement.scan_reference(reference, rpc=_rpc):
+                    # CR-L25: a signature already found not to pay this invoice
+                    # is never fetched again, and fetches are capped per
+                    # invoice per tick — spam on the reference cannot hide a
+                    # real payment (older signatures are reached on later
+                    # ticks) nor make a tick unbounded.
+                    if (request_id, signature) in _svm_seen:
+                        continue
                     if await invoicing.transaction_hash_already_settled(
                             signature, db=self._db):
                         continue
+                    if fetched >= _SVM_FETCH_CAP:
+                        break
+                    fetched += 1
                     tx = _rpc("getTransaction",
                               [signature, {"encoding": "jsonParsed",
                                            "maxSupportedTransactionVersion": 0}])
                     credited = solana_settlement.settlement_for(
                         tx, treasury=treasury, mint=mint, expected_raw=expected_raw)
                     if credited is None:
+                        if tx is not None:
+                            if len(_svm_seen) > 50000:
+                                _svm_seen.clear()
+                            _svm_seen.add((request_id, signature))
                         unmatched += 1
                         continue
                     if not await invoicing.claim_for_settlement(request_id, db=self._db):
@@ -571,6 +633,11 @@ class SettlementScanMixin:
         from modules.x402 import invoicing
 
         known_routers = _known_swap_router_addresses(chain)
+        # CR-M16: the agent's OWN addresses (every venue, and the treasury
+        # itself). A transfer from one of them is the agent moving its own
+        # money — a venue withdrawal, a sweep — never a payer settling an
+        # invoice that happens to share the amount.
+        own_addresses = _own_evm_addresses() | {str(treasury or "").lower()}
         # Loaded at most once per batch, and only when a router-sourced
         # transfer actually needs it (the ledger is a whole-file read).
         own_trade_refs: Optional[set] = None
@@ -585,13 +652,29 @@ class SettlementScanMixin:
                 tx_hash = transfer.get("tx_hash")
                 if tx_hash and await invoicing.transaction_hash_already_settled(
                         tx_hash, db=self._db):
-                    # A given on-chain tx settles AT MOST ONE invoice EVER —
-                    # this transfer was already applied (its original
-                    # settlement row is the durable record); neither a new
-                    # settlement nor a fresh payment_unmatched for it.
+                    # A given on-chain tx settles AT MOST ONE invoice EVER.
+                    # CR-L24: but a SECOND Transfer log in the same tx is a
+                    # different payment, not a replay — it must never vanish.
+                    # It cannot settle (the tx-hash key is taken), so the
+                    # owner is told to reconcile it.
+                    settled_log = await self._settled_log_index(tx_hash)
+                    this_log = transfer.get("log_index")
+                    if (this_log is not None and settled_log is not None
+                            and int(this_log) != int(settled_log)):
+                        logger.warning(
+                            "settlement watcher: tx %s log %s is a second "
+                            "transfer in an already-settling tx (log %s) — "
+                            "reporting it unmatched", tx_hash, this_log, settled_log)
+                        await self._notify_unmatched(transfer, treasury)
+                        unmatched += 1
+                        continue
                     logger.info(
                         "settlement watcher: tx %s already settled an "
                         "invoice — skipping (replay guard)", tx_hash)
+                    continue
+                if (transfer.get("from") or "").lower() in own_addresses:
+                    self._note_self_proceeds(transfer, treasury,
+                                             correlation="own_address")
                     continue
                 # 046: ASSET-KEYED integer match. Matching a float amount_usd
                 # treasury-wide would let a transfer of one token settle an
@@ -651,6 +734,8 @@ class SettlementScanMixin:
                         request_id, transaction_hash=tx_hash, db=self._db):
                     claimed_request_id = None  # terminal — nothing to revert
                     settled += 1
+                    # CR-M16/L24: the settled row names WHO paid and WHICH log.
+                    await self._stamp_settlement_source(request_id, transfer)
                     # The settled row now flows through the SAME
                     # settled_unnotified_invoices -> claim_wake -> _notify path as
                     # an owner/API settle — no new wake code needed.
@@ -694,7 +779,44 @@ class SettlementScanMixin:
                     "advances)", transfer.get("tx_hash"), exc_info=True)
                 continue
         return settled, unmatched
-    def _note_self_proceeds(self, transfer: dict, treasury: str) -> None:
+    async def _settled_log_index(self, tx_hash: str) -> Optional[int]:
+        """The log index stamped on the row *tx_hash* settled, or None (a
+        row from before CR-L24, or an unreadable store)."""
+        from modules.x402 import invoicing
+        try:
+            database = await invoicing._resolve_db(self._db)
+            row = await database.fetch_one(
+                "SELECT json_extract(metadata, '$.settled_log_index') AS li "
+                "FROM x402_payment_requests WHERE transaction_hash = ?",
+                (invoicing._norm_tx(tx_hash),))
+            if row and row["li"] is not None:
+                return int(row["li"])
+        except Exception:
+            logger.debug("settlement watcher: settled log index unreadable",
+                         exc_info=True)
+        return None
+
+    async def _stamp_settlement_source(self, request_id: str, transfer: dict) -> None:
+        """Record the payer address and the log index on the settled row.
+        Additive metadata only — no schema change. Fail-open: the settlement
+        already landed."""
+        from modules.x402 import invoicing
+        try:
+            database = await invoicing._resolve_db(self._db)
+            await database.execute(
+                """UPDATE x402_payment_requests
+                   SET metadata = json_set(COALESCE(metadata, '{}'),
+                                           '$.payer_address', ?,
+                                           '$.settled_log_index', ?)
+                   WHERE id = ?""",
+                (str(transfer.get("from") or "").lower() or None,
+                 transfer.get("log_index"), request_id))
+        except Exception:
+            logger.warning("settlement watcher: could not stamp the payer on %s",
+                           request_id, exc_info=True)
+
+    def _note_self_proceeds(self, transfer: dict, treasury: str,
+                            correlation: str = "own_trade_tx_hash") -> None:
         """A router-sourced transfer confirmed as OUR OWN trade proceeds.
 
         It is correctly not an owner notice — the agent moved this money on
@@ -717,7 +839,7 @@ class SettlementScanMixin:
                 "amount_usd": transfer.get("amount_usd"),
                 "block": transfer.get("block"),
                 "treasury": treasury,
-                "correlation": "own_trade_tx_hash",
+                "correlation": correlation,
             })
         except Exception:
             logger.debug("settlement watcher: self-proceeds breadcrumb failed "

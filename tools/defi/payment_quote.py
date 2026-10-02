@@ -16,6 +16,7 @@ bless liquidity the price never touched.
 from __future__ import annotations
 
 import logging
+import math
 import time
 from typing import Any, Callable, Optional, Tuple
 
@@ -42,16 +43,42 @@ def _deepest_priced_pool(chain: str, address: str, *,
     payload = (fetch or gt._get)(url)
 
     candidates = gt.parse_pools(payload, chain, row.geckoterminal_id)
+    # CR-M06: the price must be THIS asset's side of the pool. GeckoTerminal
+    # lists a token's pools with the token on EITHER side, and
+    # `base_token_price_usd` is the OTHER token's price when ours is the quote
+    # side — USDC priced at $3000 off a WETH/USDC pool, and a pool creator
+    # choosing which side an invoice is sized against. A pool where the asset
+    # is on neither side (or the side cannot be read) is not a price at all.
+    from core.wallet.addresses import normalize_for_chain
+    try:
+        want = normalize_for_chain(chain, str(address).strip())
+    except ValueError:
+        return None
     prices = {}
     for item in ((payload or {}).get("data") or []):
         attrs = (item or {}).get("attributes") or {}
+        rel = (item or {}).get("relationships") or {}
         addr = str(attrs.get("address") or "").strip()
-        price = attrs.get("base_token_price_usd")
-        if addr and price is not None:
-            try:
-                prices[addr] = float(price)
-            except (TypeError, ValueError):
-                continue
+        if not addr:
+            continue
+        if _side_is(rel, "base_token", row.geckoterminal_id, chain, want):
+            price = attrs.get("base_token_price_usd")
+        elif _side_is(rel, "quote_token", row.geckoterminal_id, chain, want):
+            price = attrs.get("quote_token_price_usd")
+        else:
+            continue
+        if price is None:
+            continue
+        try:
+            value = float(price)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(value) and value > 0:
+            prices[addr] = value
+    # Only a pool whose price for OUR side is known can be the deepest pool:
+    # otherwise a deeper pool we cannot price for this asset would turn a real
+    # quote into a refusal, and a pool with the asset on neither side would win.
+    candidates = [c for c in candidates if c.pool_address in prices]
 
     best = None
     for c in candidates:
@@ -67,6 +94,24 @@ def _deepest_priced_pool(chain: str, address: str, *,
         # answer; the caller turns it into a named refusal.
         return None
     return best, price
+
+
+def _side_is(rel, side: str, gt_network: str, chain: str, want: str) -> bool:
+    """True when the pool's ``side`` (``base_token``/``quote_token``) is ``want``.
+
+    The relationship id is ``<network>_<address>``; a wrong-network prefix or a
+    malformed address is "not this side", never a guess.
+    """
+    raw = (((rel or {}).get(side) or {}).get("data") or {}).get("id") or ""
+    prefix = f"{gt_network}_"
+    if not isinstance(raw, str) or not raw.startswith(prefix):
+        return False
+    from core.wallet.addresses import normalize_for_chain, same_address
+    try:
+        got = normalize_for_chain(chain, raw[len(prefix):])
+    except ValueError:
+        return False
+    return same_address(got, want)
 
 
 class PaymentQuoter:

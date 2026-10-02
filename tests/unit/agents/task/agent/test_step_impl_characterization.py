@@ -134,7 +134,7 @@ async def test_invalid_model_output_skips_execution():
 
     assert a._validate_model_output.called
     a.controller.multi_act.assert_not_awaited()
-    assert a.message_manager.inject_user_guidance.called
+    assert a.message_manager.inject_runtime_guidance.called
 
 
 @pytest.mark.asyncio

@@ -64,6 +64,25 @@ def _update_forged_turn_marker(orchestrator, messages: List[Dict[str, Any]]) -> 
             orchestrator._clear_correspondent_taint()
         except Exception:
             pass
+        # The owner is driving again: a money refusal earlier in this session
+        # no longer holds its public rails (core/security/refusal_taint.py).
+        try:
+            from core.security.refusal_taint import clear as _clear_refusal_taint
+            _clear_refusal_taint(getattr(orchestrator, "session_id", "") or "")
+        except Exception:
+            pass
+
+    # CR-L22: a FORWARDED body (Telegram stamps ``metadata.forwarded``) is a
+    # third party's words inside an owner message. It re-taints AFTER the clear
+    # above, so a mixed batch fails toward untrusted and the capability gate
+    # holds the money / high-impact verbs for this turn. The next genuine,
+    # un-forwarded owner message clears it again.
+    if any((m.get("metadata") or {}).get("forwarded") for m in messages):
+        try:
+            orchestrator._set_correspondent_taint("telegram", "forwarded")
+        except Exception:
+            # Fail closed: the flag alone is what the gate reads.
+            orchestrator._correspondent_tainted = True
 
     # P1 finalization: a genuine (non-forged) batch means the owner is driving
     # again — clear the self-wake re-entry budget for this session. Previously the
@@ -191,6 +210,20 @@ class UserIngressMixin:
             _stamp_delegation_deliveries(self, messages)
         except Exception:
             pass
+
+        # 061: a GENUINE owner batch brings the thread with it — the referent of
+        # a quote-reply, and (mid-run only; a turn's first step injects its own
+        # delta) what other sessions/rails said meanwhile. Fail-open.
+        if messages and getattr(getattr(self, 'orchestrator', None),
+                                '_forged_turn_kind', None) is None:
+            try:
+                if hasattr(self, '_inject_owner_thread_referents'):
+                    self._inject_owner_thread_referents(messages)
+                if getattr(self.state, 'n_steps', 0) >= 1 and \
+                        hasattr(self, '_inject_owner_thread_delta'):
+                    self._inject_owner_thread_delta()
+            except Exception:
+                pass
 
         # Prepare session context for message injection
         if messages:

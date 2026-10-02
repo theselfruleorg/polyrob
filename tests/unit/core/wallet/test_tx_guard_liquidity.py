@@ -110,7 +110,12 @@ def test_required_event_from_exact_emitter():
 
 
 def test_implied_price_and_two_unpriceable():
-    d = run(price_fn=lambda chain, token: 1 if token == A else None)
+    # CR-L13: the paired-leg valuation holds only for a pool THIS tx creates.
+    created_event = (dex_registry.row_for('base', 'v3').factory,
+                     '0x' + keccak(text='PoolCreated(address,address,uint24,int24,address)').hex())
+    d = run(intent(expected_events=(created_event,)),
+            deltas(event_topics=(created_event,)),
+            price_fn=lambda chain, token: 1 if token == A else None)
     assert d.allowed and d.amount_usd == 2 and 'implied' in d.reason
     assert not run(price_fn=lambda *a: None).allowed
     assert not run(price_fn=lambda *a: float('nan')).allowed
@@ -158,3 +163,10 @@ def test_deposit_cannot_fund_somebody_elses_position():
     i = intent(lp_position=(NPM, 42), lp_position_effect='hold')
     result = run(i, replace(d, logs=(wrong_log,)))
     assert not result.allowed and 'different position' in result.reason
+
+
+def test_cr_l13_existing_pool_refuses_the_paired_leg_valuation():
+    """In an existing pool the ratio is whatever its last trader seeded, so the
+    unpriceable leg may not borrow the priced leg's USD."""
+    d = run(price_fn=lambda chain, token: 1 if token == A else None)
+    assert not d.allowed and 'already exists' in d.reason

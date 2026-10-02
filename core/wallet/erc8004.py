@@ -19,15 +19,18 @@ Addresses verified 2026-09-15 against
 https://github.com/erc-8004/erc-8004-contracts. The **Validation** Registry spec
 is still under development upstream and is deliberately not pinned here.
 
-⚠️ `robinhood` (4663) is ABSENT, on purpose: this project's own chain registry
-carries it, but ERC-8004 has no published deployment there. `registry_for`
-returns None rather than a guess — a made-up address on a real money chain is
-exactly the failure this module exists to prevent.
+`robinhood` (4663) and `robinhood-testnet` (46630) were added 2026-09-23 from a
+MEASUREMENT, not a list: on 4663 the mainnet pair answers `name() ==
+"AgentIdentity"` with proxy code sha256 `e3b1c1b4…` equal to Base/Ethereum and
+implementation `0x7274e874…9c02` in the ERC-1967 slot; on 46630 the TESTNET pair
+has the same proxy code and the same implementation slot as base-sepolia, and the
+mainnet address has no code there. (Before that date the row was absent on
+purpose: a made-up address on a money chain is the failure this module prevents.)
 """
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Dict, Optional, Tuple
 
 #: Same address on every mainnet (a deliberate vanity deployment).
@@ -46,6 +49,11 @@ class RegistryRow:
     chain_id: int
     identity: str
     reputation: str
+    #: The first block that can hold an Identity-Registry ``Transfer`` on this chain — where
+    #: an agentId log scan starts (``tools.defi.agent_registration.read_agent_id``). 0 = not
+    #: measured: scan from genesis. A MEASURED lower bound, never a guess: a later start
+    #: would miss an identity and read a registered wallet as unregistered-by-id.
+    identity_logs_from: int = 0
 
 
 def _mainnet(chain: str, chain_id: int) -> RegistryRow:
@@ -63,12 +71,17 @@ _ROWS: Dict[str, RegistryRow] = {
     "optimism": _mainnet("optimism", 10),
     "arbitrum": _mainnet("arbitrum", 42161),
     "polygon": _mainnet("polygon", 137),
+    # identity_logs_from = the block of the registry's FIRST Transfer (agentId 0), read
+    # 2026-09-29 with eth_getLogs over 0..head in 10M-block windows (testnet-run F3).
+    "robinhood": replace(_mainnet("robinhood", 4663), identity_logs_from=34_617_892),
     # Testnets — where a first registration should always be exercised.
     "ethereum-sepolia": _testnet("ethereum-sepolia", 11155111),
     "base-sepolia": _testnet("base-sepolia", 84532),
     "optimism-sepolia": _testnet("optimism-sepolia", 11155420),
     "arbitrum-sepolia": _testnet("arbitrum-sepolia", 421614),
     "polygon-amoy": _testnet("polygon-amoy", 80002),
+    "robinhood-testnet": replace(_testnet("robinhood-testnet", 46630),
+                                 identity_logs_from=99_678_682),
 }
 
 
@@ -117,3 +130,9 @@ def resolve_identity_registry(chain: Optional[str]) -> str:
 
 def resolve_reputation_registry(chain: Optional[str]) -> str:
     return _resolve(chain, "EIP8004_REPUTATION_REGISTRY", "reputation")
+
+
+def identity_logs_from(chain: Optional[str]) -> int:
+    """Where an Identity-Registry ``Transfer`` log scan on *chain* starts (0 = genesis)."""
+    row = registry_for(chain)
+    return int(row.identity_logs_from) if row is not None else 0

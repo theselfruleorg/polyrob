@@ -34,7 +34,7 @@ import logging
 import re
 import urllib.request
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, NamedTuple, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -421,12 +421,18 @@ def parse_search_pools(payload: Any) -> List:
         address = _base_token(row.get("relationships") or {}, gt_network, chain)
         if not address:
             continue
+        from core.wallet.tokens import clean_symbol
         name = str(attrs.get("name") or "")
-        symbol = name.split("/")[0].strip() or None
+        # CR-L11: the pool name is creator-authored text; bound it and keep it
+        # to one printable line before it becomes a symbol anyone reads.
+        symbol = clean_symbol(name.split("/")[0])
+        # The pool name ("PNL / WETH") is NOT the token's name, so it is not
+        # passed off as one: the index sends no token name here.
         out.append(Candidate(
-            chain=chain, address=address, symbol=symbol, name=name or None,
+            chain=chain, address=address, symbol=symbol, name=None,
             liquidity_usd=_positive(attrs.get("reserve_in_usd")) or 0.0,
-            price_usd=_f(attrs.get("base_token_price_usd")),
+            # CR-L04: a zero/negative price is unpriced, never a valuation.
+            price_usd=_positive(attrs.get("base_token_price_usd")),
         ))
     return out
 
@@ -502,13 +508,76 @@ def ohlcv(chain: str, pool_address: str, *, timeframe: str = "hour",
         return []
 
 
-def top_pool_for_token(chain: str, token_address: str, *, fetch=None) -> Optional[str]:
-    """The DEEPEST pool for a token, because candles are pool-scoped.
+class PoolPick(NamedTuple):
+    """Which pool was chosen, on what basis, and what the runner-up was.
 
-    Deepest rather than first: a token's pools disagree, and the thin one is the
-    one an attacker seeded. Returns None when nothing is indexed — which is a
-    real answer for a token minutes old, not an error to paper over.
+    The basis is the point, and it has been wrong in both directions. 2026-09-22:
+    a buyback skip report narrated "a ~96% collapse inside a single hour" from
+    candles on a pool holding $4,251 while the treasury's own quote — routed
+    through a different, $18,350 venue — said the price was down 7%. 2026-09-23:
+    a reviewer read the reserve-top PNL pool ($18,190 held, **$1,390** traded),
+    "cross-checked" it against a second index that ranks the same way, and filed
+    a RED FLAG against a rail that was reading the pool the position actually
+    trades ($4,147.81 held, **$61,792** traded) — then had to retract it.
+
+    Both are the same mistake: **reserve is not where a token trades.** So the
+    pick is the BUSIEST pool when any pool reports volume, and the deepest only
+    when none does, which is the right answer for a token nothing has traded.
+
+    Every figure is None when the indexer did not give it — unknown, never 0.0,
+    because a zero reads as "empty pool" / "nothing traded" and would be a worse
+    lie than the silence it replaces.
+
+    ``deepest_*`` is populated ONLY when the deepest pool is a different pool
+    from the one chosen, so a caller can always see the disagreement rather than
+    inherit a ranking it cannot audit. A volume-only pick is wash-tradeable; a
+    pick that shows its work is not.
+
+    The three original fields keep their positions: ``PoolPick(addr, liq, n)``
+    still builds, and everything added here defaults to "not known".
     """
+    address: str
+    liquidity_usd: Optional[float]
+    pool_count: int
+    volume_h24_usd: Optional[float] = None
+    deepest_address: Optional[str] = None
+    deepest_liquidity_usd: Optional[float] = None
+    deepest_volume_h24_usd: Optional[float] = None
+
+    @property
+    def pools_disagree(self) -> bool:
+        """Whether the deepest pool is NOT the one chosen."""
+        return self.deepest_address is not None
+
+    @property
+    def basis(self) -> str:
+        """How this pool was chosen, for a caller that renders the answer."""
+        return "busiest" if self.volume_h24_usd is not None else "deepest"
+
+
+def top_pool_for_token_detailed(chain: str, token_address: str, *,
+                                fetch=None) -> Optional[PoolPick]:
+    """:class:`PoolPick` for the chosen pool, or None if none is indexed."""
+    best = _top_pool(chain, token_address, fetch=fetch)
+    return best
+
+
+def top_pool_for_token(chain: str, token_address: str, *, fetch=None) -> Optional[str]:
+    """The pool a token actually TRADES in, because candles are pool-scoped.
+
+    Busiest by 24 h volume, falling back to deepest when no pool reports any —
+    see :class:`PoolPick` for why reserve alone read the wrong pool twice.
+    Returns None when nothing is indexed, which is a real answer for a token
+    minutes old, not an error to paper over.
+
+    Address only, for every caller that wants just that;
+    :func:`top_pool_for_token_detailed` carries the basis and the runner-up.
+    """
+    pick = _top_pool(chain, token_address, fetch=fetch)
+    return None if pick is None else pick.address
+
+
+def _top_pool(chain: str, token_address: str, *, fetch=None) -> Optional[PoolPick]:
     from core.wallet import chains
     row = chains.get(chain)
     if row is None or not row.geckoterminal_id:
@@ -523,16 +592,83 @@ def top_pool_for_token(chain: str, token_address: str, *, fetch=None) -> Optiona
         logger.info("geckoterminal: pools-for-token failed for %s/%s (%s)",
                     chain, token_address, exc)
         raise RuntimeError(f"indexer error for {chain} pools-for-token: {exc}") from exc
-    best, best_liq = None, None
+    # (address, reserve, 24h volume) for every row that named a pool. Both
+    # figures go through `_positive`: the indexer sends 0 for something it has
+    # not valued, and a 0 must not out-rank an unvalued pool nor lose to one.
+    rows: List[tuple] = []
     for item in ((payload or {}).get("data") or []):
         attrs = (item or {}).get("attributes") or {}
         addr = str(attrs.get("address") or "").strip()
         if not addr:
             continue
-        liq = _positive(attrs.get("reserve_in_usd"))
-        if best is None or (liq is not None and (best_liq is None or liq > best_liq)):
-            best, best_liq = addr, liq
-    return best
+        rows.append((addr,
+                     _positive(attrs.get("reserve_in_usd")),
+                     _positive((attrs.get("volume_usd") or {}).get("h24"))))
+    if not rows:
+        return None
+    seen = len(rows)
+
+    deepest = max(rows, key=lambda r: (r[1] is not None, r[1] or 0.0))
+    traded = [r for r in rows if r[2] is not None]
+    # Busiest when anything traded; deepest when nothing did. Listing order never
+    # decides it — the indexer returns these reserve-ordered.
+    chosen = max(traded, key=lambda r: r[2]) if traded else deepest
+
+    alt = deepest if deepest[0] != chosen[0] else None
+    return PoolPick(
+        address=chosen[0], liquidity_usd=chosen[1], pool_count=seen,
+        volume_h24_usd=chosen[2],
+        deepest_address=None if alt is None else alt[0],
+        deepest_liquidity_usd=None if alt is None else alt[1],
+        deepest_volume_h24_usd=None if alt is None else alt[2],
+    )
+
+
+#: ``/simple/networks/{net}/token_price/{a,b,...}`` takes up to 30 addresses
+#: (071 §3.3: the second price source, batched so a holdings read costs one
+#: call per 30 tokens, not one per token against a 30/min free tier).
+TOKEN_PRICE_MAX = 30
+
+
+def parse_token_prices(payload: Any, addresses) -> Dict[str, float]:
+    """``{requested address: usd}`` for each token the indexer priced. EVM
+    keys come back lower-cased; base58 keys are case-sensitive and match as sent.
+    A zero / negative / unparsable price is absent (unknown), never 0."""
+    prices = ((((payload or {}).get("data") or {}).get("attributes") or {})
+              .get("token_prices") or {}) if isinstance(payload, dict) else {}
+    out: Dict[str, float] = {}
+    for addr in addresses:
+        raw = prices.get(addr)
+        if raw is None and str(addr).startswith("0x"):
+            raw = prices.get(str(addr).lower())
+        val = _positive(raw)
+        if val is not None:
+            import math
+            if math.isfinite(val):
+                out[addr] = val
+    return out
+
+
+def token_prices(chain: str, addresses, *, fetch=None) -> Dict[str, float]:
+    """Batched USD prices. RAISES on a provider error (a 429 that survived the
+    retry, a timeout): the caller names the failure — it is not "no price"."""
+    from core.wallet import chains
+    row = chains.get(chain)
+    if row is None or not row.geckoterminal_id:
+        return {}
+    # (as the caller spelled it, as the URL carries it)
+    pairs = [(a, _url_safe_address(chain, a, what="token"))
+             for a in dict.fromkeys(addresses) if a]
+    out: Dict[str, float] = {}
+    for i in range(0, len(pairs), TOKEN_PRICE_MAX):
+        chunk = pairs[i:i + TOKEN_PRICE_MAX]
+        url = (f"{BASE_URL}/simple/networks/{row.geckoterminal_id}/token_price/"
+               f"{','.join(safe for _, safe in chunk)}")
+        got = parse_token_prices((fetch or _get)(url), [safe for _, safe in chunk])
+        for orig, safe in chunk:
+            if safe in got:
+                out[orig] = got[safe]
+    return out
 
 
 def health() -> bool:

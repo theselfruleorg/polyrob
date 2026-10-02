@@ -78,6 +78,7 @@ def _resolve_job_id(svc, job_id: str, tenant: str) -> str:
 def _warn_if_cron_off() -> None:
     """A stored job only runs if the ticker is on — never mislead the owner."""
     from cli._flag_warn import warn_if_flag_off
+    from core.remedy import flag_command
 
     def _enabled() -> bool:
         from tools.cronjob_tools import cron_enabled
@@ -87,8 +88,8 @@ def _warn_if_cron_off() -> None:
         "CRON_ENABLED",
         "the job is stored but no ticker will run it.",
         enabled_fn=_enabled,
-        remedy="polyrob config set CRON_ENABLED true --global "
-               "(or AUTONOMY_POSTURE=full)",
+        remedy=(f"{flag_command('CRON_ENABLED')}` or `"
+                f"{flag_command('AUTONOMY_POSTURE', 'full')}"),
     )
 
 
@@ -377,11 +378,17 @@ def show(job_id: str, user: Optional[str]):
               help="Replace the job's task PROSE with this file's text (schedule, next run, cap "
                    "and payload untouched). The alternative was cancel + re-schedule, which loses "
                    "last_run_at and every payload edit.")
+@click.option("--slot-cap", default=None,
+              help="$0 preflight in payload.preflight: skip the run (cron_run skipped/no_slot) while "
+                   "the ledger's `## Open positions` table already holds N or more rows — the "
+                   "SCOUT rail's rule-10 cap, evaluated in-process before any model call "
+                   "(or 'none' to drop it).")
 @click.option("--user", default=None, help="Tenant id (default: this instance's identity)")
 @as_root_option
 def edit(job_id: str, max_duration: Optional[int], schedule: Optional[str],
          priority: Optional[str], preempts: Optional[bool], rig: Optional[str],
-         deliver: Optional[str], task_file: Optional[str], user: Optional[str]):
+         deliver: Optional[str], task_file: Optional[str], slot_cap: Optional[str],
+         user: Optional[str]):
     """Change a job's cap, schedule, priority, pre-emption and/or rig (tenant-scoped).
 
     Why: the EXIT/SCOUT treasury rails were created with a 240 s cap and timed
@@ -393,10 +400,11 @@ def edit(job_id: str, max_duration: Optional[int], schedule: Optional[str],
     svc = _service(write=True)
     tenant = _tenant(user)
     if max_duration is None and schedule is None and priority is None \
-            and rig is None and preempts is None and deliver is None and task_file is None:
+            and rig is None and preempts is None and deliver is None and task_file is None \
+            and slot_cap is None:
         raise click.ClickException(
             "nothing to change: pass --max-duration, --schedule, --priority, "
-            "--preempts, --rig, --deliver and/or --task-file")
+            "--preempts, --rig, --deliver, --slot-cap and/or --task-file")
     job_id = _resolve_job_id(svc, job_id, _tenant(user))
     if max_duration is not None:
         if svc.store.set_max_duration(job_id, max_duration, user_id=tenant):
@@ -439,17 +447,33 @@ def edit(job_id: str, max_duration: Optional[int], schedule: Optional[str],
         else:
             raise click.ClickException(f"could not set rig on {job_id!r} (no job for this tenant)")
     if deliver is not None:
-        from cron.delivery import ALLOWED_TARGETS
+        from cron.delivery import allowed_targets
         from cron.rig_edit import set_job_deliver
         _drop = deliver.strip().lower() in ("none", "", "-")
-        if not _drop and deliver.strip().lower() not in ALLOWED_TARGETS:
+        if not _drop and deliver.strip().lower() not in allowed_targets():
             raise click.ClickException(
-                f"unknown delivery target {deliver!r} (valid: {', '.join(ALLOWED_TARGETS)}, "
+                f"unknown delivery target {deliver!r} (valid: {', '.join(allowed_targets())}, "
                 f"or 'none' to drop it)")
         if set_job_deliver(svc.store, job_id, None if _drop else deliver, user_id=_tenant(user)):
             click.echo(f"{job_id}: deliver → {'(dropped)' if _drop else deliver.strip().lower()}")
         else:
             raise click.ClickException(f"could not set deliver on {job_id!r} (no job for this tenant)")
+    if slot_cap is not None:
+        from cron.rig_edit import set_job_preflight_slot_cap
+        _drop = slot_cap.strip().lower() in ("none", "", "-")
+        cap = None
+        if not _drop:
+            try:
+                cap = int(slot_cap)
+            except ValueError:
+                cap = 0
+            if cap <= 0:
+                raise click.ClickException(
+                    f"--slot-cap must be a positive row count (or 'none' to drop it), got {slot_cap!r}")
+        if set_job_preflight_slot_cap(svc.store, job_id, cap, user_id=_tenant(user)):
+            click.echo(f"{job_id}: preflight slot_cap → {'(dropped)' if _drop else cap}")
+        else:
+            raise click.ClickException(f"could not set slot-cap on {job_id!r} (no job for this tenant)")
     if task_file is not None:
         with open(task_file, "r", encoding="utf-8") as fh:
             text = fh.read()

@@ -29,42 +29,14 @@ import os
 # here, a frozen copy went stale twice).
 # code_execution is excluded from all named sets (unsafe by default).
 
+# The ids live in core/config_policy/profiles.py (067 P1 — one ordered table);
+# this dict is the historical ``name -> list`` view, key order = the table's
+# (the `polyrob init` wizard offers them in that order).
+from core.config_policy.profiles import (names as _profile_names, profile as _profile,
+                                         provided_only as _provided_only)
+
 TOOLSETS: dict[str, list[str]] = {
-    # Absolute minimum: file access + task management.
-    "minimal": ["filesystem", "task"],
-    # Equivalent to the safe/cli minimum.
-    "safe": ["filesystem", "task"],
-    # Static base of the true default; resolve_toolset("default") adds the dynamic
-    # coding/anysite additions so it is behavior-identical to an unset
-    # POLYROB_AGENT_TOOLSET (`polyrob init` writes "default" — O1, 2026-07-14 review).
-    "default": ["filesystem", "task", "web_fetch"],
-    # Research workflow: lightweight web read + search + any-site scraping + read-only
-    # crypto market data (no wallet).
-    "research": ["filesystem", "task", "perplexity", "anysite", "web_fetch",
-                 "polymarket_data", "hyperliquid_data"],
-    # Trading research: research base focused on the crypto read tools (no trade tools).
-    "trading_research": ["filesystem", "task", "perplexity", "anysite", "web_fetch",
-                         "polymarket_data", "hyperliquid_data"],
-    # Coding workflow: file editing + code runner tool.
-    "coding": ["filesystem", "task", "coding"],
-    # Development: coding + browser (e.g. to browse docs / test web UIs).
-    "development": ["filesystem", "task", "coding", "browser"],
-    # Browser-centric: just the browser on top of core.
-    "browser": ["filesystem", "task", "browser"],
-    # Social work: broad public discovery plus the two account-authoritative X rails.
-    # Registration/config gates still apply; writes keep their per-action approval and
-    # TWITTER_ENABLED boundaries, so requesting these ids does not bypass policy.
-    "social": ["filesystem", "task", "anysite", "perplexity", "web_fetch",
-               "twitter", "x_browser"],
-    # Full server stack (mirrors server_default_tools()).
-    "full": ["filesystem", "task", "web_fetch", "perplexity", "email", "mcp", "anysite"],
-    # Flagship "earn real money, safely" goal toolset (scripts/seed_goal.py). Research /
-    # browse / code only — deliberately NO money (wallet/x402), trading, or social tools;
-    # those are opt-in per the safety envelope, never seeded by the flagship goal.
-    "earn": ["filesystem", "task", "browser", "perplexity", "mcp", "anysite", "coding"],
-    # Owner interactive chat supervised default (surfaces/telegram/interactive_tools.py) —
-    # scheduling belongs in the owner chat, so `goal` + the write-gated `twitter` are in.
-    "owner_interactive": ["goal", "twitter", "web_fetch", "filesystem", "task"],
+    name: list(_profile(f"toolset:{name}")) for name in _profile_names("toolset")
 }
 
 
@@ -77,19 +49,18 @@ def _dynamic_default_tools() -> list[str]:
     never setting the env at all. Never raises: a failed dynamic import falls
     back to the static base.
     """
-    tools = list(TOOLSETS["default"])
+    tools = list(_profile("default:cli"))
     try:
         from tools.coding import coding_tools_enabled
         if coding_tools_enabled():
             tools.append('coding')
     except Exception:
         pass
-    try:
-        from tools.anysite import anysite_cli_enabled
-        if anysite_cli_enabled():
-            tools.append('anysite')
-    except Exception:
-        pass
+    # The anysite gate is registered by the discovery pack in the loader's phase 2
+    # (core.tool_gates); unregistered (pack absent / not loaded) reads as off.
+    from core.tool_gates import gate_on
+    if gate_on("anysite"):
+        tools.append('anysite')
     try:
         # Registering a container tool does NOT make it callable — the id must
         # also be in the session's loaded tool_ids. Read the flag from the tier-0
@@ -113,12 +84,26 @@ def resolve_toolset(name: str) -> list[str]:
     key = (name or "").strip().lower()
     if key == "default" or key not in TOOLSETS:
         return _dynamic_default_tools()
-    return list(TOOLSETS[key])
+    # TOOLSETS is an import-time view; a pack disabled at phase 2 drops out here.
+    return _provided_only(TOOLSETS[key])
 
 
 # ---------------------------------------------------------------------------
 # Per-surface defaults
 # ---------------------------------------------------------------------------
+
+
+def _full_autonomy() -> bool:
+    from agents.task.constants import full_autonomy_enabled
+    return full_autonomy_enabled()
+
+
+def _ambient_autonomous_tools() -> list[str]:
+    """The BARE autonomous grant minus the meta ids (``exclude:ambient``) — the
+    ambient toolset of an autonomous session that asked for no tools."""
+    from agents.task.constants import AUTONOMOUS_MODE_TOOLS
+    meta = _profile("exclude:ambient")
+    return [t for t in _provided_only(AUTONOMOUS_MODE_TOOLS) if t not in meta]
 
 
 def server_default_tools() -> list[str]:
@@ -140,10 +125,9 @@ def server_default_tools() -> list[str]:
     ``tests/unit/agents/task/test_ambient_toolset_has_no_spend.py``; an
     alignment audit read this as drift precisely because nothing here said so.
     """
-    from agents.task.constants import full_autonomy_enabled, AUTONOMOUS_MODE_TOOLS
-    if full_autonomy_enabled():
-        return [t for t in AUTONOMOUS_MODE_TOOLS if t not in ("goal", "cronjob")]
-    return ['filesystem', 'task', 'web_fetch', 'perplexity', 'email', 'mcp', 'anysite']
+    if _full_autonomy():
+        return _ambient_autonomous_tools()
+    return list(_profile("default:server"))
 
 
 def with_compute_tools(tools: list[str]) -> list[str]:
@@ -192,10 +176,9 @@ def default_session_tools() -> list[str]:
     older wording overclaimed on both. What actually holds, and what the test
     pins, is that no money-SPEND tool is ever in an ambient session's toolset.)
     """
-    from agents.task.constants import full_autonomy_enabled, AUTONOMOUS_MODE_TOOLS
-    if full_autonomy_enabled():
-        return [t for t in AUTONOMOUS_MODE_TOOLS if t not in ("goal", "cronjob")]
-    return ["browser", "filesystem", "task"]
+    if _full_autonomy():
+        return _ambient_autonomous_tools()
+    return list(_profile("default:session"))
 
 
 def cli_default_tools() -> list[str]:

@@ -1,3 +1,4 @@
+from tests.support.owner_prefs import set_owner_pref
 import asyncio
 import types
 
@@ -101,7 +102,7 @@ def _patch(monkeypatch, *, result, act):
 
 @pytest.mark.asyncio
 async def test_voice_echo_quotes_voice_note(monkeypatch):
-    monkeypatch.setenv("VOICE_TRANSCRIPT_ECHO", "true")
+    set_owner_pref(monkeypatch, "voice.transcript_echo", True)
     bot = FakeBot()
     media = [Media(kind="voice", transcript="turn on the lights")]
     _patch(monkeypatch, result=_result("turn on the lights", media), act=_spawn_act())
@@ -113,7 +114,7 @@ async def test_voice_echo_quotes_voice_note(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_no_echo_for_text_message(monkeypatch):
-    monkeypatch.setenv("VOICE_TRANSCRIPT_ECHO", "true")
+    set_owner_pref(monkeypatch, "voice.transcript_echo", True)
     bot = FakeBot()
     _patch(monkeypatch, result=_result("hello", []), act=_spawn_act())
     await _harness(bot).handle_update({"update_id": 1, "message": {"message_id": 7,
@@ -124,7 +125,7 @@ async def test_no_echo_for_text_message(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_flag_off_no_echo(monkeypatch):
-    monkeypatch.setenv("VOICE_TRANSCRIPT_ECHO", "false")
+    set_owner_pref(monkeypatch, "voice.transcript_echo", False)
     bot = FakeBot()
     media = [Media(kind="voice", transcript="hi")]
     _patch(monkeypatch, result=_result("hi", media), act=_spawn_act())

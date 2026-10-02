@@ -32,8 +32,11 @@ class PublishParams(BaseModel):
                                        "and single hyphens (e.g. 'rob-status'). The page "
                                        "is served at <base>/<slug>/.")
     files: List[str] = Field(..., description="Workspace-relative (or absolute in-workspace) "
-                                              "files to publish. Include an index.html for a "
-                                              "page. Existing files at this slug are replaced.")
+                                              "files or directories to publish. A file lands at "
+                                              "the slug root; a directory (e.g. a build's dist/) "
+                                              "publishes its CONTENTS with their tree. Include an "
+                                              "index.html for a page. Existing files at this slug "
+                                              "are replaced.")
 
 
 class UnpublishParams(BaseModel):
@@ -148,8 +151,11 @@ class PublishTool(BaseTool):
         except OSError as e:
             return ActionResult(error=f"publish failed: {str(e)[:160]}")
 
-        if needs_approval:
-            store.approve(user_id, params.slug)
+        if needs_approval and not store.approve(user_id, params.slug):
+            # The promotion failed (and rolled back): nothing is served. Saying
+            # "Published" here was a lie (codex review 2026-09-25).
+            return ActionResult(error=f"publish failed: {params.slug!r} was staged but could "
+                                      f"not be promoted to the served tree")
 
         pub = store.get(params.slug)
         url = pub.url if pub else store.url_for(params.slug)
@@ -204,7 +210,14 @@ class PublishTool(BaseTool):
 
             from core.artifacts import get_artifact_ledger
             ledger = get_artifact_ledger()
+            files = []
             for src in sources:
+                if os.path.isdir(src) and not os.path.islink(src):
+                    for dirpath, _dirs, names in os.walk(src):
+                        files.extend(os.path.join(dirpath, n) for n in names)
+                else:
+                    files.append(src)
+            for src in files:
                 row = ledger._row_by_path(user_id, os.path.realpath(src))
                 if row:
                     ledger.set_url(row["id"], user_id, url)

@@ -46,6 +46,9 @@ class LiveHealthMixin:
             from core.surfaces.room_policy import is_public_session
             if is_public_session(getattr(self, "orchestrator", None)):
                 return  # 044 T4: no owner health note into a public room
+            from agents.task.session_class import correspondent_facing
+            if correspondent_facing(getattr(self, "orchestrator", None)):
+                return  # H16: output goes to a correspondent — no owner-tenant state
             from agents.task.constants import AutonomyConfig
             if not AutonomyConfig.live_health_context():
                 return

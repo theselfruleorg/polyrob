@@ -23,7 +23,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 PATHS = ["/", "/inbox", "/work", "/money", "/agent"]
-LABELS = ["New", "Inbox", "Work", "Money", "Agent"]
+LABELS = ["Chat", "Inbox", "Work", "Money", "Rob"]
 
 
 @pytest.fixture()
@@ -172,7 +172,7 @@ def test_an_uncertain_count_is_drawn_as_uncertain(pages_new, monkeypatch):
     assert "is-uncertain" in badge.get("class", [])
     # The badge may never claim more certainty than the list behind it.
     assert inbox["aria-label"] != "Inbox, 1 waiting"
-    assert "unread" in inbox["aria-label"] or "unreadable" in inbox["aria-label"]
+    assert "could not check" in inbox["aria-label"]
 
 
 def test_the_label_counts_the_unreadable_lists_too(pages_new, monkeypatch):
@@ -182,16 +182,16 @@ def test_the_label_counts_the_unreadable_lists_too(pages_new, monkeypatch):
     soup = _soup(client, "/work")
     label = _nav(soup).select("a.nav-item")[1]["aria-label"]
     assert "3 lists" in label
-    assert "one list" not in label
+    assert "everything" not in label
     truth = soup.select_one(".head-truth").get_text(" ", strip=True)
-    assert "3 lists are unreadable" in truth
+    assert "I could not check 3 lists." in truth
 
 
 def test_one_unreadable_list_is_still_singular(pages_new, monkeypatch):
     client = _client_with(pages_new, monkeypatch, inbox=(2, True, 1))
     soup = _soup(client, "/work")
-    assert "one list" in _nav(soup).select("a.nav-item")[1]["aria-label"]
-    assert "one list is unreadable" in soup.select_one(".head-truth").get_text(" ", strip=True)
+    assert "I could not check everything." in _nav(soup).select("a.nav-item")[1]["aria-label"]
+    assert "I could not check everything." in soup.select_one(".head-truth").get_text(" ", strip=True)
 
 
 def test_the_nav_still_does_not_fork_when_the_count_is_uncertain(pages_new, monkeypatch):

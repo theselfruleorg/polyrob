@@ -144,34 +144,43 @@ def extract_done_text(orchestrator: Any) -> str:
     return ""
 
 
-def collect_user_messages(orchestrator: Any, *, limit: int = 50) -> List[str]:
-    """send_message texts the agent addressed to its user during the run.
+def agent_user_messages(agent: Any, *, limit: int = 50) -> List[str]:
+    """send_message texts ONE agent addressed to its user, oldest first.
 
     Read from the ledger (action params paired with a non-error result) —
     the ActionResult content of a send is a framework placeholder.
     """
     out: List[str] = []
+    try:
+        for step in _steps(agent):
+            actions = list(getattr(getattr(step, "model_output", None), "action", None) or [])
+            results = list(getattr(step, "result", None) or [])
+            for i, action in enumerate(actions):
+                if _action_name(action) != "send_message":
+                    continue
+                if i < len(results) and getattr(results[i], "error", None):
+                    continue
+                try:
+                    params = action.model_dump(exclude_unset=True).get("send_message") or {}
+                    text = str(params.get("text") or "").strip()
+                except Exception:
+                    text = ""
+                if text:
+                    out.append(text)
+                    if len(out) >= limit:
+                        return out
+    except Exception:
+        pass
+    return out
+
+
+def collect_user_messages(orchestrator: Any, *, limit: int = 50) -> List[str]:
+    """send_message texts the run's main agents addressed to their user."""
+    out: List[str] = []
     for agent in _main_agents(orchestrator):
-        try:
-            for step in _steps(agent):
-                actions = list(getattr(getattr(step, "model_output", None), "action", None) or [])
-                results = list(getattr(step, "result", None) or [])
-                for i, action in enumerate(actions):
-                    if _action_name(action) != "send_message":
-                        continue
-                    if i < len(results) and getattr(results[i], "error", None):
-                        continue
-                    try:
-                        params = action.model_dump(exclude_unset=True).get("send_message") or {}
-                        text = str(params.get("text") or "").strip()
-                    except Exception:
-                        text = ""
-                    if text:
-                        out.append(text)
-                        if len(out) >= limit:
-                            return out
-        except Exception:
-            continue
+        out.extend(agent_user_messages(agent, limit=limit - len(out)))
+        if len(out) >= limit:
+            return out[:limit]
     return out
 
 
@@ -233,7 +242,8 @@ class RunOutcome:
     verified: str = "unverified"          # verified|unverified|failed_verification
 
     def result_text(self) -> str:
-        """Canonical display/record string.
+        """Canonical RECORD string (episode summary, board result, OUTCOME
+        parsing). Not a delivery body: a report delivers :meth:`sent_text`.
 
         Priority: done() ledger text → extracted reply → a NON-generic
         run_session return (custom task_agents return real output there).
@@ -250,6 +260,35 @@ class RunOutcome:
         if s and s.lower() not in GENERIC_STATUSES:
             return s
         return ""
+
+    def sent_text(self) -> str:
+        """What the run SAID to its user — the last send_message text.
+
+        Owner rule (2026-09-29): the agent speaks with ``send_message`` only;
+        ``done_text`` is the run's record, never the delivered answer. This is
+        the body a goal/cron report delivers. '' when the run sent nothing (or
+        was refused) — the caller keeps its empty-result behaviour.
+        """
+        if self.refusal:
+            return ""
+        for msg in reversed(self.user_messages or []):
+            m = (msg or "").strip()
+            if m and m not in FRAMEWORK_PLACEHOLDER_TEXTS:
+                return m
+        return ""
+
+
+def with_done_record(body: str, record: Optional[str], show: bool) -> str:
+    """Append the run's done() record to an owner-bound body when ``show``.
+
+    ``show`` is the owner's verbosity choice (``core.prefs.done_records_visible``).
+    Never for a public sink: the record is bookkeeping, not publishable text.
+    """
+    rec = (record or "").strip()
+    if not show or not rec or rec in FRAMEWORK_PLACEHOLDER_TEXTS:
+        return body
+    line = f"Record: {rec[:1500]}"
+    return f"{body}\n\n{line}" if (body or "").strip() else line
 
 
 async def build_run_outcome(task_agent: Any, session_id: Optional[str],

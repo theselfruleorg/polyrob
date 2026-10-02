@@ -82,7 +82,7 @@ def scan_treasury_transfers(
     filtered server-side on the `to` topic — only transfers INTO the
     treasury are ever returned.
 
-    Returns ``[{tx_hash, from, amount_raw, amount_usd, block}, ...]``.
+    Returns ``[{tx_hash, from, amount_raw, amount_usd, block, log_index}, ...]``.
 
     ⚠️ ``amount_raw`` is the EXACT integer from the log and is what settlement
     matches on. ``amount_usd`` is ``value / 10**decimals`` and is for DISPLAY
@@ -133,6 +133,10 @@ def scan_treasury_transfers(
                 "amount_raw": value,
                 "amount_usd": round(value / (10 ** int(decimals)), 6),
                 "block": int(log.get("blockNumber") or "0x0", 16),
+                # CR-L24: one tx can carry several Transfer logs; the log
+                # index is what tells them apart.
+                "log_index": (int(log["logIndex"], 16)
+                              if isinstance(log.get("logIndex"), str) else None),
             })
         except Exception:
             logger.debug("onchain_probe: skipping malformed log entry", exc_info=True)

@@ -25,18 +25,49 @@ def _sha(text: str) -> str:
     return hashlib.sha1(text.encode("utf-8", "replace")).hexdigest()[:12]
 
 
-def compute_stamps(request_params: Dict[str, Any]) -> Dict[str, str]:
-    """`{"prefix_sha", "tools_sha"}` for an OpenAI-shaped request; a missing
-    part is simply absent from the dict (never a digest of nothing)."""
+def _text(value: Any) -> str:
+    """A stable string for any system-prompt shape: a plain `str`, Anthropic's
+    list of content blocks, or anything else JSON-serialisable."""
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, sort_keys=True, default=str)
+
+
+def _system_of(request_params: Dict[str, Any], system: Any = None) -> Any:
+    """The system prompt of a request, whatever shape the provider uses.
+
+    F20 (2026-09-22): the original was OpenAI-shaped only — it scanned
+    `messages` for `role == "system"`. Anthropic puts the system prompt in a
+    top-level `system` key (a `str` OR a list of content blocks) and the
+    Responses API calls it `instructions`, so on both of those paths the stamp
+    silently came back empty and the billing record could not say whether two
+    calls shared a prefix — which is the whole question the stamp exists to
+    answer.
+
+    Precedence: an explicit `system=` argument, then `system`, then
+    `instructions`, then the first system-role message.
+    """
+    if system is not None:
+        return system
+    for key in ("system", "instructions"):
+        value = request_params.get(key)
+        if value:
+            return value
+    for m in request_params.get("messages") or []:
+        if isinstance(m, dict) and m.get("role") == "system":
+            return m.get("content")
+    return None
+
+
+def compute_stamps(request_params: Dict[str, Any],
+                   system: Any = None) -> Dict[str, str]:
+    """`{"prefix_sha", "tools_sha"}` for a request on ANY provider shape; a
+    missing part is simply absent from the dict (never a digest of nothing)."""
     out: Dict[str, str] = {}
     try:
-        for m in request_params.get("messages") or []:
-            if isinstance(m, dict) and m.get("role") == "system":
-                content = m.get("content")
-                if not isinstance(content, str):
-                    content = json.dumps(content, sort_keys=True, default=str)
-                out["prefix_sha"] = _sha(content)
-                break
+        prefix = _system_of(request_params, system)
+        if prefix:
+            out["prefix_sha"] = _sha(_text(prefix))
         tools = request_params.get("tools")
         if tools:
             out["tools_sha"] = _sha(json.dumps(tools, sort_keys=True, default=str))
@@ -45,9 +76,15 @@ def compute_stamps(request_params: Dict[str, Any]) -> Dict[str, str]:
     return out
 
 
-def stamp_client(client: Any, request_params: Dict[str, Any]) -> Dict[str, str]:
-    """Compute and remember the stamps on *client* for the call being made."""
-    stamps = compute_stamps(request_params)
+def stamp_client(client: Any, request_params: Dict[str, Any],
+                 system: Any = None) -> Dict[str, str]:
+    """Compute and remember the stamps on *client* for the call being made.
+
+    ⚠️ *client* is the POLYROB `LLMClient` (i.e. `self` inside a client method),
+    not the vendor SDK object it wraps — `read_stamps` looks the stamps up
+    through `llm._client`, which is that wrapper.
+    """
+    stamps = compute_stamps(request_params, system)
     try:
         setattr(client, _PREFIX_ATTR, stamps.get("prefix_sha"))
         setattr(client, _TOOLS_ATTR, stamps.get("tools_sha"))

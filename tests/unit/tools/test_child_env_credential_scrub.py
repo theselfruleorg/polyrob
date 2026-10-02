@@ -7,7 +7,7 @@ straight to a child:
 * ``tools/browser/browser.py`` — ``os.environ.copy()`` into
   ``playwright.chromium.launch(env=…)``, so every page Chromium rendered ran
   next to the treasury seed;
-* ``tools/anysite/client.py`` — ``{**os.environ, …}`` into the third-party
+* ``packs/discovery/polyrob_discovery/anysite/client.py`` — ``{**os.environ, …}`` into the third-party
   ``anysite`` CLI;
 * ``cli/commands/{profile_dist,skill_install}.py`` — ``dict(os.environ)`` into a
   ``git clone`` of an ATTACKER-NAMED repository.
@@ -33,7 +33,7 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-SCANNED_DIRS = ("tools", "cli")
+SCANNED_DIRS = ("tools", "cli", "packs")
 
 #: Attribute/function names that start a child process.
 _SPAWN_NAMES = frozenset({
@@ -57,7 +57,7 @@ FULL_ENV_SPAWN_ALLOWLIST: dict[str, str] = {}
 MUST_PASS_ENV_MODULES = (
     "tools/browser/browser.py",
     "tools/browser/playwright_utils.py",
-    "tools/anysite/client.py",
+    "packs/discovery/polyrob_discovery/anysite/client.py",
     "tools/code_exec/backends/docker.py",
     "tools/code_exec/backends/_proc.py",
     "tools/code_exec/backends/local_subprocess.py",
@@ -242,7 +242,7 @@ def test_browser_env_drops_a_secret_named_key_from_the_caller_overlay(_env_with_
 
 def test_anysite_env_carries_only_its_own_credential(_env_with_secrets):
     _env_with_secrets.setenv("ANYSITE_API_KEY", "anysite-live-key")
-    from tools.anysite.client import build_anysite_env
+    build_anysite_env = pytest.importorskip("polyrob_discovery.anysite.client").build_anysite_env
     env = build_anysite_env()
     _assert_no_secret_values(env)
     # The one credential this child is SUPPOSED to have, by env rather than argv.
@@ -253,7 +253,7 @@ def test_anysite_env_carries_only_its_own_credential(_env_with_secrets):
 def test_anysite_env_without_a_key_carries_none(_env_with_secrets, monkeypatch):
     monkeypatch.delenv("ANYSITE_API_KEY", raising=False)
     monkeypatch.delenv("ANYSITE_ACCESS_TOKEN", raising=False)
-    from tools.anysite.client import build_anysite_env
+    build_anysite_env = pytest.importorskip("polyrob_discovery.anysite.client").build_anysite_env
     env = build_anysite_env()
     _assert_no_secret_values(env)
     assert "ANYSITE_API_KEY" not in env

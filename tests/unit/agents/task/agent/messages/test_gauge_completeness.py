@@ -113,3 +113,73 @@ def test_hmem_empty_context_adds_nothing():
     mm.session_id = "s1"
     mm.task_context_manager = _Tcm("")
     assert mm.get_actual_token_count() == mm.get_token_count()
+
+
+# --- F6: no provider usage yet => the pure local estimate, unchanged ---------
+
+def test_no_anchor_keeps_the_pre_f6_estimate():
+    """Every assertion above is about the ESTIMATE path. Pin that it IS the path
+    taken until a real call records the provider's own prompt_tokens."""
+    mm = _mm()
+    mm.set_environment_message("env " * 200)
+    mm.set_tool_catalog_message("cat " * 100)
+    assert mm.usage_anchor() is None
+
+    expected = mm.get_token_count() + mm._tool_schema_tokens_for_gauge()
+    assert mm.get_actual_token_count() == expected
+
+
+def test_an_anchor_replaces_the_estimated_prefix():
+    mm = _mm()
+    mm.set_environment_message("env " * 200)
+    mm.get_messages_for_llm(consume_ephemeral=False)
+    mm.note_call_usage(output_tokens=120, input_tokens=42_000, cached_tokens=30_000)
+
+    assert mm.usage_anchor() is not None
+    assert mm.get_actual_token_count() == 42_000
+
+
+# --- F19: ONE reading, and every accessor is a view onto it ------------------
+
+def test_every_gauge_accessor_reads_the_same_number():
+    mm = _mm()
+    mm.set_environment_message("env " * 200)
+    mm.set_tool_catalog_message("cat " * 100)
+    mm.set_tool_schema_tokens(7_512)
+
+    usage = mm.context_usage()
+    assert usage["total_tokens"] == mm.get_actual_token_count()
+    assert usage["pct"] == mm.get_context_usage_percent()
+    assert usage["pct"] / 100.0 == pytest.approx(mm.get_estimated_context_usage())
+    assert mm.check_token_safety()["current_tokens"] == usage["total_tokens"]
+    assert mm.check_token_safety()["max_limit"] == usage["limit"]
+
+
+def test_the_gauge_names_its_own_provenance():
+    mm = _mm()
+    assert mm.context_usage()["source"] == "local_estimate"
+    mm.get_messages_for_llm(consume_ephemeral=False)
+    mm.note_call_usage(output_tokens=10, input_tokens=5_000, cached_tokens=4_000)
+    assert mm.context_usage()["source"] == "provider_usage"
+
+
+def test_slots_add_up_to_the_estimated_total():
+    mm = _mm()
+    mm.set_environment_message("env " * 200)
+    mm.set_tool_schema_tokens(1_000)
+    usage = mm.context_usage()
+    assert usage["source"] == "local_estimate"
+    slots = usage["slots"]
+    assert (slots["foundation"] + slots["conversation"] + slots["ephemeral"]
+            + slots["hmem"] + slots["tool_schemas"]) == usage["total_tokens"]
+
+
+def test_the_overflow_guard_divides_by_the_same_limit():
+    from agents.task.robust_parse_config import RobustParseConfig
+
+    mm = _mm()
+    limit = mm.context_usage()["limit"]
+    assert limit > 0
+    ratio = RobustParseConfig.estimate_context_usage(limit // 2, mm.model_name,
+                                                     message_manager=mm)
+    assert ratio == pytest.approx(0.5, abs=0.01)

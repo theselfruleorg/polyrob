@@ -200,7 +200,9 @@ def test_the_denial_vocabulary_has_no_dead_slug():
     import inspect
 
     import core.surfaces.dispatcher as disp
-    src = inspect.getsource(disp._route_inbound_impl)
+    # 064 F4: the bot-pair guard decides in its own pre-route helper.
+    src = (inspect.getsource(disp._route_inbound_impl)
+           + inspect.getsource(disp._bot_pair_refusal))
     dead = [r for r in disp.DENIAL_REASONS if f'reason="{r}"' not in src]
     assert not dead, f"DENIAL_REASONS slug(s) with no branch: {dead}"
 

@@ -95,7 +95,12 @@ async def test_token_info_accepts_a_base58_mint():
 @pytest.mark.asyncio
 async def test_token_info_on_solana_says_base58_has_no_checksum():
     """The EVM habit ('a wrong address would have failed the checksum') is
-    simply false here, and carrying it across is how funds go somewhere real."""
+    simply false here, and carrying it across is how funds go somewhere real.
+
+    The note belongs where an address is about to RECEIVE funds, so a token
+    READ no longer repeats it; the helper that says it is unchanged."""
+    from core.wallet.addresses import typo_protection_note
+    assert "no checksum" in typo_protection_note("solana").lower()
     from tools.defi.providers.base import PriceInfo, ScreenVerdict
     tool = DefiDataTool(
         price_fn=lambda c, a: PriceInfo(price_usd=1.0, liquidity_usd=9e6,
@@ -103,7 +108,7 @@ async def test_token_info_on_solana_says_base58_has_no_checksum():
         screen_fn=lambda c, a: ScreenVerdict(available=True, checks={}, flags=[]),
         identity_fn=lambda c, a: _ident())
     out = _text(await tool.token_info(TokenRefParams(chain="solana", address=SOL_USDC)))
-    assert "checksum" in out.lower()
+    assert "checksum" not in out.lower()
 
 
 @pytest.mark.asyncio
@@ -126,8 +131,10 @@ async def test_portfolio_on_solana_reports_holdings(monkeypatch):
     refuses. Coverage is COMPLETE without an indexer key — the parity win."""
     from core.wallet import solana_onchain
     monkeypatch.setattr(solana_onchain, "native_balance", lambda a, **k: 0.5)
-    monkeypatch.setattr(solana_onchain, "token_balances",
-                        lambda a, **k: {SOL_USDC: 11_910_340})
+    # 071: portfolio reads the display enumeration (classic + Token-2022, decimals kept).
+    monkeypatch.setattr(solana_onchain, "token_holdings",
+                        lambda a, **k: solana_onchain.SplHoldings(
+                            rows=[solana_onchain.SplHolding(SOL_USDC, 11_910_340, 6)]))
     from tools.defi.providers.base import PriceInfo
     tool = DefiDataTool(
         holder="HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk",

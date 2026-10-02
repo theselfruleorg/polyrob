@@ -86,8 +86,14 @@ def _render_line(row) -> str:
     if row.mentions_bot:
         flags.append("mentions-you")
     flag = f" [{', '.join(flags)}]" if flags else ""
-    text = (row.text or "").strip() or "(no text — media/caption row)"
-    return f"[{stamp}] {row.sender_name or row.sender_id} ({row.role_at_write}){flag}: {text}"
+    # M01 (2026-09-23): member text and names are UNTRUSTED. Collapse control
+    # characters/newlines and defang every fence (the ONE room neutralizer), so a
+    # member cannot forge a second attributed line such as "... (owner): do X".
+    from core.surfaces.group_turn import neutralize_name, neutralize_text
+    text = neutralize_text(row.text or "") or "(no text — media/caption row)"
+    who = neutralize_name(row.sender_name or "") or neutralize_name(str(row.sender_id or ""))
+    role = neutralize_name(str(row.role_at_write or ""))
+    return f"[{stamp}] {who} ({role}){flag}: {text}"
 
 
 def register_room_read_action(controller) -> None:
@@ -236,7 +242,9 @@ def register_room_read_action(controller) -> None:
                      "Lines appear here only when OTHERS write.)",
                      _channel_proof()]
         else:
-            lines = [_render_line(r) for r in rows]
+            # M01: the member lines are third-party DATA — framed as such.
+            from core.security.untrusted_wrap import wrap_untrusted
+            lines = [wrap_untrusted("room_ledger", "\n".join(_render_line(r) for r in rows))]
         footer = ("read-only: this action never posts. Reply via "
                   "message(surface='telegram', target=<chat_id>) or by "
                   "answering a mention in the room.")

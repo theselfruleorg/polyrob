@@ -53,7 +53,11 @@ NON_SPEND_MONEY_VERBS = {
     "x402_invoice_x402_invoices": "lists own invoices; receives nothing",
     "x402_invoice_accounting": "read-only ledger view",
 
-    # -- hyperliquid (real gated trading tool) — reads/risk-management --------
+    # -- agent_nft (050, 069) — the two chain READS; every agent_nft write is on the lane. ---
+    "agent_nft_snapshot": "read-only view of the bound account (chain reads + local journal)",
+    "agent_nft_inspect": "read-only view of any agent NFT before buying; signs nothing",
+
+    # -- hyperliquid (real gated trading tool) — reads ------------------------
     "hyperliquid_get_perpetual_markets": "read-only market/account data; no fund movement",
     "hyperliquid_get_spot_markets": "read-only market/account data; no fund movement",
     "hyperliquid_get_current_price": "read-only market/account data; no fund movement",
@@ -65,18 +69,8 @@ NON_SPEND_MONEY_VERBS = {
     "hyperliquid_get_open_orders": "read-only market/account data; no fund movement",
     "hyperliquid_get_fills": "read-only market/account data; no fund movement",
     "hyperliquid_agent_status": "read-only market/account data; no fund movement",
-    "hyperliquid_cancel_order": "cancels a pending order; does not move funds",
-    "hyperliquid_cancel_all_orders": "cancels a pending order; does not move funds",
-    "hyperliquid_update_leverage": "changes margin/leverage ratio; does not move funds directly",
-    "hyperliquid_approve_agent": (
-        "authorizes a trading-only delegate key (Hyperliquid agent wallets "
-        "cannot withdraw); no fund movement"
-    ),
-    "hyperliquid_revoke_agent": (
-        "revokes a trading-only delegate key; no fund movement"
-    ),
-    # hyperliquid_place_limit_order / hyperliquid_place_market_order are the
-    # real SPEND verbs and stay ON the lane (not exempted here).
+    # Order writes, cancellations, agent authority and leverage changes all
+    # stay on the owner lane; indirect control of funds is not an exemption.
 
     # -- polymarket (real gated trading tool) — reads/risk-management ---------
     "polymarket_search_markets": "read-only market data; no fund movement",
@@ -270,8 +264,8 @@ def test_venue_order_verbs_are_on_the_lane(runtime_names):
     verbs per venue by exact literal name as a defense-in-depth check independent
     of that general derivation — venues are also tagged `readable_while_tainted`
     (not `high_impact`) so their read verbs stay available to a correspondent-
-    tainted session; only the place-order verbs are meant to sit on the payment-
-    approval lane. A rename or an action-set change to either venue tool then
+    tainted session. Place-order verbs must sit on the payment-approval lane.
+    A rename or an action-set change to either venue tool then
     fails here by exact verb name, not just via the broader derivation."""
     from core.config_policy import PAYMENT_APPROVAL_TOOLS
 
@@ -279,3 +273,19 @@ def test_venue_order_verbs_are_on_the_lane(runtime_names):
                  "polymarket_place_limit_order", "polymarket_place_market_order"):
         assert verb in runtime_names, f"{verb} is not a runtime name — check went vacuous"
         assert verb in PAYMENT_APPROVAL_TOOLS, f"{verb} left the approval lane"
+
+
+def test_every_money_verb_has_an_explicit_effect_row(runtime_names):
+    """067 P0.7: no money-tool verb may fall back to the tool ceiling
+    (``confidence="tool"``). Under ``EXTERNAL_WRITE_STRICT`` such a verb is
+    refused as unclassified — 14 defi_trade spend verbs were."""
+    from core.effects import classify_effect
+
+    owners = _container_tool_action_owners()
+    unclassified = sorted(
+        v for v in _money_verbs(runtime_names)
+        if (verdict := classify_effect(owners[v], v)) is not None
+        and verdict.confidence != "action")
+    assert not unclassified, (
+        f"money verbs {unclassified} have no explicit row in core/effects.py "
+        f"WRITE_ACTIONS or NON_WRITE_ACTIONS")

@@ -64,19 +64,54 @@ _SLOT_SPECS: Tuple[Tuple[str, str], ...] = (
 )
 
 
+def _usage_view(message_manager: Any) -> dict:
+    """``MessageManager.context_usage()``, or ``{}`` for a stub that lacks it.
+
+    F19: `/context` reads the SAME gauge the compaction ladder, the per-step log
+    line and the CLI status bar read. A manager stub (a test double, a future
+    variant) without the method degrades to the per-slot rendering below rather
+    than crashing the REPL.
+    """
+    reader = getattr(message_manager, "context_usage", None)
+    if not callable(reader):
+        return {}
+    try:
+        view = reader()
+        return view if isinstance(view, dict) else {}
+    except Exception:
+        return {}
+
+
 def render_context_breakdown(message_manager: Any) -> str:
     """Render one line per populated context slot + a total/limit footer.
 
     Pure function over ``message_manager``: reads only its existing token
-    counters, never mutates it, performs no I/O and no LLM/H-MEM calls.
-    ``message_manager=None`` (no live session yet) returns the same friendly
-    line the registered ``/context`` handler shows.
+    counters and its ``context_usage()`` view, never mutates it, performs no I/O
+    and no LLM/H-MEM calls. ``message_manager=None`` (no live session yet)
+    returns the same friendly line the registered ``/context`` handler shows.
+
+    F18: every number that is a local ESTIMATE is prefixed with ``≈``. When the
+    provider has reported its own ``prompt_tokens`` the total is measured and the
+    mark is dropped, and a "last request (provider-reported)" line names the
+    prompt / cached / written split. The tool-schema slot honours
+    ``CTX_COUNT_TOOL_SCHEMAS`` — `/context` must never render a slot the gauge
+    suppresses.
     """
     if message_manager is None:
         return _NO_SESSION_LINE
 
+    usage = _usage_view(message_manager)
+    measured = usage.get("source") == "provider_usage"
+    mark = "" if measured else "≈"
+    schemas_counted = True
+    if usage:
+        schemas_counted = bool(usage.get("slots", {}).get("tool_schemas", 0)) or _int_attr(
+            message_manager, "_tool_schema_tokens") == 0
+
     slots: List[Tuple[str, int]] = []
     for label, attr in _SLOT_SPECS:
+        if attr == "_tool_schema_tokens" and not schemas_counted:
+            continue
         tokens = _int_attr(message_manager, attr)
         if tokens > 0:
             slots.append((label, tokens))
@@ -96,25 +131,45 @@ def render_context_breakdown(message_manager: Any) -> str:
     if history_tokens > 0:
         slots.append(("history", history_tokens))
 
-    total = sum(tokens for _, tokens in slots)
-    limit = _int_attr(message_manager, "max_input_tokens")
+    # F18: the one-shot messages riding this turn were in no breakdown at all.
+    ephemeral_tokens = int(usage.get("slots", {}).get("ephemeral", 0) or 0)
+    if ephemeral_tokens > 0:
+        slots.append(("ephemerals (one-shot, this turn)", ephemeral_tokens))
+
+    total = int(usage.get("total_tokens") or 0) or sum(tokens for _, tokens in slots)
+    limit = int(usage.get("limit") or 0) or _int_attr(message_manager, "max_input_tokens")
     denom = limit if limit > 0 else total
 
     lines = ["context assembly (this session):"]
     if not slots:
         lines.append("  (no foundation slots populated yet)")
 
-    total_pct = (total / denom * 100) if denom else 0.0
+    total_pct = float(usage.get("pct") or 0.0) or ((total / denom * 100) if denom else 0.0)
     rows = []
     for label, tokens in slots:
         pct = (tokens / denom * 100) if denom else 0.0
-        rows.append((label, f"{tokens:,} tokens · {pct:.1f}%"))
-    rows.append(("total", f"{total:,} tokens · {total_pct:.1f}%"))
+        rows.append((label, f"{mark}{tokens:,} tokens · {pct:.1f}%"))
+    rows.append(("total", f"{mark}{total:,} tokens · {total_pct:.1f}%"))
     lines.append(candy.kv_lines(rows))
 
     if limit > 0:
         lines.append(f"context limit: {limit:,} tokens ({total_pct:.1f}% used)")
     else:
         lines.append("context limit: unknown (showing % of observed total)")
+
+    last_call = usage.get("last_call") or {}
+    if last_call.get("prompt_tokens"):
+        lines.append(
+            "last request (provider-reported): "
+            f"{int(last_call.get('prompt_tokens', 0)):,} prompt · "
+            f"{int(last_call.get('cached_tokens', 0)):,} cached · "
+            f"{int(last_call.get('cache_creation_tokens', 0)):,} written · "
+            f"{int(last_call.get('uncached_tokens', 0)):,} uncached"
+        )
+    else:
+        lines.append("last request (provider-reported): none yet this session")
+
+    if not measured:
+        lines.append("≈ = local estimate (no provider token count yet this session)")
 
     return "\n".join(lines)

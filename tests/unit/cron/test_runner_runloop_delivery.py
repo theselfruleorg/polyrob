@@ -25,6 +25,16 @@ def _job(**kw):
     return CronJob(**base)
 
 
+def _patch_run(monkeypatch, sent=(), done_text="internal record"):
+    """The run's envelope: what it SENT (send_message) and its done() record."""
+    async def fake_run(*args, **kwargs):
+        return RunOutcome(
+            session_id="sess-1", status="Session completed successfully",
+            done_called=True, done_text=done_text, user_messages=list(sent),
+        )
+    monkeypatch.setattr("cron.runner._run_task_to_outcome", fake_run)
+
+
 class _FakeTaskAgent:
     def __init__(self, final="done"):
         self.created = False
@@ -98,15 +108,15 @@ async def test_delivery_fires_when_enabled(monkeypatch):
     # returns True still passes `delivery_outcome`, which accepts both — so it
     # proves nothing about the contract the runner now depends on.
     async def fake_deliver(task_agent, job, final, *, target, deliver_target=None,
-                           session_id=None):
+                           session_id=None, record=None):
         calls["target"] = target
         calls["final"] = final
         calls["session_id"] = session_id
         return "sent"
 
     monkeypatch.setattr(cron_delivery, "deliver_result_ex", fake_deliver)
-    agent = _FakeTaskAgent(final="hello")
-    runner = make_agent_runner(agent)
+    _patch_run(monkeypatch, sent=["hello"])
+    runner = make_agent_runner(_FakeTaskAgent())
     await runner(_job(payload={"deliver": "email"}))
     assert calls["target"] == "email"
     assert calls["final"] == "hello"
@@ -127,11 +137,12 @@ async def test_the_journal_line_carries_deferred_not_failed(monkeypatch, caplog)
     monkeypatch.setenv("CRON_DELIVERY_ENABLED", "true")
 
     async def fake_deliver(task_agent, job, final, *, target, deliver_target=None,
-                           session_id=None):
+                           session_id=None, record=None):
         return "deferred"
 
     monkeypatch.setattr(cron_delivery, "deliver_result_ex", fake_deliver)
-    runner = make_agent_runner(_FakeTaskAgent(final="the report"))
+    _patch_run(monkeypatch, sent=["the report"])
+    runner = make_agent_runner(_FakeTaskAgent())
     with caplog.at_level(logging.INFO, logger="cron.runner"):
         await runner(_job(payload={"deliver": "telegram"}))
     line = [r.getMessage() for r in caplog.records
@@ -309,17 +320,80 @@ async def test_an_already_told_echo_is_recorded_in_the_ledger(monkeypatch, caplo
     monkeypatch.setenv("CRON_DELIVERY_ENABLED", "true")
 
     async def fake_deliver(task_agent, job, final, *, target, deliver_target=None,
-                           session_id=None):
+                           session_id=None, record=None):
         return "already_told"
 
     monkeypatch.setattr(cron_delivery, "deliver_result_ex", fake_deliver)
+    _patch_run(monkeypatch, sent=["the report"])
     events = []
     import cron.runner as cr
     monkeypatch.setattr(cr, "_delivery_ev",
                         lambda job, outcome, target: events.append((job.id, outcome, target)))
-    runner = make_agent_runner(_FakeTaskAgent(final="the report"))
+    runner = make_agent_runner(_FakeTaskAgent())
     with caplog.at_level(logging.INFO, logger="cron.runner"):
         await runner(_job(payload={"deliver": "telegram"}))
     assert events == [("j1", "already_told", "telegram")]
     line = [r.getMessage() for r in caplog.records if "out-of-band delivery" in r.getMessage()]
     assert "outcome=already_told" in line[-1]
+
+
+# --- owner rule 2026-09-29: send_message is the body, done() is a record ----
+
+async def _capture(monkeypatch, *, sent, done_text="internal record"):
+    monkeypatch.setenv("CRON_RUN_LOOP", "true")
+    monkeypatch.setenv("CRON_DELIVERY_ENABLED", "true")
+    calls = []
+
+    async def fake_deliver(task_agent, job, final, *, target, deliver_target=None,
+                           session_id=None, record=None):
+        calls.append({"final": final, "record": record})
+        return "sent"
+
+    monkeypatch.setattr(cron_delivery, "deliver_result_ex", fake_deliver)
+    _patch_run(monkeypatch, sent=sent, done_text=done_text)
+    await make_agent_runner(_FakeTaskAgent())(_job(payload={"deliver": "telegram"}))
+    return calls
+
+
+@pytest.mark.asyncio
+async def test_the_body_is_the_last_send_message_never_the_done_text(monkeypatch):
+    calls = await _capture(monkeypatch, sent=["plan: two steps", "report: 3 posts"],
+                           done_text="Finished the job for the owner")
+    assert calls[0]["final"] == "report: 3 posts"
+    assert "Finished the job" not in calls[0]["final"]
+    assert calls[0]["record"] is None  # default verbosity shows no record
+
+
+@pytest.mark.asyncio
+async def test_a_run_that_sent_nothing_delivers_nothing(monkeypatch):
+    calls = await _capture(monkeypatch, sent=[], done_text="a record only")
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_silent_record_still_opts_the_run_out(monkeypatch):
+    calls = await _capture(monkeypatch, sent=["x"], done_text="nothing new [SILENT]")
+    assert calls[0]["final"] == "[SILENT]"
+
+
+@pytest.mark.asyncio
+async def test_detailed_verbosity_passes_the_record(monkeypatch):
+    import core.prefs as prefs
+    monkeypatch.setattr(prefs, "done_records_visible", lambda uid, home: True)
+    calls = await _capture(monkeypatch, sent=["the report"], done_text="the record")
+    assert calls[0]["final"] == "the report"
+    assert calls[0]["record"] == "the record"
+
+
+@pytest.mark.asyncio
+async def test_the_record_is_appended_for_an_owner_sink(monkeypatch):
+    seen = {}
+
+    async def fake_email(task_agent, job, final, deliver_target):
+        seen["final"] = final
+        return True
+
+    monkeypatch.setattr(cron_delivery, "_deliver_email", fake_email)
+    await cron_delivery.deliver_result(object(), _job(), "the report",
+                                       target="email", record="the record")
+    assert seen["final"] == "the report\n\nRecord: the record"

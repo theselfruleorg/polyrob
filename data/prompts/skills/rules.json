@@ -18,10 +18,7 @@
         "seed",
         "private key"
       ],
-      "action_names": [
-        "preferences",
-        "owner_doc_manage"
-      ],
+      "action_names": [],
       "task_patterns": [
         "what can you do",
         "how do (i|we)",
@@ -42,7 +39,6 @@
         "analyze person",
         "research person",
         "person intelligence",
-        "who is",
         "profile analysis",
         "sales prospect",
         "contact research",
@@ -51,18 +47,18 @@
       ],
       "action_names": [],
       "task_patterns": [
-        "analyze.*person",
-        "research.*person",
-        "who is.*",
-        "find.*about.*person",
-        "profile.*analysis",
+        "analy[sz]e.*\\bperson\\b",
+        "research.*\\b(person|founder|ceo|executive)\\b",
+        "find.*about.*\\bperson\\b",
+        "\\bprofile analysis\\b",
         "prospect.*research",
-        "intelligence.*on"
+        "\\bwho is\\b.*\\b(on linkedin|linkedin)\\b"
       ]
     },
     "priority": 1,
     "auto_activate": true,
-    "description": "Person intelligence workflow using LinkedIn and web research"
+    "description": "Person intelligence workflow using LinkedIn and web research",
+    "version": "2"
   },
   "project-analyzer": {
     "triggers": {
@@ -111,7 +107,8 @@
     },
     "priority": 2,
     "auto_activate": true,
-    "description": "Web scraping and automation workflow patterns"
+    "description": "Web scraping and automation workflow patterns",
+    "version": "2"
   },
   "presentation-creator": {
     "triggers": {
@@ -166,7 +163,8 @@
     },
     "priority": 2,
     "auto_activate": true,
-    "description": "Multi-source web research with cross-checking and cited synthesis"
+    "description": "Multi-source web research with cross-checking and cited synthesis",
+    "version": "2"
   },
   "file-data-ops": {
     "triggers": {
@@ -197,28 +195,29 @@
     "triggers": {
       "tool_ids": [],
       "keywords": [
-        "write",
-        "draft",
-        "compose",
-        "report",
+        "write a report",
+        "write a document",
+        "draft a report",
+        "draft a document",
         "summarize",
         "outline",
         "essay",
         "memo",
-        "article"
+        "article",
+        "long-form"
       ],
       "action_names": [],
       "task_patterns": [
-        "write.*(report|memo|doc|article|summary)",
-        "draft.*",
-        "compose.*",
+        "write.*(report|memo|doc|article|summary|essay)",
+        "draft.*(report|memo|doc|article|essay|proposal)",
         "summari[sz]e.*",
         "outline.*for"
       ]
     },
     "priority": 3,
     "auto_activate": true,
-    "description": "Draft and edit long-form documents, reports and summaries"
+    "description": "Draft and edit long-form documents, reports and summaries",
+    "version": "2"
   },
   "coding-workflow": {
     "triggers": {
@@ -253,27 +252,28 @@
     "triggers": {
       "tool_ids": [],
       "keywords": [
-        "plan",
+        "make a plan",
+        "plan this",
         "break down",
-        "steps",
-        "how should i",
-        "approach",
+        "how should i approach",
         "roadmap",
         "decompose",
-        "milestones"
+        "milestones",
+        "step-by-step plan"
       ],
       "action_names": [],
       "task_patterns": [
-        "plan.*",
-        "break.*down",
-        "how (should|do) (i|we)",
-        "what.*steps",
-        "approach.*for"
+        "\\b(make|write|draft|create) (a |an |the )?plan\\b",
+        "\\bplan (out|this|the|my|our)\\b",
+        "\\bbreak\\b.*\\bdown\\b.*\\b(task|goal|project|work)\\b",
+        "how (should|do) (i|we) approach",
+        "what (are the )?steps"
       ]
     },
     "priority": 4,
     "auto_activate": true,
-    "description": "Decompose a fuzzy goal into a verifiable plan and decide when to delegate"
+    "description": "Decompose a fuzzy goal into a verifiable plan and decide when to delegate",
+    "version": "2"
   },
   "email-comms": {
     "triggers": {
@@ -296,7 +296,8 @@
     },
     "priority": 4,
     "auto_activate": true,
-    "description": "Compose, triage and reply to email and short comms"
+    "description": "Compose, triage and reply to email and short comms",
+    "version": "2"
   },
   "skill-authoring": {
     "name": "Skill Authoring",
@@ -310,11 +311,12 @@
         "create skill",
         "edit skill"
       ]
-    }
+    },
+    "version": "2"
   },
   "skill-security-review": {
     "name": "Skill Security Review",
-    "description": "Vet a skill body and description for injection, unicode, over-broad capability, staleness.",
+    "description": "Vet a skill (body, description, references/, scripts/) for injection, unicode, encoded payloads, exfiltration, secret reads, trigger hijack, over-broad capability, staleness.",
     "priority": 4,
     "auto_activate": true,
     "triggers": {
@@ -324,11 +326,12 @@
         "skill security",
         "audit skill"
       ]
-    }
+    },
+    "version": "2"
   },
   "secret-handling": {
     "name": "Secret Handling",
-    "description": "Never embed secrets in skills, memory, or written files; reference by env-var name.",
+    "description": "Never embed or echo secrets; reference by env-var name, show only a fingerprint, and tell the owner to rotate a pasted secret.",
     "priority": 4,
     "auto_activate": true,
     "triggers": {
@@ -336,68 +339,19 @@
         "secret",
         "api key",
         "credentials",
-        "token",
-        "password"
-      ]
-    }
-  },
-  "web-scraping": {
-    "triggers": {
-      "tool_ids": [
-        "anysite",
-        "browser",
-        "web_fetch"
+        "api token",
+        "auth token",
+        "access token",
+        "bearer token",
+        "password",
+        "private key",
+        "seed phrase"
       ],
-      "keywords": [
-        "scrape website",
-        "extract data from",
-        "web scraping",
-        "crawl website",
-        "structured data from url",
-        "scrape page",
-        "extract structured data"
-      ],
-      "action_names": [],
       "task_patterns": [
-        "web.scrap",
-        "extract.*from.*(url|site|page|website)",
-        "scrape.*(site|page|data|url)",
-        "crawl.*(site|page|url)"
+        "\\b(store|save|paste|pasted|set|rotate|hide|leak|leaked|share)\\b.*\\b(tokens?|keys?|passwords?|secrets?)\\b"
       ]
     },
-    "priority": 6,
-    "auto_activate": true,
-    "description": "Extract structured data from a URL using anysite (discover-first), web_fetch, or browser with fallback"
-  },
-  "lead-research": {
-    "triggers": {
-      "tool_ids": [
-        "anysite"
-      ],
-      "keywords": [
-        "find leads",
-        "prospect list",
-        "lead research",
-        "find contacts",
-        "qualify leads",
-        "outbound list",
-        "build lead list",
-        "sales prospects"
-      ],
-      "action_names": [],
-      "task_patterns": [
-        "find.*leads",
-        "prospect.*list",
-        "lead.*research",
-        "build.*contact.*list",
-        "qualify.*leads",
-        "outbound.*campaign",
-        "sales.*prospect"
-      ]
-    },
-    "priority": 6,
-    "auto_activate": true,
-    "description": "Find and qualify sales leads using LinkedIn and public data sources, producing a prioritized contact list"
+    "version": "2"
   },
   "market-research-brief": {
     "triggers": {
@@ -441,411 +395,63 @@
         "hyperliquid_data"
       ],
       "keywords": [
-        "trade",
-        "trading",
-        "place order",
-        "buy",
-        "sell",
         "polymarket",
         "hyperliquid",
         "perp",
+        "perps",
         "leverage",
-        "on-chain trade"
+        "prediction market",
+        "venue order"
       ],
       "action_names": [],
       "task_patterns": [
-        "place.*(order|trade|bet)",
-        "(buy|sell|long|short).*(token|coin|market|perp)",
-        "trade.*on.*(polymarket|hyperliquid)"
+        "place.*(order|trade|bet).*(polymarket|hyperliquid|perp|prediction market)",
+        "\\b(long|short)\\b.*\\b(perp|perps|hyperliquid|leverage)\\b",
+        "trade.*on.*(polymarket|hyperliquid)",
+        "\\b(buy|sell)\\b.*\\b(shares|yes|no)\\b.*\\b(polymarket|market)\\b"
       ]
     },
     "priority": 1,
     "auto_activate": true,
-    "description": "Grounding safety rules for any on-chain trade: wallet model, PolicyGate caps, >$500 gate, owner-only / no leaf-or-forged trading, testnet-first"
-  },
-  "polymarket-market-research": {
-    "triggers": {
-      "tool_ids": [
-        "polymarket_data"
-      ],
-      "keywords": [
-        "polymarket",
-        "prediction market",
-        "implied probability",
-        "market odds",
-        "event probability",
-        "orderbook",
-        "market spread"
-      ],
-      "action_names": [],
-      "task_patterns": [
-        "polymarket.*(market|price|odds|research)",
-        "implied.*probability",
-        "prediction.*market",
-        "(odds|probability).*of.*event"
-      ]
-    },
-    "priority": 5,
-    "auto_activate": true,
-    "description": "Read Polymarket markets (discover, details, price as implied probability, orderbook, spread, volume) with no wallet"
-  },
-  "polymarket-portfolio-review": {
-    "triggers": {
-      "tool_ids": [
-        "polymarket_data"
-      ],
-      "keywords": [
-        "polymarket positions",
-        "polymarket portfolio",
-        "polymarket pnl",
-        "trade history",
-        "wallet positions",
-        "exposure summary"
-      ],
-      "action_names": [],
-      "task_patterns": [
-        "polymarket.*(position|portfolio|pnl|history)",
-        "review.*wallet.*positions",
-        "summari[sz]e.*(exposure|pnl)"
-      ]
-    },
-    "priority": 5,
-    "auto_activate": true,
-    "description": "Read a wallet's Polymarket positions and trade history from the public Data API; summarize exposure and P&L"
-  },
-  "hyperliquid-market-data": {
-    "triggers": {
-      "tool_ids": [
-        "hyperliquid_data"
-      ],
-      "keywords": [
-        "hyperliquid",
-        "perpetual",
-        "perps",
-        "funding rate",
-        "spot mids",
-        "orderbook depth",
-        "perp price"
-      ],
-      "action_names": [],
-      "task_patterns": [
-        "hyperliquid.*(price|market|funding|perp|spot)",
-        "funding.*rate",
-        "perp.*(price|market)",
-        "spot.*mids"
-      ]
-    },
-    "priority": 5,
-    "auto_activate": true,
-    "description": "Read Hyperliquid perp/spot markets: mids, funding rates, orderbook depth, and funding as a sentiment signal (no wallet)"
-  },
-  "hyperliquid-account-review": {
-    "triggers": {
-      "tool_ids": [
-        "hyperliquid_data"
-      ],
-      "keywords": [
-        "hyperliquid account",
-        "account state",
-        "margin",
-        "open orders",
-        "fills",
-        "agent status",
-        "spot balances"
-      ],
-      "action_names": [],
-      "task_patterns": [
-        "hyperliquid.*(account|balance|margin|orders|fills)",
-        "review.*(margin|account state)",
-        "open.*orders.*hyperliquid"
-      ]
-    },
-    "priority": 5,
-    "auto_activate": true,
-    "description": "Read Hyperliquid account state, balances, open orders, and fills (always the master address); confirm agent authorization"
-  },
-  "polymarket-trading": {
-    "name": "Polymarket Trading",
-    "triggers": {
-      "tool_ids": [
-        "polymarket"
-      ],
-      "keywords": [
-        "place polymarket order",
-        "buy polymarket",
-        "sell polymarket",
-        "polymarket limit order",
-        "polymarket market order",
-        "cancel polymarket order"
-      ],
-      "action_names": [
-        "place_limit_order",
-        "place_market_order",
-        "cancel_order",
-        "cancel_all_orders"
-      ],
-      "task_patterns": [
-        "(place|buy|sell|cancel).*polymarket",
-        "polymarket.*(limit|market).*order"
-      ]
-    },
-    "priority": 5,
-    "auto_activate": false,
-    "description": "GATED: place/cancel Polymarket orders. Owner-only, read-first, >$500 confirmation gate; references crypto-trading-safety"
-  },
-  "hyperliquid-trading": {
-    "name": "Hyperliquid Trading",
-    "triggers": {
-      "tool_ids": [
-        "hyperliquid"
-      ],
-      "keywords": [
-        "place hyperliquid order",
-        "hyperliquid trade",
-        "update leverage",
-        "approve agent",
-        "hyperliquid limit order",
-        "hyperliquid market order"
-      ],
-      "action_names": [
-        "place_limit_order",
-        "place_market_order",
-        "update_leverage",
-        "cancel_order",
-        "approve_agent"
-      ],
-      "task_patterns": [
-        "(place|buy|sell|cancel).*hyperliquid",
-        "update.*leverage",
-        "approve.*agent",
-        "hyperliquid.*(limit|market).*order"
-      ]
-    },
-    "priority": 5,
-    "auto_activate": false,
-    "description": "GATED: place/modify/cancel Hyperliquid orders and set leverage. Owner-only, read-first, testnet-first, exposure cap + >$500 gate; references crypto-trading-safety"
-  },
-  "social-discovery": {
-    "triggers": {
-      "tool_ids": [
-        "anysite",
-        "twitter"
-      ],
-      "keywords": [
-        "engagement targets",
-        "who to engage",
-        "find accounts",
-        "accounts to engage",
-        "discover on x",
-        "discover on twitter",
-        "social discovery",
-        "find people to engage",
-        "find prospects on x",
-        "who to reply to",
-        "trending in ai"
-      ],
-      "action_names": [
-        "twitter_search",
-        "twitter_get_user",
-        "twitter_get_tweets",
-        "twitter_get_mentions",
-        "twitter_get_timeline"
-      ],
-      "task_patterns": [
-        "(find|discover|identify).*(account|people|target|prospect|conversation).*(x|twitter|social)",
-        "who.*(to )?(engage|reply|follow)",
-        "(engagement|social).*(discovery|target)",
-        "find.*(mentions|conversations).*(about|on)"
-      ]
-    },
-    "priority": 6,
-    "auto_activate": true,
-    "description": "Discover public X/social accounts and conversations with AnySite first, using native X account reads where they are authoritative and preserving write gates"
-  },
-  "x-engagement": {
-    "triggers": {
-      "tool_ids": [
-        "twitter",
-        "x_browser"
-      ],
-      "keywords": [
-        "post on x",
-        "post on twitter",
-        "tweet",
-        "reply on x",
-        "quote tweet",
-        "quote-tweet",
-        "dm on x",
-        "send a dm",
-        "read x dms",
-        "check x inbox",
-        "reply to x dm",
-        "engage on x",
-        "engage on twitter",
-        "x thread",
-        "twitter thread",
-        "publish on x",
-        "poll",
-        "poll results",
-        "ask the community",
-        "community vote"
-      ],
-      "action_names": [
-        "twitter_post",
-        "twitter_reply",
-        "twitter_quote",
-        "twitter_thread",
-        "twitter_dm",
-        "twitter_get_dms",
-        "twitter_get_mentions",
-        "twitter_get_timeline",
-        "x_post",
-        "x_dm",
-        "x_read_dms",
-        "twitter_poll_results"
-      ],
-      "task_patterns": [
-        "(post|publish|tweet|thread).*(x|twitter)",
-        "(reply|respond|quote).*(tweet|thread|conversation|x|twitter)",
-        "(read|check|review|reply|send).*(dm|direct message|inbox).*(x|twitter|account|user)?",
-        "engage.*(x|twitter|thread|conversation)"
-      ]
-    },
-    "priority": 7,
-    "auto_activate": true,
-    "description": "Operate X account communication across API and captured-browser rails—read inboxes, post/reply, and send DMs with correct routing, approval, and completion evidence",
-    "version": "4"
+    "description": "Safety rules for the Polymarket and Hyperliquid VENUE rail (not defi_trade): wallet model, venue caps, >$500 gate, owner-only / no leaf-or-forged trading, testnet-first",
+    "version": "3"
   },
   "treasury-trading": {
     "triggers": {
       "action_names": [
         "defi_trade_swap",
         "defi_trade_solana_swap",
-        "defi_trade_bridge",
         "defi_trade_approve_token",
         "defi_trade_revoke_approval",
-        "defi_trade_deploy_token",
-        "defi_trade_deploy_contract",
-        "defi_trade_solana_deploy_token",
-        "defi_trade_call",
-        "defi_trade_lp_add",
-        "defi_trade_lp_remove",
-        "defi_trade_lp_collect",
-        "defi_data_lp_positions",
-        "defi_data_lp_pool_info",
-        "defi_data_lp_quote",
-        "launchpad_launch",
-        "launchpad_buy",
-        "launchpad_sell",
-        "launchpad_quote",
-        "launchpad_status",
-        "dapp_browser_dapp_connect",
-        "defi_data_token_info",
+        "defi_trade_unwrap",
         "defi_data_portfolio",
+        "defi_data_positions",
         "defi_data_reconcile",
         "defi_data_token_resolve",
-        "defi_data_swap_quote",
-        "defi_data_new_pools",
-        "defi_data_trending",
-        "defi_data_scan",
-        "defi_data_token_holders",
-        "defi_data_ohlcv",
-        "launchpad_claim",
-        "defi_trade_unwrap"
+        "defi_data_swap_quote"
       ],
       "keywords": [
-        "treasury",
-        "portfolio",
+        "treasury trading",
+        "grow the treasury",
+        "treasury wallet",
         "buy token",
         "sell token",
-        "swap",
         "on-chain trade",
-        "base chain",
-        "robinhood",
-        "robinhood chain",
-        "pons",
-        "tokenized stock",
-        "stock token",
-        "nvda",
-        "usdg",
-        "arbitrum",
-        "polygon",
-        "ethereum",
-        "solana",
-        "multi-chain",
         "memecoin",
         "meme coin",
-        "new launch",
-        "new pair",
         "degen",
-        "token",
-        "dex",
-        "position",
-        "sizing",
-        "social proof",
-        "watchlist",
-        "reconcile",
-        "ledger",
-        "p&l",
-        "pnl",
+        "robinhood",
+        "robinhood chain",
         "aerodrome",
         "uniswap",
-        "bridge",
-        "bridging",
-        "cross-chain",
-        "cross chain",
-        "move funds",
-        "in_flight",
-        "relay",
-        "launch a token",
-        "launchpad",
-        "pons",
-        "deploy token",
-        "deploy contract",
-        "create a token",
-        "mint a token",
-        "bonding curve",
-        "graduate",
-        "snipe tax",
-        "vanity address",
-        "spl token",
-        "mint authority",
-        "fixed supply",
-        "same address",
-        "dapp",
-        "use a dapp",
-        "connect wallet",
-        "erc-20",
-        "erc20",
-        "holders",
-        "holder concentration",
-        "top holders",
-        "bubble map",
-        "wash trading",
-        "wash traded",
-        "ohlcv",
-        "candles",
-        "price history",
-        "scan",
-        "screen",
-        "rug",
-        "honeypot",
-        "claim",
-        "claim fees",
-        "creator fees",
-        "creator tax",
-        "fee escrow",
-        "unwrap",
-        "weth to eth",
-        "gas back"
+        "trading ledger"
       ],
       "task_patterns": [
-        "(buy|sell|swap|ape).*(token|coin|meme)",
+        "\\b(buy|sell|swap|ape into)\\b.*\\b(usdc|usdg|usdt|eth|weth|sol|wsol|btc|wbtc|pnl|tokens?|coins?|memecoins?|meme coins?)\\b",
         "grow.*treasury",
-        "(check|review).*(portfolio|position)",
-        "monitor.*market",
-        "(find|scan).*(new|fresh).*(token|coin|pair|launch)",
-        "(bridge|move|send).*(to|from|between).*(chain|solana|base|robinhood|ethereum)"
+        "(check|review).*(crypto portfolio|token portfolio|wallet portfolio|trading position|open position)",
+        "monitor.*\\b(token|crypto|memecoin|meme coin)\\b.*market",
+        "(find|scan).*(new|fresh).*(token|coin|pair|launch)"
       ],
       "tool_ids": [
         "defi_trade",
@@ -854,10 +460,14 @@
         "dapp_browser"
       ]
     },
-    "priority": 1,
+    "priority": 4,
     "auto_activate": true,
-    "description": "How to grow the agent treasury by trading NEW memecoin launches in degen mode, primarily on Robinhood Chain (tokenized stocks, Pons launches, meme/stock pairs) plus Solana and Base: where to find fresh pairs, the two hard screens, the social-proof test, the tiered sizing ladder, fast exits, the anti-dust rule, learning the meta, and building the track record in public",
-    "version": "15"
+    "description": "The memecoin treasury strategy in degen mode: the ledger and reconcile step, which chain to hunt on, the tiered sizing ladder, routing, the anti-dust rule, executing, fast exits, the track record, learning the meta, and when to stop. Scouting, Robinhood Chain, bridging, launches and liquidity are separate skills.",
+    "version": "19",
+    "requires": [
+      "token-identity",
+      "pre-trade-check"
+    ]
   },
   "verified-tooling": {
     "triggers": {
@@ -869,15 +479,14 @@
       "keywords": [
         "build a tool",
         "small tool",
-        "script",
+        "analysis script",
         "analysis tool",
         "parser",
         "ledger summary",
         "pnl curve",
         "watchlist diff",
         "report tool",
-        "re-run",
-        "smoke test",
+        "re-run the analysis",
         "verify the tool"
       ],
       "task_patterns": [
@@ -892,7 +501,7 @@
     "priority": 3,
     "auto_activate": true,
     "description": "How to build a small read-only analysis tool you can trust and re-run: one tool one question, pure and read-only, UNKNOWN is never zero, tests alongside, a real run recorded in a smoke log, and cross-checked totals",
-    "version": "1"
+    "version": "2"
   },
   "self-deploy": {
     "triggers": {
@@ -917,13 +526,7 @@
         "fund you",
         "funding address"
       ],
-      "action_names": [
-        "x_browser_x_signup_start",
-        "x_browser_x_login_check",
-        "x402_wallet_status",
-        "twitter_whoami",
-        "agent_status"
-      ],
+      "action_names": [],
       "task_patterns": [
         "(set|setting) (your|its)?self up",
         "(initiali[sz]e|bootstrap|provision) (yourself|the (agent|instance))",
@@ -936,5 +539,494 @@
     "auto_activate": true,
     "version": "1",
     "description": "How to bring a fresh instance of yourself online: assess what is already configured (model, wallet, funding, email, X, autonomy grants), provision what you can yourself (own inbox, X account, standing work), ask the owner only for what needs a human (API keys, funding, a CAPTCHA), and report one honest readiness table before you start operating"
+  },
+  "token-identity": {
+    "triggers": {
+      "action_names": [
+        "defi_data_token_resolve",
+        "defi_data_token_info"
+      ],
+      "keywords": [
+        "token address",
+        "contract address",
+        "which contract",
+        "token_resolve",
+        "pin a token",
+        "pin-token",
+        "look-alike",
+        "lookalike",
+        "ticker collision",
+        "same symbol",
+        "one symbol",
+        "verify the token",
+        "wrong token"
+      ],
+      "task_patterns": [
+        "(resolve|verify|confirm|check).*(token|contract) address",
+        "(buy|swap|trade).*(by|from) (ticker|symbol)",
+        "\\b(buy|sell|swap|ape into)\\b.*\\b(usdc|usdg|usdt|eth|weth|sol|wsol|btc|wbtc|pnl|tokens?|coins?|memecoins?|meme coins?)\\b"
+      ],
+      "tool_ids": [
+        "defi_trade",
+        "defi_data"
+      ]
+    },
+    "priority": 2,
+    "auto_activate": true,
+    "description": "Resolve a token to ONE contract address before any trade: trusted address sources, token_resolve candidates, token_info verified line, the one-symbol-two-contracts warning, owner pins, and the swap identity refusals. Read before buying anything named only by a ticker.",
+    "version": "3"
+  },
+  "pre-trade-check": {
+    "triggers": {
+      "action_names": [
+        "defi_data_swap_quote"
+      ],
+      "keywords": [
+        "pre-trade",
+        "pre trade",
+        "before a trade",
+        "before the swap",
+        "price impact",
+        "slippage",
+        "swap_quote",
+        "quote a swap",
+        "exit liquidity",
+        "exit route"
+      ],
+      "task_patterns": [
+        "(check|quote|price|measure).*(before|prior to).*(buy|swap|trade)"
+      ],
+      "tool_ids": [
+        "defi_trade",
+        "defi_data"
+      ]
+    },
+    "priority": 2,
+    "auto_activate": true,
+    "description": "Measure before you commit a trade: gas row, swap_quote lines (rate, spender, cross-check, value), price impact by a half-size quote, the exit quote, the token screen, and slippage by asset class. Lists what the swap verb already refuses.",
+    "version": "3",
+    "requires": [
+      "token-identity"
+    ]
+  },
+  "trade-execution": {
+    "triggers": {
+      "action_names": [
+        "defi_trade_swap",
+        "defi_trade_approve_token",
+        "defi_trade_revoke_approval",
+        "defi_trade_solana_swap"
+      ],
+      "keywords": [
+        "execute the trade",
+        "execute a swap",
+        "execute the swap",
+        "send the swap",
+        "dry run the swap",
+        "approve_token",
+        "revoke_approval",
+        "token allowance",
+        "solana_swap"
+      ],
+      "task_patterns": [
+        "(execute|send|place) (the|a|this|my) (swap|trade)"
+      ],
+      "tool_ids": [
+        "defi_trade",
+        "defi_data"
+      ]
+    },
+    "priority": 2,
+    "auto_activate": true,
+    "description": "Execute an on-chain trade safely: dry run first, native-in needs no approval, exact approve to the quoted spender, send once, read RESULT lines (pending is not failed), revoke after, the Solana one-verb path, and the money-parameter sources you may trust.",
+    "version": "3",
+    "requires": [
+      "token-identity",
+      "pre-trade-check"
+    ]
+  },
+  "post-trade-verify": {
+    "triggers": {
+      "action_names": [],
+      "keywords": [
+        "verify the trade",
+        "verify the fill",
+        "verify the swap",
+        "did the swap land",
+        "trade receipt",
+        "tx receipt",
+        "fill price",
+        "confirm the fill",
+        "realized slippage"
+      ],
+      "task_patterns": [
+        "(verify|confirm|check).*(fill price|tx receipt|trade receipt|swap landed|trade landed)"
+      ],
+      "tool_ids": [
+        "defi_trade",
+        "defi_data"
+      ]
+    },
+    "priority": 2,
+    "auto_activate": true,
+    "description": "Verify a trade after it confirms: receipt, measured amount received, the bought token at the intended address, the measured amount beside the quote, leftover allowances, the ledger row, and reconcile. A tx hash is not proof.",
+    "version": "3"
+  },
+  "position-journal": {
+    "triggers": {
+      "action_names": [
+        "defi_data_reconcile",
+        "defi_data_positions"
+      ],
+      "keywords": [
+        "position ledger",
+        "open positions table",
+        "cost basis",
+        "trade journal",
+        "realized pnl",
+        "unrealized pnl",
+        "trading pnl",
+        "position pnl",
+        "reconcile the position ledger",
+        "reconcile the trading ledger"
+      ],
+      "task_patterns": [
+        "(update|write|record|fix).*(ledger|journal).*(trade|position|fill)"
+      ],
+      "tool_ids": [
+        "defi_trade",
+        "defi_data"
+      ]
+    },
+    "priority": 2,
+    "auto_activate": true,
+    "description": "Keep the position ledger honest: the Open positions table reconcile reads, per-fill rows from measured receipts, P&L read from defi_data.positions (average cost, computed by the verb, never by hand), unknown is never zero, and never summing ledgers.",
+    "version": "3"
+  },
+  "exits": {
+    "triggers": {
+      "action_names": [],
+      "keywords": [
+        "stop loss",
+        "stop-loss",
+        "take profit",
+        "take-profit",
+        "trailing stop",
+        "trade exit plan",
+        "sell the position",
+        "exit the position"
+      ],
+      "task_patterns": [
+        "(set|plan|define|add).*(stop.?loss|take.?profit|trailing stop)"
+      ],
+      "tool_ids": [
+        "defi_trade",
+        "defi_data",
+        "cronjob"
+      ]
+    },
+    "priority": 2,
+    "auto_activate": true,
+    "description": "Declare the exit at entry: stop loss, take profit, time limit and trailing stop, run by a scheduled check because the on-chain rail has no native stop, limit or trigger orders; the DEFI_MONITOR_EXITS lane and the exit clamp.",
+    "version": "4"
+  },
+  "sizing-and-risk": {
+    "triggers": {
+      "action_names": [],
+      "keywords": [
+        "position size",
+        "position sizing",
+        "risk per trade",
+        "max drawdown",
+        "daily loss",
+        "kelly",
+        "bankroll",
+        "exposure cap"
+      ],
+      "task_patterns": [
+        "\\b(size|sizing)\\b.*\\b(trade|bet|ticket)\\b",
+        "position siz(e|ing)"
+      ],
+      "tool_ids": [
+        "defi_trade",
+        "defi_data"
+      ]
+    },
+    "priority": 2,
+    "auto_activate": true,
+    "description": "Size a trade from the risk you accept: risk per trade, caps by asset class, quarter Kelly for bets, loss breakers kept in the ledger (none exist in code yet), and the units check that stops a 1000x amount error.",
+    "version": "4"
+  },
+  "stable-cash": {
+    "triggers": {
+      "action_names": [],
+      "keywords": [
+        "stablecoin",
+        "stable coin",
+        "depeg",
+        "de-peg",
+        "park in stables",
+        "usdc.e",
+        "usdg",
+        "usdt"
+      ],
+      "task_patterns": [
+        "(move|rotate|park|hold).*\\b(stablecoins?|usdc|usdg|usdt)\\b"
+      ],
+      "tool_ids": [
+        "defi_trade",
+        "defi_data"
+      ]
+    },
+    "priority": 3,
+    "auto_activate": true,
+    "description": "What counts as cash: pinned stablecoins only, native over bridged, the depeg thresholds, yield stables are positions, gas is not cash.",
+    "version": "2"
+  },
+  "x402-pay": {
+    "triggers": {
+      "action_names": [
+        "x402_pay_x402_fetch",
+        "x402_pay_x402_quote",
+        "x402_pay_x402_probe"
+      ],
+      "keywords": [
+        "x402",
+        "paid api",
+        "paywall",
+        "402 payment",
+        "payment required",
+        "pay for the api",
+        "pay for data",
+        "x402_fetch"
+      ],
+      "task_patterns": [
+        "\\bpay\\b.*(endpoint|api|resource|per call)"
+      ],
+      "tool_ids": [
+        "x402_pay"
+      ]
+    },
+    "priority": 2,
+    "auto_activate": true,
+    "description": "Pay for an API over x402: what the payer supports (Base USDC, exact scheme), the caps and the autonomous ceiling, request_id for deliberate repeat calls, quote and probe before paying, the result headers, and the send interlock after an unknown outcome.",
+    "version": "2"
+  },
+  "dca": {
+    "triggers": {
+      "action_names": [],
+      "keywords": [
+        "dca",
+        "dollar cost averaging",
+        "dollar-cost averaging",
+        "recurring buy",
+        "accumulate weekly",
+        "accumulate daily"
+      ],
+      "task_patterns": [
+        "(buy|accumulate)\\b.*\\b(eth|sol|btc|wbtc|usdc|token|coin|crypto)\\b.*\\b(every|each) (day|week|month)",
+        "(buy|accumulate)\\b.*\\b(every|each) (day|week|month)\\b.*\\b(eth|sol|btc|wbtc|token|coin|crypto)\\b"
+      ],
+      "tool_ids": [
+        "defi_trade",
+        "defi_data",
+        "cronjob"
+      ]
+    },
+    "priority": 3,
+    "auto_activate": true,
+    "description": "Dollar-cost averaging on a schedule: majors only, an owner budget and end date, the target by address, cronjob_schedule with the money_rail rig and pinned skills, the per-run steps and the stop rules. There is no native recurring-order verb.",
+    "version": "2",
+    "requires": [
+      "token-identity",
+      "pre-trade-check"
+    ]
+  },
+  "memecoin-scouting": {
+    "triggers": {
+      "action_names": [
+        "defi_data_new_pools",
+        "defi_data_trending",
+        "defi_data_scan",
+        "defi_data_token_holders",
+        "defi_data_ohlcv",
+        "defi_data_token_info"
+      ],
+      "keywords": [
+        "memecoin",
+        "meme coin",
+        "new pair",
+        "fresh pair",
+        "fresh launch",
+        "degen",
+        "holder concentration",
+        "top holders",
+        "bubble map",
+        "wash trading",
+        "wash traded",
+        "ohlcv",
+        "rug pull",
+        "rugged",
+        "honeypot",
+        "sell tax",
+        "token watchlist"
+      ],
+      "task_patterns": [
+        "(find|scan|screen).*(new|fresh).*(token|coin|pair|launch)"
+      ],
+      "tool_ids": [
+        "defi_data",
+        "defi_trade"
+      ]
+    },
+    "priority": 2,
+    "auto_activate": true,
+    "description": "Finding and screening fresh memecoin pairs: where new launches are, the numbers that separated survivors from washes, price shape, holder concentration, the two hard screens (honeypot, sell tax), PARTIAL screens, and what counts as social proof.",
+    "version": "2",
+    "requires": [
+      "token-identity",
+      "pre-trade-check"
+    ]
+  },
+  "robinhood-chain": {
+    "triggers": {
+      "action_names": [
+        "launchpad_buy",
+        "launchpad_sell",
+        "launchpad_quote",
+        "launchpad_status"
+      ],
+      "keywords": [
+        "robinhood",
+        "robinhood chain",
+        "pons",
+        "tokenized stock",
+        "stock token",
+        "nvda",
+        "usdg"
+      ],
+      "task_patterns": [
+        "hunt.*robinhood"
+      ],
+      "tool_ids": [
+        "defi_trade",
+        "defi_data",
+        "launchpad"
+      ]
+    },
+    "priority": 3,
+    "auto_activate": true,
+    "description": "Robinhood Chain, the stock-meme market: tokenized stocks, Pons launches, meme/stock pairs, USDG, and how trading there differs from the other chains.",
+    "version": "1",
+    "requires": [
+      "token-identity",
+      "pre-trade-check"
+    ]
+  },
+  "defi-bridge": {
+    "triggers": {
+      "action_names": [
+        "defi_trade_bridge"
+      ],
+      "keywords": [
+        "cross-chain",
+        "cross chain",
+        "bridge funds",
+        "bridge eth",
+        "bridge sol",
+        "bridge usdc",
+        "defi_trade.bridge",
+        "in_flight"
+      ],
+      "task_patterns": [
+        "\\bbridge\\b.*\\b(eth|sol|usdc|usdg|funds)\\b",
+        "\\b(bridge|move|send)\\b.*\\b(to|from|between)\\b.*\\b(solana|robinhood|ethereum|arbitrum|polygon|base chain)\\b"
+      ],
+      "tool_ids": [
+        "defi_trade"
+      ]
+    },
+    "priority": 2,
+    "auto_activate": true,
+    "description": "Moving value between chains with defi_trade.bridge: what it can move, the two-phase guard, in_flight is not failure, and proving arrival by a measured destination balance.",
+    "version": "2"
+  },
+  "token-launch": {
+    "triggers": {
+      "action_names": [
+        "launchpad_launch",
+        "launchpad_claim",
+        "defi_trade_deploy_token",
+        "defi_trade_deploy_contract",
+        "defi_trade_solana_deploy_token",
+        "defi_trade_call",
+        "dapp_browser_dapp_connect"
+      ],
+      "keywords": [
+        "launch a token",
+        "launchpad",
+        "deploy token",
+        "deploy contract",
+        "create a token",
+        "mint a token",
+        "bonding curve",
+        "snipe tax",
+        "vanity address",
+        "spl token",
+        "mint authority",
+        "claim fees",
+        "creator fees",
+        "creator tax",
+        "fee escrow",
+        "gas back",
+        "weth to eth",
+        "use a dapp",
+        "connect wallet"
+      ],
+      "task_patterns": [
+        "(launch|deploy|create|mint)\\b.*\\b(token|coin|memecoin|erc-?20|spl)\\b"
+      ],
+      "tool_ids": [
+        "defi_trade",
+        "launchpad",
+        "dapp_browser"
+      ]
+    },
+    "priority": 2,
+    "auto_activate": true,
+    "description": "Launching or deploying a token, claiming its creator fees, getting gas back, metadata that must be set before a launch, and using a dapp with the native wallet.",
+    "version": "2"
+  },
+  "defi-liquidity": {
+    "triggers": {
+      "action_names": [
+        "defi_trade_lp_add",
+        "defi_trade_lp_remove",
+        "defi_trade_lp_collect",
+        "defi_data_lp_positions",
+        "defi_data_lp_pool_info",
+        "defi_data_lp_quote"
+      ],
+      "keywords": [
+        "liquidity pool",
+        "lp position",
+        "provide liquidity",
+        "add liquidity",
+        "remove liquidity",
+        "collect lp fees",
+        "uniswap v3 position"
+      ],
+      "task_patterns": [
+        "\\b(add|remove|provide|withdraw)\\b.*\\bliquidity\\b"
+      ],
+      "tool_ids": [
+        "defi_trade",
+        "defi_data"
+      ]
+    },
+    "priority": 2,
+    "auto_activate": true,
+    "description": "Uniswap v3 liquidity positions with the lp verbs: reading positions, pricing a deposit, adding, removing and collecting, the fee unit, and why a Pons graduation pool is different.",
+    "version": "2"
   }
 }

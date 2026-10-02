@@ -32,8 +32,9 @@ destination balance. See `core/wallet/bridge_guard.py`.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
-import uuid
+import time
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -56,14 +57,58 @@ def _refuse_non_owner_turn(execution_context) -> Optional[str]:
     it showed the cost: the agent could never bridge for its owner, only tell him
     to do it himself, three taps at a time. That is not autonomy with a safety
     margin, it is a rail the owner operates by hand. The posture is now **caps,
-    not taps** — the ONE shape in ``core.wallet.authority.leaf_refusal``.
+    not taps** — the ONE shape: the kernel's leaf + principal steps
+    (``core.money.authorize.authorize_spend``).
     """
-    from core.wallet.authority import leaf_refusal
-    return leaf_refusal(execution_context, "bridge")
+    from core.money.authorize import SpendIntent, authorize_spend
+    verdict = authorize_spend(SpendIntent(what="bridge", pause=False), execution_context)
+    return verdict.reason if verdict.refused else None
 
 
-def _refuse_paused() -> Optional[str]:
-    """The 031 owner pause — ``core.wallet.authority.spend_pause_refusal``.
+def _solana_turn_refusal(tool, execution_context) -> tuple:
+    """``(refusal | None, autonomous_origin)`` for a SOLANA-origin real run.
+
+    CR-M02: `leaf_refusal` checks leaf/sub-agent/principal only, so a forged
+    turn (self-wake, delegation-result) could bridge the Solana treasury and
+    `DEFI_AUTONOMOUS_TURN_TRADING` was never consulted. The EVM origin gets
+    this from `tx_guard.authorize`; the SVM origin has no EVM transaction to
+    route through it, so it asks the ONE Solana mirror of tx_guard steps 1-2 —
+    ``DefiTradeTool._solana_turn_gate`` — rather than a copy of it. A bridge is
+    never exit-shaped. A tool without the gate refuses (fail closed).
+    """
+    gate_fn = getattr(tool, "_solana_turn_gate", None)
+    if not callable(gate_fn):
+        return ("refused: the Solana turn gate is unavailable on this tool; "
+                "failing closed. Nothing was broadcast.", False)
+    try:
+        refusal, autonomous_origin, _exit = gate_fn(
+            execution_context, exit_shaped_fn=lambda: False)
+    except Exception as exc:
+        return (f"refused: the turn gate failed ({exc}); failing closed.", False)
+    return refusal, bool(autonomous_origin)
+
+
+def _idempotency_key(*, origin_id, dest_id, dest_currency, amount_in_raw,
+                     recipient, execution_context, now=None) -> str:
+    """A replay key derived from the INTENT, not from a random suffix (CR-L02).
+
+    ``uuid4()`` made every key unique, so the PolicyGate replay guard could
+    never fire: a re-issued tool call re-quoted, got a new Relay request id and
+    a new key, and sent again. The key is the move itself (origin, destination,
+    asset, raw amount, recipient) inside one session and a 10-minute window —
+    there is no turn id on the execution context to bind it tighter. A second
+    identical bridge in a later window is a new decision and gets a new key.
+    """
+    window = int((now if now is not None else time.time()) // 600)
+    session = str(getattr(execution_context, "session_id", "") or "")
+    raw = "|".join(str(x) for x in (
+        "bridge", origin_id, dest_id, str(dest_currency).lower(),
+        int(amount_in_raw), recipient, session, window))
+    return "defi_bridge:" + hashlib.sha256(raw.encode()).hexdigest()[:32]
+
+
+def _refuse_paused(execution_context=None) -> Optional[str]:
+    """The 031 owner pause — the kernel's pause step.
 
     Live, 2026-09-12: the owner armed the trading rail, asked his agent in chat
     to bridge, and hit this branch. He was told it was a hard safety gate the
@@ -72,8 +117,17 @@ def _refuse_paused() -> Optional[str]:
     Both halves of that answer were wrong, and the message is why; the sentence
     now lives beside the pause record (``core.autonomy_control.pause_refusal_text``).
     """
-    from core.wallet.authority import spend_pause_refusal
-    return spend_pause_refusal()
+    from core.money.authorize import SpendIntent, authorize_spend
+    # CR-L21: a bridge is never exit-shaped (see ``_solana_turn_refusal``), so
+    # the scoped `/pause trading` binds it too.
+    # 2026-09-26: a genuine owner turn (`/bridge … go`, or the owner asking in
+    # chat) is the owner acting — the pause bounds only the agent's own work.
+    from tools.controller.turn_origin import (
+        _is_autonomous_goal_turn, _is_forged_or_autonomous_turn)
+    verdict = authorize_spend(SpendIntent(principal=False, leaf=False, entry=True),
+                              execution_context, forged_fn=_is_forged_or_autonomous_turn,
+                              autonomous_ok_fn=_is_autonomous_goal_turn)
+    return verdict.reason if verdict.refused else None
 
 
 
@@ -86,23 +140,37 @@ async def _require_owner_approval(tool, *, params_summary: dict,
     which a bridge skips this", which was true of the first cut and false from
     `6d9bb790` ("the bridge runs on caps, not taps") onward: the only call site
     sits behind `amount_usd > _ceiling`.
+
+    ⚠️ The wait is BOUNDED. ``OwnerQueueApprover.request`` polls until its
+    caller's ``asyncio.wait_for`` cancels it — every other caller wraps it, and
+    this one did not, so it polled forever. On 2026-09-25 the owner's
+    ``/bridge … go`` ran on the Telegram poll loop, waited for a tap, and the tap
+    could never be read: the whole bot froze until the ask was decided on the
+    box. A timeout leaves the ask OPEN and the grant redeemable by the next run.
     """
+    import asyncio
     try:
+        from tools.controller.approval import approval_wait_timeout_sec
         from tools.controller.approval_queue import OwnerQueueApprover
         approver = OwnerQueueApprover(
             user_id=getattr(execution_context, "user_id", None))
-        ok = await approver.request("defi_trade_bridge", params_summary,
-                                    execution_context, hash_params=grant_key)
+        try:
+            ok = await asyncio.wait_for(
+                approver.request("defi_trade_bridge", params_summary,
+                                 execution_context, hash_params=grant_key),
+                timeout=approval_wait_timeout_sec("owner_queue"))
+        except asyncio.TimeoutError:
+            ok = False
         if ok:
             return True, "owner approved"
         return False, (
-            "the owner has not granted this yet. The ask is DURABLE and waiting.\n"
-            "⚠️ The approval id is the `tap-…` id shown by `/pending` — NOT the "
-            "relay request id, NOT the bridge id. Do not guess one: on "
-            "2026-09-12 an agent with no tap id in hand told its owner to run "
-            "`/approve 0x1789…` (the relay request id), which matches nothing.\n"
-            "Tell the owner: run `/pending` to see the tap id, then `/approve "
-            "<tap-id>`. Once granted, the next run of this SAME bridge redeems it "
+            "the owner has not granted this yet. The ask is DURABLE and waiting: "
+            "the owner was sent the approval and decides it with one tap (it also "
+            "shows in /pending).\n"
+            "⚠️ Do NOT give the owner a command or an id to type. On 2026-09-12 "
+            "an agent told its owner to run `/approve 0x1789…` (the relay request "
+            "id), which matches nothing.\n"
+            "Once granted, the next run of this SAME bridge redeems it "
             "automatically — do not re-quote in a loop while waiting.")
     except Exception as exc:
         # An approval path that ERRORS must deny. This is the one gate standing
@@ -255,6 +323,7 @@ def _resolve_endpoint(chain: str, tool) -> tuple:
 
 async def perform_bridge(tool, params, execution_context=None):
     """Quote, assert, approve, broadcast, then PROVE THE ARRIVAL."""
+    import asyncio as _asyncio  # CR-M10: the leg's RPC work runs off the loop
     from core.wallet import bridge_guard
     from tools.defi.providers.relay_bridge import (NATIVE_EVM, NATIVE_SVM,
                                                    RelayBridgeProvider, RelayError)
@@ -276,10 +345,13 @@ async def perform_bridge(tool, params, execution_context=None):
     # force, `polyrob wallet bridge solana robinhood 0.9` refused to even QUOTE.
     # That is the "I stopped you, now I cannot see anything" failure — the owner
     # could not learn what a bridge would cost while deciding whether to resume.
-    # The turn-origin refusal above stays unconditional: an autonomous turn has
-    # no business on this verb at all, quote or not.
+    # The LEAF refusal above stays unconditional: a delegated sub-agent never
+    # bridges, quote or not. An autonomous goal turn MAY bridge (caps, not
+    # taps) — on the EVM origin `tx_guard.authorize` applies the forged-turn
+    # and DEFI_AUTONOMOUS_TURN_TRADING bars, on the Solana origin the same
+    # gate runs below (CR-M02).
     if not params.dry_run:
-        refusal = _refuse_paused()
+        refusal = _refuse_paused(execution_context)
         if refusal:
             return tool._ar(error=refusal)
 
@@ -295,6 +367,13 @@ async def perform_bridge(tool, params, execution_context=None):
         dest_id, recipient, _dec_out, svm_dest = _resolve_endpoint(params.to_chain, tool)
     except ValueError as exc:
         return tool._ar(error=str(exc))
+
+    svm_autonomous_origin = False
+    if svm_origin and not params.dry_run:
+        refusal, svm_autonomous_origin = _solana_turn_refusal(
+            tool, execution_context)
+        if refusal:
+            return tool._ar(error=refusal)
 
     dest_name = bridge_guard.chain_name_for_id(dest_id)
     try:
@@ -357,6 +436,11 @@ async def perform_bridge(tool, params, execution_context=None):
     raw_tx = None
     signer = None
     prepared = None
+    svm_usd = None
+    idem = _idempotency_key(
+        origin_id=origin_id, dest_id=dest_id, dest_currency=dest_currency,
+        amount_in_raw=amount_in_raw, recipient=recipient,
+        execution_context=execution_context)
     if svm_origin:
         from core.wallet.relay_svm import (RelaySvmBuildError, build_transaction,
                                            signer_accounts)
@@ -386,10 +470,21 @@ async def perform_bridge(tool, params, execution_context=None):
             return tool._ar(content=header + f"  guard: {exc}\n  RESULT: NOT SENT.")
         raw_tx = bytes(tx)
 
+        # CR-M04: the Relay program was only an ALLOWANCE — a payload that never
+        # called it and moved the declared SOL with a plain System transfer
+        # passed every check, and phase 2 then said `in_flight` forever. The
+        # pinned program must be INVOKED, and no top-level System value move
+        # may appear beside it.
+        from core.wallet.solana_tx_inspect import (RELAY_PROGRAM_IDS,
+                                                   inspect_bridge_transaction)
+        shape = inspect_bridge_transaction(raw_tx, owner=sender)
+        if not shape.ok:
+            return tool._ar(content=header + (
+                f"  guard: {shape.reason}\n  RESULT: NOT SENT."))
+
         # The bridge calls Relay's deposit program, which the default allowlist
         # deliberately excludes (a SWAP calling it is an anomaly). Widened HERE,
         # per-call, from a PINNED constant — never from the quote we are vetting.
-        from core.wallet.solana_tx_inspect import RELAY_PROGRAM_IDS
         deltas = tool._solana_simulate(raw_tx=raw_tx, owner=sender, mints=(),
                                        extra_allowed=RELAY_PROGRAM_IDS)
         if deltas is None or not deltas.ok:
@@ -434,6 +529,21 @@ async def perform_bridge(tool, params, execution_context=None):
                 f"far more than fees and rent explain.\n  RESULT: NOT SENT."))
         header += (f"  simulated: native delta {deltas.native_delta} lamports "
                    f"(declared {amount_in_raw})\n")
+        # CR-M03 + CR-L06: the value is the MEASURED lamport outflow — principal,
+        # fee and any excess — at the pinned wSOL price, independent of Relay's
+        # `amountUsd` (a figure from the same party whose order is being
+        # vetted). Relay's figure can only RAISE it. Unpriced refuses: no cap
+        # can bound a number we do not have.
+        from tools.defi.spl_deploy_verb import _price_sol
+        svm_usd = _price_sol(tool, outflow / 1_000_000_000)
+        if svm_usd is None:
+            return tool._ar(content=header + (
+                "  guard: REFUSED — the SOL leaving could not be priced at the "
+                "pinned wSOL price, so no cap can bound it (Relay's own USD "
+                "figure is not an independent valuation).\n  RESULT: NOT SENT."))
+        if quote.amount_in_usd is not None:
+            svm_usd = max(svm_usd, round(float(quote.amount_in_usd), 2))
+        header += f"  valued:    ${svm_usd:,.2f} (measured outflow, pinned price)\n"
     else:
         # EVM ORIGIN (039 B2). The twin of the branch above, in its own module.
         # What was missing was never the broadcast rail — it has moved value
@@ -455,11 +565,12 @@ async def perform_bridge(tool, params, execution_context=None):
             return tool._ar(error=f"no EVM signer: {exc}")
         evm_leg = EvmOriginLeg(chain=(params.from_chain or "").strip().lower(),
                                signer=evm_signer)
-        prepared = evm_leg.prepare(
+        prepared = await _asyncio.to_thread(
+            evm_leg.prepare,
             tx_data=quote.tx_data, origin_chain_id=origin_id,
             amount_in_raw=amount_in_raw, amount_usd=quote.amount_in_usd,
             gate=gate, execution_context=execution_context, tool=tool,
-            idempotency_key=f"defi_bridge:{quote.request_id}")
+            idempotency_key=idem)
         header += prepared.header
         if not prepared.ok:
             # `prepared.header` ALREADY carries the guard verdict — appending
@@ -467,7 +578,7 @@ async def perform_bridge(tool, params, execution_context=None):
             # two different problems. The header is the one copy.
             return tool._ar(content=header + "  RESULT: NOT SENT.")
 
-    amount_usd = quote.amount_in_usd
+    amount_usd = svm_usd if svm_origin else quote.amount_in_usd
     if amount_usd is None and not params.dry_run:
         # The ledger is the only place every OTHER money verb sees this spend
         # against ITS cap. Booking an unknown as 0.00 would silently widen every
@@ -505,6 +616,27 @@ async def perform_bridge(tool, params, execution_context=None):
             "endpoint cannot authorize moving funds — set DEFI_SOLANA_RPC. "
             "Dry runs are unaffected.\n  RESULT: NOT SENT."))
 
+    # CR-L12: phase 2 proves an arrival by a balance RISE, which cannot say
+    # whose rise it is. Two open bridges into the same (chain, recipient,
+    # asset) would each claim the other's funds, so a second one waits.
+    try:
+        _open = bridge_guard.conflicting_open_bridge(
+            dest_chain_id=dest_id, recipient=recipient,
+            currency_out=quote.currency_out)
+    except Exception as exc:
+        return tool._ar(content=header + (
+            f"  guard: REFUSED — the bridge store could not be read ({exc}), so "
+            f"an open bridge into the same balance cannot be ruled out.\n"
+            f"  RESULT: NOT SENT."))
+    if _open is not None:
+        return tool._ar(content=header + (
+            f"  guard: REFUSED — bridge {_open.get('id')} into the same "
+            f"{dest_name} balance is still {_open.get('state')}. Its arrival is "
+            f"proven by a balance rise, and a second bridge into the same "
+            f"balance would make either arrival unprovable. Wait for it to "
+            f"settle: the bridge watcher re-measures the destination and tells "
+            f"the owner when it lands or is refunded.\n  RESULT: NOT SENT."))
+
     # Measure the destination BEFORE. An unreadable balance here is fatal: phase
     # 2 has nothing to compare against, and a bridge whose arrival cannot be
     # proven is one we do not start.
@@ -532,8 +664,14 @@ async def perform_bridge(tool, params, execution_context=None):
     # re-deriving it here from the quote would be a second opinion on the same
     # question, and two ceilings that can disagree is how a gate goes quiet. The
     # SVM path has no `authorize` to ask, so it compares directly.
+    # A genuine owner turn (`/bridge … go`) IS the owner asking — on the EVM
+    # path tx_guard step 0 already said so; the SVM path asks the same predicate.
+    from core.money.authority import owner_direct_turn
+    from tools.controller.turn_origin import (
+        _is_autonomous_goal_turn, _is_forged_or_autonomous_turn)
     _needs_owner = (prepared.needs_owner_approval if prepared is not None
-                    else amount_usd > _ceiling)
+                    else (amount_usd > _ceiling and not owner_direct_turn(
+                        execution_context, _is_forged_or_autonomous_turn, tool)))
     if _needs_owner:
         approved, note = await _require_owner_approval(
             tool,
@@ -560,7 +698,27 @@ async def perform_bridge(tool, params, execution_context=None):
                 f"${_ceiling:,.2f} — {note}\n  RESULT: NOT SENT."))
         header += (f"  approval: granted by the owner (${amount_usd:,.2f} over the "
                    f"${_ceiling:,.2f} ceiling)\n")
+        if prepared is not None:
+            # CR-L03: the owner ask polls, so the leg prepared above may be minutes
+            # old — nonce, fees and chain state simulated at `latest` before the
+            # wait. Build and authorize it again so what is broadcast is what the
+            # guard just simulated.
+            prepared = await _asyncio.to_thread(
+                evm_leg.prepare,
+                tx_data=quote.tx_data, origin_chain_id=origin_id,
+                amount_in_raw=amount_in_raw, amount_usd=quote.amount_in_usd,
+                gate=gate, execution_context=execution_context, tool=tool,
+                idempotency_key=idem)
+            if not prepared.ok:
+                return tool._ar(content=header + "  re-check after approval:\n"
+                                + prepared.header + "  RESULT: NOT SENT.")
     else:
+        if svm_autonomous_origin and not getattr(gate, "has_daily_cap", False):
+            # The `solana_swap` bar, for the same reason: an unattended origin
+            # needs an aggregate damage bound, not only a per-tx ceiling.
+            return tool._ar(content=header + (
+                "  guard: REFUSED — an unattended bridge needs an aggregate "
+                "damage bound; set WALLET_DAILY_CAP_USD.\n  RESULT: NOT SENT."))
         header += (f"  lane:  autonomous — ${amount_usd:,.2f} is within the "
                    f"${_ceiling:,.2f} ceiling\n")
 
@@ -568,25 +726,65 @@ async def perform_bridge(tool, params, execution_context=None):
         user_id=str(getattr(execution_context, "user_id", "") or "owner"),
         quote=quote, amount_usd=amount_usd, balance_before=balance_before)
 
-    idem = f"defi_bridge:{quote.request_id}:{uuid.uuid4().hex[:8]}"
     async with gate.reserve():
+        # M10 (security analysis 2026-09-23): the PolicyGate check INSIDE the
+        # reserve, on BOTH origins. The SVM path used to record without ever
+        # checking (no kill-switch, per-tx ceiling, daily cap, replay or
+        # submission-journal check), and the EVM check in tx_guard ran outside
+        # this lock, so two concurrent bridges could both clear a nearly
+        # exhausted cap. check -> send -> record is now one critical section.
+        verdict = gate.check(venue="defi", amount_usd=float(amount_usd or 0.0),
+                             idempotency_key=idem)
+        if not verdict.allowed:
+            bridge_guard.settle(bid, state=bridge_guard.STATE_FAILED,
+                                detail=f"refused by PolicyGate: {verdict.reason}")
+            return tool._ar(content=header + (
+                f"  guard: refused by PolicyGate: {verdict.reason}\n"
+                f"  RESULT: NOT SENT — nothing was broadcast."))
         if prepared is not None:
             from tools.defi.bridge_evm_leg import EvmOriginLeg
-            _sent = EvmOriginLeg.send(prepared)
+            _sent = await _asyncio.to_thread(EvmOriginLeg.send, prepared)
+            if _sent.state == "unknown":
+                # It may have left: parked in flight, so the arrival watcher
+                # measures the destination — never FAILED, never "not sent".
+                bridge_guard.settle(bid, state=bridge_guard.STATE_IN_FLIGHT,
+                                    detail=_sent.detail)
+                return tool._ar(error=_sent.detail)
             if _sent.state == "error":
                 bridge_guard.settle(bid, state=bridge_guard.STATE_FAILED,
                                     detail=_sent.detail)
-                return tool._ar(error=f"{_sent.detail} — nothing was sent")
+                return tool._ar(error=_sent.detail)
             signature = _sent.tx_hash
         else:
+            # CR-M05 parity with `solana_swap`: Relay chose the blockhash. Sign
+            # only a transaction whose blockhash the pinned RPC says is still
+            # valid; a tool without the check refuses (fail closed).
+            _bh = getattr(tool, "_solana_blockhash_valid", None)
             try:
-                signature = tool._solana_send(raw_tx, signer)
+                bh_ok, bh_detail = ((False, "no blockhash check on this tool")
+                                    if not callable(_bh) else _bh(raw_tx))
             except Exception as exc:
+                bh_ok, bh_detail = False, f"check failed: {exc}"
+            if not bh_ok:
                 bridge_guard.settle(bid, state=bridge_guard.STATE_FAILED,
-                                    detail=f"broadcast failed: {exc}")
-                return tool._ar(error=f"broadcast failed: {exc}")
-        # Recorded, never cap-checked — see the module docstring. The ledger must
-        # still see the spend so every OTHER money verb counts it against theirs.
+                                    detail=f"blockhash not valid: {bh_detail}")
+                return tool._ar(content=header + (
+                    f"  guard: REFUSED — the transaction's recent blockhash is "
+                    f"not valid on the pinned RPC ({bh_detail}).\n"
+                    f"  RESULT: NOT SENT — nothing was signed or broadcast; "
+                    f"re-quote and try again."))
+            try:
+                signature = await _asyncio.to_thread(tool._solana_send, raw_tx, signer)
+            except Exception as exc:
+                from core.wallet.broadcast.evm import (
+                    broadcast_failure_text, outcome_unknown)
+                _unknown = outcome_unknown(exc)
+                bridge_guard.settle(bid, state=(bridge_guard.STATE_IN_FLIGHT if _unknown
+                                                else bridge_guard.STATE_FAILED),
+                                    detail=broadcast_failure_text(exc))
+                return tool._ar(error=broadcast_failure_text(exc))
+        # Checked above (M10) and recorded here, so every OTHER money verb
+        # counts this spend against its caps.
         try:
             gate.record(venue="defi", action="bridge",
                         amount_usd=float(amount_usd or 0.0), counterparty=recipient,

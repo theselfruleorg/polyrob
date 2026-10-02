@@ -56,10 +56,10 @@ def test_gateway_wires_whatsapp_harness():
     """Regression: the gateway WhatsApp path MUST build the harness — without it,
     webhook_surfaces['whatsapp'] is never registered and every Meta verify/inbound
     POST 404s while the CLI claims the surface is online."""
+    # 064 F1: the gateway launches each surface through its package's launch.py.
     import inspect
-    import cli.commands.gateway as g
-    src = inspect.getsource(g._run_gateway)
-    assert "build_whatsapp_harness" in src
+    import surfaces.whatsapp.launch as wa_launch
+    assert "build_whatsapp_harness" in inspect.getsource(wa_launch.launch)
 
 
 def test_gateway_guards_each_surface_setup():
@@ -159,7 +159,7 @@ _CONNECTORS = [
     ("x", "X_SURFACE_ENABLED",
      {"TWITTER_API_KEY": "k", "TWITTER_API_SECRET_KEY": "s",
       "TWITTER_ACCESS_TOKEN": "t", "TWITTER_ACCESS_TOKEN_SECRET": "ts"},
-     "surfaces.x.harness.build_x_harness"),
+     "polyrob_x.surface.harness.build_x_harness"),
 ]
 
 
@@ -220,7 +220,7 @@ def test_gateway_accepts_x_oauth2_user_token(monkeypatch):
         raise RuntimeError("stop after capture")
 
     monkeypatch.setattr(
-        "surfaces.x.harness.build_x_harness", _fake_harness)
+        "polyrob_x.surface.harness.build_x_harness", _fake_harness)
     CliRunner().invoke(gw_mod.gateway, [])
     assert captured.get("data_dir") == "/tmp/polyrob-instanceX"
 
@@ -237,3 +237,161 @@ def test_gateway_no_surfaces_message_lists_all_flags(monkeypatch):
                  "SLACK_SURFACE_ENABLED", "SIGNAL_SURFACE_ENABLED",
                  "X_SURFACE_ENABLED"):
         assert flag in res.output
+
+
+def test_gateway_skips_email_without_credentials(monkeypatch):
+    """064 revalidation: the email launch ran with no credentials and reported the
+    surface online; it now WARNs and skips like every other surface."""
+    from click.testing import CliRunner
+    from cli.commands import gateway as gw_mod
+
+    fake = _patch_gateway_bootstrap(monkeypatch)
+    fake.config.gmail_email = None
+    fake.config.gmail_app_password = None
+    monkeypatch.setenv("EMAIL_SURFACE_ENABLED", "true")
+    monkeypatch.delenv("AGENTMAIL_API_KEY", raising=False)
+    monkeypatch.setenv("EMAIL_PROVIDER", "smtp")
+
+    def _fail(*a, **k):
+        raise AssertionError("build_email_harness must NOT be called without creds")
+
+    monkeypatch.setattr("surfaces.email.harness.build_email_harness", _fail)
+    res = CliRunner().invoke(gw_mod.gateway, [])
+    assert "skipping email" in res.output.lower()
+
+
+@pytest.mark.asyncio
+async def test_webhook_replay_helper_runs_only_journaling_surfaces():
+    from surfaces._launch import recover_webhook_surfaces
+
+    class _WS:
+        def __init__(self, journaling, n):
+            self.ack_before_turn, self.n, self.called = journaling, n, False
+
+        async def recover(self, container, task_agent):
+            self.called = True
+            return self.n
+
+    a, b = _WS(True, 2), _WS(False, 5)
+
+    class _C:
+        def get_service(self, name):
+            return {"a": a, "b": b} if name == "webhook_surfaces" else None
+
+    notes = []
+    assert await recover_webhook_surfaces(_C(), None, note=notes.append, warn=notes.append) == 2
+    assert a.called and not b.called and "replayed 2" in notes[0]
+
+
+def test_every_webhook_entry_point_replays_before_serving():
+    """The gateway and `polyrob whatsapp` both call the ONE replay helper."""
+    import inspect
+    import cli.commands.gateway as gw
+    import cli.commands.whatsapp as wa
+    for src in (inspect.getsource(gw._run_gateway), inspect.getsource(wa)):
+        assert "recover_webhook_surfaces" in src
+        assert src.index("recover_webhook_surfaces(") < src.rindex("serve")
+
+
+# --- configured = on; the prod gateway unit's options (064 factory set-up) ----
+
+def test_a_configured_surface_starts_with_no_enable_flag(monkeypatch):
+    from click.testing import CliRunner
+    from cli.commands import gateway as gw_mod
+
+    _patch_gateway_bootstrap(monkeypatch)
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "d-tok")          # no DISCORD_SURFACE_ENABLED
+    captured = {}
+
+    def _fake(container, task_agent, **kw):
+        captured.update(kw)
+        raise RuntimeError("stop after capture")
+
+    monkeypatch.setattr("surfaces.discord.harness.build_discord_harness", _fake)
+    CliRunner().invoke(gw_mod.gateway, [])
+    assert captured.get("token") == "d-tok"
+
+
+def test_an_explicit_false_keeps_a_configured_surface_off(monkeypatch):
+    from click.testing import CliRunner
+    from cli.commands import gateway as gw_mod
+
+    _patch_gateway_bootstrap(monkeypatch)
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "d-tok")
+    monkeypatch.setenv("DISCORD_SURFACE_ENABLED", "false")
+
+    def _fail(*a, **k):
+        raise AssertionError("an explicit false must keep the surface off")
+
+    monkeypatch.setattr("surfaces.discord.harness.build_discord_harness", _fail)
+    res = CliRunner().invoke(gw_mod.gateway, [])
+    assert "No surfaces enabled" in res.output
+
+
+def test_shared_credential_surfaces_never_auto_start(monkeypatch):
+    """X shares the posting tool's keys, email the email tool's, telegram runs as
+    its own primary process: configured is NOT enough for these."""
+    from core.surfaces.config import SurfaceConfig
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+    for k in ("X_SURFACE_ENABLED", "TELEGRAM_SURFACE_ENABLED", "EMAIL_SURFACE_ENABLED",
+              "AUTONOMY_MODE"):
+        monkeypatch.delenv(k, raising=False)
+    for k in ("TWITTER_API_KEY", "TWITTER_API_SECRET_KEY", "TWITTER_ACCESS_TOKEN",
+              "TWITTER_ACCESS_TOKEN_SECRET", "TELEGRAM_BOT_TOKEN"):
+        monkeypatch.setenv(k, "v")
+    assert not SurfaceConfig.surface_enabled("x")
+    assert not SurfaceConfig.surface_enabled("telegram")
+
+
+def test_skip_leaves_a_surface_to_its_own_process(monkeypatch):
+    from click.testing import CliRunner
+    from cli.commands import gateway as gw_mod
+
+    _patch_gateway_bootstrap(monkeypatch)
+    monkeypatch.setenv("TELEGRAM_SURFACE_ENABLED", "true")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok")
+
+    def _fail(*a, **k):
+        raise AssertionError("--skip telegram must not build the telegram harness")
+
+    monkeypatch.setattr("surfaces.telegram.harness.build_telegram_harness", _fail)
+    res = CliRunner().invoke(gw_mod.gateway, ["--skip", "telegram,email"])
+    assert "No surfaces enabled" in res.output
+
+
+def test_idle_when_empty_waits_before_building_the_container(monkeypatch):
+    from click.testing import CliRunner
+    from cli.commands import gateway as gw_mod
+
+    _patch_gateway_bootstrap(monkeypatch)
+    built = []
+
+    async def _build(**k):
+        built.append(1)
+
+    monkeypatch.setattr("core.bootstrap.build_cli_container", _build)
+    waited = []
+
+    async def _wait(self):
+        waited.append(1)
+
+    monkeypatch.setattr("asyncio.Event.wait", _wait)
+    res = CliRunner().invoke(gw_mod.gateway, ["--idle-when-empty", "--skip", "telegram,email"])
+    assert waited == [1] and built == []
+    assert "idling" in res.output
+
+
+def test_no_autonomy_never_starts_the_loops(monkeypatch):
+    from click.testing import CliRunner
+    from cli.commands import gateway as gw_mod
+
+    _patch_gateway_bootstrap(monkeypatch)
+    monkeypatch.setenv("POLYROB_LOCAL", "1")
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "d-tok")
+    started = []
+    monkeypatch.setattr("core.autonomy_runtime.start_autonomy",
+                        lambda **k: started.append(1))
+    monkeypatch.setattr("surfaces.discord.harness.build_discord_harness",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("stop")))
+    CliRunner().invoke(gw_mod.gateway, ["--no-autonomy"])
+    assert started == []

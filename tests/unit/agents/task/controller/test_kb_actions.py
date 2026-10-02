@@ -118,8 +118,9 @@ async def test_collection_none_routes_to_memory_search(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_kb_disabled_with_collection_falls_back_to_memory_search(monkeypatch):
-    """KB disabled => falls back to memory_search even if collection is set."""
+async def test_kb_disabled_with_collection_says_so(monkeypatch):
+    """Review F13 (2026-09-29): KB disabled + collection= used to fall back SILENTLY
+    to past-session recall; it now says the KB is disabled and searches nothing."""
     monkeypatch.setenv("KB_ENABLED", "false")
     prov = _StubExternalProvider()
     mem_registry.set_external_memory_provider(prov)
@@ -132,17 +133,14 @@ async def test_kb_disabled_with_collection_falls_back_to_memory_search(monkeypat
         params = action.param_model(query="contract", collection="contracts")
         res = await action.function(params, execution_context=None)
 
-    # kb_search NOT called when disabled
     kb_mock.assert_not_awaited()
-    # memory_search called as fallback
-    assert len(prov.search_calls) == 1
-    # no crash
-    assert res.extracted_content  # non-empty
+    assert prov.search_calls == []
+    assert res.error and "knowledge base is disabled" in res.error.lower()
 
 
 @pytest.mark.asyncio
-async def test_kb_exception_falls_through_to_memory_search(monkeypatch):
-    """KB branch raises => fail-open: memory_search still runs."""
+async def test_kb_exception_is_reported_not_swapped_for_session_recall(monkeypatch):
+    """KB branch raises => the failure is reported (review F13), no silent fallback."""
     monkeypatch.setenv("KB_ENABLED", "true")
     prov = _StubExternalProvider()
     mem_registry.set_external_memory_provider(prov)
@@ -155,6 +153,5 @@ async def test_kb_exception_falls_through_to_memory_search(monkeypatch):
         params = action.param_model(query="docs", collection="manuals")
         res = await action.function(params, execution_context=None)
 
-    # Despite KB error, memory_search fallback ran — no crash
-    assert len(prov.search_calls) == 1
-    assert res.extracted_content  # non-empty, not an exception
+    assert prov.search_calls == []
+    assert res.error and "knowledge-base search failed" in res.error.lower()

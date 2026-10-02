@@ -243,6 +243,7 @@ def compute_llm_cost(model: str, usage: Union[Mapping[str, Any], Any],
     output_tokens = _usage_field(usage, "completion_tokens", "output_tokens")
     cached_tokens = _usage_field(usage, "cached_tokens")
     cache_creation_tokens = _usage_field(usage, "cache_creation_tokens")
+    cache_creation_1h_tokens = _usage_field(usage, "cache_creation_1h_tokens")
 
     return calculate_cost(
         model_name=model,
@@ -250,4 +251,5 @@ def compute_llm_cost(model: str, usage: Union[Mapping[str, Any], Any],
         output_tokens=output_tokens,
         cached_tokens=cached_tokens,
         cache_creation_tokens=cache_creation_tokens,
+        cache_creation_1h_tokens=cache_creation_1h_tokens,
     )

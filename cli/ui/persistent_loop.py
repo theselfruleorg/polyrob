@@ -44,7 +44,6 @@ async def run_turn(
     on_turn_complete: Optional[Callable[[], None]] = None,
     slash_dispatch: Optional[Callable[[str], Awaitable[bool]]] = None,
     request_exit: Optional[Callable[[], None]] = None,
-    owner_gate: Optional[Callable[[str], Optional[str]]] = None,
 ) -> None:
     """Run one REPL turn. Never raises — errors/cancel are rendered + swallowed.
 
@@ -64,11 +63,6 @@ async def run_turn(
             return
         # not a recognized slash → fall through and treat as a turn
 
-    if owner_gate is not None:
-        reply = owner_gate(line)
-        if reply is not None:
-            renderer.print_block(reply)
-            return
     from cli.ui.input_policy import prepare_text
     try:
         line = prepare_text(line)

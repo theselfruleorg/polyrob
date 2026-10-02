@@ -107,9 +107,13 @@ HELP_BOOK = (
     "  What I have written down against what the chains actually hold, on\n"
     "  every money chain at once.\n"
     "\n"
-    "  A disagreement is not an error to dismiss: until it is settled I will\n"
-    "  not trade, rewrite the ledger, or say anything in public about my\n"
-    "  positions. A chain I could not read is UNKNOWN, never clean.",
+    "  A disagreement is not an error to dismiss: the ledger is wrong where\n"
+    "  the chain disagrees, and I correct it before I report or claim anything\n"
+    "  about those positions. The verdict does not stop a trade — the identity\n"
+    "  check and the caps do. A chain I could not read is UNKNOWN, never clean.\n"
+    "\n"
+    "  The book also lists what the rail tracks that the ledger does not, and\n"
+    "  every quarantined or written-off position (/writeoff, /unquarantine).",
     "`/book` on Telegram, `polyrob wallet book`, and the console's Money.",
 )
 

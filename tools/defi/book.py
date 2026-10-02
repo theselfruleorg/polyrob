@@ -21,7 +21,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from core.book import (
-    NO_ENTRY_RECORDED_REASON, PNL_NEEDS_WORTH_REASON,
+    BASIS_UNKNOWN_REASON, NO_ENTRY_RECORDED_REASON, PNL_NEEDS_WORTH_REASON,
     BookRow, BookVerdict, verdict_from_report,
 )
 from core.position_ledger import _BASE58_ADDR, _EVM_ADDR, _norm
@@ -49,34 +49,83 @@ def _is_evm_address(address: str) -> bool:
     return bool(_EVM_ADDR.fullmatch((address or "").strip()))
 
 
-def _address_in_rows(address: str, rows: Optional[List[str]]) -> bool:
+def _row_address(row: str) -> Optional[str]:
+    """The ADDRESS field of a legacy ``f"{symbol} {address} — …"`` row: the last
+    whitespace token before the first `` — ``. Used only when a report carries
+    no structured ``addresses`` (hand-built reports); never "the first
+    address-shaped text in the line", which a symbol could supply (CR-L11)."""
+    head = (row or "").split(" — ", 1)[0].split()
+    if not head:
+        return None
+    token = head[-1]
+    if _EVM_ADDR.fullmatch(token) or _BASE58_ADDR.fullmatch(token):
+        return token
+    return None
+
+
+def _address_in_rows(address: str, rows: Optional[List[str]],
+                     addresses: Optional[List[str]] = None) -> bool:
     """True when ``address`` is named in any of a reconcile report's formatted
     rows. Each row is ``f"{symbol} {address} — …"`` (``reconcile.diff``); this
     reads WHICH typed list (matched/mismatched/…) a holding is in — it never
-    parses a verdict out of free prose."""
+    parses a verdict out of free prose.
+
+    CR-L11: matched by the report's structured ``addresses`` list when present
+    (``ReconcileReport.addresses``), else by the row's address FIELD — never by
+    the first address in the line, because the symbol comes first and a symbol
+    is attacker-authored."""
+    target = _norm(address)
+    if addresses is not None:
+        return any(_norm(a) == target for a in addresses if a)
     if not rows:
         return False
-    target = _norm(address)
     for row in rows:
-        m = _EVM_ADDR.search(row) or _BASE58_ADDR.search(row)
-        if m and _norm(m.group(0)) == target:
+        found = _row_address(row)
+        if found and _norm(found) == target:
             return True
     return False
 
 
-def _worth_from_portfolio(text: Optional[str], address: str) -> Optional[float]:
-    """The current USD value of one address from a ``portfolio`` render, or None.
+def _worth_from_metadata(metadata: Any, address: str) -> Optional[float]:
+    """071 W1: the typed ``usd`` of one holding from ``portfolio`` metadata.
+    Set only for a row the tool itself valued (counted in ``total_usd``); any
+    other row — excluded, unpriced, budget-skipped — or an absent one is None."""
+    target = _norm(address)
+    for row in (metadata.get("holdings") or []):
+        if not isinstance(row, dict) or _norm(str(row.get("address") or "")) != target:
+            continue
+        usd = row.get("usd")
+        return float(usd) if isinstance(usd, (int, float)) and row.get("status") == "valued" else None
+    return None
+
+
+def _worth_from_portfolio(text: Optional[str], address: str,
+                          metadata: Optional[Dict[str, Any]] = None) -> Optional[float]:
+    """The current USD value of one address from a ``portfolio`` result, or None.
+
+    071 W1: the typed ``metadata`` is read first; the prose regex below is the
+    fallback for a result that carries none.
 
     Fail-soft on purpose: an excluded-price line, an unknown balance, or a
     format the render no longer uses all return None (the caller then prints
     `—` with a reason) — never a fabricated or misparsed figure.
+
+    CR-L11: a holding line is ``  {address}  {amount} {symbol}  = $X``; the
+    address is the line's FIRST field and nothing else on the line counts.
     """
+    if isinstance(metadata, dict) and isinstance(metadata.get("holdings"), list) and address:
+        return _worth_from_metadata(metadata, address)
     if not text or not address:
         return None
     target = _norm(address)
     for line in text.splitlines():
-        m = _EVM_ADDR.search(line) or _BASE58_ADDR.search(line)
-        if not m or _norm(m.group(0)) != target:
+        fields = line.split()
+        if not fields:
+            continue
+        first = fields[0]
+        if not (_EVM_ADDR.fullmatch(first) or _BASE58_ADDR.fullmatch(first)):
+            continue
+        if _norm(first) != target:
             continue
         tail = _USD_TAIL_RE.search(line.strip())
         if not tail:
@@ -133,10 +182,18 @@ def book_rows(chains_out: Dict[str, Dict[str, Any]],
         for c in _candidate_chains(address, chain_names):
             entry = chains_out.get(c) or {}
             report = entry.get("report") or {}
-            if _address_in_rows(address, report.get("matched")):
+            structured = report.get("addresses")
+            structured = structured if isinstance(structured, dict) else None
+
+            def _in(kind: str) -> bool:
+                return _address_in_rows(
+                    address, report.get(kind),
+                    None if structured is None else (structured.get(kind) or []))
+
+            if _in("matched"):
                 matched = c
                 break
-            if mismatched is None and _address_in_rows(address, report.get("mismatched")):
+            if mismatched is None and _in("mismatched"):
                 mismatched = c
             if unreadable is None and entry.get("verdict") == BookVerdict.UNVERIFIED.value:
                 unreadable = (c, entry.get("error") or "chain read failed")
@@ -158,7 +215,8 @@ def book_rows(chains_out: Dict[str, Dict[str, Any]],
             worth_reason = _UNBACKED_REASON
         else:
             usd = _worth_from_portfolio(
-                (chains_out.get(chain) or {}).get("portfolio_text"), address)
+                (chains_out.get(chain) or {}).get("portfolio_text"), address,
+                metadata=(chains_out.get(chain) or {}).get("portfolio_metadata"))
             if usd is None:
                 worth_reason = _WORTH_UNAVAILABLE_REASON
 
@@ -170,8 +228,12 @@ def book_rows(chains_out: Dict[str, Dict[str, Any]],
         rec = entries.get(_norm(address))
         entry_usd = getattr(rec, "entry_usd", None) if rec is not None else None
         if entry_usd is None:
-            entry_reason = NO_ENTRY_RECORDED_REASON
-            since_reason = NO_ENTRY_RECORDED_REASON
+            # 071 W3: a tracked row with a NULL basis is "basis unknown", not
+            # "no entry" — and never a $0 basis.
+            _why = (BASIS_UNKNOWN_REASON if rec is not None
+                    else NO_ENTRY_RECORDED_REASON)
+            entry_reason = _why
+            since_reason = _why
         else:
             entry_val = entry_usd
             if usd is None:
@@ -191,6 +253,9 @@ def book_rows(chains_out: Dict[str, Dict[str, Any]],
             entry_reason=entry_reason,
             since_entry=since_val,
             since_entry_reason=since_reason,
+            lifecycle=(getattr(rec, "status", None) or "open") if rec is not None else None,
+            lifecycle_reason=(getattr(rec, "status_reason", None) or None)
+            if rec is not None else None,
         ))
     return rows
 
@@ -254,6 +319,7 @@ async def read_book(user_id: str, data_dir: str, *,
             try:
                 pres = await tool.portfolio(PortfolioParams(chain=c))
                 entry["portfolio_text"] = getattr(pres, "extracted_content", None)
+                entry["portfolio_metadata"] = getattr(pres, "metadata", None)
                 if getattr(pres, "error", None):
                     entry["error"] = pres.error
             except Exception as exc:
@@ -264,6 +330,7 @@ async def read_book(user_id: str, data_dir: str, *,
         try:
             pres = await tool.portfolio(PortfolioParams(chain=c))
             entry["portfolio_text"] = getattr(pres, "extracted_content", None)
+            entry["portfolio_metadata"] = getattr(pres, "metadata", None)
             portfolio_error = getattr(pres, "error", None)
             rres = await tool.reconcile(
                 ReconcileParams(chain=c, ledger_path=lp))
@@ -303,18 +370,44 @@ async def read_book(user_id: str, data_dir: str, *,
     # columns, never a gate on the book read — the verdict/worth columns stand
     # regardless.
     entries: Dict[str, Any] = {}
-    if ledger_positions:
-        try:
-            from core.open_positions import entries_for
-            entries = entries_for(user_id, data_dir=data_dir)
-        except Exception:
-            entries = {}
+    try:
+        from core.open_positions import entries_for
+        entries = entries_for(user_id, data_dir=data_dir)
+    except Exception:
+        entries = {}
 
     return {
         "chains": out_chains,
         "rows": [r.to_dict()
                  for r in book_rows(out_chains, ledger_positions, entries)],
+        "tracked": tracked_rows(ledger_positions, entries),
         "verdict": overall,
         "checked_at": checked_at,
         "ledger_path": lp,
     }
+
+
+def tracked_rows(ledger_positions: List[Any],
+                 entries: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """W1: the rail-written positions the LEDGER does not list.
+
+    ``open_positions.db`` is what the identity gate reads — a look-alike held
+    there blocked the real token for a day while no screen showed it. These
+    rows are "tracked by the rail": the rail bought (or quarantined, or the
+    owner wrote off) a position my markdown ledger never recorded. Shown with
+    their lifecycle, never folded into the ledger's verdict."""
+    listed = {_norm(getattr(p, "address", "") or "") for p in ledger_positions or []}
+    out: List[Dict[str, Any]] = []
+    for key, rec in (entries or {}).items():
+        if key in listed:
+            continue
+        out.append({
+            "symbol": getattr(rec, "symbol", None) or "?",
+            "chain": getattr(rec, "chain", None),
+            "address": getattr(rec, "address", key),
+            "amount": getattr(rec, "qty", None),
+            "entry": getattr(rec, "entry_usd", None),
+            "lifecycle": getattr(rec, "status", None) or "open",
+            "lifecycle_reason": getattr(rec, "status_reason", None) or None,
+        })
+    return out

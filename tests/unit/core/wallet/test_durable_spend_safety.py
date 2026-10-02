@@ -24,7 +24,9 @@ def _spend(path, ready, start, results):
     asyncio.run(run())
 
 
-def test_two_processes_cannot_both_clear_shared_daily_cap(tmp_path):
+def test_two_processes_cannot_both_clear_shared_daily_cap(tmp_path, monkeypatch):
+    # Spawned workers must not inherit the owner's real pause/kill-switch home.
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
     ctx = multiprocessing.get_context("spawn")
     ready, results, start = ctx.Queue(), ctx.Queue(), ctx.Event()
     workers = [ctx.Process(target=_spend, args=(str(tmp_path / "audit.jsonl"), ready, start, results))

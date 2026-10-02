@@ -48,10 +48,14 @@ def test_a_blind_model_is_not_told_it_has_vision():
     assert "YOU HAVE VISION" not in content
 
 
-def test_the_media_surface_rule_says_a_path_in_prose_is_not_a_delivery(monkeypatch):
+def test_the_media_surface_rule_names_the_one_file_delivery_rule(monkeypatch):
+    """F6 (2026-09-29): one rule, consistent with core/surfaces/path_links.py —
+    an ABSOLUTE workspace path in a message is attached or linked; a relative
+    name is not; message(media_paths=...) sends a file on its own."""
     monkeypatch.setenv("MESSAGE_TOOL_ENABLED", "true")
     content = _prompt(surface=TELEGRAM)
     assert "message(media_paths=" in content
     lowered = content.lower()
     assert "one call per file" in lowered
-    assert "is not a delivery" in lowered
+    assert "absolute workspace path" in lowered
+    assert "a relative name is not resolved" in lowered

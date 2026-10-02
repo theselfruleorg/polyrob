@@ -48,17 +48,12 @@ class WhatsAppSurface(Surface):
     def attach_window(self, tracker) -> None:
         self._window = tracker
 
-    def can_send_now(self, session_key, *, now=None):
-        import time as _t
-        from core.surfaces.send_policy import SendDecision
+    def last_inbound_at(self, session_key):
+        """The 24 h window tracker (064 F4: the base ``can_send_now`` reads it)."""
         wt = getattr(self, "_window", None)
         if wt is None:
-            return SendDecision.ALLOW
-        last = wt.last_inbound(_wa_to(session_key))
-        now = now if now is not None else _t.time()
-        if last is not None and (now - last) <= self.capabilities.service_window_secs:
-            return SendDecision.ALLOW
-        return SendDecision.TEMPLATE_ONLY
+            return False, None
+        return True, wt.last_inbound(_wa_to(session_key))
 
     async def start(self, container) -> None: ...
     async def stop(self) -> None: ...

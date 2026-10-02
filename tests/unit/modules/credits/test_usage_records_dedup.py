@@ -28,7 +28,8 @@ def _record(request_id="req-1", user_id="u1", session_id="s1"):
         agent_id="a1",
         model="gpt-4o",
         provider="openai",
-        tokens=types.SimpleNamespace(prompt_tokens=100, completion_tokens=50, cached_tokens=0),
+        tokens=types.SimpleNamespace(prompt_tokens=100, completion_tokens=50, cached_tokens=0,
+                                     cache_creation_tokens=0),
         costs=types.SimpleNamespace(
             api_cost_usd=0.01, credits_charged=2, markup_multiplier=1.0,
             credits_raw=2.0, user_cost_usd=0.02,

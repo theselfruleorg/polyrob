@@ -1,4 +1,4 @@
-"""`polyrob init` Section 6/6 — Autonomy & guardrails (owner-UX P3 T4).
+"""`polyrob init` Section 6/7 — Autonomy & guardrails (owner-UX P3 T4).
 
 All-blank-to-skip prompts placed after Owner pairing, before the final
 summary: local mode, approval preset, and daily digest channel. Skipped
@@ -8,7 +8,7 @@ entirely by `--quick` and non-interactive modes (nested inside the same
 NOTE: the "Autonomy budget USD/window" prompt (`AUTONOMY_BUDGET_USD`) was
 removed along with the autonomy budget gate itself — a $/day rate ceiling
 cannot protect a finite balance (see the money-ledger split proposal §5.3
-Task 9). Section 6/6 now asks 3 questions, not 4.
+Task 9). Section 6/7 now asks 3 questions, not 4.
 """
 from __future__ import annotations
 
@@ -50,27 +50,29 @@ def _read_env(home: Path) -> dict:
     }
 
 
-# The full non-quick interactive wizard prompts, in order, BEFORE Section 6/6:
+# The full non-quick interactive wizard prompts, in order, BEFORE Section 6/7:
 # Section 1 (provider choice/key/another = 3 blanks), model, toolset, template,
 # "give this instance its own character?" (F0, default NO), instance id, owner id.
 _PRE_SECTION5_BLANKS = ["" for _ in range(9)]
 
 
 def _full_flow_input(*, local="", autonomy="", preset="", digest="", wallet="n",
-                     mode="") -> str:
-    # Section 6/6 order (0.9.0 + 030 F7): interactive-local-tools confirm
+                     mode="", surface="") -> str:
+    # Section 6/7 order (0.9.0 + 030 F7): interactive-local-tools confirm
     # (default YES), autonomy confirm (default NO), THEN — only when autonomy
     # is yes — the autonomous-mode confirm (default NO), approval preset,
     # digest. Then Task 7's "Optional: agent crypto wallet" confirm.
     answers = [local, autonomy]
     if (autonomy or "").strip().lower() in ("y", "yes"):
         answers.append(mode)
-    answers += [preset, digest, wallet]
+    # 062 added Section 7/7 ("Reach me"): one surface prompt, blank = skip,
+    # between the digest prompt and the wallet confirm.
+    answers += [preset, digest, surface, wallet]
     return "\n".join(_PRE_SECTION5_BLANKS + answers) + "\n"
 
 
 # ---------------------------------------------------------------------------
-# Full flow: every Section 6/6 prompt answered writes the expected keys.
+# Full flow: every Section 6/7 prompt answered writes the expected keys.
 # ---------------------------------------------------------------------------
 
 def test_full_flow_writes_expected_keys(tmp_path, monkeypatch):
@@ -78,7 +80,7 @@ def test_full_flow_writes_expected_keys(tmp_path, monkeypatch):
     piped = _full_flow_input(local="y", autonomy="y", preset="y", digest="telegram")
     res, proj = _invoke([], home, monkeypatch, input_text=piped)
     assert res.exit_code == 0, res.output
-    assert "Section 6/6: Autonomy & guardrails" in res.output
+    assert "Section 6/7: Autonomy & guardrails" in res.output
 
     env = _read_env(home)
     assert env.get("POLYROB_LOCAL") == "1"
@@ -105,14 +107,14 @@ def test_final_summary_mentions_self_capability(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Blank answers take each Section 6/6 prompt's default (0.9.0): the interactive
+# Blank answers take each Section 6/7 prompt's default (0.9.0): the interactive
 # local-tools prompt defaults YES (writes POLYROB_LOCAL), autonomy defaults NO,
 # and the approval preset / digest still skip on blank.
 # ---------------------------------------------------------------------------
 
 def test_blanks_take_section6_defaults(tmp_path, monkeypatch):
     home = _make_home(tmp_path)
-    piped = _full_flow_input()  # every Section 6/6 prompt left blank
+    piped = _full_flow_input()  # every Section 6/7 prompt left blank
     res, proj = _invoke([], home, monkeypatch, input_text=piped)
     assert res.exit_code == 0, res.output
 
@@ -133,7 +135,7 @@ def test_blanks_take_section6_defaults(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# --quick skips Section 6/6 entirely (it's nested inside `if not quick:`).
+# --quick skips Section 6/7 entirely (it's nested inside `if not quick:`).
 # ---------------------------------------------------------------------------
 
 def test_quick_skips_guardrails_section_entirely(tmp_path, monkeypatch):
@@ -187,10 +189,11 @@ def test_digest_with_explicit_owner_flag_writes_that_owners_prefs(tmp_path, monk
     home = _make_home(tmp_path)
     # --owner/--instance-id pre-supplied => Owner-pairing's two prompts are
     # skipped, leaving 7 prompts (Section 1's choice/key/another + model +
-    # toolset + template + the F0 "own character?" confirm) before Section 6/6's
+    # toolset + template + the F0 "own character?" confirm) before Section 6/7's
     # 4 prompts (interactive, autonomy, preset, digest) + the wallet opt-in
-    # confirm (Task 7, "n").
-    piped = "\n".join(_PRE_SECTION5_BLANKS[:7] + ["", "", "", "email", "n"]) + "\n"
+    # confirm (Task 7, "n"). 062 inserts Section 7/7's surface prompt (blank)
+    # between the digest answer and the wallet confirm.
+    piped = "\n".join(_PRE_SECTION5_BLANKS[:7] + ["", "", "", "email", "", "n"]) + "\n"
     res, proj = _invoke(
         ["--owner", "alice", "--instance-id", "alice"],
         home, monkeypatch, input_text=piped,

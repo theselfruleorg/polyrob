@@ -73,6 +73,14 @@ class ChainRow:
     #: explorer is pinned for this chain, which `explorer_url` must render as a
     #: refusal (`None`) rather than guessing a host.
     explorer: Optional[str] = None
+    #: A KEYLESS Blockscout v2 API base for this chain (``…/api/v2``), the
+    #: history and deployer source of ``defi_data.wallet_activity`` /
+    #: ``token_origin`` (071 W4). ``None`` = no keyless explorer API answers
+    #: for this chain, which the verbs render as "history: NOT AVAILABLE" —
+    #: never another chain's host. Each host was checked live on 2026-10-02
+    #: (``/addresses/{a}/token-transfers`` → 200 JSON). Robinhood mainnet's
+    #: Blockscout sits behind a browser challenge (403) and stays ``None``.
+    blockscout_api: Optional[str] = None
     #: The LI.FI Diamond on THIS chain — the one address a third-party route may
     #: be approved to spend from (proposal 029). Pinned per chain for the same
     #: reason the routers are: the address is deterministic across deployments
@@ -100,7 +108,13 @@ class ChainRow:
 
     @property
     def rpc_env(self) -> str:
-        return f"DEFI_EVM_RPC_{self.name.upper()}"
+        return rpc_env_name(self.name)
+
+
+def rpc_env_name(chain: str) -> str:
+    """``DEFI_EVM_RPC_<CHAIN>`` for *chain*: upper case, ``-`` -> ``_`` (a shell cannot export
+    ``DEFI_EVM_RPC_ROBINHOOD-TESTNET``). Every chain name without a hyphen is unchanged."""
+    return f"DEFI_EVM_RPC_{str(chain).upper().replace('-', '_')}"
 
 
 #: LI.FI's Diamond proxy. Deterministic across deployments, so the SAME address
@@ -140,6 +154,7 @@ _ROWS: Dict[str, ChainRow] = {
         goplus_id="1",
         alchemy_slug="eth-mainnet",
         explorer="https://etherscan.io",
+        blockscout_api="https://eth.blockscout.com/api/v2",
         aggregator_spender=_LIFI_DIAMOND,
         money_enabled=True,
     ),
@@ -162,6 +177,7 @@ _ROWS: Dict[str, ChainRow] = {
         goplus_id="8453",
         alchemy_slug="base-mainnet",
         explorer="https://basescan.org",
+        blockscout_api="https://base.blockscout.com/api/v2",
         aggregator_spender=_LIFI_DIAMOND,
         money_enabled=True,
     ),
@@ -244,6 +260,31 @@ _ROWS: Dict[str, ChainRow] = {
         route_hints=("lifi",),
         money_enabled=True,
     ),
+    # Robinhood Chain TESTNET (W13; the agent-NFT collection's testnet-first rule).
+    # READ-ONLY on purpose: testnet ETH has no price at any source the guard reads, so a
+    # money-enabled row would still refuse every write as unpriceable — arming it would add
+    # surface and no capability. Measured 2026-09-29 against rpc.testnet.chain.robinhood.com:
+    # eth_chainId 46630; WETH 0x7943…52Fa has runtime code byte-identical to the mainnet WETH
+    # pinned above (same TransparentUpgradeableProxy shape), symbol WETH, 18 decimals — the
+    # other verified "WETH" (0x33e4…0B94) is a different contract and is NOT pinned; the
+    # ERC-6551 registry is there with the pinned hash; Multicall3 and Permit2 are there;
+    # AccountV3 and the Tokenbound forwarder are NOT deployed yet (the collection's seed replay).
+    "robinhood-testnet": ChainRow(
+        name="robinhood-testnet",
+        chain_id=46630,
+        native_symbol="ETH",
+        public_rpc="https://rpc.testnet.chain.robinhood.com",
+        max_fee_wei_per_tx=2 * 10 ** 15,
+        purpose=("Robinhood Chain's TESTNET: valueless ETH, used to rehearse an agent-NFT collection (mint, "
+                 "adopt, inspect) before mainnet. Reads only here — nothing moves value from "
+                 "the agent on this chain, and no route, price or screen covers it."),
+        wrapped_native="0x7943e237c7F95DA44E0301572D358911207852Fa",
+        explorer="https://explorer.testnet.chain.robinhood.com",
+        blockscout_api="https://explorer.testnet.chain.robinhood.com/api/v2",
+        route_hints=(),
+        money_enabled=False,
+        assets_verified=True,
+    ),
     # Read-only rows: these exist because venues settle on them
     # (onchain.VENUE_CHAIN — hyperliquid/polymarket) and balance reads need the
     # endpoint and the USDC pin. Nothing about their money path is verified, so
@@ -269,10 +310,14 @@ _ROWS: Dict[str, ChainRow] = {
                  "the aggregator — which reaches Camelot, Ramses and the rest."),
         usdc="0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
         wrapped_native="0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",   # WETH, verified
+        # Verified 2026-10-01: /latest/dex/tokens/<USDC> returns chainId
+        # "arbitrum" pairs. Without it the chain had NO price at all (071 R1).
+        dexscreener_id="arbitrum",
         geckoterminal_id="arbitrum",
         goplus_id="42161",
         alchemy_slug="arb-mainnet",
         explorer="https://arbiscan.io",
+        blockscout_api="https://arbitrum.blockscout.com/api/v2",
         aggregator_spender=_LIFI_DIAMOND,
         money_enabled=True,
     ),
@@ -295,12 +340,54 @@ _ROWS: Dict[str, ChainRow] = {
                  "aggregator (QuickSwap, SushiSwap and the rest)."),
         usdc="0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359",
         wrapped_native="0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",   # WPOL, verified
+        # Verified 2026-10-01: DexScreener says "polygon" (GeckoTerminal says
+        # "polygon_pos"). Without it the chain had NO price at all (071 R1).
+        dexscreener_id="polygon",
         geckoterminal_id="polygon_pos",
         goplus_id="137",
         alchemy_slug="polygon-mainnet",
         explorer="https://polygonscan.com",
+        blockscout_api="https://polygon.blockscout.com/api/v2",
         aggregator_spender=_LIFI_DIAMOND,
         money_enabled=True,
+    ),
+    # 064 S1 stage R (READ ONLY, 2026-09-23). money_enabled stays False: stage M
+    # (arming) is its own order behind 029 section 4's gate AND the owner's D2
+    # decision — the train never arms a new chain on its own (default OFF).
+    # route_hints=() and no aggregator_spender until then, so no verb can reach
+    # a route here even with a pinned RPC.
+    #
+    # Measured 2026-09-23 against TWO public RPCs (mainnet.optimism.io,
+    # optimism-rpc.publicnode.com), which agreed on every value: eth_chainId
+    # 0xa; USDC 0x0b2C…Ff85 code 3,704 hex chars, symbol USDC, decimals 6
+    # (native Circle USDC, not bridged USDC.e); WETH 0x4200…0006 code 4,082 hex
+    # chars, symbol WETH, decimals 18; eth_gasPrice 1,000,621 wei (~0.001 gwei).
+    # dexscreener "optimism" and goplus "10" answered a token read;
+    # geckoterminal lists the network id "optimism"; the explorer answered 200.
+    "optimism": ChainRow(
+        name="optimism",
+        chain_id=10,
+        native_symbol="ETH",
+        public_rpc="https://mainnet.optimism.io",
+        # 250k gas x 1.0e6 wei x 3 headroom = 7.5e11 wei of L2 execution, but an
+        # OP Stack fee also carries the L1 data fee the gas price does not show;
+        # 0.002 ETH is the base row's brake for the same stack.
+        max_fee_wei_per_tx=2 * 10 ** 15,      # 0.002 ETH
+        purpose=("OP Stack L2 with native USDC and deep majors liquidity; READ "
+                 "ONLY here (token screens, prices, balances). No money moves on "
+                 "this chain until the owner arms it. Gas is ETH and costs a "
+                 "fraction of a cent plus a small L1 data fee."),
+        usdc="0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85",
+        wrapped_native="0x4200000000000000000000000000000000000006",   # WETH, verified
+        dexscreener_id="optimism",
+        geckoterminal_id="optimism",
+        goplus_id="10",
+        alchemy_slug="opt-mainnet",
+        explorer="https://optimistic.etherscan.io",
+        blockscout_api="https://explorer.optimism.io/api/v2",
+        route_hints=(),
+        money_enabled=False,
+        assets_verified=True,
     ),
     # ---- non-EVM ---------------------------------------------------------
     # Solana. `money_enabled=False` and `route_hints=()` are NOT "nothing is
@@ -330,7 +417,9 @@ _ROWS: Dict[str, ChainRow] = {
         purpose=("Solana. Reads (prices, screens, pool discovery, portfolio) "
                  "work here; the EVM money verbs do NOT — swaps go through the "
                  "dedicated defi_trade.solana_swap verb (Jupiter route, "
-                 "simulate-and-assert guard, SOLANA_TRADE_ENABLED). Its "
+                 "simulate-and-assert guard, SOLANA_TRADE_ENABLED) and sends "
+                 "through defi_trade.solana_transfer (SOL or an SPL token, "
+                 "same guard). Its "
                  "addresses are base58 with NO checksum, so a mistyped one is "
                  "a valid different account — verify before trusting any "
                  "address here."),
@@ -423,7 +512,7 @@ def swap_chains() -> List[str]:
 
 def rpc_is_pinned(chain: str) -> bool:
     row = get(chain)
-    env = row.rpc_env if row else f"DEFI_EVM_RPC_{str(chain).upper()}"
+    env = row.rpc_env if row else rpc_env_name(chain)
     return bool(os.getenv(env, "").strip())
 
 

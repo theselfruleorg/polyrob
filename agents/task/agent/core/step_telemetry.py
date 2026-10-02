@@ -90,13 +90,20 @@ class StepTelemetryMixin:
 					file_path = action_params.get('file_path') or action_params.get('path') or action_params.get('filename')
 
 					if file_path:
-						if action_name_lower in ('write_file', 'create_file', 'save_file'):
+						# The key is the REGISTERED name (`filesystem_write_file`,
+						# `coding_create_file`), so match the method as a suffix
+						# (codex review 2026-09-25; see core/action_names.py).
+						def _is(*methods):
+							return any(action_name_lower == m or action_name_lower.endswith(f"_{m}")
+									   for m in methods)
+						if _is('write_file', 'create_file', 'save_file'):
 							files_created.append(file_path)
-						elif action_name_lower in ('append_file', 'edit_file', 'modify_file', 'update_file'):
+						elif _is('append_file', 'edit_file', 'modify_file', 'update_file',
+								 'str_replace', 'apply_patch'):
 							files_modified.append(file_path)
-						elif action_name_lower in ('read_file', 'get_file_content', 'load_file'):
+						elif _is('read_file', 'get_file_content', 'load_file'):
 							files_read.append(file_path)
-						elif action_name_lower in ('delete_file', 'remove_file'):
+						elif _is('delete_file', 'remove_file'):
 							files_deleted.append(file_path)
 
 			# Determine iteration type based on actions

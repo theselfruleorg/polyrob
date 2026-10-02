@@ -219,7 +219,7 @@ def test_activate_legacy_mode_is_inert(_isolated):
 
 
 def test_prod_env_shape_is_untouched(_isolated, monkeypatch):
-    # The Hetzner box: explicit POLYROB_DATA_DIR, no flag/env/pin/sticky.
+    # A server: explicit POLYROB_DATA_DIR, no flag/env/pin/sticky.
     monkeypatch.setenv("POLYROB_DATA_DIR", "/var/lib/polyrob")
     assert activate_profile() is None
     assert os.environ["POLYROB_DATA_DIR"] == "/var/lib/polyrob"

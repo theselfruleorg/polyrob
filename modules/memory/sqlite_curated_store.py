@@ -254,6 +254,12 @@ class CuratedNotesStoreMixin:
           (access_count 0) and not updated since the cutoff. Owner-authored
           (created_by user/owner) and legacy rows (NULL created_by/updated_ts —
           unknowable) are exempt.
+          ⚠️ So are ``curator``-authored notes (WS-K4, 2026-09-22). Those are
+          DERIVED — one per recurring recall cluster — and nothing in the tree
+          bumps their access_count, so "never read" would archive every one of
+          them exactly once the cutoff passed, while the pass that writes them
+          kept rewriting the same archived rows. Two curator passes must not
+          undo each other every tick.
         - **dupes**: within (user_id, content) groups of active notes, archive the
           agent-authored copies, keeping the group's single oldest row (an
           owner-authored copy always survives).
@@ -269,7 +275,8 @@ class CuratedNotesStoreMixin:
                 self.db_path,
                 "SELECT id, user_id FROM curated_memory "
                 "WHERE COALESCE(status, 'active') = 'active' "
-                "AND created_by IS NOT NULL AND created_by NOT IN ('user', 'owner') "
+                "AND created_by IS NOT NULL "
+                "AND created_by NOT IN ('user', 'owner', 'curator') "
                 "AND COALESCE(access_count, 0) = 0 "
                 "AND updated_ts IS NOT NULL AND updated_ts < ?",
                 (int(stale_before_ts),), fetch="all") or []

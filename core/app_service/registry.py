@@ -23,6 +23,10 @@ import re
 import time
 from typing import Any, Dict, List, Optional, Sequence
 
+from core.app_service.approval import (
+    ApprovalKeyUnavailable, approval_mac, default_approval_key_path, load_key, verify_mac,
+)
+from core.app_service.config import valid_app_slug, valid_app_tenant, valid_workspace_digest
 from core.app_service.env_scan import SECRET_KEY_RE, secret_value_reason
 from core.app_service.fingerprint import (
     approval_config, changed_fields, config_from_row, describe_change, fingerprint,
@@ -73,6 +77,7 @@ CREATE TABLE IF NOT EXISTS app_services (
     last_failure_error   TEXT,
     approved_fingerprint TEXT,
     approved_config      TEXT,
+    approval_mac         TEXT,
     created_at           REAL NOT NULL,
     updated_at           REAL NOT NULL,
     PRIMARY KEY (slug, user_id)
@@ -137,8 +142,11 @@ class AppServiceRegistry:
     """Tenant-keyed app rows with CAS transitions. Every method is safe to call
     from any process (the agent, the supervisor, an owner seat)."""
 
-    def __init__(self, db_path: str):
+    def __init__(self, db_path: str, *, approval_key_path: Optional[str] = None):
         self.db_path = db_path
+        #: H07 — the owner-approval MAC key lives OUTSIDE this (group-writable)
+        #: db; see :mod:`core.app_service.approval`.
+        self.approval_key_path = approval_key_path or default_approval_key_path(db_path)
         parent = os.path.dirname(db_path)
         if parent:
             os.makedirs(parent, exist_ok=True)
@@ -149,7 +157,7 @@ class AppServiceRegistry:
         try:
             conn.executescript(_SCHEMA)
             have = {row[1] for row in conn.execute("PRAGMA table_info(app_services)")}
-            for col in ("approved_fingerprint", "approved_config"):
+            for col in ("approved_fingerprint", "approved_config", "approval_mac"):
                 if col not in have:  # a pre-fingerprint database, added in place
                     conn.execute(f"ALTER TABLE app_services ADD COLUMN {col} TEXT")
             conn.commit()
@@ -264,6 +272,12 @@ class AppServiceRegistry:
         cross-tenant slug and ``ValueError`` on a malformed request, a deploy in
         progress, or a changed configuration for an app that is ``live`` (stop it
         first — a running public address is never rewritten underneath)."""
+        if not valid_app_slug(slug):
+            raise ValueError(f"invalid app slug {str(slug)[:60]!r}")
+        if not valid_app_tenant(user_id):
+            raise ValueError(f"invalid tenant id {str(user_id)[:60]!r}")
+        if not valid_workspace_digest(workspace_digest):
+            raise ValueError("workspace_digest must be 12-64 lowercase hex characters")
         if not isinstance(cmd, list) or not cmd or not all(isinstance(c, str) and c for c in cmd):
             raise ValueError("cmd must be a non-empty list of strings (an argv, never a shell line)")
         if not isinstance(container_port, int) or not (1 <= container_port <= 65535):
@@ -339,6 +353,15 @@ class AppServiceRegistry:
         if row is None or row["status"] != STATUS_PENDING:
             return False
         config = config_from_row(row)
+        fp = fingerprint(config)
+        try:
+            mac = approval_mac(load_key(self.approval_key_path), slug, user_id, fp)
+        except ApprovalKeyUnavailable as e:
+            # No key, no approval: an unsigned `approved` row is refused by the
+            # supervisor anyway, so say so here instead of pretending.
+            raise PermissionError(
+                f"cannot sign the approval ({e}); approve from a seat that can read the "
+                f"approval key, e.g. `sudo polyrob apps approve {slug}`") from e
         now = time.time()
         # CAS on updated_at as well as status: a request that lands between the
         # read and this write would otherwise stamp the owner's approval onto a
@@ -347,11 +370,25 @@ class AppServiceRegistry:
         rc = execute_retry(
             self.db_path,
             "UPDATE app_services SET status=?, approved_at=?, approved_fingerprint=?, "
-            "approved_config=?, updated_at=? "
+            "approved_config=?, approval_mac=?, updated_at=? "
             "WHERE slug=? AND user_id=? AND status=? AND updated_at=?",
-            (STATUS_APPROVED, now, fingerprint(config), json.dumps(config, sort_keys=True),
+            (STATUS_APPROVED, now, fp, json.dumps(config, sort_keys=True), mac,
              now, slug, user_id, STATUS_PENDING, row["updated_at"]))
         return rc == 1
+
+    def verify_approval(self, row: Dict[str, Any]) -> Optional[str]:
+        """``None`` when the row's CURRENT configuration carries a valid owner
+        MAC, else why not. The stored ``approved_fingerprint`` is NOT trusted
+        (any db writer can set it): the fingerprint is recomputed from the row."""
+        try:
+            key = load_key(self.approval_key_path)
+        except ApprovalKeyUnavailable as e:
+            return f"approval key unavailable: {e}"
+        fp = fingerprint(config_from_row(row))
+        if not verify_mac(key, row.get("slug"), row.get("user_id"), fp, row.get("approval_mac")):
+            return ("the approval is not signed by an owner seat for this configuration "
+                    "— approve it again")
+        return None
 
     def approval_change_reason(self, row: Dict[str, Any]) -> Optional[str]:
         """Owner-readable: why this row is pending again, or ``None``."""

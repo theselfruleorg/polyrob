@@ -5,7 +5,12 @@ import types
 
 from modules.llm.deepseek_client import DeepSeekClient
 from modules.llm.openrouter_client import OpenRouterClient
-from modules.llm.gemini_client import GeminiClient
+import pytest
+
+try:
+    from modules.llm.gemini_client import GeminiClient
+except ModuleNotFoundError:  # the [gemini] extra is optional since 058
+    GeminiClient = None
 
 
 def _bare(cls):
@@ -51,6 +56,7 @@ def test_openrouter_no_details_safe():
     assert out.get("cached_tokens", 0) in (0, None)
 
 
+@pytest.mark.skipif(GeminiClient is None, reason="the [gemini] extra is not installed")
 def test_gemini_surfaces_cached_content_token_count():
     c = _bare(GeminiClient)
     meta = types.SimpleNamespace(prompt_token_count=2000, candidates_token_count=80,

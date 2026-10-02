@@ -329,7 +329,8 @@ class AsyncDelegationRegistry:
             f"**goal:** {rec.goal}\n"
             f"**status:** {status}\n\n"
             f"**result:**\n{safe_result}\n\n"
-            "Use this result, or re-dispatch if the situation has changed.\n"
+            "Use this result, or re-dispatch if the situation has changed. "
+            "If a user is waiting for this result, send it to them with send_message.\n"
             "</delegation-result>"
         )
 

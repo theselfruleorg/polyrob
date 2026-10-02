@@ -35,6 +35,10 @@ import os
 from abc import ABC, abstractmethod
 from typing import Any, Callable, Dict, Iterable, Optional
 
+from core.lazy_views import lazy_module_getattr, view
+from core.verb_policy import ids_where as _verb_ids_where
+from core.verb_policy import ordered_ids_where as _verb_ordered_ids_where
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_APPROVAL_TIMEOUT_SEC = float(os.getenv("APPROVAL_TIMEOUT_SEC", "30"))
@@ -103,8 +107,8 @@ def resolve_gated_actions() -> tuple:
     try:
         from core.config_policy import compute_posture
         if compute_posture() >= 2:
-            required |= set(DEFAULT_APPROVAL_REQUIRED_TOOLS)
-            required |= set(POSTURE2_APPROVAL_REQUIRED_TOOLS)
+            required |= set(view(__name__, "DEFAULT_APPROVAL_REQUIRED_TOOLS"))
+            required |= set(view(__name__, "POSTURE2_APPROVAL_REQUIRED_TOOLS"))
             if provider in ("", "auto"):
                 provider = "interactive_cli"
     except Exception as e:
@@ -211,7 +215,13 @@ def _refreeze_approval_flags_for_tests() -> None:
     except (TypeError, ValueError):
         _FROZEN_APPROVAL_TIMEOUT_SEC = 30.0
 
-# The RECOMMENDED set of mutating coding / self-evolution ops to gate behind approval.
+# 067 P1: the three generic approval lanes below are DERIVED views of the
+# per-action policy table (core/verb_policy.py; rows and per-verb rationale in
+# core/verb_policy_rows.py): put a verb on a lane there, by its ``approval`` field.
+# Tuple order is the row order.
+
+# The RECOMMENDED set of mutating coding / self-evolution ops to gate behind approval
+# (``approval`` contains ``recommended``).
 # ⚠️ NOT auto-applied. `Controller.__init__` reads `APPROVAL_REQUIRED_TOOLS` (default
 # empty → the hook is never registered) and defaults `APPROVAL_PROVIDER` to `auto`
 # (AutoApprover = allow-all). So approval is INERT until an operator BOTH sets
@@ -220,41 +230,22 @@ def _refreeze_approval_flags_for_tests() -> None:
 # real interactive provider only logs — it can't actually prompt a human. Permissions
 # audit F5: the previous "the server sets APPROVAL_REQUIRED_TOOLS to this unless
 # overridden" claim was aspirational (no wiring did that); see docs/CONFIGURATION.md.
-DEFAULT_APPROVAL_REQUIRED_TOOLS = (
-    "git_push", "github_open_pr", "github_merge_pr",
-    "mcp_install", "tool_manage", "self_modify",
-    # Outward-facing invoicing — recommend owner approval. RUNTIME (namespaced) name:
-    # the hook matches exactly, and container-tool actions register as
-    # {tool_id}_{action}, so the bare `x402_request` matched nothing.
-    "x402_invoice_x402_request",
-    # Browser-based X posting/DMs — outward-facing, recommend owner approval.
-    "x_browser_x_post", "x_browser_x_reply", "x_browser_x_dm",
-    # ⚠️ `defi_trade_bridge` is deliberately ABSENT (039). "Belt-and-braces" was
-    # the intent; two owner taps for one bridge, from two prompts describing the
-    # same transaction differently, was the result (2026-09-12). The verb owns its
-    # own gate and asks the better question — see core/config_policy/payment_tools.py.
-    # NOTE: hf_deploy's `deploy` is deliberately NOT here. A blanket Controller
-    # gate can't tell a FIRST publish (must be approved) from a redeploy of an
-    # already-approved app (unattended within caps) — gating both would break the
-    # "approved-app redeploy is unattended" contract. hf_deploy owns that
-    # distinction itself via its deployed_apps registry (see tools/hf_deploy/tool.py).
-)
+# ⚠️ `defi_trade_bridge` is deliberately ABSENT (039): the verb owns its own gate
+# (core/config_policy/payment_tools.py). hf_deploy's `deploy` is deliberately ABSENT:
+# the tool gates a FIRST publish through its own registry-backed approver and lets an
+# already-approved app redeploy unattended (see tools/hf_deploy/tool.py).
+# 067 P4 prerequisite: this and the two lanes below are LAZY (``core/lazy_views.py``),
+# built on first read after the pack loader's phase 1 (the module ``__getattr__`` at
+# the end of this file); functions here read them with ``view(__name__, NAME)``.
+def _default_approval_required_tools():
+    return _verb_ordered_ids_where(approval=lambda lanes: "recommended" in lanes)
 
 # WS-6: the compute-tier action names auto-gated at AGENT_COMPUTE_POSTURE >= 2 (the
-# self-maintenance tier). The persistent shell and every self_env verb require an
-# owner approval decision before they run. UNIONed with DEFAULT_APPROVAL_REQUIRED_TOOLS
-# in Controller.__init__ when posture >= 2.
-POSTURE2_APPROVAL_REQUIRED_TOOLS = (
-    "shell_run",
-    "self_env_install_dep",
-    "self_env_patch_source",
-    "self_env_restart_service",
-    "self_env_git_pull",
-    # NOTE: hf_deploy's `deploy` is deliberately NOT here (see the note in
-    # DEFAULT_APPROVAL_REQUIRED_TOOLS above). The tool gates FIRST publish through
-    # its own registry-backed approver (resolving the SAME interactive-default
-    # provider at posture>=2), and lets an already-approved app redeploy unattended.
-)
+# self-maintenance tier; ``approval`` contains ``posture2``): the persistent shell and
+# every self_env verb require an owner approval decision before they run. UNIONed
+# with DEFAULT_APPROVAL_REQUIRED_TOOLS in Controller.__init__ when posture >= 2.
+def _posture2_approval_required_tools():
+    return _verb_ordered_ids_where(approval=lambda lanes: "posture2" in lanes)
 
 
 def default_approval_required_tools() -> tuple:
@@ -263,11 +254,17 @@ def default_approval_required_tools() -> tuple:
     See :data:`DEFAULT_APPROVAL_REQUIRED_TOOLS` — nothing wires this by default; an
     operator opts in with ``APPROVAL_REQUIRED_TOOLS`` + a non-``auto`` ``APPROVAL_PROVIDER``.
     """
-    return DEFAULT_APPROVAL_REQUIRED_TOOLS
+    return view(__name__, "DEFAULT_APPROVAL_REQUIRED_TOOLS")
 
 
 class ApprovalProvider(ABC):
     """Decides whether a gated action may execute."""
+
+    #: True only when this provider's ``True`` IS the owner's decision for THIS
+    #: call (the durable owner queue). Only such a provider mints the owner grant
+    #: that lifts the autonomous ceiling in ``tx_guard`` step 9 — an automatic
+    #: approver answers True with no human asked (validation, 2026-09-27).
+    decides_as_owner: bool = False
 
     @abstractmethod
     async def request(self, action_name: str, params: Dict[str, Any], context: Any) -> bool:
@@ -322,25 +319,15 @@ _PROVIDERS: Dict[str, type] = {
 }
 
 
-# 013 T4: verbs that stay owner-queued even under AUTONOMY_MODE=autonomous —
-# self-modification / host mutation is never act-and-report. Routed to the durable,
-# remotely approvable `owner_queue` provider (Telegram /approve) rather than
-# auto_notify. Verified against the real registered action names:
-#   - self_env_* — tools/self_env/tool.py (posture-2 self-maintenance verbs);
-#   - mcp_install — tools/controller/action_registration.py (_register_mcp_install_action).
-# `self_modify` and `tool_manage` are NOT registered actions today — they are the
-# same aspirational defense-in-depth tokens DEFAULT_APPROVAL_REQUIRED_TOOLS and the
-# correspondent-gate high-impact set already carry, kept so a future action with
-# either name can never silently land in the act-and-report lane.
-_ALWAYS_GATED_VERBS = frozenset({
-    "self_modify",
-    "self_env_install_dep", "self_env_patch_source",
-    "self_env_restart_service", "self_env_git_pull",
-    "mcp_install", "tool_manage",
-    # Registering an X account for the agent is an identity-creating act — owner
-    # must decide, even under autonomous mode.
-    "x_browser_x_signup_start",
-})
+# 013 T4: verbs that stay owner-queued even under AUTONOMY_MODE=autonomous
+# (``approval`` contains ``always_queued``) — self-modification / host mutation and
+# identity creation are never act-and-report. Routed to the durable, remotely
+# approvable `owner_queue` provider (Telegram /approve) rather than auto_notify.
+# `self_modify` and `tool_manage` are RESERVED names (no action emits them today),
+# kept so a future action with either name can never silently land in the
+# act-and-report lane.
+def _always_gated_verbs():
+    return _verb_ids_where(approval=lambda lanes: "always_queued" in lanes)
 
 
 def autonomous_gating_lanes(gates: Dict[str, str]) -> tuple:
@@ -352,7 +339,8 @@ def autonomous_gating_lanes(gates: Dict[str, str]) -> tuple:
     Pure — takes the ``gates`` mapping :func:`effective_approval_state` returns
     (``{action: source}``, source in ``"env (frozen)"``/``"posture"``/``"pref"``).
     """
-    queued = {a for a, src in gates.items() if a in _ALWAYS_GATED_VERBS or src == "pref"}
+    always = view(__name__, "_ALWAYS_GATED_VERBS")
+    queued = {a for a, src in gates.items() if a in always or src == "pref"}
     return queued, set(gates) - queued
 
 
@@ -427,6 +415,29 @@ def _emit_approval_event(kind: str, action_name: str, context: Any, **fields: An
         emit_feed_event(event)
     except Exception:
         logger.debug("approval run-event emit failed", exc_info=True)
+
+
+def _stamp_owner_grant(context, params: Dict[str, Any]) -> None:
+    """Carry the owner's approval of THIS call to the money guard.
+
+    ``tx_guard`` step 9 reads it (``core.wallet.tx_guard.OWNER_GRANT_KEY``):
+    without it an approved spend above the autonomous ceiling was re-queued by
+    the guard and never sent. It covers the declared ``max_spend_usd`` only —
+    the guard holds the simulated value to that bound — and the controller
+    clears it before the next action (``tools/controller/execution.py``).
+    Never raises: a grant that cannot be stamped just leaves the ceiling on.
+    """
+    try:
+        metadata = getattr(context, "metadata", None)
+        if not isinstance(metadata, dict):
+            return
+        declared = params.get("max_spend_usd")
+        if isinstance(declared, bool) or not isinstance(declared, (int, float)):
+            return
+        from core.wallet.tx_guard import OWNER_GRANT_KEY
+        metadata[OWNER_GRANT_KEY] = {"approved": True, "max_spend_usd": float(declared)}
+    except Exception:
+        logger.debug("owner grant stamp skipped", exc_info=True)
 
 
 def make_approval_hook(
@@ -515,6 +526,8 @@ def make_approval_hook(
                 return (f"approval denied (error) for '{action_name}'; owner can approve "
                         "via /pending or loosen via the approvals.require pref")
             decision = "approved" if approved else "denied"
+            if approved and getattr(provider, "decides_as_owner", False) is True:
+                _stamp_owner_grant(context, params or {})
             if not approved:
                 from core.security.refusals import record_refusal
                 record_refusal("approval_denied", tool=action_name,
@@ -530,3 +543,11 @@ def make_approval_hook(
             )
 
     return _hook
+
+
+# 067 P4 prerequisite: the three approval lanes, built on first read.
+__getattr__ = lazy_module_getattr(__name__, {
+    "DEFAULT_APPROVAL_REQUIRED_TOOLS": _default_approval_required_tools,
+    "POSTURE2_APPROVAL_REQUIRED_TOOLS": _posture2_approval_required_tools,
+    "_ALWAYS_GATED_VERBS": _always_gated_verbs,
+})

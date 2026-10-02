@@ -136,3 +136,33 @@ async def test_an_absent_action_id_names_its_flag(monkeypatch):
     reason = c.get_tool_load_failures()["message"]
     assert reason.startswith("gated:disabled-by-flag") and "MESSAGE_TOOL_ENABLED" in reason, \
         "the flag is the answer, not 'unknown-tool'"
+
+
+# --- M04 (2026-09-23 security analysis) --------------------------------------
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool_id", ["twitter", "email", "github", "publish", "cronjob",
+                                     "goal", "mcp", "x_browser", "app_service"])
+async def test_m04_non_owner_tenant_cannot_load_a_shared_identity_tool(monkeypatch, tool_id):
+    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda *a, **k: "owner-1")
+    c = _controller(_Container({f"{tool_id}_tool": _Tool(), "filesystem_tool": _Tool()}))
+    loaded = await c.load_tools_from_container(["filesystem", tool_id])
+    assert "filesystem" in loaded and tool_id not in loaded
+    assert c.get_tool_load_failures()[tool_id].startswith("gated:owner_only")
+
+
+@pytest.mark.asyncio
+async def test_m04_the_owner_tenant_still_loads_them(monkeypatch):
+    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda *a, **k: "u1")
+    c = _controller(_Container({"twitter_tool": _Tool(), "goal_tool": _Tool()}))
+    loaded = await c.load_tools_from_container(["twitter", "goal"])
+    assert set(loaded) == {"twitter", "goal"}
+    assert c.get_tool_load_failures() == {}
+
+
+def test_m04_the_dimension_is_the_one_list():
+    from core.tool_capabilities import ids_with
+    got = ids_with("shared_identity")
+    assert {"twitter", "x_browser", "email", "github", "publish", "app_service",
+            "cronjob", "goal", "mcp"} <= got
+    assert not ({"filesystem", "task", "browser", "web_fetch", "knowledge"} & got)

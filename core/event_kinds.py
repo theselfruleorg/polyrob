@@ -29,6 +29,17 @@ CRON_DELIVERY = "cron_delivery"
 #: 056 WS4/WS9: an SMTP login was rejected (535) — the layering-safe fact the
 #: status snapshot turns into a health WARN with the remedy.
 EMAIL_AUTH_REJECTED = "email_auth_rejected"
+#: 2026-09-21: a money rail's PRECONDITION verb refused or errored — first
+#: producer `defi_data.reconcile` (the rails' step-1 "ledger vs chain — if a real
+#: row disagrees, STOP"). It refused every call for 9 h (ledger > 1 MB) while six
+#: rails traded without it and every status seat read healthy; the snapshot
+#: renders this kind as a CRIT so a gate-down rail can never read healthy.
+#: attrs: tool, chain, reason.
+RAIL_PRECONDITION_FAILED = "rail_precondition_failed"
+#: 060 WS-5: a rail (cron job / goal) PINNED a skill (`payload.skills`) that did
+#: not load into its session — unknown id or no SKILL.md. The run continues on
+#: keyword matching; the `rules` status section names it. attrs: missing, rail.
+RAIL_SKILL_MISSING = "rail_skill_missing"
 #: 056 WS9: an external-rail call outcome (anysite …): ok / empty / error / timeout.
 RAIL_PROBE = "rail_probe"
 #: 056 WS8: one stale-session-directory GC pass (dry-run or applied) — the
@@ -42,6 +53,10 @@ SESSION_GC = "session_gc"
 #: seats ``console_write`` never saw.
 CRON_SCHEDULED = "cron_scheduled"
 CRON_CANCELLED = "cron_cancelled"
+#: A job was amended in place (task patch / schedule / cap / payload key) —
+#: ``CronService.edit``. attrs name the changed fields; a task patch carries
+#: the bounded old/new snippet so a bad amendment can be reverted by hand.
+CRON_EDITED = "cron_edited"
 GOAL_RUN = "goal_run"
 GOAL_COMPLETION = "goal_completion"          # consumed by cron/digest rollup
 SELF_WAKE = "self_wake"
@@ -60,6 +75,11 @@ SOCIAL_WRITE = "social_write"       # 2026-08-28: durable cross-session cooldown
                                      # in-memory per-instance rate limiter never saw
                                      # a repeat goal firing in a FRESH session
 
+#: 033: the ONE effect-classified outward act (``core/effects.py``). The class
+#: rides the indexed ``effect`` column; ``attrs`` carry the pinned envelope
+#: (tool, action, target, surface, autonomous, confidence, outcome, dedup).
+EXTERNAL_WRITE = "external_write"
+
 # --- delivery / correspondence --------------------------------------------------
 USER_DELIVERY = "user_delivery"
 OWNER_NOTICE = "owner_notice"
@@ -70,6 +90,9 @@ CORRESPONDENT_RESUMED = "correspondent_resumed"
 # --- tool governance ------------------------------------------------------------
 TOOL_DENIED = "tool_denied"
 TOOL_TIMEOUT = "tool_timeout"
+# 058 T4.1: one row per tool action the controller ran (success or error) —
+# attrs {tool, action, ok, ms}. The only cross-session "is this tool used?" signal.
+TOOL_INVOKED = "tool_invoked"
 TOOL_AUTO_APPROVED = "tool_auto_approved"
 PAYMENT_AUTO_APPROVED = "payment_auto_approved"
 MCP_INSTALL = "mcp_install"
@@ -85,6 +108,10 @@ ACCESS_DENIED = "access_denied"
 #: A threat scan (`modules.memory.task.threat_scan.is_suspicious`) flagged
 #: content. The local verdict is unchanged; this only makes it visible.
 INJECTION_FLAGGED = "injection_flagged"
+#: 045 lane 4: a NAMED perimeter limiter tripped (``core/rate_limit.py::
+#: report_trip``). One row per (limiter, key) per window — an episode, not a
+#: denied-call count. attrs: limiter, key (truncated), window_sec.
+RATE_LIMITED = "rate_limited"
 
 # --- money / wallet -------------------------------------------------------------
 WALLET_SPEND = "wallet_spend"
@@ -101,6 +128,16 @@ PAYMENT_REFUND_DUE = "payment_refund_due"
 #: broadcast-hash match against the wallet audit ledger) rather than a payment.
 #: Not an owner notice — but never a silent skip either.
 PAYMENT_SELF_PROCEEDS = "payment_self_proceeds"
+#: The buy identity gate set a tracked look-alike position to `quarantined`
+#: because a TRUSTED contract (canonical / owner pin / own launch / owner
+#: target) claims the same symbol. attrs: chain, symbol, address, trusted,
+#: trust_source.
+TOKEN_QUARANTINED = "token_quarantined"
+#: W1 owner token-trust decisions (``core.wallet.token_trust`` — owner seats
+#: only). attrs: chain, address, symbol (+ loss_usd on a write-off).
+TOKEN_TRUSTED = "token_trusted"
+TOKEN_UNTRUSTED = "token_untrusted"
+POSITION_WRITTEN_OFF = "position_written_off"
 PAYMENT_SETTLING_REVERTED = "payment_settling_reverted"
 PAYMENT_FEEDBACK_AUTHORIZED = "payment_feedback_authorized"
 
@@ -166,10 +203,33 @@ CONSOLE_GOAL_CREATE = "console_goal_create"
 CONSOLE_CRON_CANCEL = "console_cron_cancel"
 CONSOLE_CRON_CREATE = "console_cron_create"
 CONSOLE_INVOICE_SETTLE = "console_invoice_settle"
-CONSOLE_PFP_WRITE = "console_pfp_write"
 CONSOLE_INBOX_DECIDE = "console_inbox_decide"
+CONSOLE_TOKEN_DECIDE = "console_token_decide"   # W1: trust/untrust/write-off from Money
+CONSOLE_CARD_PRESS = "console_card_press"       # an action card tapped in the console
 CONSOLE_SELF_CONTEXT_WRITE = "console_self_context_write"
 CONSOLE_MEMORY_WRITE = "console_memory_write"
+
+# --- rails (036) -------------------------------------------------------------------
+#: A rail is an objective with ``payload.recurrence``; its tool grants live in
+#: ``rail_grants`` (``core/tool_grants.py``). Every grant change is audited.
+RAIL_GRANT = "rail_grant"        # owner granted (or an import staged) a tool on a rail
+RAIL_REVOKE = "rail_revoke"      # owner revoked a rail grant (immediate)
+RAIL_SEEDED = "rail_seeded"      # the rails tick wrote one cycle of a rail's legs
+
+# 025: a ROOT goal completed verified and its quarantined memory scope moved
+# to shared recall (``agents/task/goals/memory_scope.py``; emitted only when N > 0).
+MEMORY_PROMOTED = "memory_promoted"
+#: Owner CLI scope promotion/purge (distinct from console mutation audit).
+MEMORY_WRITE = "memory_write"
+#: First X API credit rejection in a credential-verdict episode.
+X_API_REJECTED = "x_api_rejected"
+#: Provider output was cut short; the agent recorded whether it retried.
+LLM_OUTPUT_TRUNCATED = "llm_output_truncated"
+#: A money verb stopped a run because the broadcast infrastructure failed.
+MONEY_VERB_INFRA_FAILURE = "money_verb_infra_failure"
+#: A money verb failed or was refused, so the rest of that run reports to the
+#: owner only (``core/security/refusal_taint.py``); one row per run.
+RUN_REFUSAL_TAINTED = "run_refusal_tainted"
 
 # Infra/storage housekeeping
 DB_RELOCATED = "db_relocated"                 # R-2 T3 one-shot sidecar move ran

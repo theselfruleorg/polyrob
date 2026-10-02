@@ -85,6 +85,13 @@ CACHE_WRITE_PRICE_MULTIPLIER = {
     ModelProvider.ANTHROPIC: 1.25,
 }
 
+# Cache-WRITE price for a ONE-HOUR window (F4, 2026-09-22). Anthropic bills a 1h
+# `cache_control` write at 2.0x base input against 1.25x for the 5m default; the
+# response says which is which (`usage.cache_creation.ephemeral_1h_input_tokens`).
+CACHE_WRITE_1H_PRICE_MULTIPLIER = {
+    ModelProvider.ANTHROPIC: 2.0,
+}
+
 
 @dataclass
 class ModelPricing:
@@ -95,6 +102,9 @@ class ModelPricing:
     # G3 (telemetry audit 2026-07-04): price to WRITE a cache entry (Anthropic 1.25x).
     # None => no per-token write surcharge; cache-creation tokens bill at input_price.
     cache_write_price: Optional[float] = None
+    # F4 (2026-09-22): price to WRITE a 1h cache entry (Anthropic 2.0x). None =>
+    # a 1h write bills at cache_write_price (then input_price).
+    cache_write_price_1h: Optional[float] = None
     batch_api_available: bool = False
     currency: str = "USD"
 
@@ -113,6 +123,13 @@ class ModelCapabilities:
     supports_search: bool = False
     supports_computer_use: bool = False
     supports_thinking: bool = False
+    # F9 (063 WS-4, 2026-09-23): does this model accept Anthropic's
+    # mid-conversation tool changes (`defer_loading` + `tool_addition`, beta
+    # `mid-conversation-tool-changes-2026-07-01`)? Claude Opus 5 onward only —
+    # NOT Opus 4.8 or older, not Sonnet 4.6, and Sonnet 5 is unverified, so it
+    # stays False there. The deferred late-tool mode reads THIS, never a name
+    # pattern (modules/llm/deferred_tools.py::model_supports_deferred_tools).
+    supports_mid_conversation_tool_changes: bool = False
     # UP-07: per-model reasoning budget/effort. None => provider/SDK default (current
     # behavior). thinking_budget_tokens -> Anthropic thinking.budget_tokens / DeepSeek
     # max_cot_tokens; reasoning_effort -> OpenAI ("minimal"|"low"|"medium"|"high"|"none").
@@ -157,6 +174,10 @@ class ModelConfig:
             _wmult = CACHE_WRITE_PRICE_MULTIPLIER.get(self.provider)
             if _wmult is not None:
                 self.pricing.cache_write_price = round(self.pricing.input_price * _wmult, 6)
+        if self.pricing is not None and self.pricing.cache_write_price_1h is None:
+            _w1h = CACHE_WRITE_1H_PRICE_MULTIPLIER.get(self.provider)
+            if _w1h is not None:
+                self.pricing.cache_write_price_1h = round(self.pricing.input_price * _w1h, 6)
 
     @property
     def display_name(self) -> str:

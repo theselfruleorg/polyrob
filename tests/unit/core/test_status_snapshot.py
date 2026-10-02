@@ -410,7 +410,7 @@ def test_literals_match_owning_modules():
             ss._K_RUN_DEGRADED, ss._K_AUTONOMY_TICK) == (
         ek.USER_DELIVERY, ek.OWNER_NOTICE, ek.CREDIT_SENTINEL, ek.CRON_RUN, ek.GOAL_RUN,
         ek.SELF_WAKE, ek.TOOL_TIMEOUT, ek.TOOL_DENIED, ek.RUN_OUTCOME_DEGRADED, "autonomy_tick")
-    assert (ss._K_SOCIAL_WRITE, ss._K_WALLET_SPEND) == (ek.SOCIAL_WRITE, ek.WALLET_SPEND)
+    assert ss._K_WALLET_SPEND == ek.WALLET_SPEND
     assert ss._K_AUTONOMY_STARTED == ek.AUTONOMY_STARTED
     assert ss._K_SURFACE_POLL_ERROR == ek.SURFACE_POLL_ERROR
     # the rail's suppression marker (user_delivery.py) is what /missed and the
@@ -508,3 +508,263 @@ def test_snapshot_never_probes_a_remote_browser(degraded, monkeypatch):
     monkeypatch.setattr(br, "browser_rail_status", fake)
     build_status_snapshot(OWNER, data_dir=degraded, ledger=_fake_ledger())
     assert seen.get("probe") is False
+
+
+def test_a_refused_money_rail_gate_is_a_crit_health_item(tmp_path):
+    """2026-09-21: `defi_data.reconcile` — the money rails' step-1 gate — refused
+    every call for 9 h (ledger > 1 MB) and every seat read healthy while six
+    rails traded without it. The refusal is a `rail_precondition_failed` event;
+    the snapshot must lead with it as CRIT, with the count, the first time and
+    the reason, so a gate-down rail can never read healthy."""
+    from core.event_log import TelemetryEventLog
+    from core.status_snapshot import build_status_snapshot
+    log = TelemetryEventLog(str(tmp_path / "telemetry_events.db"))
+    for _ in range(3):
+        log.record("rail_precondition_failed", user_id="u1", source="defi_data",
+                   attrs={"tool": "reconcile", "chain": "robinhood",
+                          "reason": "that file exceeds 1MB — not a position ledger"})
+    snap = build_status_snapshot("u1", data_dir=str(tmp_path), include_money=False)
+    items = {h.key: h for h in snap.health}
+    assert "rail_gate_refused" in items
+    h = items["rail_gate_refused"]
+    assert h.severity == "crit"
+    assert "reconcile" in h.text and "3" in h.text and "exceeds 1MB" in h.text
+    assert h.remedy
+
+
+def test_no_refused_gate_means_no_item(tmp_path):
+    from core.event_log import TelemetryEventLog
+    from core.status_snapshot import build_status_snapshot
+    TelemetryEventLog(str(tmp_path / "telemetry_events.db"))
+    snap = build_status_snapshot("u1", data_dir=str(tmp_path), include_money=False)
+    assert "rail_gate_refused" not in {h.key for h in snap.health}
+
+
+def _log_delivery(log, *, session_id, source, text, age_s, outcome="sent"):
+    log.record("user_delivery", user_id="u1", session_id=session_id, source=source,
+               attrs={"outcome": outcome, "text": text, "lane": "normal"},
+               ts=time.time() - age_s)
+
+
+def test_recent_notices_are_the_other_sessions_sends_in_the_last_minutes(tmp_path):
+    """2026-09-21 15:33Z: the owner's "haven't i told you not to report about
+    bugs?" landed 28 s after an AUTONOMOUS run's delivery notice, and the chat
+    session — which never saw that notice — matched the correction to its own
+    10:40 message. The delivery section now carries the LAST FEW MINUTES of
+    sends by OTHER sessions (`recent_notices`), and the per-turn agent note
+    renders them as "the owner was just told …", so a correction lands on the act."""
+    from core.event_log import TelemetryEventLog
+    from core.status_snapshot import build_status_snapshot
+    log = TelemetryEventLog(str(tmp_path / "telemetry_events.db"))
+    _log_delivery(log, session_id="chat-1", source="agent_send", text="my own reply", age_s=20)
+    _log_delivery(log, session_id="cron-9", source="agent_send",
+                  text="posted thread 2102058280738553979: my own ledger caught me", age_s=40)
+    # 2026-09-22 06:07Z: "Explin better" landed 210 s after the EXIT rail's R6
+    # escalation — a real owner reads first, then replies. The window is ten
+    # minutes; a 20-minute-old send is still out.
+    _log_delivery(log, session_id="cron-6", source="agent_send",
+                  text="Exit rail ran. No trade — a real problem in the rules.", age_s=210)
+    _log_delivery(log, session_id="cron-8", source="cron", text="old news", age_s=1200)
+    _log_delivery(log, session_id="cron-7", source="agent_send", text="held", age_s=30,
+                  outcome="quiet_held")
+    snap = build_status_snapshot("u1", data_dir=str(tmp_path), session_id="chat-1",
+                                 include_money=False)
+    recent = snap.sections["delivery"].data["recent_notices"]
+    assert [r["session_id"] for r in recent] == ["cron-9", "cron-6"]
+    assert recent[0]["source"] == "agent_send"
+    assert recent[0]["text"].startswith("posted thread")
+    note = render_agent_health_note(snap)
+    assert "the owner was just told" in note.lower()
+    assert "you were just told" not in note.lower()
+    assert "my own ledger caught me" in note
+    assert "my own reply" not in note
+
+
+def test_no_session_means_no_recent_notices_line(tmp_path):
+    from core.event_log import TelemetryEventLog
+    from core.status_snapshot import build_status_snapshot
+    log = TelemetryEventLog(str(tmp_path / "telemetry_events.db"))
+    _log_delivery(log, session_id="cron-9", source="agent_send", text="x", age_s=10)
+    snap = build_status_snapshot("u1", data_dir=str(tmp_path), include_money=False)
+    assert snap.sections["delivery"].data.get("recent_notices") == []
+    assert "was just told" not in render_agent_health_note(snap).lower()
+
+
+# -- the missed-messages TEXT, not just a count -------------------------------
+#
+# 2026-09-22: the delivery rail records every suppressed owner message as an
+# `owner_notice` on the promise that it is "rolled into the digest". Prod's
+# digest is the LLM cron job, which reads THIS snapshot — and the snapshot
+# carried only `suppressed_notices`, a number. So the roll-up could report "16
+# suppressed, all self_evolution" and never the one report the owner actually
+# needed. The bodies live in `core.surfaces.missed.missed_notices`, the same ONE
+# query `/missed` uses on every seat; the snapshot now carries a bounded copy so
+# the digest can QUOTE them without sending a second daily message (the owner
+# asked for "daily, text only" on 2026-09-20).
+
+def test_delivery_carries_the_missed_bodies_not_only_the_count(degraded):
+    snap = build_status_snapshot(OWNER, data_dir=degraded)
+    data = snap.section("delivery").data
+    assert data["suppressed_notices"] == 3, "the count stays"
+    missed = data["missed"]
+    assert len(missed) == 3, "and now the bodies are there too"
+    for entry in missed:
+        assert entry["kind"] == "capped"
+        assert entry["text"].startswith("goal started"), \
+            "the rail's marker prefix is stripped, as /missed strips it"
+        assert isinstance(entry["ts"], float)
+    assert data["missed_more"] == 0
+    assert data.get("missed_unavailable") is None
+
+
+def test_missed_is_bounded_and_says_how_many_it_left_out(tmp_path, monkeypatch):
+    """A digest that quotes 200 bodies is not a digest. The cap is explicit and
+    the remainder is COUNTED, never silently dropped."""
+    from core.status_snapshot import MISSED_IN_SNAPSHOT
+    data_dir = str(tmp_path)
+    monkeypatch.setenv("POLYROB_DATA_DIR", data_dir)
+    monkeypatch.setenv("TELEMETRY_EVENT_LOG_PATH",
+                       os.path.join(data_dir, "telemetry_events.db"))
+    extra = 4
+    _seed_telemetry(os.path.join(data_dir, "telemetry_events.db"),
+                    capped=MISSED_IN_SNAPSHOT + extra)
+    snap = build_status_snapshot(OWNER, data_dir=data_dir)
+    data = snap.section("delivery").data
+    assert len(data["missed"]) == MISSED_IN_SNAPSHOT
+    assert data["missed_more"] == extra
+    assert data["suppressed_notices"] == MISSED_IN_SNAPSHOT + extra
+
+
+def test_an_unreadable_notice_store_is_NAMED_never_rendered_as_none_missed(
+        degraded, monkeypatch):
+    """'I could not look' is a different fact from 'you missed nothing', and the
+    second one told to a digest is a confident lie."""
+    import core.surfaces.missed as missed_mod
+
+    def _boom(*a, **kw):
+        raise OSError("telemetry log not found")
+
+    monkeypatch.setattr(missed_mod, "missed_notices", _boom)
+    snap = build_status_snapshot(OWNER, data_dir=degraded)
+    data = snap.section("delivery").data
+    assert data["missed"] == []
+    assert "OSError" in str(data["missed_unavailable"])
+    assert data["suppressed_notices"] == 3, \
+        "the independent count is unaffected by the body read failing"
+
+
+def test_the_missed_bodies_are_RENDERED_not_just_stored(degraded):
+    """The trap this item was filed about is "built but not wired": prod's
+    digest is the LLM cron job and it reads the snapshot's LINES via
+    `agent_status`, never `section.data`. A `data["missed"]` nobody renders
+    would change nothing for the owner."""
+    from core.status_render import render_section_lines
+    snap = build_status_snapshot(OWNER, data_dir=degraded)
+    lines = "\n".join(render_section_lines(snap, "delivery"))
+    assert "missed" in lines.lower()
+    assert "goal started" in lines, "the body itself must be quotable from the lines"
+
+
+def test_an_unreadable_notice_store_says_so_in_the_LINES_too(degraded, monkeypatch):
+    import core.surfaces.missed as missed_mod
+    monkeypatch.setattr(missed_mod, "missed_notices",
+                        lambda *a, **kw: (_ for _ in ()).throw(OSError("gone")))
+    from core.status_render import render_section_lines
+    snap = build_status_snapshot(OWNER, data_dir=degraded)
+    lines = "\n".join(render_section_lines(snap, "delivery")).lower()
+    assert "could not" in lines or "unreadable" in lines or "unavailable" in lines
+
+
+# -- what each rail COSTS ------------------------------------------------------
+#
+# 2026-09-22 14:26Z, OpenRouter below $3: to tell the owner which rail to thin I
+# hand-queried `cron_run.spend_usd` out of the telemetry db, because no surface
+# answered "what is costing the money". The events have carried the figure all
+# along. ⚠️ A run with NO spend recorded is counted as UNPRICED, never as $0 —
+# summing an unpriced run into the total would understate the bill, which is the
+# confident-zero class this file exists to prevent.
+
+def test_each_rail_reports_what_it_spent_in_24h(tmp_path, monkeypatch):
+    data_dir = str(tmp_path)
+    monkeypatch.setenv("POLYROB_DATA_DIR", data_dir)
+    monkeypatch.setenv("TELEMETRY_EVENT_LOG_PATH",
+                       os.path.join(data_dir, "telemetry_events.db"))
+    monkeypatch.setenv("CRON_ENABLED", "true")
+    _seed_cron(data_dir)
+    from core.event_log import TelemetryEventLog
+    log = TelemetryEventLog(os.path.join(data_dir, "telemetry_events.db"))
+    now = time.time()
+    for i, spend in enumerate((0.10, 0.02, 0.03)):
+        log.record("cron_run", user_id=OWNER, source="cron",
+                   attrs={"job_id": "job1", "outcome": "done", "steps": 5,
+                          "duration_s": 60, "spend_usd": spend}, ts=now - 100 - i)
+    snap = build_status_snapshot(OWNER, data_dir=data_dir)
+    sec = snap.section("loops")
+    spend = sec.data["rails_spend_24h"]["job1"]
+    assert abs(spend["usd"] - 0.15) < 1e-9
+    assert spend["runs"] == 3
+    assert spend["unpriced"] == 0
+    line = "\n".join(l for l in sec.lines if l.startswith("rail "))
+    assert "$0.15" in line and "3 run" in line, line
+
+
+def test_a_run_with_no_spend_recorded_is_UNPRICED_not_zero(tmp_path, monkeypatch):
+    data_dir = str(tmp_path)
+    monkeypatch.setenv("POLYROB_DATA_DIR", data_dir)
+    monkeypatch.setenv("TELEMETRY_EVENT_LOG_PATH",
+                       os.path.join(data_dir, "telemetry_events.db"))
+    monkeypatch.setenv("CRON_ENABLED", "true")
+    _seed_cron(data_dir)
+    from core.event_log import TelemetryEventLog
+    log = TelemetryEventLog(os.path.join(data_dir, "telemetry_events.db"))
+    now = time.time()
+    log.record("cron_run", user_id=OWNER, source="cron",
+               attrs={"job_id": "job1", "outcome": "done", "spend_usd": 0.04}, ts=now - 100)
+    log.record("cron_run", user_id=OWNER, source="cron",
+               attrs={"job_id": "job1", "outcome": "done"}, ts=now - 90)
+    snap = build_status_snapshot(OWNER, data_dir=data_dir)
+    spend = snap.section("loops").data["rails_spend_24h"]["job1"]
+    assert abs(spend["usd"] - 0.04) < 1e-9
+    assert spend["runs"] == 2
+    assert spend["unpriced"] == 1
+    line = "\n".join(l for l in snap.section("loops").lines if l.startswith("rail "))
+    assert "unpriced" in line, line
+
+
+def test_a_skipped_run_costs_nothing_and_says_so(tmp_path, monkeypatch):
+    """The $0 preflight skip is the point of the preflight — it must read as a
+    real zero, not as an unpriced unknown."""
+    data_dir = str(tmp_path)
+    monkeypatch.setenv("POLYROB_DATA_DIR", data_dir)
+    monkeypatch.setenv("TELEMETRY_EVENT_LOG_PATH",
+                       os.path.join(data_dir, "telemetry_events.db"))
+    monkeypatch.setenv("CRON_ENABLED", "true")
+    _seed_cron(data_dir)
+    from core.event_log import TelemetryEventLog
+    log = TelemetryEventLog(os.path.join(data_dir, "telemetry_events.db"))
+    log.record("cron_run", user_id=OWNER, source="cron",
+               attrs={"job_id": "job1", "outcome": "skipped", "reason": "no_slot"},
+               ts=time.time() - 60)
+    spend = build_status_snapshot(OWNER, data_dir=data_dir).section(
+        "loops").data["rails_spend_24h"]["job1"]
+    assert spend["usd"] == 0.0 and spend["unpriced"] == 0 and spend["runs"] == 1
+
+
+def test_a_rail_with_nothing_priced_never_renders_a_confident_zero(tmp_path, monkeypatch):
+    """`$0.00` is the lie-shaped string this file bans everywhere else. A rail
+    whose runs carry no cost figure has an UNKNOWN cost, not a zero one."""
+    data_dir = str(tmp_path)
+    monkeypatch.setenv("POLYROB_DATA_DIR", data_dir)
+    monkeypatch.setenv("TELEMETRY_EVENT_LOG_PATH",
+                       os.path.join(data_dir, "telemetry_events.db"))
+    monkeypatch.setenv("CRON_ENABLED", "true")
+    _seed_cron(data_dir)
+    from core.event_log import TelemetryEventLog
+    log = TelemetryEventLog(os.path.join(data_dir, "telemetry_events.db"))
+    for i in range(2):
+        log.record("cron_run", user_id=OWNER, source="cron",
+                   attrs={"job_id": "job1", "outcome": "done"}, ts=time.time() - 60 - i)
+    sec = build_status_snapshot(OWNER, data_dir=data_dir).section("loops")
+    line = "\n".join(l for l in sec.lines if l.startswith("rail "))
+    assert "$0.00" not in line, line
+    assert "cost not recorded for 2 runs today" in line, line

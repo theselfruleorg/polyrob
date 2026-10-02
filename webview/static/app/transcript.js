@@ -32,15 +32,86 @@ import { loadSocketIo } from './socket-client.js';
 import { postJson, serverAnswer } from './http.js';
 
 /** The feed event types this transcript draws, grouped by how it draws them. */
-const USER_TYPES = new Set(['user_message']);
+const USER_TYPES = new Set(['user_message', 'user_message_during_execution']);
+/** A follow-up typed while a run works is written as
+ *  `user_message_during_execution`, its text cut at this many characters
+ *  (agents/task/agent/hitl_manager.py). */
+const DURING_CUT = 200;
+/** Two owner bubbles with the same text inside this window are one message
+ *  (the console's own follow-up writes both event types). */
+const USER_DEDUPE_MS = 60000;
 const REPLY_TYPES = new Set(['agent_message', 'final_message', 'result']);
 const TOOL_TYPES = new Set(['tool_result', 'tool_execution', 'tool_started']);
 const COST_TYPES = new Set(['llm_request']);
 const STATUS_TYPES = new Set(['status']);
+/** The events that END a turn: `done` writes `task_complete` (scheme B), a
+ *  session end writes `session_completion` (scheme A). */
+const TURN_CLOSE_TYPES = new Set(['task_complete', 'session_completion']);
 
-/** Session statuses that end a turn, split by which receipt state they mean. */
+/**
+ * The controller verbs are bookkeeping, never a step (070 W0.6): `send_message`
+ * IS the reply (its text arrives as `agent_message`) and `done` closes the turn.
+ * `message` (the outbound tool) is a real step and is NOT here.
+ */
+const CONTROLLER_VERBS = new Set(['send_message', 'done']);
+
+/** True for a tool event of a controller verb — no row, no count. */
+export function isControllerVerb(data) {
+  const d = data || {};
+  return CONTROLLER_VERBS.has(String(d.action_name || d.name || '').trim().toLowerCase());
+}
+/** A console verb's answer that arrived LATER (a `/send … go` or `/bridge … go`
+ *  runs in the background; `console_commands._console_deliver` pushes its
+ *  result on the live socket). Drawn exactly like the inline `command_reply`. */
+const COMMAND_REPLY_TYPES = new Set(['command_reply']);
+
+/** Action cards (core/surfaces/cards.py). A card's tap token. */
+const CARD_TOKEN = /\/card_[0-9a-f]{10}_(?:ok|no|re|[1-6])(?![\w])/g;
+/** The verbs whose console answer may be a card: the confirmable money verbs
+ *  and `/cards`. Buttons are EXPLICIT, never inferred from arbitrary text — an
+ *  answer to any other verb (`/thread` quotes the agent's own words) gets none,
+ *  exactly the Telegram rule in core/surfaces/actions.py. */
+const CARD_VERBS = new Set(['/send', '/swap', '/bridge', '/pay', '/claim', '/launch',
+  '/deploy', '/nft', '/identity', '/writeoff', '/unquarantine', '/wallet']);
+// ⚠️ `/cards` is deliberately absent: its answer lists each card's title, and a
+// choice card's title is the MODEL's question. The Inbox draws those buttons
+// from the store instead.
+
+/**
+ * The card taps a console answer offers, in order: `[{token, act}]` (at most 8:
+ * a builder step shows up to 6 options plus Cancel).
+ * Only for an answer to a card verb, or to a card tap itself.
+ */
+export function cardTaps(sentText, reply) {
+  const verb = String(sentText || '').trim().split(/\s+/)[0].toLowerCase();
+  if (!(CARD_VERBS.has(verb) || /^\/card_[0-9a-f]{10}_/.test(verb))) return [];
+  const out = [];
+  const seen = new Set();
+  for (const m of String(reply || '').matchAll(CARD_TOKEN)) {
+    if (seen.has(m[0])) continue;
+    seen.add(m[0]);
+    out.push({ token: m[0], act: m[0].split('_').pop() });
+    if (out.length >= 8) break;   // 6 options + Cancel on a builder step
+  }
+  return out;
+}
+
+/** The button words for one act — from the server's copy node, never here. */
+export function cardLabel(act, copy) {
+  if (act === 'ok') return copy.card_ok || act;
+  if (act === 're') return copy.card_re || act;
+  if (act === 'no') return copy.card_no || act;
+  return String(copy.card_pick || '{n}').replace('{n}', act);
+}
+
+/** Session statuses, split by the receipt state they mean (070 W0.7).
+ *  `suspended` is a `send_message(wait_for_response=True)` pause: Rob waits for
+ *  the owner's answer — it is NOT stopped. */
+const WORKING_STATUS = new Set(['running', 'resumed', 'created', 'initializing']);
 const DONE_STATUS = new Set(['completed', 'done', 'finished']);
-const STOPPED_STATUS = new Set(['failed', 'cancelled', 'canceled', 'error', 'stopped', 'suspended']);
+const WAITING_STATUS = new Set(['suspended', 'waiting', 'paused']);
+const FAILED_STATUS = new Set(['failed', 'error']);
+const STOPPED_STATUS = new Set(['cancelled', 'canceled', 'stopped']);
 
 /** MM:SS for an act's own elapsed clock, matching the mockup's `0:04` / `1:12`. */
 export function mmss(totalSeconds) {
@@ -84,12 +155,16 @@ export function narrationLine(data, copy) {
   return (copy && (d.success === false ? copy.act_failed : copy.act_did_work)) || '';
 }
 
-/** The receipt state class for a session status, or `null` when it is unknown. */
-function statusToState(raw) {
+/** The receipt state for a session status:
+ *  `working|done|waiting|failed|stopped`, or `null` for a status never seen. */
+export function statusToState(raw) {
   const s = String(raw || '').trim().toLowerCase();
+  if (WORKING_STATUS.has(s)) return 'working';
   if (DONE_STATUS.has(s)) return 'done';
+  if (WAITING_STATUS.has(s)) return 'waiting';
+  if (FAILED_STATUS.has(s)) return 'failed';
   if (STOPPED_STATUS.has(s)) return 'stopped';
-  return null; // still working, or a status we have never seen — leave it be
+  return null; // a status we have never seen — leave the receipt be
 }
 
 function el(tag, className, text) {
@@ -142,6 +217,32 @@ export function chronoTs(event) {
   return ts;
 }
 
+/**
+ * An event's own time in ms — the clock every act offset and every receipt
+ * duration is drawn from (070 W0.5). A backfill applies a whole chat in one
+ * tick, so the render time is the wrong clock: it drew every act at `0:00`
+ * and every receipt as `0s`. `fallbackMs` (the render time) is used only for
+ * an event that carries no timestamp at all.
+ */
+export function eventMs(event, fallbackMs) {
+  const ts = chronoTs(event);
+  return ts > 0 ? ts * 1000 : fallbackMs;
+}
+
+/** The receipt's step count in words: "no steps", "1 step", "3 steps". */
+export function stepsWords(count, copy) {
+  const n = Number(count) || 0;
+  if (n <= 0) return (copy && copy.steps_none) || '0';
+  if (n === 1) return (copy && copy.steps_one) || '1';
+  return String((copy && copy.steps_many) || '{count}').replace('{count}', String(n));
+}
+
+/** The receipt's cost sentence: "Cost $0.02." or "Cost not known yet." */
+export function costWords(cost, copy) {
+  if (typeof cost !== 'number' || !Number.isFinite(cost)) return (copy && copy.cost_unknown) || '';
+  return String((copy && copy.cost_known) || '{amount}').replace('{amount}', costLabel(cost));
+}
+
 /** The monotonic sequence when the event carries one (telemetry does; an
  *  add_to_feed event does not), else 0 — a tiebreaker, never the primary key. */
 export function chronoSeq(event) {
@@ -167,23 +268,75 @@ export class Transcript {
     this.now = opts.now || (() => Date.now());
     this.input = opts.input || null; // the composer textarea, for Steer
     this.seen = new Set(); // bubble idempotency (timestamp:text)
+    this.userBubbles = new Map(); // owner bubble key -> {at, node, during}
+    // 070 W0.9: every telemetry event reaches the socket twice (the fast push
+    // and the feed watcher), and the backfill may carry it too — one `_id`,
+    // one row. Scheme B events have no `_id` and keep their own keys.
+    this.seenIds = new Set();
+    // Live events that arrive while the backfill loads wait here, then apply
+    // in arrival order after it (`flush`). `null` = not buffering.
+    this.buffer = null;
     this.synthetic = 0; // act key when an event carries no call_id
     this.turn = null; // the open rob turn, or null between turns
     this.remoteNotice = null; // the one 409 "live in the agent" line, reused
+    // False while a backfill is applied; true once the socket is live. A live
+    // working turn counts up to now; otherwise a receipt ends at the turn's
+    // last event.
+    this.live = Boolean(opts.live);
+    // 070 E.13: is a live process running this session (the page's
+    // `data-run-live`)? `false` = the run ended; `null` = not known. A turn
+    // still working after the backfill of a run that is not live never got its
+    // closing event: it reads "Stopped … without a final word", not "Working
+    // for …" forever.
+    this.runLive = opts.runLive === true || opts.runLive === false ? opts.runLive : null;
   }
 
   apply(event) {
     if (!this.thread || !event || typeof event !== 'object') return;
+    if (event._id) {
+      if (this.seenIds.has(event._id)) return;
+      this.seenIds.add(event._id);
+    }
     const type = event.type;
     const data = event.data || {};
     const ts = event.timestamp;
-    if (USER_TYPES.has(type)) return this._user(data, ts);
-    if (REPLY_TYPES.has(type)) return this._reply(data, ts);
-    if (TOOL_TYPES.has(type)) return this._tool(data);
-    if (COST_TYPES.has(type)) return this._cost(data);
-    if (STATUS_TYPES.has(type)) return this._status(data);
+    if (USER_TYPES.has(type)) return this._user(data, ts, event, type);
+    if (REPLY_TYPES.has(type)) return this._reply(data, ts, event);
+    if (TOOL_TYPES.has(type)) return this._tool(data, event);
+    if (COST_TYPES.has(type)) return this._cost(data, event);
+    if (STATUS_TYPES.has(type)) return this._status(data, event);
+    if (TURN_CLOSE_TYPES.has(type)) return this._close(event, 'done');
+    if (COMMAND_REPLY_TYPES.has(type)) {
+      const text = String(data.text || '').trim();
+      const key = `c:${ts}:${text}`;
+      if (!text || this.seen.has(key)) return null;
+      this.seen.add(key);
+      return this._commandNote({ command_reply: text });
+    }
     // Everything else (step, planner, evaluation, …) is not drawn in the
     // transcript — the acts and the reply are the visible turn.
+  }
+
+  /** Start holding live events (the room is joined before the backfill). */
+  startBuffer() { this.buffer = []; }
+
+  /** A live `feed_update`: held while the backfill loads, else applied. */
+  receive(event) {
+    if (this.buffer) this.buffer.push(event);
+    else this.apply(event);
+  }
+
+  /** The backfill is drawn: apply the held live events in arrival order, stop
+   *  buffering, and let a working turn count up to now. */
+  flush() {
+    const held = this.buffer || [];
+    this.buffer = null;
+    held.forEach((event) => this.apply(event));
+    this.live = true;
+    if (this.runLive === false && this.turn && this.turn.state === 'working') {
+      this._close(null, 'ended');
+    }
+    if (this.turn) this._receipt();
   }
 
   /**
@@ -201,30 +354,93 @@ export class Transcript {
       .forEach((event) => this.apply(event));
   }
 
-  _user(data, ts) {
-    const text = String(data.text || data.message || '').trim();
-    if (!text) return;
-    const key = `u:${ts}:${text}`;
-    if (this.seen.has(key)) return;
-    this.seen.add(key);
+  /**
+   * 070 W0.12: draw the stored first line (the owner's question from
+   * `task.json`) as the first bubble, BEFORE the backfill. A later
+   * `user_message` with the same text is absorbed once, whatever its time.
+   */
+  seedFirstLine(text) {
+    const line = String(text || '').trim();
+    if (!line || !this.thread) return;
+    const key = `u:${line.replace(/\s+/g, ' ').slice(0, DURING_CUT)}`;
+    if (this.userBubbles.has(key)) return;
     const turn = el('div', 'turn turn-you');
-    turn.appendChild(el('div', 'bubble', text));
+    const bubble = el('div', 'bubble', line);
+    turn.appendChild(bubble);
     this.thread.appendChild(turn);
-    // A new person-turn closes the agent's turn: the next action opens a fresh
-    // one, with its own clock, count and receipt.
-    this.turn = null;
+    this.userBubbles.set(key, { at: 0, node: bubble, during: false, seed: true });
   }
 
-  _ensureTurn() {
+  _user(data, ts, event, type) {
+    let text = String(data.text || data.message || data.message_text || '').trim();
+    if (!text) return;
+    const during = type === 'user_message_during_execution';
+    if (during && text.length === DURING_CUT) text += '…';
+    // One message, one bubble: the key is the first 200 characters of the
+    // whitespace-normalised text, and a repeat within a minute is the same
+    // message arriving as both event types (or twice from the socket).
+    const key = `u:${text.replace(/…$/, '').replace(/\s+/g, ' ').slice(0, DURING_CUT)}`;
+    const at = eventMs(event, this.now());
+    const prior = this.userBubbles.get(key);
+    if (prior && prior.seed) {
+      // The stored first line already drew this message: take its clock once.
+      prior.seed = false;
+      prior.at = at;
+      return;
+    }
+    if (prior && Math.abs(at - prior.at) <= USER_DEDUPE_MS) {
+      // The cut during-execution copy gives way to the full user_message text.
+      if (prior.during && !during && text.length > prior.node.textContent.length) {
+        prior.node.textContent = text;
+        prior.during = false;
+      }
+      return;
+    }
+    // A new person-turn closes the agent's turn: the next action opens a fresh
+    // one, with its own clock, count and receipt. A turn still working when the
+    // person wrote reads "… before your message", never a live Stop or Steer.
+    this._close(event, this.turn && this.turn.state === 'working' ? 'so_far'
+      : (this.turn && this.turn.state));
+    const turn = el('div', 'turn turn-you');
+    const bubble = el('div', 'bubble', text);
+    turn.appendChild(bubble);
+    this.thread.appendChild(turn);
+    this.userBubbles.set(key, { at, node: bubble, during });
+  }
+
+  /** Close the open turn in *state*: its receipt drawn once more, without
+   *  Stop or Steer, and the next event opens a new turn. */
+  _close(event, state) {
+    const turn = this.turn;
+    if (!turn) return;
+    // Only a turn still working runs up to the closing event; a turn already
+    // done or stopped keeps the time it ended.
+    if (event && (turn.state === 'working' || turn.state === 'waiting')) this._at(event);
+    if (state) turn.state = state;
+    this._receipt();
+    this.turn = null;
+    this.lastTurn = turn;
+  }
+
+  /** The ms an event happened at, and the open turn's `last` moved up to it. */
+  _at(event) {
+    const at = eventMs(event, this.now());
+    if (this.turn && at > this.turn.last) this.turn.last = at;
+    return at;
+  }
+
+  _ensureTurn(atMs) {
     if (this.turn) return this.turn;
+    const at = Number.isFinite(atMs) ? atMs : this.now();
     const root = el('div', 'turn turn-rob');
     const said = el('div', 'said');
     const acts = document.createElement('div');
     acts.style.marginTop = 'var(--s4)';
     const receipt = el('p', 'receipt');
     receipt.hidden = true; // shown once the turn has something to receipt
-    root.appendChild(said);
+    // DOM order: the steps, then the reply they led to, then the receipt.
     root.appendChild(acts);
+    root.appendChild(said);
     root.appendChild(receipt);
     this.thread.appendChild(root);
     this.turn = {
@@ -233,19 +449,22 @@ export class Transcript {
       bubbles: new Set(),
       count: 0,
       cost: null,
-      start: this.now(),
+      start: at,
+      last: at,
       state: 'working',
     };
     return this.turn;
   }
 
-  _reply(data, ts) {
+  _reply(data, ts, event) {
     const text = String(data.text || data.message || data.result || data.response || '').trim();
     if (!text) return;
     const key = `a:${ts}:${text}`;
     if (this.seen.has(key)) return;
     this.seen.add(key);
-    const turn = this._ensureTurn();
+    const at = eventMs(event, this.now());
+    const turn = this._ensureTurn(at);
+    this._at(event);
     // R2 backstop: a byte-identical repeat bubble within a turn is suppressed
     // (the same rule cli/ui/rich_renderer.py keeps).
     const norm = text.toLowerCase();
@@ -255,12 +474,17 @@ export class Transcript {
     this._receipt();
   }
 
-  _tool(data) {
-    const turn = this._ensureTurn();
+  _tool(data, event) {
+    if (isControllerVerb(data)) return;
+    const at = eventMs(event, this.now());
+    const turn = this._ensureTurn(at);
+    this._at(event);
     const callId = data.call_id != null ? String(data.call_id) : `#${this.synthetic++}`;
     const success = data.success;
     const phase = success === true ? 'done' : success === false ? 'stopped' : 'running';
-    const seconds = Math.max(0, (this.now() - turn.start) / 1000);
+    // The offset from the turn's first event; a later event for the same call
+    // moves the row to the LATEST time of that call (its end).
+    const seconds = Math.max(0, (at - turn.start) / 1000);
     // The typed `tool_result` carries the server-narrated line; the untyped
     // `tool_execution` does not. Both collapse to one row by call id, and the
     // live feed watcher can deliver them in either order in one batch.
@@ -279,49 +503,89 @@ export class Transcript {
       // applied AFTER the narrated `tool_result` must not blank it back to the
       // raw preview. Only overwrite when the incoming event brings narration.
       if (hasNarration) node.querySelector('.act-what').textContent = narrationLine(data, this.copy);
-      node.querySelector('.act-time').textContent = mmss(seconds);
+      if (!(node.lastAt > at)) node.querySelector('.act-time').textContent = mmss(seconds);
     }
+    node.lastAt = Math.max(node.lastAt || 0, at);
     node.className = phase === 'running' ? 'act is-running'
       : phase === 'stopped' ? 'act is-stopped'
         : 'act';
     this._receipt();
   }
 
-  _cost(data) {
+  _cost(data, event) {
     const raw = data.cost_estimate != null ? data.cost_estimate
       : data.cost != null ? data.cost
         : data.cost_usd;
     const n = Number(raw);
     if (!Number.isFinite(n)) return;
-    const turn = this._ensureTurn();
+    // The cost of a model call often lands just AFTER `done` closed the turn:
+    // it belongs to that turn, never to a new empty one.
+    if (!this.turn && this.lastTurn) {
+      this.lastTurn.cost = (this.lastTurn.cost || 0) + n;
+      this._receipt(this.lastTurn);
+      return;
+    }
+    const turn = this._ensureTurn(eventMs(event, this.now()));
+    this._at(event);
     turn.cost = (turn.cost || 0) + n;
     this._receipt();
   }
 
-  _status(data) {
+  _status(data, event) {
     const state = statusToState(data.status || data.state);
-    if (!state || !this.turn) return;
-    this.turn.state = state;
+    if (!state) return;
+    // Kept even with no open turn, so a status before the first step is not lost.
+    this.lastStatus = state;
+    const turn = this.turn;
+    if (!turn) {
+      // A run that failed before Rob drew anything says so, once. A `stopped`
+      // with no open turn (a REPL /exit after finished turns) draws nothing.
+      if (state === 'failed') this._failedLine();
+      return;
+    }
+    this._at(event);
+    if (state === 'failed') return this._close(event, 'failed');
+    // A working status re-opens a waiting turn; it never re-opens an ended one,
+    // and a later stop never rewrites a turn that already finished.
+    if (state === 'working' && turn.state !== 'waiting') return;
+    if (state === 'stopped' && turn.state === 'done') return;
+    turn.state = state;
     this._receipt();
   }
 
+  /** "This chat failed before Rob could answer." — once, and only while Rob
+   *  has drawn no turn in this thread (otherwise Rob did answer). */
+  _failedLine() {
+    if (!this.thread || this.thread.querySelector('.turn-rob')) return;
+    if (this.thread.querySelector('[data-read-notice="failed"]')) return;
+    const line = el('p', 'note is-failed', this.copy.turn_failed || '');
+    line.dataset.readNotice = 'failed';
+    line.setAttribute('role', 'status');
+    this.thread.appendChild(line);
+  }
+
   /** Redraw the current turn's receipt from its own counters. */
-  _receipt() {
-    const turn = this.turn;
+  _receipt(turn = this.turn) {
     if (!turn) return;
     const tpl = turn.state === 'done' ? this.copy.receipt_done
       : turn.state === 'stopped' ? this.copy.receipt_stopped
-        : this.copy.receipt_working;
+        : turn.state === 'so_far' ? this.copy.receipt_so_far
+          : turn.state === 'waiting' ? this.copy.receipt_waiting
+            : turn.state === 'failed' ? this.copy.receipt_failed
+              : turn.state === 'ended' ? this.copy.receipt_ended
+                : this.copy.receipt_working;
+    const open = turn.state === 'working' || turn.state === 'waiting';
+    const end = (open && this.live) ? this.now() : turn.last;
     const values = {
-      elapsed: elapsedWords(this.now() - turn.start),
-      actions: turn.count,
-      cost: costLabel(turn.cost, this.copy.cost_unknown),
+      elapsed: elapsedWords(end - turn.start),
+      steps: stepsWords(turn.count, this.copy),
+      cost: costWords(turn.cost, this.copy),
     };
     turn.receipt.replaceChildren(fillReceipt(tpl, values));
     turn.receipt.hidden = false;
     // Stop and Steer live on the receipt, not in a toolbar — and only while the
     // turn is live and the console may touch it.
-    if (turn.state === 'working' && !this.readOnly) {
+    if (open && turn === this.turn && !this.readOnly) {
       const stop = el('button', 'btn-quiet btn', this.copy.stop || 'Stop');
       stop.type = 'button';
       stop.style.padding = '2px 8px';
@@ -384,7 +648,8 @@ export class Transcript {
       // as `command_reply` — it never reaches the agent, so no feed event ever
       // arrives for it. Nothing rendered that field, so `/halt` typed into the
       // chat box acted and then looked exactly like a message that vanished.
-      this._commandNote(res && res.body);
+      const note = this._commandNote(res && res.body);
+      this._cardButtons(note, text, res && res.body);
       // A32: a 409 is not a failure — the session is live in Rob's OWN process,
       // not this console, so the console cannot steer it from here. Render the
       // honest "live in the agent" line (with owner_pid + a retry hint), NEVER a
@@ -443,6 +708,35 @@ export class Transcript {
     return note;
   }
 
+  /**
+   * Action cards: the taps a money quote (or `/cards`) answer offers, drawn as
+   * buttons under its note. A button SENDS the tap token as if typed — the
+   * console's verb plane runs it with every gate — and the buttons go away
+   * once one is used, so a card is never tapped twice from here.
+   */
+  _cardButtons(note, sentText, body) {
+    if (!note || !body) return null;
+    const taps = cardTaps(sentText, body.command_reply);
+    if (!taps.length) return null;
+    const row = el('div', 'entry-actions');
+    row.dataset.cardTaps = '1';
+    for (const tap of taps) {
+      const b = el('button', `btn${tap.act === 'ok' ? ' btn-primary' : ''}`,
+        cardLabel(tap.act, this.copy));
+      b.type = 'button';
+      b.dataset.token = tap.token;
+      b.addEventListener('click', async () => {
+        row.querySelectorAll('button').forEach((x) => { x.disabled = true; });
+        const res = await this.send(tap.token);
+        if (res && res.ok) row.remove();
+        else row.querySelectorAll('button').forEach((x) => { x.disabled = false; });
+      });
+      row.appendChild(b);
+    }
+    note.after(row);
+    return row;
+  }
+
   _errorNotice(body) {
     if (!this.thread) return;
     if (!this.errorNotice) {
@@ -475,6 +769,13 @@ export class Transcript {
 // It is deliberately thin and is exercised by a running console, not the unit
 // rig: the rig drives `Transcript.apply` directly (that is where the logic is).
 
+/** The live-notice words for a socket refusal, by its code (070 E.31). */
+export function liveNotice(body, copy) {
+  const code = body && body.code;
+  if (code === 'rate_limited' && copy && copy.live_busy) return copy.live_busy;
+  return (copy && copy.live_unavailable) || '';
+}
+
 async function backfill(transcript, sessionId) {
   try {
     const resp = await fetch(
@@ -492,6 +793,9 @@ async function backfill(transcript, sessionId) {
   }
 }
 
+/** Join the session room. Resolves once the socket first connects (the room
+ *  is joined on connect) or fails, or after 3 s — the backfill then runs, and
+ *  every live event that arrives meanwhile is held by `transcript.buffer`. */
 async function connect(transcript, sessionId) {
   let io;
   try {
@@ -501,19 +805,42 @@ async function connect(transcript, sessionId) {
     console.error('[transcript] no live updates', err);
     return;
   }
+  let settle;
+  const first = new Promise((resolve) => { settle = resolve; });
+  setTimeout(() => settle(), 3000);
   const socket = io({
     path: '/socket.io',
     transports: ['polling', 'websocket'],
     reconnection: true,
   });
   socket.on('connect', () => {
+    // A reconnect after the backfill is live at once; the first connect is
+    // made live by `flush()` once the backfill is drawn.
+    if (transcript.buffer === null) transcript.live = true;
     transcript._readNotice('live', '');
     socket.emit('join_session', { session_id: sessionId });
+    settle();
   });
   socket.on('disconnect', () => transcript._readNotice('live', transcript.copy.live_unavailable));
-  socket.on('connect_error', () => transcript._readNotice('live', transcript.copy.live_unavailable));
-  socket.on('error', body => transcript._readNotice('live', serverAnswer(body, transcript.copy.live_unavailable)));
-  socket.on('feed_update', (item) => transcript.apply(item));
+  socket.on('connect_error', () => {
+    transcript._readNotice('live', transcript.copy.live_unavailable);
+    settle();
+  });
+  // 070 E.31: a refusal carries a code; the console chooses the words and
+  // never shows the server's message.
+  socket.on('error', (body) => {
+    transcript._readNotice('live', liveNotice(body, transcript.copy));
+    // 070 W0.17: the socket stays on a rate limit; join again after the window.
+    if (body && body.code === 'rate_limited') {
+      const wait = Number(body.retry_after) > 0 ? Number(body.retry_after) : 60;
+      setTimeout(() => {
+        socket.emit('join_session', { session_id: sessionId });
+        transcript._readNotice('live', '');
+      }, wait * 1000);
+    }
+  });
+  socket.on('feed_update', (item) => transcript.receive(item));
+  await first;
 }
 
 /**
@@ -530,7 +857,10 @@ export function mount() {
   const readOnly = body?.dataset?.readOnly === 'true';
   const input = document.getElementById('chat-input');
   const copy = copyFrom(document.getElementById('transcript-copy'));
-  const transcript = new Transcript(thread, copy, { sessionId, readOnly, input });
+  const liveAttr = body?.dataset?.runLive;
+  const runLive = liveAttr === 'true' ? true : liveAttr === 'false' ? false : null;
+  const transcript = new Transcript(thread, copy, { sessionId, readOnly, input, runLive });
+  if (body?.dataset?.runKind === 'chat') transcript.seedFirstLine(body.dataset.firstLine);
 
   // The composer on a bound session is Steer: it talks to the running agent.
   const form = document.getElementById('chat-composer');
@@ -551,6 +881,11 @@ export function mount() {
     });
   }
 
-  backfill(transcript, sessionId).then(() => connect(transcript, sessionId));
+  // Join first, then backfill: nothing written while the page loads is lost,
+  // and an event in both the backfill and the room draws once (`_id`).
+  transcript.startBuffer();
+  connect(transcript, sessionId)
+    .then(() => backfill(transcript, sessionId))
+    .finally(() => transcript.flush());
   return transcript;
 }

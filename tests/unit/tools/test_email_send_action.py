@@ -71,9 +71,13 @@ def _corr():
 
 
 class _Ctx:
+    """A genuine owner turn (the main agent's step loop sets role='orchestrator')."""
     def __init__(self, user_id="rob", session_id="s1"):
         self.user_id = user_id
         self.session_id = session_id
+        self.is_sub_agent = False
+        self.role = "orchestrator"
+        self.metadata = {}
 
 
 def test_email_send_registered_as_an_action():
@@ -239,8 +243,8 @@ async def test_denied_target_text_unchanged_under_allowlist_policy(monkeypatch):
 
     assert smtp.sent == []
     assert result.error == (
-        "target not on owner allowlist; ask the owner to run "
-        "`polyrob owner allow email stranger@example.com`")
+        "target not on owner allowlist; only the owner can allow "
+        "it: /allow email stranger@example.com")
 
 
 # --- D9 / D19 / D31 / D66 (2026-09-21 interface audit) ----------------------
@@ -262,6 +266,8 @@ async def test_a_paused_owner_blocks_an_autonomous_email(monkeypatch, tmp_path):
     session — the dominant autonomous outbound path."""
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("POLYROB_OWNER_EMAIL", "owner@example.com")
+    # The autonomous-send gate (review E3) is open, so the pause is what refuses.
+    monkeypatch.setenv("MESSAGE_AUTONOMOUS_ALLOWLISTED", "true")
     import core.autonomy_control as ac
     ac.pause(str(tmp_path), scopes=("all",))
     try:
@@ -332,3 +338,52 @@ async def test_a_non_owner_send_anchors_its_message_id(monkeypatch):
     assert res.error is None
     anchored = [r for r in corr.list("rob") if r.get("thread_id")]
     assert anchored, "the outbound Message-ID was never bound to the session"
+
+
+# --- review E3 (2026-09-29): the same autonomous gate as `message` -----------
+
+@pytest.mark.asyncio
+async def test_an_autonomous_turn_is_refused_like_message_when_the_gate_is_closed(monkeypatch):
+    monkeypatch.setenv("POLYROB_OWNER_EMAIL", "owner@example.com")
+    monkeypatch.setenv("MESSAGE_AUTONOMOUS_ALLOWLISTED", "false")
+    monkeypatch.delenv("OUTBOUND_POLICY", raising=False)
+    tool = _tool(container=_FakeContainer(convo=_convo(), corr=_corr()))
+    smtp = _FakeSMTP()
+    tool.smtp_connection = smtp
+    res = await tool.email_send(
+        EmailSendAction(to="owner@example.com", subject="s", body="b"),
+        execution_context=_ForgedCtx())
+    assert res.error and "email_send: not permitted" in res.error
+    assert "MESSAGE_AUTONOMOUS_ALLOWLISTED" in res.error
+    assert smtp.sent == []
+
+
+@pytest.mark.asyncio
+async def test_a_leaf_is_refused_when_the_gate_is_closed(monkeypatch):
+    monkeypatch.setenv("POLYROB_OWNER_EMAIL", "owner@example.com")
+    monkeypatch.setenv("MESSAGE_AUTONOMOUS_ALLOWLISTED", "false")
+    monkeypatch.delenv("OUTBOUND_POLICY", raising=False)
+    tool = _tool(container=_FakeContainer(convo=_convo(), corr=_corr()))
+    smtp = _FakeSMTP()
+    tool.smtp_connection = smtp
+    ctx = _Ctx()
+    ctx.is_sub_agent, ctx.role = True, "leaf"
+    res = await tool.email_send(
+        EmailSendAction(to="owner@example.com", subject="s", body="b"), execution_context=ctx)
+    assert res.error and smtp.sent == []
+
+
+@pytest.mark.asyncio
+async def test_an_owner_configured_autonomous_rail_still_sends_to_the_owner(monkeypatch):
+    """MESSAGE_AUTONOMOUS_ALLOWLISTED ON (the AUTONOMY_MODE=autonomous default):
+    the autonomous send falls through to the tier gate, exactly as `message`."""
+    monkeypatch.setenv("POLYROB_OWNER_EMAIL", "owner@example.com")
+    monkeypatch.setenv("MESSAGE_AUTONOMOUS_ALLOWLISTED", "true")
+    tool = _tool(container=_FakeContainer(convo=_convo(), corr=_corr()))
+    smtp = _FakeSMTP()
+    tool.smtp_connection = smtp
+    res = await tool.email_send(
+        EmailSendAction(to="owner@example.com", subject="s", body="b"),
+        execution_context=_ForgedCtx())
+    assert res.error is None
+    assert len(smtp.sent) == 1

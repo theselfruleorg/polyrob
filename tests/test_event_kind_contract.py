@@ -31,6 +31,13 @@ PRODUCER_CALLS = (
     ("_record", "core/surfaces/user_delivery.py"),
 )
 
+# A ``.record(...)`` that is NOT the event log: (path, first-arg literal). The 061 owner
+# thread store's ``record(direction, ...)`` takes 'in'/'out', never an event kind.
+NOT_EVENT_LOG = {
+    ("core/surfaces/owner_thread.py", "in"),
+    ("core/surfaces/owner_thread.py", "out"),
+}
+
 
 def _catalog():
     kinds = {}
@@ -49,6 +56,31 @@ def _source_files():
     return [f for f in files if f.is_file() and "tests" not in f.parts and f != CATALOG]
 
 
+def _callee_name(node):
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = _callee_name(node.value)
+        return f"{parent}.{node.attr}" if parent else ""
+    return ""
+
+
+def _event_emit_calls(tree):
+    """Resolve the shared telemetry emitter's imports; UI/socket emit is unrelated."""
+    callees = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "core.event_log":
+            callees.update(a.asname or a.name for a in node.names if a.name == "emit")
+        elif isinstance(node, ast.ImportFrom) and node.module == "core":
+            callees.update(f"{a.asname or a.name}.emit" for a in node.names
+                           if a.name == "event_log")
+        elif isinstance(node, ast.Import):
+            callees.update(f"{a.asname or a.name}.emit" for a in node.names
+                           if a.name == "core.event_log")
+    return {node for node in ast.walk(tree) if isinstance(node, ast.Call)
+            and _callee_name(node.func) in callees}
+
+
 def _producer_literals():
     found = {}
     for f in _source_files():
@@ -57,15 +89,20 @@ def _producer_literals():
             tree = ast.parse(f.read_text(errors="replace"))
         except SyntaxError:
             continue
+        emit_calls = _event_emit_calls(tree)
         for node in ast.walk(tree):
             if not (isinstance(node, ast.Call) and node.args
                     and isinstance(node.args[0], ast.Constant)
                     and isinstance(node.args[0].value, str)):
                 continue
+            if node in emit_calls:
+                found.setdefault(node.args[0].value, set()).add(rel)
             fn = node.func
             name = fn.attr if isinstance(fn, ast.Attribute) else (fn.id if isinstance(fn, ast.Name) else None)
             for callee, prefix in PRODUCER_CALLS:
                 if name == callee and (prefix is None or rel.startswith(prefix)):
+                    if (rel, node.args[0].value) in NOT_EVENT_LOG:
+                        continue
                     found.setdefault(node.args[0].value, set()).add(rel)
     return found
 
@@ -91,3 +128,21 @@ def test_every_catalogued_kind_is_used_in_code():
         "Catalogued event kind(s) with no producer or consumer in shipped source — "
         f"delete the constant instead of keeping it for later: {dead}"
     )
+
+
+def test_shared_emit_aliases_are_checked_without_ui_socket_emit():
+    tree = ast.parse("""
+from core.event_log import emit as audit
+from core import event_log as telemetry
+import core.event_log as el
+import core.event_log
+
+audit("one", source="test")
+telemetry.emit("two", source="test")
+el.emit("three", source="test")
+core.event_log.emit("four", source="test")
+socket.emit("not_telemetry")
+ctx.emit("not_telemetry_either")
+""")
+    assert {n.args[0].value for n in _event_emit_calls(tree)} == {
+        "one", "two", "three", "four"}

@@ -74,6 +74,7 @@ from core.env import bool_env as _bool_env, float_env as _float_env, int_env as 
 from tools.code_exec.backend import ExecutionBackend, ExecutionBackendError
 from tools.code_exec.backends._proc import run_group
 from tools.code_exec.env_policy import SECRET_PAT
+from tools.code_exec.limits import exec_timeout_cap
 from tools.code_exec.result import ExecutionRequest, ExecutionResult
 
 logger = logging.getLogger(__name__)
@@ -177,10 +178,11 @@ class SshBackend(ExecutionBackend):
 
     # -- helpers ------------------------------------------------------------
 
-    def _clamp_timeout(self, t) -> float:
+    def _clamp_timeout(self, t, ceiling=None) -> float:
+        cap = exec_timeout_cap(self.max_timeout, ceiling)
         if t is None:
-            return self.max_timeout
-        return max(1.0, min(float(t), self.max_timeout))
+            return cap
+        return max(1.0, min(float(t), cap))
 
     def _cap_text(self, text: Optional[str]):
         text = text or ""
@@ -258,7 +260,7 @@ class SshBackend(ExecutionBackend):
                 "refusing to build an ssh invocation OpenSSH could misinterpret "
                 "as an option flag."
             )
-        timeout = self._clamp_timeout(request.timeout)
+        timeout = self._clamp_timeout(request.timeout, getattr(request, "ceiling", None))
         argv = [
             "ssh",
             "-o", "BatchMode=yes",
@@ -285,7 +287,7 @@ class SshBackend(ExecutionBackend):
             return ExecutionResult(
                 stderr="CODE_EXEC_SSH_HOST is not set", exit_code=2, backend=self.name,
             )
-        timeout = self._clamp_timeout(request.timeout)
+        timeout = self._clamp_timeout(request.timeout, getattr(request, "ceiling", None))
         try:
             argv = self._build_ssh_argv(request)
         except ExecutionBackendError as e:

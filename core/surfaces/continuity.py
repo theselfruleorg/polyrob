@@ -66,10 +66,13 @@ async def build_bridge_message(*, user_id: Optional[str], thread_key: Optional[s
         if not summary:
             return None
 
+        # C7: the summary is derived from a past conversation (it can carry a
+        # correspondent's words), so it rides as DATA — the lead-in stays outside.
+        from core.security.untrusted_wrap import wrap_untrusted
         from modules.llm.messages import make_control_message, MessageOrigin
         return make_control_message(
-            "Continuing an earlier conversation with this contact. "
-            f"Last time: {summary[:600]}",
+            "Continuing an earlier conversation with this contact. Last time:\n"
+            + wrap_untrusted("session_bridge", summary[:600]),
             MessageOrigin.SESSION_BRIDGE,
         )
     except Exception:

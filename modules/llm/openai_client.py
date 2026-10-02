@@ -9,11 +9,12 @@ import time
 from openai import AsyncOpenAI # type: ignore 
 
 from .llm_client import LLMClient
+from .prefix_stamp import stamp_client  # F20: request prefix identity
 from .sdk_caps import sdk_supports  # noqa: F401 — re-exported for callers/tests
 from .token_counter import count_messages_tokens
 from .retry_log import log_attempt
 from core.config import BotConfig
-from core.exceptions import LLMError, LLMConfigError, LLMConnectionError, ServiceError
+from core.exceptions import LLMError, LLMConnectionError, ServiceError
 
 
 class OpenAIClient(LLMClient):
@@ -246,6 +247,7 @@ class OpenAIClient(LLMClient):
                 request_params['prompt_cache_key'] = _cache_key
 
             # Make the actual API call
+            stamp_client(self, request_params)   # F20: prefix identity
             self.last_response = await self._client.chat.completions.create(**request_params)
             
             # Mark as successful
@@ -479,6 +481,7 @@ class OpenAIClient(LLMClient):
 
             # Create completion request with tools
             self.logger.debug(f"Calling OpenAI API with {len(request_params['messages'])} messages")
+            stamp_client(self, request_params)   # F20: prefix identity
             response = await self._client.chat.completions.create(**request_params)
             self.last_response = response  # ✅ Store for telemetry
             
@@ -672,6 +675,7 @@ class OpenAIClient(LLMClient):
         request_params['stream'] = True
         request_params['stream_options'] = {'include_usage': True}
 
+        stamp_client(self, request_params)   # F20: prefix identity
         stream = await self._client.chat.completions.create(**request_params)
 
         content_parts: List[str] = []
@@ -820,7 +824,8 @@ class OpenAIClient(LLMClient):
         return True
 
     async def _make_validation_request(self) -> Any:
-        """Make minimal test request to OpenAI."""
+        """Make minimal test request to OpenAI. F20: NOT prefix-stamped — a
+        two-token probe carries neither the system prompt nor the tools."""
         return await self._client.chat.completions.create(
             model=self.model_type,
             messages=[{"role": "user", "content": "test"}],

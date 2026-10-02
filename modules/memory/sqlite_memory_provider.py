@@ -21,6 +21,7 @@ import re
 import time
 from typing import Optional
 
+from core.context_fences import strip_turn_fences
 from core.env import bool_env
 from core.identity import is_anonymous, normalize_user_id
 from core.sqlite_util import execute_retry, wal_connect
@@ -30,24 +31,25 @@ logger = logging.getLogger(__name__)
 
 from modules.memory.wikilinks import _WIKILINK_RE, parse_wikilinks  # noqa: F401  (re-exported)
 from modules.memory.sqlite_curated_store import CuratedNotesStoreMixin
+from modules.memory.recall_consolidation import RecallConsolidationMixin
 from modules.memory.sqlite_kb_store import KbStoreMixin
 from modules.memory.sqlite_episodes_store import EpisodeStoreMixin
+from modules.memory.sqlite_scope_store import ScopeStoreMixin
+from modules.memory import scope as _scope
 
 
 def _require_user_id() -> bool:
     """Whether empty-user_id memory I/O is refused (default true = safe-by-construction).
 
-    BEHAVIOR FIX (task-1.4): old variant ``in ("1","true","yes")`` treated any value
-    outside that set (e.g. ``=on``) as False. Converged to bool_env canonical falsey-set
-    so ``=on``/``=yes``/``=1`` are all truthy and ``=off``/``=none``/``=false`` are all
-    falsy — matches the documented contract.
+    Parsed with the canonical ``bool_env`` falsey-set, never a private truth set.
     """
     return bool_env("MEMORY_REQUIRE_USER_ID", True)
 
 
-class SqliteMemoryProvider(CuratedNotesStoreMixin, KbStoreMixin, EpisodeStoreMixin, MemoryProvider):
-    """Turn store + FTS5 recall core; the curated-notes, KB and episode stores are mixins
-    (S5 split, 2026-08-29) sharing this class's connection helpers and tenant guards."""
+class SqliteMemoryProvider(CuratedNotesStoreMixin, KbStoreMixin, EpisodeStoreMixin,
+                           RecallConsolidationMixin, ScopeStoreMixin, MemoryProvider):
+    """Turn store + FTS5 recall core; curated notes, KB, episodes and recall
+    consolidation are mixins sharing this class's connection helpers and guards."""
 
     def __init__(self, db_path: str, *, top_k: int = 5):
         parent = os.path.dirname(db_path)
@@ -83,10 +85,9 @@ class SqliteMemoryProvider(CuratedNotesStoreMixin, KbStoreMixin, EpisodeStoreMix
                 "mem_rowid INTEGER PRIMARY KEY, user_id TEXT, "
                 "ts INTEGER NOT NULL, kind TEXT, content_hash TEXT)"
             )
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_mem_prov_user_hash "
-                         "ON mem_provenance(user_id, content_hash)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_mem_prov_ts "
                          "ON mem_provenance(ts)")
+            self._init_scope_schema(conn)  # 025: scope column + widened dedup index
             self._init_curated_schema(conn)
             self._init_kb_schema(conn)
             self._init_episodes_schema(conn)
@@ -166,10 +167,9 @@ class SqliteMemoryProvider(CuratedNotesStoreMixin, KbStoreMixin, EpisodeStoreMix
         vector providers so both store the SAME string (keeps RRF dedup-by-content
         consistent across the two halves). The D8 cap is applied HERE for the same
         reason — a truncated FTS row must match its embedded twin byte-for-byte."""
-        if cls._store_answer_only():
-            content = (assistant_content or "").strip()
-        else:
-            content = f"User: {user_content}\nAssistant: {assistant_content}".strip()
+        u, a = strip_turn_fences(user_content, assistant_content)  # 070 W1.5: no fence is stored
+        content = ("" if a is None else a.strip() if cls._store_answer_only()
+                   else f"User: {u}\nAssistant: {a}".strip())
         cap = cls._row_cap()
         if cap > 0 and len(content) > cap:
             content = content[:cap]
@@ -185,7 +185,7 @@ class SqliteMemoryProvider(CuratedNotesStoreMixin, KbStoreMixin, EpisodeStoreMix
         return await loop.run_in_executor(None, functools.partial(fn, *args, **kwargs))
 
     async def sync_turn(self, user_content: str, assistant_content: str, *,
-                        session_id: str, user_id=None):
+                        session_id: str, user_id=None, scope=None):
         """Returns True when a new row was inserted, False when the write was an
         exact duplicate (collapsed into a ts refresh), None on early-out — so the
         vector subclass can skip embedding a collapsed dup. Callers through the
@@ -196,9 +196,11 @@ class SqliteMemoryProvider(CuratedNotesStoreMixin, KbStoreMixin, EpisodeStoreMix
         if self._anon_blocked(user_id):
             return None
         return await self._run_blocking(
-            self._sync_turn_blocking, self._norm_user(user_id), session_id, content)
+            self._sync_turn_blocking, self._norm_user(user_id), session_id, content,
+            _scope.write_label(scope))
 
-    def _sync_turn_blocking(self, norm_user: str, session_id: str, content: str) -> bool:
+    def _sync_turn_blocking(self, norm_user: str, session_id: str, content: str,
+                            label: str = "") -> bool:
         """Write one memory row + its provenance stamp (B2). Exact duplicates
         collapse: an existing (user, content_hash) provenance row gets its ts
         refreshed instead of inserting a twin — the store stops growing on
@@ -207,12 +209,15 @@ class SqliteMemoryProvider(CuratedNotesStoreMixin, KbStoreMixin, EpisodeStoreMix
         a real insert, False on a dup collapse."""
         import hashlib
         content_hash = hashlib.sha256(content.encode("utf-8", "replace")).hexdigest()
+        # 025: with scopes ON the dedup key is per-scope — a scoped finding must
+        # never collapse into a ts refresh of a SHARED twin (a quarantine bypass).
+        on = _scope.scopes_enabled()
         try:
             dup = execute_retry(
                 self.db_path,
-                "SELECT mem_rowid FROM mem_provenance "
-                "WHERE user_id = ? AND content_hash = ? LIMIT 1",
-                (norm_user, content_hash), fetch="one")
+                "SELECT mem_rowid FROM mem_provenance WHERE user_id = ? "
+                + ("AND scope = ? " if on else "") + "AND content_hash = ? LIMIT 1",
+                (norm_user,) + ((label,) if on else ()) + (content_hash,), fetch="one")
             if dup is not None:
                 execute_retry(
                     self.db_path,
@@ -229,8 +234,8 @@ class SqliteMemoryProvider(CuratedNotesStoreMixin, KbStoreMixin, EpisodeStoreMix
             execute_retry(
                 self.db_path,
                 "INSERT OR REPLACE INTO mem_provenance "
-                "(mem_rowid, user_id, ts, kind, content_hash) VALUES (?,?,?,?,?)",
-                (rowid, norm_user, int(time.time()), "finding", content_hash))
+                "(mem_rowid, user_id, ts, kind, content_hash, scope) VALUES (?,?,?,?,?,?)",
+                (rowid, norm_user, int(time.time()), "finding", content_hash, label or ""))
         except Exception as e:  # provenance is additive — never lose the memory row
             logger.debug("mem provenance stamp skipped: %s", e)
         return True
@@ -258,7 +263,7 @@ class SqliteMemoryProvider(CuratedNotesStoreMixin, KbStoreMixin, EpisodeStoreMix
 
     async def search(self, query: str, *, user_id=None, session_id: str = None,
                      limit: int = 5, sort: str = None, before_id: int = None,
-                     with_ids: bool = False) -> str:
+                     with_ids: bool = False, scope=None) -> str:
         """Tenant-scoped recall (UP-09). Two shapes inferred from args:
 
         - **discover** (`query` has terms): FTS5 MATCH over a sanitized OR-query,
@@ -286,7 +291,7 @@ class SqliteMemoryProvider(CuratedNotesStoreMixin, KbStoreMixin, EpisodeStoreMix
             rows = await self._run_blocking(
                 self._keyword_rows,
                 query, norm_user=self._norm_user(user_id), limit=limit, sort=sort,
-                before_id=before_id)
+                before_id=before_id, scope=scope)
         except Exception as e:
             logger.warning("sqlite memory search failed: %s", e)
             return ""
@@ -294,7 +299,8 @@ class SqliteMemoryProvider(CuratedNotesStoreMixin, KbStoreMixin, EpisodeStoreMix
 
     def _keyword_rows(self, query: str, *, norm_user: str, limit: int,
                       sort: str = None, allow_browse: bool = True,
-                      exclude_session_id: str = None, before_id: int = None) -> list:
+                      exclude_session_id: str = None, before_id: int = None,
+                      scope=None) -> list:
         """FTS5 recall -> ranked list of ``{"content", "ts", "rowid"}`` dicts (no
         formatting). ``ts`` comes from the B2 provenance sidecar (None for legacy
         rows). Discover when `query` has >=3-char terms; otherwise browse
@@ -342,6 +348,9 @@ class SqliteMemoryProvider(CuratedNotesStoreMixin, KbStoreMixin, EpisodeStoreMix
         _excl_arg = (exclude_session_id,) if exclude_session_id else ()
         _before_sql = " AND m.rowid < ?" if before_id is not None else ""
         _before_arg = (before_id,) if before_id is not None else ()
+        # 025: the scope predicate rides the cursor slot on all three shapes.
+        _sc_sql, _sc_arg = _scope.read_predicate(scope, norm_user)
+        _before_sql, _before_arg = _before_sql + _sc_sql, _before_arg + _sc_arg
         if terms:
             match = self._fts_match(terms)
             if sort in ("newest", "oldest"):
@@ -390,12 +399,12 @@ class SqliteMemoryProvider(CuratedNotesStoreMixin, KbStoreMixin, EpisodeStoreMix
 
     def _keyword_contents(self, query: str, *, norm_user: str, limit: int,
                           sort: str = None, allow_browse: bool = True,
-                          exclude_session_id: str = None) -> list:
+                          exclude_session_id: str = None, scope=None) -> list:
         """Bare content strings (subclass RRF contract — the hybrid vector provider
         merges ranked lists keyed by content). Delegates to `_keyword_rows`."""
         return [r["content"] for r in self._keyword_rows(
             query, norm_user=norm_user, limit=limit, sort=sort,
-            allow_browse=allow_browse, exclude_session_id=exclude_session_id)]
+            allow_browse=allow_browse, exclude_session_id=exclude_session_id, scope=scope)]
 
     @staticmethod
     def _recall_line(content: str, ts=None, rowid=None) -> str:
@@ -421,7 +430,8 @@ class SqliteMemoryProvider(CuratedNotesStoreMixin, KbStoreMixin, EpisodeStoreMix
             for r in rows
         )
 
-    async def prefetch(self, query: str, *, session_id: str, user_id=None) -> str:
+    async def prefetch(self, query: str, *, session_id: str, user_id=None,
+                       scope=None) -> str:
         # Rank-ordered, top_k, "" on anon-block or no significant terms (NO browse-on-
         # empty — automatic prefetch must not inject recent rows when the query is empty).
         # P2-1: calls _keyword_contents DIRECTLY (not search()) so it can exclude the
@@ -434,47 +444,11 @@ class SqliteMemoryProvider(CuratedNotesStoreMixin, KbStoreMixin, EpisodeStoreMix
         try:
             rows = await self._run_blocking(
                 self._keyword_rows, query, norm_user=self._norm_user(user_id),
-                limit=self.top_k, exclude_session_id=session_id)
+                limit=self.top_k, exclude_session_id=session_id, scope=scope)
         except Exception as e:
             logger.warning("sqlite memory prefetch failed: %s", e)
             return ""
         return self._format_recall_rows(rows)
-
-    _PRUNE_BATCH = 500  # ids per DELETE ... IN (...) — safely under any param limit
-
-    def prune_memories(self, *, older_than_ts: int) -> int:
-        """Age-based retention for the cross-session store (B3), across ALL tenants.
-        Deletes memories rows whose B2 provenance stamp is older than the cutoff
-        (+ the stamp itself). Legacy rows WITHOUT a provenance stamp are exempt —
-        their age is unknowable, and guessing risks deleting live recall. Called
-        from the curator tick on its own cadence, NEVER from the write path.
-        Fail-open: any DB error degrades to 0 rather than raising.
-        """
-        try:
-            rows = execute_retry(
-                self.db_path,
-                "SELECT mem_rowid FROM mem_provenance WHERE ts < ?",
-                (int(older_than_ts),), fetch="all")
-            ids = [r["mem_rowid"] for r in (rows or [])]
-            if not ids:
-                return 0
-            # Batched IN clauses: a multi-year backlog can exceed SQLite's bound-
-            # parameter limit (999 on older builds), and the resulting error would
-            # be swallowed fail-open — retention silently broken forever.
-            for i in range(0, len(ids), self._PRUNE_BATCH):
-                chunk = tuple(ids[i:i + self._PRUNE_BATCH])
-                marks = ",".join("?" for _ in chunk)
-                execute_retry(self.db_path,
-                              f"DELETE FROM memories WHERE rowid IN ({marks})",
-                              chunk)
-                execute_retry(self.db_path,
-                              f"DELETE FROM mem_provenance WHERE mem_rowid IN ({marks})",
-                              chunk)
-            return len(ids)
-        except Exception as e:
-            logger.warning("prune_memories failed: %s", e)
-            return 0
-
 
     # ---- notes substrate (C1, 2026-07-11) ------------------------------------
     # curated_memory promoted to first-class notes: title/tags/[[wikilinks]]/

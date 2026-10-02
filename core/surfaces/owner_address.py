@@ -20,13 +20,11 @@ from typing import Any, List, Optional
 
 logger = logging.getLogger(__name__)
 
-_ENV_BY_SURFACE = {
-    "slack": "OWNER_SLACK_ID",
-    "discord": "OWNER_DISCORD_ID",
-    "signal": "OWNER_SIGNAL_ID",
-    "whatsapp": "OWNER_WHATSAPP_ID",
-    "x": "OWNER_X_ID",
-}
+
+def _env_by_surface() -> dict:
+    """``{surface: OWNER_<S>_ID}`` — derived from the surface catalog (064 F1)."""
+    from core.surfaces.catalog import owner_env_by_surface
+    return owner_env_by_surface()
 
 
 def owner_surface_order() -> List[str]:
@@ -71,7 +69,7 @@ def owner_address(container: Any, surface_id: str, user_id: str = "") -> Optiona
         except Exception:
             logger.debug("owner_address: email resolution failed", exc_info=True)
             return None
-    env_key = _ENV_BY_SURFACE.get(sid)
+    env_key = _env_by_surface().get(sid)
     if env_key:
         val = (os.getenv(env_key) or "").strip()
         return val or None

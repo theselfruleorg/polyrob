@@ -17,6 +17,7 @@ from tools.controller.doc_authoring import DocAuthoringMixin
 from tools.controller._helpers import (
 	build_load_skill_result,
 	build_session_search_hint,
+	forget_activated_skill,
 	read_skill_resource_confined,
 	self_mod_emitter,
 )
@@ -176,12 +177,15 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 				# CONTINUOUS CHAT MODE: If waiting for response, stop execution
 				# User will reply via continuous chat, session will resume with their response
 				if params.wait_for_response:
+					# 061: an AUTONOMOUS run cannot wait — refuse with the remedy
+					# (owner_ask) instead of silently degrading to a notify.
+					from tools.controller.owner_ask_action import autonomous_wait_refusal
+					_wait_refusal = autonomous_wait_refusal(self, self.session_id)
+					if _wait_refusal is not None:
+						return _wait_refusal
 					# P3 (Task 3.2): guard the wait_for_response deadlock. If a chat surface
-					# is bound AND it cannot collect a reply (supports_interactive_ask=False),
-					# pausing the session would hang it forever. Degrade to a non-blocking
-					# notify in that case. Unknown/unbound (the legacy default) -> pause as
-					# before, so flag-OFF behavior is byte-identical. Lazy import: this file
-					# must never get `from __future__ import annotations` (registry closures).
+					# is bound AND it cannot collect a reply, pausing would hang forever;
+					# degrade to a non-blocking notify. Unknown/unbound -> pause as before.
 					try:
 						from core.surfaces.binding import surface_ask_capability
 						_ask_ok = surface_ask_capability(getattr(self, 'orchestrator', None))
@@ -222,7 +226,7 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 					metadata={'conversational_reply': True, 'delivery_outcome': _route_outcome}
 				)
 
-			@self.registry.action('Complete the current task and provide final output', param_model=DoneAction)
+			@self.registry.action('End the task. The text is an internal completion record the user never sees; talk to the user with send_message. (A sub-agent\'s done text is its report to the parent agent.)', param_model=DoneAction)
 			async def done(params: DoneAction, execution_context=None):
 				"""Complete the current task.
 				
@@ -512,6 +516,8 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 		# (default false). Lets the agent author durable procedures; quarantined to
 		# .pending/ + threat-scanned + tenant-confined.
 		self._register_skill_manage_action()
+		from tools.controller.worker_manage_action import register_worker_manage_action
+		register_worker_manage_action(self)  # 041 phase 2, gated WORKERS_ENABLED
 
 		# polyrob C-write: optional evolving SELF-identity tool, gated
 		# SELF_CONTEXT_WRITABLE (default false; ON under POLYROB_LOCAL). Lets the agent
@@ -603,9 +609,11 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 			user_id = getattr(execution_context, 'user_id', None) or getattr(self, 'user_id', None)
 			session_id = getattr(execution_context, 'session_id', None) or getattr(self, 'session_id', '')
 
-			# Task 7: KB recall path — routes to kb_search when collection is set and KB is enabled.
-			# Fail-open: any exception falls through to the normal memory_search path below.
-			if params.collection and _kb_on():
+			# Task 7: KB recall path. An off/failing KB is SAID, never a silent fall-through (F13).
+			if params.collection:
+				if not _kb_on():
+					return ActionResult(error="The knowledge base is disabled, so collection= cannot be searched; "
+					                    "omit collection to search past sessions.", include_in_memory=True)
 				try:
 					from modules.memory.registry import kb_search
 					recalled = await kb_search(
@@ -627,8 +635,8 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 						include_in_memory=True,
 					)
 				except Exception as e:
-					self.logger.debug(f"kb_search failed, falling back to memory_search: {e}")
-					# fall through to normal session memory path
+					return ActionResult(error=f"Knowledge-base search failed ({e}); nothing was searched.",
+					                    include_in_memory=True)
 
 			try:
 				from modules.memory.registry import memory_search
@@ -673,7 +681,8 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 		except Exception:
 			alias_on = True
 		if alias_on:
-			@self.registry.action(_SEARCH_DESC, param_model=SessionSearchAction)
+			@self.registry.action("Alias of session_search: the same handler and parameters. Prefer session_search.",
+			                      param_model=SessionSearchAction)
 			async def memory_search(params: SessionSearchAction, execution_context=None) -> ActionResult:
 				return await _run_session_search(params, execution_context)
 
@@ -1052,6 +1061,7 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 					if not res.ok:
 						return ActionResult(error=f"promote failed: {'; '.join(res.errors)}",
 						                    include_in_memory=True)
+					forget_activated_skill(self, params.skill_id)  # body changed — allow a reload
 					_self_mod_ev("promote", pending=False, created_by="owner")
 					return ActionResult(
 						extracted_content=f"Skill `{params.skill_id}` promoted (active next session).",
@@ -1072,6 +1082,7 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 				else:  # delete
 					ok = sm.delete_skill(params.skill_id, user_id=user_id, created_by=created_by)
 					if ok:
+						forget_activated_skill(self, params.skill_id)  # archived — never re-ack it
 						_self_mod_ev("delete", created_by=created_by)
 					return ActionResult(
 						extracted_content=(f"Archived skill `{params.skill_id}`." if ok
@@ -1086,6 +1097,9 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 				return ActionResult(error=f"Skill rejected: {'; '.join(res.errors)}",
 				                    include_in_memory=True)
 			where = "pending review" if res.pending else "active"
+			# The body just changed: let the next `load_skill` re-emit it instead
+			# of the "already active this session" ack (see forget_activated_skill).
+			forget_activated_skill(self, params.skill_id)
 			_self_mod_ev(params.action, pending=bool(res.pending), created_by=created_by)
 			# §7.1: notify the owner when a skill lands in pending (fail-open, gated).
 			if res.pending:
@@ -1117,12 +1131,13 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 		except Exception:
 			return
 
+		from core.surfaces.catalog import surface_ids
 		from tools.controller.message_send import perform_message_send
 		from tools.controller.views import MessageTargetAction
 
 		@self.registry.action(
 			'Send a message — and any FILES you made — to a chat/recipient on a surface '
-			'(telegram/email/whatsapp/discord/slack/signal/x). Attach with media_paths, '
+			f'({"/".join(surface_ids())}). Attach with media_paths, '
 			'one call per file; a path in text is NOT a delivery. Owner/allowlisted only.',
 			param_model=MessageTargetAction,
 		)
@@ -1266,8 +1281,8 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 		class PreferencesAction(BaseModel):
 			operation: _Literal["list", "get", "set", "explain", "contract_propose"]
 			key: Optional[str] = Field(
-				None, description="Setting name — REQUIRED for get/explain/set "
-				"(e.g. key='TWITTER_ENABLED')")
+				None, description="Preference key — REQUIRED for get/explain/set (e.g. "
+				"key='style.verbosity'); an env flag name (e.g. 'TWITTER_ENABLED') works for explain only")
 			value: Optional[str] = Field(
 				None, description="set only: new value (str; coerced per the key's type)")
 			text: Optional[str] = Field(

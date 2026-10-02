@@ -111,12 +111,14 @@ async def test_ohlcv_names_the_pool_it_read():
 
 @pytest.mark.asyncio
 async def test_ohlcv_uses_an_explicit_pool_without_resolving():
-    called = []
+    # 071 R10: the resolver IS consulted now — but only to name its pick next
+    # to the caller's pool. The candles still come from the pool the caller named.
+    read = []
     tool = DefiDataTool(
-        pool_for_token_fn=lambda c, a: called.append(1) or POOL,
-        ohlcv_fn=lambda c, p, **kw: _series([1.0]))
+        pool_for_token_fn=lambda c, a: "0x" + "9" * 40,
+        ohlcv_fn=lambda c, p, **kw: read.append(p) or _series([1.0]))
     await tool.ohlcv(OhlcvParams(chain="base", address=TOKEN, pool=POOL))
-    assert not called
+    assert read == [POOL]
 
 
 @pytest.mark.asyncio
@@ -256,3 +258,92 @@ async def test_ohlcv_names_the_indexer_refusal_not_an_absent_pool():
     res = await tool.ohlcv(OhlcvParams(chain="robinhood", address=TOKEN))
     assert "429" in (res.error or "")
     assert "no indexed pool" not in _text(res)
+
+
+# --- how DEEP is the pool it read? ----------------------------------------
+#
+# 2026-09-22, from a real money-rail artifact: the buyback skip report narrated
+# "a ~96% collapse inside a single hour" off candles for pool 0x9c54d4e1…, while
+# the same programme's live quote four hours later said 1 ETH still bought 73.6M
+# PNL against a 79.2M 24 h average — down 7%, not 96%. A true −96% would buy
+# ~20× MORE, not less. The report itself recorded $4,251 liquidity "for the pool
+# they track" against the monitor's $18,350, so two pools were in play and the
+# resolver had picked the sideshow.
+#
+# The verb already NAMED the pool and warned that candles are pool-scoped. What
+# it never gave was the one number that makes the warning actionable — how deep
+# that pool is. `top_pool_for_token` computed the liquidity to choose the
+# deepest and then threw it away. Now it is carried and rendered, and unknown
+# stays "unknown" rather than becoming $0.
+
+def test_the_resolver_reports_the_liquidity_it_already_computed():
+    from tools.defi.providers.geckoterminal import top_pool_for_token_detailed
+    payload = {"data": [
+        {"attributes": {"address": "0xthin", "reserve_in_usd": "4251.64"}},
+        {"attributes": {"address": "0xdeep", "reserve_in_usd": "18349.82"}},
+    ]}
+    pick = top_pool_for_token_detailed("base", TOKEN, fetch=lambda url: payload)
+    assert pick.address == "0xdeep"
+    assert pick.liquidity_usd == pytest.approx(18349.82)
+    assert pick.pool_count == 2
+
+
+def test_the_plain_resolver_still_returns_just_the_address():
+    """Every existing caller and the injectable seam keep their contract."""
+    from tools.defi.providers.geckoterminal import top_pool_for_token
+    payload = {"data": [{"attributes": {"address": "0xdeep",
+                                        "reserve_in_usd": "18349.82"}}]}
+    assert top_pool_for_token("base", TOKEN, fetch=lambda url: payload) == "0xdeep"
+
+
+def test_a_pool_with_no_reserve_figure_is_unknown_not_zero():
+    from tools.defi.providers.geckoterminal import top_pool_for_token_detailed
+    payload = {"data": [{"attributes": {"address": "0xonly"}}]}
+    pick = top_pool_for_token_detailed("base", TOKEN, fetch=lambda url: payload)
+    assert pick.address == "0xonly"
+    assert pick.liquidity_usd is None
+
+
+@pytest.mark.asyncio
+async def test_the_rendered_candles_say_how_deep_the_pool_is():
+    from tools.defi.providers.geckoterminal import PoolPick
+    tool = DefiDataTool(
+        pool_for_token_fn=lambda c, a: PoolPick("0xthin", 4251.64, 3),
+        ohlcv_fn=lambda c, p, **kw: _series([1.0, 2.0]))
+    out = _text(await tool.ohlcv(OhlcvParams(chain="base", address=TOKEN)))
+    assert "0xthin" in out
+    assert "4,251" in out or "4251" in out, out
+    assert "3 indexed pools" in out, out
+    # and it must tell the reader what to do about it
+    assert "swap_quote" in out, out
+
+
+@pytest.mark.asyncio
+async def test_unknown_liquidity_is_said_not_shown_as_zero():
+    from tools.defi.providers.geckoterminal import PoolPick
+    tool = DefiDataTool(
+        pool_for_token_fn=lambda c, a: PoolPick("0xonly", None, 1),
+        ohlcv_fn=lambda c, p, **kw: _series([1.0]))
+    out = _text(await tool.ohlcv(OhlcvParams(chain="base", address=TOKEN)))
+    assert "unknown" in out.lower()
+    assert "$0" not in out
+
+
+@pytest.mark.asyncio
+async def test_a_caller_supplied_pool_claims_no_depth_it_did_not_read():
+    """Passing `pool=` skips resolution, so there is no liquidity figure. The
+    render must not imply one."""
+    tool = DefiDataTool(pool_for_token_fn=lambda c, a: None,
+                        ohlcv_fn=lambda c, p, **kw: _series([1.0]))
+    out = _text(await tool.ohlcv(OhlcvParams(chain="base", address=TOKEN, pool=POOL)))
+    assert POOL in out
+    assert "as supplied" in out.lower(), out
+
+
+@pytest.mark.asyncio
+async def test_a_plain_string_from_the_resolver_still_works():
+    """The seam is injected by tests and by older callers as a bare address."""
+    tool = DefiDataTool(pool_for_token_fn=lambda c, a: POOL,
+                        ohlcv_fn=lambda c, p, **kw: _series([1.0, 2.0]))
+    out = _text(await tool.ohlcv(OhlcvParams(chain="base", address=TOKEN)))
+    assert POOL in out

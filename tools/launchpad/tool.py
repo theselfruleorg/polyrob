@@ -52,7 +52,7 @@ class LaunchParams(BaseModel):
     creator_tax_bps: int = Field(100, ge=0, le=1000, description=(
         "Creator tax on every curve trade, in basis points (100 = 1%). Paid to "
         "this wallet. The launchpad's own maximum is 1000."))
-    slippage_bps: int = Field(DEFAULT_SLIPPAGE_BPS, ge=1, le=5000, description=(
+    slippage_bps: int = Field(DEFAULT_SLIPPAGE_BPS, ge=1, le=1000, description=(
         "Slippage bound on the opening buy. Enforced on-chain by the curve."))
     max_spend_usd: float = Field(..., gt=0, description=(
         "The most USD you authorize to leave the wallet — the launch fee plus "
@@ -69,7 +69,7 @@ class TradeParams(BaseModel):
         "from the factory's own record, never supplied."))
     amount: float = Field(..., gt=0, description=(
         "BUY: how much of the quote asset to spend. SELL: how many tokens to sell."))
-    slippage_bps: int = Field(DEFAULT_SLIPPAGE_BPS, ge=1, le=5000,
+    slippage_bps: int = Field(DEFAULT_SLIPPAGE_BPS, ge=1, le=1000,
                               description="Slippage bound, enforced on-chain.")
     max_spend_usd: float = Field(..., gt=0, description=(
         "The most USD you authorize to leave the wallet."))
@@ -102,6 +102,12 @@ class ClaimParams(BaseModel):
     dry_run: bool = Field(True, description=(
         "TRUE (default) simulates and reports what would arrive, broadcasting "
         "nothing. Set false to actually claim."))
+    account: Optional[str] = Field(None, description=(
+        "Optional (069 v4) — claim what the escrow owes the token-bound ERC-6551 account of an "
+        "NFT this treasury OWNS, instead of the treasury: the account receives, the treasury "
+        "signs as the NFT's owner. Only accounts of a pinned collection; needs AGENT_NFT_ENABLED."))
+    nft: Optional[str] = Field(None, description=(
+        "Optional — the same as `account`, naming the NFT: '<collection>#<id>' or '<id>'."))
 
 
 def _fmt_native(wei) -> str:
@@ -175,8 +181,28 @@ class LaunchpadTool(WalletHolderMixin, BaseTool):
     def _price(self, chain, addr):
         if self._price_fn:
             return self._price_fn(chain, addr)
-        from tools.defi.providers import dexscreener
-        return dexscreener.token(chain, addr).price_usd
+        # 071: the one read layer; a DISPUTED quote yields None.
+        from tools.defi.price_sources import indexer_price
+        return indexer_price(chain, addr)
+
+    def _native_worth_text(self, wei: int) -> str:
+        """USD worth of a native amount, computed here so the model never has to.
+
+        Priced through the chain's wrapped native, the same proxy the guard
+        prices the claim fee with. `unknown` on any failure — never $0.00.
+        """
+        from core.wallet import chains
+        from tools.launchpad import pons_abi as P
+        row = chains.get(P.CHAIN)
+        proxy = getattr(row, "wrapped_native", None) if row else None
+        try:
+            unit = self._price(P.CHAIN, proxy) if proxy else None
+        except Exception:
+            unit = None
+        if not unit or unit <= 0:
+            return "unknown (no native price right now)"
+        native = wei / 10 ** 18
+        return f"≈ ${native * unit:,.2f}  ({native:.6f} × ${unit:,.2f} per native)"
 
     def _fallback_price(self, chain, addr):
         if self._fallback_price_fn:
@@ -201,19 +227,24 @@ class LaunchpadTool(WalletHolderMixin, BaseTool):
         except Exception:
             logger.debug("launchpad: owner notice failed", exc_info=True)
 
-    def _preflight(self, execution_context, verb: str, *, dry_run: bool):
-        """Flag, turn origin and the 031 pause. None when clear."""
+    def _preflight(self, execution_context, verb: str, *, dry_run: bool,
+                   entry: bool = True):
+        """Flag, turn origin and the 031 pause. None when clear.
+
+        CR-L21: an ENTRY (launch, buy) also honours the scoped `/pause
+        trading`; a sell passes ``entry=False`` so the owner can still exit."""
         if not launchpad_enabled():
             return (f"the launchpad is off — set {FLAG}=true to arm it. Nothing "
                     f"was broadcast.")
-        from core.wallet.authority import leaf_refusal, spend_pause_refusal
-        turn_err = leaf_refusal(execution_context, verb)
-        if turn_err:
-            return turn_err
-        if not dry_run:
-            paused = spend_pause_refusal()
-            if paused:
-                return paused + " RESULT: NOT SENT."
+        from core.money.authorize import SpendIntent, authorize_spend
+        from tools.controller.turn_origin import (
+            _is_forged_or_autonomous_turn as _owner_turn_probe)
+        verdict = authorize_spend(
+            SpendIntent(tool="launchpad", what=verb, entry=entry, dry_run=dry_run),
+            execution_context, forged_fn=_owner_turn_probe)
+        if verdict.refused:
+            suffix = " RESULT: NOT SENT." if verdict.step == "pause" else ""
+            return verdict.reason + suffix
         return None
 
     def _signer_address(self):
@@ -299,14 +330,13 @@ class LaunchpadTool(WalletHolderMixin, BaseTool):
             line += (f"               + {_fmt_native(owed.unswept_wei)} not yet "
                      f"swept from the curve into the escrow (not claimable yet)\n")
         if owed.native_wei:
-            line += ("               claim it: `polyrob wallet claim <token>` from "
-                     "the terminal, /claim on chat, or the launchpad_claim "
-                     "action\n")
+            line += ("               claim it: the launchpad_claim action, or "
+                     "the owner's /claim verb\n")
         return line
 
     @BaseTool.action(
         "CLAIM the creator fees a token you launched has earned. The launchpad "
-        "credits your 1% creator tax to a fee escrow, not to the curve and not "
+        "credits your creator tax (the creator_tax_bps set at launch) to a fee escrow, not to the curve and not "
         "to your wallet — it sits there until you claim it. The escrow credits "
         "an ADDRESS, so ONE claim collects what every token this wallet "
         "launched has earned; naming a token here only tells the tool which "
@@ -321,6 +351,15 @@ class LaunchpadTool(WalletHolderMixin, BaseTool):
         who = self._signer_address()
         if who is None:
             return self._ar(error="agent wallet not enabled (AGENT_WALLET_ENABLED)")
+        # 069 v4 A3: `account=` / `nft=` — the escrow credits an ADDRESS, so claiming for an
+        # NFT's account claims what is owed to the account; the treasury signs as its owner.
+        held = None
+        from tools.defi import account_mode
+        if account_mode.requested(params):
+            held, why = account_mode.resolve(params, P.CHAIN, who, rpc=self._rpc)
+            if why:
+                return self._ar(error=why)
+            who = held.account
         try:
             # The pins are the ROOT of this verb's provenance chain: the curve
             # comes from the factory's record, the escrow from the curve, the
@@ -363,6 +402,7 @@ class LaunchpadTool(WalletHolderMixin, BaseTool):
             f"  recipient: {who}\n"
             f"  claiming:  {_fmt_native(owed.native_wei)} native, the full balance "
             f"the escrow reports owing this wallet\n"
+            f"  worth:     {self._native_worth_text(owed.native_wei)}\n"
             f"  ⚠ scope:   the escrow credits an ADDRESS, not a token. This "
             f"collects what is owed for EVERY token this wallet launched, so "
             f"there is no second claim to make afterwards.\n")
@@ -371,7 +411,7 @@ class LaunchpadTool(WalletHolderMixin, BaseTool):
             chain=P.CHAIN, to=built["to"], calldata=built["calldata"],
             value_wei=0, max_spend_usd=params.max_spend_usd,
             dry_run=params.dry_run, header=header,
-            is_claim=True, min_native_inflow_wei=owed.native_wei)
+            is_claim=True, min_native_inflow_wei=owed.native_wei, held=held)
 
     @BaseTool.action(
         "Price a buy or sell on a launchpad bonding curve BEFORE committing. "
@@ -428,6 +468,11 @@ class LaunchpadTool(WalletHolderMixin, BaseTool):
                               dry_run=params.dry_run)
         if err:
             return self._ar(error=err)
+        from core.wallet.buy_target import acquisition_refusal
+        _why = acquisition_refusal(execution_context, chain=P.CHAIN, token_out=None,
+                                   what="launch")
+        if _why:
+            return self._ar(error=_why)
         wallet = self._get_wallet()
         if wallet is None:
             return self._ar(error="agent wallet not enabled (AGENT_WALLET_ENABLED)")
@@ -526,6 +571,32 @@ class LaunchpadTool(WalletHolderMixin, BaseTool):
                 f"An ERC-20-quoted buy needs an allowance leg to the curve "
                 f"first — use defi_trade.approve_token, then defi_trade.call."))
 
+        # 068 B4: a curve buy is an acquisition like any swap — the run's
+        # declared target and the identity gate apply here too. A bonding curve
+        # has no independent price, so the route verdict is UNAVAILABLE and an
+        # unpinned buy is held to the scouting ticket.
+        from core.wallet.buy_target import acquisition_refusal
+        _why = acquisition_refusal(execution_context, chain=P.CHAIN,
+                                   token_out=state.token, native_in=True,
+                                   what="launchpad buy")
+        if _why:
+            return self._ar(error=_why)
+        try:
+            from core.wallet.tokens import get_token_identity
+            _ident = get_token_identity(P.CHAIN, state.token)
+        except Exception:
+            import types as _types
+            _ident = _types.SimpleNamespace(symbol=None, name=None, verified=False,
+                                            source="unknown")
+        from tools.defi.identity_gate import buy_identity_refusal, container_of
+        _why = buy_identity_refusal(
+            chain=P.CHAIN, token_out=state.token, id_out=_ident,
+            max_spend_usd=params.max_spend_usd, route_verdict="UNAVAILABLE",
+            execution_context=execution_context,
+            container=container_of(self))
+        if _why:
+            return self._ar(error=_why)
+
         quote_in = int(round(params.amount * 10 ** 18))
         try:
             expected, legs = pons.quote_buy(state, quote_in)
@@ -563,7 +634,7 @@ class LaunchpadTool(WalletHolderMixin, BaseTool):
         from tools.launchpad import execute, pons, pons_abi as P
 
         err = self._preflight(execution_context, "sell on a launchpad",
-                              dry_run=params.dry_run)
+                              dry_run=params.dry_run, entry=False)
         if err:
             return self._ar(error=err)
         state, record, err = self._resolve_curve(params.token)

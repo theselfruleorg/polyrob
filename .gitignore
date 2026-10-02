@@ -137,6 +137,11 @@ docs/*
 !docs/SKILL_AUTHORING_STANDARD.md
 !docs/comparison.md
 !docs/examples.md
+# WS-K5 (2026-09-22): AGENTS.md is an INDEX into these files, so they are not
+# optional internal notes — a clone without them has an index pointing at
+# nothing. `docs/architecture/` was already tracked file-by-file with `-f`.
+!docs/architecture/
+!docs/architecture/**
 
 # mypy
 .mypy_cache/
@@ -279,3 +284,7 @@ fly.toml
 /polyrob-header-*.png
 /mindprint-wall-*.png
 /polyrob-logo-render.py
+
+# 062: generated at deploy from the repo-root install.sh (ONE file)
+web/portal/install.sh
+web/portal/install.sh.sha256

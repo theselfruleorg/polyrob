@@ -25,6 +25,52 @@ def _filter_console_help(body: str) -> str:
     return "\n".join(lines)
 
 
+#: The feed event type the console transcript draws as a console answer (a
+#: `.note`, not an agent bubble) — `transcript.js` maps it to `_commandNote`.
+COMMAND_REPLY_EVENT = "command_reply"
+
+
+def _console_deliver(task_agent, clean_id: str, user_id: str):
+    """The ``deliver`` for a console verb that runs in the background.
+
+    Two legs, both fail-open, so the result is never lost:
+
+    1. the OWNER NOTICE rail (``core.surfaces.user_delivery.deliver_user_message``)
+       — the one durable path: it reaches the owner's chat when one is bound
+       and is otherwise recorded as an ``owner_notice`` (``/missed``, Work ›
+       Log). Critical lane: this is the outcome of the owner's own money act,
+       and the daily cap must not starve it.
+    2. a live ``feed_update`` to this chat's Socket.IO room, so the console
+       tab that typed the verb shows the answer where it asked. Skipped on the
+       cold-open path (no session, ``clean_id == ""``).
+    """
+    async def _deliver(text: str) -> None:
+        body = str(text or "").strip()
+        if not body:
+            return
+        try:
+            from core.surfaces.user_delivery import deliver_user_message
+            await deliver_user_message(
+                getattr(task_agent, "container", None), user_id, body,
+                source="console_command", session_id=clean_id or None,
+                priority="critical")
+        except Exception:
+            logger.warning("console command: owner-notice delivery failed",
+                           exc_info=True)
+        if not clean_id:
+            return
+        try:
+            import time
+
+            import webview.server as _srv
+            event = {"type": COMMAND_REPLY_EVENT, "timestamp": time.time(),
+                     "data": {"text": body}}
+            await _srv._sio.emit("feed_update", event, room=clean_id)
+        except Exception:
+            logger.debug("console command: live feed push skipped", exc_info=True)
+    return _deliver
+
+
 async def maybe_handle_console_command(task_agent, clean_id: str, user_id: str, text: str):
     """Returns the reply text for a known owner verb, or None for anything that
     should reach the agent as a normal message. Fail-open — never swallow a
@@ -34,8 +80,9 @@ async def maybe_handle_console_command(task_agent, clean_id: str, user_id: str, 
         if not token.startswith("/"):
             return None
         token = token.split("@", 1)[0]
-        from core.surfaces.dispatcher import _COMMANDS, RouteDecision, RouteKind
-        if token not in _COMMANDS:
+        from core.surfaces.dispatcher import RouteDecision, RouteKind, command_names
+        from core.surfaces.tappable import is_tappable_token
+        if token not in command_names() and not is_tappable_token(token):
             return None  # unknown slash: let the agent see it (prose question)
         if token in ("/task", "/new"):
             return None  # session-creating verbs: the console has real UI for these
@@ -62,15 +109,45 @@ async def maybe_handle_console_command(task_agent, clean_id: str, user_id: str, 
                                  # fact, not a new grant.
                                  session_key=f"agent:main:webview:dm:{clean_id}:{user_id}",
                                  session_id=clean_id, command=token)
-        reply = await _handle_command(task_agent,
-                                      InboundResult(inbound=inbound, decision=decision),
-                                      spawn=None)
+        result = InboundResult(inbound=inbound, decision=decision)
+        # 061: a DECIDING console verb (/approve, /pause, …) is a line of the
+        # owner's conversation exactly as the same verb on Telegram is.
+        from surfaces.telegram.harness import _record_owner_line
+        _record_owner_line(task_agent, result, session_id=clean_id, kind="command")
+        # An EXECUTING money verb (`/send … go`, `/bridge … go`) waits up to
+        # ~120 s for a receipt. Without a `deliver` the harness ran it INLINE
+        # and held this HTTP request the whole time. The console passes one
+        # under the SAME rule Telegram uses (`_runs_in_background`), so the
+        # harness answers "started" at once and hands the result here. Only
+        # then: every other verb keeps its inline answer, byte-identical.
+        from surfaces.telegram.harness import _runs_in_background
+        # A card tap (`/card_<id>_ok`) may run a money line: the card seat
+        # decides whether THAT line goes to the background, so it gets one too.
+        from core.surfaces.cards import parse_card_token
+        deliver = (_console_deliver(task_agent, clean_id, str(user_id))
+                   if (_runs_in_background(token, result)
+                       or parse_card_token(token)[0] is not None) else None)
+        reply = await _handle_command(task_agent, result, spawn=None,
+                                      deliver=deliver)
         if token == "/help" and not args and isinstance(reply, str):
             reply = _filter_console_help(reply)
+        # An action card (or a room reply) answers with a CommandReply; the
+        # console draws text, and the text keeps every tap token.
+        from core.surfaces.command_reply import CommandReply, reply_text
+        if isinstance(reply, CommandReply):
+            reply = reply_text(reply)
         return reply
     except Exception:
         logger.debug("console command routing skipped (fail-open)", exc_info=True)
         return None
+
+
+async def run_console_line(task_agent, clean_id: str, user_id: str, text: str) -> str:
+    """Run one owner line (a verb or a tap token) as the console chat box
+    would, and return its answer text ("" when it is not a console verb or no
+    agent runs in this process). The Inbox's card buttons post through this."""
+    reply = await maybe_handle_console_command(task_agent, clean_id, user_id, text)
+    return "" if reply is None else str(reply)
 
 
 # --- the cold-open short-circuit (043 A17) ---------------------------------- #
@@ -97,10 +174,12 @@ def looks_like_console_verb(text) -> bool:
         return False
     token = token.split("@", 1)[0]
     try:
-        from core.surfaces.dispatcher import _COMMANDS
+        from core.surfaces.dispatcher import command_names
     except Exception:  # pragma: no cover — the dispatcher is always importable
         return False
-    return token in _COMMANDS and token not in ("/task", "/new")
+    from core.surfaces.tappable import is_tappable_token
+    return ((token in command_names() or is_tappable_token(token))
+            and token not in ("/task", "/new"))
 
 
 def build_console_create_router():

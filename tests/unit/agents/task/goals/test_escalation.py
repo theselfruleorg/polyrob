@@ -96,12 +96,41 @@ async def test_empty_pipeline_escalates_when_enabled(monkeypatch):
     agent = _FakeAgent(_FakeContainer(sink))
     sent = await escalation.maybe_escalate_empty_pipeline(
         agent, objective_title="Grow the POLYROB following on X",
-        planner_summary="blocked: I need Twitter write access from you")
+        planner_summary="blocked: I need Twitter write access from you",
+        planner_word_visible=True)
     assert sent is True
     assert sink.sent
     msg = sink.sent[0][1]
     assert "Grow the POLYROB following on X" in msg
-    assert "Twitter write access" in msg  # the planner's concrete ask rides along
+    assert "Twitter write access" in msg  # verbose owner: the planner's record rides along
+
+
+@pytest.mark.asyncio
+async def test_empty_pipeline_hides_planner_record_unless_verbose(monkeypatch):
+    # The planner's summary is its done() text — a bookkeeping record the owner
+    # sees only at style.verbosity == detailed. Default: not shown.
+    monkeypatch.setenv("GOAL_BLOCKER_ESCALATION", "true")
+    monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "28436760")
+    sink = _FakeSink()
+    agent = _FakeAgent(_FakeContainer(sink))
+    sent = await escalation.maybe_escalate_empty_pipeline(
+        agent, objective_title="Grow the POLYROB following on X",
+        planner_summary="blocked: I need Twitter write access from you")
+    assert sent is True
+    msg = sink.sent[0][1]
+    assert "Grow the POLYROB following on X" in msg
+    assert "Twitter write access" not in msg
+    assert "planner" not in msg.lower()
+
+
+def test_empty_pipeline_text_names_which_stall():
+    # Two stalls must not produce identical bytes (the rail dedups identical text).
+    a = escalation.build_empty_pipeline_escalation(
+        "X", stall_number=1, stalled_since=1_790_000_000.0)
+    b = escalation.build_empty_pipeline_escalation(
+        "X", stall_number=2, stalled_since=1_790_000_000.0)
+    assert a != b
+    assert "stall #1" in a and "UTC" in a
 
 
 @pytest.mark.asyncio

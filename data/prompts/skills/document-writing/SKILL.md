@@ -5,8 +5,8 @@ license: MIT
 metadata:
   polyrob-priority: '3'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":[],"keywords":["write","draft","compose","report","summarize","outline","essay","memo","article"],"task_patterns":["write.*(report|memo|doc|article|summary)","draft.*","compose.*","summari[sz]e.*","outline.*for"],"tool_ids":[]}'
-  polyrob-version: '1'
+  polyrob-triggers: '{"action_names":[],"keywords":["write a report","write a document","draft a report","draft a document","summarize","outline","essay","memo","article","long-form"],"task_patterns":["write.*(report|memo|doc|article|summary|essay)","draft.*(report|memo|doc|article|essay|proposal)","summari[sz]e.*","outline.*for"],"tool_ids":[]}'
+  polyrob-version: '2'
 ---
 # Document Writing
 

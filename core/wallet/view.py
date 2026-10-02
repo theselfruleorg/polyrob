@@ -56,6 +56,7 @@ def wallet_view(user_id, *, data_dir=None, wallet_fn=None):
             result.accounts.append(AccountView('account0', 'solana', None, False, 'address unavailable'))
         gate = wallet.policy
         result.caps = {'per_tx_usd': gate.per_tx_cap_usd, 'daily_usd': gate.daily_cap_usd}
+        result.caps.update(_headroom(gate))
     except Exception:
         result.errors.append('wallet identity or policy unavailable')
         result.state = 'unavailable'
@@ -79,6 +80,36 @@ def wallet_view(user_id, *, data_dir=None, wallet_fn=None):
     return result
 
 
+def _headroom(gate):
+    """O9: used today, left today, and the ask-above line. Views only.
+
+    ``used_24h_usd`` is the SAME rolling-24h PolicyGate read the console Money ›
+    Limits shows (``modules.credits.unified_ledger._caps_block``); the ceiling
+    is the one tx_guard compares against. An unreadable value is ``None`` with
+    its reason, never 0 — "I could not read it" is not "nothing spent".
+    """
+    out = {'used_24h_usd': None, 'left_24h_usd': None, 'ask_above_usd': None,
+           'headroom_errors': {}}
+    try:
+        used = float(gate.rolling_24h_spend_usd())
+        out['used_24h_usd'] = used
+        daily = gate.daily_cap_usd
+        if daily is not None:
+            out['left_24h_usd'] = max(0.0, float(daily) - used)
+    except Exception as exc:
+        out['headroom_errors']['used'] = f'spend ledger unreadable: {type(exc).__name__}'
+    try:
+        from core.wallet.tx_guard import autonomous_max_usd, ceiling_scope
+        out['ask_above_usd'] = float(autonomous_max_usd(*ceiling_scope(None)))
+    except Exception as exc:
+        out['headroom_errors']['ask_above'] = f'ceiling unreadable: {type(exc).__name__}'
+    return out
+
+
+def _usd(value):
+    return f'${value:,.2f}'
+
+
 def render_wallet(view):
     lines = [f'Wallet: {view.state}', f'Network: {view.network or "unavailable"}',
              'Signing in this process: ' + ('available' if view.signing_available else 'unavailable')]
@@ -89,13 +120,28 @@ def render_wallet(view):
         daily = view.caps['daily_usd']
         lines.append(f'Caps: ${view.caps["per_tx_usd"]:g}/tx; daily ' +
                      ('unlimited' if daily is None else f'${daily:g}'))
+        errs = view.caps.get('headroom_errors') or {}
+        if 'used_24h_usd' in view.caps:
+            used, left = view.caps.get('used_24h_usd'), view.caps.get('left_24h_usd')
+            if used is None:
+                lines.append(f'Used today (24h): unavailable({errs.get("used", "not read")})')
+            else:
+                lines.append(f'Used today (24h): {_usd(used)}; left today: '
+                             + ('no daily cap' if daily is None
+                                else (_usd(left) if left is not None else 'unavailable')))
+        if 'ask_above_usd' in view.caps:
+            ask = view.caps.get('ask_above_usd')
+            lines.append('I ask you above ' + _usd(ask) if ask is not None
+                         else f'I ask you above: unavailable({errs.get("ask_above", "not read")})')
     lines.append(f'Balances: {view.balances["state"]}')
     for row in view.balances['chains']:
         native, usdc = row.get('native'), row.get('usdc')
         lines.append(f'{row["chain"]}: {native if native is not None else "unavailable"} '
                      f'{row["symbol"]}; USDC {usdc if usdc is not None else "unavailable"}')
     if view.unaccounted_submissions:
-        lines.append('Spending blocked by unaccounted submissions:')
+        lines.append('Spending blocked by unaccounted submissions — I sent these '
+                     'and could not confirm the result; no new spend goes out until '
+                     'each one is settled:')
         lines.extend(f'{r["chain"]}: {r["tx_hash"]}' for r in view.unaccounted_submissions)
     lines.extend(view.errors)
     return '\n'.join(lines)

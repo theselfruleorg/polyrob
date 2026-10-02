@@ -182,6 +182,19 @@ class SkillWriterMixin:
             return True
         return base
 
+    def _reserved_id_error(self, skill_id: str) -> Optional[str]:
+        """D1: the refusal for a builtin/pack skill id (``SkillManager``
+        provides :meth:`reserved_skill_id_error`). Fail-CLOSED: if the reserved
+        set cannot be computed, the write is refused rather than risk a shadow."""
+        check = getattr(self, "reserved_skill_id_error", None)
+        if check is None:
+            return None
+        try:
+            return check(skill_id)
+        except Exception as e:
+            logger.warning("reserved skill-id check failed for %s: %s", skill_id, e)
+            return "reserved skill-id check failed (write refused)"
+
     def create_skill(self, skill_id: str, content: str, *, user_id: str,
                      description: str = "", created_by: str = PROVENANCE_AGENT,
                      pending: Optional[bool] = None,
@@ -195,6 +208,9 @@ class SkillWriterMixin:
         id_ok, id_errors = self.validate_skill_id(skill_id)
         if not id_ok:
             return SkillWriteResult(skill_id, False, errors=id_errors)
+        reserved = self._reserved_id_error(skill_id)
+        if reserved:
+            return SkillWriteResult(skill_id, False, errors=[reserved])
 
         content_res = self.validate_skill_content(skill_id, content)
         if not content_res.is_valid:
@@ -316,7 +332,8 @@ class SkillWriterMixin:
         if not id_ok:
             return SkillWriteResult(skill_id, False, errors=id_errors)
 
-        skill_file = self._find_skill_file(uid, skill_id)
+        skill_file = self._patch_base_file(uid, skill_id, created_by=created_by,
+                                           pending=pending)
         if skill_file is None:
             return SkillWriteResult(skill_id, False, errors=[f"skill '{skill_id}' not found for user"])
         # A forged (non-user) turn may refine its OWN pending draft but must never
@@ -394,6 +411,12 @@ class SkillWriterMixin:
         id_ok, id_errors = self.validate_skill_id(skill_id)
         if not id_ok:
             return SkillWriteResult(skill_id, False, errors=id_errors)
+        # D1: a draft staged under a builtin/pack id (before the writer refused
+        # one) must never activate — promote would replace the builtin's body,
+        # triggers, `requires` and gate.
+        reserved = self._reserved_id_error(skill_id)
+        if reserved:
+            return SkillWriteResult(skill_id, False, errors=[reserved])
         pending_file = self._user_root(uid) / ".pending" / skill_id / "SKILL.md"
         if not pending_file.exists():
             return SkillWriteResult(skill_id, False, errors=["no pending skill with that id"])
@@ -532,6 +555,43 @@ class SkillWriterMixin:
     def _atomic_write(self, path: Path, content: str) -> None:
         from core.security.confined_write import write_confined_text
         write_confined_text(path, self._user_dirs_root(), content)
+
+    def _patch_base_file(self, uid: str, skill_id: str, *, created_by: str,
+                         pending: Optional[bool]) -> Optional[Path]:
+        """The body :meth:`patch_skill` must edit — the file the write will LAND in.
+
+        ⚠️ This is the whole fix for the 2026-09-21 double-approval loop.
+        :meth:`_find_skill_file` prefers the ACTIVE ``SKILL.md``, but a non-owner
+        patch of an active skill is quarantined by :meth:`_resolve_pending` and
+        LANDS in ``.pending/<id>/SKILL.md``. So ``patch_skill`` read one file,
+        derived its CAS token from it, and handed that token to ``create_skill``,
+        which compared it against a DIFFERENT file. Once a draft existed, every
+        later patch failed ``revision conflict`` with no reachable remedy, and
+        each edit had to be approved on its own before the next could start.
+        Worse, had the CAS passed, the edit would have been computed from the
+        active body and would have overwritten (silently discarded) the draft.
+
+        So: when the write will be quarantined and a draft already exists, the
+        draft IS the base. A chain of edits then accumulates into ONE pending
+        item and costs the owner ONE approval. The active file is still never
+        written by a non-owner author — the quarantine rule is untouched.
+        """
+        active_file = self._user_root(uid) / skill_id / "SKILL.md"
+        overwriting_active = (active_file.exists()
+                              or (skill_id in getattr(self, "skill_rules", {})))
+        try:
+            quarantine = self._resolve_pending(created_by, pending,
+                                               overwriting_active=overwriting_active)
+        except Exception:  # fail-open to the legacy resolution order
+            quarantine = False
+        if quarantine:
+            draft = self._user_root(uid) / ".pending" / skill_id / "SKILL.md"
+            try:
+                self._read_skill_text(draft)
+                return draft
+            except (OSError, UnicodeError):
+                pass
+        return self._find_skill_file(uid, skill_id)
 
     def _find_skill_file(self, uid: str, skill_id: str) -> Optional[Path]:
         # Defense-in-depth: never join an unvalidated id into a path (callers also

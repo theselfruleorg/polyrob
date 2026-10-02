@@ -297,6 +297,25 @@ async def test_command_cancel_cancels_bound_session():
 
 
 @pytest.mark.asyncio
+async def test_command_cancel_never_claims_a_failed_stop():
+    """A16/O17: a failed or empty cancel is not "Task cancelled.", and every
+    reply names the reach (goals and cron keep running; /pause stops those)."""
+    class _Raises(_FakeTaskAgent):
+        async def cancel_session_by_id(self, session_id, force=False):
+            raise RuntimeError("boom")
+
+    class _Nothing(_FakeTaskAgent):
+        async def cancel_session_by_id(self, session_id, force=False):
+            return False
+
+    res = _result(RouteKind.COMMAND, command="/cancel", session_id="sess_1")
+    out = await act_on_inbound(_Raises(), res, spawn=lambda c: None)
+    assert "could not stop" in out and "Task cancelled" not in out and "/pause" in out
+    out = await act_on_inbound(_Nothing(), res, spawn=lambda c: None)
+    assert out.startswith("Nothing was running") and "/pause" in out
+
+
+@pytest.mark.asyncio
 async def test_command_new_unbinds_chat_so_next_message_starts_fresh():
     """a4: /new cancels the bound session AND drops its chat binding, so the next
     message routes cold (a fresh session) instead of STEERing back into the old one."""

@@ -54,24 +54,17 @@ from .descriptors import (
 from .filesystem import FileSystem
 from .task_tool import TaskTool
 from .email_tool import EmailTool
-from .perplexity_tool import PerplexityTool
 from .web_fetch import WebFetchTool
-# Twitter is optional (requires the `tweepy` extra); don't let a missing optional
-# dependency break the whole tools import / CLI boot.
-try:
-    from .twitter_tool import TwitterTool
-    _TWITTER_AVAILABLE = True
-except ImportError:
-    TwitterTool = None
-    _TWITTER_AVAILABLE = False
 from .collabland.collabland_tool import CollabLandTool
 from .alchemy.alchemy_tool import AlchemyTool
 from .mcp.mcp_tool import MCPTool
-from .anysite.tool import AnysiteTool
 # Importing this registers the bridge STATUS reader with core's seam
 # (core/wallet/bridge_status.py) so the bridge watcher has one in every
 # process that loads the tool tier — not only after a bridge has run.
 from .defi.providers import relay_bridge as _relay_bridge  # noqa: F401
+# Importing this registers the hf_deploy gate + cold-start reconciler with core's
+# seams (core/tool_gates.py, core/boot_reconcilers.py) — light (core.env only).
+from . import hf_deploy as _hf_deploy  # noqa: F401
 
 # Browser is optional (may not be available in all environments)
 try:
@@ -82,24 +75,6 @@ except ImportError:
     Browser = None
     BrowserManager = None
     _BROWSER_AVAILABLE = False
-
-# Polymarket is optional
-try:
-    from .polymarket import PolymarketTool, PolymarketDataTool
-    _POLYMARKET_AVAILABLE = True
-except ImportError:
-    PolymarketTool = None
-    PolymarketDataTool = None
-    _POLYMARKET_AVAILABLE = False
-
-# Hyperliquid is optional
-try:
-    from .hyperliquid import HyperliquidTool, HyperliquidDataTool
-    _HYPERLIQUID_AVAILABLE = True
-except ImportError:
-    HyperliquidTool = None
-    HyperliquidDataTool = None
-    _HYPERLIQUID_AVAILABLE = False
 
 # Logger
 logger = logging.getLogger(__name__)
@@ -113,13 +88,10 @@ logger = logging.getLogger(__name__)
 register_tool_class('filesystem', FileSystem)
 register_tool_class('task', TaskTool)
 
-# Communication tools
-if _TWITTER_AVAILABLE and TwitterTool is not None:
-    register_tool_class('twitter', TwitterTool)
+# Communication tools (twitter / x_browser: the x pack, 067 P3b)
 register_tool_class('email', EmailTool)
 
 # Search tools
-register_tool_class('perplexity', PerplexityTool)
 register_tool_class('web_fetch', WebFetchTool)
 
 # Verification tools
@@ -128,23 +100,13 @@ register_tool_class('alchemy', AlchemyTool)
 
 # Integration tools
 register_tool_class('mcp', MCPTool)
-register_tool_class('anysite', AnysiteTool)
 
 # Optional tools (only register if available)
 if _BROWSER_AVAILABLE and BrowserManager is not None:
     register_tool_class('browser_manager', BrowserManager)
 
-# Polymarket: Register tool for prediction market access
-if _POLYMARKET_AVAILABLE and PolymarketTool is not None:
-    register_tool_class('polymarket', PolymarketTool)
-    if PolymarketDataTool is not None:
-        register_tool_class('polymarket_data', PolymarketDataTool)
-
-# Hyperliquid: Register tool for perpetuals and spot trading
-if _HYPERLIQUID_AVAILABLE and HyperliquidTool is not None:
-    register_tool_class('hyperliquid', HyperliquidTool)
-    if HyperliquidDataTool is not None:
-        register_tool_class('hyperliquid_data', HyperliquidDataTool)
+# Polymarket / Hyperliquid (+ their *_data read tools): the markets pack
+# registers them in the loader's phase 2 (067 P4).
 
 # Code execution (Item 3): registers the 'code_execution' descriptor + class only
 # when CODE_EXEC_ENABLED=true. OFF by default; never in the default tool_ids.
@@ -191,15 +153,6 @@ try:
 except Exception as _e:  # never block tool import on the optional git seam
     logging.getLogger(__name__).debug(f"git registration skipped: {_e}")
 
-# x_browser tool (2026-08-18 X rail): registers the 'x_browser' descriptor + class
-# only when X_BROWSER_ENABLED=true. OFF by default; never in the default tool_ids;
-# delegate_blocked. Browser-based X posting + self-registration.
-try:
-    from .x_browser import register_x_browser_tool
-    register_x_browser_tool()
-except Exception as _e:  # never block tool import on the optional x_browser seam
-    logging.getLogger(__name__).debug(f"x_browser registration skipped: {_e}")
-
 # GitHub tool (P0-E): registers the 'github' descriptor + class only when
 # GITHUB_TOOL_ENABLED is on. OFF by default (even locally); never in the default tool_ids.
 try:
@@ -236,6 +189,16 @@ try:
     register_knowledge_tool()
 except Exception as _e:  # never block tool import on the optional knowledge seam
     logging.getLogger(__name__).debug(f"knowledge registration skipped: {_e}")
+
+# WS-K3 (2026-09-22): listen for produced documents so the knowledge base holds
+# what the agent WRITES (prod: 76 indexed sources against 473 produced files).
+# Registered here because the layering runs downward — core owns the hook list
+# and never reaches up into tools to call one.
+try:
+    from .kb_autoingest import install_artifact_hook as _install_kb_artifact_hook
+    _install_kb_artifact_hook()
+except Exception as _e:  # never block tool import on the optional KB seam
+    logging.getLogger(__name__).debug(f"kb artifact hook skipped: {_e}")
 
 # Agent x402 paying (native crypto): registers the 'x402_pay' descriptor + class
 # only when X402_CLIENT_ENABLED=true. OFF by default; never in the default tool_ids.
@@ -280,6 +243,15 @@ try:
     register_launchpad_tool()
 except Exception as _e:  # never block tool import on the optional launchpad seam
     logging.getLogger(__name__).debug(f"launchpad registration skipped: {_e}")
+
+# Agent NFTs (050, 069): registers the 'agent_nft' descriptor + class only when AGENT_NFT_ENABLED=true.
+# The logic lives in the optional agent-NFT package; every write routes through
+# core/wallet/tx_guard.py with `via_account`. OFF by default; never in the default tool_ids.
+try:
+    from .agent_nft import register_agent_nft_tool
+    register_agent_nft_tool()
+except Exception as _e:  # never block tool import on the optional agent_nft seam
+    logging.getLogger(__name__).debug(f"agent_nft registration skipped: {_e}")
 
 # Dapp browser wallet (042): registers the 'dapp_browser' descriptor + class
 # only when DAPP_BROWSER_ENABLED=true. `dapp_connect` authorizes spending from a
@@ -418,15 +390,10 @@ __all__ = [
     # Tool classes
     'FileSystem',
     'TaskTool',
-    'TwitterTool',
-    'PerplexityTool',
     'EmailTool',
     'CollabLandTool',
     'AlchemyTool',
     'MCPTool',
-    'AnysiteTool',
-    'PolymarketTool',
-    'HyperliquidTool',
 
     # Functions
     'initialize_tool',

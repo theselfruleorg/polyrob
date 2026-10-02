@@ -77,31 +77,86 @@ class TestFlagOnTiersByDeclaredCeiling:
             assert defi_spend_exemption(verb, _live()) is None
 
 
+_SPEND_TOOL_CLASSES = (
+    ("defi_trade", "tools.defi.trade_tool", "DefiTradeTool"),
+    ("launchpad", "tools.launchpad.tool", "LaunchpadTool"),
+    ("dapp_browser", "tools.dapp_browser.tool", "DappBrowserTool"),
+    ("agent_nft", "tools.agent_nft.tool", "AgentNftTool"),
+)
+
+
+def _param_model_for(verb):
+    """Resolve a RUNTIME spend verb to its param model, across every tool.
+
+    FAILS (never skips) when a verb cannot be resolved: an unresolvable verb is
+    one whose simulation claim nobody checked.
+    """
+    import importlib
+    import inspect
+    for prefix, module, cls_name in _SPEND_TOOL_CLASSES:
+        if not verb.startswith(prefix + "_"):
+            continue
+        cls = getattr(importlib.import_module(module), cls_name)
+        for attr in (verb[len(prefix) + 1:], verb):
+            try:
+                member = inspect.getattr_static(cls, attr)
+            except AttributeError:
+                continue
+            model = getattr(member, "_param_model", None)
+            assert model is not None, f"{verb}: action has no param model"
+            return model
+        pytest.fail(f"{verb}: no action '{verb}' on {cls_name}")
+    pytest.fail(f"{verb}: no tool class known for this verb — add it to "
+                f"_SPEND_TOOL_CLASSES")
+
+
 class TestParamModelDefaultsArePinned:
     """The absent-dry_run exemption is only sound while the models default True."""
 
-    def test_dry_run_defaults_true_on_every_spend_model(self):
-        """DERIVED, not hand-listed (042).
+    @pytest.mark.parametrize("verb", sorted(
+        __import__("core.config_policy.spend_lane",
+                   fromlist=["DEFI_SPEND_VERBS"]).DEFI_SPEND_VERBS))
+    def test_every_spend_verb_agrees_with_dry_run_verbs(self, verb):
+        """H03a (2026-09-23): EVERY verb in DEFI_SPEND_VERBS, across ALL tools.
 
-        The hand-list held four models and was never extended: `WrapParams` and
-        `BridgeParams` shipped outside it, so the exemption they rely on was
-        unpinned for both. Reflecting over the tool means the NEXT verb cannot
-        ship outside it either.
+        The old derivation reflected over DefiTradeTool only and SKIPPED a model
+        without ``dry_run`` — which is exactly how `dapp_browser_dapp_connect`
+        (no dry_run field) rode the "absent means simulate" default past the
+        owner queue. A verb is in DRY_RUN_VERBS iff its model has a dry_run
+        field, and that field must default True.
         """
-        import inspect
-        from tools.defi.trade_tool import DefiTradeTool
+        from core.config_policy.spend_lane import DRY_RUN_VERBS
+        model = _param_model_for(verb)
+        field = getattr(model, "model_fields", {}).get("dry_run")
+        if field is None:
+            assert verb not in DRY_RUN_VERBS, (
+                f"{verb}: {model.__name__} has NO dry_run field, so it can never "
+                f"be a simulation — remove it from DRY_RUN_VERBS")
+        else:
+            assert verb in DRY_RUN_VERBS, (
+                f"{verb}: {model.__name__} has a dry_run field; add it to "
+                f"DRY_RUN_VERBS so a dry run is not queued")
+            assert field.default is True, f"{verb}: dry_run must default True"
 
-        models = {}
-        for name in dir(DefiTradeTool):
-            if name.startswith("_"):
-                continue
-            member = inspect.getattr_static(DefiTradeTool, name)
-            model = getattr(member, "_param_model", None)
-            if model is not None and "dry_run" in getattr(model, "model_fields", {}):
-                models[model.__name__] = model
-        assert len(models) >= 6, f"derivation found too few models: {sorted(models)}"
-        for label, model in sorted(models.items()):
-            assert model.model_fields["dry_run"].default is True, label
+
+class TestVerbWithoutDryRunIsNeverASimulation:
+    def test_dapp_connect_absent_dry_run_is_gated(self, monkeypatch):
+        monkeypatch.delenv("DEFI_TIERED_SPEND_LANE", raising=False)
+        assert defi_spend_exemption("dapp_browser_dapp_connect",
+                                    {"url": "https://app.example"}) is None
+
+    def test_dapp_connect_with_a_smuggled_dry_run_is_gated(self, monkeypatch):
+        monkeypatch.delenv("DEFI_TIERED_SPEND_LANE", raising=False)
+        assert defi_spend_exemption("dapp_browser_dapp_connect",
+                                    {"dry_run": True}) is None
+
+    def test_is_simulation_needs_a_literal_true(self):
+        from core.config_policy.spend_lane import is_simulation
+        assert is_simulation("defi_trade_swap", {}) is True
+        assert is_simulation("defi_trade_swap", {"dry_run": True}) is True
+        assert is_simulation("defi_trade_swap", {"dry_run": False}) is False
+        assert is_simulation("defi_trade_swap", {"dry_run": "false"}) is False
+        assert is_simulation("unknown_verb", {"dry_run": True}) is False
 
 
 def test_x402_fetch_below_ceiling_is_exempt(monkeypatch):

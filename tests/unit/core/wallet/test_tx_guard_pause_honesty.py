@@ -41,16 +41,21 @@ def test_the_refusal_names_the_pause_as_the_cause():
 
 
 def test_the_refusal_offers_a_remedy_that_exists():
-    """The old branch offered none. `/resume` and `polyrob autonomy resume` are
-    both real seats for the same record."""
-    text = _halt_refusal().reason
-    assert "/resume" in text or "autonomy resume" in text
+    """The old branch offered none. `/resume` is the chat seat for the record."""
+    assert "/resume" in _halt_refusal().reason
 
 
-def test_the_refusal_says_it_binds_the_owners_own_seat():
-    """The gate runs before any seat distinction, so telling the owner to type the
-    command himself -- as the agent did live on 2026-09-12 -- is wrong advice."""
-    assert "own seat" in _halt_refusal().reason.lower()
+def test_the_refusal_says_the_owner_is_not_bound():
+    """2026-09-26: the pause stops the agent's own work; the owner's own request
+    is not bound by it (tx_guard step 0). The old text said the opposite — and
+    was true, which was the defect."""
+    text = _halt_refusal().reason.lower()
+    assert "own seat" not in text
+    assert "not bound" in text
+
+
+def test_the_refusal_names_no_server_command():
+    assert "polyrob " not in _halt_refusal().reason
 
 
 def test_the_refusal_states_nothing_was_broadcast():

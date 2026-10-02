@@ -23,7 +23,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 SCAN_DIRS = ["agents", "api", "cli", "core", "cron", "modules", "surfaces",
-             "tools", "utils", "webview"]
+             "tools", "utils", "webview", "packs"]
 CANONICAL = "core/rate_limit.py"
 
 _DEF_RE = re.compile(
@@ -40,8 +40,8 @@ ALLOWLISTED_RATE_LIMITER_DEFS = frozenset({
     ('core/exceptions.py', 'LLMRateLimitError'),     # exception, not a limiter
     ('core/exceptions.py', 'RateLimitError'),        # exception, not a limiter
     ('surfaces/telegram/rate_limit.py', 'TelegramRateLimiter'),  # penalty tracker (documented exception)
-    ('surfaces/x/client.py', 'XRateLimited'),        # marker/exception, not a limiter
     ('tools/mcp/rate_limit.py', 'MCPExecRateLimiter'),  # back-compat subclass shim
+    ('packs/x/polyrob_x/surface/client.py', 'XRateLimited'),  # marker/exception, not a limiter
     ('utils/rate_limit_manager.py', 'RateLimitManager'),  # component wrapper over SlidingWindowLimiter
     ('utils/rate_limit_manager.py', 'check_rate_limit'),  # method of that wrapper
     ('webview/server.py', 'check_rate_limit'),       # thin delegator to SlidingWindowLimiter

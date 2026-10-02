@@ -40,7 +40,7 @@ from core.event_kinds import (
 )
 from webview import webgate
 from webview.audit import console_write
-from webview.copy import t
+from webview.copy import has, t
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +50,10 @@ router = APIRouter()
 #: are readers the console's pages depend on, mounted unconditionally. (They were
 #: once wrongly gated behind the WEBVIEW_UI page switch, which hid the Inbox API.)
 api_router = APIRouter()
+
+#: 067 P5a: the Money readers of this module (bridges, creations, moves),
+#: contributed through ``webview.contributions`` like ``pages.money_router``.
+money_api_router = APIRouter()
 
 
 # --- the five destinations, one table --------------------------------------- #
@@ -200,6 +204,9 @@ def _pause_headline() -> str:
     if everything:
         if until:
             return t("shell.state.paused_until", until=_when(until))
+        since = getattr(state, "since", None)
+        if since:
+            return t("shell.state.paused_since", when=_when(since))
         return t("shell.state.paused")
     what = _scope_words(scopes)
     if until:
@@ -441,7 +448,42 @@ _ACTION_WORDS = {
 _ACTION_VERB = {"approve": "decide", "reject": "reject", "fulfill": "fulfill"}
 
 
-def _card(item: dict, *, owner_console: bool = True) -> dict:
+def _age_words(seconds: float) -> str:
+    """``inbox.age.*`` for a span: whole minutes up to an hour, whole hours up
+    to a day, whole days after. Under a minute counts as one minute."""
+    seconds = max(0.0, float(seconds))
+    if seconds < 3600:
+        n = max(1, int(seconds // 60))
+        return t("inbox.age.minute_one") if n == 1 else t("inbox.age.minutes", count=n)
+    if seconds < 86400:
+        n = int(seconds // 3600)
+        return t("inbox.age.hour_one") if n == 1 else t("inbox.age.hours", count=n)
+    n = int(seconds // 86400)
+    return t("inbox.age.day_one") if n == 1 else t("inbox.age.days", count=n)
+
+
+def _card_ages(item: dict, now: float) -> dict:
+    """``waiting`` and ``expires`` for a card — only from a real stamp. A
+    ``0.0``/``None`` stamp is "no stamp", never an invented age; an expiry in
+    the past says nothing (the item is about to close on its own)."""
+    out = {"waiting": "", "expires": ""}
+    try:
+        created = float(item.get("created_at") or 0.0)
+    except (TypeError, ValueError):
+        created = 0.0
+    if created > 0:
+        out["waiting"] = t("inbox.waiting_for", age=_age_words(now - created))
+    try:
+        expires = float(item.get("expires_at") or 0.0)
+    except (TypeError, ValueError):
+        expires = 0.0
+    if expires > now:
+        out["expires"] = t("inbox.expires_in", age=_age_words(expires - now))
+    return out
+
+
+def _card(item: dict, *, owner_console: bool = True, now: float = None) -> dict:
+
     """One rendered card: the item, plus the words and the routes for its verbs.
 
     ⚠️ An app decision is INSTANCE-wide, so ``inbox._decide`` refuses it for
@@ -455,10 +497,12 @@ def _card(item: dict, *, owner_console: bool = True) -> dict:
     behaviour for a caller that does not know the posture; the page passes the
     real ``webgate.is_owner_console()``.
     """
+    import time
     from webview.inbox import _APP_KINDS  # the ONE list of instance-wide kinds
+    ages = _card_ages(item, time.time() if now is None else now)
     kind = item.get("kind") or ""
     if kind in _APP_KINDS and not owner_console:
-        row = dict(item)
+        row = dict(item, **ages)
         row["rendered_actions"] = []
         row["decide_elsewhere"] = t("inbox.decide_owner_console")
         return row
@@ -470,7 +514,7 @@ def _card(item: dict, *, owner_console: bool = True) -> dict:
             "verb": _ACTION_VERB.get(action),
             "primary": i == 0 and action in ("approve", "fulfill"),
         })
-    row = dict(item)
+    row = dict(item, **ages)
     row["rendered_actions"] = actions
     return row
 
@@ -491,23 +535,15 @@ def _pill(count: int, uncertain: bool, unreadable: int) -> tuple:
     return ("is-needs-you", t("inbox.pill_waiting", count=count))
 
 
-def _sources_sentence(body: dict) -> str:
-    """What the page read, and what it could not. This is what makes the count
-    a claim rather than a number."""
+def _checked_sentence(body: dict) -> str:
+    """One plain line: did every list answer? A refused source is named, never
+    folded into "all checked" — that is what makes the count a claim."""
     from core.surfaces.inbox import SOURCE_LABELS
-    sources = body.get("sources") or {}
     refused = body.get("unreadable_sources") or []
-    read = [SOURCE_LABELS.get(n, n) for n in sources if n not in refused]
-    parts = []
-    if read:
-        parts.append(t("inbox.sources.lead", sources=", ".join(read)))
-    if refused:
-        parts.append(t("inbox.sources.refused",
-                       sources=", ".join(SOURCE_LABELS.get(n, n) for n in refused)))
-    elif read:
-        parts.append(t("inbox.sources.all_answered"))
-    parts.append(t("inbox.sources.what_counts"))
-    return " ".join(parts)
+    if not refused:
+        return t("inbox.checked_all")
+    return t("inbox.checked_some",
+             sources=", ".join(SOURCE_LABELS.get(n, n) for n in refused))
 
 
 def _shared_refusal(body: dict, refused: list) -> str:
@@ -552,7 +588,7 @@ def _inbox_context(request: Request) -> dict:
         "partial_body": (t("inbox.partial.body",
                            source=", ".join(SOURCE_LABELS.get(n, n) for n in refused))
                          if refused else ""),
-        "sources_note": _sources_sentence(body),
+        "checked_note": _checked_sentence(body),
         "page_glyph": _GLYPH["inbox"],
     })
     return ctx
@@ -572,24 +608,59 @@ def _work_context(request: Request) -> dict:
 
 def _agent_context(request: Request) -> dict:
     """The Agent destination (043 WS-AF1). Six tabs drawn client-side from the
-    tenant-scoped Agent readers; this builds only the frame plus the four posture
+    tenant-scoped Agent readers; this builds only the frame plus the posture
     axes, computed once from ``build_posture_card`` so a person reads one plain
     sentence per axis rather than the two vocabularies ``doctor`` and
     ``/autonomy`` print on one screen today. Each axis carries its EFFECTIVE
     value (an unreadable axis reads as empty, never a fabricated state)."""
     ctx = _shell_context(request, "agent")
     ctx["page_glyph"] = _GLYPH["agent"]
+    ctx["posture"] = _posture_axes()
+    return ctx
+
+
+#: The posture axes the overview renders, looked up on ``build_posture_card()``
+#: BY ENV NAME. ⚠️ Every env here must be exactly the ``env`` the card writes —
+#: a typo drops the axis with no error, which is how the fifth axis (the builder
+#: mode, 058 WS-3) reached every other seat and not this one. Pinned by
+#: ``tests/unit/webview/test_agent_posture_axes.py``.
+_POSTURE_AXES = (
+    ("local", "POLYROB_LOCAL"),
+    ("mode", "AUTONOMY_MODE"),
+    ("loop", "AUTONOMY_POSTURE"),
+    ("compute", "AGENT_COMPUTE_POSTURE"),
+    ("builder", "AGENT_BUILDER_MODE"),
+)
+
+
+def axis_answer(axis: str, raw, *, autonomy=None) -> str:
+    """The owner's answer to one axis question (070 E.23): the raw effective
+    value mapped to ``agent.axis_value.<axis>_<raw>``. The loop axis is "No"
+    while autonomy is off; a missing row or a value with no key reads "Not
+    known" — never a guessed Yes or No."""
+    raw = "" if raw is None else str(raw).strip().lower()
+    if axis == "loop" and str(autonomy or "").strip().lower() == "off":
+        raw = "off"
+    key = f"agent.axis_value.{axis}_{raw.replace('-', '_')}"
+    return t(key) if raw and has(key) else t("agent.axis_value.unknown")
+
+
+def _posture_axes() -> dict:
+    """Each axis's EFFECTIVE value (an unreadable axis reads as empty, never a
+    fabricated state) plus ``builder_note`` — the card's clamp sentence for a
+    ``ship`` request that no domain can honour, so the console says the same
+    thing ``doctor`` and ``/status`` say instead of showing ``ship`` as if it
+    were live."""
     try:
         from core.config_policy.posture_card import build_posture_card
         by_env = {r.get("env"): r for r in build_posture_card()}
     except Exception:
         by_env = {}
-    posture = {}
-    for key, env in (("local", "POLYROB_LOCAL"), ("mode", "AUTONOMY_MODE"),
-                     ("loop", "AUTONOMY_POSTURE"), ("compute", "AGENT_COMPUTE_POSTURE")):
-        posture[key] = str((by_env.get(env) or {}).get("effective", ""))
-    ctx["posture"] = posture
-    return ctx
+    posture = {key: axis_answer(key, (by_env.get(env) or {}).get("effective"),
+                                autonomy=(by_env.get("AUTONOMY_ENABLED") or {}).get("effective"))
+               for key, env in _POSTURE_AXES}
+    posture["builder_note"] = str((by_env.get("AGENT_BUILDER_MODE") or {}).get("note") or "")
+    return posture
 
 
 # --- money readers (043 A37): open bridges + on-chain creations ------------- #
@@ -666,7 +737,7 @@ def _creations_body(user_id: str) -> dict:
     }
 
 
-@api_router.get("/api/webgate/bridges")
+@money_api_router.get("/api/webgate/bridges")
 async def api_bridges(request: Request):
     """Open cross-chain bridges for the effective tenant (043 A37). Read-only,
     both UIs. ``_effective_user_id`` resolves (and 403s) OUTSIDE the reader, so a
@@ -677,7 +748,7 @@ async def api_bridges(request: Request):
     return JSONResponse(_bridges_body(str(user_id)))
 
 
-@api_router.get("/api/webgate/creations")
+@money_api_router.get("/api/webgate/creations")
 async def api_creations(request: Request):
     """What this agent has deployed or launched on-chain, for the effective
     tenant (043 A37). Read-only, both UIs; tenant resolved and 403'd by
@@ -743,7 +814,7 @@ def _moves_body(user_id: str) -> dict:
             "unavailable": None}
 
 
-@api_router.get("/api/webgate/moves")
+@money_api_router.get("/api/webgate/moves")
 async def api_moves(request: Request):
     """Recent wallet_spend moves for the effective tenant (043 N2). Read-only,
     both UIs; tenant resolved and 403'd by ``_effective_user_id`` OUTSIDE the
@@ -1062,7 +1133,24 @@ async def _memory_search_body(user_id: str, query: str, limit: int) -> dict:
             notes_error = f"{type(exc).__name__}: {exc}"[:200]
     return {"provider": getattr(provider, "name", None), "mode": mode,
             "recall": recall, "notes": notes, "recall_error": recall_error,
-            "notes_error": notes_error, "unavailable": False}
+            "notes_error": notes_error, "unavailable": False,
+            "held_in_scopes": _held_in_scopes(provider, user_id)}
+
+
+def _held_in_scopes(provider, user_id: str):
+    """025: recall above is the SHARED view (``search`` with no scope), so a goal's
+    quarantined findings never show here. This says how much is held back —
+    counts only, never the findings: ``{enabled, scopes, rows}``; ``None`` when the
+    backend has no scopes; ``{"error": ...}`` when the count could not be read."""
+    if not hasattr(provider, "list_scopes"):
+        return None
+    try:
+        from modules.memory.scope import scopes_enabled
+        rows = provider.list_scopes(user_id)
+        return {"enabled": scopes_enabled(), "scopes": len(rows),
+                "rows": sum(int(r.get("rows") or 0) for r in rows)}
+    except Exception as exc:
+        return {"error": f"{type(exc).__name__}: {exc}"[:200]}
 
 
 @api_router.get("/api/webgate/memory/search")
@@ -1125,7 +1213,7 @@ def _flags_body(q: str, group: str) -> dict:
     from webview.config_view import flag_metadata
     ql = q.lower()
     out = []
-    for name, grp, default, desc in CATALOG:
+    for name, grp, default, desc, *_ in CATALOG:
         if group and grp != group:
             continue
         if ql and ql not in name.lower() and ql not in (desc or "").lower():
@@ -1221,6 +1309,10 @@ def _chat(request: Request, session_id: str = ""):
     ctx.update(chat_context(request, session_id))
     if session_id and not ctx.get("is_owner") and not ctx.get("ownership_unknown"):
         raise HTTPException(status_code=404)
+    if session_id:
+        # 070 W0.12: a bound chat is not "New" — the tab says Chat, no nav slot.
+        ctx["page_title"] = t("shell.title", page=t("chat.title"))
+        ctx["nav_current"] = ""
     return _TEMPLATES.TemplateResponse(request, "chat.html", ctx)
 
 
@@ -1259,15 +1351,19 @@ async def money(request: Request):
     """Money › Book. The book itself is drawn client-side by money.js from the
     tenant-scoped ``/api/webgate/book`` reader; this builds only the frame. The
     verdict leads, because a wrong number here costs real money."""
-    return _TEMPLATES.TemplateResponse(request, "money.html",
-                                       _shell_context(request, "money"))
+    from webview.contributions import provides
+    ctx = _shell_context(request, "money")
+    # 067 P5a: the data routes are a contribution; with none the page is the
+    # install hint (the destination itself stays — one of the five).
+    ctx["money_installed"] = provides("money")
+    return _TEMPLATES.TemplateResponse(request, "money.html", ctx)
 
 
 @router.get("/agent", response_class=HTMLResponse, name="console_agent")
 async def agent(request: Request):
     """Agent — one screen, six tabs (043 WS-AF1). Every pane is drawn client-side
     by agent.js from the tenant-scoped Agent readers; this builds only the frame
-    and the four posture axes."""
+    and the posture axes."""
     return _TEMPLATES.TemplateResponse(request, "agent.html", _agent_context(request))
 
 
@@ -1583,6 +1679,16 @@ def mount(app) -> None:
     # read exactly; they were never behind the (now removed) WEBVIEW_UI switch.
     for one in _API_ROUTERS():
         _mount_one(app, one)
+    # 067 P5a: every destination's contributed data routes (today the Money
+    # readers of pages.py and this module; after P5b, the wallet pack's).
+    from webview.contributions import contributed_routers
+    for one in contributed_routers():
+        _mount_one(app, one)
+    # PackSpec.console_routers under /api/packs/<id>: owner-only, except the EXACT
+    # GET paths a first-party pack declares public (webview/pack_console.py; the
+    # auth middleware in server.py asks `pack_console.is_public`).
+    from webview.pack_console import mount_into
+    mount_into(app, None)
     if _drop_legacy_index(app):
         logger.info("console index replaced by the new chat (043 C6)")
     _mount_one(app, router)
@@ -1693,3 +1799,9 @@ def _mount_one(app, one) -> None:
     keep = APIRouter()
     keep.routes.extend(r for r in one.routes if r not in clashes)
     app.include_router(keep)
+
+
+# 067 P5a: this module's Money readers, contributed to the console.
+from webview.contributions import register_console_router  # noqa: E402
+
+register_console_router(money_api_router, destination="money", source="webview.pages_new")

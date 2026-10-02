@@ -2,7 +2,7 @@
 
 The old console greyed one button at a time, so a person had to discover the
 posture by clicking. The banner says it once, at the top of every screen, in
-words: *"You are looking at Rob, not driving it."* Per-control "disabled" copy
+words: *"View only."* Per-control "disabled" copy
 is then not a second courtesy — it is noise that teaches the reader the first
 sentence was not the whole answer.
 
@@ -74,7 +74,7 @@ def _soup(client, path):
 def test_every_page_states_the_posture_exactly_once(client, path):
     banners = _soup(client, path).select(".banner")
     lead = [b for b in banners
-            if "looking at Rob, not driving it" in b.get_text(" ", strip=True)]
+            if "View only." in b.get_text(" ", strip=True)]
     assert len(lead) == 1, f"{path} states read-only {len(lead)} times"
 
 
@@ -136,7 +136,7 @@ def test_a_bound_session_still_loads_its_thread_under_read_only(client):
     assert soup.select_one("#chat-messages") is not None
     # …and the frame still states the posture exactly once.
     lead = [b for b in soup.select(".banner")
-            if "looking at Rob, not driving it" in b.get_text(" ", strip=True)]
+            if "View only." in b.get_text(" ", strip=True)]
     assert len(lead) == 1
     # …with no composer to type into.
     assert soup.select_one("form.composer") is None
@@ -230,6 +230,14 @@ def test_the_overlay_opens_from_the_head_search_button(writable_client):
     assert button is not None
     assert button.get("aria-haspopup") == "dialog"
     assert button.get("aria-label")
+
+
+def test_the_chats_button_has_a_visible_word(writable_client):
+    """070 E.7: the ⌘K button says "Chats"; its accessible name stays the label."""
+    soup = BeautifulSoup(writable_client.get("/").text, "html.parser")
+    button = soup.select_one("#chats-open")
+    assert button.select_one(".btn-label").get_text(strip=True) == "Chats"
+    assert button.get("aria-label") == "Open your chats"
 
 
 def test_the_overlay_carries_every_word_its_script_asks_for(writable_client):

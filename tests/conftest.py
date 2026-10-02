@@ -4,6 +4,17 @@ import os
 
 import pytest
 
+# 067 P2/P3: the pack loader's phase 1 (policy rows from each installed pack's
+# pack.toml) runs where the CLI's main() and api/app.py run it — before any
+# policy view module is imported — and phase 2 (the enabled packs' tools and
+# gates) runs once, as the tool tier's own registrations used to at import.
+# Without this an installed pack's tools (anysite, perplexity) are unclassified
+# in the test process. Never raises; a refusal is recorded in core.packs.state.
+from core.packs.loader import load_packs as _load_packs, register_policies as _register_policies
+
+_register_policies()
+_load_packs()
+
 
 # ---------------------------------------------------------------------------
 # Operator-env sandbox (§3.5, 2026-07-16): tests must never read the dev box
@@ -75,7 +86,7 @@ def _wallet_env_vars() -> tuple:
     """
     try:
         from core.flags_catalog import CATALOG
-        return tuple(name for name, _group, _default, _desc in CATALOG
+        return tuple(name for name, *_ in CATALOG
                      if name.startswith("AGENT_WALLET_") and "<" not in name)
     except Exception:
         return ()
@@ -109,6 +120,11 @@ _OPERATOR_ENV_VARS = (
     # registers NO undo — so a profile-activation test leaks it and every later
     # test resolves the leaked profile name as the instance id.
     "POLYROB_PROFILE", "POLYROB_PROFILE_SOURCE",
+    # Activation also pins the registry and home with raw writes. A leaked
+    # registry can select a prior test's sticky profile, redirecting subsequent
+    # CLI writes away from their patched Path.home(). Restore; never override
+    # these globally, since tests intentionally exercise the normal home tier.
+    "POLYROB_PROFILES_ROOT", "POLYROB_HOME", "POLYROB_PROFILE_RESOLVED",
     # Money-rail class (2026-08-24): X402_TREASURY_FROM_WALLET defaults ON, so
     # on any box where the wallet vars are in the ambient env (a dev machine,
     # the prod maintenance loop) `resolve_treasury_address()` would return the
@@ -258,6 +274,23 @@ def _tests_are_not_a_deployed_box(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _reset_custody_latches():
+    """066 P0: the custody-secret holder and the hardening result are
+    PROCESS-level. A seed one test's ``load_wallet_config()`` took out of
+    ``os.environ`` must not be what a later, seedless test reads back."""
+    def _reset():
+        try:
+            from core.security import custody_env, process_hardening
+            custody_env._reset_for_tests()
+            process_hardening._reset_for_tests()
+        except Exception:
+            pass
+    _reset()
+    yield
+    _reset()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_wallet_audit_sink(tmp_path, monkeypatch):
     """Keep the wallet PolicyGate/AgentWallet — and the durable audit sink they
     read real trailing-24h spend from — OUT of the developer's real data home,
@@ -349,6 +382,23 @@ def _isolate_wallet_audit_sink(tmp_path, monkeypatch):
         yield
     finally:
         reset_agent_wallet_cache()
+
+
+@pytest.fixture(autouse=True)
+def _reset_memory_scope_bindings():
+    """025: the session -> memory-scope binding is process-global (a bounded
+    LRU in ``modules.memory.scope``). Clear it around every test so a scope one
+    test bound never reaches another test's recall."""
+    try:
+        from modules.memory.scope import reset_bindings
+    except Exception:  # pragma: no cover - import guard
+        yield
+        return
+    reset_bindings()
+    try:
+        yield
+    finally:
+        reset_bindings()
 
 
 @pytest.fixture(autouse=True)
@@ -557,6 +607,22 @@ def _isolate_publish_store(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_card_store(tmp_path_factory):
+    """Keep the action-card store (``core.surfaces.cards``) out of the real data
+    home: every quote on a money verb now writes a card row."""
+    try:
+        from core.surfaces import cards as _cards
+    except Exception:
+        yield
+        return
+    # Its own tmp dir: a test that lists its tmp_path must not see this file.
+    _cards.set_store(_cards.CardStore(str(tmp_path_factory.mktemp("cards") / "cards.db")))
+    yield
+    _cards.set_store(None)
+    _cards._LISTENERS.clear()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_app_services_db(tmp_path, monkeypatch):
     """032: keep the durable app registry out of the developer's real data home
     (mirrors ``_isolate_deployed_apps_db``; the app_service suite also passes an
@@ -731,3 +797,34 @@ def _reset_skill_usage_singleton():
             _su._STORE = None
     except Exception:
         pass
+
+
+@pytest.fixture(autouse=True)
+def _reset_bot_pair_guard():
+    """064 F4: the bot-pair loop guard counts in process memory; a test that
+    sends bot lines must not spend a later test's budget."""
+    yield
+    try:
+        from core.surfaces import bot_pair_guard
+        bot_pair_guard.reset()
+    except Exception:
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _lazy_overlay_sandbox(tmp_path_factory, monkeypatch):
+    """066 P1: a test never installs into, or imports from, the operator's real
+    lazy overlays (``~/.polyrob/pylibs``, ``<data home>/pylibs``), and never runs
+    a real network install by accident. Both roots point into a per-test tmp dir;
+    the in-process trusted install refuses unless a test patches it back."""
+    import core.lazy_deps as _ld
+    base = tmp_path_factory.mktemp("lazy-overlay")
+    monkeypatch.setattr(_ld, "system_root", lambda: base / "system")
+    monkeypatch.setattr(_ld, "local_root", lambda: base / "local")
+
+    def _blocked(feature, *, wheel_only):
+        raise _ld.FeatureUnavailable(
+            f"{feature}: real lazy installs are blocked under pytest (tests/conftest.py). "
+            f"Remedy: {_ld.remedy(feature)}", "test_blocked")
+
+    monkeypatch.setattr(_ld, "_trusted_install", _blocked)

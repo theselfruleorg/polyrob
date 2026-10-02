@@ -11,8 +11,11 @@ Honest limits, stated rather than papered over:
 
 * **Simulation is not execution.** A contract can behave differently at
   execution time (block-dependent logic, another transaction landing in the same
-  block, a contract that detects `eth_call`). Mitigated by simulating at pending
-  state and re-simulating immediately pre-broadcast — not eliminated.
+  block, a contract that detects `eth_call`). The simulation runs ONCE, at
+  `latest`, inside `tx_guard.authorize` — there is no pending-state read and no
+  automatic re-simulation before broadcast. A caller that waits (for example
+  for an owner approval) between authorize and broadcast must call authorize
+  again after the wait; otherwise it broadcasts against stale state.
 * **Simulation cannot see the future.** An allowance granted now can be drained
   in a later transaction this engine will never observe. That is why an
   allowance INCREASE is refused unless explicitly declared, rather than merely
@@ -63,8 +66,21 @@ _TOPIC_TRANSFER_BATCH = "0x4a39dc06d4c0dbc64b70af90fd698a233a518aa5d07e595d983b8
 
 #: ERC-1155 `TransferBatch` arrays are bounded so a pathological log cannot turn
 #: one simulation into an unbounded allocation. A batch beyond this is malformed
-#: for our purposes and skipped like any other unreadable log.
+#: for our purposes; one that touches the holder refuses the simulation.
 _MAX_BATCH_IDS = 512
+
+# Uniswap Permit2 (CR-H06). A Permit2 grant is held BY Permit2, keyed
+# (owner, token, spender) — it is not an ERC-20 allowance, so the allowance
+# reads never see it, and its topic0 differs from the ERC-20 Approval.
+#   Approval(address indexed owner, address indexed token,
+#            address indexed spender, uint160 amount, uint48 expiration)
+#   Permit  (address indexed owner, address indexed token,
+#            address indexed spender, uint160 amount, uint48 expiration,
+#            uint48 nonce)
+_TOPIC_PERMIT2_APPROVAL = "0xda9fa7c1b00402c17d0161b249b1ab8bbec047c5a52207b9c112deffd817036b"
+_TOPIC_PERMIT2_PERMIT = "0xc6a377bfc4eb120024a8ac08eef205be16b817020812c73223e81d1bdb9708ec"
+#   Lockdown(address indexed owner, address token, address spender) — amount -> 0 (a revoke).
+_TOPIC_PERMIT2_LOCKDOWN = "0x89b1add15eff56b3dfe299ad94e01f2b52fbcb80ae1a3baea6ae8c04cb2b98a4"
 
 
 @dataclass(frozen=True)
@@ -106,6 +122,9 @@ class Deltas:
     #: ``(contract, approved_to, token_id)`` from a 4-topic Approval — the
     #: ERC-721 single-token approval. Same risk as an allowance, one token wide.
     holder_nft_approvals: Tuple[Tuple[str, str, int], ...] = ()
+    #: ``(permit2_contract, token, spender, amount)`` from a Permit2
+    #: ``Approval``/``Permit`` whose owner is the holder (CR-H06).
+    holder_permit2_grants: Tuple[Tuple[str, str, str, int], ...] = ()
     #: gasUsed of the simulated tx entry. The rail sizes the broadcast gas
     #: limit from it (a fixed limit out-of-gas-reverts a swap and burns the
     #: fee). None when the node did not report it — never 0.
@@ -119,6 +138,19 @@ class Deltas:
     error: Optional[str] = None
     event_topics: Tuple[Tuple[str, str], ...] = ()
     logs: Tuple[dict, ...] = ()
+    #: 050 §7.3 — only when ``simulate(sender=…)`` measured a SIGNER that is not
+    #: the holder (an agent NFT: the owner's treasury key signs, the token-bound account holds).
+    #: ``sender_native_delta`` is the signer's native change (the simulation does
+    #: not charge gas); ``sender_moved`` names every log whose INDEXED topics mention
+    #: the signer — a transfer from or to it, an approval by or to it, an NFT to it.
+    #: Measured for the record only: 069 v4 retired the "operator wallet must not move"
+    #: rule (the signer OWNS the NFT, so the account paying it is the owner's own money).
+    sender_native_delta: int = 0
+    sender_moved: Tuple[str, ...] = ()
+    #: The ABSOLUTE allowance of each measured ``(token, spender)`` AFTER the transaction (W8).
+    #: A delta cannot say "nothing is left standing" when an allowance existed before; the
+    #: approve-spend-reset batch asserts this is exactly 0. Empty = not measured.
+    allowance_after: Dict[Tuple[str, str], int] = field(default_factory=dict)
 
     @property
     def grants_allowance(self) -> bool:
@@ -159,7 +191,8 @@ def _native_balance(rpc, holder) -> Optional[int]:
 
 def simulate(tx: dict, *, holder: str, chain: str,
              tokens: List[str], spenders: List[str],
-             rpc: Optional[Callable] = None) -> Deltas:
+             rpc: Optional[Callable] = None,
+             sender: Optional[str] = None) -> Deltas:
     """Simulate *tx* and return the observed deltas for *holder*.
 
     ⚠️ Uses ``eth_simulateV1``, NOT a sequence of ``eth_call``s. This is the
@@ -178,8 +211,15 @@ def simulate(tx: dict, *, holder: str, chain: str,
     addresses whose allowance over each token should be measured. Anything not
     measured cannot be asserted, so the guard must name every address the
     transaction touches.
+
+    ``sender`` (050 §7.3): the address that SIGNS when it is not the holder —
+    the NFT owner's treasury key driving its token-bound account. The transaction runs
+    ``from`` the sender, the holder reads are unchanged, and the sender's own
+    native balance and every event naming it are measured on top
+    (``Deltas.sender_native_delta`` / ``sender_moved``).
     """
     rpc = rpc or _default_rpc_for(chain)
+    split = bool(sender) and str(sender).lower() != str(holder).lower()
 
     reads: List[dict] = []
     layout: List[tuple] = []
@@ -200,8 +240,12 @@ def simulate(tx: dict, *, holder: str, chain: str,
             reads.append({"from": holder, "to": t,
                           "data": _SEL_ALLOWANCE + _pad_addr(holder) + _pad_addr(s)})
             layout.append(("allow", (t, s)))
+    if split:
+        reads.append({"from": holder, "to": MULTICALL3,
+                      "data": _SEL_GET_ETH_BALANCE + _pad_addr(sender)})
+        layout.append(("sender_native", None))
 
-    the_tx = {"from": holder, "to": tx.get("to"),
+    the_tx = {"from": sender if split else holder, "to": tx.get("to"),
               "data": tx.get("data", "0x"),
               "value": hex(int(tx.get("value", 0) or 0))}
     calls = reads + [the_tx] + reads
@@ -241,6 +285,14 @@ def simulate(tx: dict, *, holder: str, chain: str,
             "simulation returned no event-log set for the transaction — "
             "hidden transfers/approvals cannot be ruled out, refusing"))
     events = _holder_events(raw_logs, holder)
+    if events.unreadable:
+        # CR-L17: a known NFT event that touches the holder but cannot be read
+        # (an oversized TransferBatch, a 1-/2-topic legacy Transfer) is not
+        # "nothing moved" — it is an unmeasured movement of our assets.
+        return Deltas(ok=False, error=(
+            f"the transaction emits {events.unreadable} that touches the wallet "
+            f"but cannot be read — refusing rather than treating an unread "
+            f"asset movement as none"))
     holder_transfers, holder_approvals = events.transfers, events.approvals
 
     def _value(entry) -> Optional[int]:
@@ -256,16 +308,22 @@ def simulate(tx: dict, *, holder: str, chain: str,
             "than treating unknown as zero"))
 
     native_delta = 0
+    sender_native_delta = 0
     token_deltas: Dict[str, int] = {}
     allowance_deltas: Dict[Tuple[str, str], int] = {}
+    allowance_after: Dict[Tuple[str, str], int] = {}
     for i, (kind, key) in enumerate(layout):
         delta = after[i] - before[i]
         if kind == "native":
             native_delta = delta
+        elif kind == "sender_native":
+            sender_native_delta = delta
         elif kind == "token":
             token_deltas[key] = delta
         else:
             allowance_deltas[key] = delta
+            allowance_after[key] = after[i]
+    sender_moved = _sender_movements(raw_logs, sender) if split else ()
 
     return Deltas(ok=True, native_delta=native_delta,
                   token_deltas=token_deltas, allowance_deltas=allowance_deltas,
@@ -275,12 +333,32 @@ def simulate(tx: dict, *, holder: str, chain: str,
                   holder_nft_in=events.nft_in,
                   holder_operator_grants=events.operator_grants,
                   holder_nft_approvals=events.nft_approvals,
+                  holder_permit2_grants=events.permit2_grants,
                   gas_used=onchain._hex_int(tx_entry.get("gasUsed")),
                   return_data=tx_entry.get("returnData"),
                   logs=tuple(raw_logs),
                   event_topics=tuple((str(log.get("address", "")).lower(),
                                       str(log["topics"][0]).lower())
-                                     for log in raw_logs if log.get("topics")))
+                                     for log in raw_logs if log.get("topics")),
+                  sender_native_delta=sender_native_delta,
+                  sender_moved=sender_moved,
+                  allowance_after=allowance_after)
+
+
+def _sender_movements(raw_logs, sender: str) -> Tuple[str, ...]:
+    """Every log whose INDEXED topics name *sender* (050 §7.3; measured, not judged since 069 v4).
+
+    Deliberately wider than :func:`_holder_events`: it does not parse the event,
+    it only asks whether the signer appears in it. AccountV3's own `execute` emits
+    no event, so a clean account call produces none of these.
+    """
+    word = "0x" + "0" * 24 + str(sender).lower().removeprefix("0x")
+    out = []
+    for log in raw_logs or ():
+        topics = [str(t).lower() for t in (log.get("topics") or [])]
+        if word in topics[1:]:
+            out.append(f"{str(log.get('address', '?')).lower()}:{topics[0][:10]}")
+    return tuple(out)
 
 
 @dataclass(frozen=True)
@@ -292,6 +370,10 @@ class _HolderEvents:
     nft_in: Tuple[Tuple[str, str, str, int, int], ...] = ()
     operator_grants: Tuple[Tuple[str, str, bool], ...] = ()
     nft_approvals: Tuple[Tuple[str, str, int], ...] = ()
+    permit2_grants: Tuple[Tuple[str, str, str, int], ...] = ()
+    #: Non-empty names a known event that touches the holder and could not be
+    #: parsed (CR-L17); the simulation refuses on it.
+    unreadable: str = ""
 
 
 def _addr_of(topic: str) -> str:
@@ -336,6 +418,8 @@ def _holder_events(raw_logs, holder: str) -> _HolderEvents:
     nft_in = []
     operator_grants = []
     nft_approvals = []
+    permit2_grants = []
+    unreadable = ""
 
     def _is_holder(topic: str) -> bool:
         return topic[2:] == holder_word
@@ -348,6 +432,37 @@ def _holder_events(raw_logs, holder: str) -> _HolderEvents:
                 continue
             topic0 = topics[0]
             data = str(log.get("data") or "0x")
+
+            # -- legacy Transfer with non-indexed parties (CR-L17) -----------
+            # ERC-20 and ERC-721 share this topic0; a pre-standard token puts
+            # from/to (and the value/id) in DATA. Unreadable if it names us.
+            if topic0 == _TOPIC_TRANSFER and len(topics) in (1, 2):
+                if holder_word in data.lower() or any(
+                        _is_holder(t) for t in topics[1:]):
+                    unreadable = unreadable or (
+                        f"a {len(topics)}-topic legacy Transfer on {contract}")
+                continue
+
+            # -- Permit2 grants (CR-H06) --------------------------------------
+            if (len(topics) == 4 and topic0 in (_TOPIC_PERMIT2_APPROVAL,
+                                                _TOPIC_PERMIT2_PERMIT)):
+                if _is_holder(topics[1]):
+                    raw = data[2:] if data.startswith("0x") else data
+                    try:
+                        amount = int(raw[:64], 16) if raw else 0
+                    except ValueError:
+                        amount = 1  # unreadable amount: treat as a grant
+                    permit2_grants.append(
+                        (contract, _addr_of(topics[2]), _addr_of(topics[3]),
+                         amount))
+                continue
+
+            if len(topics) == 2 and topic0 == _TOPIC_PERMIT2_LOCKDOWN:
+                if _is_holder(topics[1]):
+                    raw = data[2:] if data.startswith("0x") else data
+                    permit2_grants.append(
+                        (contract, _addr_of("0x" + raw[0:64]), _addr_of("0x" + raw[64:128]), 0))
+                continue
 
             # -- 3 topics: the fungible shapes + the blanket grant ------------
             if len(topics) == 3:
@@ -395,18 +510,25 @@ def _holder_events(raw_logs, holder: str) -> _HolderEvents:
             if topic0 in (_TOPIC_TRANSFER_SINGLE, _TOPIC_TRANSFER_BATCH):
                 # ⚠️ topics[1] is the OPERATOR. from/to are topics[2]/topics[3].
                 # Being the operator alone moved nothing of OURS.
-                if topic0 == _TOPIC_TRANSFER_SINGLE:
-                    raw = data[2:] if data.startswith("0x") else data
-                    if len(raw) < 128:
-                        continue
-                    pairs = [(int(raw[:64], 16), int(raw[64:128], 16))]
-                else:
-                    pairs = _batch_pairs(data)
                 if _is_holder(topics[2]):
                     sink, other = nft_out, _addr_of(topics[3])
                 elif _is_holder(topics[3]):
                     sink, other = nft_in, _addr_of(topics[2])
                 else:
+                    continue
+                try:
+                    if topic0 == _TOPIC_TRANSFER_SINGLE:
+                        raw = data[2:] if data.startswith("0x") else data
+                        if len(raw) < 128:
+                            raise ValueError("TransferSingle data too short")
+                        pairs = [(int(raw[:64], 16), int(raw[64:128], 16))]
+                    else:
+                        pairs = _batch_pairs(data)
+                except Exception:
+                    # CR-L17: it touches the holder, so skipping it would hide
+                    # a movement of our assets.
+                    unreadable = unreadable or (
+                        f"an unreadable ERC-1155 transfer on {contract}")
                     continue
                 for token_id, value in pairs:
                     sink.append((contract, "erc1155", other, token_id, value))
@@ -418,4 +540,5 @@ def _holder_events(raw_logs, holder: str) -> _HolderEvents:
         transfers=tuple(transfers), approvals=tuple(approvals),
         nft_out=tuple(nft_out), nft_in=tuple(nft_in),
         operator_grants=tuple(operator_grants),
-        nft_approvals=tuple(nft_approvals))
+        nft_approvals=tuple(nft_approvals),
+        permit2_grants=tuple(permit2_grants), unreadable=unreadable)

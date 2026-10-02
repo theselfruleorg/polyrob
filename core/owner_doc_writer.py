@@ -43,7 +43,14 @@ class OwnerDocWriter(SelfContextWriter):
     _LOG_LABEL = "owner-doc"
     _MAX_CHARS = OWNER_DOC_MAX_CHARS
     _CAP_NOUN = "owner-facts doc"
-    _CAP_HINT = "consolidate (keep only durable facts/preferences), then retry"
+    # ⚠️ The hint used to say only "consolidate". The agent read that as a licence
+    # to DELETE an older owner rule to make room, which is exactly how the 09-17
+    # and 09-18 enforcement anchors disappeared on 2026-09-20. Tightening the
+    # words is the cheap half of the fix; raising OWNER_DOC_MAX_CHARS is the other.
+    _CAP_HINT = ("tighten the WORDING of existing facts, then retry. Never delete "
+                 "or weaken a standing owner rule to make room — if nothing can be "
+                 "tightened, ask the owner which rule to retire (a retired rule moves "
+                 "under '## Superseded', dated, and stops counting toward the cap)")
     _ARCHIVE_PREFIX = "owner"
     # Namespace rejected owner drafts separately from the SELF doc's
     # rejected.<n>.md so archived provenance is unambiguous.
@@ -56,6 +63,36 @@ class OwnerDocWriter(SelfContextWriter):
 
     def _pending_file(self, uid: str) -> Path:
         return self._root(uid) / ".pending" / _OWNER_DOC_NAME
+
+    # --- 060 WS-6: supersede, never evict -------------------------------------
+
+    def _prepare_body(self, uid: str, body: str, *, pending: Optional[bool],
+                      created_by: str, observed_at: Optional[str]) -> str:
+        """A rule this write DROPS moves under ``## Superseded``, dated (with its
+        successor when one line replaced one line) — it is never evicted. The
+        baseline is the same one provenance diffs against (the pending draft for
+        a quarantined write, else the active doc). Fail-open to the body as given:
+        superseding is bookkeeping, and a fault in it must not block a rule."""
+        try:
+            from core.doc_claims import carry_superseded, owner_rules_supersede
+            if not owner_rules_supersede():
+                return body
+            quarantine = self._resolve_pending(created_by, pending)
+            old = self._provenance_baseline(uid, quarantine=quarantine)
+            return carry_superseded(old, body, observed_at=observed_at)
+        except Exception:
+            return body
+
+    def _capped_len(self, body: str) -> int:
+        """The cap counts the ACTIVE rules only; the superseded section has its own
+        bound (``doc_claims.SUPERSEDED_MAX_CHARS``) and is never injected."""
+        try:
+            from core.doc_claims import owner_rules_supersede, split_superseded
+            if owner_rules_supersede():
+                return len(split_superseded(body)[0])
+        except Exception:
+            pass
+        return len(body)
 
     # --- review flag (owner-doc-specific) ------------------------------------
 

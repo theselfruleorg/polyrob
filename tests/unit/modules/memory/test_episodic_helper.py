@@ -105,3 +105,29 @@ def test_parse_since():
     assert parse_since(None) is None
     assert parse_since("garbage") is None
     assert parse_since("2026-07-03T00:00:00Z") is not None
+
+
+@pytest.mark.asyncio
+async def test_collect_provenance_reports_the_api_cost_not_the_billed_credits(monkeypatch):
+    """2026-09-21 (intel): `spend_usd` fed the rail ledger, the episodic digest,
+    goal-event provenance and the owner digest with `total_user_cost_usd` — the
+    platform BILLING figure (credits × $0.01, every call rounded UP to one
+    credit), ~4× the real API cost on the owner's own seat (tranche 17: $0.048
+    api vs $0.21 billed). On a single-owner deploy the owner IS the payer, so the
+    provenance figure is the API cost; the credit figure stays where platform
+    billing needs it. Never one unlabelled number that is 4× wrong."""
+    import agents.task.runtime.evidence as evidence_mod
+    monkeypatch.setattr(evidence_mod, "collect_artifacts", lambda orch, **kw: [])
+
+    class _Tracker:
+        async def get_session_breakdown(self, session_id):
+            return {"total_user_cost_usd": 0.21, "total_api_cost_usd": 0.048}
+
+    class _Orch:
+        agents = {}
+        usage_tracker = _Tracker()
+        session_id = "s-cost"
+
+    out = await collect_provenance(_Orch())
+    assert out["spend_usd"] == 0.048
+    assert out["billed_usd"] == 0.21

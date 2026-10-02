@@ -96,11 +96,35 @@ def is_bot_username(surface: str, target) -> bool:
     return t.startswith("@") and t.lower().endswith("bot")
 
 
+def canonical_owner_addr(surface: str, target) -> str:
+    """The ONE spelling an owner address is compared under (061 §2.3).
+
+    Strips a leading ``<surface>:`` that names THIS surface (the model types
+    ``telegram:28436760`` for the owner's Telegram id; prod held that as a
+    SECOND, open-tier conversation row invisible to the owner-resend cooldown),
+    then applies :func:`core.surfaces.address_key.canonical_addr`. Used by
+    :func:`resolve_target_tier` and the cooldown — one helper, both callers.
+    """
+    from core.surfaces.address_key import canonical_addr
+    t = str(target or "").strip()
+    prefix = f"{(surface or '').strip().lower()}:"
+    if prefix != ":" and t.lower().startswith(prefix):
+        t = t[len(prefix):].strip()
+    return canonical_addr(t)
+
+
+def is_owner_target(surface: str, target, owner_targets: dict) -> bool:
+    """True when ``target`` names the owner on ``surface`` under any spelling."""
+    owner_addr = (owner_targets or {}).get(surface)
+    if owner_addr is None or target is None:
+        return False
+    return canonical_owner_addr(surface, target) == canonical_owner_addr(surface, owner_addr)
+
+
 def resolve_target_tier(*, surface: str, target: str, user_id: str, allowlist,
                         owner_targets: dict, policy: str = "allowlist",
                         domains: tuple = ()) -> str:
-    owner_addr = (owner_targets or {}).get(surface)
-    if owner_addr is not None and str(target) == str(owner_addr):
+    if is_owner_target(surface, target, owner_targets):
         return "owner"
     if policy == "off":
         return "denied"

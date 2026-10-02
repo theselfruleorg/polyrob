@@ -68,6 +68,27 @@ def validate_push_url(url: str) -> str:
     return url
 
 
+async def _pinned_push_transport(url: str):
+    """An httpx transport pinned to the IP the SSRF policy cleared for ``url``.
+
+    Validation alone left a rebinding window: ``validate_push_url`` resolved the
+    host, then httpx resolved it AGAIN at connect. ``validate_and_resolve``
+    returns the checked address and the core pinned transport connects to
+    exactly that (Host and SNI preserved; any other host is refused).
+    """
+    import asyncio
+
+    from core.security.url_policy import MCPURLValidator
+    from core.security.pinned_transport import PinnedAsyncTransport
+    from urllib.parse import urlparse
+
+    ok, error, pinned_ip = await asyncio.get_running_loop().run_in_executor(
+        None, MCPURLValidator(allow_http=False).validate_and_resolve, url)
+    if not ok or not pinned_ip:
+        raise ValueError(f"push notification url refused: {error}")
+    return PinnedAsyncTransport(urlparse(url).hostname or "", pinned_ip)
+
+
 def _encrypt_push_token(token: Optional[str]) -> Optional[str]:
     """Fernet-encrypt a webhook token for the session-metadata mirror (B10).
 
@@ -921,6 +942,10 @@ class A2ATaskHandler:
             # older process build, or mutated after registration, is still
             # checked here — the delivery itself is the SSRF primitive.
             validate_push_url(config.url)
+            # ...and the socket is PINNED to the address that check cleared, so
+            # a DNS rebind between validation and connect cannot redirect the
+            # POST (2026-09-23 Low). Blocking getaddrinfo runs off the loop.
+            transport = await _pinned_push_transport(config.url)
 
             payload = {
                 "taskId": task_id,
@@ -937,7 +962,9 @@ class A2ATaskHandler:
                 if "Bearer" in config.authentication.schemes:
                     headers["Authorization"] = f"Bearer {config.authentication.credentials}"
 
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with httpx.AsyncClient(timeout=10.0, transport=transport,
+                                         trust_env=False,
+                                         follow_redirects=False) as client:
                 response = await client.post(
                     config.url,
                     json=payload,

@@ -183,10 +183,16 @@ _PAUSE_KIND_BY_SOURCE = {"self_evolution": "lifecycle_ping", "lifecycle": "lifec
                          "goal_blocked": "escalate"}
 
 
-def _lifecycle_daily_cap() -> int:
+def _lifecycle_daily_cap(user_id: Optional[str] = None, home_dir=None) -> int:
     """Max ``self_evolution`` (lifecycle ping) sends per tenant per rolling 24h.
-    ``0`` disables the bucket (lifecycle traffic then only obeys the shared cap)."""
-    return int_env("USER_DELIVERY_LIFECYCLE_DAILY_CAP", 10)
+    ``0`` disables the bucket (lifecycle traffic then only obeys the shared cap).
+    060 WS-8: the owner's pref ``delivery.lifecycle_daily_cap`` (default 10; the
+    env flag is retired)."""
+    from core import prefs
+    if home_dir is None:
+        from core.runtime_paths import prefs_home_dir
+        home_dir = prefs_home_dir()
+    return int(prefs.resolve("delivery.lifecycle_daily_cap", user_id, home_dir, default=10))
 
 
 def resolve_priority(source: str, priority: Optional[str]) -> str:
@@ -583,6 +589,28 @@ _NOTICE_SUBJECT_BY_SOURCE = {
 }
 
 
+def _card_buttons(card_id: str, user_id: str) -> list:
+    """The buttons of the owner's OWN open card, or none. Fail-open."""
+    try:
+        from core.surfaces import cards
+        card = cards.store().get(card_id)
+        if card is None or str(card.user_id) != str(user_id):
+            return []
+        return cards.card_actions(card)
+    except Exception:
+        logger.debug("card buttons unavailable (fail-open)", exc_info=True)
+        return []
+
+
+def _card_ref(card_id: str, chat_id: Any, message_id: Any) -> None:
+    """Remember where a card was shown, so a decision edits it in place."""
+    try:
+        from core.surfaces import cards
+        cards.store().add_ref(card_id, "telegram", chat_id, message_id)
+    except Exception:
+        logger.debug("card ref not stored (fail-open)", exc_info=True)
+
+
 def notice_subject(source: str) -> str:
     """The email subject for a rail notice from *source*.
 
@@ -599,7 +627,9 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
                                recipient_surface: Optional[str] = None,
                                attachments: Optional[list] = None,
                                priority: Optional[str] = None,
-                               event_log: Any = ...) -> str:
+                               event_log: Any = ...,
+                               ask_id: Optional[str] = None,
+                               card_id: Optional[str] = None) -> str:
     """Deliver *text* to *user_id*'s principal through the one rail.
 
     Returns an outcome string: ``sent`` | ``deduped`` | ``rate_limited`` |
@@ -731,7 +761,7 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
                 day = 0  # fail-open: an uncountable window never denies a send
             allowance = effective_cap_for_priority(
                 effective_daily_cap(uid, _home_dir), lane)
-            _lc_cap = _lifecycle_daily_cap()
+            _lc_cap = _lifecycle_daily_cap(uid, _home_dir)
             if lane not in _UNBUDGETED_LANES and source in _LIFECYCLE_SOURCES and _lc_cap > 0:
                 lifecycle_day = _count(
                     event_log, user_id=uid, since_ts=now - 86400,
@@ -806,6 +836,8 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
     # still owed, so it may never be recorded as ``sent``); ``no_sink`` = there
     # was no sink to try at all.
     best = "no_sink"
+    best_via = ""
+    sent_mid = None
     try:
         from core.surfaces.owner_address import owner_address, owner_surface_order
         if recipient_override:
@@ -826,10 +858,22 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
 
         async def _send_one(_sid: str, _addr: str) -> str:
             """``"sent"`` | ``"queued"`` | ``"failed"`` | ``"no_sink"``."""
+            nonlocal sent_mid
             sink = tg_sink if (_sid == "telegram" and tg_sink is not None) else router
             if sink is None:
                 return "no_sink"
             kwargs = {} if _sid == "telegram" and sink is tg_sink else {"surface_id": _sid}
+            if _sid == "telegram" and sink is tg_sink:
+                # 064 F2: a code-produced decision card carries its own tokens as
+                # buttons; any other notice carries none.
+                from core.surfaces.actions import notice_actions
+                _acts = notice_actions(source, body, ask_id=ask_id)
+                if card_id:
+                    # Action cards (2026-09-27): the buttons come from the
+                    # STORED card (its state decides them), never from the text.
+                    _acts = _card_buttons(card_id, uid)
+                if _acts:
+                    kwargs["actions"] = _acts
             # D70: an email notice is not a reply, so it must not arrive with a
             # "Re:" subject. The subject rides as the legacy media entry every
             # other surface ignores.
@@ -848,7 +892,8 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
                 two-step fallback did — delivers a message addressed to email
                 over the default surface instead.
                 """
-                for drop in ((), ("subject",), ("subject", "surface_id")):
+                for drop in ((), ("actions",), ("actions", "subject"),
+                             ("actions", "subject", "surface_id")):
                     kw = {k: v for k, v in kwargs.items() if k not in drop}
                     try:
                         return send(_addr, text_, **kw)
@@ -868,6 +913,15 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
                 res = _attempt(body)
             if hasattr(res, "__await__"):
                 res = await res
+            # 061: a sink that can name the surface message id answers with a
+            # dict ({"outcome": …, "message_id": …}); the id is the referent key
+            # a quote-reply resolves against.
+            if isinstance(res, dict):
+                if res.get("message_id") is not None:
+                    sent_mid = str(res.get("message_id"))
+                    if card_id and _sid == "telegram":
+                        _card_ref(card_id, _addr, sent_mid)
+                res = res.get("outcome", "failed")
             if isinstance(res, str):
                 return res if res in ("sent", "queued", "failed") else "failed"
             return "sent" if res else "failed"
@@ -879,6 +933,7 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
             outcome = await _send_one(_sid, _addr)
             if _RANK[outcome] > _RANK[best]:
                 best = outcome
+                best_via = _sid
             if best == "sent" and not broadcast:
                 break
     except Exception as e:
@@ -888,13 +943,28 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
                        "durable notice", e, exc_info=True)
         best = "failed"
 
+    # 061 alignment: a `recipient_override` can name a NON-owner (a cron job's
+    # `deliver_target` — a room, a channel, another chat). Only a line the OWNER
+    # received is a thread line; anything else is recorded on telemetry alone.
+    _thread_ok = _override_is_owner(container, uid, recipient_override, recipient_surface)
     if best == "sent":
         # C7: all 527 `sent` rows in prod held a NULL text, so no surface could
         # answer "what did you actually tell me" — only failures were legible.
         _record(event_log, uid, session_id, source, "sent", h, text=body,
                 attachments=send_attachments, lane=lane)
+        if _thread_ok:
+            _record_thread(container, uid, body, via=best_via, session_id=session_id,
+                           source=source, mid=sent_mid, attachments=send_attachments,
+                           ask_id=ask_id)
         return "sent"
     if best == "queued":
+        # 061: the outbox owns delivery now; the line is recorded here because the
+        # dispatcher (core tier, no container) cannot tell the owner from any
+        # other `direct:` target. A dead-lettered row is the rare exception and
+        # shows in `/missed` as the queue's own dead letter.
+        if _thread_ok:
+            _record_thread(container, uid, body, via=best_via, session_id=session_id,
+                           source=source, attachments=attachments, ask_id=ask_id)
         # D6: durable acceptance is NOT delivery. Recording it as `sent` made
         # the 24h dedup refuse the retry after the queued copy dead-lettered,
         # so neither attempt ever reached the owner. No owner_notice: the body
@@ -923,6 +993,98 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
     _record(event_log, uid, session_id, source, outcome, h, text=body,
             attachments=attachments, lane=lane)
     return outcome
+
+
+def _override_is_owner(container: Any, user_id: str, recipient_override: Optional[str],
+                       recipient_surface: Optional[str]) -> bool:
+    """True when the rail's target is the OWNER: no override at all, or an
+    override that spells the owner's own address on that surface (any spelling —
+    `telegram:<id>`, `@handle`, bare). Fail-CLOSED: an override that cannot be
+    matched to the owner is not recorded as something the owner received."""
+    if not recipient_override:
+        return True
+    try:
+        from core.surfaces.owner_address import owner_address
+        from core.surfaces.outbound_target import is_owner_target
+        sid = str(recipient_surface or "telegram").strip().lower()
+        addr = owner_address(container, sid, user_id)
+        return bool(addr) and is_owner_target(sid, str(recipient_override), {sid: str(addr)})
+    except Exception:
+        return False
+
+
+def _rail_for_session(session_id: Optional[str]) -> tuple:
+    """``(rail_id, rail_label)`` for an autonomous run, else ``("", "")``.
+
+    Reads the in-process autonomy marker (the allowlisted core→agents edge this
+    module already carries); a session no marker knows is interactive.
+    """
+    if not session_id:
+        return "", ""
+    try:
+        from agents.task.goals.autonomy_marker import cron_job_for_session, goal_for_session
+        job = cron_job_for_session(session_id)
+        if job:
+            return f"cron:{job}", ""
+        goal = goal_for_session(session_id)
+        if goal:
+            return f"goal:{goal}", ""
+    except Exception:
+        pass
+    return "", ""
+
+
+def _record_thread(container: Any, user_id: str, body: str, *, via: str,
+                   session_id: Optional[str], source: str, mid: Optional[str] = None,
+                   attachments: Any = None, ask_id: Optional[str] = None) -> None:
+    """061: the ONE owner thread gets every line the owner actually received."""
+    try:
+        from core.surfaces.owner_thread import record_owner_out
+        rail_id, rail_label = _rail_for_session(session_id)
+        record_owner_out(container, user_id, body, via=via or "", session_id=session_id,
+                         source=source, mid=mid, rail_id=rail_id, rail_label=rail_label,
+                         ask_id=ask_id, attachments=attachments)
+    except Exception:
+        logger.debug("user_delivery: owner thread record skipped (fail-open)", exc_info=True)
+
+
+def record_interactive_reply(orchestrator: Any, text: str) -> None:
+    """061: an INTERACTIVE session's reply to the owner is a thread line.
+
+    Called from the turn-reply latch (``core.surfaces.turn_reply.
+    mark_reply_published``), which every speech verb already hits on every
+    seat (Telegram mirror, console, REPL, ``chat_once``). An autonomous run's
+    reply is recorded by the delivery rail instead (``deliver_user_message``
+    ``sent``), and a room reply is never the owner's. Fail-open.
+    """
+    try:
+        if orchestrator is None or not isinstance(text, str) or not text.strip():
+            return
+        from core.surfaces.room_policy import is_public_session
+        if is_public_session(orchestrator):
+            return
+        session_id = str(getattr(orchestrator, "session_id", "") or "")
+        from agents.task.goals.autonomy_marker import is_autonomous
+        if is_autonomous(session_id):
+            return
+        from core.surfaces.binding import terminal_attached
+        key = str(getattr(orchestrator, "_chat_session_key", "") or "")
+        if key.startswith("chat:"):
+            via = "api"          # `chat_once` sessions (REST chat, the /v1 surface)
+        elif key:
+            parts = key.split(":")
+            via = parts[2] if parts[0] == "agent" and len(parts) > 2 else parts[0]
+        elif terminal_attached(orchestrator):
+            via = "repl"
+        else:
+            via = "console"
+        from core.surfaces.owner_thread import record_owner_out
+        record_owner_out(getattr(orchestrator, "container", None),
+                         str(getattr(orchestrator, "user_id", "") or ""), text,
+                         via=via, session_id=session_id, source="reply")
+    except Exception:
+        logger.debug("user_delivery: interactive reply record skipped (fail-open)",
+                     exc_info=True)
 
 
 async def release_quiet_held(container: Any, *, event_log: Any = ...,

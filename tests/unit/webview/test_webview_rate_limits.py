@@ -70,3 +70,30 @@ def test_event_limit_window_expiry_reallows():
         assert not server.check_event_rate_limit(sid)
     with patch("time.time", return_value=1000.0 + server.RATE_LIMIT_WINDOW + 1):
         assert server.check_event_rate_limit(sid)
+
+
+def test_a_refusal_carries_a_code(monkeypatch):
+    """070 E.31: a socket refusal names a machine code; the console picks the words."""
+    import asyncio
+    sent = []
+
+    async def emit(event, body, room=None):
+        sent.append((event, body))
+
+    async def disconnect(sid):
+        return None
+
+    monkeypatch.setattr(server._sio, "emit", emit)
+    monkeypatch.setattr(server._sio, "disconnect", disconnect)
+    monkeypatch.setattr(server._sio, "get_environ", lambda sid: {"REMOTE_ADDR": "1.2.3.4"})
+    monkeypatch.setattr(server, "check_rate_limit", lambda ip: False)
+    asyncio.run(server.join_session("sid-1", {"session_id": "s"}))
+    asyncio.run(server.join_activity("sid-2", {}))
+    assert [b["code"] for _e, b in sent] == ["rate_limited", "rate_limited"]
+    sent.clear()
+    monkeypatch.setattr(server, "check_rate_limit", lambda ip: True)
+    asyncio.run(server.join_session("sid-3", {}))
+    assert sent == [("error", {"code": "no_chat", "retry_after": None})]
+    from webview.socket_limits import forget
+    for sid in ("sid-1", "sid-2", "sid-3"):
+        forget(sid)

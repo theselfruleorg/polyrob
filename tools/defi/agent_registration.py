@@ -134,22 +134,127 @@ def check_not_already_registered(*, existing_agent_id: Optional[int],
     the flag and re-register, minting a second token. The chain is the only
     thing that actually knows.
     """
-    if not existing_agent_id:
+    if existing_agent_id is None:
+        # agentId 0 is a REAL id (the registries mint from 0; 4663's first identity is 0) —
+        # `not 0` read it as "unregistered" and would mint a second identity (testnet-run F4).
         return None
+    # CR-L15: holding an agent token is not proof of having MINTED it — a
+    # token can be transferred in, and that is somebody else's identity. The
+    # refusal stands either way (never mint a second one), but it must not
+    # tell the agent the held token is its own.
     return (
-        f"already registered on {chain} as agentId {existing_agent_id}. "
-        f"`register()` is not idempotent — calling it again mints a SECOND "
-        f"token and splits the identity, leaving two agentIds and no way to say "
-        f"which is authoritative. To change the registration file use "
-        f"`set_agent_uri` instead.")
+        f"this wallet already holds an ERC-8004 agent token on {chain} "
+        f"(agentId {existing_agent_id}). `register()` is not idempotent — "
+        f"calling it again mints a SECOND token and splits the identity, "
+        f"leaving two agentIds and no way to say which is authoritative. If "
+        f"this wallet minted it, change the registration file with "
+        f"`set_agent_uri`. A token TRANSFERRED in is somebody else's identity, "
+        f"not ours — the owner decides what to do with it.")
 
 
-def read_agent_id(rpc, *, chain: str, holder: str) -> Optional[int]:
+#: How long a broadcast registration stays "in flight" for the double-mint
+#: check. A receipt wait times out at 120 s, so a registration still unseen by
+#: the chain after this long was dropped or replaced.
+IN_FLIGHT_WINDOW_SEC = 24 * 3600
+
+
+def in_flight_registration(audit, *, chain: str, now: float,
+                           window: float = IN_FLIGHT_WINDOW_SEC) -> Optional[str]:
+    """A refusal when a registration on *chain* was BROADCAST recently, else None.
+
+    CR-L15: the chain read in :func:`read_agent_id` cannot see a registration
+    that is signed but not yet mined — a pending receipt (or a second call
+    racing the first) reads "not registered" and mints a second identity. The
+    ledger records every broadcast registration, so it is the in-flight signal.
+    An unreadable ledger refuses: fail closed.
+    """
+    try:
+        rows = list(audit or ())
+    except Exception:
+        return ("could not read the spend ledger to rule out a registration "
+                "already in flight; refusing rather than risking a SECOND identity")
+    for row in reversed(rows):
+        try:
+            if (row.get("action") == "register_agent"
+                    and str(row.get("chain") or "") == chain
+                    and now - float(row.get("ts") or 0.0) <= window):
+                return (f"a registration on {chain} was already broadcast "
+                        f"(tx {row.get('result_ref')}) and the chain does not "
+                        f"show its agent token yet. Check that transaction "
+                        f"before registering again — a second call mints a "
+                        f"SECOND identity.")
+        except Exception:
+            return ("the spend ledger holds an unreadable row; refusing rather "
+                    "than risking a SECOND identity")
+    return None
+
+
+def minted_agent_id_from_receipt(raw_receipt: Any, *, registry: str,
+                                 holder: str) -> Optional[int]:
+    """The agentId the LANDED receipt minted to *holder*, or None.
+
+    CR-M13: the simulated id is a prediction — a concurrent registration by
+    anyone else takes that id first. Only the receipt's
+    ``Transfer(0x0 -> holder, tokenId)`` from the pinned registry says which
+    token is ours. None when the logs are unreadable, show no such mint, or
+    show more than one.
+    """
+    from core.wallet.simulation import _TOPIC_TRANSFER
+    if not isinstance(raw_receipt, dict) or not isinstance(raw_receipt.get("logs"), list):
+        return None
+    zero = "0x" + "0" * 64
+    to_word = "0x" + str(holder)[2:].lower().rjust(64, "0")
+    minted = []
+    for log in raw_receipt["logs"]:
+        try:
+            topics = [str(t).lower() for t in (log.get("topics") or ())]
+            if (str(log.get("address") or "").lower() != str(registry).lower()
+                    or len(topics) != 4 or topics[0] != _TOPIC_TRANSFER):
+                continue
+            if topics[1] == zero and topics[2] == to_word:
+                minted.append(int(topics[3], 16))
+        except (AttributeError, TypeError, ValueError):
+            return None
+    return minted[0] if len(minted) == 1 else None
+
+
+#: ``supportsInterface`` id of ERC721Enumerable (``tokenOfOwnerByIndex``).
+_ENUMERABLE_IID = "780e9d63"
+#: Blocks per ``eth_getLogs`` window. The public 4663 node refuses a span above 10,000,000
+#: blocks (measured 2026-09-29); half that leaves headroom.
+LOG_SCAN_STEP = 5_000_000
+
+
+def _supports_enumeration(rpc, registry: str) -> bool:
+    """True only when the registry SAYS it is ERC721Enumerable. A failed or malformed read
+    is False: the log path below proves the id on its own, so doubt costs nothing."""
+    try:
+        raw = rpc("eth_call", [{"to": registry, "data": "0x01ffc9a7" + _ENUMERABLE_IID.ljust(64, "0")},
+                               "latest"])
+        return isinstance(raw, str) and raw.startswith("0x") and len(raw) >= 66 and int(raw[2:66], 16) == 1
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def read_agent_id(rpc, *, chain: str, holder: str, from_block: Optional[int] = None,
+                  step: int = LOG_SCAN_STEP) -> Optional[int]:
     """This wallet's existing agentId on *chain*, or None.
 
     ⚠️ Returns None ONLY when the read succeeded and found nothing. A failed
     read RAISES, because "I could not look" must never be mistaken for "not
     registered" — that mistake mints a second identity.
+
+    testnet-run F3 (2026-09-29): the reference Identity Registries are NOT
+    ERC721Enumerable — ``supportsInterface(0x780e9d63)`` is false on 4663 and
+    46630, and their implementation is the one on Base/Ethereum — so
+    ``tokenOfOwnerByIndex`` REVERTS and this read raised for every registered
+    wallet. The enumerable path is kept for a registry that says it supports it;
+    otherwise the id comes from the registry's ``Transfer(_, holder, id)`` logs
+    (from *from_block*, default the row's measured ``identity_logs_from``), each
+    candidate confirmed live with ``ownerOf``. When the live ids do not account
+    for ``balanceOf`` exactly, this RAISES (never guesses an id). With several
+    identities held, the lowest id is returned (the enumerable path's index 0
+    order is not defined either; any id refuses a second register()).
     """
     registry = erc8004.resolve_identity_registry(chain)
     from core.wallet.abi import decode
@@ -159,13 +264,56 @@ def read_agent_id(rpc, *, chain: str, holder: str) -> Optional[int]:
         raise RuntimeError(
             f"could not read the ERC-8004 registry on {chain}; refusing to "
             f"assume this wallet is unregistered")
-    if decode([{"type": "uint256"}], raw)[0] == 0:
+    held = int(decode([{"type": "uint256"}], raw)[0])
+    if held == 0:
         return None
-    data = encode_call("tokenOfOwnerByIndex",
-                       [{"type": "address"}, _U256], [holder, 0])
-    raw = rpc("eth_call", [{"to": registry, "data": data}, "latest"])
-    if not isinstance(raw, str) or not raw.startswith("0x") or raw == "0x":
-        # It holds a token but enumeration is unavailable. Still registered —
-        # say so without inventing an id.
-        return -1
-    return int(decode([_U256], raw)[0])
+    if _supports_enumeration(rpc, registry):
+        data = encode_call("tokenOfOwnerByIndex",
+                           [{"type": "address"}, _U256], [holder, 0])
+        raw = rpc("eth_call", [{"to": registry, "data": data}, "latest"])
+        if not isinstance(raw, str) or not raw.startswith("0x") or raw == "0x":
+            # It holds a token but enumeration is unavailable. Still registered —
+            # say so without inventing an id.
+            return -1
+        return int(decode([_U256], raw)[0])
+    return _agent_id_from_logs(rpc, chain=chain, registry=registry, holder=holder, held=held,
+                               from_block=from_block, step=step)
+
+
+def _agent_id_from_logs(rpc, *, chain: str, registry: str, holder: str, held: int,
+                        from_block: Optional[int], step: int) -> int:
+    from core.wallet.abi import decode
+    from core.wallet.simulation import _TOPIC_TRANSFER
+    start = erc8004.identity_logs_from(chain) if from_block is None else int(from_block)
+    head_raw = rpc("eth_blockNumber", [])
+    head = int(head_raw, 16) if isinstance(head_raw, str) else int(head_raw)
+    to_word = "0x" + str(holder).lower().removeprefix("0x").rjust(64, "0")
+    candidates = set()
+    while start <= head:
+        end = min(start + int(step) - 1, head)
+        rows = rpc("eth_getLogs", [{"address": registry, "topics": [_TOPIC_TRANSFER, None, to_word],
+                                    "fromBlock": hex(start), "toBlock": hex(end)}])
+        if not isinstance(rows, list):
+            raise RuntimeError(f"the ERC-8004 registry's Transfer logs on {chain} were unreadable "
+                               f"(blocks {start}..{end}); refusing to assume an agentId")
+        for row in rows:
+            topics = [str(t).lower() for t in (row.get("topics") or ())]
+            if (len(topics) == 4 and topics[0] == _TOPIC_TRANSFER and topics[2] == to_word
+                    and str(row.get("address") or "").lower() == registry.lower()):
+                candidates.add(int(topics[3], 16))
+        start = end + 1
+    live = []
+    for agent_id in sorted(candidates):
+        raw = rpc("eth_call", [{"to": registry, "data": encode_call("ownerOf", [_U256], [agent_id])},
+                               "latest"])
+        if not isinstance(raw, str) or not raw.startswith("0x") or len(raw) < 66:
+            raise RuntimeError(f"could not read ownerOf({agent_id}) on the ERC-8004 registry "
+                               f"({chain}); refusing to assume an agentId")
+        if str(decode([{"type": "address"}], raw)[0]).lower() == str(holder).lower():
+            live.append(agent_id)
+    if len(live) != held:
+        raise RuntimeError(
+            f"this wallet holds {held} ERC-8004 agent token(s) on {chain} but the registry's "
+            f"Transfer logs from block {erc8004.identity_logs_from(chain) if from_block is None else from_block} "
+            f"name {live or 'none'} — refusing to guess the agentId")
+    return live[0]

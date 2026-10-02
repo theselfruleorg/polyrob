@@ -119,8 +119,9 @@ async def get_nonce(request: NonceRequest):
                     "on the account system, then restart."),
         )
 
-    # Get domain from environment or default to the local webview
-    domain = os.environ.get("WEBVIEW_DOMAIN", "localhost:3000")
+    # The ONE reader of the SIWE domain: /verify requires the same value back.
+    from modules.auth.siwe_auth import configured_siwe_domain
+    domain = configured_siwe_domain()
     uri = f"https://{domain}"
 
     # Create SIWE message

@@ -8,7 +8,7 @@ import logging
 from typing import Dict, Any, Optional, Callable
 from datetime import datetime, timedelta
 
-from fastapi import Request, HTTPException, Header
+from fastapi import Request, HTTPException
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
@@ -50,6 +50,13 @@ class RateLimiter:
         self._minute = FixedWindowCounter(requests_per_minute, 60.0)
         self._hour = FixedWindowCounter(requests_per_hour, 3600.0)
 
+    @staticmethod
+    def _trip(user_id: str, window: str) -> None:
+        """045 lane 4: record the trip (throttled per key + window, fail-open)."""
+        from core.rate_limit import report_trip
+        report_trip(f"api_{window}", user_id,
+                    window_sec={"burst": 1.0, "minute": 60.0}.get(window, 3600.0))
+
     def check_rate_limit(self, user_id: str) -> tuple[bool, Optional[RateLimitInfo]]:
         """Check if user is within rate limits (burst, then minute, then hour).
 
@@ -63,6 +70,7 @@ class RateLimiter:
 
         ok, wait = self._bucket.peek(user_id, now=now)
         if not ok:
+            self._trip(user_id, "burst")
             return False, RateLimitInfo(
                 limit=self.burst_size,
                 remaining=0,
@@ -71,6 +79,7 @@ class RateLimiter:
             )
 
         if not self._minute.peek(user_id, now=now):
+            self._trip(user_id, "minute")
             return False, RateLimitInfo(
                 limit=self.rpm_limit,
                 remaining=0,
@@ -80,6 +89,7 @@ class RateLimiter:
             )
 
         if not self._hour.peek(user_id, now=now):
+            self._trip(user_id, "hour")
             return False, RateLimitInfo(
                 limit=self.rph_limit,
                 remaining=0,

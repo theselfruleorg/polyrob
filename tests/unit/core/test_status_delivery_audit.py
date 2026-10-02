@@ -147,6 +147,20 @@ def test_the_smtp_line_matches_what_effective_autonomous_tools_actually_does(
     cv._reset_for_tests()
 
 
+def test_the_smtp_line_matches_the_owner_when_explicitly_off(monkeypatch, tmp_path):
+    monkeypatch.setenv("VERDICTS_DB_PATH", os.path.join(str(tmp_path), "v.db"))
+    monkeypatch.setenv("EMAIL_PROVIDER", "smtp")
+    monkeypatch.setenv("STABLE_AUTONOMOUS_TOOLSET", "false")
+    import core.credential_verdicts as cv
+    cv._reset_for_tests()
+    cv.record_rejection("smtp", "k", code="535")
+    from agents.task.constants import effective_autonomous_tools
+    dropped = "email" not in effective_autonomous_tools()
+    assert dropped is True
+    assert dropped is ("no longer request" in _email_tool_drop_note())
+    cv._reset_for_tests()
+
+
 def test_an_imap_verdict_renders_its_own_line():
     from core.credential_verdicts import Verdict
     v = Verdict(kind="imap", key="imap.x:me@x", first_seen=time.time() - 7200,

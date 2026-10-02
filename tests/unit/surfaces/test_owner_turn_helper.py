@@ -87,7 +87,11 @@ def test_the_email_surface_is_covered_by_the_shared_executor():
     already opens `owner_turn`. Pinned so a refactor of the shared executor
     cannot silently drop the email seat's coverage."""
     email = (REPO / "surfaces/email/harness.py").read_text()
-    assert "from surfaces.telegram.harness import act_on_inbound" in email
+    assert "from surfaces._actor import act_on_inbound" in email
+    # 064 F1: the seam delegates to the shared executor's home by attribute.
+    actor = (REPO / "surfaces/_actor.py").read_text()
+    assert "import surfaces.telegram.harness as home" in actor
+    assert "_home().act_on_inbound(task_agent, result" in actor
     tg = (REPO / "surfaces/telegram/harness.py").read_text()
     assert "from core.interactive_gate import owner_turn" in tg
     assert "with owner_turn(kind=_kind, session_id=session_id):" in tg

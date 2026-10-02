@@ -4,6 +4,7 @@ from collections import OrderedDict
 from typing import Any, Optional, Dict
 import asyncio
 import json
+import time
 
 from modules.base_module import BaseModule
 from core.config import BotConfig
@@ -26,6 +27,11 @@ class CacheManager(BaseModule):
         """Initialize cache manager."""
         super().__init__(name=name, config=config, container=container)
         self._cache = OrderedDict()  # Use OrderedDict for LRU functionality
+        # key -> monotonic deadline; only keys set with a ttl have a row here.
+        # 2026-09-22 (harness/cache review F27): every ``set(..., ttl=)`` caller
+        # raised TypeError before this existed — MCP read_resource turned each
+        # successful read into a ToolError.
+        self._expiry: Dict[str, float] = {}
         self.max_size = getattr(config, 'cache_size', 1000)
         self.logger.info(f"Cache manager initialized with max size: {self.max_size}")
 
@@ -38,6 +44,7 @@ class CacheManager(BaseModule):
         try:
             self.logger.info("Starting Cache Manager initialization")
             self._cache.clear()  # Ensure clean state
+            self._expiry.clear()
             self._initialized = True
             self.logger.info("Cache Manager initialization completed")
         except Exception as e:
@@ -50,6 +57,7 @@ class CacheManager(BaseModule):
         try:
             self.logger.info("Starting Cache Manager cleanup")
             self._cache.clear()
+            self._expiry.clear()
             self._initialized = False
             self.logger.info("Cache Manager cleanup completed")
         except Exception as e:
@@ -64,6 +72,12 @@ class CacheManager(BaseModule):
         async with self._lock:
             try:
                 if key in self._cache:
+                    deadline = self._expiry.get(key)
+                    if deadline is not None and time.monotonic() >= deadline:
+                        del self._cache[key]
+                        del self._expiry[key]
+                        self.logger.debug(f"Cache expired for key: {key}")
+                        return None
                     value = self._cache[key]
                     self._cache.move_to_end(key)  # Move to end for LRU
                     self.logger.debug(f"Cache hit for key: {key}")
@@ -75,8 +89,12 @@ class CacheManager(BaseModule):
                 self.logger.error(f"Error retrieving from cache: {e}")
                 return None
 
-    async def set(self, key: str, value: Any) -> None:
-        """Set an item in the cache."""
+    async def set(self, key: str, value: Any, *, ttl: Optional[float] = None) -> None:
+        """Set an item in the cache.
+
+        *ttl* (seconds, optional) makes the entry expire on read; ``None`` (the
+        default) keeps the LRU-only lifetime every 2-arg caller relies on.
+        """
         if not self._initialized:
             await self.initialize()
             
@@ -86,10 +104,15 @@ class CacheManager(BaseModule):
                 if key in self._cache:
                     self._cache.move_to_end(key)
                 self._cache[key] = value
+                if ttl is not None and ttl > 0:
+                    self._expiry[key] = time.monotonic() + float(ttl)
+                else:
+                    self._expiry.pop(key, None)
                 
                 # Enforce size limit (LRU eviction)
                 while len(self._cache) > self.max_size:
                     oldest_key, _ = self._cache.popitem(last=False)
+                    self._expiry.pop(oldest_key, None)
                     self.logger.debug(f"Cache evicted key: {oldest_key}")
                     
                 self.logger.debug(f"Cache set for key: {key}")
@@ -106,6 +129,7 @@ class CacheManager(BaseModule):
             try:
                 if key in self._cache:
                     del self._cache[key]
+                    self._expiry.pop(key, None)
                     self.logger.debug(f"Cache deleted key: {key}")
             except Exception as e:
                 self.logger.error(f"Error deleting from cache: {e}")
@@ -119,6 +143,7 @@ class CacheManager(BaseModule):
         async with self._lock:
             try:
                 self._cache.clear()
+                self._expiry.clear()
                 self.logger.debug("Cache cleared")
             except Exception as e:
                 self.logger.error(f"Error clearing cache: {e}")

@@ -140,9 +140,9 @@ def test_the_intent_pins_the_registry_and_declares_the_shape():
 def test_an_unsupported_chain_refuses_before_any_transaction():
     from tools.defi.agent_registration import build_registration_intent
     with pytest.raises(ValueError) as exc:
-        build_registration_intent(chain="robinhood", max_spend_usd=5.0,
+        build_registration_intent(chain="dogecoin", max_spend_usd=5.0,
                                   idempotency_key="k")
-    assert "robinhood" in str(exc.value)
+    assert "dogecoin" in str(exc.value)
 
 
 def test_the_intent_clears_the_real_guard():

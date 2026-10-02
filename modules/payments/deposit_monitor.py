@@ -8,6 +8,7 @@ import asyncio
 import logging
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta
+from decimal import Decimal, InvalidOperation
 
 from modules.payments.networks import chain_configs, TOKEN_ADDRESSES, ERC20_BALANCEOF_ABI
 
@@ -170,8 +171,14 @@ class DepositMonitor:
 
             w3 = Web3(Web3.HTTPProvider(chain_config['rpc_url']))
 
-            # Check if address has received ETH
+            # Every balance READING is reported, including zero and dust
+            # (CR-H08): `_process_deposit` credits only the INCREASE over the
+            # last observed balance, so it must also see a DECREASE (a sweep)
+            # to lower its mark — otherwise the next deposit below the old
+            # high-water mark is never credited. The minimum-deposit floor
+            # applies to the increase, in `_process_deposit`.
             eth_balance = w3.eth.get_balance(address)
+            eth_price = None
             if eth_balance > 0:
                 try:
                     eth_price = await self._get_eth_price()
@@ -180,25 +187,17 @@ class DepositMonitor:
                         f"ETH price oracle unavailable, skipping ETH deposit check "
                         f"for {address} this cycle: {e}"
                     )
-                    eth_price = None
-                if eth_price is not None:
-                    eth_deposit = {
-                        'chain': chain_name,
-                        'token_symbol': 'ETH',
-                        # Price-INDEPENDENT identifier for the dedup guard in
-                        # `_process_deposit` (see that method's comment): the
-                        # wei balance is stable across ticks for an un-swept
-                        # deposit, unlike `amount_usd` which is
-                        # `eth_price * balance` and now moves every tick
-                        # under the live oracle. Without this, the dedup
-                        # SELECT never matches twice in a row and the same
-                        # on-chain funds re-credit on every check_interval.
-                        'amount': str(eth_balance),
-                        'amount_wei': eth_balance,
-                        'amount_usd': eth_price * (eth_balance / 10**18)
-                    }
-                    if eth_deposit['amount_usd'] >= self.min_deposit_usd:
-                        deposits.append(eth_deposit)
+            if eth_balance == 0 or eth_price is not None:
+                deposits.append({
+                    'chain': chain_name,
+                    'token_symbol': 'ETH',
+                    # Price-INDEPENDENT balance reading (wei): the mark in
+                    # `_process_deposit` compares readings, never amount_usd,
+                    # which is `eth_price * balance` and moves every tick.
+                    'amount': str(eth_balance),
+                    'amount_wei': eth_balance,
+                    'amount_usd': (eth_price or 0.0) * (eth_balance / 10**18),
+                })
 
             # Check each token on this chain
             token_addresses = self.token_addresses.get(chain_name, {})
@@ -208,25 +207,23 @@ class DepositMonitor:
                     address,
                     token_address
                 )
+                if balance is None:
+                    continue  # unreadable is not zero: never lower the mark on a failed read
 
-                if balance > 0:
-                    # Stablecoins are 1:1 with USD
-                    amount_usd = balance
-
-                    if amount_usd >= self.min_deposit_usd:
-                        deposits.append({
-                            'chain': chain_name,
-                            'token_symbol': token_symbol,
-                            'amount': str(balance),
-                            'amount_usd': amount_usd
-                        })
+                # Stablecoins are 1:1 with USD
+                deposits.append({
+                    'chain': chain_name,
+                    'token_symbol': token_symbol,
+                    'amount': str(balance),
+                    'amount_usd': balance,
+                })
 
         except Exception as e:
             self.logger.error(f"Error checking {chain_name} for {address}: {e}")
 
         return deposits
 
-    async def _get_token_balance(self, w3, address: str, token_address: str) -> float:
+    async def _get_token_balance(self, w3, address: str, token_address: str) -> Optional[float]:
         """Get ERC20 token balance.
 
         Args:
@@ -235,7 +232,8 @@ class DepositMonitor:
             token_address: Token contract address
 
         Returns:
-            Token balance as float
+            Token balance as float, or None when the read failed (an
+            unreadable balance is not a zero balance — CR-H08).
         """
         try:
             contract = w3.eth.contract(address=token_address, abi=ERC20_BALANCEOF_ABI)
@@ -248,7 +246,7 @@ class DepositMonitor:
 
         except Exception as e:
             self.logger.debug(f"Error getting token balance: {e}")
-            return 0.0
+            return None
 
     async def _get_eth_price(self) -> float:
         """Get current ETH price in USD from the live oracle (C8).
@@ -270,36 +268,41 @@ class DepositMonitor:
             deposit: Deposit information
         """
         try:
-            # Check if already processed. Dedup key MUST be price-independent
-            # (on-chain amount: wei for ETH, raw token balance for ERC20s) —
-            # NEVER amount_usd, which is derived from the live oracle price
-            # and changes almost every tick. Keying off amount_usd would
-            # never match twice in a row, and the same un-swept balance
-            # would re-credit on every check_interval (see C8 review).
+            # CR-H08: credit only the INCREASE over the last observed balance
+            # for this (user, chain, token). The balance reading is
+            # price-independent (wei for ETH, the token balance for ERC20s) —
+            # NEVER amount_usd, which moves with the live oracle every tick.
+            # Crediting the WHOLE balance on every change minted 10 + 10.5 +
+            # 11 USDC of credits for 11 USDC received.
             #
-            # 'amount' is REQUIRED, never a price-derived fallback (a
-            # `deposit.get('amount', str(deposit['amount_usd']))` default
-            # here would silently reintroduce the exact CRITICAL dedup bug
-            # for any future deposit-dict producer that forgets to set it —
-            # let it raise loudly instead).
+            # 'amount' is REQUIRED, never a price-derived fallback — let a
+            # producer that forgets it raise loudly.
             deposit_amount = deposit['amount']
+            current = Decimal(str(deposit_amount))
 
-            existing = await self.db.fetch_one("""
-                SELECT id FROM crypto_payments
-                WHERE user_id = ? AND chain = ? AND amount = ? AND token_symbol = ?
-            """, (
-                user_id,
-                deposit['chain'],
-                deposit_amount,
-                deposit['token_symbol']
-            ))
+            await self._ensure_marks_table()
+            previous = await self._last_balance_mark(
+                user_id, deposit['chain'], deposit['token_symbol'])
 
-            if existing:
-                self.logger.debug(f"Deposit already processed: {existing['id']}")
+            if current <= previous:
+                if current < previous:
+                    # Funds left the address (a sweep). Lower the mark so the
+                    # next deposit is measured from what is there now.
+                    await self._write_balance_mark(
+                        user_id, deposit['chain'], deposit['token_symbol'], deposit_amount)
+                self.logger.debug(
+                    f"No new deposit for {user_id} ({deposit['token_symbol']} "
+                    f"on {deposit['chain']}): balance {current} <= mark {previous}")
                 return
 
-            # Calculate credits to add
-            amount_usd = deposit['amount_usd']
+            # Only the increase is new money. amount_usd prices the WHOLE
+            # reading; scale it to the increase.
+            full_usd = float(deposit['amount_usd'])
+            amount_usd = full_usd * float((current - previous) / current)
+            if amount_usd < self.min_deposit_usd:
+                # Dust: leave the mark where it is so dust accumulates until
+                # the increase crosses the floor, then it credits once.
+                return
             credits = int(amount_usd / self.credit_rate)
 
             # Credit the user's balance AND record the crypto_payments
@@ -335,6 +338,8 @@ class DepositMonitor:
                     amount_usd,
                     credits
                 ))
+                await self._write_balance_mark(
+                    user_id, deposit['chain'], deposit['token_symbol'], deposit_amount)
 
                 await self.db.connection.commit()
             except Exception:
@@ -347,10 +352,65 @@ class DepositMonitor:
                 f"{deposit['token_symbol']} on {deposit['chain']}"
             )
 
-            await self._notify_deposit_credited(user_id, deposit, credits)
+            await self._notify_deposit_credited(
+                user_id, {**deposit, 'amount_usd': amount_usd}, credits)
 
         except Exception as e:
             self.logger.error(f"Error processing deposit for {user_id}: {e}", exc_info=True)
+
+    async def _ensure_marks_table(self):
+        """Create the per-address balance mark table once (CR-H08).
+
+        Additive and idempotent (`CREATE TABLE IF NOT EXISTS`): an existing
+        database only gains the table.
+        """
+        if getattr(self, '_marks_table_ready', False):
+            return
+        await self.db.execute("""
+            CREATE TABLE IF NOT EXISTS deposit_balance_marks (
+                user_id TEXT NOT NULL,
+                chain TEXT NOT NULL,
+                token_symbol TEXT NOT NULL,
+                balance TEXT NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, chain, token_symbol)
+            )
+        """)
+        self._marks_table_ready = True
+
+    async def _last_balance_mark(self, user_id: str, chain: str, token_symbol: str) -> Decimal:
+        """The last balance reading this monitor accounted for.
+
+        No mark yet (a database from before CR-H08): the balance recorded on
+        the newest `crypto_payments` row — the old code stored the whole
+        balance reading there — so a monitor upgraded over an un-swept,
+        already-credited address does not credit it a second time.
+        """
+        row = await self.db.fetch_one("""
+            SELECT balance FROM deposit_balance_marks
+            WHERE user_id = ? AND chain = ? AND token_symbol = ?
+        """, (user_id, chain, token_symbol))
+        if row and row['balance'] is not None:
+            return Decimal(str(row['balance']))
+        row = await self.db.fetch_one("""
+            SELECT amount FROM crypto_payments
+            WHERE user_id = ? AND chain = ? AND token_symbol = ?
+            ORDER BY id DESC LIMIT 1
+        """, (user_id, chain, token_symbol))
+        if row and row['amount'] is not None:
+            try:
+                return Decimal(str(row['amount']))
+            except (InvalidOperation, ValueError):
+                pass
+        return Decimal(0)
+
+    async def _write_balance_mark(self, user_id: str, chain: str, token_symbol: str, balance: str):
+        await self.db.execute("""
+            INSERT INTO deposit_balance_marks (user_id, chain, token_symbol, balance, updated_at)
+            VALUES (?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(user_id, chain, token_symbol)
+            DO UPDATE SET balance = excluded.balance, updated_at = excluded.updated_at
+        """, (user_id, chain, token_symbol, str(balance)))
 
     async def _ensure_notifications_table(self):
         """Create `user_notifications` once per monitor instance.

@@ -51,7 +51,7 @@ def test_a_render_fault_costs_the_picture_never_the_offer(tmp_path, monkeypatch)
     def boom(*a, **kw):
         raise RuntimeError("no font")
 
-    monkeypatch.setattr("modules.pfp.cards.render_invoice_card", boom)
+    monkeypatch.setattr("modules.cards.cards.render_invoice_card", boom)
     assert group_ops._offer_card(_Container(tmp_path), "off_1", _INVOICE) == []
 
 

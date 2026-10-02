@@ -304,9 +304,9 @@ async def create_payment_request(
         from core.config_policy import AutonomyConfig
         halted = AutonomyConfig.autonomy_halted()
     except Exception as e:
-        raise ValueError(f"invoicing refused: kill-switch probe failed ({e}) — failing closed")
+        raise ValueError(f"invoicing refused: pause probe failed ({e}) — failing closed")
     if halted:
-        raise ValueError("invoicing refused: autonomy is HALTED (owner kill-switch)")
+        raise ValueError("invoicing refused: the autonomy pause is on (/resume lifts it)")
     if not user_id:
         # An empty tenant would create a SHARED anonymous invoice bucket (cross-
         # tenant reads + a shared daily cap) — refuse, mirroring MEMORY_REQUIRE_USER_ID.
@@ -509,20 +509,22 @@ async def create_payment_request(
         # action is identified BY its amount, so this may not depend on the
         # detection flag. The loop, the lock, the index and the retry live in
         # `invoice_jitter` (this file is under a size ratchet for good reason).
-        from modules.x402.invoice_jitter import insert_with_unique_raw
+        from modules.x402.invoice_jitter import insert_with_unique_raw, random_tail_raw
 
         async def _insert_at(_raw: int) -> None:
             nonlocal amount_raw
             amount_raw = _raw       # read back by `_insert`'s closure
             await _insert(amount_usd)
 
+        tail = random_tail_raw(raw, amount_usd, asset.decimals) if family != "svm" else 0
         amount_raw = await insert_with_unique_raw(
-            _insert_at, int(raw), normalize_recipient(recipient, chain),
+            _insert_at, int(raw) + tail, normalize_recipient(recipient, chain),
             database, asset_address=asset.address, decimals=asset.decimals)
     elif _jitter_should_apply(chain):
         # M5: the partial UNIQUE index is the CROSS-process backstop for the
         # in-process dedupe below. Created only here (jitter-active path).
         await _ensure_pending_amount_unique_index(database)
+        amount_usd = random_tail_usd(amount_usd, cap, asset.decimals)  # CR-M16
         async with _treasury_lock(normalize_recipient(recipient, chain)):
             candidate = await _dedupe_amount_for_treasury(
                 amount_usd, normalize_recipient(recipient, chain), cap, database,
@@ -823,8 +825,8 @@ async def revert_stale_settling(*, max_age_seconds: int = 600, db=None,
         """SELECT * FROM x402_payment_requests
            WHERE status = 'settling'
              AND updated_at < datetime('now', ?)
-             AND json_extract(metadata, '$.kind') = ?""",
-        (f'-{int(max(1, max_age_seconds))} seconds', INVOICE_KIND),
+             AND json_extract(metadata, '$.kind') IN (SELECT value FROM json_each(?))""",
+        (f'-{int(max(1, max_age_seconds))} seconds', json.dumps(list(PAYABLE_KINDS))),  # CR-M17
     )
     reverted = []
     for row in rows or []:
@@ -948,8 +950,8 @@ async def expire_stale_requests(*, db=None, now: Optional[float] = None) -> List
     rows = await database.fetch_all(
         """SELECT * FROM x402_payment_requests
            WHERE status = 'pending' AND deadline < ?
-             AND json_extract(metadata, '$.kind') = ?""",
-        (cutoff, INVOICE_KIND),
+             AND json_extract(metadata, '$.kind') IN (SELECT value FROM json_each(?))""",
+        (cutoff, json.dumps(list(PAYABLE_KINDS))),  # CR-M17: room actions expire too
     )
     expired = []
     for row in rows or []:
@@ -1159,11 +1161,9 @@ from modules.x402.invoice_assets import (  # noqa: E402,F401
 )
 
 
-# 046: the amount-jitter concern lives in its own module (the decomposition rule
-# + this file's size ratchet). Re-exported so every pre-existing caller and test
-# keeps working unchanged.
+# 046: the amount-jitter concern lives in its own module (size ratchet); re-exported.
 from modules.x402.invoice_jitter import (  # noqa: E402,F401
     _PENDING_AMOUNT_INDEX, _dedupe_amount_for_treasury,
     _ensure_pending_amount_unique_index, _is_pending_amount_conflict,
-    _treasury_lock,
+    _treasury_lock, random_tail_usd,
 )

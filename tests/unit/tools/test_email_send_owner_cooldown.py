@@ -73,6 +73,9 @@ def _tool(container):
 def _owner_email(monkeypatch):
     monkeypatch.setattr("core.instance.resolve_owner_email", lambda env: "owner@example.com")
     monkeypatch.setenv("OWNER_MESSAGE_COOLDOWN_SEC", "7200")
+    # The autonomous-send gate (review E3, same as `message`) is open here, so
+    # the cooldown is the gate under test.
+    monkeypatch.setenv("MESSAGE_AUTONOMOUS_ALLOWLISTED", "true")
 
 
 @pytest.mark.asyncio

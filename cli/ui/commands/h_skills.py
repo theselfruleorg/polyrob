@@ -32,7 +32,8 @@ _DESC_WIDTH = 80
 # Subcommand names that route to the install-pipeline dispatch below. Anything
 # else in ctx.args[0] is treated as a catalog filter query (backward compat —
 # `/skills <query>` predates this dispatch layer).
-_SUBCOMMANDS = frozenset({"list", "install", "approve", "remove", "info"})
+_SUBCOMMANDS = frozenset({"list", "install", "approve", "remove", "info",
+                          "tap", "search", "update"})
 
 
 def _truncate(text: str, limit: int) -> str:
@@ -57,6 +58,10 @@ async def h_skills(ctx: CommandContext) -> None:
                                   — local operator only; installs from a local
                                     folder / git spec / direct SKILL.md url
       /skills approve <id>       — local operator only; activates a quarantined skill
+      /skills tap [list|add|remove] [owner/repo[/subdir]]
+                                  — the skill taps (067 P6); add/remove local operator only
+      /skills search <query>     — search the taps (mirrors `polyrob skill search`)
+      /skills update [id]        — local operator only; re-fetch and re-apply trust rules
 
     Read-only paths are fail-open: any backend error degrades to a friendly
     one-liner (never raises into the REPL).
@@ -82,6 +87,10 @@ async def h_skills(ctx: CommandContext) -> None:
             await _cmd_install(ctx, rest)
         elif sub == "approve":
             await _cmd_approve(ctx, rest)
+        else:  # tap / search / update — 067 P6, cli/ui/commands/h_skills_hub.py
+            from cli.ui.commands.h_skills_hub import dispatch_hub
+
+            await dispatch_hub(ctx, sub, rest, _require_local_operator)
         return
     _cmd_catalog(ctx)
 
@@ -202,10 +211,10 @@ async def _cmd_install(ctx: CommandContext, rest: List[str]) -> None:
         ctx.emit("Usage: /skills install <spec> [--trust local|prompt] [--ref REF]", title="skills")
         return
     try:
-        from cli.commands.skill_install import dispatch_install
+        from cli.commands.skill_hub import install_spec
 
         res = await asyncio.to_thread(
-            dispatch_install, spec, user_id=ctx.user_id or "local", trust=trust, ref=ref
+            install_spec, spec, user_id=ctx.user_id or "local", trust=trust, ref=ref
         )
     except Exception as exc:
         ctx.emit(f"Install failed: {exc}", title="skills")

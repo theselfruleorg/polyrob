@@ -5,9 +5,9 @@ The four polling harnesses (discord, slack, signal, x) carried byte-similar
 executor, deliver the immediate reply. ONE tail here; each harness keeps only
 its transport-specific ``deliver`` (and optional typing) closure.
 
-Lives in the surfaces tier (not core/) because importing
-``surfaces.telegram.harness`` is what registers the shared inbound actor —
-core must never import surfaces (layering ratchet).
+Lives in the surfaces tier (not core/) because it reaches the shared inbound
+executor through ``surfaces._actor`` — core must never import surfaces
+(layering ratchet).
 """
 import logging
 from typing import Any, Callable, Optional
@@ -16,18 +16,37 @@ logger = logging.getLogger(__name__)
 
 
 async def route_and_act(container: Any, task_agent: Any, inbound: Any,
-                        deliver: Callable, *, spawn: Optional[Callable] = None) -> None:
-    """route_inbound → act_on_inbound(deliver=) → deliver the immediate reply."""
+                        deliver: Callable, *, spawn: Optional[Callable] = None,
+                        fetch_media: Optional[Callable] = None) -> None:
+    """route_inbound → act_on_inbound(deliver=, fetch_media=) → deliver the reply.
+
+    ``fetch_media`` (064 F3) is the surface's async ``(Media) -> bytes | None``.
+    The shared executor decides by TIER what happens to the files: the owner's
+    are stored in the session workspace, a correspondent's are only named.
+    """
     from core.surfaces.dispatcher import route_inbound
-    from surfaces.telegram.harness import act_on_inbound  # registers the actor
-    from surfaces.telegram.inbound import InboundResult
+    from surfaces._actor import InboundResult, act_on_inbound
 
     decision = await route_inbound(container, inbound)
+    # Only a message WITH files carries a downloader: a text-only turn calls
+    # the executor exactly as before.
+    extra = {"fetch_media": fetch_media} if fetch_media is not None else {}
     reply = await act_on_inbound(
         task_agent, InboundResult(inbound=inbound, decision=decision),
-        deliver=deliver, spawn=spawn)
+        deliver=deliver, spawn=spawn, **extra)
     if reply:
-        await deliver(reply)
+        # A command may answer with a CommandReply (a room reply, an action
+        # card): a text surface delivers its words, which keep every token.
+        from core.surfaces.command_reply import reply_text
+        await deliver(reply_text(reply))
+
+
+async def _hook(fn, *args) -> None:
+    """Run an optional surface hook; a failing reaction never costs the turn."""
+    try:
+        await fn(*args)
+    except Exception:
+        logger.debug("surface hook %s failed", getattr(fn, "__name__", fn), exc_info=True)
 
 
 class TextSink:
@@ -94,7 +113,26 @@ class BaseHarness:
             await self._before_route(target)
         except Exception:
             pass
-        await route_and_act(self._container, self._task_agent, inbound, _deliver)
+        await _hook(self.on_processing_start, inbound)
+        ok = False
+        try:
+            await route_and_act(self._container, self._task_agent, inbound, _deliver,
+                                fetch_media=self._fetch_media if inbound.media else None)
+            ok = True
+        finally:
+            await _hook(self.on_processing_finish, inbound, ok)
+
+    async def on_processing_start(self, inbound) -> None:
+        """064 F2: optional "seen" reaction (👀) when a message is accepted.
+        No-op by default; a transport that can react overrides it."""
+
+    async def on_processing_finish(self, inbound, ok: bool) -> None:
+        """064 F2: optional finish reaction (✅ / ❌). No-op by default."""
+
+    async def _fetch_media(self, media) -> Optional[bytes]:
+        """Bytes for one inbound attachment (064 F3). A transport overrides it;
+        the default fetches nothing, so the executor NAMES the file instead."""
+        return None
 
 
 def register_surface_and_sink(container: Any, surface: Any, *, sink_name: str,
@@ -108,3 +146,51 @@ def register_surface_and_sink(container: Any, surface: Any, *, sink_name: str,
     register_surface(container, surface)
     if container.get_service(sink_name) is None:
         container.register_service(sink_name, TextSink(send, label=sink_label))
+
+
+async def fetch_capped(url: str, *, allowed_hosts: tuple,
+                       headers: Optional[dict] = None,
+                       max_bytes: Optional[int] = None) -> Optional[bytes]:
+    """GET one platform attachment, or None (064 F3).
+
+    Two guards every surface needs, so they live once:
+
+    * ``https`` to a host in ``allowed_hosts`` only (a suffix match on a dot
+      boundary). The attachment URL comes from the platform's event, and Slack's
+      needs the BOT TOKEN in the header — a URL pointed anywhere else would hand
+      that token to a stranger, or turn the bot into a fetcher of internal hosts.
+    * the size cap (``INBOUND_MEDIA_MAX_MB``) enforced WHILE reading, so a lying
+      ``size`` field cannot make the process buffer a huge body.
+
+    It opens its OWN session: a surface client's session may carry the bot
+    token as a default header (Discord's does), and only the headers passed
+    here may leave. None = not fetched; the executor names the file.
+    """
+    import aiohttp
+    from urllib.parse import urlparse
+
+    from core.surfaces.inbound_attachments import inbound_media_max_mb
+    cap = max_bytes if max_bytes is not None else int(inbound_media_max_mb() * 1024 * 1024)
+    parts = urlparse(url or "")
+    host = (parts.hostname or "").lower()
+    if parts.scheme != "https" or not any(
+            host == h or host.endswith("." + h) for h in allowed_hosts):
+        logger.warning("inbound media: refused fetch from %r (not an allowed host)", host)
+        return None
+    async with aiohttp.ClientSession() as session, \
+            session.get(url, headers=headers or {}, allow_redirects=False) as resp:
+        if resp.status != 200:
+            logger.warning("inbound media: %s answered HTTP %s", host, resp.status)
+            return None
+        declared = resp.headers.get("Content-Length")
+        if declared and declared.isdigit() and int(declared) > cap:
+            logger.warning("inbound media: %s bytes over the %s-byte cap", declared, cap)
+            return None
+        chunks, size = [], 0
+        async for chunk in resp.content.iter_chunked(64 * 1024):
+            size += len(chunk)
+            if size > cap:
+                logger.warning("inbound media: body passed the %s-byte cap", cap)
+                return None
+            chunks.append(chunk)
+        return b"".join(chunks)

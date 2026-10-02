@@ -5,6 +5,13 @@ content is a list OR whose string content contains 'Current url:'. A minimal
 (non-browser) state message is a plain string WITHOUT that marker, so the scan
 could walk past it and delete the nearest list-content HumanMessage instead —
 which is exactly the shape of a user's multimodal image-guidance turn.
+
+F16(ii) (2026-09-23): this whole mechanism is the ``STATE_MESSAGE_EPHEMERAL=false``
+path. With the flag ON (the default) the state message rides the one-shot
+ephemeral rail, never enters ``history``, and there is nothing to splice — the
+method returns immediately. Every test below therefore pins the flag OFF; the ON
+invariant is pinned in
+``tests/unit/agents/task/agent/messages/test_state_message_ephemeral.py``.
 """
 import pytest
 
@@ -42,6 +49,12 @@ def _minimal_state() -> BrowserState:
 		selector_map={},
 		tabs=[],
 	)
+
+
+@pytest.fixture(autouse=True)
+def _legacy_state_message(monkeypatch):
+	"""These cases are the flag-OFF (append + splice) path."""
+	monkeypatch.setenv("STATE_MESSAGE_EPHEMERAL", "false")
 
 
 @pytest.fixture

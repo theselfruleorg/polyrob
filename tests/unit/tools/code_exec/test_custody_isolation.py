@@ -7,6 +7,9 @@ from tools.code_exec.sandbox_guard import require_sandbox_or_none, code_exec_exe
 
 @pytest.fixture
 def custody(monkeypatch):
+    # Test custody policy independently of this host's Docker socket permissions.
+    monkeypatch.setattr("tools.code_exec.sandbox_guard.docker_socket_unreachable_reason",
+                        lambda backend: None)
     monkeypatch.setenv("POLYROB_LOCAL", "true")
     monkeypatch.setenv("AGENT_WALLET_ENABLED", "true")
     monkeypatch.setenv("CODE_EXEC_BACKEND", "local_subprocess")

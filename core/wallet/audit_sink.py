@@ -39,9 +39,13 @@ class JsonlAuditSink(list):
     subsequent spending until storage is repaired and reloaded.
     """
 
-    def __init__(self, path: str):
+    def __init__(self, path: str, *, lock_timeout: Optional[float] = None):
         super().__init__()
         self._path = path
+        #: 068 R3-4: when set, every lock this sink takes (the construction-time
+        #: load included) gives up after this many seconds instead of waiting
+        #: forever — an operator path must not hang behind a stalled spender.
+        self._lock_timeout = lock_timeout
         self._hwm_path = path + ".hwm"
         self._hwm = 0
         self.healthy = True
@@ -63,6 +67,53 @@ class JsonlAuditSink(list):
             self._ensure_parent()
             with self._write_lock():
                 self._load()
+        else:
+            record = self._wallet_of_record()
+            if record:
+                # CR-L31: a wallet of record with NEITHER the ledger NOR its
+                # high-water mark is the "delete both before a restart" reset —
+                # it would silently zero the rolling cap and the replay guard.
+                # Every wallet created since this check writes the genesis mark
+                # (see ensure_genesis), so this state is never a fresh install.
+                self.healthy = False
+                logger.error(
+                    "wallet audit sink %s: the ledger and its high-water mark are both "
+                    "MISSING but a wallet of record exists (%s) — the rolling-24h spend "
+                    "cap and payment-replay guard would restart from zero. Spending is "
+                    "refused. If this wallet has truly never spent, the owner creates an "
+                    "empty %s to confirm it; otherwise restore the ledger from backup.",
+                    path, record, path)
+
+    #: The files whose presence means "this wallet already exists".
+    _RECORD_FILES = ("meta.json", "public_identity.json")
+
+    def _wallet_of_record(self) -> Optional[str]:
+        parent = os.path.dirname(self._path) or "."
+        for name in self._RECORD_FILES:
+            candidate = os.path.join(parent, name)
+            try:
+                if os.path.isfile(candidate):
+                    return candidate
+            except OSError:
+                continue
+        return None
+
+    def ensure_genesis(self) -> None:
+        """Write the genesis high-water mark (0) for a wallet that has none.
+
+        Called where a wallet comes into being (a seeded ``AgentWallet``,
+        ``write_scheme_once``) so "no ledger and no mark" can later be read as
+        tampering (CR-L31). A no-op when either file exists or the sink is
+        unhealthy — genesis must never paper over a missing ledger.
+        """
+        if not self.healthy:
+            return
+        if os.path.exists(self._path) or os.path.exists(self._hwm_path):
+            return
+        self._ensure_parent()
+        with self._write_lock():
+            if not (os.path.exists(self._path) or os.path.exists(self._hwm_path)):
+                self._write_hwm()
 
     def _ensure_parent(self) -> None:
         parent = os.path.dirname(self._path)
@@ -97,6 +148,41 @@ class JsonlAuditSink(list):
             os.close(fd)
 
     @contextmanager
+    def reserve_blocking(self, timeout: float = 30.0):
+        """The synchronous twin of :meth:`reserve` for a CLI/operator path.
+
+        068 N3: normal spending takes this audit lock FIRST and touches the
+        submission journal second (``SpendLedger.record`` -> ``mark_booked``).
+        An operator release must use the same order, or the two can each hold
+        one lock while waiting on the other. Appends made while this is held
+        reuse the reservation instead of re-locking (a second ``flock`` on a new
+        descriptor would block this very process).
+        """
+        import fcntl
+        import time as _time
+        self._ensure_parent()
+        fd = os.open(self._path + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            deadline = _time.monotonic() + timeout
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if _time.monotonic() >= deadline:
+                        raise TimeoutError("wallet audit lock is held by a spend in "
+                                           "progress; retry when it finishes")
+                    _time.sleep(0.02)
+            self._reservation_fd = fd
+            self._reservation_owner = None
+            yield
+        finally:
+            if self._reservation_fd == fd:
+                self._reservation_fd = None
+                self._reservation_owner = None
+            os.close(fd)
+
+    @contextmanager
     def _write_lock(self):
         if self._reservation_fd is not None:
             try:
@@ -111,7 +197,20 @@ class JsonlAuditSink(list):
         self._ensure_parent()
         fd = os.open(self._path + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            if self._lock_timeout is None:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+            else:
+                import time as _time
+                deadline = _time.monotonic() + self._lock_timeout
+                while True:
+                    try:
+                        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except BlockingIOError:
+                        if _time.monotonic() >= deadline:
+                            raise TimeoutError("wallet audit lock is held by a spend in "
+                                               "progress; retry when it finishes")
+                        _time.sleep(0.02)
             yield
         finally:
             os.close(fd)
@@ -314,6 +413,12 @@ def _wallet_data_dir(data_dir: Optional[str] = None, *, for_meta: bool = False) 
 
 
 
-def default_audit_sink(data_dir: Optional[str] = None) -> List[dict]:
-    """The factory's default persistent sink at ``<data_dir or resolved home>/wallet/audit.jsonl``."""
-    return JsonlAuditSink(os.path.join(_wallet_data_dir(data_dir), "audit.jsonl"))
+def default_audit_sink(data_dir: Optional[str] = None, *,
+                       lock_timeout: Optional[float] = None) -> List[dict]:
+    """The factory's default persistent sink at ``<data_dir or resolved home>/wallet/audit.jsonl``.
+
+    ``lock_timeout`` bounds every lock the sink takes, construction included
+    (068 R3-4); None keeps the blocking behaviour every spend path relies on.
+    """
+    return JsonlAuditSink(os.path.join(_wallet_data_dir(data_dir), "audit.jsonl"),
+                          lock_timeout=lock_timeout)

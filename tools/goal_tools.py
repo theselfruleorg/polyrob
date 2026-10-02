@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Dict
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -40,10 +40,10 @@ logger = logging.getLogger(__name__)
 # for an operator-seeded cycle. `defi_trade` stays excluded, and that is exactly
 # where the line belongs. (`portfolio` remains separately gated by NAME while
 # correspondent-tainted; adding the tool here does not touch that.)
-_SELF_GOAL_ALLOWED_TOOLS = frozenset(
-    {"filesystem", "task", "browser", "perplexity", "mcp", "anysite", "coding", "web_fetch",
-     "twitter", "email", "message", "x402_invoice", "knowledge", "defi_data"}
-)
+# The ids live in core/config_policy/profiles.py as `ceiling:self_goal` (067 P1).
+from core.config_policy.profiles import profile as _profile  # noqa: E402
+
+_SELF_GOAL_ALLOWED_TOOLS = frozenset(_profile("ceiling:self_goal"))
 
 
 def allowed_self_goal_tools() -> frozenset:
@@ -68,10 +68,98 @@ def allowed_self_goal_tools() -> frozenset:
     return _SELF_GOAL_ALLOWED_TOOLS
 
 
+def agent_rig_refusal(rig: Optional[str]) -> Optional[str]:
+    """H05: the error for a rig the AGENT may not request, else None.
+
+    `tools=` has always been filtered through :func:`allowed_self_goal_tools`;
+    `rig=` was stored unchecked, so `rig="money_rail"` resolved to `defi_trade`
+    at dispatch. A rig whose ids leave the ceiling is REFUSED (not silently
+    narrowed) so the agent learns which rigs it can use. `full` always passes —
+    it means the caller's own default, which is no wider than omitting a rig.
+    """
+    from core.config_policy.rigs import rig_names, rig_tools, rig_ungrantable_ids
+    ceiling = allowed_self_goal_tools()
+    blocked = rig_ungrantable_ids(rig, ceiling)
+    if not blocked:
+        return None
+    usable = [n for n in rig_names()
+              if not [t for t in (rig_tools(n) or []) if t not in ceiling]]
+    return (f"Tool rig '{rig}' NOT granted: it requests {', '.join(blocked)}, which "
+            f"an agent-created goal or cron job cannot grant itself (only the owner "
+            f"can set it, from an owner seat). Rigs you can use: "
+            f"{', '.join(usable)}.")
+
+
+def _is_leaf_context(execution_context) -> bool:
+    """A delegated leaf / sub-agent turn (it reports to its parent, never to the owner)."""
+    return bool(getattr(execution_context, "is_sub_agent", False)) or \
+        str(getattr(execution_context, "role", "") or "") == "leaf"
+
+
+def owner_seat_turn(execution_context) -> bool:
+    """True when the creating turn is the OWNER asking in chat — a genuine turn
+    (not a leaf / sub-agent, self-wake, delegation-result, room or autonomous
+    goal/cron/planner run) on the owner tenant. Such a turn writes a goal or cron
+    row like an owner seat (``polyrob goals create``, ``/trade``) does: its rig
+    is honoured as written and the row is stamped ``authored_by="owner"``.
+
+    A correspondent-TAINTED session never gets here: the correspondent gate
+    denies the whole ``goal`` / ``cronjob`` tool while tainted. Fail-closed:
+    any probe error answers False (the row is then the agent's)."""
+    if execution_context is None:
+        return False
+    try:
+        from tools.controller.turn_origin import _is_forged_or_autonomous_turn
+        if _is_forged_or_autonomous_turn(execution_context, None):
+            return False
+        from core.security.owner_turn import owner_turn_refusal
+        return owner_turn_refusal(execution_context, verb="goal", does="sets owner work",
+                                  public="set owner work") is None
+    except Exception:
+        return False
+
+
+def autonomous_run_may_schedule(execution_context) -> bool:
+    """M07, re-keyed on the regime: a goal/cron-dispatched MAIN-agent run on the
+    owner tenant may start its own recurring job when the instance runs the
+    ``autonomous`` (or ``armed``) regime — that is what `cronjob` in
+    AUTONOMOUS_MODE_TOOLS is for. A leaf / sub-agent, a self-wake or
+    delegation-result re-entry and a room turn stay refused in every regime.
+    Fail-closed on any probe error."""
+    if execution_context is None:
+        return False
+    try:
+        from core.config_policy.autonomy_mode import autonomous_work_enabled
+        if not autonomous_work_enabled():
+            return False
+        metadata = getattr(execution_context, "metadata", None) or {}
+        if metadata.get("turn_kind") == "group":
+            return False
+        from tools.controller.turn_origin import _is_autonomous_goal_turn
+        if not _is_autonomous_goal_turn(execution_context, None):
+            return False
+        from core.security.owner_turn import owner_turn_refusal
+        return owner_turn_refusal(execution_context, verb="cronjob_schedule",
+                                  does="starts recurring work",
+                                  public="start recurring work") is None
+    except Exception:
+        return False
+
+
+def owner_turn_goal_tools() -> frozenset:
+    """What `tools=` may carry on an owner-seat turn: the self-goal ceiling plus
+    every id a named rig can request — no wider than the rig an owner turn may
+    already pick. Host tools (shell/process/code_execution) and the payment
+    tools outside the rig table stay excluded; they ride their own postures."""
+    from core.config_policy.rigs import RIGS
+    return frozenset(allowed_self_goal_tools()
+                     | {t for ids in RIGS.values() for t in ids})
+
+
 # Proposal 009 #1 (2026-07-14): whenever a self-created goal carries ANY tools payload, union in
 # this safe baseline so the dispatched session is never starved of basics (night-1 failure mode:
 # tools=['twitter'] sessions had no filesystem; text-only goals had no web_fetch to research).
-_SELF_GOAL_BASELINE_TOOLS = ("filesystem", "task", "web_fetch", "knowledge")
+_SELF_GOAL_BASELINE_TOOLS = _profile("baseline:self_goal")
 
 # Proposal 009 option B: when the agent sets no `tools`, infer them from the goal's own text —
 # the night-1 blocked goals literally named their needed tool in title/acceptance ("Publish
@@ -193,9 +281,15 @@ class GoalCreateAction(BaseModel):
         description=("ALWAYS list every tool this goal needs to actually finish (e.g. 'twitter' "
                      "to post to X, 'email' to send mail, 'message' to post to telegram, "
                      "'x402_invoice' to invoice, 'web_fetch' to read the web) — a goal without "
-                     "the right tools dispatches tool-starved and blocks. Filtered to a safe "
-                     "allowlist; money-spend/code-exec/cron are never granted. If unset, tools "
-                     "are inferred from the goal text and a safe baseline is applied."),
+                     "the right tools dispatches tool-starved and blocks. Filtered to the "
+                     "self-goal ceiling: filesystem, task, web_fetch, knowledge, browser, "
+                     "perplexity, mcp, anysite, coding (runs tests, so it executes commands), "
+                     "twitter, email, message, x402_invoice, defi_data. Under autonomous mode "
+                     "the ceiling widens to the autonomous grant (adds goal, cronjob, x_browser; "
+                     "plus defi_trade, launchpad, dapp_browser and x402_pay when "
+                     "DEFI_AGENT_AUTONOMY is armed). Host shell/process/code_execution are never "
+                     "granted here. Dropped ids are named in the result. If unset, tools are "
+                     "inferred from the goal text and a safe baseline is applied."),
     )
     rig: Optional[str] = Field(
         None,
@@ -203,7 +297,23 @@ class GoalCreateAction(BaseModel):
                      "'money_rail', 'social', 'research', 'ops', or 'full'. A narrow rig "
                      "ships far fewer tool schemas on every step of the run, which is most "
                      "of what a goal costs. `tools`, when set, always wins. A rig is a "
-                     "REQUEST, not a grant — money tools still need an owner grant."),
+                     "REQUEST, not a grant: a rig with an id outside the ceiling described "
+                     "under `tools` is REFUSED (e.g. 'money_rail' asks for defi_trade, which "
+                     "needs DEFI_AGENT_AUTONOMY armed; 'ops' asks for cronjob, which needs "
+                     "autonomous mode)."),
+    )
+    skills: Optional[List[str]] = Field(
+        None,
+        description=("Optional skill ids this goal's runs must load (its doctrine, e.g. "
+                     "['rh-reporting']). Pinned skills load every run instead of depending on "
+                     "keyword matching; they grant no tool. Up to 8; omit to match by keyword."),
+    )
+    target_token: Optional[Dict[str, str]] = Field(
+        None,
+        description=("068: the ONE contract this goal's runs may acquire, as data: "
+                     "{'chain': 'robinhood', 'address': '0x…'}. Buys of anything else "
+                     "are refused. A goal created by a run that already has a target "
+                     "inherits it and may only restate the same one."),
     )
     objective_id: Optional[str] = Field(None, description="Parent objective this goal advances.")
     depends_on: Optional[List[str]] = Field(
@@ -217,6 +327,12 @@ class GoalCreateAction(BaseModel):
                      "the shape: ≥25 for write/post/deliver goals, ≥35 if it installs, renders "
                      "or polls; a run that exhausts its budget without done() is retried at "
                      "the same cost."))
+    memory_regime: Optional[str] = Field(
+        None,
+        description=("Optional memory isolation for this goal's runs: 'shared', 'scoped' "
+                     "(reads shared memory, its own findings stay quarantined until it "
+                     "completes verified) or 'sealed' (sees only its own findings). Omit "
+                     "for the deployment default. Never weaker than the creating run's."))
     report_back: bool = Field(
         False,
         description=("056 WS7: when true the FULL result re-enters the session that created "
@@ -249,7 +365,7 @@ class GoalAskAction(BaseModel):
     what: str = Field(..., min_length=8, max_length=600, description=(
         "The decision or resource you need from the owner, as ONE question they can answer in a "
         "word or two (name the options: 'A) … or B) …'). This lands on the durable board, shows in "
-        "/status, `owner pending` and the daily digest, and is deduplicated: a matching OPEN ask "
+        "/status, /pending and the daily digest, and is deduplicated: a matching OPEN ask "
         "is refreshed, never duplicated — so raise it EVERY time you skip on it; never fall back to "
         "'I asked once, I will not spam'."))
     why: str = Field("", max_length=1200, description=(
@@ -282,6 +398,20 @@ class GoalShowAction(BaseModel):
 class GoalCancelAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
     goal_id: str = Field(..., description="The goal id to cancel.")
+
+
+class RailProposeAction(BaseModel):
+    """036 §4.3: PROPOSE standing work. Never creates it — the owner accepts."""
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(..., description="What the recurring work is, in a few words.")
+    body: str = Field(..., description="What each run should do (one leg).")
+    schedule: str = Field(..., description="How often: 'every 24h', 'every monday 09:00', "
+                                           "or a 5-field cron expression.")
+    key: str = Field("", description="Optional stable key (defaults to the title). A key "
+                                     "the owner dismissed is never offered again.")
+    needs: List[str] = Field(default_factory=list,
+                             description="Tool ids it would need beyond the ordinary goal "
+                                         "toolset. Named only — the owner grants them.")
 
 
 class GoalUnblockAction(BaseModel):
@@ -369,6 +499,13 @@ class GoalTool(BaseTool):
                      "Use for ongoing objectives; use `task` for this-turn TODOs and `cronjob` "
                      "for time-scheduled runs.", param_model=GoalCreateAction)
     async def goal_create(self, params: GoalCreateAction, execution_context=None) -> ActionResult:
+        # A leaf / sub-agent reports to its parent; it must not start durable
+        # autonomous work of its own (cronjob is delegate_blocked, goal_ask and
+        # rail_propose refuse a leaf — the same rule).
+        if _is_leaf_context(execution_context):
+            return ActionResult(error="Refused: a leaf/sub-agent cannot create a durable goal — "
+                                      "return the proposed goal to your parent instead.",
+                                include_in_memory=True)
         user_id = self._user(execution_context)
         payload: dict = {}
         # 031: the AUDIT stamp — who created this goal — set on EVERY turn kind,
@@ -388,9 +525,11 @@ class GoalTool(BaseTool):
         _origin = getattr(execution_context, "session_id", None)
         if _origin and not self._creating_turn_is_forged(execution_context):
             payload["origin_session_id"] = str(_origin)
+        # The owner asking in chat writes the goal like an owner seat does.
+        owner_turn = owner_seat_turn(execution_context)
         allowed: List[str] = []
         if params.tools:
-            _allowed_set = allowed_self_goal_tools()
+            _allowed_set = owner_turn_goal_tools() if owner_turn else allowed_self_goal_tools()
             allowed = [t for t in params.tools if t in _allowed_set]
             dropped = [t for t in params.tools if t not in _allowed_set]
             if dropped:
@@ -429,7 +568,28 @@ class GoalTool(BaseTool):
                     error=f"Unknown tool rig '{params.rig}'. Valid rigs: "
                           f"{', '.join(rig_names())}.",
                     include_in_memory=True)
+            refusal = None if owner_turn else agent_rig_refusal(params.rig)
+            if refusal:
+                return ActionResult(error=refusal, include_in_memory=True)
             payload["rig"] = params.rig.strip().lower()
+        # 060 WS-5: the goal pins its doctrine (seeded every run; no tool granted).
+        from core.config_policy.rigs import pinned_skills
+        if pinned_skills({"skills": params.skills}):
+            payload["skills"] = pinned_skills({"skills": params.skills})
+        # H05: provenance — the dispatcher intersects an agent-authored rig with
+        # allowed_self_goal_tools() (core/config_policy/rigs.py); an owner-turn
+        # rig is honoured as written.
+        from core.config_policy.rigs import AGENT_AUTHOR, AUTHORED_BY_KEY, OWNER_AUTHOR
+        payload[AUTHORED_BY_KEY] = OWNER_AUTHOR if owner_turn else AGENT_AUTHOR
+        # 068 B4: a goal created by a target-bound run inherits the target.
+        from core.wallet.buy_target import PAYLOAD_KEY as _TARGET_KEY, inherit_target
+        try:
+            _target = inherit_target(execution_context, params.target_token)
+        except ValueError as exc:
+            return ActionResult(error=f"Cannot create goal: invalid target_token: {exc}",
+                                include_in_memory=True)
+        if _target:
+            payload[_TARGET_KEY] = _target
         board = self._resolve_board()
         parent_id = None
         if params.objective_id:
@@ -444,6 +604,14 @@ class GoalTool(BaseTool):
             payload["max_steps"] = int(params.max_steps)
         if params.report_back:
             payload["report_back"] = True
+        if params.memory_regime is not None or execution_context is not None:
+            from modules.memory.scope import goal_create_regime  # 025: clamped, never a label
+            _regime, _err = goal_create_regime(
+                params.memory_regime, getattr(execution_context, "session_id", None))
+            if _err:
+                return ActionResult(error=f"Cannot create goal: {_err}", include_in_memory=True)
+            if _regime:
+                payload["memory_regime"] = _regime
         if params.acceptance_checks is not None:
             from agents.task.runtime.acceptance_checks import validate_checks
             try:
@@ -456,6 +624,11 @@ class GoalTool(BaseTool):
                 user_id=user_id, title=params.title, body=params.body, priority=params.priority,
                 parent_id=parent_id, payload=payload or None,
                 depends_on=params.depends_on,
+                # 036 §3.3: the ONE predicate. The allowlist filter above and the
+                # board's grant check read the same ceiling, so they cannot drift.
+                actor="owner_seat" if owner_turn else "agent",
+                tool_ceiling=sorted(allowed_self_goal_tools()
+                                    | set(_SELF_GOAL_BASELINE_TOOLS)),
             )
         except DuplicateGoalError as e:
             return ActionResult(
@@ -476,10 +649,11 @@ class GoalTool(BaseTool):
         return ActionResult(extracted_content=f"Created goal `{goal.id}` (status={goal.status}){tool_note}{dep_note}: {goal.title}{drop_note}{warn_note}",
                             include_in_memory=True)
 
-    @BaseTool.action("Raise a DURABLE owner ask when a run needs an OWNER DECISION or resource to "
-                     "proceed (a rule ambiguity, a grant, a top-up). Lands on the board, shows in "
-                     "/status, `owner pending` and the daily digest; dedups against your OPEN asks, so "
-                     "call it every time you skip on the same blocker — it will not spam.",
+    @BaseTool.action("Raise a DURABLE owner ask that HOLDS specific goals (blocks_goal_ids) until "
+                     "the owner answers. For any other owner decision use owner_ask — it tells the "
+                     "owner, offers taps and hands the answer to this rail's next run. Lands on the "
+                     "board, shows in /status, /pending and the daily digest; dedups against your "
+                     "OPEN asks, so call it every time you skip on the same blocker.",
                      param_model=GoalAskAction)
     async def goal_ask(self, params: GoalAskAction, execution_context=None) -> ActionResult:
         # A leaf / sub-agent reports to its parent, not to the owner: refuse.
@@ -492,17 +666,30 @@ class GoalTool(BaseTool):
         sid = str(getattr(execution_context, "session_id", "") or "")
         board = self._resolve_board()
         before = {a.id for a in board.asks(user_id=user_id, status="open")}
+        # Same provenance and tap options owner_ask stamps, so the answer reaches
+        # the asking rail's next run and the owner can answer with one tap.
+        extra = {"origin": "agent", "session_id": sid}
+        try:
+            from tools.controller.owner_ask_action import _rail, ask_options
+            rail_id, rail_kind = _rail(sid)
+            if rail_id:
+                extra.update(rail_id=rail_id, rail_kind=rail_kind)
+            options = ask_options(params.what)
+            if options:
+                extra["options"] = options
+        except Exception:
+            pass
         ask = board.create_ask(
             user_id=user_id, what=params.what.strip(), why=(params.why or "").strip(),
             blocks_goal_ids=list(params.blocks_goal_ids or []),
-            extra_payload={"origin": "agent", "session_id": sid})
+            extra_payload=extra)
         if ask.id in before:
             import datetime as _dt
             since = _dt.datetime.fromtimestamp(float(ask.created_at or 0), tz=_dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
             return ActionResult(
                 extracted_content=(f"Ask `{ask.id}` is ALREADY OPEN since {since} (refreshed, not duplicated — "
                                    f"the store dedups, no need to re-ask in chat). The owner sees it in /status, "
-                                   f"`owner pending` and the daily digest; until it is answered, keep applying the "
+                                   f"/pending and the daily digest; until it is answered, keep applying the "
                                    f"conservative reading and log the skip against ask {ask.id}."),
                 include_in_memory=True)
         return ActionResult(
@@ -617,6 +804,35 @@ class GoalTool(BaseTool):
             extracted_content=(f"Cancelled goal `{params.goal_id}`." if ok else "Nothing to cancel."),
             include_in_memory=True,
         )
+
+    @BaseTool.action("PROPOSE a recurring piece of work (a rail) to the owner. It does NOT "
+                     "schedule anything: the owner accepts it with /rail accept, and grants "
+                     "any tool it needs separately. A dismissed proposal is never re-offered.",
+                     param_model=RailProposeAction)
+    async def rail_propose(self, params: RailProposeAction,
+                           execution_context=None) -> ActionResult:
+        # 036 §4.3: consent-first. A leaf reports to its parent, not to the owner.
+        if getattr(execution_context, "is_sub_agent", False) or \
+                str(getattr(execution_context, "role", "") or "") == "leaf":
+            return ActionResult(error="Refused: a leaf/sub-agent cannot propose standing "
+                                      "work — return it to your parent.", include_in_memory=True)
+        from agents.task.goals import rail_proposals
+        board = self._resolve_board()
+        try:
+            p = rail_proposals.propose(
+                board.db_path, user_id=self._user(execution_context), key=params.key,
+                source="agent", title=params.title, body="",
+                recurrence={"schedule": params.schedule,
+                            "legs": [{"title": params.title, "body": params.body}],
+                            "max_live": 1},
+                needs=params.needs)
+        except ValueError as e:
+            return ActionResult(error=f"Not proposed: {e}", include_in_memory=True)
+        needs = f" (needs grant: {', '.join(p.needs)})" if p.needs else ""
+        return ActionResult(
+            extracted_content=(f"Proposed rail `{p.key}` — {p.recurrence['schedule']}{needs}. "
+                               f"Nothing runs until the owner accepts it (/rail accept {p.key})."),
+            include_in_memory=True)
 
     @BaseTool.action("Add a standing OBJECTIVE the planner decomposes into goals "
                      "(owner-only; abstract like 'get 100k followers' or concrete "

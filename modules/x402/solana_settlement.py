@@ -128,22 +128,37 @@ def settlement_for(tx: Any, *, treasury: str, mint: str,
     return credited if credited >= int(expected_raw) else None
 
 
-def scan_reference(reference: str, *, rpc, limit: int = 20) -> Iterable[str]:
+def scan_reference(reference: str, *, rpc, limit: int = 1000,
+                   max_pages: int = 5) -> Iterable[str]:
     """Signatures that touched *reference*, newest first.
 
     This is the whole reason the reference exists: instead of scanning every
     transfer to the treasury and guessing which invoice it belongs to, ask the
     chain directly which transactions carry THIS invoice's marker.
+
+    CR-L25: anyone can put the (public) reference into a transaction, so the
+    newest page can be spam. Pages back with ``before`` (up to *max_pages*
+    pages of *limit*) instead of stopping at the 20 newest; the caller skips
+    signatures it has already judged, so a real payment behind the spam is
+    reached.
     """
-    try:
-        res = rpc("getSignaturesForAddress", [reference, {"limit": int(limit)}])
-    except Exception as exc:
-        logger.info("solana settlement: reference scan failed for %s (%s)",
-                    reference, exc)
-        return []
     out = []
-    for entry in (res or []):
-        if isinstance(entry, dict) and entry.get("signature"):
+    before = None
+    for _ in range(max(1, int(max_pages))):
+        opts = {"limit": int(limit)}
+        if before:
+            opts["before"] = before
+        try:
+            res = rpc("getSignaturesForAddress", [reference, opts])
+        except Exception as exc:
+            logger.info("solana settlement: reference scan failed for %s (%s)",
+                        reference, exc)
+            break
+        page = [e for e in (res or []) if isinstance(e, dict) and e.get("signature")]
+        for entry in page:
             if entry.get("err") is None:
                 out.append(str(entry["signature"]))
+        if len(page) < int(limit):
+            break
+        before = str(page[-1]["signature"])
     return out

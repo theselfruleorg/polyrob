@@ -104,6 +104,7 @@ def client(monkeypatch):
     monkeypatch.setattr("webview.pages._effective_user_id", lambda request: "u1")
     app = FastAPI()
     app.include_router(mod.api_router)
+    app.include_router(mod.money_api_router)  # 067 P5a: the Money readers' router
     return TestClient(app)
 
 
@@ -131,9 +132,10 @@ def test_the_creations_endpoint_scopes_to_the_tenant(client, monkeypatch):
 
 
 def test_both_readers_are_gets_with_no_mutation_guard():
-    """Reads never carry the write guard; they ride ``api_router`` (both UIs)."""
+    """Reads never carry the write guard; they ride ``money_api_router`` (the
+    Money contribution, 067 P5a)."""
     paths = {}
-    for route in mod.api_router.routes:
+    for route in mod.money_api_router.routes:
         methods = getattr(route, "methods", None) or set()
         if getattr(route, "path", "") in ("/api/webgate/bridges",
                                           "/api/webgate/creations"):
@@ -145,5 +147,8 @@ def test_both_readers_are_gets_with_no_mutation_guard():
 
 def test_the_readers_mount_in_both_uis():
     """``api_router`` is returned by ``_API_ROUTERS`` — the seam that mounts
-    endpoints regardless of ``WEBVIEW_UI``."""
+    endpoints regardless of ``WEBVIEW_UI``; the Money readers are a console
+    contribution ``mount`` also mounts (067 P5a)."""
+    from webview.contributions import contributed_routers
     assert mod.api_router in mod._API_ROUTERS()
+    assert mod.money_api_router in contributed_routers("money")

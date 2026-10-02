@@ -147,3 +147,94 @@ def test_derive_closing_chat_summary_caps_length():
 
     summary = _derive_closing_chat_summary(orch)
     assert summary is not None and len(summary) <= 500
+
+
+# --- 2026-09-22: the summary is the session's OWN account, not the H-MEM banner ---
+# Intel 2026-09-16 (episode 1230): a fully successful chat was recorded with a summary
+# that was raw "[HIERARCHICAL MEMORY - SESSION CONTEXT]" boilerplate, so every consumer
+# under-read the turn. The closing turn's done()/final result is preferred, and the
+# H-MEM fallback drops its banner.
+
+
+class _FakeHistory:
+    def __init__(self, text):
+        self._text = text
+
+    def final_result(self):
+        return self._text
+
+
+class _FakeState:
+    def __init__(self, history):
+        self.history = history
+
+
+def _agent_with_final(text, tcm=None):
+    agent = _FakeAgent(tcm)
+    agent.state = _FakeState(_FakeHistory(text))
+    return agent
+
+
+def test_final_assistant_turn_is_preferred_over_hmem_block():
+    retriever = _FakeContextRetriever(
+        "[HIERARCHICAL MEMORY - SESSION CONTEXT]\n\nSession: s9\nTask: t\nProgress: 1/5")
+    tcm = _FakeTaskContextManager({"sess-final-1": _FakeSessionData(retriever)})
+    orch = _MinimalOrchestrator(
+        "sess-final-1", "u1",
+        {"main": _agent_with_final("Told the owner both X rails were down and "
+                                   "answered from durable memory instead.", tcm)})
+
+    summary = _derive_closing_chat_summary(orch)
+    assert summary is not None
+    assert "durable memory" in summary
+    assert "HIERARCHICAL MEMORY" not in summary
+
+
+def test_hmem_fallback_drops_the_banner_but_keeps_the_content():
+    retriever = _FakeContextRetriever(
+        "[HIERARCHICAL MEMORY - SESSION CONTEXT]\n\n"
+        "Session: sess-final-2\nTask: draft the launch tweet\n"
+        "Progress: 3/5\nCurrent Phase: drafting")
+    tcm = _FakeTaskContextManager({"sess-final-2": _FakeSessionData(retriever)})
+    # no state/history at all -> falls back
+    orch = _MinimalOrchestrator("sess-final-2", "u1", {"main": _FakeAgent(tcm)})
+
+    summary = _derive_closing_chat_summary(orch)
+    assert summary is not None
+    assert "HIERARCHICAL MEMORY" not in summary
+    assert "Session: sess-final-2" not in summary
+    assert "Current Phase" not in summary
+    assert "draft the launch tweet" in summary
+    assert "Progress: 3/5" in summary
+
+
+def test_empty_final_result_falls_through_rather_than_winning():
+    retriever = _FakeContextRetriever("Progress: wrote and sent the weekly note")
+    tcm = _FakeTaskContextManager({"sess-final-3": _FakeSessionData(retriever)})
+    orch = _MinimalOrchestrator("sess-final-3", "u1", {"main": _agent_with_final("   ", tcm)})
+
+    assert _derive_closing_chat_summary(orch) == "wrote and sent the weekly note"
+
+
+def test_banner_only_block_yields_no_summary_not_a_banner():
+    """Nothing to say must read as nothing, never as a header."""
+    retriever = _FakeContextRetriever(
+        "[HIERARCHICAL MEMORY - SESSION CONTEXT]\n\nSession: s\nCurrent Phase: idle")
+    tcm = _FakeTaskContextManager({"sess-final-4": _FakeSessionData(retriever)})
+    orch = _MinimalOrchestrator("sess-final-4", "u1", {"main": _FakeAgent(tcm)})
+
+    assert _derive_closing_chat_summary(orch) is None
+
+
+def test_raising_history_accessor_does_not_break_teardown():
+    class _Boom:
+        def final_result(self):
+            raise RuntimeError("history is gone")
+
+    retriever = _FakeContextRetriever("Progress: still fine")
+    tcm = _FakeTaskContextManager({"sess-final-5": _FakeSessionData(retriever)})
+    agent = _FakeAgent(tcm)
+    agent.state = _FakeState(_Boom())
+    orch = _MinimalOrchestrator("sess-final-5", "u1", {"main": agent})
+
+    assert _derive_closing_chat_summary(orch) == "still fine"

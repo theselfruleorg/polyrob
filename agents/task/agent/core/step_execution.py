@@ -12,7 +12,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from agents.task.agent.views import ActionResult
-from modules.llm.messages import HumanMessage
+from modules.llm.messages import HumanMessage, MessageOrigin, make_control_message
 from agents.task.constants import MAX_MCP_PER_STEP
 
 # Hard ceiling on tool calls executed in ONE step; the rest are deferred to the next
@@ -38,6 +38,21 @@ _EMPTY_ACTION_ESCALATE_AT = 2 if _FAST_ESCALATE else 3
 
 class StepExecutionMixin:
 	"""Validate-and-intervene + execute-actions step phases for Agent."""
+
+	def _empty_action_examples(self) -> str:
+		"""Example lines for the empty-action nudges, naming only REGISTERED
+		actions (F12). ``done`` is always offered as the way out."""
+		try:
+			names = set(self.controller.get_action_names()) if self.controller else set()
+		except Exception:
+			names = set()
+		lines = []
+		if "filesystem_write_file" in names:
+			lines.append("If this is a file operation → call filesystem_write_file(...)")
+		if "mcp_execute_tool" in names:
+			lines.append("If you need an MCP server's tool → call mcp_execute_tool(...)")
+		lines.append("If you have finished or are stuck → call done(text='explanation')")
+		return "\n".join(lines)
 
 	def _validate_and_intervene(self, model_output) -> bool:
 		"""Phase 2b: validate model output; inject corrective guidance and return False if the step should end early, else True."""
@@ -73,15 +88,11 @@ class StepExecutionMixin:
 				f"📝 Tool-free planning turn {self._empty_action_counter}/{ALLOWED_REASONING_TURNS} "
 				f"allowed (no action this step; must act next)"
 			)
-			self.message_manager.inject_user_guidance([{
-				'text': (
-					"📝 Planning turn noted. You may reason this turn, but you MUST call at "
-					"least one function on your NEXT step to make progress "
-					"(e.g. done(text=...) if you are finished)."
-				),
-				'kind': 'guidance',
-				'metadata': {'source': 'reasoning_turn_allowance', 'turn': self._empty_action_counter}
-			}])
+			self.message_manager.inject_runtime_guidance(
+				"📝 Planning turn noted. You may reason this turn, but you MUST call at "
+				"least one function on your NEXT step to make progress "
+				"(e.g. done(text=...) if you are finished).",
+				origin=MessageOrigin.GUIDANCE, source='reasoning_turn_allowance')
 			# Not an error: a planning turn is a legitimate (bounded) outcome.
 			# Tagged for telemetry/clarity; the R1 conversational-exit treats it as
 			# a non-reply step (it lacks conversational_reply), so it resets the
@@ -106,28 +117,17 @@ class StepExecutionMixin:
 				f"🚨 CRITICAL: Thinking loop detected - {_n} consecutive steps without function calls"
 			)
 
-			# Strong intervention with explicit example
-			self.message_manager.inject_user_guidance([{
-				'text': (
-					"🚨 INTERVENTION: Thinking loop detected.\n\n"
-					f"You have failed to call functions for {_n} consecutive steps.\n"
-					"This violates the core agent contract.\n\n"
-					"**STOP thinking. START acting.**\n\n"
-					"Example for current task:\n"
-					f"Task: {self.task}\n\n"
-					"If this is a file operation → call filesystem_write_file(...)\n"
-					"If this is a search → call mcp_execute_tool(...)\n"
-					"If you're stuck → call done(text='explanation')\n\n"
-					"**CALL A FUNCTION IN YOUR NEXT RESPONSE.**\n"
-					"No more explanations, no more planning."
-				),
-				'kind': 'intervention',
-				'metadata': {
-					'source': 'thinking_loop_detector',
-					'counter': _n,
-					'task': self.task[:100] if self.task else 'unknown'
-				}
-			}])
+			# Strong intervention. F12: name only actions that are really
+			# registered — an example naming an absent tool sends the model to
+			# call something that does not exist.
+			self.message_manager.inject_runtime_guidance(
+				"🚨 INTERVENTION: Thinking loop detected.\n\n"
+				f"You have produced {_n} consecutive steps without a function call.\n"
+				"Your planning allowance is used up for now.\n\n"
+				"**CALL A FUNCTION IN YOUR NEXT RESPONSE.**\n"
+				f"Task: {self.task}\n\n"
+				+ self._empty_action_examples(),
+				origin=MessageOrigin.INTERVENTION, source='thinking_loop_detector')
 
 			# History clearing disabled - preserves context
 			self.logger.info("Thinking loop detected - guidance injected")
@@ -150,23 +150,15 @@ class StepExecutionMixin:
 				include_in_memory=True
 			)]
 		else:
-			# Normal error handling for attempts 1-2
-			self.message_manager.inject_user_guidance([
-				{
-					'text': (
-						"❌ CRITICAL ERROR: No function calls detected.\n\n"
-						"You MUST call at least one function every step.\n"
-						"There is no 'thinking mode' or 'planning phase'.\n\n"
-						"**What to do RIGHT NOW:**\n"
-						"1. Look at the available functions below\n"
-						"2. Pick one that makes progress on the task\n"
-						"3. CALL IT with proper parameters\n\n"
-						f"You have {available_actions} functions available - use them!"
-					),
-					'kind': 'error',
-					'metadata': {'source': 'empty_actions_validation', 'attempt': self._empty_action_counter}
-				}
-			])
+			# Normal error handling (the planning allowance above is spent).
+			# F12: no "there is no planning phase" (the allowance above says there
+			# is one) and no "the functions below" (the tool schemas are not below).
+			self.message_manager.inject_runtime_guidance(
+				"❌ No function call in this step, and your planning allowance is used up.\n\n"
+				"Call at least one function in your NEXT response — pick one of your "
+				f"{available_actions} available functions that makes progress on the task.\n"
+				+ self._empty_action_examples(),
+				origin=MessageOrigin.INTERVENTION, source='empty_actions_validation')
 
 			# Set error result
 			self._last_result = [ActionResult(
@@ -207,7 +199,9 @@ class StepExecutionMixin:
 			workspace_dir=self.orchestrator.workspace_dir,
 			available_file_paths=self.available_file_paths or [],
 			sensitive_data=self.sensitive_data or {},
-			metadata={"turn_kind": turn_kind},
+			metadata={"turn_kind": turn_kind,
+			          # 068 G2: the run's declared buy target (None = none).
+			          "money_target": getattr(self.orchestrator, "_money_target", None)},
 		)
 		return execution_context
 
@@ -337,15 +331,11 @@ class StepExecutionMixin:
 
 					# Inject guidance
 					blocked_names = [f"{s}/{t}" for s, t in blocked_mcp]
-					self.message_manager.inject_user_guidance([{
-						'text': (
-							f"⚠️ Blocked {len(blocked_mcp)} MCP actions due to repeated validation failures: {blocked_names}\n\n"
-							f"The schema has been injected in previous error messages. "
-							f"Please review the FULL SCHEMA and correct your arguments before retrying."
-						),
-						'kind': 'warning',
-						'metadata': {'source': 'mcp_validation_loop_prevention'}
-					}])
+					self.message_manager.inject_runtime_guidance(
+						f"⚠️ Blocked {len(blocked_mcp)} MCP actions due to repeated validation failures: {blocked_names}\n\n"
+						f"The schema has been injected in previous error messages. "
+						f"Please review the FULL SCHEMA and correct your arguments before retrying.",
+						origin=MessageOrigin.INTERVENTION, source='mcp_validation_loop_prevention')
 
 			# PHASE 2 FIX (Nov 4, 2025): Loop Detection
 			# Detect if agent is repeating same actions without progress
@@ -362,7 +352,7 @@ class StepExecutionMixin:
 					# Inject warning into agent's next context as ephemeral message
 					# HumanMessage imported at module level from modules.llm.messages
 					self.message_manager.push_ephemeral_message(
-						HumanMessage(content=loop_warning)
+						make_control_message(loop_warning, MessageOrigin.INTERVENTION)
 					)
 
 					# Optional: Could halt after N consecutive loops

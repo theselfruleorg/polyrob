@@ -11,7 +11,18 @@ def _clean(monkeypatch):
     monkeypatch.delenv("TOOL_RESULT_MAX_TOKENS", raising=False)
 
 
-def test_off_by_default():
+def test_default_is_the_prod_cap():
+    """2026-09-22 harness/cache review F3: the documented prod value is the default."""
+    from agents.task.agent.core.result_budget import (
+        DEFAULT_TOOL_RESULT_MAX_TOKENS, tool_result_max_tokens)
+    assert tool_result_max_tokens() == DEFAULT_TOOL_RESULT_MAX_TOKENS == 6000
+    big = "x" * 100000
+    out = truncate_tool_result(big)
+    assert out is not big and "truncated" in out
+
+
+def test_zero_is_the_explicit_off(monkeypatch):
+    monkeypatch.setenv("TOOL_RESULT_MAX_TOKENS", "0")
     big = "x" * 100000
     assert truncate_tool_result(big) is big
 

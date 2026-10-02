@@ -99,3 +99,28 @@ def build_live_status(user_id: str, data_dir: str, sessions_root: str) -> dict:
                          for name, reason in unreadable.items()]
     out["count_unit"] = "actors"
     return out
+
+
+def session_is_live(session_id: str, data_dir: str) -> "bool | None":
+    """Does a live process hold *session_id* now, by the SHARED session registry?
+
+    ``True`` = a row in ``session_registry.db`` whose worker is alive (fail-open:
+    ``_pid_alive`` says alive when it cannot ask). ``False`` = the registry
+    answered and no live worker holds it. ``None`` = the registry could not be
+    read (absent or broken) — "not known", never "ended". The caller decides
+    whether the registry is shared at all (``SESSION_REGISTRY_BACKEND=sqlite``);
+    with the in-process backend this file says nothing about another process.
+    """
+    import os
+
+    from core.status_snapshot import _pid_alive, _rows
+    sid = str(session_id or "").strip()
+    if not sid:
+        return None
+    try:
+        rows = _rows(os.path.join(data_dir, "session_registry.db"),
+                     "SELECT worker_pid FROM active_sessions WHERE session_id=?",
+                     (sid,))
+    except Exception:
+        return None
+    return any(_pid_alive(int(r.get("worker_pid") or 0)) for r in rows)

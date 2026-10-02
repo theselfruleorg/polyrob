@@ -18,6 +18,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+pytest.importorskip("google.generativeai", reason="the [gemini] extra is not installed (058 lean core) — GeminiClient imports the SDK at module load")
 from modules.llm.gemini_client import GeminiClient
 
 

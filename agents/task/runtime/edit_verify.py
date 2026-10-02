@@ -2,8 +2,8 @@
 (I-3 harness-review finding ≡ H3 HF-proposal "edit-then-finish contract",
 merged under dedup decision D1).
 
-Coding-specific by design (names ``str_replace``/``apply_patch``/``create_file``/
-``move_file``/``delete_file`` and ``run_tests``) — this is the deliberate, scoped
+Coding-specific by design (names the ``coding`` tool's ``str_replace``/``apply_patch``/
+``create_file``/``move_file``/``delete_file`` and ``run_tests``, by their registered keys) — this is the deliberate, scoped
 exception to ``goals/completion_judge.py``'s capability-agnostic rule (that judge
 reasons about arbitrary goal *outcomes* via an LLM; this check reasons about ONE
 narrow, mechanical fact — was a code-editing action's ledger entry newer than the
@@ -20,10 +20,15 @@ from __future__ import annotations  # OK here: this is NOT an action-registratio
 from typing import Any
 
 from agents.task.runtime.evidence import walk_action_events
+from core.action_names import action_names
 
-# Names come from tools/coding/tool.py's registered actions.
-_EDIT_ACTIONS = frozenset({"str_replace", "apply_patch", "create_file", "move_file", "delete_file", "self_env_patch_source"})
-_TEST_ACTIONS = frozenset({"run_tests"})
+# The REGISTERED keys (``coding_str_replace``), not the bare method names: the
+# ledger records what the Controller registered. Matching the bare names left
+# this check dead in production (coding-agent review B1, 2026-09-24).
+_EDIT_ACTIONS = (action_names("coding", "str_replace", "apply_patch", "create_file",
+                              "move_file", "delete_file")
+                 | action_names("self_env", "self_env_patch_source"))
+_TEST_ACTIONS = action_names("coding", "run_tests")
 
 # Public contract name (R-4): external consumers (tools/hf_deploy/digest.py's
 # ship==tested gate) must not bind to the private spelling.
@@ -63,3 +68,65 @@ def edited_since_last_test(orchestrator: Any) -> bool:
     except Exception:
         return False  # fail-open: never block a finish on an introspection miss
     return False
+
+
+#: Refusals that mean "tests cannot run on THIS deploy" — a posture, not a
+#: failed test. Nudging "run tests" after one of these asks for the impossible:
+#: 2026-09-25 the prod agent got the nudge six times after `run_tests` had
+#: already said "Do not retry" (no Docker for the agent identity, 053 pending).
+_UNRUNNABLE_MARKERS = (
+    "code execution unavailable on this deploy",
+    "host execution refused while wallet custody",
+)
+
+#: Edits to these are prose, not code: no test run can verify them.
+_PROSE_SUFFIXES = (".md", ".txt", ".rst")
+
+
+#: Every path field a coding edit carries (tools/coding/tool.py): the edit verbs
+#: name ``file_path``; ``move_file`` names BOTH ``src_path`` and ``dest_path``
+#: (068 B13 — a move was read as an unknown path, so moving README.md into
+#: docs/ still drew the "run tests" nudge).
+_PATH_FIELDS = ("file_path", "path", "src_path", "dest_path", "target", "dest")
+
+
+def _edit_paths(event) -> list:
+    """Every path the edit touched; ``[]`` when none can be read (= code)."""
+    try:
+        dumped = event.action.model_dump(exclude_unset=True)
+    except Exception:
+        return []
+    out = []
+    for params in (dumped or {}).values():
+        if isinstance(params, dict):
+            out += [params[k] for k in _PATH_FIELDS if isinstance(params.get(k), str)]
+    return out
+
+
+def _is_prose_edit(event) -> bool:
+    paths = _edit_paths(event)
+    return bool(paths) and all(p.lower().endswith(_PROSE_SUFFIXES) for p in paths)
+
+
+def verify_nudge_applies(orchestrator: Any) -> bool:
+    """False when the "run tests" nudge cannot be satisfied or is meaningless.
+
+    068 G7: the nudge is skipped when a test run this session was refused by the
+    deploy's posture, or when every edit was to a prose file. Unknown paths count
+    as code (the nudge stays). Fail-open to True — never suppress the nudge on an
+    introspection miss, because suppressing is the permissive direction.
+    """
+    try:
+        events = list(walk_action_events(orchestrator))
+        for event in events:
+            if event.name in _TEST_ACTIONS:
+                err = str(getattr(event.result, "error", "") or "").lower()
+                if any(marker in err for marker in _UNRUNNABLE_MARKERS):
+                    return False
+        edits = [event for event in events if event.name in _EDIT_ACTIONS
+                 and not getattr(event.result, "error", None)]
+        if edits and all(_is_prose_edit(e) for e in edits):
+            return False
+    except Exception:
+        return True
+    return True

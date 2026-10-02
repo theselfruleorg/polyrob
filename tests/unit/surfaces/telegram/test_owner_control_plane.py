@@ -243,7 +243,8 @@ def test_every_help_line_is_dispatched_or_lifecycle():
     never actually run — `/journey` shipped this way once (help mentioned it
     only as a parenthetical on /recap, with no line of its own to look up)."""
     lifecycle = {"/task", "/cancel", "/new", "/help", "/start"}
-    known = set(_OWNER_ADMIN_COMMANDS) | lifecycle
+    from surfaces.telegram.harness import _owner_verbs  # + contributed verbs (067 P5a)
+    known = set(_owner_verbs()) | lifecycle
     for name, _ in help_commands():
         verb = f"/{name}"
         assert verb in known, f"/help documents {verb} but it dispatches nowhere"

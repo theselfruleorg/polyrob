@@ -88,6 +88,7 @@ def capture_llm_request(
     prompt_tokens: Optional[int] = None,
     completion_tokens: Optional[int] = None,
     cached_tokens: Optional[int] = None,
+    cache_creation_tokens: Optional[int] = None,
     agent_id: Optional[str] = None,
     total_tokens: Optional[int] = None,
     temperature: Optional[float] = None,
@@ -110,7 +111,9 @@ def capture_llm_request(
         session_id: Session ID for tracking
         prompt_tokens: Number of tokens in the prompt (if available)
         completion_tokens: Number of tokens in the completion (if available)
-        cached_tokens: Number of cached prompt tokens (for prompt caching cost calculation)
+        cached_tokens: Number of cached prompt tokens READ (prompt-cache hits)
+        cache_creation_tokens: Number of cache-WRITE tokens (F17) — billed ABOVE
+            the base input rate, so it is a separate fact from a cache read
         agent_id: Optional agent ID for explicit tracking
         total_tokens: Total tokens (alternative to token_count)
         temperature: Temperature setting used for the request
@@ -154,6 +157,7 @@ def capture_llm_request(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             cached_tokens=cached_tokens,
+            cache_creation_tokens=cache_creation_tokens,
             agent_id=agent_id,
             parameters=parameters if parameters else None
         )

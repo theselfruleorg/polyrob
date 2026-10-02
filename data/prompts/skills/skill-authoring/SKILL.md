@@ -6,7 +6,7 @@ metadata:
   polyrob-priority: '4'
   polyrob-auto-activate: 'true'
   polyrob-triggers: '{"keywords":["author skill","write skill","create skill","edit skill"]}'
-  polyrob-version: '1'
+  polyrob-version: '2'
 ---
 # Skill Authoring
 
@@ -19,7 +19,10 @@ How to write a durable, safe skill in this system.
   must promote. Do not expect an edit to take effect immediately; surface the pending id.
 
 ## Shape
-- Start with a single `# Title` heading. Keep the body under ~12,000 characters.
+- Start with a single `# Title` heading. Keep the body under 20,000 characters
+  (`MAX_SKILL_INJECT_CHARS` — a bigger body still loads but bloats every prompt
+  it joins; move depth into `references/` files). The hard limits: at least 50
+  characters, at most 40,000 (`MAX_SKILL_FILE_CHARS`) — a bigger file is refused.
 - Describe the procedure as advisory steps, tool-graceful: if a tool is absent, say so and
   fall back, never hard-fail.
 - `tool_ids` in a skill are METADATA for matching only — they do NOT grant capabilities.

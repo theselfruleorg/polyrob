@@ -83,7 +83,12 @@ HELP_WALLET = (
     "\n"
     "  /wallet autonomous <usd> sets how much executes WITHOUT interrupting\n"
     "  you. It cannot widen maximum loss: the catastrophic per-transaction\n"
-    "  ceiling still binds above it and stays env-only.",
+    "  ceiling still binds above it and stays env-only.\n"
+    "\n"
+    "  /wallet tokens lists the tokens I trust and why (canonical, our own\n"
+    "  launch, owner approved, owner pin), what you marked not trusted, and\n"
+    "  every quarantined or written-off holding. /wallet trust|untrust\n"
+    "  <chain> <address> [go] records your word on one token.",
     "`/wallet` on Telegram and `polyrob wallet`.",
 )
 
@@ -127,7 +132,7 @@ def register(reg, Command) -> None:
     reg.register(Command(
         "wallet", h_wallet,
         "Wallet addresses, network, caps — and the one cap you may set from chat",
-        usage="[balances|autonomous <usd>]", group="money",
+        usage="[balances|tokens|trust|untrust|autonomous <usd>]", group="money",
         help_long=HELP_WALLET[0], elsewhere=HELP_WALLET[1],
     ))
     reg.register(Command(

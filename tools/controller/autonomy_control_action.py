@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 #: together: a scope the record accepts but this Literal rejects is a pause the
 #: owner can write from every seat EXCEPT by asking the agent.
 _SCOPE = Literal["all", "trading", "streams", "planner", "cron", "social",
-                 "oversight", "pings", "apps"]
+                 "oversight", "pings", "apps", "release"]
 
 
 class AutonomyControlAction(BaseModel):
@@ -50,13 +50,19 @@ def register_autonomy_control_action(controller) -> None:
 	"""Register `autonomy_control` on *controller*'s registry (unconditional)."""
 
 	@controller.registry.action(
-		"Stop your own autonomous work (goal dispatch, planner, stream seeding, cron, "
-		"self-wake, social posts, the dev/ops loops) — durable across restarts. Call "
-		"this FIRST when the owner asks you to stop, pause or halt anything, then quote "
-		"the result verbatim. scopes narrows it (default all); duration_minutes makes it "
-		"temporary; cancel_goals=true also cancels the ready goal rows the pause held. "
-		"Cancelling goals alone is NOT a stop. You cannot lift a pause — only the owner "
-		"can, with /resume; if they ask you to start again, tell them that.",
+		"Pause your own autonomous/background work (goal dispatch, planner, stream "
+		"seeding, cron, self-wake, social posts, the dev/ops loops) — durable across "
+		"restarts. Call pause ONLY when the owner explicitly asks you to stop, pause or "
+		"halt your autonomous or background work, then quote the result verbatim. A "
+		"bare \"stop\" in the middle of the owner's own request means stop the current "
+		"attempt — end the turn and report; it is NOT a pause. If it is unclear which "
+		"one the owner means, ask one short question first. \"Resume\", \"continue\" "
+		"or \"restart X\" must NEVER call pause. scopes narrows it — pick the scope "
+		"the owner named (e.g. trading, cron); use all only when the owner means "
+		"everything. duration_minutes makes it temporary; cancel_goals=true also "
+		"cancels the ready goal rows the pause held. Cancelling goals alone is NOT a "
+		"stop. You cannot lift a pause — only the owner can, with /resume; if they ask "
+		"you to start again, tell them that.",
 		param_model=AutonomyControlAction,
 	)
 	async def autonomy_control(params: AutonomyControlAction, execution_context=None) -> ActionResult:

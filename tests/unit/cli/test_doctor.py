@@ -55,7 +55,7 @@ def test_sqlite_vec_not_loadable_branch_unavailable(monkeypatch):
     lines = doctor_report({})
     blob = "\n".join(lines)
     assert "NOT loadable" in blob
-    assert "apsw + sqlite-vec" in blob
+    assert "polyrob[memory-vector]" in blob  # 058: the extra, never the package names
 
 
 def test_sqlite_vec_not_loadable_branch_connect_fails(monkeypatch):

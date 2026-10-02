@@ -38,6 +38,33 @@ def _elide_middle(text: str, keep_head: int, keep_tail: int) -> str:
 
 class GuidanceMixin:
 	"""User/continuation guidance injection for MessageManager."""
+	# F29: empty slots so the composed MessageManager keeps its own
+	# __slots__ and never grows a __dict__. This mixin omitted it, which
+	# silently defeated the whole tuple.
+	__slots__ = ()
+
+
+	def inject_runtime_guidance(self, text: str, *, origin: str = MessageOrigin.INTERVENTION,
+	                            source: str = "runtime") -> None:
+		"""Append a RUNTIME nudge (planning-turn note, thinking-loop / empty-action
+		correction, MCP block, verify-before-done) to durable history.
+
+		C3: these used to enter through ``inject_user_guidance`` and landed as
+		origin USER framed "User guidance" — the model read the runtime as the
+		owner speaking, and the compaction static fallback promoted a nudge to
+		the owner's "Active Task". A runtime nudge is control content: a
+		non-user origin (INTERVENTION / GUIDANCE) and a ``<system-directive>``
+		envelope via ``make_control_message``. Genuine user text never comes
+		through here — it keeps ``inject_user_guidance`` and origin USER.
+		"""
+		from modules.llm.messages import make_control_message
+		if origin == MessageOrigin.USER:
+			origin = MessageOrigin.INTERVENTION  # never forge a user turn from here
+		received_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+		body = (f"Runtime note ({source}, {received_at}) — from the agent runtime, "
+		        f"not from the user:\n{text}")
+		self._add_message_with_tokens(make_control_message(body, origin))
+		self.logger.info(f"Injected runtime guidance (origin={origin}, source={source})")
 
 	def inject_user_guidance(self, messages: List[Dict[str, Any]], session_context: Optional[Dict] = None) -> None:
 		"""Inject user guidance into message context for continuous conversation.
@@ -122,13 +149,17 @@ class GuidanceMixin:
 		# user never sent.
 		if guidance_origin != MessageOrigin.USER:
 			source_label = "self-wake" if guidance_origin == MessageOrigin.SELF_WAKE else "system"
+			# F12: a delegation result is often the answer a user asked for — the
+			# "no redundant status" rule must not swallow it.
+			relay = ("\nIf a user is waiting for this result, send it to them with "
+			         "send_message." if "delegation_result" in kinds else "")
 			frame = f"""{change_summary}🤖 AUTONOMOUS RE-ENTRY ({source_label}, {received_at})
 
 {chr(10).join(message_texts)}
 
 This is NOT a new user message — it is a system-scheduled continuation. If there
 is pending productive work, do it. Otherwise call done() briefly. Do NOT re-answer
-previous user questions and do NOT send the user redundant status messages.
+previous user questions and do NOT send the user redundant status messages.{relay}
 """.strip()
 		elif is_continuation:
 			# High-signal marker: User sent new message during/after task work

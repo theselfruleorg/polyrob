@@ -50,7 +50,7 @@ def test_goal_planner_enabled_explicit_value_wins_over_local(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_deliver_self_wake_holds_strong_ref_to_run_session_task(monkeypatch):
+async def test_deliver_self_wake_holds_strong_ref_to_run_session_task(monkeypatch, tmp_path):
     """The asyncio.create_task(...) fired at the end of a successful self-wake
     dispatch must be retained in a module-level strong-ref set (mirrors
     core/autonomy_runtime.py's _BACKGROUND_TASKS) -- otherwise asyncio's weak
@@ -58,6 +58,9 @@ async def test_deliver_self_wake_holds_strong_ref_to_run_session_task(monkeypatc
     from agents.task.agent.core.self_wake import reset_reentry_budget
     from agents.task_agent_lite import TaskAgent, _SELF_WAKE_TASKS
 
+    # deliver_self_wake resolves an explicit data home before probing pause/prefs.
+    # Keep it off the real owner home, including any standing kill switch.
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("SELF_WAKE_ENABLED", "true")
     monkeypatch.setenv("SELF_WAKE_MAX_REENTRIES", "5")
     monkeypatch.setenv("SELF_WAKE_IDLE_BACKOFF_SEC", "0")

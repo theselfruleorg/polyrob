@@ -19,6 +19,8 @@ for secret EXPOSURE is workspace path-confinement at the tool layer.
 """
 from __future__ import annotations
 
+import functools
+import os
 import re
 from typing import Optional
 
@@ -46,4 +48,55 @@ def scrub_secret_shapes(text: Optional[str]) -> str:
     # Ordered battery lives in ONE place (core/secret_patterns.apply_ssot_shapes)
     # so this scrubber, the logging filter, and the CLI display scrubber can't drift.
     out = apply_ssot_shapes(text)
+    return scrub_loaded_seed(out)
+
+
+#: The one env var that holds the wallet's master secret.
+_SEED_ENV = "AGENT_WALLET_MASTER_SEED"
+#: A run of this many consecutive seed words is redacted as one unit.
+_SEED_WORD_RUN = 4
+
+
+@functools.lru_cache(maxsize=4)
+def _seed_patterns(seed: str):
+    """(exact-value regex, word-run regex or None) for *seed* — cached per value."""
+    words = seed.split()
+    exact = re.compile(r"\s+".join(re.escape(w) for w in words)) if words else None
+    run = None
+    if len(words) >= 12:
+        alt = "|".join(sorted({re.escape(w) for w in words}, key=len, reverse=True))
+        run = re.compile(rf"\b(?:{alt})(?:[\s,'\"]+(?:{alt})){{{_SEED_WORD_RUN - 1},}}\b")
+    return exact, run
+
+
+def scrub_loaded_seed(text: Optional[str], env=None, redacted: str = REDACTED) -> str:
+    """CR-M08: redact the LOADED wallet seed and runs of its words from *text*.
+
+    The shape battery only catches ``mnemonic=``-anchored text. A library error
+    that echoes a mistyped mnemonic has no such anchor, so this matches against
+    the value actually loaded in ``AGENT_WALLET_MASTER_SEED``: the exact value
+    (whitespace-insensitive) and any run of 4+ consecutive words drawn from a
+    12+ word seed. A seed shorter than 32 chars is not a live seed and is ignored.
+    """
+    if not text:
+        return text or ""
+    # 066 P0.2: the seed leaves os.environ once the wallet loads; the held
+    # copy (custody_secret) is what this process still has to redact.
+    from core.security.custody_env import custody_secret
+    seed = (custody_secret(_SEED_ENV, env) or "").strip()
+    if len(seed) < 32:
+        return text
+    exact, run = _seed_patterns(seed)
+    out = text
+    if seed in out:
+        out = out.replace(seed, redacted)
+    if exact is not None:
+        out = exact.sub(redacted, out)
+    if run is not None:
+        out = run.sub(redacted, out)
     return out
+
+
+def contains_loaded_seed(text: Optional[str], env=None) -> bool:
+    """True when :func:`scrub_loaded_seed` would change *text*."""
+    return bool(text) and scrub_loaded_seed(text, env) != text

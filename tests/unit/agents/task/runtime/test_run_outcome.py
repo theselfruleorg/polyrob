@@ -248,7 +248,7 @@ def test_build_run_outcome_refusal_keeps_provenance():
 
     class _Tracker:
         async def get_session_breakdown(self, sid):
-            return {"total_user_cost_usd": 0.42}
+            return {"total_user_cost_usd": 1.0, "total_api_cost_usd": 0.42}  # billed vs api — spend_usd is the api figure
 
     class _ProvOrch:
         agents = {"main": _MainAgent()}
@@ -290,7 +290,7 @@ def test_build_run_outcome_provenance():
 
     class _Tracker:
         async def get_session_breakdown(self, session_id):
-            return {"total_user_cost_usd": 0.42}
+            return {"total_user_cost_usd": 1.0, "total_api_cost_usd": 0.42}  # billed vs api — spend_usd is the api figure
 
     orch = _Orch({"main": _Agent([_done_step("OUTCOME: NONE — nothing to do")], n_steps=7)},
                  usage_tracker=_Tracker())
@@ -368,3 +368,26 @@ async def test_run_task_to_outcome_marks_autonomous():
         _RunFake("sess-auto", "Session completed successfully"),
         user_id="u1", request={"task": "t"}, autonomous=True)
     assert is_autonomous("sess-auto") is True
+
+
+# --- owner rule 2026-09-29: send_message is the voice, done() is the record ---
+
+def test_sent_text_is_the_last_send_message_not_the_done_text():
+    from agents.task.runtime.run_outcome import RunOutcome
+    o = RunOutcome(session_id="s", done_text="record", user_messages=["plan", "report"])
+    assert o.sent_text() == "report"
+    assert o.result_text() == "record"  # the record still feeds OUTCOME/episodes
+
+
+def test_sent_text_is_empty_when_nothing_was_sent_or_refused():
+    from agents.task.runtime.run_outcome import RunOutcome
+    assert RunOutcome(session_id="s", done_text="record").sent_text() == ""
+    assert RunOutcome(session_id="s", refusal=True, user_messages=["x"]).sent_text() == ""
+
+
+def test_with_done_record_only_when_shown():
+    from agents.task.runtime.run_outcome import with_done_record
+    assert with_done_record("body", "rec", False) == "body"
+    assert with_done_record("body", "rec", True) == "body\n\nRecord: rec"
+    assert with_done_record("", "rec", True) == "Record: rec"
+    assert with_done_record("body", "", True) == "body"

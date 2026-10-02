@@ -63,16 +63,90 @@ def usdc_mint(network: str) -> str:
     return _USDC_MINTS[key]
 
 
+_TOKEN_PROGRAMS = frozenset({
+    "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",      # SPL Token
+    "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",      # Token-2022
+})
+_ATA_PROGRAM = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+_COMPUTE_BUDGET_PROGRAM = "ComputeBudget111111111111111111111111111111"
+#: The SDK's `exact` SVM client always appends a Memo (a nonce) with no accounts.
+_MEMO_PROGRAM = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"
+_TRANSFER_CHECKED = 12
+
+
+def _ata(owner: str, mint: str, token_program: str) -> str:
+    from solders.pubkey import Pubkey
+    ata, _bump = Pubkey.find_program_address(
+        [bytes(Pubkey.from_string(owner)), bytes(Pubkey.from_string(token_program)),
+         bytes(Pubkey.from_string(mint))],
+        Pubkey.from_string(_ATA_PROGRAM))
+    return str(ata)
+
+
 class SolanaX402Signer:
     """Adapts ``SolanaSigner`` to the SDK's ``ClientSvmSigner`` protocol.
 
     ⚠️ Holds a reference to the underlying keypair because the SDK's protocol
     requires it. In-process use only — never return this object (or its
     ``keypair``) from a tool action, never log it, never serialize it.
+
+    ⚠️ CR-L28: it signs ONE shape only — the payment it was PINNED to (mint,
+    payTo, raw amount): exactly one SPL ``TransferChecked`` of that mint, from
+    our token account to payTo's token account, for that amount, with us as the
+    sole authority, plus ComputeBudget and the SDK's account-less Memo. An
+    unpinned signer signs nothing. Being "a required signer" is not consent.
     """
 
-    def __init__(self, signer):
+    def __init__(self, signer, *, mint: str = None, pay_to: str = None,
+                 amount: int = None):
         self._signer = signer
+        self._pin = None
+        if mint is not None or pay_to is not None or amount is not None:
+            self.pin(mint=mint, pay_to=pay_to, amount=amount)
+
+    def pin(self, *, mint: str, pay_to: str, amount: int) -> None:
+        """Bind the ONE payment this signer may authorize."""
+        if not mint or not pay_to or amount is None or int(amount) <= 0:
+            raise ValueError("a pin needs a mint, a payTo and a positive raw amount")
+        self._pin = (str(mint), str(pay_to), int(amount))
+
+    def _refuse_unless_pinned_transfer(self, tx) -> None:
+        if self._pin is None:
+            raise ValueError(
+                "refusing to sign: no payment is pinned (mint, payTo, amount). "
+                "This signer only authorizes the one transfer it was bound to.")
+        mint, pay_to, amount = self._pin
+        message = tx.message
+        if list(getattr(message, "address_table_lookups", None) or []):
+            raise ValueError("refusing to sign: address-table lookups hide "
+                             "accounts this check cannot read")
+        keys = [str(k) for k in message.account_keys]
+        transfers = 0
+        for ix in message.instructions:
+            program = keys[ix.program_id_index]
+            accounts = [keys[i] for i in bytes(ix.accounts)]
+            data = bytes(ix.data)
+            if program == _COMPUTE_BUDGET_PROGRAM and not accounts:
+                continue
+            if program == _MEMO_PROGRAM and not accounts:
+                continue
+            if program not in _TOKEN_PROGRAMS:
+                raise ValueError(f"refusing to sign: unexpected program {program}")
+            if len(data) != 10 or data[0] != _TRANSFER_CHECKED or len(accounts) != 4:
+                raise ValueError("refusing to sign: the token instruction is not a "
+                                 "plain TransferChecked")
+            src, ix_mint, dest, authority = accounts
+            ix_amount = int.from_bytes(data[1:9], "little")
+            if (ix_mint != mint or authority != self.address
+                    or src != _ata(self.address, mint, program)
+                    or dest != _ata(pay_to, mint, program) or ix_amount != amount):
+                raise ValueError(
+                    "refusing to sign: the transfer does not match the pinned "
+                    "payment (mint, payTo, amount, authority)")
+            transfers += 1
+        if transfers != 1:
+            raise ValueError(f"refusing to sign: expected exactly one transfer, "
+                             f"found {transfers}")
 
     @property
     def address(self) -> str:
@@ -104,6 +178,7 @@ class SolanaX402Signer:
                 f"refusing to sign: this transaction does not involve "
                 f"{self.address} at all. Signing for an account set we are not "
                 f"part of is never correct.")
+        self._refuse_unless_pinned_transfer(tx)                 # CR-L28
         if keys[0] == self.address:
             # We are the fee payer, so the strict rule applies and the base
             # signer owns it.

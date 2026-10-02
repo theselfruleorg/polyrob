@@ -19,6 +19,7 @@ from modules.llm.token_counter import count_messages_tokens
 from modules.llm.model_registry import get_model_config, ModelProvider
 from core.exceptions import LLMError, ServiceError, LLMRateLimitError, LLMAuthenticationError
 from core.config import BotConfig
+from core.security.redaction import args_shape as _args_shape  # [RAW_TOOL_CALL]: never the VALUES
 
 # Import default model from registry (mirrors anthropic_client.py's pattern; no
 # circular import — llm_client_registry only imports openrouter_client lazily,
@@ -312,8 +313,9 @@ def recover_textual_tool_calls(
         return (content, [])
     found: List[Tuple[int, int, str, Dict[str, Any]]] = []
 
-    # A. Anthropic <invoke name="...">...</invoke> blocks (whole content).
+    # A. Anthropic <invoke name="...">...</invoke> blocks, only for OFFERED names (2026-09-23).
     for m in _XML_INVOKE_RE.finditer(content):
+        if known_names is not None and m.group("name") not in known_names: continue  # noqa: E701
         body = m.group("body")
         args: Dict[str, Any] = {}
         for pm in _XML_PARAM_RE.finditer(body):
@@ -739,10 +741,8 @@ class OpenRouterClient(LLMClient):
                 content = message.content or ""
                 tool_calls_list = []
                 for tc in message.tool_calls:
-                    # Log raw arguments for debugging MCP nested args issue
                     raw_args = tc.function.arguments
-                    self.logger.info(f"[RAW_TOOL_CALL] {tc.function.name}: arguments type={type(raw_args).__name__}, value={raw_args[:500] if isinstance(raw_args, str) else raw_args}")
-
+                    self.logger.debug(f"[RAW_TOOL_CALL] {tc.function.name}: {_args_shape(raw_args)}")
                     tool_calls_list.append({
                         "id": tc.id,
                         "type": tc.type,
@@ -937,20 +937,20 @@ class OpenRouterClient(LLMClient):
     def _extract_usage_data(self) -> Dict[str, Optional[int]]:
         """Extract usage data from response."""
         if not self.last_response or not hasattr(self.last_response, 'usage'):
-            return {'prompt_tokens': None, 'completion_tokens': None, 'total_tokens': None}
+            return {'prompt_tokens': None, 'completion_tokens': None, 'total_tokens': None,
+                    'billed_cost_usd': None, 'cache_discount_usd': None}
 
         usage = self.last_response.usage
-        # UP-08: surface server-side prefix-cache hits (mirrors OpenAIClient). Benefits
-        # NIM too (NvidiaClient subclasses this). cached_tokens feeds cached_input_price.
-        cached_tokens = None
-        details = getattr(usage, 'prompt_tokens_details', None)
-        if details is not None:
-            cached_tokens = getattr(details, 'cached_tokens', None)
+        # UP-08: server-side prefix-cache hits (mirrors OpenAIClient; NIM subclasses this).
+        cached_tokens = getattr(getattr(usage, 'prompt_tokens_details', None), 'cached_tokens', None)
+        # F23: carry what OpenRouter billed, or the native tool path stores the catalog estimate.
+        from modules.llm.usage_extract import _billed_cost_fields
         return {
             'prompt_tokens': getattr(usage, 'prompt_tokens', None),
             'completion_tokens': getattr(usage, 'completion_tokens', None),
             'total_tokens': getattr(usage, 'total_tokens', None),
             'cached_tokens': cached_tokens or 0,
+            **_billed_cost_fields(self.last_response),
         }
 
     async def cleanup(self) -> None:

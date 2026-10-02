@@ -76,11 +76,32 @@ def _bridge(persist_fn=None, *, ctx=None, allow=True, usd=2.0):
     return B.WalletBridge(
         envelope=env, wallet=_Wallet(), execution_context=ctx or _ctx(),
         rail_factory=_Rail, guard_fn=_guard, price_fn=lambda c, a: 2500.0,
-        rpc_fn=lambda chain, method, params: "0x", persist_fn=persist_fn)
+        rpc_fn=lambda chain, method, params: "0x", persist_fn=persist_fn,
+        armed_origin="https://app.example")
+
+
+class _Frame:
+    def __init__(self, url):
+        self.url = url
+
+
+class _Page:
+    def __init__(self, url="https://app.example"):
+        self.main_frame = _Frame(url)
+        self.handlers = {}
+
+    def on(self, event, fn):
+        self.handlers.setdefault(event, []).append(fn)
+
+
+def _source(page=None):
+    """What Playwright hands a binding: the calling page and frame."""
+    page = page or _Page()
+    return {"page": page, "frame": page.main_frame, "context": None}
 
 
 async def _ask(bridge, method, params=None):
-    raw = await bridge.handle(None, json.dumps({"method": method,
+    raw = await bridge.handle(_source(), json.dumps({"method": method,
                                                 "params": params or []}))
     return json.loads(raw)
 

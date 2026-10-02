@@ -27,7 +27,7 @@ def test_init_wallet_optin_names_invoice_flag(monkeypatch, tmp_path):
     #  10. "y" wallet opt-in (<- what this test checks)
     result = runner.invoke(
         init_mod.init_cmd, ["--skip-keys"],
-        input="\n\n\n\n\n\nn\nn\nn\n\ny\n")
+        input="\n\n\n\n\n\nn\nn\nn\n\n\ny\n")  # 062: +1 blank for Section 7/7
     assert result.exit_code == 0, result.output
     assert "X402_INVOICE_ENABLED" in result.output
 

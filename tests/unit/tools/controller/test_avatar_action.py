@@ -1,23 +1,12 @@
-"""The `agent_avatar` action — the agent can finally SEE and SEND its own face.
+"""The `agent_avatar` action — the agent reads, sends and (on an owner turn) sets
+its own avatar image (the one slot in `core/avatar.py`; core generates no face).
 
-Before this, the Mindprint identity reached exactly one runtime output (the x402
-invoice card) and the agent had no way to read or use it. `avatar/` and
-`modules/pfp/` were, from the agent's side, dark.
-
-Two halves, deliberately narrow:
-
-- **read** — instance, kept/draft/absent, tier, traits, voice signature.
-- **attach** — copy `pfp.png` into the SESSION WORKSPACE and return the path, so
+- **read** — set (and from where) / not set / unreadable.
+- **attach** — copy the image into the SESSION WORKSPACE and return the path, so
   the EXISTING `message(media_paths=[…])` rail carries it with every screen
   intact (size cap, secret filter, threat scan, workspace confinement).
-
-⚠️ Attach copies INTO the workspace on purpose. `core/surfaces/attachments.py::
-validate_media_paths` requires every media path to resolve inside the session
-workspace; special-casing one file would weaken that confinement rule for every
-caller. One rule, no exception.
-
-⚠️ The action can never generate, randomize, keep or push. `keep` is permanent
-and irreversible, so the identity ceremony stays the owner's.
+- **set_from** — a workspace file, a URL or an NFT; refused on any turn that is
+  not the owner's.
 """
 import json
 
@@ -50,17 +39,12 @@ def _ctx():
                             "metadata": {}})()
 
 
-def _write_pfp(home, instance="rob", *, locked=True):
-    d = home / "identity" / instance / "pfp"
-    d.mkdir(parents=True, exist_ok=True)
-    d.joinpath("pfp.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"x" * 64)
-    d.joinpath("pfp.json").write_text(json.dumps({
-        "generator": "mindprint@v2", "seed": "POLYROB", "variant": "#a1b2",
-        "instance_id": instance, "seed_hex": "0x1546", "locked": locked,
-        "traits": {"tier": "rare", "eyes": "square", "mouth": "grin"},
-        "voice": {"pitch": 1.29, "rate": 1.02, "timbre": 0.78},
-    }))
-    return d
+PNG = b"\x89PNG\r\n\x1a\n" + b"x" * 64
+
+
+def _write_pfp(home, instance="rob"):
+    from core.avatar import set_avatar
+    return set_avatar(home, instance, PNG, source="file:face.png").path
 
 
 @pytest.fixture
@@ -82,32 +66,57 @@ def _action(c):
 # --- read ------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_it_reports_its_own_traits_and_voice(home):
+async def test_it_reports_its_avatar_and_where_it_came_from(home):
     _write_pfp(home)
     c = _Controller(home)
     fn, model = _action(c)
     res = await fn(model(), _ctx())
     body = res.extracted_content
-    assert "rare" in body and "0x1546" in body
-    assert "1.29" in body, "the voice signature must be reported"
-    assert "kept" in body.lower()
+    assert "avatar: set (file:face.png)" in body
+    assert "traits" not in body and "voice" not in body
 
 
 @pytest.mark.asyncio
-async def test_a_draft_identity_is_named_as_a_draft(home):
-    _write_pfp(home, locked=False)
+async def test_an_unreadable_record_is_not_reported_as_absent(home):
+    from core.avatar import avatar_dir
+    _write_pfp(home)
+    (avatar_dir(home, "rob") / "avatar.json").write_text("{broken")
     c = _Controller(home)
     fn, model = _action(c)
     res = await fn(model(), _ctx())
-    assert "draft" in res.extracted_content.lower()
+    assert "unreadable" in res.extracted_content
+    assert "not set" not in res.extracted_content
 
 
 @pytest.mark.asyncio
-async def test_no_avatar_is_an_honest_answer_not_an_error(home):
+async def test_an_unset_slot_reads_as_the_default(home):
     c = _Controller(home)
     fn, model = _action(c)
     res = await fn(model(), _ctx())
-    assert "not set up" in res.extracted_content.lower()
+    assert "the default" in res.extracted_content.lower()
+    assert "polyrob avatar set" in res.extracted_content
+    assert res.error is None
+
+
+@pytest.mark.asyncio
+async def test_attach_with_the_default_copies_the_default_mark(home, tmp_path):
+    from core.avatar import DEFAULT_AVATAR
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    c = _Controller(home, workspace=str(ws))
+    fn, model = _action(c)
+    res = await fn(model(attach=True), _ctx())
+    assert (ws / "avatar.png").read_bytes() == DEFAULT_AVATAR.read_bytes()
+    assert "attached" in res.extracted_content
+
+
+@pytest.mark.asyncio
+async def test_no_avatar_is_an_honest_answer_not_an_error(home, monkeypatch, tmp_path):
+    monkeypatch.setattr("core.avatar.DEFAULT_AVATAR", tmp_path / "missing.png")
+    c = _Controller(home)
+    fn, model = _action(c)
+    res = await fn(model(), _ctx())
+    assert "not set" in res.extracted_content.lower()
     assert res.error is None
 
 
@@ -123,7 +132,7 @@ async def test_attach_copies_the_face_into_the_session_workspace(home, tmp_path)
     res = await fn(model(attach=True), _ctx())
     copied = ws / "avatar.png"
     assert copied.is_file(), "the face was not materialised in the workspace"
-    assert copied.read_bytes() == (home / "identity" / "rob" / "pfp" / "pfp.png").read_bytes()
+    assert copied.read_bytes() == PNG
     assert "avatar.png" in res.extracted_content
 
 
@@ -154,28 +163,98 @@ async def test_attach_without_a_workspace_says_so(home):
 
 
 @pytest.mark.asyncio
-async def test_attach_with_no_avatar_does_not_claim_success(home, tmp_path):
+async def test_attach_with_no_avatar_does_not_claim_success(home, tmp_path, monkeypatch):
+    monkeypatch.setattr("core.avatar.DEFAULT_AVATAR", tmp_path / "missing.png")
     ws = tmp_path / "ws"
     ws.mkdir()
     c = _Controller(home, workspace=str(ws))
     fn, model = _action(c)
     res = await fn(model(attach=True), _ctx())
     assert not (ws / "avatar.png").exists()
-    assert "not set up" in res.extracted_content.lower()
+    assert "not set" in res.extracted_content.lower()
 
 
-# --- what it must NEVER do -------------------------------------------------
+# --- set_from ---------------------------------------------------------------
 
-def test_the_action_exposes_no_mutating_verb(home):
-    """`keep` is permanent. The identity ceremony is the owner's, so no
-    generate/randomize/keep/push may be reachable from a model turn."""
+@pytest.mark.asyncio
+async def test_set_from_a_workspace_file_on_an_owner_turn(home, tmp_path, monkeypatch):
+    monkeypatch.setattr("core.security.owner_turn.owner_turn_refusal",
+                        lambda *a, **k: None)
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "new.png").write_bytes(PNG + b"new")
+    c = _Controller(home, workspace=str(ws))
+    fn, model = _action(c)
+    res = await fn(model(set_from="new.png"), _ctx())
+    assert res.error is None, res.error
+    from core.avatar import load_avatar
+    st = load_avatar(home, "rob")
+    assert st.is_set and st.source == "file:new.png"
+    assert st.path.read_bytes() == PNG + b"new"
+
+
+@pytest.mark.asyncio
+async def test_set_from_a_path_outside_the_workspace_is_refused(home, tmp_path, monkeypatch):
+    monkeypatch.setattr("core.security.owner_turn.owner_turn_refusal",
+                        lambda *a, **k: None)
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    outside = tmp_path / "outside.png"
+    outside.write_bytes(PNG)
+    c = _Controller(home, workspace=str(ws))
+    fn, model = _action(c)
+    for ref in (str(outside), "../outside.png"):
+        res = await fn(model(set_from=ref), _ctx())
+        assert res.error and "refused" in res.error
+    from core.avatar import load_avatar
+    assert load_avatar(home, "rob").is_default  # unchanged
+
+
+@pytest.mark.asyncio
+async def test_set_from_is_refused_on_a_non_owner_turn(home, tmp_path):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "new.png").write_bytes(PNG)
+    c = _Controller(home, workspace=str(ws))
+    fn, model = _action(c)
+    ctx = _ctx()
+    ctx.is_sub_agent = True
+    res = await fn(model(set_from="new.png"), ctx)
+    assert res.error and "denied" in res.error
+    from core.avatar import load_avatar
+    assert load_avatar(home, "rob").is_default  # unchanged
+
+
+@pytest.mark.asyncio
+async def test_set_from_is_refused_on_a_forged_turn(home, tmp_path):
+    from core.security.forged_turns import FORGED_TURN_KINDS
+    c = _Controller(home, workspace=str(tmp_path))
+    fn, model = _action(c)
+    ctx = _ctx()
+    ctx.metadata = {"turn_kind": next(iter(FORGED_TURN_KINDS))}
+    res = await fn(model(set_from="x.png"), ctx)
+    assert res.error and "denied" in res.error
+
+
+@pytest.mark.asyncio
+async def test_set_from_is_refused_on_an_autonomous_run(home, tmp_path, monkeypatch):
+    monkeypatch.setattr("core.security.owner_turn.owner_turn_refusal",
+                        lambda *a, **k: None)
+    monkeypatch.setattr("agents.task.session_class.is_autonomous_session",
+                        lambda sid: True)
+    c = _Controller(home, workspace=str(tmp_path))
+    fn, model = _action(c)
+    res = await fn(model(set_from="x.png"), _ctx())
+    assert res.error and "autonomous" in res.error
+
+
+def test_the_action_reaches_no_push(home):
+    """Pushing the image to X / Discord is an owner CLI act, never a model turn."""
     import inspect
     from tools.controller import avatar_action
     src = inspect.getsource(avatar_action)
-    for forbidden in ("generate_pfp", "keep_pfp", "shuffle_face", "shuffle_voice",
-                      "push_twitter", "push_discord", "random_config"):
-        assert forbidden not in src, (
-            f"{forbidden} is reachable from the agent-facing action")
+    for forbidden in ("push_twitter", "push_discord"):
+        assert forbidden not in src
 
 
 def test_the_flag_off_registers_nothing(home, monkeypatch):

@@ -34,6 +34,19 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def workspace_relative(stored: Optional[str], ws_root: Optional[str]) -> Optional[str]:
+    """*stored* relative to *ws_root* when its realpath is inside it, else None."""
+    if not stored or not ws_root:
+        return None
+    try:
+        real = os.path.realpath(stored)
+        if os.path.commonpath([real, ws_root]) != ws_root or real == ws_root:
+            return None
+        return os.path.relpath(real, ws_root).replace(os.sep, "/")
+    except (ValueError, OSError):
+        return None
+
+
 @router.get("/api/webgate/artifacts")
 async def api_artifacts(request: Request, session_id: Optional[str] = None) -> JSONResponse:
     """List the recorded artifacts for *session_id*, tenant-scoped and read-only."""
@@ -63,6 +76,17 @@ async def api_artifacts(request: Request, session_id: Optional[str] = None) -> J
         logger.warning("artifact ledger read failed for session %s", session_id, exc_info=True)
         return JSONResponse({"artifacts": None, "error": "unreadable"})
 
+    # 070 W0.15: `path` is relative to THIS chat's workspace when the stored
+    # realpath is inside it, else None (no link: the file lives elsewhere).
+    # Resolved only when there are rows: get_workspace_dir creates the folder.
+    ws_root = None
+    if rows:
+        try:
+            from agents.task.path import pm
+            ws_root = os.path.realpath(str(pm().get_workspace_dir(clean_id, user_id=str(user_id))))
+        except Exception:
+            logger.debug("artifact rows: no workspace for %s", clean_id, exc_info=True)
+
     artifacts = []
     for art in rows:
         try:
@@ -71,7 +95,8 @@ async def api_artifacts(request: Request, session_id: Optional[str] = None) -> J
             verdict = "unknown"
         artifacts.append({
             "id": art.id,
-            "path": os.path.basename(art.path or ""),
+            "name": os.path.basename(art.path or ""),
+            "path": workspace_relative(art.path, ws_root),
             "kind": art.kind,
             "url": art.url,
             "verdict": verdict,

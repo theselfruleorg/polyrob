@@ -241,8 +241,22 @@ def describe_tool(tool_id: str, *, container, loaded_ids, is_leaf: bool,
     if req:
         lines.append("required_config: " + ", ".join(req))
 
+    # F9 (063 WS-4): in BRIDGE mode an action registered after the first emit is
+    # NOT in the model's tool list — it is called by name through the bridge.
+    # Saying "callable now" would send the model looking for a verb it will never
+    # be shown. `grow` and `deferred` DO show it, so they keep the old wording.
+    frozen = False
+    try:
+        from tools.tool_disclosure import _bridge_mode
+        frozen = (bool(registry.schemas_frozen()) if registry is not None else False) \
+            and _bridge_mode()
+    except Exception:
+        frozen = False
+    _via_bridge = ' — call it with tool_call(name="<action>", arguments={...})'
+
     if st.status == "loaded":
-        lines.append("status: loaded — its actions are callable now")
+        lines.append("status: loaded — its actions are callable now"
+                     + (_via_bridge if frozen else ""))
         actions = {}
         if registry is not None and hasattr(registry, "get_actions_by_service"):
             try:
@@ -262,7 +276,9 @@ def describe_tool(tool_id: str, *, container, loaded_ids, is_leaf: bool,
                 lines.append(f"  - {name}({props})")
     elif st.status == "loadable":
         lines.append(f'status: loadable — call load_tool("{display}") first, then '
-                     "its actions appear next step")
+                     + ("call its actions with "
+                        'tool_call(name="<action>", arguments={...})' if frozen
+                        else "its actions appear next step"))
     else:
         lines.append(f"status: gated:{st.reason} — {st.remedy}")
     return "\n".join(lines)

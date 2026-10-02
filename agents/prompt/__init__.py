@@ -1,25 +1,13 @@
-"""Prompt management and composition system.
+"""Prompt data anchors.
 
-This module provides a comprehensive prompt management system including:
-- Base prompt management functionality
-- JSON-based prompt storage and retrieval
-- Unified prompt composition for different LLM types
-- System prompt management with character integration
+H8: UnifiedPromptComposer + PromptPackage were dead code and were retired in the
+prompt-stack consolidation. 2026-09-29 (review F16): SystemPromptManager and
+BasePromptManager were retired too — nothing read their prompts, and the manager
+rewrote data/prompts/system_prompts.json on every shutdown. The live prompt path
+is the task agent's SystemPrompt builder (agents/task/agent/prompts.py).
 """
 
-from .base_prompt import BasePromptManager
-from .system import SystemPromptManager
 from pathlib import Path
-
-# H8: UnifiedPromptComposer + PromptPackage (agents/prompt/prompt_composer.py) were
-# dead code — exported but never instantiated anywhere. Retired in the prompt-stack
-# consolidation. The live prompt path is SystemPromptManager / the task agent's
-# SystemPrompt builder.
-
-__all__ = [
-    'BasePromptManager',
-    'SystemPromptManager'
-]
 
 # Version info
 from core.version import __version__  # noqa: F401  (project version SSOT)

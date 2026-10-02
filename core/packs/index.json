@@ -1,0 +1,52 @@
+[
+  {
+    "id": "discovery",
+    "dist": "polyrob",
+    "version": "1.2.0",
+    "sha256": "",
+    "tier": "first-party",
+    "summary": "Structured web data (AnySite) and web search (Perplexity)",
+    "capabilities": [
+      "egress",
+      "high_impact",
+      "tools"
+    ],
+    "requires_core": "==1.2.*",
+    "homepage": "https://github.com/theselfruleorg/polyrob/tree/main/packs/discovery",
+    "entry_point": "polyrob_discovery:pack"
+  },
+  {
+    "id": "markets",
+    "dist": "polyrob",
+    "version": "1.2.0",
+    "sha256": "",
+    "tier": "first-party",
+    "summary": "Prediction markets and perps: Polymarket and Hyperliquid (read tools, gated trade tools, API routes)",
+    "capabilities": [
+      "api_routes",
+      "money",
+      "tools"
+    ],
+    "requires_core": "==1.2.*",
+    "homepage": "https://github.com/theselfruleorg/polyrob/tree/main/packs/markets",
+    "entry_point": "polyrob_markets:pack"
+  },
+  {
+    "id": "x",
+    "dist": "polyrob",
+    "version": "1.2.0",
+    "sha256": "",
+    "tier": "first-party",
+    "summary": "X (Twitter): the API tool, the browser rail, the DM surface, cron post delivery",
+    "capabilities": [
+      "console_routes",
+      "high_impact",
+      "owner_verbs",
+      "surface",
+      "tools"
+    ],
+    "requires_core": "==1.2.*",
+    "homepage": "https://github.com/theselfruleorg/polyrob/tree/main/packs/x",
+    "entry_point": "polyrob_x:pack"
+  }
+]

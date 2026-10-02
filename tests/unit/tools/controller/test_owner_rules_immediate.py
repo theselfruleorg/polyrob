@@ -1,8 +1,11 @@
 """035 P1-6 / P1-11 — an owner-turn rule write applies immediately.
 
 Design principle: the owner IS the authority, and review protects against a
-FORGED author, not against the owner. Gated ``OWNER_RULES_IMMEDIATE`` (default
-OFF for one release, so the polarity flip is revertible).
+FORGED author, not against the owner. Gated ``OWNER_RULES_IMMEDIATE``, **default
+ON since 2026-09-21** (it shipped OFF "for one release"; the release became four
+and the defect recurred — prod kept a rule inert for 27 h and broke it in
+between). Every test here therefore sets the flag EXPLICITLY: an unset env now
+means ON, so a test that means OFF must say so.
 
 Defence in depth: the action passes ``pending=not immediate``, and
 ``SelfContextWriter._resolve_pending`` independently forces quarantine for a
@@ -55,8 +58,9 @@ def _action(c, which):
 
 @pytest.mark.asyncio
 async def test_flag_off_still_quarantines_an_owner_turn(monkeypatch, tmp_path):
+    """The revert path: `=false` restores the pre-2026-09-21 review lane."""
     monkeypatch.setenv("OWNER_DOC_WRITABLE", "true")
-    monkeypatch.delenv("OWNER_RULES_IMMEDIATE", raising=False)
+    monkeypatch.setenv("OWNER_RULES_IMMEDIATE", "false")
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
     c = _bare_controller(tmp_path)
     a = _action(c, "owner_doc_manage")
@@ -122,7 +126,7 @@ async def test_immediate_write_supersedes_a_stale_pending_draft(monkeypatch, tmp
     """An immediate write must not leave its superseded draft in the queue —
     otherwise /pending shows a proposal that is already law."""
     monkeypatch.setenv("OWNER_DOC_WRITABLE", "true")
-    monkeypatch.delenv("OWNER_RULES_IMMEDIATE", raising=False)
+    monkeypatch.setenv("OWNER_RULES_IMMEDIATE", "false")
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
     c = _bare_controller(tmp_path)
     a = _action(c, "owner_doc_manage")
@@ -159,3 +163,31 @@ async def test_immediate_write_reports_what_changed(monkeypatch, tmp_path):
     body = res.extracted_content or ""
     assert "IN EFFECT NOW" in body
     assert "+2" in body and "-1" in body, f"no change summary in: {body}"
+
+
+@pytest.mark.asyncio
+async def test_the_default_is_ON_so_an_owner_rule_binds_when_he_says_it(monkeypatch, tmp_path):
+    """The flip itself, with NO env set — the state a real deploy runs in.
+
+    Prod, 2026-09-20 07:19:39: the owner said "never publish bug-fix reports".
+    The rule landed in `.pending/`; `load_owner_doc` reads only the ACTIVE file;
+    it bound at 09-21 10:48:38, 27 hours later. In between the agent published
+    one and the owner asked "haven't i told you not to report about bugs?".
+    """
+    monkeypatch.setenv("OWNER_DOC_WRITABLE", "true")
+    monkeypatch.delenv("OWNER_RULES_IMMEDIATE", raising=False)
+    monkeypatch.delenv("POLYROB_LOCAL", raising=False)
+    c = _bare_controller(tmp_path)
+    a = _action(c, "owner_doc_manage")
+    res = await a.function(
+        a.param_model(action="update", content="Never publish bug-fix reports."),
+        execution_context=_owner_ctx())
+    active, pending = _paths(tmp_path, "owner.md")
+    assert active.exists(), "with no env set, an owner rule must bind on the turn"
+    assert not pending.exists()
+    assert "NOT YET IN EFFECT" not in (res.extracted_content or "")
+
+    # …and it is READABLE by the loader the rails actually use. The 27-hour gap
+    # was exactly this: written, but not on the path anything reads.
+    from core.instance import load_owner_doc
+    assert "bug-fix reports" in load_owner_doc(tmp_path, "rob", "polyrob")

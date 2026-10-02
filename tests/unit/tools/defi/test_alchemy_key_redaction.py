@@ -45,19 +45,28 @@ def test_the_settlement_scan_and_the_indexer_share_one_helper():
 
 def test_a_failed_fetch_never_logs_the_key(monkeypatch, caplog):
     """The real leak path: an httpx failure whose message carries the full URL,
-    logged from the broad except in `fetch_balances`."""
+    logged from the broad except in `fetch_balances`.
+
+    ⚠️ Patches the POOLED client in `_http`, not module-level `httpx.post`. On
+    2026-09-24 `alchemy_index` moved onto the shared pooled client (a fresh
+    client costs ~6 s of connection setup on this box), and this test caught the
+    move by failing — correctly, because its `assert caplog.records` refuses to
+    pass when no failure was provoked. Patching `httpx.post` here now proves
+    nothing, which for a SECURITY test is the dangerous kind of green.
+    """
     import httpx
 
-    from tools.defi.providers import alchemy_index
+    from tools.defi.providers import _http, alchemy_index
 
     monkeypatch.setenv("ALCHEMY_API_KEY", KEY)
 
-    def _boom(url, **kwargs):
-        raise httpx.HTTPStatusError(
-            f"Client error '401 Unauthorized' for url '{url}'",
-            request=None, response=None)
+    class _BoomClient:
+        def post(self, url, **kwargs):
+            raise httpx.HTTPStatusError(
+                f"Client error '401 Unauthorized' for url '{url}'",
+                request=None, response=None)
 
-    monkeypatch.setattr(httpx, "post", _boom)
+    monkeypatch.setattr(_http, "client", lambda: _BoomClient())
     with caplog.at_level(logging.DEBUG, logger=alchemy_index.__name__):
         assert alchemy_index.fetch_balances("0x" + "1" * 40, chain="base") is None
 

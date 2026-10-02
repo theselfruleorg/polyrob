@@ -227,8 +227,8 @@ def _soup(client):
 def _page_text(soup) -> str:
     """The SCREEN's own words, without the frame's.
 
-    The head truth legitimately says "Nothing needs you here, and one list is
-    unreadable" — a qualified claim, which is the point. What the page itself
+    The head truth legitimately says "I could not check everything. Nothing I
+    checked needs you." — a qualified claim, which is the point. What the page itself
     may never do is state the unqualified version, so the assertions below read
     the page and not the whole document.
     """
@@ -284,13 +284,24 @@ def test_the_partial_state_never_claims_nothing_waits(page_client, monkeypatch):
     assert "Nothing needs you" not in _page_text(_soup(client))
     # …and the frame only ever says it with the qualifier attached.
     head = _soup(client).select_one(".head-truth").get_text(" ", strip=True)
-    assert "one list is unreadable" in head
+    assert "I could not check everything." in head
 
 
-def test_the_page_carries_one_sources_note(page_client, monkeypatch):
+def test_the_page_says_what_it_checked(page_client, monkeypatch):
+    """One plain line under the list, never a paragraph of code names."""
+    from webview.copy import t
+    from core.surfaces.inbox import SOURCE_LABELS
     client, mod = page_client
-    _summary(monkeypatch, mod, [], {"asks": "ok"})
-    assert len(_soup(client).select("p.sources")) == 1
+    _summary(monkeypatch, mod, [], {"asks": "ok", "apps": "ok"})
+    soup = _soup(client)
+    assert len(soup.select("p.sources")) == 0
+    lines = soup.select("#inbox-checked")
+    assert len(lines) == 1
+    assert lines[0].get_text(strip=True) == t("inbox.checked_all")
+
+    _summary(monkeypatch, mod, [], {"asks": "ok", "apps": "unreadable(locked)"})
+    line = _soup(client).select_one("#inbox-checked").get_text(strip=True)
+    assert line == t("inbox.checked_some", sources=SOURCE_LABELS.get("apps", "apps"))
 
 
 def test_the_page_has_one_main_nav(page_client, monkeypatch):
@@ -318,7 +329,7 @@ def test_an_uncertain_count_is_drawn_uncertain(page_client, monkeypatch):
     badge = soup.select_one(".nav-badge")
     assert badge is not None and badge.get_text(strip=True) == "1+"
     assert "is-uncertain" in badge.get("class", [])
-    assert "one list" in soup.select_one(".nav-item[aria-label]")["aria-label"]
+    assert "I could not check everything." in soup.select_one(".nav-item[aria-label]")["aria-label"]
 
 
 def test_two_unreadable_lists_are_counted_as_two(page_client, monkeypatch):
@@ -327,7 +338,7 @@ def test_two_unreadable_lists_are_counted_as_two(page_client, monkeypatch):
              {"asks": "unreadable(locked)", "apps": "unreadable(disk)"})
     soup = _soup(client)
     assert "2 lists" in soup.select_one(".nav-item[aria-label]")["aria-label"]
-    assert "2 lists are unreadable" in soup.select_one(".head-truth").get_text(" ", strip=True)
+    assert "I could not check 2 lists." in soup.select_one(".head-truth").get_text(" ", strip=True)
 
 
 def test_the_summary_is_read_once_per_request(monkeypatch):
@@ -360,3 +371,38 @@ def test_no_tenant_is_uncertain_not_a_confident_zero(monkeypatch):
     page = soup.select_one(".page").get_text(" ", strip=True)
     assert "Nothing needs you" not in page
     assert "incomplete" in page
+
+
+def test_a_stamped_card_says_how_long_it_waited(page_client, monkeypatch):
+    """070 E.4: a card with a real stamp says how long it has waited and, when
+    it can expire, when."""
+    import time
+    from core.surfaces.inbox import Item
+    from webview.copy import t
+    client, mod = page_client
+    now = time.time()
+    _summary(monkeypatch, mod,
+             [Item(kind="ask", id="a", title="need a key", created_at=now - 3 * 3600 - 60,
+                   expires_at=now + 2 * 86400 + 600)], {"asks": "ok"})
+    text = _page_text(_soup(client))
+    assert t("inbox.waiting_for", age=t("inbox.age.hours", count=3)) in text
+    assert t("inbox.expires_in", age=t("inbox.age.days", count=2)) in text
+
+
+def test_an_unstamped_card_has_no_age(page_client, monkeypatch):
+    from core.surfaces.inbox import Item
+    client, mod = page_client
+    _summary(monkeypatch, mod, [Item(kind="ask", id="a", title="need a key")], {"asks": "ok"})
+    text = _page_text(_soup(client))
+    assert "Waiting for" not in text
+    assert "Expires in" not in text
+
+
+def test_the_age_words_are_singular_and_plural():
+    from webview.pages_new import _age_words
+    from webview.copy import t
+    assert _age_words(5) == t("inbox.age.minute_one")
+    assert _age_words(60 * 7) == t("inbox.age.minutes", count=7)
+    assert _age_words(3600) == t("inbox.age.hour_one")
+    assert _age_words(86400) == t("inbox.age.day_one")
+    assert _age_words(86400 * 4 + 5) == t("inbox.age.days", count=4)

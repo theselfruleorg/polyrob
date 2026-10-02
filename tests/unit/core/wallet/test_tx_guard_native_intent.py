@@ -255,3 +255,19 @@ def test_erc20_transfer_still_refuses_an_unexpected_native_move():
         entry_paused_fn=lambda: False, forged_fn=lambda ctx, tool: False)
     assert d.allowed is False
     assert "native balance change" in d.reason.lower()
+
+
+def test_plain_native_transfer_to_a_person_is_authorized():
+    """defi_trade.transfer(token='native') (2026-09-26): empty calldata, value
+    only, to an ordinary address — the most basic wallet send."""
+    person = "0x2FAa2566d98FC6eac6eD5F2DbA182Ffd2142f0e7"
+    decision = tx_guard.authorize(
+        _intent(to=person),
+        {"to": person, "data": "0x", "value": AMOUNT, "chainId": 8453},
+        holder=HOLDER, gate=_gate(), execution_context=None,
+        simulate_fn=lambda **_: _deltas(),
+        price_fn=lambda chain, addr: ETH_PRICE, fallback_price_fn=None,
+        rpc_is_pinned_fn=lambda chain: True, halted_fn=lambda: False,
+        entry_paused_fn=lambda: False, forged_fn=lambda ctx, tool: False)
+    assert decision.allowed, decision.reason
+    assert decision.amount_usd == pytest.approx(10.0)

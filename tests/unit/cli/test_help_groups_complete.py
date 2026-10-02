@@ -7,12 +7,12 @@ accident — nobody had added them to `_HELP_GROUPS`. This pins the regroup:
 a new **Owner** section (`owner identity profile`), `apps`/`autonomy` folded
 into "Autonomy & work" alongside `tools`/`kb`, `journey` folded into "Money",
 and a new `identity` click group (`cli/commands/identity.py`) that mounts the
-existing `soul`/`persona`/`pfp` groups as `identity soul` / `identity persona`
+existing `soul`/`persona`/`avatar` groups as `identity soul` / `identity persona`
 / `identity avatar`.
 
 Old top-level names never stop working (043 §4.1: an alias invokes forever) —
 they just fold onto their canonical row in `--help` via `_COMMAND_ALIASES`:
-`soul`/`persona`/`pfp` -> `identity`, `approvals` -> `owner` (display-only;
+`soul`/`persona`/`avatar` -> `identity`, `approvals` -> `owner` (display-only;
 `owner approvals` as a real subcommand is phase 3), `skill` -> `skills`.
 """
 from __future__ import annotations
@@ -36,7 +36,7 @@ def _invoke(args):
     return CliRunner().invoke(cli, args)
 
 
-_ALIAS_TOKENS = ("soul", "persona", "pfp", "approvals", "skill",
+_ALIAS_TOKENS = ("soul", "persona", "avatar", "approvals", "skill",
                   "sessions", "models", "profiles", "webgate")
 
 
@@ -97,7 +97,7 @@ def test_alias_does_not_appear_as_its_own_help_row(alias):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("alias", ["soul", "persona", "pfp", "approvals", "skill"])
+@pytest.mark.parametrize("alias", ["soul", "persona", "avatar", "approvals", "skill"])
 def test_alias_still_invokes(alias):
     res = _invoke([alias, "--help"])
     assert res.exit_code == 0, res.output
@@ -116,15 +116,21 @@ def test_identity_group_lists_soul_persona_avatar():
 
 
 # ---------------------------------------------------------------------------
-# (f) `identity avatar --help` is pfp's subcommands
+# (f) `identity avatar --help` is the avatar slot's subcommands — no generator
 # ---------------------------------------------------------------------------
 
 
-def test_identity_avatar_is_pfp():
+def test_identity_avatar_is_the_slot():
     res = _invoke(["identity", "avatar", "--help"])
     assert res.exit_code == 0, res.output
-    assert "show" in res.output
-    assert "generate" in res.output
+    for verb in ("show", "set", "clear", "push"):
+        assert verb in res.output
+    assert "generate" not in res.output
+
+
+def test_pfp_is_gone():
+    res = _invoke(["pfp", "--help"])
+    assert res.exit_code != 0
 
 
 # ---------------------------------------------------------------------------

@@ -34,7 +34,8 @@ def test_the_protected_names_are_the_ones_the_code_actually_writes():
     from core.instance import AGENT_MAIL_STATE_FILENAME
     from core.security.encryption import _key_file_path
     from tools.oauth.file_store import TOKENS_FILENAME
-    from tools.x_browser.session_store import SESSION_FILENAME
+    SESSION_FILENAME = pytest.importorskip(
+        "polyrob_x.x_browser.session_store").SESSION_FILENAME  # the X pack (067 P3b)
 
     assert AGENT_MAIL_STATE_FILENAME == "agent_mail.json"
     assert _key_file_path().name == ".mcp_encryption_key"

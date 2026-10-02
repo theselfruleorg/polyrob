@@ -31,7 +31,7 @@ CEILINGS = {
     # (/signin, /profile, /settings, /admin*) moved to webview/posture_routes.py
     # as ONE posture table — they were seven hand-registered routes that
     # disagreed about what a denial looks like.
-    "webview/server.py": 3458,  # 043 A12/A29/A30: the full-tree session catalog, the per-session stats route and the four consumer-less socket emits deleted
+    "webview/server.py": 3193,  # 043 A12/A29/A30: the full-tree session catalog, the per-session stats route and the four consumer-less socket emits deleted; 070 W0.10: the feed events route moved to webview/feed_routes.py; 070 W0.14: the workspace tree moved to webview/workspace_routes.py; 070 W0.17: socket joins through webview/socket_limits.py; 070 W0.18/E.34: the error handler delegates to webview/error_page.py
     # S8 (2026-08-29): chat / delivery / lifecycle mixins + support helpers extracted
     # (agents/task/task_agent_{chat,delivery,lifecycle,support}.py).
     # Tightened 2026-09-08: the public session-control verbs (get_session_status /
@@ -63,17 +63,25 @@ CEILINGS = {
     # model at a time — raise its row deliberately with the model, never by drift.
     # Raised 2026-09-15 with the two models it names (+50): z-ai/glm-5.3 and
     # z-ai/glm-5.3-flash, the ids the GLM Coding Plan seat actually serves.
-    "modules/llm/model_catalog.py": 1555,
+    # Raised 2026-09-23 with the two models it names (+36): claude-opus-5 and
+    # claude-fable-5-1 — the first Anthropic rows that accept mid-conversation
+    # tool changes (F9 shape (b)), plus the comment that says which do not.
+    "modules/llm/model_catalog.py": 1591,
     # S6 (2026-08-29): scan / notify / subscriptions / reputation extracted to settlement_*.py mixins.
     "modules/x402/settlement_watcher.py": 330,
-    "modules/llm/gemini_client.py": 1357,
+    "modules/llm/gemini_client.py": 1360,
     # Raised 2026-09-15 (+16): the glm-5.3 / glm-5.3-flash ids on BOTH z.ai rows,
     # plus the notes recording why zai-coding's provider-wide supports_vision stays
     # False while glm-5.3-flash has vision, and why the metered `zai` row keeps its
     # cheaper default. No new behaviour — two existing data rows.
     "modules/llm/provider_spec.py": 1317,
     # S5 (2026-08-29): curated-notes / KB / episodes stores extracted to sqlite_*_store.py mixins.
-    "modules/memory/sqlite_memory_provider.py": 492,
+    # 2026-09-22 (WS-K4): 492 -> 491. The recall-consolidation BEHAVIOUR went to a
+    # new module (modules/memory/recall_consolidation.py); only the mixin wiring
+    # landed here, paid for by trimming a dated change-story out of a docstring.
+    # 2026-09-23 (025): 491 -> 466. prune_memories moved to the new scope/retention
+    # mixin (modules/memory/sqlite_scope_store.py) with the scope verbs.
+    "modules/memory/sqlite_memory_provider.py": 466,
     "modules/x402/invoicing.py": 1169,
     "modules/llm/adapters.py": 1140,
     "modules/memory/task/task_context_manager.py": 1135,
@@ -83,8 +91,8 @@ CEILINGS = {
     # modules/llm/manager_inventory.py::InventoryMixin, which the manager composes.
     "modules/llm/llm_manager.py": 861,
     "modules/llm/llm_client.py": 955,
-    "modules/llm/anthropic_client.py": 912,
-    "modules/llm/openai_client.py": 896,
+    "modules/llm/anthropic_client.py": 920,  # F12: breakpoint placement -> cache_hints.py; sampling routing + thinking clamp -> anthropic_sampling.py
+    "modules/llm/openai_client.py": 901,
     "modules/memory/task/hierarchical_memory.py": 821,
 }
 

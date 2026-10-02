@@ -91,8 +91,10 @@ def _cron_off_note() -> str:
     ticker is on" — so the one case where we know least produced the most
     reassuring reply. An unreadable probe now says it is unreadable.
 
-    ⚠️ D72: names the VERB the owner can run, not the env flag. The flag is not
-    something he can reach from a phone; `polyrob autonomy status` is.
+    ⚠️ D72: names what the owner can DO from the chat he is in. A server
+    command is not reachable from a phone; `/status` and `/config set` are
+    (CRON_ENABLED is chat-writable through the config oracle, like the /mode
+    copy's AUTONOMY_ENABLED).
     """
     try:
         from tools.cronjob_tools import cron_enabled
@@ -102,10 +104,33 @@ def _cron_off_note() -> str:
         logger.warning("cron enablement probe failed", exc_info=True)
         return (f"\n⚠️ I could not check whether my scheduler is running "
                 f"({type(exc).__name__}) — the job is stored, but I cannot "
-                f"promise anything will run it. Check with "
-                f"`polyrob autonomy status`.")
+                f"promise anything will run it. Check with /status.")
     return ("\n⚠️ My scheduler is switched off — the job is stored but nothing "
-            "will run it. Turn it on with `polyrob autonomy on`.")
+            "will run it. Turn it on from here with `/config set CRON_ENABLED "
+            "true` (applies on the next restart).")
+
+
+_CRON_ADD_USAGE = (
+    f"Usage: /cron add <schedule> {_CRON_SEP} <task> [tools=a,b] "
+    "[target=<token address> chain=<chain>]\n"
+    "Schedules: a duration (30m), 'every monday 09:00', a 5-field "
+    "cron line, or an ISO timestamp.\n"
+    "e.g. /cron add every monday 09:00 | summarise the week\n"
+    "tools= grants the job those tools; target= is the one token it may buy.")
+_CRON_EDIT_USAGE = ("Usage: /cron edit <id> schedule <schedule> · "
+                    "/cron edit <id> task <new task text>")
+
+
+def _cron_grant_note(payload) -> str:
+    """What the owner granted the job, read back from the stored payload."""
+    p = payload or {}
+    parts = []
+    if p.get("tools"):
+        parts.append("tools " + ", ".join(p["tools"]))
+    t = p.get("target_token")
+    if t:
+        parts.append(f"target {t['address']} on {t['chain']}")
+    return ("\nGranted: " + "; ".join(parts) + ".") if parts else ""
 
 
 def _fmt_job(job) -> str:
@@ -145,29 +170,59 @@ def cron_reply(user_id: str, data_dir: str, args: List[str]) -> str:
         out = [_fmt_job(job),
                f"   created {job.created_at} · last run {job.last_run_at or '-'}",
                f"   max duration {job.max_duration_seconds}s"]
+        # 060 WS-4: the job's prose IS an instruction (the SCOPED tier) — show it
+        # as one, with the precedence that governs it and the skills it pins.
+        from core.rules_sweep import rail_instruction_lines
+        out += ["   " + l for l in rail_instruction_lines(job.task, job.payload)]
         if job.payload:
             out.append(f"   payload: {_code(job.payload)}")
         return "\n".join(out)
 
     if sub in ("add", "schedule", "new"):
+        from core.owner_create import (create_cron, cron_options_payload,
+                                       split_cron_options)
+        try:
+            rest, options = split_cron_options(rest)
+            tools, extra = cron_options_payload(options)
+        except ValueError as e:
+            return f"❌ {e}\n{_CRON_ADD_USAGE}"
         raw = " ".join(rest)
         if _CRON_SEP not in raw:
-            return (f"Usage: /cron add <schedule> {_CRON_SEP} <task>\n"
-                    "Schedules: a duration (30m), 'every monday 09:00', a 5-field "
-                    "cron line, or an ISO timestamp.\n"
-                    "e.g. /cron add every monday 09:00 | summarise the week")
+            return _CRON_ADD_USAGE
         spec, _, task = raw.partition(_CRON_SEP)
         spec, task = spec.strip(), task.strip()
         if not spec or not task:
             return f"Both parts are required: /cron add <schedule> {_CRON_SEP} <task>"
         from cron.schedule import ScheduleError
         try:
-            job = svc.schedule(task=task, schedule_spec=spec, user_id=user_id)
+            job = create_cron(svc, task=task, schedule_spec=spec, user_id=user_id,
+                              tools=tools, via="telegram", extra_payload=extra)
         except ScheduleError as e:
             return f"Invalid schedule {_code(spec)}: {e}"
+        except ValueError as e:
+            return f"❌ {e}"
         nxt = job.next_run_at.strftime("%Y-%m-%d %H:%M") if job.next_run_at else "-"
         return (f"✅ Scheduled {_code(job.id[:8])} — next run {nxt}."
-                + _cron_off_note())
+                + _cron_grant_note(job.payload) + _cron_off_note())
+
+    if sub == "edit":
+        if len(rest) < 3:
+            return _CRON_EDIT_USAGE
+        jobs = svc.list_jobs(user_id=user_id)
+        job_id, err = resolve_prefix(rest[0], [j.id for j in jobs])
+        if err:
+            return f"{err} — see /cron."
+        job = next(j for j in jobs if j.id == job_id)
+        from core.owner_create import edit_cron
+        from cron.schedule import ScheduleError
+        try:
+            changed = edit_cron(svc, job, user_id=user_id, field=rest[1],
+                                value=" ".join(rest[2:]), via="telegram")
+        except (ScheduleError, ValueError) as e:
+            return f"❌ {e}\n{_CRON_EDIT_USAGE}"
+        if not changed:
+            return f"Nothing changed on {_code(job_id[:8])}."
+        return f"✅ Edited {_code(job_id[:8])}: {', '.join(changed)}. The rest of the job is kept."
 
     if sub in ("cancel", "rm", "delete"):
         if not rest:
@@ -181,7 +236,8 @@ def cron_reply(user_id: str, data_dir: str, args: List[str]) -> str:
         return f"Could not cancel {_code(job_id[:8])} — see /cron."
 
     return ("Usage: /cron [list] · /cron show <id> · "
-            f"/cron add <schedule> {_CRON_SEP} <task> · /cron cancel <id>")
+            f"/cron add <schedule> {_CRON_SEP} <task> · "
+            "/cron edit <id> schedule|task <value> · /cron cancel <id>")
 
 
 # ---------------------------------------------------------------------------
@@ -213,8 +269,10 @@ def trade_reply(user_id: Optional[str], data_dir: str, args: List[str],
     The signal the system was throwing away is that the OWNER asking, from an
     authenticated seat, IS the authorization. This verb carries it into the
     payload. The agent still cannot self-grant; nothing here widens a cap; and
-    every spend is still bounded by the per-transaction ceiling and still
-    queues for ``/approve`` above the autonomous ceiling.
+    every spend is still bounded by the per-transaction ceiling. Above the
+    autonomous ceiling a spend raises an owner ask; the owner's tap re-arms the
+    run, and its next attempt of the SAME call is sent (the owner grant,
+    2026-09-26). Until then an approved spend was re-refused — "NOT SENT".
     """
     if not user_id:
         return "Only the owner can launch a trading run."
@@ -222,8 +280,9 @@ def trade_reply(user_id: Optional[str], data_dir: str, args: List[str],
     if not task:
         return ("Usage: /trade <what to do>\n"
                 "e.g. /trade bridge 0.93 SOL to USDC on Base\n"
-                "Seeds a run that carries the money verb. Spends above the "
-                "autonomous ceiling still come to you via /pending.")
+                "Seeds a run that carries the money verb. A spend above the "
+                "autonomous ceiling asks you first (/pending); once you approve "
+                "it, the run's next attempt sends it.")
 
     if board is None:
         from agents.task.goals.board import GoalBoard
@@ -234,10 +293,12 @@ def trade_reply(user_id: Optional[str], data_dir: str, args: List[str],
         f"{task}\n\n"
         "The owner asked for this directly, so this run carries `defi_trade`. "
         "Read the treasury-trading skill before acting. Every spend is still "
-        "bounded by the wallet caps, and anything above the autonomous ceiling "
-        "returns lane=owner_queue — that is normal, not a blocker: report it "
-        "and stop, the owner approves from chat. Do NOT create follow-up goals "
-        "to 'get the tool granted' — you have it here."
+        "bounded by the wallet caps. A live spend above the autonomous ceiling "
+        "is refused with an owner ask (it is in /pending). Tell the owner the "
+        "amount and the ceiling, and stop. The owner's approval re-arms this "
+        "run: make the SAME call again, with the same parameters — a changed or "
+        "split call is a different request and asks again. Do NOT create "
+        "follow-up goals to 'get the tool granted' — you have it here."
     )
     try:
         goal = board.create(
@@ -247,6 +308,7 @@ def trade_reply(user_id: Optional[str], data_dir: str, args: List[str],
             priority=9,                     # the owner asked; it goes first
             payload={"tools": list(_TRADE_TOOLS), "max_steps": 40,
                      "owner_granted": True},
+            actor="owner_seat",   # 036 §3.3: the owner asking IS the grant (audited)
         )
     except Exception as e:
         logger.warning("trade run could not be seeded: %s", e)
@@ -254,9 +316,43 @@ def trade_reply(user_id: Optional[str], data_dir: str, args: List[str],
 
     return (f"✅ Launched {_code(str(getattr(goal, 'id', '?'))[:8])} with "
             f"`defi_trade` granted.\n{task}\n\n"
-            "It runs on the next dispatcher tick. Spends above the autonomous "
-            "ceiling come to you for approval — /pending, then /approve <id>. "
-            "Progress: /goals")
+            + "\n".join(_trade_run_notes(data_dir)) + "\nProgress: /goals")
+
+
+def _trade_run_notes(data_dir: str) -> List[str]:
+    """A10/O17: what the seeded run can actually do, read at launch.
+
+    Views only — this reads the pause record and the turn-trading flag the
+    guard reads; it decides nothing. Each read fails toward the cautious line.
+    """
+    notes: List[str] = []
+    try:
+        from core.autonomy_control import allows
+        dispatch, entry = allows("dispatch", data_dir), allows("trade_entry", data_dir)
+    except Exception:
+        dispatch = entry = None
+    if dispatch is None:
+        notes.append("I could not read the pause state; /status shows it.")
+    elif not dispatch.allowed:
+        notes.append("Paused — it runs after /resume.")
+    else:
+        notes.append("It runs on the next dispatcher tick.")
+        if entry is not None and not entry.allowed:
+            notes.append("Trading is paused: it can read and quote, but it starts "
+                         "no buy until /resume trading.")
+    try:
+        from core.wallet.tx_guard import autonomous_turn_trading_enabled
+        can_sign = autonomous_turn_trading_enabled()
+    except Exception:
+        can_sign = False
+    if not can_sign:
+        notes.append("Unattended runs may not sign on this instance: it can read "
+                     "and quote, but it cannot send a transaction.")
+    if can_sign:
+        notes.append("A spend above the autonomous ceiling asks you first "
+                     "(/pending); once you approve it, the run's next attempt "
+                     "sends it.")
+    return notes
 
 
 # ---------------------------------------------------------------------------
@@ -371,6 +467,60 @@ def _objective_reply(user_id: str, board: Any, rest: List[str]) -> str:
     return f"✅ {_code(oid[:8])} → {target}.{note}"
 
 
+def _cancel_for_good(user_id: str, board: Any, goal: Any, reason: str) -> str:
+    """034 §11.1 — ``/goal cancel <id>`` means NEVER AGAIN (owner decision).
+
+    Cancels the row (when it is still open) AND switches the title OFF in
+    ``goal_suppressions``: the stream seeder, ``goal_create``/the planner and
+    ``board.create(force=True)`` all refuse it until ``/goal allow``.
+    """
+    from core.goal_suppressions import SCOPE_TITLE, suppress
+    gid = _code(goal.id[:8])
+    note = ""
+    if goal.status not in ("done", "cancelled"):
+        if goal.status == "running":
+            note = "\n⚠️ It is running right now — this run finishes; no new one starts."
+        if not board.update_status(goal.id, "cancelled", user_id=user_id):
+            return f"Could not update {gid} — see /goals."
+    try:
+        suppress(board.db_path, user_id=user_id, scope=SCOPE_TITLE, value=goal.title,
+                 label=goal.title, reason=(reason or "").strip())
+    except Exception as exc:
+        logger.warning("goal suppression not written", exc_info=True)
+        return (f"✅ {gid} → cancelled, but I could NOT switch it off for good "
+                f"({type(exc).__name__}: {str(exc)[:80]}) — it may be created again.")
+    return (f"✅ {gid} → cancelled and switched OFF: “{goal.title}” will not be "
+            f"created again — not by a stream, the planner or me.{note}\n"
+            f"Turn it back on: /goal allow {goal.id[:8]} · just this run next "
+            f"time: /goal cancel <id> --once")
+
+
+def _allow_reply(user_id: str, board: Any, rest: List[str]) -> str:
+    """``/goal allow <id|title>`` — turn a switched-off goal back on."""
+    from core.goal_suppressions import SCOPE_TITLE, allow, match
+    ref = " ".join(rest).strip()
+    if not ref:
+        return ("Usage: /goal allow <id|title> — turns a goal you switched off back "
+                "on. /goals lists what is off.")
+    hits = []
+    # An id (or prefix) of a goal row names its title.
+    if " " not in ref:
+        goal, err = _resolve_goal(board, user_id, ref)
+        if goal is not None:
+            hits = match(board.db_path, user_id=user_id, text=goal.title)
+    if not hits:
+        hits = match(board.db_path, user_id=user_id, text=ref)
+    if not hits:
+        return f"Nothing switched off matches {_code(ref[:40])} — /goals lists what is off."
+    if len(hits) > 1:
+        return ("That matches more than one: " + "; ".join(h.label for h in hits[:5])
+                + " — use more of the title.")
+    h = hits[0]
+    allow(board.db_path, user_id=user_id, scope=h.scope, value=h.key)
+    return (f"✅ Back ON: “{h.label}”. It can be created again — a stream leg is "
+            f"seeded on its next cadence.")
+
+
 def goal_reply(user_id: str, data_dir: str, args: List[str],
                board: Optional[Any] = None) -> str:
     """`/goal <verb> <id>` — the WRITE counterpart to the read-only `/goals`.
@@ -387,9 +537,15 @@ def goal_reply(user_id: str, data_dir: str, args: List[str],
     rest = args[1:]
     if verb == "objective":
         return _objective_reply(user_id, board, rest)
+    if verb == "allow":
+        return _allow_reply(user_id, board, rest)
     if verb not in _GOAL_TRANSITIONS and verb != "show":
-        return ("Usage: /goal <show|ready|pause|resume|retry|cancel> <id>\n"
+        return ("Usage: /goal <show|ready|pause|resume|retry|cancel|allow> <id>\n"
+                "  /goal cancel <id> switches it off for good; add --once to stop "
+                "just this run.\n"
                 "See /goals for the board.")
+    once = "--once" in rest
+    rest = [a for a in rest if a != "--once"]
     if not rest:
         return f"Usage: /goal {verb} <id> (see /goals)"
 
@@ -406,6 +562,9 @@ def goal_reply(user_id: str, data_dir: str, args: List[str],
         if goal.last_failure_error:
             out.append(f"last failure: {goal.last_failure_error[:200]}")
         return "\n".join(out)
+
+    if verb == "cancel" and not once:
+        return _cancel_for_good(user_id, board, goal, " ".join(rest[1:]))
 
     target, reset, allowed, participle = _GOAL_TRANSITIONS[verb]
     if allowed is not None and goal.status not in allowed:
@@ -486,7 +645,9 @@ def _set_autonomous_ceiling(rest: List[str], user_id: Optional[str],
         return ("Usage: /wallet autonomous <usd>\n"
                 "How much may execute without asking you. Anything above it "
                 "queues for /approve. It can never exceed the per-transaction "
-                "ceiling, which stays env-only on purpose.")
+                "ceiling; change that one with /config set "
+                "budget.wallet_per_tx_usd <usd> (owner-approved, clamped to "
+                "the daily cap).")
     try:
         value = float(str(rest[0]).lstrip("$"))
     except (TypeError, ValueError):
@@ -508,8 +669,9 @@ def _set_autonomous_ceiling(rest: List[str], user_id: Optional[str],
            f"asking you; above it they queue for /approve."]
     if effective < value:
         out.append(f"⚠️ Clamped to the per-transaction ceiling ${effective:,.2f}. "
-                   f"That one is a catastrophic-loss limit and is not settable "
-                   f"from chat by design.")
+                   f"That one is a loss limit: raise it with /config set "
+                   f"budget.wallet_per_tx_usd <usd> (guarded → /approve), and it "
+                   f"stays clamped to the daily cap.")
     return "\n".join(out)
 
 
@@ -533,6 +695,14 @@ def wallet_reply(args: List[str], user_id: Optional[str] = None,
         return refusal
     if args and args[0].lower() in ("autonomous", "auto", "ceiling"):
         return _set_autonomous_ceiling(args[1:], user_id, data_dir)
+    if args and args[0].lower() in ("tokens", "token", "trust", "untrust"):
+        # W1: which tokens are trusted, and the owner's trust / untrust — the
+        # chat seat that replaces `polyrob wallet pin-token` on the server.
+        from core.open_positions import open_positions_db_path
+        from core.wallet.token_trust import tokens_reply
+        return tokens_reply(user_id, list(args),
+                            positions_db=(open_positions_db_path(data_dir)
+                                          if data_dir else None))
     if not args or args[0].lower() in ("overview", "accounts"):
         from core.wallet.view import wallet_view, render_wallet
         try:
@@ -907,64 +1077,73 @@ def mcp_reply(user_id: Optional[str], args: List[str]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# /avatar — the owner SEES the agent's face, from the phone
+# /avatar — the agent's avatar image, from the phone
 #
-# The Mindprint identity reached no chat surface at all: `pfp push` sets a
-# profile picture on X and Discord and prints BotFather steps for Telegram, but
-# nothing ever showed the owner the face, its traits, or the voice signature.
-# Read-only on purpose -- `pfp keep` is a one-way permanent lock, so the setup
-# ceremony stays on the CLI where it cannot be fired by a stray chat message.
+# The avatar is ONE image slot (`core/avatar.py`); core generates no face. The
+# owner sees it, sets it from a URL or an NFT's image, or clears it. Only the
+# owner reaches this verb, and it is refused from a room (`_ROOM_REFUSED`).
 # ---------------------------------------------------------------------------
 
+_AVATAR_USAGE = ("`/avatar` — show the avatar\n"
+                 "`/avatar set <https-url | ipfs://… | nft:chain:contract:id>` — "
+                 "replace it\n"
+                 "`/avatar clear` — remove it\n"
+                 "(From a file on the box: `polyrob avatar set <file>`.)")
+
+
 def avatar_reply(data_dir: str, args: List[str]) -> Tuple[str, Optional[str]]:
-    """``(text, png_path_or_None)`` for the instance's frozen identity.
+    """``(text, image_path_or_None)`` for the instance's avatar slot.
 
     Returns the image path SEPARATELY rather than embedding it, so this stays a
-    pure function the tests can read and the one side effect (sending a photo)
-    lives at the single call site in the harness.
+    pure function the tests can read and the one side effect (sending the
+    image) lives at the single call site in the harness.
     """
-    from core.instance import load_pfp_meta, pfp_path, resolve_instance_id
+    from core.avatar import describe, load_avatar
+    from core.instance import resolve_instance_id
 
     if args:
-        return ("/avatar is read-only — it shows this instance's face, traits "
-                "and voice signature.\nSetting up or changing the identity is a "
-                "one-time owner ceremony on the CLI: `polyrob pfp generate`, "
-                "`polyrob pfp randomize`, then `polyrob pfp keep` (permanent).",
-                None)
+        return (_AVATAR_USAGE, None)
+    instance_id = resolve_instance_id()
+    st = load_avatar(data_dir, instance_id)
+    if st.state == "none":
+        return (f"*{instance_id}* — avatar not set.\nThat is a normal optional "
+                f"state. To give this instance a face:\n" + _AVATAR_USAGE, None)
+    if st.is_default:
+        return (f"*{instance_id}* — avatar: the default polyrob mark.\n"
+                f"To give it its own face:\n" + _AVATAR_USAGE, str(st.path))
+    lines = [f"*{instance_id}* — avatar {describe(st)}"]
+    if st.is_set and st.set_at:
+        lines.append(f"set {st.set_at}")
+    if st.is_set and not st.is_raster:
+        lines.append("_an SVG: it arrives as a file, and X/Discord need a raster image_")
+    return ("\n".join(lines), str(st.path) if st.is_set else None)
+
+
+async def avatar_change(data_dir: str, args: List[str]) -> Tuple[str, Optional[str]]:
+    """``/avatar set <ref>`` | ``/avatar clear`` -> ``(text, image_path_or_None)``."""
+    from core.avatar import AvatarError, clear_avatar, describe, set_avatar
+    from core.instance import resolve_instance_id
 
     instance_id = resolve_instance_id()
-    png = pfp_path(data_dir, instance_id)
-    if not png.is_file():
-        return (f"*{instance_id}* — avatar not set up.\n"
-                f"That is a normal optional state. To give this instance a face: "
-                f"`polyrob pfp generate`, re-roll with `polyrob pfp randomize`, "
-                f"then `polyrob pfp keep` (permanent).", None)
-
-    meta = load_pfp_meta(data_dir, instance_id)
-    if not isinstance(meta, dict):
-        # The image is there but its record does not parse. Neither "kept" nor
-        # "not set up" is true, and both would read as confident.
-        return (f"*{instance_id}* — the avatar image exists but its record "
-                f"(pfp.json) is unreadable, so I cannot show its traits.",
-                str(png))
-
-    kept = bool(meta.get("locked", True))
-    traits = meta.get("traits") if isinstance(meta.get("traits"), dict) else {}
-    voice = meta.get("voice") if isinstance(meta.get("voice"), dict) else {}
-    lines = [f"*{instance_id}* — avatar "
-             + ("kept (permanent)" if kept else "DRAFT — not kept yet")]
-    if meta.get("seed_hex"):
-        lines.append(f"seed {meta['seed_hex']} · {meta.get('generator', '?')}")
-    if traits:
-        lines.append("traits: " + ", ".join(f"{k} {v}" for k, v in sorted(traits.items())))
-    if voice:
-        lines.append("voice: pitch {p} · rate {r} · timbre {t}".format(
-            p=voice.get("pitch", "?"), r=voice.get("rate", "?"),
-            t=voice.get("timbre", "?")))
-    if not kept:
-        lines.append("_re-roll:_ `polyrob pfp randomize` · _accept:_ "
-                     "`polyrob pfp keep` (permanent)")
-    return ("\n".join(lines), str(png))
+    sub = args[0].lower() if args else ""
+    if sub == "clear":
+        removed = clear_avatar(data_dir, instance_id)
+        return ((f"*{instance_id}* — avatar cleared; the default mark is back." if removed
+                 else f"*{instance_id}* — there was no avatar to clear (it shows the default mark)."), None)
+    ref = " ".join(args[1:]).strip()
+    if sub != "set" or not ref:
+        return (_AVATAR_USAGE, None)
+    from tools import avatar_sources
+    try:
+        if ref.startswith("nft:"):
+            chain, contract, token_id = avatar_sources.parse_nft_ref(ref[len("nft:"):])
+            data, source = await avatar_sources.image_from_nft(chain, contract, token_id)
+        else:
+            data, source = await avatar_sources.image_from_url(ref)
+        st = set_avatar(data_dir, instance_id, data, source=source)
+    except AvatarError as e:
+        return (f"The avatar was NOT changed: {e}", None)
+    return (f"*{instance_id}* — avatar {describe(st)}", str(st.path))
 
 
 # --------------------------------------------------------------------------- #

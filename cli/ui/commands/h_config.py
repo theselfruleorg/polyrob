@@ -7,8 +7,8 @@ Reads/writes the SAME two knob layers the rest of the CLI already resolves:
   dotted-key namespace (``style.verbosity``, ``budget.wallet_daily_usd``, …);
 - **env-flag toggles** documented in ``docs/CONFIGURATION.md`` and mirrored in
   ``core.flags_catalog.CATALOG`` (``CODE_EXEC_ENABLED``, ``GOAL_DAILY_QUOTA``,
-  …), written to the project-scope ``./.polyrob/.env`` the same way
-  ``polyrob config set`` does (``cli/commands/config.py::_upsert_env``).
+  …), written through ``core.config_service.set_value`` — the ONE write path
+  ``polyrob config set`` and the webview also use (026 P2).
 
 Subcommands: ``list [group]``, ``get KEY``, ``set KEY VALUE [--confirm]``,
 ``check``. The core logic is the pure function ``cmd_config(ctx, args) ->
@@ -268,17 +268,29 @@ def _cmd_search(ctx: ConfigCtx, rest: List[str]) -> str:
 
 
 def _cmd_set(ctx: ConfigCtx, rest: List[str]) -> str:
+    """``/config set KEY VALUE [--global] [--confirm]`` — the ONE write path.
+
+    026 P2: routes through ``core.config_service.set_value`` like
+    ``polyrob config set`` and the webview PATCH, so validation, the 0600
+    upsert, gitignore housekeeping and the shadow/clamp notes cannot diverge.
+    026 P5: the REPL is the process that READS the flag, so it asks for a live
+    apply; only ``LIVE_APPLY_SAFE`` flags (the autonomy loop + posture groups)
+    take it — money, approval, ingress and frozen flags still say restart.
+    """
+    usage = "usage: /config set KEY VALUE [--global] [--confirm]"
     if len(rest) < 2:
-        return "usage: /config set KEY VALUE [--confirm]"
+        return usage
     key = rest[0]
     value_parts = rest[1:]
     confirm = "--confirm" in value_parts
-    value_parts = [p for p in value_parts if p != "--confirm"]
+    is_global = "--global" in value_parts
+    value_parts = [p for p in value_parts if p not in ("--confirm", "--global")]
     value = " ".join(value_parts).strip()
     if not value:
-        return "usage: /config set KEY VALUE [--confirm]"
+        return usage
 
-    from core.prefs import PREF_SCHEMA, SENSITIVITY_GUARDED, write_preference, load_preferences
+    from core.config_service import set_value
+    from core.prefs import PREF_SCHEMA, SENSITIVITY_GUARDED, load_preferences
 
     spec = PREF_SCHEMA.get(key)
     if spec is not None:
@@ -287,55 +299,35 @@ def _cmd_set(ctx: ConfigCtx, rest: List[str]) -> str:
                 f"'{key}' is guarded — change it with /approve or confirm via "
                 f"`/config set {key} {value} --confirm`."
             )
-        ok, err = write_preference(ctx.home_dir, ctx.user_id, key, value)
-        if not ok:
-            return f"error: {err}"
+        res = set_value(key, value, scope="user", user_id=ctx.user_id,
+                        home_dir=ctx.home_dir, confirm=True, surface="local")
+        if not res.ok:
+            return f"error: {res.message}"
         coerced = load_preferences(ctx.home_dir, ctx.user_id).get(key)
         reply = f"Set {key} = {coerced} (applies: {spec.applies})."
         if key == "approvals.require":
             reply += _approval_gate_enforcement_warning(ctx)
         return reply
 
-    from core.prefs import catalog_lookup, shape_of_default, value_matches_shape
+    from core.prefs import catalog_lookup
+    if catalog_lookup(key) is None:
+        hint = _closest_match(key)
+        suffix = f" (did you mean {hint}?)" if hint else ""
+        return f"unknown key: {key}{suffix}"
 
-    hit = catalog_lookup(key)
-    if hit is not None:
-        _group, documented_default = hit
-        # 026 P1.4: enum-shaped flags name their valid set on a typo.
-        from core.config_policy.flag_enums import enum_error
-        enum_err = enum_error(key, value)
-        if enum_err:
-            return f"error: {enum_err}"
-        shape = shape_of_default(documented_default)
-        if not value_matches_shape(value, shape):
-            return (
-                f"error: {key} expects a {shape} value (documented default: "
-                f"{documented_default}); got {value!r}"
-            )
-        path = Path.cwd() / ".polyrob" / ".env"
-        try:
-            from cli.commands.config import _upsert_env
-            _upsert_env(path, key, value, secure=True)
-            try:
-                from cli.gitignore import ensure_polyrob_gitignored
-                ensure_polyrob_gitignored(Path.cwd(), require_git_repo=True)
-            except Exception:
-                pass  # gitignore housekeeping must never block a set
-        except Exception as exc:
-            return f"error: failed to write {key} to {path}: {exc}"
-        reply = f"Set {key}={value} in {path} (takes effect: restart)."
-        # 026 P0.6/P1.6: shadow + clamp honesty from the ONE note builder.
-        try:
-            from core.config_service import post_write_notes
-            for note in post_write_notes(key, value, "project"):
-                reply += "\n" + note
-        except Exception:
-            pass
-        return reply
-
-    hint = _closest_match(key)
-    suffix = f" (did you mean {hint}?)" if hint else ""
-    return f"unknown key: {key}{suffix}"
+    res = set_value(key, value, scope="global" if is_global else "project",
+                    surface="local", live=True)
+    if not res.ok:
+        return f"error: {res.message}"
+    from core.flags import is_secret_flag
+    from core.secrets import is_secret_key
+    shown = "(set, masked)" if (is_secret_flag(key) or is_secret_key(key)) else value
+    effect = ("applies: live in this session + persisted for the next start"
+              if res.live else "takes effect: restart")
+    reply = f"Set {key}={shown} in {res.store} ({effect})."
+    for note in res.notes:
+        reply += "\n" + note
+    return reply
 
 
 # ---------------------------------------------------------------------------

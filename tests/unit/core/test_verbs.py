@@ -25,8 +25,11 @@ _EXCLUDED = frozenset({"/task", "/new"})
 
 
 def _routable() -> set[str]:
-    """Every _COMMANDS name that a palette / verb table must describe."""
-    return {name for name in _COMMANDS} - _EXCLUDED
+    """Every routed name that a palette / verb table must describe:
+    ``_COMMANDS`` plus the verbs a pack contributed (067 P5a — the union the
+    dispatcher itself routes, ``command_names``)."""
+    from core.surfaces.dispatcher import command_names
+    return set(command_names()) - _EXCLUDED
 
 
 def test_excluded_matches_the_module_constant():
@@ -137,3 +140,11 @@ def test_grouped_with_no_seat_covers_every_row_in_group_order():
     flat = [v for _, rows in grouped() for v in rows]
     assert {v.name for v in flat} == {v.name for v in VERB_TABLE}
     assert len(flat) == len(VERB_TABLE)
+
+
+def test_memory_scopes_command_is_in_the_repl_verb_table():
+    memory = verb_for("/memory")
+    assert memory is not None
+    assert memory.seats == ("repl",)
+    assert memory in seat_verbs("repl")
+    assert memory not in seat_verbs("telegram")

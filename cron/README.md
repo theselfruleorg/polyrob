@@ -40,11 +40,16 @@ cron/
 1. `CronTicker` calls `scheduler.tick()` on an interval.
 2. `tick()` acquires the file `TickLock` (safe under `workers>1`), finds due jobs,
    and runs each through the injected runner with a hard duration cap.
-3. `make_agent_runner` runs the real agent loop (`create_session` + `run_session`,
-   `skip_memory=True`); a one-shot job is marked done, a recurring job is
-   rescheduled to its next run.
-4. If the job requested delivery, `delivery.py` sends the final result to the
-   chosen sink (within the tick's `wait_for` budget).
+3. `make_agent_runner` runs the real agent loop (`create_session` + `run_session`);
+   it reads and writes cross-session memory like any run — with memory scopes on
+   (`MEMORY_SCOPES_ENABLED`) its findings stay in the job's own `cron:<job_id>`
+   scope. A one-shot job is marked done, a recurring job is rescheduled to its
+   next run.
+4. If the job requested delivery, `delivery.py` sends the run's LAST
+   `send_message` text to the chosen sink (within the tick's `wait_for`
+   budget). The `done()` text is the run record: it is appended as a
+   `Record:` line on an owner-bound sink only when `style.verbosity` is
+   `detailed`, and never published. A run that sent nothing delivers nothing.
 
 ## Key invariants
 
@@ -55,6 +60,14 @@ cron/
   (shared CWD safety — see `core/interactive_gate.py`); inert on the server.
 - **Delivery is gated** separately (`CRON_DELIVERY_ENABLED`, default off) and
   fail-open.
+- **Deterministic jobs (`read_job.py`):** `payload.read_verb` runs one allowlisted
+  READ verb in-process (no session, no model turn), after the owner-pause check;
+  `payload.pause_windows` makes a tick inside a window a $0 skip for any job.
+  Both are validated by `CronService.schedule`/`edit` before a write.
+- **Deterministic write job (`write_job.py`):** `payload.write_verb` runs the ONE
+  allowlisted write verb (`agent_nft.agent_nft_collection_reveal`) with no model turn — off unless
+  `CRON_WRITE_JOBS_ENABLED`, owner-authored jobs only, through `tx_guard`. Read and
+  write jobs may recur every minute; every other job keeps the 5-minute floor.
 
 ## Related
 

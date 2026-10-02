@@ -178,6 +178,11 @@ class DocProcessingMixin:
     # Cache helpers
     # ---------------------------------------------------------------------------
 
+    #: seconds a parsed document stays cached; the attribute was read at
+    #: ``_cache_result`` but never assigned (AttributeError, swallowed) until
+    #: 2026-09-22 — harness/cache review F27.
+    cache_ttl: int = 3600
+
     async def _get_cached_result(self, cache_key: str) -> Optional[Dict[str, Any]]:
         """Get cached result if available."""
         if self.cache:  # Use the cache property from BaseTool
@@ -191,7 +196,7 @@ class DocProcessingMixin:
         """Cache result for future use."""
         if self.cache:  # Use the cache property from BaseTool
             try:
-                await self.cache.set(cache_key, result, ttl=self.cache_ttl)
+                await self.cache.set(cache_key, result, ttl=self.cache_ttl)  # see cache_ttl below
             except Exception as e:
                 self.logger.warning(f"Cache storage failed: {str(e)}")
 
@@ -271,7 +276,7 @@ class DocProcessingMixin:
             # Check cache if available
             if hasattr(self, 'cache') and self.cache is not None:
                 cache_key = f"doc_analysis:{analysis_type}:{text[:100]}"
-                cached = self.cache.get(cache_key)
+                cached = await self.cache.get(cache_key)
                 if cached:
                     self.logger.debug("Using cached document analysis result")
                     return cached
@@ -311,7 +316,7 @@ class DocProcessingMixin:
             # Cache result if cache is available
             if hasattr(self, 'cache') and self.cache is not None:
                 cache_key = f"doc_analysis:{analysis_type}:{text[:100]}"
-                self.cache.set(cache_key, analysis)
+                await self.cache.set(cache_key, analysis)
 
             return analysis
 

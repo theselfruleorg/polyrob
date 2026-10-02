@@ -12,8 +12,16 @@ which is not what "we couldn't check" means).
 """
 import asyncio
 
+import pytest
+
 import modules.credits.unified_ledger as ul
 from modules.credits.unified_ledger import build_ledger
+
+
+@pytest.fixture(autouse=True)
+def _bind_owner(monkeypatch):
+    # CR-M07: the caps block is the OWNER's fact; these tests read it as the owner.
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u1")
 
 
 class _FakeDB:

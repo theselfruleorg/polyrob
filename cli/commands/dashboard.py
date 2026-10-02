@@ -21,6 +21,24 @@ import webbrowser
 import click
 
 
+def _anchor_session_root() -> None:
+    """Anchor the console's session tree on the data home.
+
+    With neither ``DATA_ROOT`` nor ``POLYROB_DATA_DIR`` set, the shared resolver
+    falls back to the legacy ``./data/task`` and the PathManager creates it in the
+    caller's cwd — a stray ``data/task`` dir, and a different tree from the one
+    ``polyrob`` in the same folder writes (``<data home>/sessions``). The dashboard
+    runs in the caller's folder, so the CLI's local data home is the right root.
+    An operator-set ``DATA_ROOT`` or ``POLYROB_DATA_DIR`` always wins.
+    """
+    if (os.environ.get("DATA_ROOT") or "").strip():
+        return
+    if (os.environ.get("POLYROB_DATA_DIR") or "").strip():
+        return
+    from core.runtime_paths import resolve_data_home
+    os.environ["DATA_ROOT"] = str(resolve_data_home() / "sessions")
+
+
 @click.command(short_help="Launch the POLYROB Console (webgate)")
 @click.option("--multitenant", is_flag=True,
               help="Enable the multitenant layer (JWT/SIWE auth + admin pages, bind 0.0.0.0). "
@@ -68,10 +86,23 @@ def dashboard(multitenant, posture, host, port, no_browser):
                    + "no usable provider key — chat will fail until you set one "
                      "(`polyrob init` / `polyrob config set`). View-only pages still work.")
 
+    _anchor_session_root()
+
     from webview import webgate
 
     bind_host = host or webgate.bind_host()
     bind_port = port or webgate.bind_port()
+
+    # Security review 2026-09-23 (Low): `--posture local --host 0.0.0.0` bound
+    # the no-login console to every interface. Refuse unless the operator set
+    # the documented override (they front it with their own auth layer).
+    from webview.posture_guard import ALLOW_FLAG, _allow_override, non_loopback_bind
+    if webgate.posture() == "local" and non_loopback_bind(bind_host) \
+            and not _allow_override(os.environ):
+        raise click.ClickException(
+            f"refusing to bind {bind_host}: the 'local' posture has no login — every "
+            "request is the owner. Use --posture own_ops (owner login), bind "
+            f"127.0.0.1, or set {ALLOW_FLAG}=1 if your own auth layer fronts it.")
 
     # A 0.0.0.0 bind is reachable locally via loopback — show a clickable URL.
     display_host = "127.0.0.1" if bind_host in ("0.0.0.0", "") else bind_host

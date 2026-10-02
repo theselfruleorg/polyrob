@@ -78,8 +78,8 @@ class SettlementSubscriptionsMixin:
             _halted = True
         if _halted:
             logger.info(
-                "settlement watcher: subscription %s renewal skipped — autonomy "
-                "HALTED (owner kill-switch); retries on the next tick after resume",
+                "settlement watcher: subscription %s renewal skipped — paused by "
+                "the owner's autonomy pause; retries on the next tick after /resume",
                 sub.get("id"))
             return False
         from core.config_policy import payment_approval_mode, approval_grant_ttl_hours

@@ -29,13 +29,69 @@ polyrob has a **native multi-provider LLM layer** — no third-party agent frame
 Six providers are built in, each with a native adapter behind one
 `BaseChatModel` interface, alongside flat-rate rows, OAuth subscription plans and
 any endpoint you declare as data in `providers.yaml` with no code. Which six, and
-how one is chosen: [configuration.md §3](configuration.md#3-providers-and-models).
+how one is chosen: [configuration.md §4](configuration.md#4-providers-and-models).
 
 Key behaviors:
 - **Native tool calling** — uses each provider's structured function-call protocol; no JSON parsing hacks.
 - **Automatic failover** — a rate-limit or connection error on the primary provider automatically retries on a fallback provider. Failover on billing/quota-exhaustion errors is also attempted before a permanent halt (`BILLING_FAILOVER_ENABLED`, on by default); it has no second provider to fall back to unless more than one is configured.
-- **Prompt caching** — provider-specific caching (Anthropic `cache_control`, OpenAI prefix caching) reduces token costs on long sessions.
+- **Prompt caching** — on by default wherever the provider supports it: Anthropic `cache_control` breakpoints with a 5-minute or 1-hour window, OpenAI and DeepSeek automatic prefix caching, OpenRouter and Gemini breakpoints. What makes it pay is that the assembled request is a stable *prefix* — see [Prompt caching and the context window](#prompt-caching-and-the-context-window) below.
 - **Reasoning tokens** — extended thinking / reasoning effort for Claude, DeepSeek, and OpenAI reasoning models when `THINKING_CONFIG_ENABLED=true` (off by default).
+
+### Prompt caching and the context window
+
+Every provider that caches a prompt caches a **prefix**: your next request is
+served from cache only for the leading bytes it shares with the last one. One
+rewritten message early in the conversation re-bills everything behind it. So
+POLYROB assembles each request the same way twice in a row, on purpose.
+
+**What is held still.** The tool schemas are sorted by action name, so a cron
+job, a goal and a chat session holding the same tools send identical bytes. The
+requested tool set does not shrink and re-grow when a credential check flaps.
+The first eight messages (system prompt, runtime identity, environment, SOUL,
+project context, the initial task, the skill catalog, the tool catalog) are a
+pinned *foundation*: written once, never repaired, never evicted, and a later
+change to the tool catalog arrives as a short note at the end rather than a
+rewrite in place.
+
+**Tools loaded mid-session.** `load_tool` adds a tool's actions to the schema
+list; on most providers that is the one prefix change POLYROB still accepts,
+because the alternative is a tool the model cannot see. On a Claude model that
+supports it, the new actions are declared as *deferred* and surfaced to the
+model with a small addition note instead, so the cached prefix survives. An
+opt-in third shape (`TOOL_SCHEMAS_FROZEN`) pins the list for the whole session
+and reaches late tools through a `tool_call(name, arguments)` bridge on any
+provider — at the cost of the provider's own argument validation.
+
+**What moves, and where.** Everything time-varying is appended at the tail: the
+per-step state message (step counter, clock, browser view), recalled memories,
+your mid-run guidance, one-shot notes. Those cost their own bytes and nothing
+else. The state message never enters durable history at all.
+
+**What it costs when the window fills.** A ladder at 70 / 85 / 95 % of the
+window: a log line, then a deterministic pass that demotes old tool results to
+one line plus a pointer to where the full text was written, then — only if that
+was not enough — a compaction through the model, then a non-LLM emergency prune.
+Compaction is the expensive event, because a rebuild is the one moment the whole
+prefix goes cold, so it waits at least eight steps between firings unless the
+last one actually freed 5 % or more.
+
+**Across a restart.** The rendered foundation and the tool order are saved with
+the conversation, so a resumed session re-issues the same prefix instead of
+re-rendering it from the current environment. Change the model, the provider or
+the working directory and it rebuilds — once, with a warning that says so.
+
+**Seeing it.** `/context` shows what is in the window slot by slot, and the
+provider's own figures for the last request. The status bar carries `cache N%`
+beside `ctx N%`. `polyrob doctor` reports the same thing over a window of real
+billing rows, including tokens written *into* cache — a write costs more than an
+ordinary input token, so a prefix written once and reused fifty times and one
+rewritten fifty times are very different bills that a hit rate alone cannot tell
+apart.
+
+Nothing here needs configuring. Every behaviour above has a flag that restores
+the previous one byte-for-byte if you need it: see
+[configuration.md](configuration.md) and
+[`docs/CONFIGURATION.md`](../CONFIGURATION.md).
 
 ---
 
@@ -60,9 +116,9 @@ Each step is driven by the LLM's response. The agent loops until it calls `done(
 |-----------|---------------|
 | `SessionOrchestrator` | Session lifecycle, browser pool, multi-agent coordination |
 | `Agent` | Step loop execution |
-| `MessageManager` | Message history, token counting, context compaction |
+| `MessageManager` | Message history; token counting anchored on the provider's own reported count; the one context gauge every surface reads; context compaction |
 | `Controller` | Tool dispatch: load, validate, execute, hook pipeline |
-| `Registry` | Tool/action registration and schema generation |
+| `Registry` | Tool/action registration and schema generation. The list it emits to the provider is sorted by action name, so the bytes do not move under the cache |
 | `ToolCallTracker` | Tool-call ID lifecycle (single source of truth) |
 
 ---
@@ -73,13 +129,13 @@ Tools are registered with the Controller and exposed to the LLM as callable func
 
 | Tool set | Capabilities |
 |----------|-------------|
-| Web fetch / search | `web_fetch` reads a single URL as clean markdown without a browser (the lightweight default reader); Perplexity-backed web search when `PERPLEXITY_API_KEY` is set |
+| Web fetch / search | `web_fetch` reads a single URL as clean markdown without a browser (the lightweight default reader); Perplexity-backed web search (the `discovery` pack) when `PERPLEXITY_API_KEY` is set |
 | Browser (`tools/browser/`) | Playwright: navigate, click, type, scroll, screenshot, extract DOM — opt-in (`browser` toolset/tool) |
 | Filesystem / docs | Create, read, edit files in the session workspace |
-| AnySite (`tools/anysite/`) | Structured data from 200+ external sites and platforms via the `anysite` CLI (needs `ANYSITE_API_KEY`) |
+| AnySite (the `discovery` pack, `packs/discovery/`) | Structured data from 200+ external sites and platforms via the `anysite` CLI (needs `ANYSITE_API_KEY`) |
 | MCP (`tools/mcp/`) | Model Context Protocol — connect any MCP-compatible server (filesystem, GitHub, Slack, or your own); none are configured out of the box |
 | Crypto / x402 (`core/wallet/`, `tools/x402/`) | A native agent wallet that pays for external resources over x402 — opt-in (`X402_CLIENT_ENABLED`) |
-| DeFi and on-chain (`tools/defi/`, `tools/launchpad/`, `tools/dapp_browser/`, `tools/polymarket/`, `tools/hyperliquid/`) | Reading a chain, swapping, bridging, deploying a token, launching one, and driving a web dapp with the agent's own wallet — every verb off by default and separately armed; see [payments.md](payments.md) |
+| DeFi and on-chain (`tools/defi/`, `tools/launchpad/`, `tools/dapp_browser/`; the venues in the `markets` pack, `packs/markets/`) | Reading a chain, swapping, bridging, deploying a token, launching one, and driving a web dapp with the agent's own wallet — every verb off by default and separately armed; see [payments.md](payments.md) |
 | Durable apps (`tools/app_service/`) | Runs an app the agent built as a supervised container behind a public URL — opt-in (`AGENT_BUILDER_MODE=ship`); see [deployment-postures.md](deployment-postures.md) |
 | Code execution (`tools/code_exec/`) | Runs code in a subprocess or a hardened container; opt-in (`CODE_EXEC_ENABLED`), never loaded by default |
 
@@ -91,7 +147,7 @@ polyrob uses a **pluggable memory system** with a single external-provider seam.
 
 Default backend (`MEMORY_BACKEND=sqlite`): keyword full-text search (FTS5) in a local `memory.db`. Cross-session recall is tenant-scoped by `user_id`.
 
-Optional vector backend (`MEMORY_BACKEND=local_vector`): adds sentence-transformer embeddings via `sqlite-vec` loaded through `apsw`. Degrades gracefully to FTS if the extension is unavailable. See [configuration.md](configuration.md) for the apsw note.
+Optional vector backend (`MEMORY_BACKEND=local_vector`): adds sentence-transformer embeddings via `sqlite-vec` loaded through `apsw`. Degrades gracefully to FTS if the `[memory-vector]` extra is absent or the extension is unavailable. See [configuration.md](configuration.md) for the apsw note.
 
 The memory flow within a session:
 1. At the start of each step, relevant memories are **prefetched** and injected as context.
@@ -118,6 +174,8 @@ programmatic ones:
 | Slack | `polyrob slack` | |
 | Signal | `polyrob signal` | |
 | X | `polyrob x` | Direct messages |
+| Feishu / Lark | `polyrob gateway` | Long connection (the `feishu` extra) or a signed webhook; text, files, buttons. See [feishu-dingtalk.md](feishu-dingtalk.md) |
+| DingTalk | `polyrob gateway` | Stream Mode, text. See [feishu-dingtalk.md](feishu-dingtalk.md) |
 | Web console | `polyrob dashboard` | Socket.IO browser interface. See [console.md](console.md) |
 | REST / A2A / `/v1` | `polyrob serve` | Programmatic access. See [api.md](api.md) |
 
@@ -164,8 +222,13 @@ when `POLYROB_LOCAL` **and** `AUTONOMY_ENABLED` are both set — `POLYROB_LOCAL`
 turns on the *interactive* tools (coding, git, knowledge base, project context) and
 nothing self-directed. `CRON_ENABLED` is not in that group at all: set it yourself,
 or set `AUTONOMY_POSTURE=full`, which moves its default. The dial, its four axes and
-how to stop it are in [configuration.md](configuration.md#5-the-autonomy-dial) and
+how to stop it are in [configuration.md](configuration.md#6-the-autonomy-dial) and
 [owner-controls.md](owner-controls.md).
+
+The agent manages its own scheduled runs with the `cronjob` tool: schedule,
+list, show, edit and cancel. An edit patches the job in place rather than
+re-writing it, and a job you scheduled can only be edited on your own turn —
+see [cli.md](cli.md#polyrob-cron--scheduled-runs).
 
 ---
 

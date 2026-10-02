@@ -28,7 +28,7 @@
     {
       "name": "/pending",
       "group": "needs you",
-      "help": "Proposals I have learned, waiting for your approval",
+      "help": "Every approval waiting on you: spends, contacts, tokens, and proposals",
       "aliases": []
     },
     {
@@ -40,7 +40,7 @@
     {
       "name": "/reject",
       "group": "needs you",
-      "help": "Discard a pending proposal",
+      "help": "Decline something that is waiting on you",
       "aliases": []
     },
     {
@@ -62,6 +62,12 @@
       "aliases": []
     },
     {
+      "name": "/cards",
+      "group": "needs you",
+      "help": "Open action cards: confirm a quote, answer a choice, or cancel",
+      "aliases": []
+    },
+    {
       "name": "/goal",
       "group": "work",
       "help": "Steer one goal or a whole stream",
@@ -74,9 +80,15 @@
       "aliases": []
     },
     {
+      "name": "/rail",
+      "group": "work",
+      "help": "Standing work: list, create, switch, drop and grant rails",
+      "aliases": []
+    },
+    {
       "name": "/cron",
       "group": "work",
-      "help": "Durable scheduled runs: list, add, or cancel",
+      "help": "Durable scheduled runs: list, add, edit, or cancel",
       "aliases": []
     },
     {
@@ -94,7 +106,7 @@
     {
       "name": "/wallet",
       "group": "money",
-      "help": "Wallet addresses, network, and spend caps",
+      "help": "Wallet addresses, network, and spend caps; set the no-ask ceiling or trust a token",
       "aliases": []
     },
     {
@@ -164,6 +176,42 @@
       "aliases": []
     },
     {
+      "name": "/pay",
+      "group": "money",
+      "help": "Pay for one x402 resource, up to a price you name",
+      "aliases": []
+    },
+    {
+      "name": "/swap",
+      "group": "money",
+      "help": "Swap one token for another: a quote with the minimum you receive, then confirm",
+      "aliases": []
+    },
+    {
+      "name": "/send",
+      "group": "money",
+      "help": "Send native value or a token to an address: a quote, then `go`",
+      "aliases": []
+    },
+    {
+      "name": "/writeoff",
+      "group": "money",
+      "help": "Write a holding off: the loss is its recorded cost, and nothing is sold",
+      "aliases": []
+    },
+    {
+      "name": "/unquarantine",
+      "group": "money",
+      "help": "Undo the quarantine of a look-alike holding, so it counts as open again",
+      "aliases": []
+    },
+    {
+      "name": "/check",
+      "group": "money",
+      "help": "Look at any address or ticker: a wallet's holdings or a token's report",
+      "aliases": []
+    },
+    {
       "name": "/cancel",
       "group": "control",
       "help": "Stop the task I am running now",
@@ -188,6 +236,12 @@
       "aliases": []
     },
     {
+      "name": "/run",
+      "group": "control",
+      "help": "Pause, resume or stop one background run",
+      "aliases": []
+    },
+    {
       "name": "/mode",
       "group": "control",
       "help": "The effective autonomy posture and how to change it",
@@ -202,7 +256,13 @@
     {
       "name": "/recap",
       "group": "remember",
-      "help": "What I have done over a recent window",
+      "help": "The same as /journey",
+      "aliases": []
+    },
+    {
+      "name": "/thread",
+      "group": "remember",
+      "help": "Our conversation across every session and rail, newest last",
       "aliases": []
     },
     {
@@ -239,6 +299,12 @@
       "name": "/contacts",
       "group": "look",
       "help": "Who I have been writing to, and the transcript with one of them",
+      "aliases": []
+    },
+    {
+      "name": "/why",
+      "group": "look",
+      "help": "The last things I refused to do, and the reason for each",
       "aliases": []
     },
     {
@@ -310,13 +376,13 @@
     {
       "name": "/avatar",
       "group": "display",
-      "help": "This instance's face, traits, and voice signature",
+      "help": "This instance's avatar image — show, set, clear",
       "aliases": []
     },
     {
       "name": "/identity",
       "group": "display",
-      "help": "My on-chain identity: register it, or update where it is published",
+      "help": "My on-chain identity: register it, or update where it is published (spends gas)",
       "aliases": []
     },
     {

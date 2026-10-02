@@ -1,11 +1,12 @@
+from tests.support.owner_prefs import set_owner_pref
 from core.surfaces.config import SurfaceConfig
 
 
 def test_echo_default_on(monkeypatch):
-    monkeypatch.delenv("VOICE_TRANSCRIPT_ECHO", raising=False)
+    set_owner_pref(monkeypatch, "voice.transcript_echo", True)
     assert SurfaceConfig.voice_transcript_echo_enabled() is True
 
 
 def test_echo_off(monkeypatch):
-    monkeypatch.setenv("VOICE_TRANSCRIPT_ECHO", "false")
+    set_owner_pref(monkeypatch, "voice.transcript_echo", False)
     assert SurfaceConfig.voice_transcript_echo_enabled() is False

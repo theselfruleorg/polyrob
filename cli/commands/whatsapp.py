@@ -73,6 +73,15 @@ async def _run_whatsapp(port: int, verbose: bool) -> None:
                                 log_level=ctx.log_level.lower())
         server = uvicorn.Server(config)
 
+        # 064 F4: replay events acked before a restart — BEFORE serving, exactly
+        # as the gateway does (surfaces/_launch.py). A no-op while WhatsApp
+        # processes inline; it keeps the two paths from drifting.
+        from surfaces._launch import recover_webhook_surfaces
+        await recover_webhook_surfaces(
+            ctx.container, ctx.task_agent,
+            note=lambda m: click.echo(click.style(f"  {m}", dim=True)),
+            warn=lambda m: click.echo(click.style("[polyrob] WARN: ", fg="yellow") + m))
+
         async def _announce():
             click.echo(click.style("whatsapp webhook worker online", fg="green")
                        + f": listening on port {port}")

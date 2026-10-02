@@ -4,6 +4,29 @@ import pytest
 from modules.credits import balances as B
 
 
+@pytest.fixture(autouse=True)
+def _bind_owner(monkeypatch):
+    # CR-M07: the treasury probe answers only for the bound owner.
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+
+
+def test_treasury_probe_refuses_a_non_owner_tenant(monkeypatch):
+    import asyncio
+
+    reads = []
+
+    class _W:
+        address = "0x" + "11" * 20
+        solana_address = None
+
+    monkeypatch.setattr("core.wallet.factory.get_agent_wallet",
+                        lambda: reads.append(1) or _W())
+    monkeypatch.setattr("core.wallet.onchain.balances", lambda a, c: (1.0, 50.0))
+    assert asyncio.run(B.treasury_balance_usd("u_stranger")) is None
+    assert reads == []  # the operator wallet was never read
+    assert asyncio.run(B.treasury_balance_usd("rob")) == 50.0
+
+
 @pytest.mark.asyncio
 async def test_provider_balance_none_when_not_openrouter(monkeypatch):
     monkeypatch.delenv("CHAT_PROVIDER", raising=False)
@@ -183,6 +206,7 @@ async def test_build_ledger_include_balances_true_populates_both_fields(monkeypa
 
     monkeypatch.setattr(B, "treasury_balance_usd", fake_treasury)
     monkeypatch.setattr(B, "provider_balance_usd", fake_provider)
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")  # CR-M07: owner-only
 
     led = await build_ledger("rob", days=1, db=FakeDB(), include_balances=True)
     assert led["treasury"]["balance_usd"] == 12.34

@@ -38,7 +38,7 @@ async def test_create_payment_request_refused_while_halted(tmp_path, monkeypatch
     monkeypatch.setenv("AUTONOMY_HALT", "1")
     db = await _setup_db(tmp_path)
     try:
-        with pytest.raises(ValueError, match="HALTED"):
+        with pytest.raises(ValueError, match="autonomy pause.*/resume"):
             await invoicing.create_payment_request(
                 user_id="rob", session_id="sess_1", amount_usd=5.0,
                 purpose="research report", db=db,

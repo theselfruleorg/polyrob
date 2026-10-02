@@ -19,6 +19,8 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from core.action_names import action_names
+
 logger = logging.getLogger(__name__)
 
 MAX_LEDGER_LINES = 80
@@ -30,19 +32,18 @@ ERRORS_TAIL_STEPS = 5  # errors in the final N steps
 # Actions whose successful result is itself evidence of produced output
 # (proposal 007's allowlist) — descriptors recorded even when no file lands
 # in the workspace.
+# Registered keys (``core.action_names``), never bare method names — the
+# ledger carries ``coding_str_replace``, not ``str_replace`` (review B1).
 OUTPUT_ACTION_ALLOWLIST = frozenset({
     "twitter_post",
     "twitter_reply",
     "filesystem_write_file",
-    "fs_write",
-    "apply_patch",
-    "str_replace",
-    "run_code",
-    "knowledge_ingest",
-    "x402_request",
+    "knowledge_kb_ingest",
+    "x402_invoice_x402_request",
     "message",
     "email_send",
-})
+}) | action_names("coding", "apply_patch", "str_replace", "create_file") \
+   | action_names("code_execution", "run_code")
 
 _URL_RE = re.compile(r"https?://[^\s'\"<>)\]]+")
 _PATH_RE = re.compile(r"(?:workspace|project)/[\w][\w./\-]*")

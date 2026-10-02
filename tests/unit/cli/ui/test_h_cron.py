@@ -279,3 +279,21 @@ def test_cron_unknown_verb_shows_usage(_home, _cron_on):
     ctx, buf = _plain_ctx(user_id="local", args=["frobnicate"])
     h_cron(ctx)
     assert "unknown /cron verb" in buf.getvalue()
+
+
+def test_cron_add_and_edit_share_the_chat_parser(_home, _cron_on):
+    """O13: the REPL twin of Telegram `/cron add … tools= target= chain=` and
+    `/cron edit <id> schedule|task <value>`."""
+    from cron.jobs import CronJobStore
+    addr = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+    ctx, buf = _plain_ctx(user_id="local", args=[
+        "add", "1d", "buy", "back", "tools=defi_trade", f"target={addr}", "chain=base"])
+    h_cron(ctx)
+    assert "granted tools: defi_trade" in buf.getvalue()
+    job = CronJobStore(str(_home / "cron.db")).list(user_id="local")[0]
+    assert job.task == "buy back" and job.payload["authored_by"] == "owner"
+    ctx, buf = _plain_ctx(user_id="local", args=["edit", job.id[:8], "schedule", "2h"])
+    h_cron(ctx)
+    assert "edited" in buf.getvalue()
+    job = CronJobStore(str(_home / "cron.db")).list(user_id="local")[0]
+    assert job.schedule_spec == "2h" and job.payload["target_token"]["chain"] == "base"

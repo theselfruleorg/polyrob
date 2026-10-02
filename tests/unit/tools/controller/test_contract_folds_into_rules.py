@@ -17,6 +17,8 @@ from tools.controller.registry.service import Registry
 from tools.controller.service import Controller
 
 
+
+
 def _c(data_dir):
     c = object.__new__(Controller)
     c.logger = logging.getLogger("contract-fold-test")
@@ -36,7 +38,8 @@ def _ctx(uid="rob"):
 @pytest.mark.asyncio
 async def test_contract_propose_writes_the_rules_doc(monkeypatch, tmp_path):
     monkeypatch.setenv("PREFS_TOOL_ENABLED", "true")
-    monkeypatch.delenv("OWNER_RULES_IMMEDIATE", raising=False)
+    # ⚠️ unset now means ON (flipped 2026-09-21) — say "false" to mean the queue.
+    monkeypatch.setenv("OWNER_RULES_IMMEDIATE", "false")
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
     c = _c(tmp_path)
     c._register_preferences_action()

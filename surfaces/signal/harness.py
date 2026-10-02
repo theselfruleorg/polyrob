@@ -39,6 +39,14 @@ class SignalHarness(BaseHarness):
     async def _deliver_to(self, target, text: str) -> None:
         await self._client.send(target, text)
 
+    async def _fetch_media(self, media) -> Optional[bytes]:
+        """A signal-cli attachment by id, from the local daemon (size-capped)."""
+        from core.surfaces.inbound_attachments import inbound_media_max_mb
+        data = await self._client.get_attachment(media.ref)
+        if data is not None and len(data) > inbound_media_max_mb() * 1024 * 1024:
+            return None
+        return data
+
     async def run(self) -> None:
         await self._stream.run(self.handle_envelope)
 

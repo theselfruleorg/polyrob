@@ -68,6 +68,87 @@ def resolve_serving_provider(llm: Any, model_name: Optional[str] = None) -> str:
     return detect_llm_provider(None, model_name)
 
 
+#: the keys of :func:`extract_token_usage` that are token COUNTS. Everything
+#: else in that dict is money and must not be coerced through ``int()``.
+_TOKEN_KEYS = ('total_tokens', 'prompt_tokens', 'completion_tokens',
+               'cached_tokens', 'cache_creation_tokens', 'cache_creation_1h_tokens')
+
+
+def cache_creation_1h_from(usage: Any, cache_creation: int) -> int:
+    """The 1h-window slice of an Anthropic cache write — F4 (2026-09-22).
+
+    Anthropic splits the write by window in ``usage.cache_creation``
+    (``ephemeral_5m_input_tokens`` / ``ephemeral_1h_input_tokens``); the 1h
+    slice bills at 2.0x, the 5m slice at 1.25x, so it travels separately to the
+    biller. Clamped to the total write; 0 when the response has no split.
+    """
+    split = getattr(usage, 'cache_creation', None)
+    if split is None and isinstance(usage, dict):
+        split = usage.get('cache_creation')
+    if split is None:
+        return 0
+    if isinstance(split, dict):
+        value = split.get('ephemeral_1h_input_tokens') or 0
+    else:
+        value = getattr(split, 'ephemeral_1h_input_tokens', 0) or 0
+    try:
+        return max(0, min(int(value), int(cache_creation or 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _usage_block(result: Any) -> Any:
+    """The response's ``usage`` object/dict, or None."""
+    usage = getattr(result, 'usage', None)
+    if usage is None and isinstance(result, dict):
+        usage = result.get('usage')
+    return usage
+
+
+def _money(value: Any) -> Optional[float]:
+    """A real, non-negative USD figure, or None. A bool is not a number here,
+    and a string that does not parse is NOT a zero."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        amount = float(value)
+    except (TypeError, ValueError):
+        return None
+    if amount != amount or amount < 0:      # NaN or negative -> not a cost
+        return None
+    return amount
+
+
+def _billed_cost_fields(result: Any) -> Dict[str, Optional[float]]:
+    """What the provider says this call COST — F23 (2026-09-22).
+
+    Every cost in the tree is otherwise an estimate recomputed from the model
+    catalog. On OpenRouter (with ``usage: {"include": true}`` on the request,
+    see ``modules/llm/openrouter_reasoning.py::apply_usage_accounting``) the
+    response carries the real numbers: ``usage.cost`` in USD and
+    ``usage.cache_discount``, which our per-token table cannot model at all.
+
+    Absent keys come back as None — never 0.0, because "the provider did not
+    report a cost" and "this call was free" are different facts and only one of
+    them should overwrite an estimate.
+    """
+    out: Dict[str, Optional[float]] = {'billed_cost_usd': None,
+                                       'cache_discount_usd': None}
+    try:
+        usage = _usage_block(result)
+        if usage is None:
+            return out
+        for key, field in (('billed_cost_usd', 'cost'),
+                           ('cache_discount_usd', 'cache_discount')):
+            value = getattr(usage, field, None)
+            if value is None and isinstance(usage, dict):
+                value = usage.get(field)
+            out[key] = _money(value)
+    except Exception:
+        return {'billed_cost_usd': None, 'cache_discount_usd': None}
+    return out
+
+
 def extract_token_usage(result: Any, provider: str) -> Dict[str, Optional[int]]:
     """Extract token usage from LLM response using provider-specific paths.
 
@@ -78,7 +159,9 @@ def extract_token_usage(result: Any, provider: str) -> Dict[str, Optional[int]]:
     Returns:
         Dictionary with token counts (total_tokens, prompt_tokens, completion_tokens, cached_tokens)
     """
-    token_usage = {'total_tokens': None, 'prompt_tokens': None, 'completion_tokens': None, 'cached_tokens': None, 'cache_creation_tokens': None}
+    token_usage = {'total_tokens': None, 'prompt_tokens': None, 'completion_tokens': None, 'cached_tokens': None, 'cache_creation_tokens': None,
+                   'cache_creation_1h_tokens': None,
+                   'billed_cost_usd': None, 'cache_discount_usd': None}
 
     try:
         # Handle structured output format: {'parsed': ..., 'raw': <llm_response>}
@@ -104,6 +187,10 @@ def extract_token_usage(result: Any, provider: str) -> Dict[str, Optional[int]]:
                 token_usage['total_tokens'] = usage.get('total_tokens')
                 token_usage['cached_tokens'] = usage.get('cache_read_input_tokens') or usage.get('cached_tokens')
                 token_usage['cache_creation_tokens'] = usage.get('cache_creation_input_tokens')
+                token_usage['cache_creation_1h_tokens'] = usage.get('cache_creation_1h_tokens')
+                # F23: the adapter carries the provider's billed cost here.
+                token_usage['billed_cost_usd'] = _money(usage.get('billed_cost_usd'))
+                token_usage['cache_discount_usd'] = _money(usage.get('cache_discount_usd'))
             else:
                 # Object format
                 token_usage['prompt_tokens'] = (
@@ -172,13 +259,20 @@ def extract_token_usage(result: Any, provider: str) -> Dict[str, Optional[int]]:
             token_usage['completion_tokens'] is not None):
             token_usage['total_tokens'] = token_usage['prompt_tokens'] + token_usage['completion_tokens']
 
-        # Ensure all values are proper integers or None
-        for key in token_usage:
-            if token_usage[key] is not None:
+        # Ensure the TOKEN values are proper integers or None. The money fields
+        # below are floats and must never be coerced through int().
+        for key in _TOKEN_KEYS:
+            if token_usage.get(key) is not None:
                 try:
                     token_usage[key] = int(token_usage[key])
                 except (ValueError, TypeError):
                     token_usage[key] = None
+
+        # F23: what the provider says it ACTUALLY billed, when it says so.
+        # Only a reported figure overrides: an AIMessage has no `usage` block, and a
+        # None here would erase the cost its usage_metadata already carried.
+        token_usage.update({k: v for k, v in _billed_cost_fields(actual_result).items()
+                            if v is not None})
 
     except Exception as e:
         logging.getLogger('task.utils').debug(f"Error extracting token usage: {e}")

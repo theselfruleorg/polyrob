@@ -122,7 +122,7 @@ class TokenIdentity:
     decimals: Optional[int]
     verified: bool
     metadata_changed: bool
-    source: str  # "canonical" | "frozen" | "first_seen"
+    source: str  # "canonical" | "owner_pin" | "owner_approved" | "own_launch" | "frozen" | "first_seen"
 
     @property
     def valuable(self) -> bool:
@@ -138,10 +138,20 @@ def normalize_address(addr: str) -> str:
     and discarding it becomes a fund-loss vector the moment a money verb exists.
     An all-lowercase or all-uppercase address carries no checksum information,
     so it is accepted and checksummed.
+
+    SURROUNDING whitespace is stripped first. It is not a hex digit, so it can
+    never have been part of the address, and the refusal it used to cause read
+    as though the address itself were malformed: a quote-only exit run had four
+    `swap_quote` calls refused for Base USDC in BOTH its checksummed and its
+    lowercase form, because the value carried a trailing newline in from a
+    recalled line. ``same_address`` has always stripped; validation now agrees.
+    Whitespace INSIDE the string is still a refusal — that is a corrupted
+    address, not a formatting artefact.
     """
-    if not isinstance(addr, str) or not is_hex_address(addr):
+    candidate = addr.strip() if isinstance(addr, str) else addr
+    if not isinstance(candidate, str) or not is_hex_address(candidate):
         raise ValueError(f"not a 20-byte hex address: {addr!r}")
-    body = addr[2:] if addr.startswith("0x") else addr
+    body = candidate[2:] if candidate.startswith("0x") else candidate
     mixed = body != body.lower() and body != body.upper()
     checksummed = to_checksum_address("0x" + body.lower())
     if mixed and checksummed != ("0x" + body):
@@ -155,7 +165,7 @@ def normalize_address(addr: str) -> str:
 
 def canonical_token(chain: str, address: str) -> Optional[Dict[str, object]]:
     """Pinned identity for ``(chain, address)``, or None."""
-    return CANONICAL_TOKENS.get((chain, address))
+    return CANONICAL_TOKENS.get((str(chain or "").strip().lower(), address))
 
 
 def _db(db_path: Optional[str]) -> str:
@@ -172,6 +182,56 @@ def _ensure_schema(path: str) -> None:
         conn.commit()
     finally:
         conn.close()
+
+
+#: CR-L04: the largest ``decimals`` a real token uses is 18 (24 on a few
+#: chains); 36 leaves headroom. A contract reporting more is lying, and
+#: ``10 ** decimals`` on an attacker-chosen uint256 either hangs the valuation or
+#: rounds every amount to zero — so it reads as UNKNOWN, never as a number.
+MAX_DECIMALS = 36
+
+#: CR-L11: metadata is attacker-authored text that reaches prompts, chat and the
+#: position book. Printable only, one line, bounded.
+MAX_SYMBOL_CHARS = 32
+MAX_NAME_CHARS = 64
+
+
+def _bounded_decimals(value) -> Optional[int]:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return None
+    return n if 0 <= n <= MAX_DECIMALS else None
+
+
+def _clean_text(text: Optional[str], limit: int) -> Optional[str]:
+    """Strip control/format characters (newlines included), collapse runs of
+    whitespace, and cap the length. ``None`` when nothing printable is left."""
+    if text is None:
+        return None
+    import unicodedata
+    out = []
+    for ch in str(text):
+        if ch.isspace():
+            out.append(" ")
+        elif unicodedata.category(ch).startswith("C"):
+            continue
+        else:
+            out.append(ch)
+    cleaned = " ".join("".join(out).split())[:limit].strip()
+    return cleaned or None
+
+
+def clean_symbol(text: Optional[str]) -> Optional[str]:
+    """A token symbol from ANY source (contract, indexer), bounded and one line."""
+    return _clean_text(text, MAX_SYMBOL_CHARS)
+
+
+def clean_name(text: Optional[str]) -> Optional[str]:
+    """A token name from ANY source (contract, indexer), bounded and one line."""
+    return _clean_text(text, MAX_NAME_CHARS)
 
 
 def _decode_uint(raw: Optional[str]) -> Optional[int]:
@@ -217,9 +277,9 @@ def _read_chain_metadata(chain: str, address: str, rpc: Callable):
         except Exception:
             return None
 
-    return (_decode_string(call(_SEL_SYMBOL)),
-            _decode_string(call(_SEL_NAME)),
-            _decode_uint(call(_SEL_DECIMALS)))
+    return (_clean_text(_decode_string(call(_SEL_SYMBOL)), MAX_SYMBOL_CHARS),
+            _clean_text(_decode_string(call(_SEL_NAME)), MAX_NAME_CHARS),
+            _bounded_decimals(_decode_uint(call(_SEL_DECIMALS))))
 
 
 def get_token_identity(
@@ -230,7 +290,74 @@ def get_token_identity(
     rpc: Optional[Callable] = None,
 ) -> TokenIdentity:
     """Identity for ``(chain, address)``. Never raises on a chain failure;
-    raises ``ValueError`` on a malformed address (validated before any RPC)."""
+    raises ``ValueError`` on a malformed address (validated before any RPC).
+
+    068 G1: an OWNER-PINNED address (``core.wallet.token_pins``) reads
+    ``verified=True`` with ``source="owner_pin"``. Its decimals/name still come
+    from the frozen chain read — the pin vouches for WHICH contract, not for
+    what the contract says about itself.
+    """
+    ident = _identity_unpinned(chain, address, db_path=db_path, rpc=rpc)
+    if ident.verified:
+        return ident
+    from dataclasses import replace
+    try:
+        from core.wallet.token_pins import owner_pin
+        pinned = owner_pin(chain, ident.address)
+    except Exception:
+        pinned = None
+    if pinned is not None:
+        # W1: ``owner_pin`` (the CLI) or ``owner_approved`` (a tap / a chat verb).
+        return replace(ident, verified=True,
+                       source=str(pinned.get("source") or "owner_pin"),
+                       symbol=ident.symbol or pinned["symbol"])
+    # W0: a token THIS instance launched/deployed is verified by provenance —
+    # the owner never has to pin their own launch by hand.
+    try:
+        from core.wallet.token_provenance import SOURCE, own_token
+        own = own_token(chain, ident.address)
+    except Exception:
+        own = None
+    if own is not None:
+        return replace(ident, verified=True, source=SOURCE)
+    return ident
+
+
+def frozen_record(chain: str, address: str, *,
+                  db_path: Optional[str] = None) -> Optional[Dict[str, object]]:
+    """The frozen first-sight row for ``(chain, address)`` — symbol, name,
+    ``first_seen_ts`` — or None. Read-only: never creates the store, never
+    reads the chain (W1: the owner's identity ask shows WHEN a contract was
+    first seen, beside its name)."""
+    import os
+    try:
+        address = normalize_address(address)
+        path = _db(db_path)
+        if not os.path.isfile(path):
+            return None
+        conn = sqlite_util.wal_connect(path)
+        try:
+            row = conn.execute(
+                "SELECT symbol, name, first_seen_ts FROM tokens "
+                "WHERE chain = ? AND address = ?",
+                (str(chain or "").strip().lower(), address)).fetchone()
+        finally:
+            conn.close()
+    except Exception:
+        return None
+    if row is None:
+        return None
+    return {"symbol": _clean_text(row[0], MAX_SYMBOL_CHARS),
+            "name": _clean_text(row[1], MAX_NAME_CHARS), "first_seen_ts": row[2]}
+
+
+def _identity_unpinned(
+    chain: str,
+    address: str,
+    *,
+    db_path: Optional[str] = None,
+    rpc: Optional[Callable] = None,
+) -> TokenIdentity:
     address = normalize_address(address)
 
     pinned = canonical_token(chain, address)
@@ -266,6 +393,11 @@ def get_token_identity(
                 source="first_seen")
 
         frozen_symbol, frozen_name, frozen_decimals, change_count = row
+        # A row frozen before CR-L04/L11 may hold an unbounded value; it reads
+        # through the same bounds as a fresh one (and compares like one).
+        frozen_symbol = _clean_text(frozen_symbol, MAX_SYMBOL_CHARS)
+        frozen_name = _clean_text(frozen_name, MAX_NAME_CHARS)
+        frozen_decimals = _bounded_decimals(frozen_decimals)
         changed = any((
             fresh_decimals is not None and fresh_decimals != frozen_decimals,
             fresh_symbol is not None and fresh_symbol != frozen_symbol,

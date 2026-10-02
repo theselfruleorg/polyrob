@@ -43,6 +43,17 @@ def _event_aggregate(user_id: str, since_ts: Optional[float]) -> Dict[str, Any]:
         return {}
 
 
+def _outward(user_id: str, since_ts: float, data_dir: Optional[str]) -> str:
+    """033: what the agent did to the outside world, by effect class — every
+    tool, surface and MCP server, not a closed kind list. Seam kept for test
+    monkeypatching; an unreadable store says so rather than printing "none"."""
+    try:
+        from core.effects import outward_counts, outward_line
+        return outward_line(outward_counts(user_id, since_ts, data_dir=data_dir))
+    except Exception:
+        return "unavailable (event log unreadable)"
+
+
 def _open_asks(user_id: str, data_dir: Optional[str]) -> List[Dict[str, Any]]:
     try:
         import os
@@ -142,6 +153,7 @@ async def compose_digest(user_id: str, *, days: int = 1,
     lines.extend(_health_lines(user_id, data_dir))
     lines.append(f"• Activity: {n_sessions} session(s), {n_goals} goal event(s), "
                  f"{n_self_mods} self-change(s)")
+    lines.append(f"• Outward: {_outward(user_id, since_ts, data_dir)}")
 
     # H14b (final whole-branch review, Finding 1): `_ledger` fails open to `{}`
     # when the unified-ledger read raises (or the DB isn't there). `{}` and a

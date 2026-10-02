@@ -67,6 +67,14 @@ _RPC_URLS = {"base": "https://mainnet.base.org"}
 _QUOTE_SELECTOR = "0xc6a5026a"
 # keccak("exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))")[:4]
 _EXACT_INPUT_SINGLE_SELECTOR = "0x04e45aaf"
+# keccak("multicall(uint256,bytes[])")[:4] — SwapRouter02's deadline-checked
+# multicall (`PeripheryValidationExtended.checkDeadline`).
+_MULTICALL_DEADLINE_SELECTOR = "0x5ae401dc"
+#: CR-L14: how long a built swap stays executable. The quote it floors
+#: `amountOutMinimum` against is refused after 30 s (`trade_tool`), so a
+#: transaction still unmined minutes later is executing a stale price; past this
+#: the router reverts it rather than filling it whenever it lands.
+SWAP_DEADLINE_SEC = 300
 # keccak("approve(address,uint256)")[:4]
 _APPROVE_SELECTOR = "0x095ea7b3"
 
@@ -153,17 +161,56 @@ def best_quote(chain: str, token_in: str, token_out: str, amount_in_raw: int,
                      quoted_at=time.time())
 
 
-def build_exact_input_single_data(*, token_in: str, token_out: str, fee: int,
+def build_exact_input_single_call(*, token_in: str, token_out: str, fee: int,
                                   recipient: str, amount_in_raw: int,
                                   amount_out_min_raw: int) -> str:
-    """Calldata for ``SwapRouter02.exactInputSingle``.
+    """The BARE ``SwapRouter02.exactInputSingle`` call (no deadline).
 
     NOTE: SwapRouter02's struct has NO deadline field (SwapRouter01 did).
-    Adding one shifts every subsequent word and the call reverts.
+    Adding one shifts every subsequent word and the call reverts. The deadline
+    rides the ``multicall`` wrapper instead — see
+    :func:`build_exact_input_single_data`.
     """
     return ("0x" + _EXACT_INPUT_SINGLE_SELECTOR[2:]
             + _addr(token_in) + _addr(token_out) + _uint(fee) + _addr(recipient)
             + _uint(amount_in_raw) + _uint(amount_out_min_raw) + _uint(0))
+
+
+def wrap_multicall_deadline(inner: str, deadline: int) -> str:
+    """``multicall(uint256 deadline, bytes[] data)`` around ONE inner call."""
+    body = inner[2:] if inner.startswith("0x") else inner
+    raw_len = len(body) // 2
+    padded = body.ljust(((raw_len + 31) // 32) * 64, "0")
+    return ("0x" + _MULTICALL_DEADLINE_SELECTOR[2:]
+            + _uint(deadline)        # deadline
+            + _uint(0x40)            # offset of bytes[]
+            + _uint(1)               # array length
+            + _uint(0x20)            # offset of element 0 (from array body)
+            + _uint(raw_len)         # element length
+            + padded)
+
+
+def build_exact_input_single_data(*, token_in: str, token_out: str, fee: int,
+                                  recipient: str, amount_in_raw: int,
+                                  amount_out_min_raw: int,
+                                  deadline: Optional[int] = None,
+                                  now: Optional[float] = None) -> str:
+    """Router calldata for one exact-input swap, WITH a deadline (CR-L14).
+
+    ``exactInputSingle`` on SwapRouter02 carries no deadline, so a signed swap
+    that sits unmined executes whenever it lands, against whatever price then
+    holds (bounded only by ``amountOutMinimum``). It is wrapped in
+    ``multicall(deadline, [exactInputSingle(...)])`` so the router reverts it
+    after ``SWAP_DEADLINE_SEC``. ``to``/``value``/the approval spender are
+    unchanged: it is the same router, and ``msg.sender`` is preserved through
+    the router's self-delegatecall.
+    """
+    inner = build_exact_input_single_call(
+        token_in=token_in, token_out=token_out, fee=fee, recipient=recipient,
+        amount_in_raw=amount_in_raw, amount_out_min_raw=amount_out_min_raw)
+    if deadline is None:
+        deadline = int(now if now is not None else time.time()) + SWAP_DEADLINE_SEC
+    return wrap_multicall_deadline(inner, int(deadline))
 
 
 def build_approve_data(*, spender: str, amount_raw: int) -> str:

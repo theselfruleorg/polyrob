@@ -9,7 +9,7 @@ Three actions, all riding existing seams:
   and listed in the recommended approval set (operators add ``x402_request`` to
   ``APPROVAL_REQUIRED_TOOLS``; at compute posture ≥2 it is auto-gated). When
   ``INVOICE_CARD_ENABLED`` resolves true, a branded PNG invoice card
-  (``modules/pfp/cards.py``) is also rendered into the session workspace and its
+  (``modules/cards/cards.py``) is also rendered into the session workspace and its
   path appended to the result — a presentation nicety over an already-created
   invoice, fail-open (Task 6, Phase 1).
 - ``x402_invoices`` — list this tenant's invoices (read-only).
@@ -116,7 +116,7 @@ def _maybe_render_invoice_card(invoice: Dict[str, Any], execution_context) -> Op
         workspace_dir = _resolve_workspace_dir(execution_context)
         if not workspace_dir:
             return None
-        from modules.pfp.cards import render_invoice_card
+        from modules.cards.cards import render_invoice_card
         from modules.x402.artifact import build_payment_artifact
         out_dir = Path(workspace_dir) / "invoices"
         out_dir.mkdir(parents=True, exist_ok=True)

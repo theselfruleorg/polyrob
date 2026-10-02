@@ -190,7 +190,10 @@ def test_decide_ask_answer_rides_into_the_unblocked_goal(board):
     dep = board.get(g.id)
     assert dep.payload["owner_unblocked"]["answer"].startswith("use the SANDBOX key")
     prompt = build_goal_run_task(dep, None)
-    assert "the owner answered: use the SANDBOX key" in prompt
+    # H04: quoted DATA with provenance, the newline collapsed (no forged line).
+    assert "the owner answered (quoted):" in prompt
+    assert "use the SANDBOX key   please" in prompt or "use the SANDBOX key please" in prompt
+    assert '<owner_answer ask="' in prompt and 'recorded_via="owner seat"' in prompt
 
 
 def test_decide_ask_empty_answer_writes_nothing(board):

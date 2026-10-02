@@ -13,15 +13,18 @@ Pipeline (``install_local``):
      at the ``~/.agents/skills`` auto-discovery path instead.
   3. reject symlinks in the source folder (a local folder is UNAUDITED, unlike a
      tree-audited git install).
-  4. ``_scan_folder`` — ``is_suspicious`` on SKILL.md + every text resource,
+  4. ``_scan_folder`` — ``is_skill_content_suspicious`` (injection + invisible/
+     bidi unicode) on SKILL.md + every text resource,
      fail-CLOSED (raise on a hit OR a scanner error).
   5. copy the WHOLE folder (SKILL.md + resources) into ``user_<uid>/.pending/<name>``,
      plus a ``.install-meta.json`` recording the TRUE origin (``source``/
      ``resolved_sha``) so a later bare ``skill approve <name>`` — which only
      knows the skill name, not how it was quarantined — can still audit the
      real source (Task 24).
-  6. auto-approve ONLY when ``trust == "local" and source == "local"``; a remote
-     (git/url) source is NEVER auto-approved even with ``--trust local``.
+  6. the trust matrix (``skill_hub.trust_decision``, 067 P6) decides: a local
+     folder auto-approves ONLY with ``trust == "local"``; a name resolved
+     through an official/trusted tap auto-approves on a clean scan; a git/url
+     spec given directly is NEVER auto-approved, even with ``--trust local``.
 
 Approve (``_approve``): read back ``.install-meta.json`` (Task 24, falls back to
 the passed ``source``/``resolved_sha`` if absent) → ``promote_pending_skill``
@@ -48,6 +51,19 @@ _INSTALL_META_NAME = ".install-meta.json"
 
 class InstallError(click.ClickException):
     pass
+
+
+@dataclass(frozen=True)
+class InstallOrigin:
+    """Where an install came from beyond its ``source`` string (067 P6).
+
+    ``tap``/``tier`` are set ONLY by ``skill_hub.install_spec`` (a name resolved
+    through a tap) and by ``skill hub update``; ``tier`` feeds the trust matrix
+    (``skill_hub.trust_decision``). ``stage_only`` keeps the result in
+    quarantine whatever the matrix says (update compares before it approves)."""
+    tap: Optional[str] = None
+    tier: Optional[str] = None
+    stage_only: bool = False
 
 
 @dataclass
@@ -82,8 +98,13 @@ def _scan_folder(folder: Path) -> None:
     with ``errors="replace"`` and scanned anyway, since a bad-UTF-8 ``.md``/
     ``.txt``/etc. still passes the suffix gate and can carry an ASCII-safe
     injection payload alongside the invalid bytes. Only a genuine read failure
-    (unreadable/permission) is fail-closed via ``InstallError``."""
-    from modules.memory.task.threat_scan import is_suspicious
+    (unreadable/permission) is fail-closed via ``InstallError``.
+
+    067 P0.3: every file gets the SKILL-content scan (``is_skill_content_suspicious``
+    — injection patterns AND zero-width/bidi smuggling), not the plain
+    ``is_suspicious``: a ``references/*.md`` served by ``read_skill_resource`` is
+    read by the model exactly like the body."""
+    from modules.memory.task.threat_scan import is_skill_content_suspicious
 
     for p in sorted(folder.rglob("*")):
         if not p.is_file() or p.suffix.lower() not in _TEXT_SUFFIXES:
@@ -94,7 +115,7 @@ def _scan_folder(folder: Path) -> None:
             raise InstallError(f"cannot read {p.name} for threat scan: {e}")
         text = raw.decode("utf-8", errors="replace")
         try:
-            flagged = is_suspicious(text)
+            flagged = is_skill_content_suspicious(text)
         except Exception as e:  # scanner failure => fail-CLOSED
             raise InstallError(f"threat scan failed on {p.name}: {e}")
         if flagged:
@@ -121,7 +142,8 @@ def _require_local_operator() -> None:
 
 
 def install_local(src: Path, *, user_id: str, trust: str = "prompt", source: str = "local",
-                  resolved_sha: Optional[str] = None) -> InstallResult:
+                  resolved_sha: Optional[str] = None,
+                  origin: Optional[InstallOrigin] = None) -> InstallResult:
     _require_local_operator()
     from agents.task.agent.skill_frontmatter import parse_frontmatter
     from agents.task.agent.skill_validation import validate_consumed
@@ -150,6 +172,11 @@ def install_local(src: Path, *, user_id: str, trust: str = "prompt", source: str
             f"<=50 chars to register. Lenient-named skills can still be used by "
             f"placing them in ~/.agents/skills/ (auto-discovered)."
         )
+    # D1: a builtin/pack id is never installable — approve would replace the
+    # builtin's body, triggers, `requires` and gate (REST create refuses 409).
+    reserved = mgr.reserved_skill_id_error(name)
+    if reserved:
+        raise InstallError(f"cannot install {name!r}: {reserved}")
 
     # A local folder is unaudited — reject symlink/escape before staging.
     _reject_unsafe_source(src)
@@ -164,13 +191,27 @@ def install_local(src: Path, *, user_id: str, trust: str = "prompt", source: str
     # Record the TRUE origin alongside the staged skill so a later `skill approve`
     # (Task 24) — which only knows the skill NAME, not how it got quarantined —
     # can audit the real source/sha instead of a hardcoded "local" guess.
+    origin = origin or InstallOrigin()
     (pending / _INSTALL_META_NAME).write_text(
-        json.dumps({"source": source, "resolved_sha": resolved_sha}), encoding="utf-8"
+        json.dumps({"source": source, "resolved_sha": resolved_sha,
+                    "tap": origin.tap, "tier": origin.tier}), encoding="utf-8"
     )
 
     res = InstallResult(name=name, staged_path=pending, approved=False,
                         source=source, resolved_sha=resolved_sha)
-    if trust == "local" and source == "local":  # NEVER auto-approve remote (git/url)
+    # 067 P6 trust matrix. The scan above raised on a hit (verdict dangerous →
+    # refused), so reaching here means verdict safe. Only a local folder with
+    # --trust local, or a name resolved through an official/trusted tap, is
+    # auto-approved; a git/url spec given directly is NEVER auto-approved.
+    from cli.commands.skill_hub import trust_decision
+
+    if source == "local":
+        kind = "local"
+    else:
+        kind = "tap" if origin.tap else "remote"
+    decision = trust_decision(source_kind=kind, tier=origin.tier, verdict="safe",
+                              trust_flag=trust)
+    if decision == "approve" and not origin.stage_only:
         _approve(name, user_id=user_id, source=source, resolved_sha=resolved_sha)
         res.approved = True
     return res
@@ -195,7 +236,11 @@ def _resolve_git_spec(spec: str):
     ``anthropics/skills/pdf@v1.2`` resolves to subdir ``pdf`` / ref ``v1.2``
     rather than leaking ``.git``/ref fragments into the repo path.
     """
-    if spec.startswith(("http://", "https://", "git@", "file://", "ssh://")):
+    if spec.startswith("http://"):
+        # A skill is code the agent runs; fetched over plain http any network
+        # hop can rewrite it (security review 2026-09-23).
+        raise InstallError("refusing a plain http:// skill source; use https://")
+    if spec.startswith(("https://", "git@", "file://", "ssh://")):
         m = re.match(r"^(.*?\.git)(?:/(.+))?$", spec)
         if m:
             return m.group(1), (m.group(2) or ""), None
@@ -270,8 +315,56 @@ def _audit_tree(root: Path, env: Optional[dict] = None) -> None:
                 raise InstallError("clone exceeds size/file caps — refused")
 
 
+_GIT_HARDENING = ("-c", "core.symlinks=false", "-c", "core.hooksPath=")
+
+
+def clone_audited(url: str, dest: Path, *, ref: Optional[str] = None,
+                  sha: Optional[str] = None) -> str:
+    """Clone *url* into *dest* with the hardened git child (scrubbed env, no
+    credential helper, no hooks, no symlinks, no submodules, no prompt,
+    wall-clock timeouts), then audit the tree (symlinks, traversal, size and
+    file caps). Returns the checked-out commit sha.
+
+    ``ref`` = a shallow single-branch clone of that branch/tag. ``sha`` = a
+    full-history clone checked out at exactly that commit (a pinned install,
+    e.g. ``polyrob pack install git+https://...@<sha>``); a mismatch refuses.
+    The ONE clone implementation for the CLI's install paths."""
+    # S2 (2026-09-14): was `dict(os.environ, ...)` — a clone of an attacker-named
+    # repo ran with the agent's whole environment (AGENT_WALLET_MASTER_SEED +
+    # every API key). Same hardening flags, allowlisted inheritance only.
+    from cli.git_child_env import build_git_child_env
+    env = build_git_child_env(GIT_CONFIG_NOSYSTEM="1", GIT_TERMINAL_PROMPT="0",
+                              GIT_CONFIG_GLOBAL="/dev/null")
+    cmd = ["git", *_GIT_HARDENING, "clone", "--no-recurse-submodules"]
+    if sha:
+        cmd += ["--no-checkout"]
+    else:
+        cmd += ["--depth", "1", "--single-branch"]
+        if ref:
+            cmd += ["--branch", ref]
+    cmd += [url, str(dest)]
+    try:
+        subprocess.run(cmd, env=env, check=True, capture_output=True, timeout=120)
+        if sha:
+            subprocess.run(["git", *_GIT_HARDENING, "-C", str(dest), "checkout", "--detach",
+                            sha], env=env, check=True, capture_output=True, timeout=60)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        raise InstallError(f"git clone failed: {e}")
+
+    sha_proc = subprocess.run(["git", "-C", str(dest), "rev-parse", "HEAD"],
+                              env=env, capture_output=True, text=True, timeout=30)
+    if sha_proc.returncode != 0:
+        raise InstallError(f"git rev-parse failed: {sha_proc.stderr.strip() or sha_proc.returncode}")
+    head = sha_proc.stdout.strip()
+    if sha and head.lower() != sha.lower():
+        raise InstallError(f"git checkout resolved {head}, not the pinned {sha}")
+
+    _audit_tree(dest, env=env)  # symlink/traversal/cap audit — BEFORE subdir selection
+    return head
+
+
 def install_git(spec: str, *, user_id: str, ref: Optional[str] = None,
-                trust: str = "prompt") -> InstallResult:
+                trust: str = "prompt", origin: Optional[InstallOrigin] = None) -> InstallResult:
     """Resolve a git URL or ``owner/repo[/subdir]`` shorthand, clone it into a
     sandboxed temp dir (no credential helper, no hooks, no interactive prompt,
     shallow + single-branch, wall-clock timeout), audit the raw tree BEFORE
@@ -285,31 +378,9 @@ def install_git(spec: str, *, user_id: str, ref: Optional[str] = None,
         ref = spec_ref
     if subdir and Path(subdir).is_absolute():
         raise InstallError("invalid subdir")
-    # S2 (2026-09-14): was `dict(os.environ, ...)` — a clone of an attacker-named
-    # repo ran with the agent's whole environment (AGENT_WALLET_MASTER_SEED +
-    # every API key). Same hardening flags, allowlisted inheritance only.
-    from cli.git_child_env import build_git_child_env
-    env = build_git_child_env(GIT_CONFIG_NOSYSTEM="1", GIT_TERMINAL_PROMPT="0",
-                              GIT_CONFIG_GLOBAL="/dev/null")
     with tempfile.TemporaryDirectory(prefix="polyrob-skill-") as tmp:
         clone = Path(tmp) / "clone"
-        cmd = ["git", "-c", "core.symlinks=false", "-c", "core.hooksPath=", "clone",
-               "--depth", "1", "--single-branch", "--no-recurse-submodules"]
-        if ref:
-            cmd += ["--branch", ref]
-        cmd += [url, str(clone)]
-        try:
-            subprocess.run(cmd, env=env, check=True, capture_output=True, timeout=120)
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-            raise InstallError(f"git clone failed: {e}")
-
-        sha_proc = subprocess.run(["git", "-C", str(clone), "rev-parse", "HEAD"],
-                                  env=env, capture_output=True, text=True, timeout=30)
-        if sha_proc.returncode != 0:
-            raise InstallError(f"git rev-parse failed: {sha_proc.stderr.strip() or sha_proc.returncode}")
-        sha = sha_proc.stdout.strip()
-
-        _audit_tree(clone, env=env)  # symlink/traversal/cap audit — BEFORE subdir selection
+        sha = clone_audited(url, clone, ref=ref)
 
         clone_real = clone.resolve()
         skill_dir = (clone / subdir) if subdir else clone
@@ -318,10 +389,32 @@ def install_git(spec: str, *, user_id: str, ref: Optional[str] = None,
             raise InstallError("subdir escapes clone root")
 
         return install_local(skill_dir, user_id=user_id, trust=trust,
-                             source=f"git:{spec}", resolved_sha=sha)  # remote => never auto-approve
+                             source=f"git:{spec}", resolved_sha=sha,
+                             origin=origin)  # remote => auto-approve only via an official/trusted tap
 
 
 _MAX_URL_BYTES = 512 * 1024
+
+
+def _https_only_redirect_handler():
+    """A redirect handler that refuses a 30x OFF https (to ``http://`` or any
+    other scheme) — otherwise any network hop could serve the skill."""
+    import urllib.parse
+    import urllib.request
+
+    class _HttpsOnlyRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            if urllib.parse.urlparse(newurl).scheme.lower() != "https":
+                raise InstallError(f"refusing a redirect off https: {newurl[:200]!r}")
+            return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+    return _HttpsOnlyRedirect()
+
+
+def _https_open(req, *, timeout: int):
+    """``urlopen`` with :func:`_https_only_redirect_handler`. Module-level test seam."""
+    import urllib.request
+    return urllib.request.build_opener(_https_only_redirect_handler()).open(req, timeout=timeout)
 
 
 def _fetch_text(url: str, *, max_bytes: int = _MAX_URL_BYTES, timeout: int = 30) -> str:
@@ -336,11 +429,12 @@ def _fetch_text(url: str, *, max_bytes: int = _MAX_URL_BYTES, timeout: int = 30)
     import urllib.request
 
     scheme = urllib.parse.urlparse(url).scheme.lower()
-    if scheme not in ("http", "https"):
-        raise InstallError(f"unsupported URL scheme: {scheme!r} (only http/https)")
+    if scheme != "https":
+        # A skill is code the agent runs; plain http lets any hop rewrite it.
+        raise InstallError(f"unsupported URL scheme: {scheme!r} (https only)")
 
     req = urllib.request.Request(url, headers={"User-Agent": "polyrob-skill-install"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:  # nosec - operator-initiated
+    with _https_open(req, timeout=timeout) as r:  # nosec - operator-initiated
         ctype = (r.headers.get("Content-Type") or "").lower()
         if ctype and not any(t in ctype for t in ("text/", "markdown", "application/octet-stream")):
             raise InstallError(f"refusing non-text content-type: {ctype!r}")
@@ -350,7 +444,8 @@ def _fetch_text(url: str, *, max_bytes: int = _MAX_URL_BYTES, timeout: int = 30)
     return data.decode("utf-8", errors="replace")
 
 
-def install_url(url: str, *, user_id: str, trust: str = "prompt") -> InstallResult:
+def install_url(url: str, *, user_id: str, trust: str = "prompt",
+                origin: Optional[InstallOrigin] = None) -> InstallResult:
     """Fetch a single ``SKILL.md`` from ``url``, stage it into a temp folder
     named by its frontmatter ``name`` (fallback ``downloaded-skill``), and
     hand it to ``install_local`` with ``source=f"url:{url}"`` — which
@@ -371,7 +466,8 @@ def install_url(url: str, *, user_id: str, trust: str = "prompt") -> InstallResu
         d = Path(tmp) / name
         d.mkdir(parents=True)
         (d / "SKILL.md").write_text(text, encoding="utf-8")
-        return install_local(d, user_id=user_id, trust=trust, source=f"url:{url}")  # never auto-approve
+        return install_local(d, user_id=user_id, trust=trust, source=f"url:{url}",
+                             origin=origin)  # never auto-approve (no tap origin)
 
 
 def _looks_like_skill_md_url(spec: str) -> bool:
@@ -408,7 +504,8 @@ def _looks_like_git_spec(spec: str) -> bool:
 
 
 def dispatch_install(spec: str, *, user_id: str, trust: str = "prompt",
-                     ref: Optional[str] = None) -> InstallResult:
+                     ref: Optional[str] = None,
+                     origin: Optional[InstallOrigin] = None) -> InstallResult:
     """Route a single install *spec* string to the right pipeline by shape
     (single entry point for both ``polyrob skill install`` and the REPL's
     ``/skills install``):
@@ -422,13 +519,18 @@ def dispatch_install(spec: str, *, user_id: str, trust: str = "prompt",
         attempt against a spec that was never a git reference to begin with)
 
     ``ref`` is only meaningful for the git path (ignored otherwise).
+    ``origin`` (067 P6) carries a tap's tier from ``skill_hub.install_spec``;
+    it is ignored for a local folder.
     """
+    # ``origin`` is passed on only when set, so the call shape without a tap is
+    # the pre-067 one.
+    extra = {"origin": origin} if origin is not None else {}
     if Path(spec).is_dir():
         return install_local(Path(spec), user_id=user_id, trust=trust)
     if _looks_like_skill_md_url(spec):
-        return install_url(spec, user_id=user_id, trust=trust)
+        return install_url(spec, user_id=user_id, trust=trust, **extra)
     if _looks_like_git_spec(spec):
-        return install_git(spec, user_id=user_id, ref=ref, trust=trust)
+        return install_git(spec, user_id=user_id, ref=ref, trust=trust, **extra)
     raise InstallError(
         f"unrecognized skill spec: {spec!r} — expected a local directory, a "
         f"SKILL.md URL, or an owner/repo[/subdir] / git URL"
@@ -454,6 +556,15 @@ def _port_resources(pending_dir: Path, active_dir: Path) -> None:
             shutil.copytree(item, dest, dirs_exist_ok=True)
         else:
             shutil.copy2(item, dest)
+
+
+def _read_install_meta_dict(pending_dir: Path) -> Dict[str, Any]:
+    """The whole ``.install-meta.json`` (``{}`` when absent or unreadable)."""
+    try:
+        meta = json.loads((pending_dir / _INSTALL_META_NAME).read_text(encoding="utf-8"))
+        return meta if isinstance(meta, dict) else {}
+    except Exception:
+        return {}
 
 
 def _read_install_meta(pending_dir: Path, *, source: str,
@@ -493,6 +604,18 @@ def _approve(name: str, *, user_id: str, source: str = "local",
     # (and eventually delete) the pending dir.
     audit_source, audit_sha = _read_install_meta(
         pending_dir, source=source, resolved_sha=resolved_sha)
+    # 067 P6: the lock records what was FETCHED (the staged tree), hashed
+    # before promote touches it.
+    lock_meta = dict(_read_install_meta_dict(pending_dir),
+                     source=audit_source, resolved_sha=audit_sha)
+    lock_digest = None
+    try:
+        from cli.commands.skill_hub import tree_digest
+
+        if pending_dir.is_dir():
+            lock_digest = tree_digest(pending_dir)
+    except Exception:
+        lock_digest = None
 
     res = mgr.promote_pending_skill(name, user_id=user_id)  # promotes+registers+re-scans SKILL.md
     if not getattr(res, "ok", False):
@@ -513,6 +636,19 @@ def _approve(name: str, *, user_id: str, source: str = "local",
             approver=user_id)
     except Exception:
         pass
+
+    # 067 P6: the skill lock — validated on write, best-effort (a lock failure
+    # is logged and never undoes an activation).
+    if lock_digest is not None:
+        try:
+            from cli.commands.skill_hub import record_approved
+
+            record_approved(name, user_id=user_id, meta=lock_meta, files=lock_digest[0],
+                            content_sha256=lock_digest[1], install_path=active_dir)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning("skill lock: could not record %r", name,
+                                                exc_info=True)
 
 
 def list_all_skills(user_id: str) -> List[Dict[str, Any]]:
@@ -677,7 +813,15 @@ def remove_skill(skill_id: str, user_id: str) -> bool:
     """Archive (never hard-delete) a user skill. Thin wrapper over
     ``SkillWriterMixin.delete_skill`` — a builtin/external/unknown id (or one
     a background/non-user author isn't allowed to touch) returns ``False``."""
-    return _skill_manager().delete_skill(skill_id, user_id=user_id)
+    ok = _skill_manager().delete_skill(skill_id, user_id=user_id)
+    if ok:
+        try:  # 067 P6: an archived skill leaves the lock
+            from cli.commands.skill_hub import remove_lock_entry
+
+            remove_lock_entry(skill_id, user_id=user_id)
+        except Exception:
+            pass
+    return ok
 
 
 # --- CLI group -------------------------------------------------------------
@@ -706,17 +850,22 @@ def skill():
               help="Git ref (branch/tag/commit) — only used when SPEC resolves to a git install.")
 @click.option("--trust", type=click.Choice(["local", "prompt"]), default="prompt",
               help="'local' auto-approves a local folder; 'prompt' quarantines for `skill approve`. "
-                   "A git/url install is NEVER auto-approved, even with --trust local.")
+                   "A git/url spec is NEVER auto-approved, even with --trust local; a name from "
+                   "an official/trusted tap auto-approves on a clean scan.")
 @click.option("--user", "user_id", default=None, help="Tenant user_id (default: local owner id).")
 def skill_install(spec: str, ref: Optional[str], trust: str, user_id: Optional[str]):
-    """Install a skill from a local folder, a git repo, or a direct SKILL.md URL.
+    """Install a skill from a tap, a local folder, a git repo, or a SKILL.md URL.
 
-    SPEC is dispatched by shape: an existing local directory installs locally;
+    A tap name (<tap>/<skill>, or a bare <skill> found in exactly one tap) is
+    resolved first; an official/trusted tap with a clean scan auto-approves.
+    Otherwise SPEC is dispatched by shape: an existing local directory installs locally;
     an http(s) URL ending in SKILL.md fetches that single file; anything else
     (a git URL or an `owner/repo[/subdir][@ref]` GitHub shorthand) clones via git.
     """
     uid = user_id or _default_user()
-    res = dispatch_install(spec, user_id=uid, trust=trust, ref=ref)
+    from cli.commands.skill_hub import install_spec
+
+    res = install_spec(spec, user_id=uid, trust=trust, ref=ref)
     if res.approved:
         click.echo(click.style("[polyrob] ", fg="green")
                    + f"installed + approved skill {res.name!r} (active).")
@@ -790,3 +939,9 @@ def skill_remove_cmd(skill_id: str, user_id: Optional[str]):
         )
     click.echo(click.style("[polyrob] ", fg="green")
                + f"removed skill {skill_id!r} (archived under .archived/ — recoverable).")
+
+
+# 067 P6: tap / search / update (cli/commands/skill_hub.py — stdlib+click at import).
+from cli.commands.skill_hub import register_hub_commands  # noqa: E402
+
+register_hub_commands(skill)

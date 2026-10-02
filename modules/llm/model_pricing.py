@@ -12,7 +12,8 @@ logger = logging.getLogger(__name__)
 
 
 def calculate_cost(model_name: str, input_tokens: int, output_tokens: int,
-                  cached_tokens: int = 0, cache_creation_tokens: int = 0) -> float:
+                  cached_tokens: int = 0, cache_creation_tokens: int = 0,
+                  cache_creation_1h_tokens: int = 0) -> float:
     """Calculate cost for token usage
 
     Args:
@@ -22,6 +23,8 @@ def calculate_cost(model_name: str, input_tokens: int, output_tokens: int,
         output_tokens: Number of output tokens
         cached_tokens: Number of cached input tokens (reads, discounted)
         cache_creation_tokens: Number of cache-WRITE tokens (G3: Anthropic 1.25x)
+        cache_creation_1h_tokens: The SUBSET of cache_creation_tokens written with a
+            1h window (F4: Anthropic 2.0x). Clamped to cache_creation_tokens.
 
     Returns:
         Total cost in USD
@@ -49,7 +52,12 @@ def calculate_cost(model_name: str, input_tokens: int, output_tokens: int,
     # surcharges them (Anthropic 1.25x); otherwise at plain input price (no surcharge).
     if cache_creation_tokens > 0:
         write_price = pricing.cache_write_price if pricing.cache_write_price is not None else pricing.input_price
-        input_cost += (cache_creation_tokens / 1_000_000) * write_price
+        # F4: the 1h-window slice of the write bills at 2.0x (Anthropic); the
+        # response reports it separately, so the split is measured, not guessed.
+        write_1h = max(0, min(cache_creation_1h_tokens or 0, cache_creation_tokens))
+        write_1h_price = pricing.cache_write_price_1h if pricing.cache_write_price_1h is not None else write_price
+        input_cost += ((cache_creation_tokens - write_1h) / 1_000_000) * write_price
+        input_cost += (write_1h / 1_000_000) * write_1h_price
 
     # Calculate output cost
     output_cost = (output_tokens / 1_000_000) * pricing.output_price

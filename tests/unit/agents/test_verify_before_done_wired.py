@@ -26,7 +26,7 @@ from agents.task.agent.service import Agent
 from agents.task.agent.views import ActionResult
 
 
-def _build_run_loop_agent(*, max_steps=10):
+def _build_run_loop_agent(*, max_steps=10, registered=("coding_run_tests", "done")):
     """Minimal Agent standing in for a real run(), stubbing everything run()
     touches except the done-handling verify-before-done block under test.
     Every step() call returns a fresh done() result (mirrors the output-
@@ -73,6 +73,8 @@ def _build_run_loop_agent(*, max_steps=10):
     a.orchestrator.user_id = None  # Agent.user_id is a read-only property -> orchestrator.user_id
 
     a.message_manager = MagicMock()
+    a.controller = MagicMock()
+    a.controller.get_action_names = MagicMock(return_value=list(registered))
     a.message_manager.get_token_count = MagicMock(return_value=0)
     a.message_manager.model_name = "test-model"  # Agent.model_name reads message_manager.model_name
 
@@ -106,7 +108,7 @@ async def test_flag_off_is_byte_identical_legacy(monkeypatch):
     await agent.run(max_steps=max_steps, _continue_session=True)
 
     assert agent.step.await_count == 1, "off must break on the very first done()"
-    agent.message_manager.inject_user_guidance.assert_not_called()
+    agent.message_manager.inject_runtime_guidance.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -122,7 +124,7 @@ async def test_flag_on_no_unverified_edit_breaks_immediately(monkeypatch):
     await agent.run(max_steps=max_steps, _continue_session=True)
 
     assert agent.step.await_count == 1, "no unverified edit -> no nudge, breaks immediately"
-    agent.message_manager.inject_user_guidance.assert_not_called()
+    agent.message_manager.inject_runtime_guidance.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -145,13 +147,33 @@ async def test_flag_on_unverified_edit_nudges_twice_then_allows_done(monkeypatch
     assert agent.step.await_count == 3
     assert agent._verify_nudge_count == 2
 
-    calls = agent.message_manager.inject_user_guidance.call_args_list
+    calls = agent.message_manager.inject_runtime_guidance.call_args_list
     assert len(calls) == 2
-    first_batch = calls[0].args[0]
-    assert first_batch[0]["kind"] == "intervention"
-    assert first_batch[0]["metadata"]["source"] == "verify_before_done"
-    assert first_batch[0]["metadata"]["attempt"] == 1
-    assert calls[1].args[0][0]["metadata"]["attempt"] == 2
+    from modules.llm.messages import MessageOrigin
+    assert calls[0].kwargs["source"] == "verify_before_done"
+    assert calls[0].kwargs["origin"] == MessageOrigin.INTERVENTION
+    # F2: the nudge names the REAL registered action, and it is not a failure.
+    assert "coding_run_tests" in calls[0].args[0]
+    assert agent.state.consecutive_failures == 0
+    agent.message_manager.inject_user_guidance.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_flag_on_skips_nudge_when_coding_run_tests_not_registered(monkeypatch):
+    """F2: a run without the coding tool cannot satisfy the nudge — skip it."""
+    monkeypatch.setenv("VERIFY_BEFORE_DONE", "true")
+    monkeypatch.setattr(
+        "agents.task.runtime.edit_verify.edited_since_last_test",
+        MagicMock(return_value=True),
+    )
+
+    agent, max_steps = _build_run_loop_agent(max_steps=10, registered=("done",))
+
+    await agent.run(max_steps=max_steps, _continue_session=True)
+
+    assert agent.step.await_count == 1
+    agent.message_manager.inject_runtime_guidance.assert_not_called()
+    assert agent.state.consecutive_failures == 0
 
 
 @pytest.mark.asyncio

@@ -14,6 +14,12 @@ import logging
 from typing import Optional
 
 from core.config_policy import embedder_needed
+from core.tool_capabilities import (
+    TOOL_CAPABILITIES as _TOOL_ROWS,
+    descriptor_id as _descriptor_id,
+    ids_where as _tool_ids_where,
+    row_field as _tool_row_field,
+)
 from dotenv import load_dotenv
 
 
@@ -241,6 +247,17 @@ def load_env(env: Optional[str] = None, config_dir: str = "config",
     except Exception:
         pass
 
+    # 066 P0.1/P0.2: a custody process goes non-dumpable as soon as its env is
+    # layered (before any child can be spawned against it), and a dotenv layer
+    # that put a seed the wallet load already took back into os.environ loses
+    # it again. Both are no-ops for a process without custody.
+    from core.security.custody_env import repop_after_env_load
+    from core.security.host_execution import wallet_custody_enabled
+    if wallet_custody_enabled():
+        from core.security.process_hardening import harden_custody_process
+        harden_custody_process()
+    repop_after_env_load()
+
     return resolved
 
 
@@ -355,48 +372,43 @@ async def build_container(
 # capability default / local server files) — absent secrets make the affected
 # server connections fail loudly at load time (an owner ask), never a silent
 # "not found in container".
-_CLI_INCOMPATIBLE = {
-    "perplexity",
-    "collabland", "alchemy",
-    "polymarket", "polymarket_data", "hyperliquid", "hyperliquid_data",
-}
+#
+# 067 P1: the three tables below are VIEWS of the ``cli``/``cli_registrar`` fields of
+# the per-tool rows in core/tool_capabilities.py — change a tool's CLI mode there.
+_CLI_INCOMPATIBLE = set(_tool_ids_where("cli", "incompatible"))
 
-# Optional (flag/posture/creds-gated) tools the CLI can register. Each row is the
-# module + the ``register_optional_tool()`` wrapper that MATERIALIZES the descriptor
-# under the CURRENT env (self-gating — a no-op when its flag/posture is off), plus the
-# container service name(s) it produces. This ONE table drives BOTH descriptor
-# materialization (so the generic loop below sees the enabled optionals even when
-# tools/__init__ was first imported with the flags off) AND the derived
-# _CLI_REGISTERABLE_TOOLS capability set. `shell` registers two services (shell +
-# process); `tools.x402` hosts two independent registrars.
-_CLI_OPTIONAL_REGISTRARS = (
-    ("tools.code_exec",        "register_code_exec_tool",    ("code_execution",)),
-    ("tools.coding",           "register_coding_tool",       ("coding",)),
-    ("tools.shell",            "register_shell_tools",       ("shell", "process")),
-    ("tools.self_env",         "register_self_env_tool",     ("self_env",)),
-    ("tools.git",              "register_git_tool",          ("git",)),
-    ("tools.github",           "register_github_tool",       ("github",)),
-    ("tools.cronjob_tools",    "register_cronjob_tool",      ("cronjob",)),
-    ("tools.goal_tools",       "register_goal_tool",         ("goal",)),
-    ("tools.knowledge_ingest", "register_knowledge_tool",    ("knowledge",)),
-    ("tools.x402",             "register_x402_tool",         ("x402_pay",)),
-    ("tools.x402",             "register_x402_invoice_tool", ("x402_invoice",)),
-    ("tools.hf_deploy",        "register_hf_deploy_tool",    ("hf_deploy",)),
-    ("tools.publish",          "register_publish_tool",      ("publish",)),
-    ("tools.app_service",      "register_app_service_tool",  ("app_service",)),
-    ("tools.x_browser",        "register_x_browser_tool",    ("x_browser",)),
-    # F2 (2026-09-14): read-only token sight (DEFI_DATA_ENABLED) — money/high-impact
-    # DeFi verbs (defi_trade/launchpad/dapp_browser) deliberately stay OUT
-    # of this table; only the read-only book belongs on the CLI default rig.
-    ("tools.defi",             "register_defi_data_tool",    ("defi_data",)),
-)
+
+def _derive_cli_optional_registrars() -> tuple:
+    """``((module, function, services), ...)`` from the rows' ``cli_registrar``.
+
+    Optional (flag/posture/creds-gated) tools the CLI can register. Each registrar is
+    the ``register_optional_tool()`` wrapper that MATERIALIZES the descriptor under
+    the CURRENT env (self-gating — a no-op when its flag/posture is off), plus the
+    container service name(s) it produces. This ONE table drives BOTH descriptor
+    materialization (so the generic loop below sees the enabled optionals even when
+    tools/__init__ was first imported with the flags off) AND the derived
+    _CLI_REGISTERABLE_TOOLS capability set. Rows that share a registrar group into
+    one entry in row order (``shell`` registers two services: shell + process). The
+    money/high-impact DeFi verbs (defi_trade/launchpad/dapp_browser) are ``cli="none"``;
+    only the read-only book (``defi_data``) belongs on the CLI default rig.
+    Module paths are strings: core imports no tool module here.
+    """
+    grouped: dict = {}
+    for tool_id in _TOOL_ROWS:
+        ref = _tool_row_field(tool_id, "cli_registrar")
+        if ref:
+            grouped.setdefault(ref, []).append(tool_id)
+    return tuple((ref.partition(":")[0], ref.partition(":")[2], tuple(services))
+                 for ref, services in grouped.items())
+
+
+_CLI_OPTIONAL_REGISTRARS = _derive_cli_optional_registrars()
 
 # Static (always-present) descriptors the CLI serves — the lightweight, dependency-free
-# tools that are in tools/descriptors.py unconditionally. Kept explicit to avoid
-# importing the heavy tools package at bootstrap import; the parity test asserts this
+# tools that are in tools/descriptors.py unconditionally, named by DESCRIPTOR id (the
+# ``browser`` row is the ``browser_manager`` descriptor). The parity test asserts this
 # stays == get_tool_init_order() - _CLI_INCOMPATIBLE once all descriptors materialize.
-_CLI_STATIC_TOOLS = {"filesystem", "task", "web_fetch", "twitter", "anysite", "email",
-                     "browser_manager", "mcp"}
+_CLI_STATIC_TOOLS = {_descriptor_id(t) for t in _tool_ids_where("cli", "static")}
 
 # Service names produced by the optional registrars (derived from the one table above).
 _CLI_OPTIONAL_TOOLS = {svc for _mod, _fn, services in _CLI_OPTIONAL_REGISTRARS for svc in services}
@@ -443,30 +455,15 @@ def _materialize_cli_optional_descriptors() -> set:
 
 
 
-def _x_oauth2_store_present() -> bool:
-    """Core-tier probe: does the encrypted X token store hold an ``x_oauth2``
-    record? Reads only the store's KEY index (opaque Fernet values), so no
-    token is decrypted here and core imports nothing from the tools tier."""
-    try:
-        import json as _json
-        from core.runtime_paths import resolve_data_home
-        path = resolve_data_home() / ".x_session.json"
-        if not path.is_file():
-            return False
-        raw = _json.loads(path.read_text(encoding="utf-8"))
-        keys = raw.keys() if isinstance(raw, dict) else []
-        return any(str(k).endswith("x_oauth2") for k in keys)
-    except Exception:
-        return False
-
 def _cli_extra_gate(name: str) -> bool:
     """Extra per-tool enablement for STATICALLY-present descriptors whose gate is NOT a
     ``register_optional_tool()`` insert (their descriptor is always in the init order):
 
-      - twitter: registered only when X API credentials are configured. Reads work with
-        valid creds; writes stay TWITTER_ENABLED-gated per-action. Without creds the tool
-        is dead weight, so we don't register a useless service (matches the pre-I-1 block).
-      - anysite: gated by ``anysite_cli_enabled()`` (ANYSITE_TOOL_ENABLED, default on).
+      - a tool with a live gate in ``core.tool_gates`` (a pack tool registers one in
+        the loader's phase 2 — e.g. the discovery pack's ``anysite``
+        (ANYSITE_TOOL_ENABLED, default on), the X pack's ``twitter`` (X API
+        credentials configured) and ``x_browser`` (X_BROWSER_ENABLED)): registered
+        only while the gate is on.
       - mcp (S3, 2026-07-20): mirrors ``BotConfig._maybe_build_mcp``'s enablement —
         explicit MCP_ENABLED, else the autonomous-mode capability default, else the
         presence of local server files.
@@ -474,19 +471,15 @@ def _cli_extra_gate(name: str) -> bool:
     Every other tool returns True — its presence in the init order already IS its gate
     (the optional ones are only inserted when enabled; the remaining static ones are
     unconditional CLI tools).
+
+    067 P1 residue: the mcp predicate is the runtime half of the row's gate column but
+    still lives here. Moving it next to its tool means ``register_gate("mcp", ...)``,
+    which flips ``gate_for`` for that id in the policy golden — do it in a commit
+    that lists that change (the twitter one moved to the X pack in 067 P3b).
     """
-    if name == "twitter":
-        return bool(os.getenv("TWITTER_OAUTH2_ACCESS_TOKEN") or
-                    os.getenv("TWITTER_OAUTH2_REFRESH_TOKEN") or
-                    _x_oauth2_store_present() or
-                    (os.getenv("TWITTER_API_KEY") and
-                     os.getenv("TWITTER_ACCESS_TOKEN")))
-    if name == "anysite":
-        try:
-            from tools.anysite import anysite_cli_enabled
-            return anysite_cli_enabled()
-        except Exception:
-            return False
+    from core.tool_gates import gate_for, gate_on
+    if gate_for(name) is not None:
+        return gate_on(name)
     if name == "mcp":
         try:
             from core.env import bool_env
@@ -553,6 +546,12 @@ async def register_cli_tools(container) -> None:
         except Exception as e:
             log.debug("Could not register CLI browser tool: %s", e)
 
+    # 067 P2 phase 2: enabled packs register their tools (descriptors the loop below
+    # picks up), gates and hooks. Per-pack fail-closed; never raises.
+    from core.packs.loader import load_packs, rematerialize_tools
+    load_packs()
+    rematerialize_tools()   # a self-gating pack tool whose flag turned on since
+
     # Materialize the enabled optional descriptors (self-gating) so the loop below can
     # see them via get_tool_init_order(), and capture the freshly-evaluated enabled set.
     # This replaces the ~13 per-tool `register_*()` + `if enabled():` the old blocks did.
@@ -567,7 +566,7 @@ async def register_cli_tools(container) -> None:
         if name in _CLI_OPTIONAL_TOOLS and name not in enabled_optional:
             continue
         # Extra gate for statically-present, non-register_optional_tool descriptors
-        # (twitter creds / anysite flag).
+        # (a live tool gate / mcp).
         if not _cli_extra_gate(name):
             continue
         cls = get_tool_class(name)

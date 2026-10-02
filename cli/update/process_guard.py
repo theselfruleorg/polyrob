@@ -111,8 +111,15 @@ def workspace_lock_busy(lock_dir: Optional[Path] = None) -> bool:
 # write-lock probe nor an open-fd scan catches an idle-but-live server; only detecting
 # the PROCESS does). `update` is deliberately excluded so a sibling `polyrob update`
 # never counts as a server.
-_SERVER_SUBCOMMANDS = frozenset({"telegram", "email", "serve", "api", "run", "chat", "gateway",
-    "discord", "slack", "signal", "whatsapp", "x", "dashboard", "webgate"})
+# 064 F1: every chat surface's standalone command (from its catalog row) is a server.
+from core.surfaces.catalog import cli_commands as _surface_cli_commands  # noqa: E402
+
+def _server_subcommands() -> frozenset:
+    return frozenset({"serve", "api", "run", "chat", "gateway", "dashboard",
+                      "webgate", *_surface_cli_commands()})
+
+
+_SERVER_SUBCOMMANDS = _server_subcommands()
 
 
 def _iter_proc_cmdlines():
@@ -251,9 +258,9 @@ def server_process_alive(*, exclude_pid: Optional[int] = None, _cmdlines=None) -
                 from cli.polyrob import _LAZY_SUBCOMMANDS
                 known_commands = set(_LAZY_SUBCOMMANDS) | {"chat", "version"}
             except ImportError:
-                known_commands = set(_SERVER_SUBCOMMANDS) | {"update"}
+                known_commands = set(_server_subcommands()) | {"update"}
             bare_repl = not (set(tokens) & known_commands) and "--help" not in tokens and "--version" not in tokens
-            if bare_repl or (set(tokens) & _SERVER_SUBCOMMANDS) or "uvicorn" in tokens \
+            if bare_repl or (set(tokens) & _server_subcommands()) or "uvicorn" in tokens \
                     or "api.app" in joined or any(t.endswith("main.py") for t in tokens):
                 return True
     except Exception as exc:

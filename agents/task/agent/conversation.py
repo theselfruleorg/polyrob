@@ -67,9 +67,22 @@ class Conversation:
         which would otherwise re-fire on every REPL line.
         """
         _reset_turn_state(self.agent)                # recover from a prior failed turn
+        _record_repl_line(self.agent, text)          # 061: the terminal is an owner seat
         self.agent.set_turn_input(text)              # append-as-turn (Task 7)
         history = await self.agent.run(
             max_steps=max_steps, _continue_session=bool(self.turns))
         answer = extract_answer(history)
         self.turns.append(Turn(user=text, assistant=answer))
         return answer
+
+
+def _record_repl_line(agent: Any, text: str) -> None:
+    """061: an owner's REPL line joins the ONE owner thread (via ``repl``).
+    The reply is recorded by the turn latch. Fail-open."""
+    try:
+        from core.surfaces.owner_thread import record_owner_in
+        record_owner_in(getattr(agent, "container", None),
+                        str(getattr(agent, "user_id", "") or ""), text, via="repl",
+                        session_id=str(getattr(agent, "session_id", "") or ""))
+    except Exception:
+        pass

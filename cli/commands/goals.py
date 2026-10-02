@@ -231,19 +231,30 @@ def goals_show(goal_id: str, as_json: bool):
 @click.option("--acceptance", help="What 'done' must prove (ids/paths/urls).")
 @click.option("--objective", "objective_id", help="Parent objective id.")
 @click.option("--force", is_flag=True, help="Bypass near-duplicate rejection.")
+@click.option("--memory-regime", "memory_regime",
+              type=click.Choice(["shared", "scoped", "sealed"]),
+              help="Memory isolation for this goal's runs (needs memory scopes on).")
 @click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
 def goals_create(title: str, body: str, priority: int, parent: Optional[str], triage: bool,
                   tools: Optional[str], acceptance: Optional[str], objective_id: Optional[str],
-                  force: bool, as_json: bool):
+                  force: bool, as_json: bool, memory_regime: Optional[str] = None):
     """Create a new goal."""
     board = _get_board()
     status = STATUS_TRIAGE if triage else STATUS_READY
 
-    payload = {}
+    # 034 §7 stamp gap: the owner seat is the author (origin() read it as LEGACY).
+    payload = {"authored_by": "owner"}
     if tools:
         payload["tools"] = [t.strip() for t in tools.split(",") if t.strip()]
     if acceptance:
         payload["acceptance"] = acceptance
+    if memory_regime:
+        # 025: the same validation goal_create uses (refused while scopes are off).
+        from modules.memory.scope import goal_create_regime
+        regime, err = goal_create_regime(memory_regime)
+        if err:
+            raise click.ClickException(err)
+        payload["memory_regime"] = regime
 
     try:
         goal = board.create(
@@ -255,6 +266,7 @@ def goals_create(title: str, body: str, priority: int, parent: Optional[str], tr
             status=status,
             payload=payload or None,
             force=force,
+            actor="owner_seat",   # 036 §3.3: the owner seat IS the grant
         )
     except DuplicateGoalError as e:
         click.echo(click.style("[polyrob] ERROR: ", fg="red")

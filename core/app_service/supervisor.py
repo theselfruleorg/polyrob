@@ -16,23 +16,34 @@ Consults the 031 pause record every tick (``allows("app_serve")``): on the
 paused edge every live container is stopped and its row parked ``paused``; the
 first allowed tick moves it back to ``approved`` and redeploys from the same
 snapshot. Nothing here imports ``agents.*`` or ``tools.*`` (layering).
+
+H07 — this process is ROOT and the registry is group-writable, so no row field
+is trusted: ``slug`` / ``user_id`` / ``workspace_digest`` / ``host_port`` are
+re-validated before any filesystem op (:func:`core.app_service.config.
+row_field_error`), an ``approved`` row must carry an owner-seat MAC over its
+current configuration (:mod:`core.app_service.approval`) or it goes back to
+``pending``, the container name is always DERIVED (never read from the row),
+and every write under ``<data>/apps`` is descriptor-relative and no-follow
+(:func:`core.app_service.snapshot.open_owned_dir`).
 """
 import asyncio
 import logging
 import os
+import secrets
 import shutil
+import stat
 import time
 import urllib.request
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-from core.app_service.config import app_dir, logs_path, safe_tenant
+from core.app_service.config import app_dir, apps_root, row_field_error, safe_tenant
 from core.app_service.egress import EgressApplier, resolve_allowlist
 from core.app_service.nginx import NginxApplier, render_stanza
 from core.app_service.registry import (
-    STATUS_APPROVED, STATUS_DEPLOYING, STATUS_LIVE, STATUS_PAUSED, STATUS_STOPPED,
-    AppServiceRegistry,
+    STATUS_APPROVED, STATUS_DEPLOYING, STATUS_FAILED, STATUS_LIVE, STATUS_PAUSED,
+    STATUS_PENDING, STATUS_STOPPED, AppServiceRegistry,
 )
-from core.app_service.snapshot import snapshot_tree
+from core.app_service.snapshot import open_owned_dir, snapshot_tree
 from core.autonomy_control import allows
 from core.container_hardening import hardening_flags
 from core.event_kinds import APP_FAILED, APP_LIVE, APP_STOPPED
@@ -47,9 +58,20 @@ class DeployError(RuntimeError):
     """A deploy step failed; the row goes ``failed`` and everything is torn down."""
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A health probe answers for the app's OWN loopback port; a 3xx is an
+    answer, never an instruction to fetch somewhere else as root."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D401
+        return None
+
+
+_PROBE_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 async def _default_http_probe(url: str, timeout: float) -> bool:
     def _get() -> bool:
-        with urllib.request.urlopen(url, timeout=timeout) as resp:  # nosec — loopback only
+        with _PROBE_OPENER.open(url, timeout=timeout) as resp:  # nosec — loopback only
             return 200 <= int(getattr(resp, "status", 200)) < 300
     try:
         return bool(await asyncio.to_thread(_get))
@@ -118,6 +140,30 @@ class AppSupervisor:
     def container_name(self, row: Dict[str, Any]) -> str:
         return f"polyrob-app-{safe_tenant(row['user_id'])}-{row['slug']}"
 
+    def _unsafe(self, row: Dict[str, Any]) -> Optional[str]:
+        """Why this row must not drive a privileged op, or ``None`` (H07)."""
+        err = row_field_error(row)
+        if err:
+            return err
+        hp = row.get("host_port")
+        if hp is not None:
+            lo, hi = self.port_range
+            if not isinstance(hp, int) or not (lo <= hp <= hi):
+                return f"host_port {hp!r} outside APP_SERVICE_PORT_RANGE"
+        hpath = row.get("health_path") or "/"
+        if not isinstance(hpath, str) or not hpath.startswith("/") or len(hpath) > 512:
+            return "invalid health_path"
+        return None
+
+    def _refuse_row(self, row: Dict[str, Any], why: str) -> None:
+        """A tampered/malformed row: record it, never act on its fields."""
+        logger.warning("app_service: refusing registry row: %s", why)
+        try:
+            self.registry.set_status(row["slug"], row["user_id"], STATUS_FAILED,
+                                     error=f"refused by supervisor: {why}")
+        except Exception:
+            logger.debug("app_service: could not mark refused row", exc_info=True)
+
     def network_name(self, row: Dict[str, Any]) -> str:
         return self.container_name(row)
 
@@ -138,6 +184,10 @@ class AppSupervisor:
         if not getattr(dec, "allowed", False):
             reason = getattr(dec, "reason", "paused")
             for row in self.registry.list_by_status((STATUS_LIVE, STATUS_DEPLOYING)):
+                why = self._unsafe(row)
+                if why:
+                    self._refuse_row(row, why)
+                    continue
                 await self._teardown(row)
                 self.registry.set_status(row["slug"], row["user_id"], STATUS_PAUSED,
                                          error=f"paused: {reason}")
@@ -149,10 +199,29 @@ class AppSupervisor:
             counts["resumed"] += 1
         for row in self.registry.list_by_status((STATUS_STOPPED,)):
             if row.get("container_name"):
+                why = self._unsafe(row)
+                if why:
+                    self._refuse_row(row, why)
+                    continue
                 await self._teardown(row)
                 self.registry.record_stopped(row["slug"], row["user_id"])
                 counts["stopped"] += 1
         for row in self.registry.list_by_status((STATUS_APPROVED,)):
+            why = self._unsafe(row)
+            if why:
+                self._refuse_row(row, why)
+                counts["failed"] += 1
+                continue
+            unsigned = self.registry.verify_approval(row)
+            if unsigned:
+                # Not an owner decision (or the config moved since one): back to
+                # the owner ask, never deployed.
+                logger.warning("app_service: %s/%s approval refused: %s",
+                               row["user_id"], row["slug"], unsigned)
+                self.registry.set_status(row["slug"], row["user_id"], STATUS_PENDING,
+                                         error=unsigned)
+                counts["failed"] += 1
+                continue
             if not self.registry.claim(row["slug"], row["user_id"], STATUS_APPROVED, STATUS_DEPLOYING):
                 continue
             if await self.deploy_one(row):
@@ -160,6 +229,11 @@ class AppSupervisor:
             else:
                 counts["failed"] += 1
         for row in self.registry.list_by_status((STATUS_LIVE,)):
+            why = self._unsafe(row)
+            if why:
+                self._refuse_row(row, why)
+                counts["unhealthy"] += 1
+                continue
             if await self.check_one(row):
                 counts["healthy"] += 1
             else:
@@ -183,10 +257,12 @@ class AppSupervisor:
         name, net = self.container_name(row), self.network_name(row)
         row = dict(row, container_name=name)
         try:
+            why = self._unsafe(row)
+            if why:
+                raise DeployError(f"refused by supervisor: {why}")
             src = self._resolve_source(row)
-            digest = str(row.get("workspace_digest") or "nodigest")[:12]
-            snap_dir = os.path.join(app_dir(self.data_dir, uid, slug), "snapshots", digest)
-            total, files, skipped = snapshot_tree(src, snap_dir, max_mb=self.snapshot_max_mb)
+            digest = str(row["workspace_digest"])[:12]
+            snap_dir, total, files, skipped = self._snapshot(row, src, digest)
             host_port = int(row["host_port"]) if row.get("host_port") else self.allocate_port()
             await self._docker(["rm", "-f", name], timeout=60)
             code, _out, err = await self._docker(["network", "create", "--driver", "bridge", net],
@@ -242,14 +318,49 @@ class AppSupervisor:
             if allow.refused:
                 live_attrs["egress_refused"] = allow.refused[:10]
             self._emit(APP_LIVE, row, live_attrs)
+            # 033: going live IS the outward act — the agent only wrote a registry
+            # row; this process made it reachable. Its direct effect seam (the
+            # supervisor has no Controller and may import only core.*).
+            from core.effects import record_external_write
+            record_external_write(
+                effect="public", tool="app_service", action="app_serve_live",
+                target="open" if public_url.startswith("https://") else "unknown",
+                surface="supervisor", autonomous=True, confidence="action",
+                outcome="ok", user_id=str(uid or ""), fingerprint=public_url,
+                event_log=self._event_log)
             return True
         except Exception as e:  # every failure is a typed, visible row state
             tail = await self._logs_tail(name, 20)
             self.registry.record_failed(slug, uid, error=str(e)[:500])
-            await self._teardown(row)
+            if not self._unsafe(row):
+                await self._teardown(row)
             self._emit(APP_FAILED, row, {"error": str(e)[:300], "log_tail": tail[-1500:]})
             logger.warning("app_service: deploy of %s/%s failed: %s", uid, slug, e)
             return False
+
+    def _snapshot(self, row: Dict[str, Any], src: str, digest: str):
+        """Copy the tested tree to ``<apps>/<tenant>/<slug>/snapshots/<digest>``
+        through descriptors only, then prove the PATH docker will mount resolves
+        to the directory just written, inside the apps root (H07)."""
+        parts = ["apps", safe_tenant(row["user_id"]), row["slug"], "snapshots"]
+        snap_dir = os.path.join(app_dir(self.data_dir, row["user_id"], row["slug"]),
+                                "snapshots", digest)
+        fd = open_owned_dir(self.data_dir, parts)
+        try:
+            total, files, skipped = snapshot_tree(src, digest, max_mb=self.snapshot_max_mb,
+                                                  parent_fd=fd)
+            st_fd = os.stat(digest, dir_fd=fd, follow_symlinks=False)
+        finally:
+            os.close(fd)
+        root = os.path.realpath(apps_root(self.data_dir))
+        real = os.path.realpath(snap_dir)
+        if not real.startswith(root + os.sep):
+            raise DeployError("snapshot dir escapes the apps root")
+        st_path = os.stat(real)
+        if (st_path.st_dev, st_path.st_ino) != (st_fd.st_dev, st_fd.st_ino) \
+                or not stat.S_ISDIR(st_path.st_mode):
+            raise DeployError("snapshot dir changed underneath the supervisor")
+        return real, total, files, skipped
 
     async def _wait_healthy(self, host_port: int, health_path: str) -> bool:
         url = f"http://127.0.0.1:{host_port}{health_path}"
@@ -302,7 +413,7 @@ class AppSupervisor:
 
     async def check_one(self, row: Dict[str, Any]) -> bool:
         slug, uid = row["slug"], row["user_id"]
-        name = row.get("container_name") or self.container_name(row)
+        name = self.container_name(row)
         code, out, _err = await self._docker(["inspect", "-f", "{{.State.Running}}", name], timeout=30)
         if code != 0 or (out or "").strip().lower() != "true":
             self.registry.record_failed(slug, uid, error="container not running")
@@ -343,13 +454,24 @@ class AppSupervisor:
         self._emit(APP_FAILED, row, {"error": f"{reason} for {_MAX_UNHEALTHY_TICKS} ticks"})
 
     async def _refresh_logs(self, row: Dict[str, Any]) -> None:
-        name = row.get("container_name") or self.container_name(row)
+        """``<apps>/<tenant>/<slug>/logs.txt``, written as a fresh O_EXCL temp
+        then renamed over — descriptor-relative, never through a symlink (H07)."""
+        name = self.container_name(row)
         try:
             text = await self._logs_tail(name, self.log_tail)
-            path = logs_path(self.data_dir, row["user_id"], row["slug"])
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "w", encoding="utf-8") as fh:
-                fh.write(text)
+            fd = open_owned_dir(self.data_dir, ["apps", safe_tenant(row["user_id"]), row["slug"]])
+            try:
+                tmp = f".logs.{secrets.token_hex(8)}.tmp"
+                out = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644,
+                              dir_fd=fd)
+                try:
+                    os.fchmod(out, 0o644)
+                    os.write(out, text.encode("utf-8", errors="replace"))
+                finally:
+                    os.close(out)
+                os.replace(tmp, "logs.txt", src_dir_fd=fd, dst_dir_fd=fd)
+            finally:
+                os.close(fd)
         except Exception:
             logger.debug("app_service: log refresh failed for %s", name, exc_info=True)
 
@@ -366,7 +488,7 @@ class AppSupervisor:
 
     async def _teardown(self, row: Dict[str, Any]) -> None:
         slug = row["slug"]
-        name = row.get("container_name") or self.container_name(row)
+        name = self.container_name(row)  # derived, never the row's own text
         net = self.network_name(row)
         for step in (
             lambda: self._docker(["rm", "-f", name], timeout=60),
@@ -383,17 +505,24 @@ class AppSupervisor:
         if self.retain_days <= 0:
             return
         cutoff = self._now() - self.retain_days * 86400
-        for row in self.registry.list_by_status((STATUS_STOPPED, "failed")):
-            base = os.path.join(app_dir(self.data_dir, row["user_id"], row["slug"]), "snapshots")
-            if not os.path.isdir(base):
+        for row in self.registry.list_by_status((STATUS_STOPPED, STATUS_FAILED)):
+            if self._unsafe(row):
                 continue
-            for d in os.listdir(base):
-                full = os.path.join(base, d)
-                try:
-                    if os.path.isdir(full) and os.path.getmtime(full) < cutoff:
-                        shutil.rmtree(full, ignore_errors=True)
-                except OSError:
-                    continue
+            parts = ["apps", safe_tenant(row["user_id"]), row["slug"], "snapshots"]
+            try:
+                fd = open_owned_dir(self.data_dir, parts, create=False)
+            except OSError:
+                continue
+            try:
+                for d in os.listdir(fd):
+                    try:
+                        st = os.stat(d, dir_fd=fd, follow_symlinks=False)
+                        if stat.S_ISDIR(st.st_mode) and st.st_mtime < cutoff:
+                            shutil.rmtree(d, dir_fd=fd, ignore_errors=True)
+                    except OSError:
+                        continue
+            finally:
+                os.close(fd)
 
     # --- bookkeeping -------------------------------------------------------
 

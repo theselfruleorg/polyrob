@@ -75,3 +75,63 @@ def test_review_prompt_includes_self_context_when_flag_on(monkeypatch):
     assert "self_context_manage" in p
     # it must frame the proposal as quarantined/consolidated, not auto-applied
     assert "quarantin" in p.lower() or "review" in p.lower()
+
+
+# --- the reviewer sees a bounded digest of the parent's steps ------------------
+# The child is a fresh sub-agent session: without a digest in its task it saw
+# nothing of the "recent conversation/work" the prompt told it to review.
+
+def _step(memory, action_name, content=None, error=None):
+    class _Act:
+        def model_dump(self, exclude_none=True):
+            return {action_name: {"x": 1}}
+    brain = types.SimpleNamespace(memory=memory)
+    out = types.SimpleNamespace(current_state=brain, action=[_Act()])
+    res = types.SimpleNamespace(extracted_content=content, error=error)
+    return types.SimpleNamespace(model_output=out, result=[res])
+
+
+def test_review_digest_is_bounded_and_keeps_the_recent_steps():
+    from agents.task.agent.core.background_review import build_review_digest
+    items = [_step(f"did thing {i}", "filesystem_write_file", content="ok " * 200)
+             for i in range(30)]
+    d = build_review_digest(items, max_steps=5, max_chars=900)
+    assert len(d) <= 900
+    assert "did thing 29" in d and "did thing 0 " not in d
+    assert "filesystem_write_file" in d
+
+
+def test_review_digest_empty_history_is_empty():
+    from agents.task.agent.core.background_review import build_review_digest
+    assert build_review_digest(None) == ""
+    assert build_review_digest([]) == ""
+
+
+def test_review_prompt_carries_the_digest_framed_as_data():
+    from agents.task.agent.core.background_review import build_review_prompt
+    p = build_review_prompt("step 1: memory: wrote report.md")
+    assert "wrote report.md" in p
+    assert "parent_step_digest" in p  # untrusted-data frame
+    assert "No step digest" in build_review_prompt()
+
+
+def test_run_background_review_passes_the_digest_to_the_child():
+    import asyncio
+    from agents.task.agent.core.background_review import BackgroundReviewMixin
+
+    seen = {}
+
+    class _Mgr:
+        async def run_subtask(self, **kw):
+            seen.update(kw)
+
+    class _H(BackgroundReviewMixin):
+        agent_id = "a"
+        llm = object()
+        _judge_llm = object()
+        orchestrator = types.SimpleNamespace(get_sub_agent_manager=lambda: _Mgr())
+        history = types.SimpleNamespace(history=[_step("drafted the pricing post",
+                                                       "filesystem_write_file")])
+
+    asyncio.run(_H()._run_background_review())
+    assert "drafted the pricing post" in seen["task"]

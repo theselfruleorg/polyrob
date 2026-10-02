@@ -4,7 +4,7 @@ capability row, event kinds, DB manifest, the `apps` pause scope, flag rows."""
 
 def test_capability_row():
     from core.tool_capabilities import TOOL_CAPABILITIES
-    assert TOOL_CAPABILITIES["app_service"] == frozenset({"high_impact", "delegate_blocked"})
+    assert TOOL_CAPABILITIES["app_service"] == frozenset({"high_impact", "delegate_blocked", "shared_identity", "writes_public"})  # M04
 
 
 def test_event_kinds():

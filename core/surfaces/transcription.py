@@ -33,17 +33,20 @@ def get_transcriber(container):
 
 
 async def _audio_bytes(media: Media) -> Optional[bytes]:
+    """The audio to transcribe: the BYTES a surface already fetched, or None.
+
+    ⚠️ A ``media.url`` is deliberately NOT downloaded here (2026-09-23). The old
+    path fetched it with a bare ``aiohttp`` GET — no SSRF policy, no pin, no
+    size cap, redirects followed — and no surface ever filled ``url`` for voice
+    (WhatsApp fetches by media id and sets ``data``; Telegram and email set
+    ``data`` too). A surface that needs a remote download must fetch it through
+    its own authenticated client and hand over bytes.
+    """
     if media.data:
         return media.data
     if media.url:
-        try:
-            import aiohttp
-            async with aiohttp.ClientSession() as s:
-                async with s.get(media.url) as r:
-                    return await r.read()
-        except Exception as e:
-            logger.debug("transcription: media url fetch failed: %s", e)
-            return None
+        logger.warning("transcription: voice media carries only a URL; refusing to "
+                       "download it here (surfaces must supply bytes)")
     return None
 
 

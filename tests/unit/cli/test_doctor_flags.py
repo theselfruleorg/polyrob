@@ -79,3 +79,32 @@ def test_flags_report_local_derived_extras(monkeypatch):
     lines = flags_report({"POLYROB_LOCAL": "1"})
     ticker = next(ln for ln in lines if "TICKER_IDLE_BACKOFF_ENABLED" in ln)
     assert "True" in ticker and "local=ON" in ticker
+
+
+def test_doctor_flags_default_is_public_tier():
+    """067 F1: a bare --flags shows the public tier; --all shows every tier."""
+    from core.flags import REGISTRY
+    assert REGISTRY["GOALS_ENABLED"].tier == "public"
+    assert REGISTRY["GEMINI_PROMPT_CACHE"].tier == "advanced"
+    runner = click.testing.CliRunner()
+    bare = runner.invoke(doctor, ["--flags"])
+    assert bare.exit_code == 0, bare.output
+    assert "GOALS_ENABLED" in bare.output
+    assert "GEMINI_PROMPT_CACHE" not in bare.output
+    assert "--all shows every flag" in bare.output
+    full = runner.invoke(doctor, ["--flags", "--all"])
+    assert full.exit_code == 0, full.output
+    assert "GEMINI_PROMPT_CACHE" in full.output
+    assert "--all shows every flag" not in full.output
+
+
+def test_flags_report_public_view_keeps_explicitly_set_flags():
+    lines = flags_report({"GEMINI_PROMPT_CACHE": "true"}, show_all=False)
+    assert any("GEMINI_PROMPT_CACHE" in ln and "[env]" in ln for ln in lines)
+    assert not any(ln.strip().startswith("NATIVE_TOOLS_DEBUG ") for ln in lines)
+
+
+def test_search_still_reaches_every_tier():
+    res = click.testing.CliRunner().invoke(doctor, ["--search", "native_tools_debug"])
+    assert res.exit_code == 0, res.output
+    assert "NATIVE_TOOLS_DEBUG" in res.output

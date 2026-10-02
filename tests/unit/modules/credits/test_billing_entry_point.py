@@ -19,6 +19,7 @@ This test module locks in:
    through the same `compute_llm_cost` entry point, so a duplicate/divergent
    billing formula can't reappear.
 """
+import json
 import logging
 
 import pytest
@@ -146,3 +147,175 @@ class TestUsageTrackerRoutesThroughSingleEntryPoint:
                        cache_creation_tokens=4000),
         )
         assert with_write.api_cost_usd > plain.api_cost_usd
+
+
+class TestCacheCreationTokensArePersisted:
+    """F17: the number reached calculate_cost and then vanished.
+
+    `usage_records` stored input/output/cached (READS) only, so after the fact
+    nothing could say how much of a session's input was a cache WRITE — the one
+    figure that decides whether a cache paid for itself, since a write costs
+    MORE than an uncached token (1.25x on a 5m window, 2x on a 1h one).
+    """
+
+    @pytest.mark.asyncio
+    async def test_column_and_metadata_both_carry_the_cache_write(self, tmp_path):
+        from modules.database.connection import DatabaseConnection
+        from modules.database.auth_tables import AuthTables
+        from modules.credits.usage_tracker import build_usage_tracker
+
+        db = DatabaseConnection(tmp_path / "billing.db")
+        await db.connect()
+        try:
+            await AuthTables(db).create_tables()
+            # usage_records.user_id has a FK -> user_profiles(user_id); a minimal
+            # stand-in row is enough to satisfy PRAGMA foreign_keys=ON.
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS user_profiles (user_id TEXT PRIMARY KEY)")
+            await db.execute(
+                "INSERT OR IGNORE INTO user_profiles (user_id) VALUES ('u1')")
+
+            # The metering-only shape (no balance_manager): records real
+            # api_cost_usd, never deducts — the single-owner headless tracker.
+            t = build_usage_tracker(db=db, balance_manager=None,
+                                    telemetry_manager=None)
+
+            await t.record_llm_usage(
+                user_id="u1", session_id="s1", agent_id="a1",
+                model=MODEL, provider="anthropic",
+                input_tokens=10000, output_tokens=50,
+                cached_tokens=1000, cache_creation_tokens=6000,
+            )
+
+            row = await db.fetch_one(
+                "SELECT cached_tokens, cache_creation_tokens, metadata "
+                "FROM usage_records WHERE user_id='u1'")
+            assert row["cached_tokens"] == 1000
+            assert row["cache_creation_tokens"] == 6000
+            md = row["metadata"]
+            if isinstance(md, str):
+                md = json.loads(md)
+            assert md["cache_creation_tokens"] == 6000
+        finally:
+            await db.close()
+
+    @pytest.mark.asyncio
+    async def test_rollup_sums_the_cache_write(self, tmp_path):
+        from modules.database.connection import DatabaseConnection
+        from modules.database.auth_tables import AuthTables
+        from modules.credits.usage_tracker import build_usage_tracker
+
+        db = DatabaseConnection(tmp_path / "rollup.db")
+        await db.connect()
+        try:
+            await AuthTables(db).create_tables()
+            # usage_records.user_id has a FK -> user_profiles(user_id); a minimal
+            # stand-in row is enough to satisfy PRAGMA foreign_keys=ON.
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS user_profiles (user_id TEXT PRIMARY KEY)")
+            await db.execute(
+                "INSERT OR IGNORE INTO user_profiles (user_id) VALUES ('u1')")
+
+            t = build_usage_tracker(db=db, balance_manager=None,
+                                    telemetry_manager=None)
+
+            for _ in range(3):
+                await t.record_llm_usage(
+                    user_id="u1", session_id="s1", agent_id="a1",
+                    model=MODEL, provider="anthropic",
+                    input_tokens=10000, output_tokens=50,
+                    cached_tokens=1000, cache_creation_tokens=2000,
+                )
+
+            breakdown = await t.get_session_breakdown("s1")
+            by_type = breakdown["by_type"][0]
+            assert by_type["tokens"]["cached"] == 3000
+            assert by_type["tokens"]["cache_write"] == 6000
+        finally:
+            await db.close()
+
+
+class TestBilledCostOutranksTheEstimate:
+    """F23: a provider that TELLS us what it charged outranks our catalog math.
+
+    None means "not reported" and must leave the estimate alone — a router that
+    stayed quiet is not a router that worked for free.
+    """
+
+    @pytest.mark.asyncio
+    async def test_billed_cost_replaces_the_estimate_and_keeps_it_in_metadata(self, tmp_path):
+        from modules.database.connection import DatabaseConnection
+        from modules.database.auth_tables import AuthTables
+        from modules.credits.usage_tracker import build_usage_tracker
+
+        db = DatabaseConnection(tmp_path / "billed.db")
+        await db.connect()
+        try:
+            await AuthTables(db).create_tables()
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS user_profiles (user_id TEXT PRIMARY KEY)")
+            await db.execute(
+                "INSERT OR IGNORE INTO user_profiles (user_id) VALUES ('u1')")
+
+            t = build_usage_tracker(db=db, balance_manager=None,
+                                    telemetry_manager=None)
+            record = await t.record_llm_usage(
+                user_id="u1", session_id="s1", agent_id="a1",
+                model=MODEL, provider="openrouter",
+                input_tokens=10000, output_tokens=50,
+                billed_cost_usd=0.001234, cache_discount_usd=0.0005,
+            )
+
+            assert record.costs.api_cost_usd == pytest.approx(0.001234)
+            md = record.metadata or {}
+            assert md["estimated_cost_usd"] > 0.001234       # the catalog guess
+            assert md["billed_cost_usd"] == pytest.approx(0.001234)
+            assert md["cache_discount_usd"] == pytest.approx(0.0005)
+
+            row = await db.fetch_one(
+                "SELECT api_cost_usd FROM usage_records WHERE user_id='u1'")
+            assert row["api_cost_usd"] == pytest.approx(0.001234)
+        finally:
+            await db.close()
+
+    @pytest.mark.asyncio
+    async def test_no_billed_cost_leaves_the_estimate_untouched(self):
+        from modules.credits.usage_tracker import LLMUsageTracker
+
+        t = LLMUsageTracker.__new__(LLMUsageTracker)
+        t.logger = logging.getLogger("f23-none-test")
+        tokens = TokenUsage(prompt_tokens=10000, completion_tokens=5000,
+                            total_tokens=15000, cached_tokens=0)
+        costs = await t._calculate_costs(MODEL, tokens)
+
+        assert t._apply_billed_cost(costs, None) is costs
+
+    @pytest.mark.asyncio
+    async def test_unusable_billed_figures_leave_the_estimate_untouched(self):
+        from modules.credits.usage_tracker import LLMUsageTracker
+
+        t = LLMUsageTracker.__new__(LLMUsageTracker)
+        t.logger = logging.getLogger("f23-bad-test")
+        tokens = TokenUsage(prompt_tokens=100, completion_tokens=10,
+                            total_tokens=110, cached_tokens=0)
+        costs = await t._calculate_costs(MODEL, tokens)
+
+        for bad in (None, True, "n/a", float("nan"), -1.0):
+            assert t._apply_billed_cost(costs, bad) is costs
+
+    @pytest.mark.asyncio
+    async def test_credits_follow_the_billed_cost(self):
+        """Charging a markup on a number the provider contradicted would be the
+        same bug in the other direction."""
+        from modules.credits.usage_tracker import LLMUsageTracker
+
+        t = LLMUsageTracker.__new__(LLMUsageTracker)
+        t.logger = logging.getLogger("f23-credits-test")
+        tokens = TokenUsage(prompt_tokens=1_000_000, completion_tokens=0,
+                            total_tokens=1_000_000, cached_tokens=0)
+        costs = await t._calculate_costs(MODEL, tokens)
+        cheaper = t._apply_billed_cost(costs, costs.api_cost_usd / 10.0)
+
+        assert cheaper.api_cost_usd == pytest.approx(costs.api_cost_usd / 10.0)
+        assert cheaper.credits_charged < costs.credits_charged
+        assert cheaper.markup_multiplier == costs.markup_multiplier

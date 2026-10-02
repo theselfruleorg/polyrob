@@ -75,8 +75,19 @@ def count_tool_schemas_enabled() -> bool:
 	return bool_env("CTX_COUNT_TOOL_SCHEMAS", True)
 
 
+
+def _foundation_tokens(manager) -> int:
+	"""060 WS-2: the pinned foundation's token cost, summed over the ONE layer
+	table (``foundation_layers.FOUNDATION_LAYERS``) instead of a hand-kept list
+	that a new block could be missing from."""
+	from agents.task.agent.messages.foundation_layers import FOUNDATION_LAYERS
+	return sum(int(getattr(manager, layer.tokens_attr, 0) or 0) for layer in FOUNDATION_LAYERS)
+
 class TokenCounterMixin:
-	# Empty slots so the composed MessageManager keeps its own __slots__ (no __dict__).
+	# F29: empty slots so the composed MessageManager keeps its own __slots__ and
+	# never grows a __dict__. This is only TRUE while EVERY class in the MRO
+	# declares one — three mixins omitted it until 2026-09-22, so the claim in
+	# this comment was false for as long as it had been written.
 	__slots__ = ()
 
 	def _calculate_token_limits(self, llm: BaseChatModel,
@@ -242,17 +253,7 @@ class TokenCounterMixin:
 		Returns:
 			Total token count across all message storage
 		"""
-		return (
-			self.history.total_tokens +
-			self._system_message_tokens +
-			self._initial_task_tokens +
-			getattr(self, '_skill_message_tokens', 0) +
-			getattr(self, '_self_context_tokens', 0) +
-			getattr(self, '_project_context_tokens', 0) +
-			getattr(self, '_runtime_identity_tokens', 0) +
-			getattr(self, '_environment_tokens', 0) +
-			getattr(self, '_tool_catalog_tokens', 0)
-		)
+		return self.history.total_tokens + _foundation_tokens(self)
 
 	def estimate_tokens(self, messages: List[BaseMessage]) -> int:
 		"""Estimate total tokens for a list of messages using modules.llm.
@@ -418,13 +419,7 @@ class TokenCounterMixin:
 		NOTE: This does NOT include H-MEM or ephemeral messages.
 		Use get_actual_token_count() for the true count that will be sent to LLM.
 		"""
-		return (self.history.total_tokens + self._system_message_tokens
-				+ self._initial_task_tokens + getattr(self, '_skill_message_tokens', 0)
-				+ getattr(self, '_self_context_tokens', 0)
-				+ getattr(self, '_project_context_tokens', 0)
-				+ getattr(self, '_runtime_identity_tokens', 0)
-				+ getattr(self, '_environment_tokens', 0)
-				+ getattr(self, '_tool_catalog_tokens', 0))
+		return self.history.total_tokens + _foundation_tokens(self)
 
 	def set_tool_schema_tokens(self, tokens: int) -> None:
 		"""Record the token cost of the emitted tool-schema list (P4).
@@ -436,6 +431,19 @@ class TokenCounterMixin:
 		never enter `history.total_tokens`.
 		"""
 		self._tool_schema_tokens = max(0, int(tokens or 0))
+
+	def _tool_schema_tokens_for_gauge(self) -> int:
+		"""The tool-schema slot the gauge counts (P4), or 0 when suppressed.
+
+		The schemas ride the `tools` REQUEST PARAM, not a message, so they never
+		enter ``history.total_tokens`` — but the provider bills them every step.
+		``CTX_COUNT_TOOL_SCHEMAS=false`` restores the legacy messages-only
+		numerator. One reader, so `/context` cannot render a slot the gauge
+		suppresses (F18).
+		"""
+		if not count_tool_schemas_enabled():
+			return 0
+		return int(getattr(self, '_tool_schema_tokens', 0) or 0)
 
 	def _count_hmem_tokens(self, context: str) -> int:
 		"""Real token count for the H-MEM injection, memoized per context string.
@@ -486,9 +494,25 @@ class TokenCounterMixin:
 				pass
 
 		# P4: the emitted tool-schema list is real billed prompt bytes.
-		schema_tokens = 0
-		if count_tool_schemas_enabled():
-			schema_tokens = getattr(self, '_tool_schema_tokens', 0)
+		schema_tokens = self._tool_schema_tokens_for_gauge()
+
+		# F6: prefer the PROVIDER's own number for everything it already billed.
+		# The estimate below is chars/N with no tokenizer for Anthropic; if it runs
+		# 15 % low, the 85 % compaction band fires at a real 98 % and
+		# check_token_safety waves through a request the provider rejects. When a
+		# valid anchor exists, the fixed prefix (system + foundation + tool schemas
+		# + the covered conversation) is the measured `prompt_tokens` and only the
+		# delta since is estimated. No anchor => byte-identical to the pre-F6 sum.
+		anchor = self._usage_anchor_view()
+		if anchor is not None:
+			prompt_tokens, covered, hmem_included = anchor
+			tail = list(self.history.messages)[covered:]
+			delta = sum(int(getattr(m.metadata, 'input_tokens', 0) or 0)
+			            for m in tail if getattr(m, 'metadata', None))
+			total = prompt_tokens + delta + ephemeral_tokens
+			if not hmem_included:
+				total += hmem_tokens
+			return total
 
 		total = base_count + ephemeral_tokens + hmem_tokens + schema_tokens
 
@@ -501,15 +525,88 @@ class TokenCounterMixin:
 
 		return total
 
-	def get_estimated_context_usage(self) -> float:
-		"""Get estimated context usage as a ratio (0.0 to 1.0).
+	def _usage_anchor_view(self):
+		"""The valid provider-usage anchor, or None (F6).
 
-		Uses actual token count including H-MEM and ephemeral messages.
+		Thin delegator over ``MessageRetrievalMixin.usage_anchor`` so a stub host
+		composing only the token-counter mixin degrades to the pure estimate
+		instead of raising.
 		"""
-		if self.max_input_tokens <= 0:
-			return 0.0
-		total_tokens = self.get_actual_token_count()
-		return min(1.0, max(total_tokens / self.max_input_tokens, self._history_budget_ratio()))
+		reader = getattr(self, 'usage_anchor', None)
+		if not callable(reader):
+			return None
+		try:
+			return reader()
+		except Exception:
+			return None
+
+	def context_usage(self) -> Dict[str, Any]:
+		"""THE context-usage reading. One source, one denominator (F19).
+
+		Four totals used to disagree (`/context`, ``get_actual_token_count``, the
+		per-step log line, the CLI status bar = history only) over TWO
+		denominators (``0.95*cw - reserve`` against a raw ``cw * 0.90``), so the
+		owner could see three different "how full is it" numbers in one minute and
+		none of them matched what the provider billed. Every surface now reads
+		this.
+
+		Returns::
+
+			{
+			  "total_tokens": int,    # what the next request will carry
+			  "limit":        int,    # the ONE denominator (max_input_tokens)
+			  "pct":          float,  # 0-100, already clamped
+			  "source":       "provider_usage" | "local_estimate",
+			  "slots":  {"foundation", "conversation", "ephemeral", "hmem",
+			             "tool_schemas"},   # tool_schemas is 0 when suppressed
+			  "last_call": {...} or {},     # provider-reported, empty before the
+			                                # first completed call
+			}
+
+		``source`` is the honest provenance: ``provider_usage`` when a valid F6
+		anchor covers the history (the prefix total is MEASURED, only the delta
+		since is estimated), ``local_estimate`` when it is a pure chars/N guess.
+		A surface that prints a local estimate must say so — `/context` prefixes
+		those numbers with ``≈``.
+		"""
+		total = self.get_actual_token_count()
+		limit = int(getattr(self, 'max_input_tokens', 0) or 0)
+		if limit > 0:
+			pct = min(max(total / limit, self._history_budget_ratio()) * 100, 100.0)
+		else:
+			pct = 0.0
+
+		history_tokens = int(getattr(self.history, 'total_tokens', 0) or 0)
+		ephemeral_tokens = 0
+		if getattr(self, '_ephemeral_messages', None):
+			ephemeral_tokens = self.estimate_tokens(self._ephemeral_messages)
+
+		hmem_tokens = 0
+		memo = getattr(self, '_hmem_token_memo', None)
+		if memo:
+			try:
+				hmem_tokens = int(memo[1])
+			except Exception:
+				hmem_tokens = 0
+
+		return {
+			"total_tokens": total,
+			"limit": limit,
+			"pct": pct,
+			"source": "provider_usage" if self._usage_anchor_view() else "local_estimate",
+			"slots": {
+				"foundation": max(0, self.get_token_count() - history_tokens),
+				"conversation": history_tokens,
+				"ephemeral": ephemeral_tokens,
+				"hmem": hmem_tokens,
+				"tool_schemas": self._tool_schema_tokens_for_gauge(),
+			},
+			"last_call": dict(getattr(self, '_last_call_usage', None) or {}),
+		}
+
+	def get_estimated_context_usage(self) -> float:
+		"""Context usage as a ratio (0.0 to 1.0) — one reader over context_usage()."""
+		return min(1.0, self.context_usage()["pct"] / 100.0)
 
 	def _history_budget_ratio(self) -> float:
 		"""057 WS-B: conversation history against the autonomous budget (0 when
@@ -548,7 +645,8 @@ class TokenCounterMixin:
 		from agents.task.robust_parse_config import RobustParseConfig
 		from core.exceptions import LLMResponseError
 
-		current = self.get_actual_token_count()
+		usage = self.context_usage()
+		current = usage['total_tokens']
 
 		# Estimate with additional messages
 		if additional_messages:
@@ -561,15 +659,21 @@ class TokenCounterMixin:
 		safe = estimated <= self.safe_input_tokens
 
 		# Check context overflow (hard limit)
+		# F19: ONE denominator. The overflow guard used to divide by a raw
+		# context window (or a hardcoded per-model ladder) while this manager
+		# divides by max_input_tokens — two answers for one question. Hand it the
+		# manager so it reads the same limit.
 		would_overflow = RobustParseConfig.should_abort_context_overflow(
 			estimated,
-			self._model_name
+			self._model_name,
+			message_manager=self,
 		)
 
 		if would_overflow:
 			safe = False
 
-		usage_percent = (estimated / self.max_input_tokens * 100) if self.max_input_tokens > 0 else 0
+		limit = usage['limit']
+		usage_percent = (estimated / limit * 100) if limit > 0 else 0
 
 		result = {
 			'safe': safe,
@@ -649,15 +753,10 @@ class TokenCounterMixin:
 			return 4000
 
 	def get_context_usage_percent(self) -> float:
-		"""Get current context usage as a percentage.
+		"""Current context usage as a percentage (0-100).
 
-		Returns:
-			Percentage of context window used (0-100)
+		One reader over :meth:`context_usage` — the compaction ladder in
+		``agent/core/step.py``, the status bar and `/context` must never be able
+		to disagree about how full the window is.
 		"""
-		if self.max_input_tokens <= 0:
-			return 0.0
-
-		# Use get_actual_token_count for complete picture including H-MEM
-		total_tokens = self.get_actual_token_count()
-		usage_pct = max(total_tokens / self.max_input_tokens, self._history_budget_ratio()) * 100
-		return min(usage_pct, 100.0)
+		return self.context_usage()["pct"]

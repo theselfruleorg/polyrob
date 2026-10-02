@@ -13,6 +13,8 @@ import uuid
 from datetime import datetime
 
 from api.session_routing import guard_remote
+from api.upload_sniff import _sniff_upload_mime
+from api.session_preflight import no_model as _no_model
 import asyncio
 
 
@@ -154,6 +156,21 @@ async def get_task_agent():
         raise HTTPException(status_code=503, detail="Task agent not available")
     return agent
 
+def _record_owner_thread_line(req, agent, session_id: str, user_id, request) -> None:
+    """061 seat hook (console + API): fail-open, never touches the response."""
+    try:
+        from core.surfaces.owner_thread import record_owner_in
+        from core.surfaces.room_policy import is_public_session
+        orch = agent.get_orchestrator(session_id) if hasattr(agent, "get_orchestrator") else None
+        if orch is None or not is_public_session(orch):
+            via = "console" if "/api/session/" in str(getattr(req, "url", "") or "") else "api"
+            record_owner_in(getattr(agent, "container", None), str(user_id or ""),
+                            getattr(request, "text", "") or "", via=via, session_id=session_id,
+                            kind=str(getattr(request, "kind", "") or "comment"))
+    except Exception:
+        logger.debug("owner thread: api inbound record skipped", exc_info=True)
+
+
 @router.post("/sessions/{session_id}/messages", response_model=MessageResponse)
 async def send_user_message(
     session_id: str,
@@ -201,6 +218,7 @@ async def send_user_message(
         # E8 (A6 gap 4): the caller must own this session — any authenticated
         # caller could otherwise inject a message into another tenant's session.
         _require_session_owner(req, user_id)
+        _record_owner_thread_line(req, agent, session_id, user_id, request)  # 061
 
         # ============================================================================
         # CRITICAL FIX: Process attached files BEFORE starting session
@@ -1156,7 +1174,6 @@ async def get_capabilities(request: Request):
             "default_provider": default_provider,
             "default_tools": default_tools_list  # From descriptors.get_default_tools()
         }
-        
     except Exception as e:
         raise _internal_error(e, "Reading the capabilities")
 
@@ -1181,6 +1198,8 @@ async def create_session(
         task = request_body.get("task")
         if not task:
             raise HTTPException(status_code=400, detail="Task is required")
+        if request_body.get("auto_start", True) and not request_body.get("wait_for_uploads") and _no_model(agent):
+            raise HTTPException(status_code=503, detail={"code": "no_model", "message": "no language model in this process"})
 
         # PAYMENT VERIFICATION (NEW)
         # This fixes the critical gap: endpoints now verify payment before execution
@@ -1688,25 +1707,7 @@ async def upload_document(
             )
 
         # 6. Validate MIME type (security: prevent file type spoofing)
-        ALLOWED_MIME_TYPES = UPLOAD_MIME_TYPES
-
-        try:
-            import magic
-            # Detect actual MIME type from file content (not just extension)
-            detected_mime = magic.from_buffer(file_content, mime=True)
-
-            if detected_mime not in ALLOWED_MIME_TYPES:
-                logger.warning(f"Rejected file with MIME type {detected_mime}: {file.filename}")
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid file type detected: {detected_mime}."
-                )
-
-            logger.info(f"File MIME type validated: {detected_mime} for {file.filename}")
-        except ImportError:
-            logger.warning("python-magic not installed - skipping MIME type validation (security risk!)")
-        except Exception as e:
-            logger.warning(f"MIME type detection failed: {e}, using extension check only")
+        _sniff_upload_mime(file_content, file.filename)
 
         # 7. Sanitize filename (prevent path traversal)
         logger.info(f"[Upload] Step 7: Sanitizing filename '{file.filename}'")

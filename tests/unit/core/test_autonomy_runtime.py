@@ -313,7 +313,7 @@ async def test_start_autonomy_orphan_reap_never_added_to_recurring_entries(monke
     await asyncio.sleep(0.01)
 
     names = [name for name, _task, _stop in handles._entries]
-    assert sorted(names) == ["cron", "curator", "goals", "sandbox_reap", "surface_gc"]
+    assert sorted(names) == ["cron", "curator", "goals", "rails", "sandbox_reap", "surface_gc"]
     # The AGE-based sweep is still forbidden as a recurring entry — `sandbox_reap`
     # above is the ownership-keyed one, which cannot kill an idle live session.
     assert "orphan_reap" not in names and "docker_reap" not in names
@@ -334,6 +334,7 @@ async def test_sandbox_reap_disabled_by_flag(monkeypatch):
     monkeypatch.setenv("CODE_EXEC_DOCKER_PERSISTENT", "true")
     monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/docker")
     _disable_other_loops(monkeypatch)
+    _install_reap_spy(monkeypatch)  # this test covers the ticker, not real Docker cleanup
 
     handles = ar.start_autonomy(task_agent=object(), data_dir="data")
     await asyncio.sleep(0.01)
@@ -351,6 +352,7 @@ async def test_sandbox_reap_tick_skips_while_paused(monkeypatch):
     monkeypatch.setenv("CODE_EXEC_DOCKER_PERSISTENT", "true")
     monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/docker")
     _disable_other_loops(monkeypatch)
+    _install_reap_spy(monkeypatch)  # this test covers the ticker, not real Docker cleanup
 
     class _Reg:
         def session_ids(self):
@@ -399,7 +401,7 @@ async def test_start_autonomy_records_autonomy_started_event(monkeypatch):
     from core.event_log import get_event_log
     rows = get_event_log().query(kind="autonomy_started")  # newest-first
     assert rows, "no autonomy_started row recorded"
-    assert sorted(rows[0]["attrs"]["loops"]) == ["cron", "goals"]
+    assert sorted(rows[0]["attrs"]["loops"]) == ["cron", "goals", "rails"]
     await handles.stop()
 
 

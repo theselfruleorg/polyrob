@@ -18,6 +18,9 @@ from __future__ import annotations
 import re
 from typing import Any, Optional
 
+from core.lazy_views import lazy_module_getattr, view
+from core.tool_capabilities import ids_where
+
 UNTRUSTED_WRAP_MIN_CHARS = 1  # even a short directive is untrusted; only empty strings skip
 
 # Any literal wrapper delimiter embedded in untrusted content would let it break out of
@@ -30,22 +33,41 @@ def _defang_delimiters(content: str) -> str:
     """Neutralize embedded ``<untrusted_tool_result>`` open/close tags in untrusted content."""
     return _WRAP_DELIM_RE.sub("<filtered_untrusted_tool_result", content)
 
-# Untrusted by the action's registered ``tool`` namespace (authoritative).
-# These all surface attacker-authorable third-party content:
-#   perplexity — web-search results;  twitter — tweets/threads;  email — message bodies;
-#   anysite — scraped third-party web/social content (was covered when it flowed via the
-#   'mcp' namespace; the native-tool migration moved it out from under coverage).
-# (Blockchain/market tools — alchemy/polymarket/hyperliquid — return mostly structured API
-# data and are intentionally NOT wrapped; add a namespace here if that changes.)
-# `defi_data`: a token's name/symbol are chosen by whoever deployed the contract,
-# and contract_read returns arbitrary bytes — so DeFi reads are an injection
-# inlet in exactly the way a fetched web page is, and are framed as DATA.
-UNTRUSTED_TOOL_NAMESPACES = frozenset({"mcp", "browser", "x_browser", "perplexity", "twitter", "email", "web_fetch", "anysite", "defi_data"})
+# Untrusted by the action's registered ``tool`` namespace (authoritative). DERIVED
+# (067 P1) from the ``untrusted_output`` field of the per-tool rows in
+# ``core/tool_capabilities.py`` — mark a tool there, not here. Today: mcp, browser,
+# x_browser, perplexity, twitter, email, web_fetch, anysite (scraped third-party
+# content) and defi_data (a token's name/symbol are chosen by whoever deployed the
+# contract; contract_read returns arbitrary bytes). Blockchain/market tools
+# (alchemy/polymarket/hyperliquid) return mostly structured API data and are
+# intentionally NOT marked.
+# 067 P4 prerequisite: LAZY (``core/lazy_views.py``) — built on first read, not at
+# import, so importing this module (e.g. via the goal dispatcher) before the pack
+# loader's phase 1 no longer freezes it. Read it in this module via ``_namespaces()``.
+def _untrusted_tool_namespaces() -> frozenset:
+    return ids_where("untrusted_output")
+
+
+__getattr__ = lazy_module_getattr(__name__, {
+    "UNTRUSTED_TOOL_NAMESPACES": _untrusted_tool_namespaces})
+
+
+def _namespaces() -> frozenset:
+    return view(__name__, "UNTRUSTED_TOOL_NAMESPACES")
+
 # Untrusted by exact action name (tools whose ``tool`` attr may be absent).
-UNTRUSTED_TOOL_NAMES = frozenset(
-    {"web_search", "web_extract", "extract_content", "fetch", "fetch_url", "perplexity_search"}
+# ``perplexity_search`` is the one name a tool emits today; the other five are
+# RESERVED (067 run 2: no registered action emits them). They stay because deleting
+# them would flip ``is_untrusted_tool(name, None)`` for those names, and
+# over-wrapping is harmless while under-wrapping is the failure mode.
+_UNTRUSTED_RESERVED_NAMES = frozenset(
+    {"web_search", "web_extract", "extract_content", "fetch", "fetch_url"}
 )
+UNTRUSTED_TOOL_NAMES = frozenset({"perplexity_search"}) | _UNTRUSTED_RESERVED_NAMES
+
 # Untrusted by action-name prefix (legacy mcp_*/browser_* wrappers + web_* family).
+# NOT derived from the rows on purpose: a ``<tool>_`` prefix for every
+# ``untrusted_output`` row would widen ``is_untrusted_tool(name, None)``.
 UNTRUSTED_TOOL_PREFIXES = ("browser_", "mcp_", "web_")
 
 
@@ -55,7 +77,7 @@ def is_untrusted_tool(action_name: Optional[str], tool: Optional[str]) -> bool:
     Over-wrapping is harmless; under-wrapping is the failure mode — so the set is
     intentionally permissive (namespace OR exact-name OR prefix).
     """
-    if tool and tool in UNTRUSTED_TOOL_NAMESPACES:
+    if tool and tool in _namespaces():
         return True
     if action_name:
         if action_name in UNTRUSTED_TOOL_NAMES:

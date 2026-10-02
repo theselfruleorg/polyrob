@@ -11,6 +11,7 @@ import aiohttp
 import subprocess
 
 from core.exceptions import MCPError, MCPConnectionError, MCPProtocolError, MCPToolExecutionError
+from core.security.pinned_resolver import PinnedResolver, is_ip_literal, url_host_key
 from core.logging import get_component_logger
 
 _protocol_logger = get_component_logger("MCPTransportSecurity")
@@ -26,43 +27,17 @@ def _client_version() -> str:
         return "0"
 
 
-class _PinnedResolver:
+class _PinnedResolver(PinnedResolver):
     """aiohttp resolver that pins a hostname to a single pre-validated IP.
 
     SECURITY (SSRF / DNS rebinding): the connect-time SSRF check resolves the
     host once and validates the resulting IP. This resolver makes aiohttp
-    connect to *that exact IP* instead of re-resolving DNS, so a rebind to an
-    internal/metadata address between validation and connection cannot redirect
-    the socket. The original hostname is preserved for the TLS SNI / Host header
-    (aiohttp keeps the request host; only the address is overridden), so HTTPS
-    certificate validation still matches the real hostname.
+    connect to *that exact IP* instead of re-resolving DNS. The original
+    hostname is preserved for the TLS SNI / Host header.
 
-    Any host other than the pinned one resolves to nothing (defensive — a
-    redirect-induced lookup to a different host is refused rather than resolved).
+    Thin name over the ONE shared resolver (``core.security.pinned_resolver``):
+    hosts compare in their wire (IDNA) form and any other host raises.
     """
-
-    def __init__(self, host: str, ip: str, family: int):
-        self._host = host
-        self._ip = ip
-        self._family = family
-
-    async def resolve(self, host, port=0, family=socket.AF_INET):
-        if host != self._host:
-            # Unknown host (e.g. via a redirect) — refuse to resolve it.
-            raise OSError(f"Refusing to resolve non-pinned host: {host}")
-        return [
-            {
-                "hostname": host,
-                "host": self._ip,
-                "port": port,
-                "family": self._family,
-                "proto": 0,
-                "flags": socket.AI_NUMERICHOST,
-            }
-        ]
-
-    async def close(self) -> None:
-        return None
 
 
 def _validate_and_pin_connector(
@@ -111,7 +86,10 @@ def _validate_and_pin_connector(
         )
         raise MCPConnectionError(f"MCP connect blocked (SSRF protection): {error}")
 
-    host = urlparse(url).hostname or ""
+    # The WIRE (IDNA) host — what aiohttp resolves (H14).
+    host = url_host_key(url)
+    if not host:
+        raise MCPConnectionError("MCP connect blocked (SSRF protection): no usable host")
     try:
         family = socket.AF_INET6 if ":" in pinned_ip else socket.AF_INET
     except Exception:
@@ -126,6 +104,61 @@ def _validate_and_pin_connector(
         # nothing else can re-resolve it.
         use_dns_cache=False,
     )
+
+
+def _origin(url: str):
+    """``(scheme, wire host, port)`` of an absolute http(s) URL, or None."""
+    from urllib.parse import urlsplit
+    try:
+        parts = urlsplit(url)
+        scheme = (parts.scheme or "").lower()
+        if scheme not in ("http", "https") or parts.username or parts.password:
+            return None
+        host = url_host_key(url)
+        if not host:
+            return None
+        port = parts.port or (443 if scheme == "https" else 80)
+    except Exception:
+        return None
+    return scheme, host, port
+
+
+def resolve_message_endpoint(server_url: str, endpoint: Optional[str]) -> Optional[str]:
+    """An explicit SSE POST endpoint, made absolute against ``server_url``.
+
+    A relative endpoint (``/message``) is resolved against the server URL; an
+    absolute one is returned as given. None/empty means "derive it".
+    """
+    from urllib.parse import urljoin
+    if not endpoint or not str(endpoint).strip():
+        return None
+    return urljoin(server_url, str(endpoint).strip())
+
+
+def message_endpoint_refusal(server_url: str, endpoint: Optional[str], *,
+                             pinned_ip: Optional[str] = None) -> Optional[str]:
+    """Why ``endpoint`` may not carry a tenant server's messages, or None.
+
+    M06 (2026-09-23): the POST endpoint was never validated, so a tenant could
+    point it anywhere — including an IP literal, which aiohttp connects to
+    WITHOUT asking the pinned resolver. The rule: the endpoint must share the
+    server URL's origin (scheme + host + port); a relative endpoint is fine
+    because it resolves against the server URL. When a pinned IP is known, an
+    IP-literal host must equal it.
+    """
+    target = resolve_message_endpoint(server_url, endpoint)
+    if target is None:
+        return None
+    want, got = _origin(server_url), _origin(target)
+    if want is None or got is None:
+        return "message_endpoint must be an http(s) URL on the server's own origin"
+    if want != got:
+        return ("message_endpoint must be on the same origin (scheme, host and "
+                "port) as server_url")
+    host = got[1]
+    if is_ip_literal(host) and pinned_ip is not None and host != str(pinned_ip).lower():
+        return "message_endpoint is an IP literal that is not the validated address"
+    return None
 
 
 @dataclass
@@ -607,7 +640,8 @@ class MCPSSETransport(MCPTransport):
         super().__init__(timeout, on_auth_refresh=on_auth_refresh)
         self.url = url
         self.headers = headers or {}
-        self.message_endpoint = message_endpoint  # User-provided or auto-derived
+        # User-provided (made absolute against `url`) or auto-derived later.
+        self.message_endpoint = resolve_message_endpoint(url, message_endpoint)
         self.allow_http = allow_http
         self.validate_ssrf = validate_ssrf
         self.session: Optional[aiohttp.ClientSession] = None
@@ -615,6 +649,7 @@ class MCPSSETransport(MCPTransport):
         self._message_queue: asyncio.Queue = asyncio.Queue()
         self._reader_task: Optional[asyncio.Task] = None
         self._session_id: Optional[str] = None  # For servers requiring sessionId
+        self._pinned_ip: Optional[str] = None  # M06: the IP the connector pinned
     
     async def connect(self) -> None:
         """Connect to SSE endpoint."""
@@ -637,6 +672,16 @@ class MCPSSETransport(MCPTransport):
                 self.url, allow_http=self.allow_http, ssl=True, limit=10,
                 validate_ssrf=self.validate_ssrf, ttl_dns_cache=300
             )
+            if self.validate_ssrf:
+                # M06: the POST endpoint must live on the pinned origin. An
+                # IP-literal host would bypass the pinned resolver entirely.
+                _resolver = getattr(connector, "_resolver", None)
+                self._pinned_ip = getattr(_resolver, "ip", None)
+                refusal = message_endpoint_refusal(
+                    self.url, self.message_endpoint, pinned_ip=self._pinned_ip)
+                if refusal:
+                    await connector.close()
+                    raise MCPConnectionError(f"MCP connect blocked (SSRF protection): {refusal}")
 
             self.session = aiohttp.ClientSession(
                 headers=self.headers,
@@ -672,8 +717,9 @@ class MCPSSETransport(MCPTransport):
                     f"SSE connection failed - Status: {self._response.status}, "
                     f"Body: {body[:500]}"
                 )
+                # The body stays in the log; it is not reflected to the caller.
                 raise MCPConnectionError(
-                    f"SSE connection failed with status {self._response.status}: {body[:200]}"
+                    f"SSE connection failed with status {self._response.status}"
                 )
             
             # Verify content type
@@ -784,6 +830,14 @@ class MCPSSETransport(MCPTransport):
             if self._session_id:
                 separator = '&' if '?' in post_url else '?'
                 post_url = f"{post_url}{separator}sessionId={self._session_id}"
+
+            if self.validate_ssrf:
+                # M06: re-checked per send — the endpoint must stay on the
+                # pinned origin, whatever derived or supplied it.
+                refusal = message_endpoint_refusal(
+                    self.url, post_url, pinned_ip=getattr(self, "_pinned_ip", None))
+                if refusal:
+                    raise MCPProtocolError(f"MCP send blocked (SSRF protection): {refusal}")
             
             self.logger.debug(f"Sending message to POST endpoint: {post_url}")
 
@@ -798,8 +852,9 @@ class MCPSSETransport(MCPTransport):
                 ) as response:
                     if response.status == 401:
                         response_text = await response.text()
+                        self.logger.debug(f"MCP send 401 body: {response_text[:200]}")
                         raise _MCPUnauthorized(MCPProtocolError(
-                            f"Failed to send message, status: 401, body: {response_text[:100]}"
+                            "Failed to send message, status: 401"
                         ))
                     if response.status not in (200, 202, 204):
                         response_text = await response.text()
@@ -808,7 +863,7 @@ class MCPSSETransport(MCPTransport):
                             f"Body: {response_text[:200]}"
                         )
                         raise MCPProtocolError(
-                            f"Failed to send message, status: {response.status}, body: {response_text[:100]}"
+                            f"Failed to send message, status: {response.status}"
                         )
 
             await self._send_with_auth_retry(_attempt)

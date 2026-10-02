@@ -35,6 +35,9 @@ CAPABILITY_MATRIX = {
     "cron":           ("cron",      "cron",     "/api/webgate/cron",        "/cron"),
     "recap":          ("journey",   "journey",  None,                       "/recap"),
     "recap-alias":    (None,        "recap",    None,                       "/journey"),
+    # 061: the ONE owner transcript on both chat seats (the console reads the
+    # same store through the status snapshot's delivery line; no route pinned yet).
+    "owner-thread":   (None,        "thread",   None,                       "/thread"),
     "status":         (None,        "status",   "/api/webgate/doctor",      "/status"),
     "memory-search":  (None,        "memory",   "/api/webgate/memory/search", None),
     "knowledge":      ("knowledge", "kb",       "/agent",                   None),
@@ -80,7 +83,7 @@ CAPABILITY_MATRIX = {
     # seat now -- CLI, REPL, the console's live canvas and the phone -- so a
     # surface dropping it fails here instead of going quietly dark, which is
     # exactly what it did for two months.
-    "avatar":             ("pfp",      "avatar",    "/pfp.json",                "/avatar"),
+    "avatar":             ("avatar",   "avatar",    "/avatar.json",             "/avatar"),
     "goal-steer":         ("goals",    "goal",      "/api/webgate/goals/{goal_id}/{verb}", "/goal"),
     "cron-cancel":        ("cron",     "cron",      "/api/webgate/cron/{job_id}/cancel",   "/cron"),
     "pending-reject":     ("owner",    "reject",    "/api/webgate/pending/{kind}/{item_id}/reject", "/reject"),
@@ -159,6 +162,7 @@ CAPABILITY_HOME = {
     "finance": "Money › Cash", "invoices": "Money › Invoices", "invoices-settle": "Money › Invoices",
     "goals": "Work › Now & next", "goal-steer": "Work › Now & next", "cron": "Work › On a clock",
     "cron-cancel": "Work › On a clock", "recap": "Work › Log", "recap-alias": "Work › Log",
+    "owner-thread": "Work › Log",   # 061: the conversation is a log the owner reads
     "avatar": "Agent › Overview",
     "status": "Agent › Overview", "doctor": "Agent › Advanced › Diagnostics",
     "system-page": "Agent › Advanced › Diagnostics", "memory-search": "Agent › Memory",
@@ -212,9 +216,12 @@ def _webview_paths():
     paths = set()
     # 2026-09-21: pages_new.api_router, worklog_api and artifacts_api were
     # registered but unscanned, so twelve readers were invisible to this guard.
+    from webview.contributions import contributed_routers
+    # 067 P5a: plus every destination's contributed data routes (Money today).
     for router in (pages.router, knowledge.router, apps_routes.router,
                    activity.router, inbox.router, pages_new.router,
-                   pages_new.api_router, worklog_api.router, artifacts_api.router):
+                   pages_new.api_router, worklog_api.router, artifacts_api.router,
+                   *contributed_routers()):
         for route in router.routes:
             paths.add(route.path)
     # 043 phase 5: the WEBVIEW_UI legacy switch and webview.legacy are removed.
@@ -229,16 +236,18 @@ def _webview_paths():
 def surfaces():
     from cli.polyrob import cli
     from cli.ui.commands.handlers import build_default_registry
-    from core.surfaces.dispatcher import _COMMANDS
-    from surfaces.telegram.harness import _OWNER_ADMIN_COMMANDS
+    # 067 P5a: over the UNION — the dispatcher's tuple and the seat's owner
+    # tuple plus every verb a pack contributed (core.verbs.register_verbs).
+    from core.surfaces.dispatcher import command_names
+    from surfaces.telegram.harness import _owner_verbs
     return {
         # list_commands is the public click API — it includes the lazy-loaded
         # subcommand names (cli.commands only holds the eagerly-defined ones).
         "cli": set(cli.list_commands(None)),
         "repl": build_default_registry(),
         "web": _webview_paths(),
-        "tg_routable": set(_COMMANDS),
-        "tg_owner": set(_OWNER_ADMIN_COMMANDS),
+        "tg_routable": set(command_names()),
+        "tg_owner": set(_owner_verbs()),
     }
 
 

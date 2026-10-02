@@ -16,6 +16,11 @@ from modules.llm.messages import AIMessage, ToolMessage
 
 class MessageBuildersMixin:
 	"""Typed-message builders for MessageManager."""
+	# F29: empty slots so the composed MessageManager keeps its own
+	# __slots__ and never grows a __dict__. This mixin omitted it, which
+	# silently defeated the whole tuple.
+	__slots__ = ()
+
 
 	def add_state_message(
 		self,
@@ -49,6 +54,7 @@ class MessageBuildersMixin:
 			step_info=step_info,
 			previous_brain=previous_brain,
 			include_browser_state=include_browser_state,  # Pass browser flag
+			results_in_tool_messages=self._results_already_in_tool_messages(result),
 		).get_user_message(use_vision=use_vision)
 
 		# CX-H1: tag the constructed state message so removal can target it by
@@ -57,8 +63,41 @@ class MessageBuildersMixin:
 		# indistinguishable to a shape-based scan).
 		message.metadata = {**(getattr(message, "metadata", None) or {}), "state_message": True}
 
-		self._add_message_with_tokens(message)
-		
+		# F16(ii): the state message is a ONE-SHOT. It used to be appended into
+		# `history` and spliced back out mid-deque after the call, which rebuilt the
+		# whole deque and colded every cached byte behind the splice. The ephemeral
+		# rail already rides the tail of exactly one assembly and never enters
+		# durable history — so nothing has to be spliced, and the browser screenshot
+		# stops landing in message_history.json. A stale state message left queued by
+		# a failed call (restore_ephemeral_on_failure re-queues it) is dropped first:
+		# one state message per request, always the current one.
+		from agents.task.constants import state_message_ephemeral
+		if state_message_ephemeral():
+			self.drop_queued_state_messages()
+			self.push_ephemeral_message(message)
+		else:
+			self._add_message_with_tokens(message)
+
+	def _results_already_in_tool_messages(self, result: Optional[List['ActionResult']]) -> bool:
+		"""F14: did the previous step commit THESE results as ToolMessages?
+
+		The native tool-calling path (every provider POLYROB ships) already wrote
+		each result into history as a ``ToolMessage``; re-rendering them inside the
+		next state message put the same bytes in the prompt twice and doubled the
+		uncached suffix of every tool step.
+
+		The fact is recorded by the IDENTITY of the result list
+		(``result_processing._mark_results_committed``), not as a bare boolean:
+		several paths replace ``Agent._last_result`` with a FRESH list whose entries
+		never became ToolMessages (the stop notice, a run-budget halt, a step-level
+		exception). Those must still render, and an identity check says so without a
+		second bookkeeping rule.
+		"""
+		if not result:
+			return False
+		committed = getattr(self, "_results_in_tool_messages", None)
+		return committed is not None and result is committed
+
 
 	def add_model_output(self, model_output: AgentOutput, tool_calls: Optional[List[Dict]] = None, llm_content: Optional[str] = None) -> Optional[str]:
 		"""Add model output as AI message.

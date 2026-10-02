@@ -41,6 +41,7 @@ _TOOL_CLASS_FALLBACK = {
     "x402_invoice": ("tools.x402.invoice_tool", "X402InvoiceTool"),
     "launchpad": ("tools.launchpad.tool", "LaunchpadTool"),
     "dapp_browser": ("tools.dapp_browser.tool", "DappBrowserTool"),
+    "agent_nft": ("tools.agent_nft.tool", "AgentNftTool"),
 }
 
 

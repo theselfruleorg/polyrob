@@ -29,19 +29,37 @@ class SurfaceConfig:
         return _bool_env("SINGULAR_CHAT_ENABLED", False)
 
     @staticmethod
+    def surface_enabled(surface_id: str) -> bool:
+        """Should this surface run (064): the explicit ``*_SURFACE_ENABLED`` flag
+        when set; else ON when the row is ``auto_start`` and its required
+        credentials are set (configured = on — no flag per surface); else the
+        autonomy-mode default (email under ``AUTONOMY_MODE=autonomous``), else OFF.
+        An unknown surface is OFF."""
+        from core.surfaces.catalog import get
+        spec = get(surface_id)
+        if spec is None:
+            return False
+        flag = spec.enabled_flag
+        if (os.environ.get(flag) or "").strip():
+            return _bool_env(flag, False)
+        if spec.auto_start and spec.credentials and not spec.missing_credentials(os.environ):
+            return True
+        return _bool_env(flag, _mode_capability_default(flag))
+
+    @staticmethod
     def telegram_surface_enabled() -> bool:
-        return _bool_env("TELEGRAM_SURFACE_ENABLED", False)
+        return SurfaceConfig.surface_enabled("telegram")
 
     @staticmethod
     def whatsapp_surface_enabled() -> bool:
-        return _bool_env("WHATSAPP_SURFACE_ENABLED", False)
+        return SurfaceConfig.surface_enabled("whatsapp")
 
     @staticmethod
     def email_surface_enabled() -> bool:
         """Run the email surface (IMAP poll inbound + SMTP outbound). Default OFF.
         v1 is correspondent-only — owner-by-email stays OFF until verified-sender lands.
         (ON under effective AUTONOMY_MODE=autonomous.)"""
-        return _bool_env("EMAIL_SURFACE_ENABLED", _mode_capability_default("EMAIL_SURFACE_ENABLED"))
+        return SurfaceConfig.surface_enabled("email")
 
     @staticmethod
     def email_imap_poll_sec() -> int:
@@ -50,19 +68,19 @@ class SurfaceConfig:
 
     @staticmethod
     def discord_surface_enabled() -> bool:
-        return _bool_env("DISCORD_SURFACE_ENABLED", False)
+        return SurfaceConfig.surface_enabled("discord")
 
     @staticmethod
     def slack_surface_enabled() -> bool:
-        return _bool_env("SLACK_SURFACE_ENABLED", False)
+        return SurfaceConfig.surface_enabled("slack")
 
     @staticmethod
     def signal_surface_enabled() -> bool:
-        return _bool_env("SIGNAL_SURFACE_ENABLED", False)
+        return SurfaceConfig.surface_enabled("signal")
 
     @staticmethod
     def x_surface_enabled() -> bool:
-        return _bool_env("X_SURFACE_ENABLED", False)
+        return SurfaceConfig.surface_enabled("x")
 
     @staticmethod
     def group_chat_enabled() -> bool:
@@ -182,15 +200,20 @@ class SurfaceConfig:
     def voice_transcript_echo_enabled() -> bool:
         """Echo the transcript back into the chat as a persistent, voice-note-anchored
         message before the agent answers (Telegram + WhatsApp). Default ON; purely additive.
-        Set VOICE_TRANSCRIPT_ECHO=false for byte-identical prior behavior."""
-        return _bool_env("VOICE_TRANSCRIPT_ECHO", True)
+        060 WS-8: the owner's pref ``voice.transcript_echo`` (the env flag is retired)."""
+        from core.prefs import owner_pref_scope, resolve
+        uid, home = owner_pref_scope()
+        return bool(resolve("voice.transcript_echo", uid, home, default=True))
 
     # --- #8 Telegram incremental streaming ----------------------------------
     @staticmethod
     def telegram_incremental_stream() -> bool:
         """Live `editMessageText` streaming on Telegram (#8). Default OFF — the buffered
-        one-send-on-finalize path stays the safe default; opt in per deployment."""
-        return _bool_env("TELEGRAM_INCREMENTAL_STREAM", False)
+        one-send-on-finalize path stays the safe default. 060 WS-8: the owner's pref
+        ``stream.telegram`` (the env flag is retired)."""
+        from core.prefs import owner_pref_scope, resolve
+        uid, home = owner_pref_scope()
+        return bool(resolve("stream.telegram", uid, home, default=False))
 
     @staticmethod
     def telegram_stream_edit_interval_sec() -> float:

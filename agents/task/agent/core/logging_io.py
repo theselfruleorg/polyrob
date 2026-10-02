@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, List
 
-from modules.llm.messages import BaseMessage, ToolMessage
+from modules.llm.messages import BaseMessage
 from agents.task.agent.views import AgentOutput, ActionResult
 from agents.task.telemetry.views import AgentRunTelemetryEvent
 
@@ -68,39 +68,26 @@ class LoggingIOMixin:
                     continue
 
     def _log_context_breakdown(self):
-        """Log detailed context usage breakdown.
+        """Log the per-step context reading — from the ONE gauge (F19).
 
-        FIX (Context Optimization Phase 2): Real-time visibility into context consumption.
-        Logs breakdown by category: Foundation, H-MEM, Conversation, Tools
+        This used to walk the assembled message list, re-count every message and
+        divide by ``max_input_tokens`` itself: a third total that disagreed with
+        `/context`, with ``get_actual_token_count`` and with the status bar,
+        because it saw neither the tool schemas nor the ephemerals and it
+        classified H-MEM by a substring. It now reads
+        ``MessageManager.context_usage()`` and prints the provenance, so the log
+        line, the compaction ladder and the owner's `/context` are the same
+        number.
         """
         try:
-            # Diagnostic/logging-only call — must peek, not drain, one-shot
-            # ephemeral messages (CX-H3). The real provider call in
-            # next_action_internal.py keeps the draining default.
-            messages = self.message_manager.get_messages_for_llm(consume_ephemeral=False)
-
-            # Count by type
-            foundation_tokens = 0
-            hmem_tokens = 0
-            conversation_tokens = 0
-            tool_tokens = 0
-
-            for msg in messages:
-                tokens = self.message_manager._count_message_tokens(msg)
-
-                if msg == self.message_manager._system_message:
-                    foundation_tokens += tokens
-                elif msg == self.message_manager._initial_task_message:
-                    foundation_tokens += tokens
-                elif hasattr(msg, 'content') and '[Session Memory]' in str(msg.content):
-                    hmem_tokens += tokens
-                elif isinstance(msg, ToolMessage):
-                    tool_tokens += tokens
-                else:
-                    conversation_tokens += tokens
-
-            total_tokens = sum([foundation_tokens, hmem_tokens, conversation_tokens, tool_tokens])
-            usage_pct = (total_tokens / self.message_manager.max_input_tokens) * 100 if self.message_manager.max_input_tokens > 0 else 0
+            usage = self.message_manager.context_usage()
+            total_tokens = usage["total_tokens"]
+            limit = usage["limit"]
+            usage_pct = usage["pct"]
+            slots = usage["slots"]
+            # ≈ when nothing has been measured yet; the provider's own
+            # prompt_tokens once a call has completed.
+            mark = "" if usage["source"] == "provider_usage" else "≈"
 
             # Determine emoji
             if usage_pct >= 65:
@@ -110,14 +97,23 @@ class LoggingIOMixin:
             else:
                 emoji = "🟢"
 
-            self.logger.info(
-                f"{emoji} Step {self.state.n_steps} Context: {total_tokens:,}/{self.message_manager.max_input_tokens:,} "
-                f"({usage_pct:.1f}%) | "
-                f"Foundation: {foundation_tokens:,} | "
-                f"H-MEM: {hmem_tokens:,} | "
-                f"Conv: {conversation_tokens:,} | "
-                f"Tools: {tool_tokens:,}"
+            line = (
+                f"{emoji} Step {self.state.n_steps} Context: {mark}{total_tokens:,}/{limit:,} "
+                f"({usage_pct:.1f}%, {usage['source']}) | "
+                f"Foundation: {slots['foundation']:,} | "
+                f"H-MEM: {slots['hmem']:,} | "
+                f"Conv: {slots['conversation']:,} | "
+                f"Ephemeral: {slots['ephemeral']:,} | "
+                f"Schemas: {slots['tool_schemas']:,}"
             )
+            last_call = usage.get("last_call") or {}
+            if last_call.get("prompt_tokens"):
+                line += (
+                    f" | last call: {last_call['prompt_tokens']:,} prompt, "
+                    f"{last_call.get('cached_tokens', 0):,} cached, "
+                    f"{last_call.get('cache_creation_tokens', 0):,} written"
+                )
+            self.logger.info(line)
 
             # Warning if approaching compaction
             if usage_pct >= 55:

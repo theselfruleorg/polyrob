@@ -10,7 +10,7 @@ import pytest
 
 from agents.task.agent.prompts import SystemPrompt
 
-# Registered Polymarket action_map keys (tools/polymarket/service.py::execute_action).
+# Registered Polymarket action_map keys (polyrob_markets/polymarket/service.py::execute_action).
 _REAL_PM_ACTIONS = {
     "search_markets", "get_trending_markets", "filter_markets_by_category",
     "get_featured_markets", "get_closing_soon_markets", "get_sports_markets",
@@ -53,7 +53,16 @@ def test_every_dashed_tool_token_is_a_real_action():
             continue
         for token in m.group(1).split("/"):
             token = token.strip()
-            assert token in _REAL_PM_ACTIONS, f"unknown advertised action: {token}"
+            # F11 (2026-09-29): the section names the pack's namespaced ids.
+            assert token.startswith("polymarket_"), f"bare action name: {token}"
+            assert token[len("polymarket_"):] in _REAL_PM_ACTIONS, \
+                f"unknown advertised action: {token}"
+
+
+def test_names_pusd_collateral_and_the_approval_lane():
+    section = _section()
+    assert "pUSD" in section and "USDC" not in section
+    assert "owner approval" in section
 
 
 # --- reachability (census, 2026-09-12) --------------------------------------

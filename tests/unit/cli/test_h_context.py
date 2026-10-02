@@ -220,3 +220,59 @@ def test_render_includes_last_known_hmem(mm_with_history):
     out = render_context_breakdown(mm_with_history)
     assert "session memory" in out.lower()
     assert "987" in out
+
+
+# ---------------------------------------------------------------------------
+# F18/F19: provenance, the provider line, ephemerals, the schema flag
+# ---------------------------------------------------------------------------
+
+
+def test_estimates_are_marked_with_approximately(mm_with_history):
+    from cli.ui.commands.h_context import render_context_breakdown
+    out = render_context_breakdown(mm_with_history)
+    assert "≈" in out, "a local estimate must never be printed as a measurement"
+    assert "local estimate" in out
+
+
+def test_no_provider_call_yet_says_so(mm_with_history):
+    from cli.ui.commands.h_context import render_context_breakdown
+    out = render_context_breakdown(mm_with_history)
+    assert "last request (provider-reported): none yet this session" in out
+
+
+def test_provider_line_appears_after_a_call(mm_with_history):
+    from cli.ui.commands.h_context import render_context_breakdown
+
+    mm_with_history.get_messages_for_llm(consume_ephemeral=False)
+    mm_with_history.note_call_usage(output_tokens=120, input_tokens=9_000,
+                                    cached_tokens=7_000, cache_creation_tokens=400)
+    out = render_context_breakdown(mm_with_history)
+
+    assert "last request (provider-reported): 9,000 prompt · 7,000 cached" in out
+    assert "400 written" in out
+    assert "2,000 uncached" in out
+    # The total is MEASURED now, so the estimate mark is gone.
+    assert "≈" not in out
+
+
+def test_ephemerals_get_their_own_row(mm_with_history):
+    from cli.ui.commands.h_context import render_context_breakdown
+    from modules.llm.messages import HumanMessage
+
+    mm_with_history.push_ephemeral_message(
+        HumanMessage(content="a one-shot correspondent reply " * 20))
+    out = render_context_breakdown(mm_with_history)
+    assert "ephemerals" in out
+
+
+def test_schema_slot_is_omitted_when_the_gauge_suppresses_it(mm_with_history, monkeypatch):
+    from cli.ui.commands.h_context import render_context_breakdown
+
+    mm_with_history.set_tool_schema_tokens(7_512)
+    monkeypatch.delenv("CTX_COUNT_TOOL_SCHEMAS", raising=False)
+    assert "tool schemas" in render_context_breakdown(mm_with_history)
+
+    monkeypatch.setenv("CTX_COUNT_TOOL_SCHEMAS", "false")
+    assert "tool schemas" not in render_context_breakdown(mm_with_history), (
+        "/context must not render a slot the gauge suppresses"
+    )

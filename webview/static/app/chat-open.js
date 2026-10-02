@@ -22,8 +22,13 @@ const body = document.body;
 const sessionId = body?.dataset?.sessionId || '';
 const isNew = body?.dataset?.isNew === 'true' || !sessionId || sessionId === 'new';
 
+/** The machine code of a refusal, wherever the server put it. */
+function refusalCode(data) {
+  return (data && (data.code || data.detail?.code || data.error?.code)) || '';
+}
+
 /** Create a session from one line of text and go to it. */
-async function startSession(task) {
+export async function startSession(task, { fetcher } = {}) {
   const composer = document.getElementById('chat-composer');
   const send = document.getElementById('chat-send-btn');
   const input = document.getElementById('chat-input');
@@ -35,8 +40,17 @@ async function startSession(task) {
     // legacy localStorage bearer over that cookie: a stale bearer wins the
     // server's header precedence and turns a valid owner session into the
     // misleading "Invalid token" refusal the owner used to see here.
-    const resp = await postJson('/api/task/sessions', { task, auto_start: true });
+    const resp = await postJson('/api/task/sessions', { task, auto_start: true }, { fetcher });
     const data = resp.body || {};
+    // 070 W0.13: this process has no language model. Say so, keep the text,
+    // re-open Send, and stay on the page (nothing was created).
+    if (resp.status === 503 && refusalCode(data) === 'no_model') {
+      const status = document.getElementById('chat-create-status');
+      if (status) status.textContent = composer?.dataset.no_model || '';
+      if (send) send.disabled = false;
+      if (composer) composer.removeAttribute('aria-busy');
+      return;
+    }
     // A17: an owner verb typed on the COLD OPEN is answered inline by the same
     // verb plane a bound chat uses — it makes no session, so there is nothing
     // to navigate to. Before this the create route turned `/halt` into a TASK:

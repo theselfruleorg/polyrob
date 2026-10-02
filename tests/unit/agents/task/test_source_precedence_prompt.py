@@ -19,8 +19,12 @@ def test_source_precedence_in_system_prompt(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def _text():
+    """The catalog wording renders only when <tool-catalog> is pinned (F11,
+    2026-09-29 — tool disclosure on); these tests pin that wording."""
     from agents.task.agent.prompts import SystemPrompt
-    return SystemPrompt.__new__(SystemPrompt)._get_source_precedence_content()
+    sp = SystemPrompt.__new__(SystemPrompt)
+    sp._catalog_pinned = lambda: True
+    return sp._get_source_precedence_content()
 
 
 def test_the_tool_catalog_is_named_as_the_capability_authority():

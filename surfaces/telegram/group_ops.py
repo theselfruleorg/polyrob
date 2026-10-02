@@ -610,7 +610,7 @@ def _offer_card(container: Any, offer_id: str, invoice: dict) -> List[dict]:
         import os as _os
 
         from core.surfaces.room_actions import _data_dir
-        from modules.pfp.cards import render_invoice_card
+        from modules.cards.cards import render_invoice_card
         from modules.x402.artifact import build_payment_artifact
         out_dir = _os.path.join(_data_dir(container), "room_actions", "cards")
         _os.makedirs(out_dir, exist_ok=True)

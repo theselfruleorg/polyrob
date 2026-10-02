@@ -1,72 +1,45 @@
 {% extends "layout.html" %}
-
-{% block title %}Error - {{ console_display_name() }}{% endblock %}
-
-{% block header_title %}SYSTEM ERROR{% endblock %}
+{#
+  The console's error page (070 E.34). Every word comes from the copy layer:
+  one plain lead for the status class, the hints that fit the path (the chat
+  hint only on a chat path), and the raw detail one click away behind "Show
+  details" — never the first thing a person reads. No capitals, no `>` prompts.
+  `error_page.error_context` builds the context.
+#}
+{% block title %}{{ t('error.title') }}{% endblock %}
 
 {% set ws_url = ws_url|default('') %}
 
 {% block content %}
 <div class="error-screen">
-    <div class="error-box" style="max-width: 100%; width: 90ch;">
-        <div class="error-header">SYSTEM ERROR</div>
+    <div class="error-box" style="max-width: 100%; width: 72ch;">
+        <h1 class="error-header">{{ t('error.heading') }}</h1>
         <div class="error-body">
-            <div class="error-message">
-                <span class="error-prefix">!</span> ERROR: {{ error }}
-            </div>
-            {% if message %}
-            <div class="error-details">
-                <span class="error-prefix">></span> {{ message }}
-            </div>
+            <p class="error-message">{{ lead }}</p>
+            {% if hints %}
+            <ul class="troubleshooting-hints">
+                {% for hint in hints %}<li class="troubleshooting-hint">{{ hint }}</li>
+                {% endfor %}
+            </ul>
             {% endif %}
-            {% if metadata_paths %}
-            <div class="error-section">
-                <div class="section-title">METADATA FILES:</div>
-                <div class="section-content">
-                {% for path in metadata_paths %}> {{ path }}
-                {% endfor %}</div>
-            </div>
-            {% endif %}
-            {% if checked_dir %}
-            <div class="error-section">
-                <div class="section-title">DIRECTORY PATH:</div>
-                <div class="section-content">> {{ checked_dir }}</div>
-            </div>
-            {% endif %}
-            
-            <!-- Add troubleshooting actions section -->
-            <div class="error-section">
-                <div class="section-title">TROUBLESHOOTING:</div>
-                <div class="section-content">
-                    {% if session_id %}
-                    <button id="repair-session" class="action-btn" data-session-id="{{ session_id }}">
-                        <span class="action-prefix">></span> Attempt Repair For This Session
-                    </button>
-                    {% endif %}
-                </div>
-            </div>
-            
-            <div class="error-section">
-                <div class="section-title">HINTS:</div>
-                <div class="section-content troubleshooting-hints">
-                    {% for hint in troubleshooting %}
-                        <div class="troubleshooting-hint">{{ hint|safe }}</div>
-                    {% endfor %}
-                </div>
-            </div>
-            
             <div class="error-actions">
-                <a href="/" class="action-link">
-                    <span class="action-prefix">></span> RETURN TO HOME
-                </a>
+                <a href="/" class="action-link">{{ t('error.home') }}</a>
             </div>
+            <details class="error-section">
+                <summary>{{ t('error.details') }}</summary>
+                {% if details %}<pre class="section-content">{{ details }}</pre>{% endif %}
+                {% if metadata_paths %}
+                <pre class="section-content">{% for path in metadata_paths %}{{ path }}
+{% endfor %}</pre>
+                {% endif %}
+                {% if checked_dir %}<pre class="section-content">{{ checked_dir }}</pre>{% endif %}
+                {% if session_id %}
+                <button id="repair-session" class="action-btn" data-session-id="{{ session_id }}">{{ t('error.repair') }}</button>
+                {% endif %}
+            </details>
         </div>
     </div>
 </div>
 
 <script src="/static/js/error-page.js"></script>
 {% endblock %}
-
-{% block head %}
-<!-- Inline styles removed: styles moved to style.css -->
-{% endblock %} 

@@ -95,3 +95,53 @@ def test_an_uncovered_chain_has_no_url(monkeypatch):
 
 def test_an_unknown_chain_has_no_url():
     assert goplus.api_url("nosuchchain") is None
+
+
+# --- CR-L10: ACTIVE Token-2022 extensions, not only *_upgradable ------------
+
+def test_cr_l10_an_active_transfer_fee_is_flagged():
+    v = goplus.parse_solana_screen(_sol(transfer_fee={
+        "current_fee_rate": {"fee_rate": "500", "maximum_fee": "1000000"}}))
+    assert "transfer_fee_active" in v.flags
+
+
+def test_cr_l10_an_empty_or_zero_transfer_fee_is_clean():
+    assert "transfer_fee_active" not in goplus.parse_solana_screen(
+        _sol(transfer_fee={})).flags
+    v = goplus.parse_solana_screen(_sol(transfer_fee={
+        "current_fee_rate": {"fee_rate": "0"}}))
+    assert "transfer_fee_active" not in v.flags
+    assert v.checks["transfer_fee"] == "no"
+
+
+def test_cr_l10_an_unparseable_transfer_fee_config_fails_closed():
+    v = goplus.parse_solana_screen(_sol(transfer_fee={"weird": "shape"}))
+    assert "transfer_fee_active" in v.flags
+
+
+def test_cr_l10_an_active_transfer_hook_is_flagged():
+    v = goplus.parse_solana_screen(_sol(transfer_hook=[{"address": "Hook111"}]))
+    assert "transfer_hook_active" in v.flags
+    assert "transfer_hook_active" not in goplus.parse_solana_screen(
+        _sol(transfer_hook=[])).flags
+
+
+def test_cr_l10_default_account_state_frozen_is_flagged():
+    assert "default_account_frozen" in goplus.parse_solana_screen(
+        _sol(default_account_state="2")).flags
+    assert "default_account_frozen" not in goplus.parse_solana_screen(
+        _sol(default_account_state="1")).flags
+
+
+def test_cr_l10_absent_active_fields_are_missing_checks_not_clean():
+    v = goplus.parse_solana_screen(_sol())
+    for field in ("transfer_fee", "transfer_hook", "default_account_state"):
+        assert field in v.missing
+        assert field not in v.checks
+
+
+def test_cr_l10_permanent_delegate_is_flagged_when_named():
+    v = goplus.parse_solana_screen(_sol(
+        permanent_delegate={"authority": [{"address": "x"}], "status": "1"}))
+    assert "permanent_delegate" in v.flags
+    assert "permanent_delegate" not in goplus.parse_solana_screen(_sol()).missing

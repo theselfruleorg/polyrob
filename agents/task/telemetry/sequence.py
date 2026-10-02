@@ -12,10 +12,32 @@ Usage:
     event_id = generate_event_id()
 """
 
+import os
 import threading
 import time
 import uuid
-from typing import Dict, Optional
+from pathlib import Path
+from typing import Dict, Optional, Union
+
+
+def _highest_seq_on_disk(feed_dir: Union[str, Path]) -> int:
+    """Highest leading integer of a ``[0-9]*_*.json`` name in ``feed_dir``.
+
+    Returns 0 when the folder holds no such file or cannot be read.
+    """
+    best = 0
+    try:
+        with os.scandir(feed_dir) as it:
+            for entry in it:
+                name = entry.name
+                if not name.endswith(".json") or not name[:1].isdigit():
+                    continue
+                head, sep, _ = name.partition("_")
+                if sep and head.isdigit():
+                    best = max(best, int(head))
+    except OSError:
+        return 0
+    return best
 
 
 class SequenceGenerator:
@@ -47,7 +69,7 @@ class SequenceGenerator:
         self._lock = threading.Lock()
 
     @classmethod
-    def get(cls, session_id: str) -> 'SequenceGenerator':
+    def get(cls, session_id: str, feed_dir: Optional[Union[str, Path]] = None) -> 'SequenceGenerator':
         """Get or create sequence generator for session.
 
         This is the primary way to obtain a sequence generator.
@@ -55,13 +77,21 @@ class SequenceGenerator:
 
         Args:
             session_id: The session to get generator for
+            feed_dir: The session's feed folder. On first creation only, the
+                counter starts at the highest leading integer of any
+                ``[0-9]*_*.json`` name there, so a restarted process does not
+                write ``000001_*`` again (W1.4). A cached generator is never
+                reseeded.
 
         Returns:
             SequenceGenerator instance for the session
         """
         with cls._global_lock:
             if session_id not in cls._instances:
-                cls._instances[session_id] = cls(session_id)
+                gen = cls(session_id)
+                if feed_dir is not None:
+                    gen._sequence = _highest_seq_on_disk(feed_dir)
+                cls._instances[session_id] = gen
             return cls._instances[session_id]
 
     @classmethod

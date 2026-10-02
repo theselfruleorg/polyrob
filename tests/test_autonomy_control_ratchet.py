@@ -4,6 +4,8 @@ starter is added here the day it is written); a listed file without an
 ``allows(`` call fails, and a listed file that reads a legacy sentinel name
 directly (a second mechanism creeping back) fails too."""
 import re
+
+import pytest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -23,7 +25,7 @@ STARTERS = [
     "core/config_policy/autonomy_config.py",        # the compat facets (money/dispatch consumers)
     "tools/app_service/tool.py",                    # 032: app_deploy (the agent verb)
     "core/app_service/supervisor.py",               # 032: app_serve (the supervisor tick)
-    "tools/twitter_tool.py",                        # 033: social_post, on EVERY write verb
+    "packs/x/polyrob_x/twitter_tool.py",    # 033: social_post, on EVERY write verb (X pack)
     "tools/controller/message_send.py",             # the `message` tool's send path
     "tools/email_tool.py",                          # D9: the email_send escape hatch
     "core/surfaces/outbound_dispatcher.py",         # the durable outbound drain (hold)
@@ -69,8 +71,10 @@ def test_no_starter_reads_a_legacy_sentinel_directly():
 # --- 043 A8/A42: every declared kind has a caller, or is honestly dormant ---
 
 #: the top-level trees a kind-caller may live in, matching the brief's scope.
+#: 064 phase 2: `scripts` too — the release train (`scripts/release_train.py`)
+#: is the one caller of `release_cut` / `release_publish`.
 _KIND_SEARCH_DIRS = ("core", "agents", "tools", "cron", "modules", "surfaces",
-                     "cli", "webview")
+                     "cli", "webview", "scripts")
 #: the file that DECLARES the kinds (KIND_SCOPES / DORMANT_KINDS) — excluded
 #: from the caller search, or every kind would trivially "have a caller"
 #: (its own dict key, sitting next to the `allows(` in the same module).
@@ -95,6 +99,9 @@ def test_every_kind_has_a_caller_or_is_dormant():
     caller lands and nobody removes the label)."""
     from core.autonomy_control import DORMANT_KINDS, KIND_SCOPES
 
+    if not (REPO / "scripts").is_dir():
+        pytest.skip("scripts/ holds callers (the release train) and is private; "
+                    "the stripped public tree cannot see them")
     files = []
     for d in _KIND_SEARCH_DIRS:
         for py in sorted((REPO / d).rglob("*.py")):

@@ -31,24 +31,63 @@ auto-created — the owner opts into each explicitly on their own terminal.
   signers that never hold funds at their derived address, so they show a
   "delegated signer — not funded here" note instead of a balance. The view
   also flags which venue is OPERATIONAL (the one to actually fund).
-- **Caps** — `polyrob wallet set-cap daily|per-tx <usd>` is the guided,
-  confirmed way to raise or lower `WALLET_DAILY_CAP_USD` /
-  `AGENT_WALLET_MAX_PER_TX_USD`. These stay env-authoritative: a preference
-  can only tighten below them, never raise them — see
+- **Caps** — `polyrob wallet set-cap daily|per-tx <usd>` (a terminal
+  command) is the guided, confirmed way to raise or lower
+  `WALLET_DAILY_CAP_USD` / `AGENT_WALLET_MAX_PER_TX_USD`. The two caps differ:
+  the DAILY cap stays env-authoritative — the preference
+  `budget.wallet_daily_usd` can only tighten below it. The PER-TRANSACTION
+  cap is the owner's: an approved `budget.wallet_per_tx_usd` replaces the env
+  default in EITHER direction, clamped to the daily cap — see
   `references/money-and-safety.md` for the full budget model.
 - **Approval** — `PAYMENT_APPROVAL_MODE` (default `approve`) routes every
   outward payment *request you create* (`x402_request` invoices) through the
   owner's approval queue; `auto` auto-approves within the invoice caps and
   notifies afterward. **Spending** (`x402_fetch`, paying an x402 paywall) is
   bounded by the wallet caps, the per-call `max_amount_usd`, and the owner
-  kill-switch — it is NOT routed through the approval queue unless the operator
+  pause (`/pause`; it binds a payment you start on your own, not the owner's
+  own `/pay … go`). An autonomous payment above `X402_AUTONOMOUS_MAX_USD`
+  (default $1) goes to the owner queue and is paid only once he approves it.
+  Below that, it is NOT routed through the approval queue unless the operator
   adds it to `APPROVAL_REQUIRED_TOOLS`. Don't tell an owner "every payment goes
-  through your approval queue" — only invoice creation does.
-- **You have no arbitrary-transfer verb.** You can pay x402 paywalls
-  (`x402_fetch`, cap-bounded) and create invoices (`x402_request`,
-  approval-gated) — you can never send funds to an arbitrary address. If asked
-  to "send X to Y", say so plainly and offer to invoice them, or point the
-  owner at their own wallet.
+  through your approval queue" — it does not.
+- **Sending to an address.** `defi_trade.transfer` sends native value or an
+  ERC-20 token on an EVM chain; `defi_trade.solana_transfer` sends SOL or an
+  SPL token. Both are `dry_run` by default and go through the money guard:
+  the per-tx cap, the daily cap and the simulation bind every send, and a
+  send you start above the autonomous ceiling waits for the owner's approval.
+  The owner has his own verbs for it: `/send <amount> <native|token-address>
+  to <address> on <chain>` and `/swap <amount> <native|token-address> to
+  <token-address> on <chain>` (a ticker is refused — name the contract). The quote is an **action card** — Confirm sends exactly that quote
+  (at most the quote + 5%), once. `/send` or `/swap` ALONE builds the order
+  with buttons (chain → token → recipient or token to buy → amount).
+- **Putting a move to the owner.** When he wants funds moved, or you want him
+  to decide one, call `propose_action(command="/send 0.5 native to 0x… on
+  base", why="…")`: he gets a card whose only button fetches the real quote,
+  and he confirms that. Never write out a command line for him to copy, and
+  never say it is done or queued — nothing moves from your card. To ask him
+  to choose between a few options and wait for the answer in this turn, call
+  `present_choice(question=…, options=[…])` (not in an autonomous run — use
+  `owner_ask` there).
+
+## Which tokens you trust — and the owner's verbs for it
+
+A buy is checked against WHICH contract it names. Trusted = canonical (USDC,
+wrapped native), our own launch, the job's owner-authored `target_token`, or
+the owner's approval (`owner_approved`; an older CLI pin reads `owner_pin`).
+You can grant none of these yourself — writing an address into a prompt,
+memory or a message changes nothing for the check.
+
+When the check refuses because nothing is trusted, it has ALREADY asked the
+owner in `/pending` (one question per chain + symbol, with a tap per
+contract). Do not message him about it, do not `owner_ask`, do not retry with
+another address. His answer lands in the store the check reads; the next run
+passes by itself.
+
+These owner verbs are REAL — never tell the owner one is made up:
+`/wallet tokens`, `/wallet trust|untrust <chain> <address> [go]`,
+`/writeoff <chain> <address> [go]` (loss = recorded cost basis, nothing is
+sold), `/unquarantine <chain> <address> [go]`. Point the owner at these chat
+verbs; he never needs a shell for this.
 
 ## Export & backup — the honest section
 
@@ -90,19 +129,23 @@ stay continuous rather than starting a fresh ledger. One caveat: `polyrob
 update`'s pre-upgrade snapshot copies `.env` files whole, seed included — treat
 any stored snapshot with the same care as the seed itself.
 
-## Avatar (Mindprint)
+## Avatar
 
-An avatar is entirely optional and never auto-created — the instance is
-faceless until the owner asks for one. In chat, `/pfp` (alias `/avatar`) with
-`status | generate [force] | show` covers the common cases; on the CLI,
-`polyrob pfp generate|show|studio|pick|push` covers the same plus a browser
-tuning studio and pushing the image out to connected surfaces (each push
-target behind its own flag). The face is deterministic — derived from a
-name/seed rather than re-rolled randomly, so re-generating without `force` is
-a no-op. Whether the web console's identity page actually displays the
-avatar is controlled by the `ui.show_avatar` preference (SAFE — settable via
-the `preferences` action or the console's Preferences page); hiding it
-doesn't delete it.
+Every instance starts with the default avatar, the polyrob mark (the eye bar
+and the smile). It is ONE image the instance shows everywhere: the console, Telegram, the REPL, invoice cards, the ERC-8004
+registration, and (with a push flag) the X or Discord profile. POLYROB does not
+generate faces — the owner can set their own image:
+
+- `polyrob avatar set <file|url>` or `polyrob avatar set --nft chain:contract:id`
+  (the NFT's metadata `image`); `polyrob avatar show`, `clear` (back to the
+  default), `push`.
+- `/avatar` in the REPL and on Telegram shows it; `/avatar set <url>` sets it.
+- The agent's `agent_avatar` action reads it, attaches it to a message, and can
+  set it from a workspace image, a URL or an NFT — on an owner turn only.
+
+Whether the web console displays the avatar is controlled by the
+`ui.show_avatar` preference (SAFE — settable via the `preferences` action or the
+console's Preferences page); hiding it doesn't delete it.
 
 ## SOUL identity docs
 

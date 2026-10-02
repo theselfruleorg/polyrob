@@ -143,3 +143,21 @@ def test_every_line_is_a_core_copy_string_not_a_hardcode():
                 "chat.act.deploy_running", "chat.act.working", "chat.act.did_work",
                 "chat.act.failed"):
         assert key in STRINGS
+
+
+def test_registered_keys_route_like_bare_methods():
+    # Review B1 (2026-09-24): the feed carries the REGISTERED key
+    # (``coding_run_tests``, ``filesystem_read_file``); the narrator must still
+    # recognise it instead of falling back to the generic line.
+    ev = {
+        "type": "tool_execution",
+        "data": {"tool_name": "coding", "action_name": "coding_run_tests", "success": True},
+        "render": {"kind": "log", "payload": {"passed": 18, "failed": 0}},
+    }
+    assert narrate(ev) == "Ran the test suite and all 18 passed"
+    ev = {
+        "type": "tool_execution",
+        "data": {"tool_name": "filesystem", "action_name": "filesystem_read_file", "success": True},
+        "render": {"kind": "file", "payload": {"count": 4, "where": "~/price-watch"}},
+    }
+    assert narrate(ev) == "Read 4 files in ~/price-watch"

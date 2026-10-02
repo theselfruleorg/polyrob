@@ -10,8 +10,12 @@ import anthropic
 from anthropic.types import Message
 
 from modules.llm.llm_client import LLMClient
+from modules.llm.prefix_stamp import stamp_client  # F20: request prefix identity
+from modules.llm.anthropic_sampling import clamp_thinking as _clamp_thinking, route_for_client
+from modules.llm.deferred_tools import (  # F9: Anthropic native deferred tools
+    call_with_deferral_retry, deferred_tools_enabled, prepare_deferred_tools, stream_with_deferral_retry)
 from modules.llm.token_counter import count_messages_tokens
-from core.exceptions import LLMError, LLMConfigError, LLMRateLimitError, LLMAuthenticationError, LLMContextLengthError, LLMInvalidRequestError, LLMConnectionError, ServiceError
+from core.exceptions import LLMError, LLMRateLimitError, LLMAuthenticationError, LLMContextLengthError, LLMInvalidRequestError, LLMConnectionError, ServiceError
 from core.config import BotConfig
 import os
 
@@ -19,37 +23,7 @@ import os
 from modules.llm.llm_client_registry import get_default_model
 
 
-def _clamp_thinking(model_cap, budget, current_max_tokens):
-    """H4: return (budget, max_tokens) valid for Anthropic extended thinking.
-
-    Anthropic requires ``max_tokens > thinking.budget_tokens`` AND
-    ``max_tokens <= the model's real completion cap``. Registry entries set
-    budget == cap, so the old ``max_tokens = budget + 4096`` overran the cap and 400'd.
-    Shrink the budget to leave >=4096 output room under the cap; if the cap is too
-    small to fit any thinking, return (None, ...) so the caller disables thinking.
-    """
-    if not budget or budget <= 0:
-        return None, current_max_tokens
-    if model_cap and model_cap > 0:
-        max_budget = model_cap - 4096
-        if max_budget < 1024:
-            # Cap too small to fit thinking + output room — disable thinking.
-            return None, min(current_max_tokens, model_cap)
-        if budget > max_budget:
-            budget = max_budget
-        max_tokens = current_max_tokens
-        if max_tokens <= budget:
-            max_tokens = budget + 4096
-        max_tokens = min(max_tokens, model_cap)
-        return budget, max_tokens
-    # No cap known — preserve legacy behaviour (bump above budget).
-    max_tokens = current_max_tokens
-    if max_tokens <= budget:
-        max_tokens = budget + 4096
-    return budget, max_tokens
-
-
-def _build_cached_system_param(system):
+def _build_cached_system_param(system, ttl=None):
     """Build Anthropic ``system`` as content blocks with a prompt-cache breakpoint.
 
     Flow-efficiency D4-a: the system prompt (and the tool definitions that precede
@@ -59,6 +33,8 @@ def _build_cached_system_param(system):
 
     Args:
         system: the system prompt as a ``str`` or a list of content-block dicts.
+        ttl: the resolved cache ttl ("1h") or None for the API default 5-minute
+            window, which is emitted as the BARE ephemeral marker (F4).
 
     Returns:
         A list of content-block dicts (last one carrying ``cache_control`` when
@@ -75,41 +51,27 @@ def _build_cached_system_param(system):
     else:
         blocks = [{"type": "text", "text": system}]
 
-    from modules.llm.cache_hints import prompt_cache_enabled
+    from modules.llm.cache_hints import prompt_cache_enabled, cache_control_marker
     if prompt_cache_enabled() and blocks:
-        blocks[-1] = {**blocks[-1], "cache_control": {"type": "ephemeral"}}
+        blocks[-1] = {**blocks[-1], "cache_control": cache_control_marker(ttl)}
     return blocks
 
 
-def _apply_conversation_cache(messages, n: int = 3):
-    """Mark the last ``n`` conversation messages with ``cache_control: ephemeral``.
+def _apply_conversation_cache(messages, n: int = 3, ttl=None, foundation_len=None):
+    """Mark ``n`` conversation messages with ``cache_control: ephemeral``.
 
-    Flow-efficiency B1 (Reference ``system_and_3`` parity, see
-    docs/REFERENCE_VS_ROB_CONTEXT_SYSTEM_2026-06.md §9): Anthropic allows up to **4**
-    cache breakpoints per request. ``_build_cached_system_param`` already spends 1 on
-    the system block; this spends the remaining 3 on the tail of the *conversation*,
-    so the growing message prefix is served from cache instead of re-paying full input
-    cost every turn.
+    Anthropic allows up to **4** cache breakpoints per request.
+    ``_build_cached_system_param`` spends 1 on the system block; this spends the
+    remaining 3 inside ``messages``. WHERE they go is F12 policy and lives in the
+    cache seam (``modules/llm/cache_hints.py``): with ``foundation_len`` known,
+    one marker pins the end of the foundation and two ride the last completed
+    tool transactions; without it, the pre-F12 last-``n`` rows, byte-identically.
 
     Does not mutate the caller's list. No-op (returns input unchanged) when
     ``ANTHROPIC_PROMPT_CACHE`` is disabled or ``messages`` is empty.
     """
-    from modules.llm.cache_hints import prompt_cache_enabled
-    if not prompt_cache_enabled() or not messages:
-        return messages
-
-    out = [dict(m) for m in messages]
-    for m in out[-n:]:
-        content = m.get("content")
-        if isinstance(content, str):
-            m["content"] = [{"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}]
-        elif isinstance(content, list) and content:
-            # copy the last block so we don't mutate the shared dict, then mark it
-            content = [dict(b) if isinstance(b, dict) else b for b in content]
-            if isinstance(content[-1], dict):
-                content[-1] = {**content[-1], "cache_control": {"type": "ephemeral"}}
-            m["content"] = content
-    return out
+    from modules.llm.cache_hints import mark_conversation_cache
+    return mark_conversation_cache(messages, n=n, ttl=ttl, foundation_len=foundation_len)
 
 
 class AnthropicClient(LLMClient):
@@ -126,6 +88,42 @@ class AnthropicClient(LLMClient):
     # spec-driven subclass (AnthropicCompatClient — e.g. a z.ai row) reports ITS
     # provider, never "Anthropic" (mirrors OpenRouterClient._PROVIDER_LABEL).
     _PROVIDER_LABEL = "Anthropic"
+
+    # F4: only the REAL Anthropic API is known to accept a ``ttl`` inside
+    # ``cache_control``. An Anthropic-compat seat (z.ai / kimi / minimax via
+    # AnthropicCompatClient) is a third-party /v1/messages validator that may
+    # 4xx on a key it does not know, so it overrides this to False and keeps
+    # emitting the bare ephemeral marker.
+    _SUPPORTS_CACHE_TTL = True
+
+    # F9: only the REAL Anthropic API knows `defer_loading` / `tool_addition`.
+    _SUPPORTS_DEFERRED_TOOLS = True
+
+    def _cache_ttl(self):
+        """The prompt-cache ttl for this request, or None for the bare marker.
+
+        None is BOTH "no ttl stamped" and "5m" — the 5-minute window is the API
+        default and is expressed by omitting the key, so an unstamped client
+        issues the byte-identical pre-F4 request. Fail-open on any error.
+        """
+        if not self._SUPPORTS_CACHE_TTL:
+            return None
+        try:
+            from modules.llm.cache_hints import cache_ttl_for
+            return cache_ttl_for(self)
+        except Exception:  # pragma: no cover - defensive
+            return None
+
+    def _foundation_len(self):
+        """F12: how many leading wire messages are the pinned foundation, or None.
+
+        None keeps the pre-F12 placement (the last three rows). Fail-open.
+        """
+        try:
+            from modules.llm.cache_hints import foundation_len_for
+            return foundation_len_for(self)
+        except Exception:  # pragma: no cover - defensive
+            return None
 
     def __init__(self, config: BotConfig, name: str = "anthropic_client"):
         """Initialize the client."""
@@ -237,14 +235,11 @@ class AnthropicClient(LLMClient):
             # This happens when max_tokens is high (e.g., 65536). A thinking budget raises
             # max_tokens above 8192, so this path is always taken when thinking is on.
             use_streaming = api_params['max_tokens'] > 8192
+            stamp_client(self, api_params)   # F20: prefix identity
 
-            if use_streaming:
-                self.logger.debug(f"Using streaming for tool call (max_tokens={api_params['max_tokens']})")
-                # Use streaming to avoid timeout error
-                async with self._client.messages.stream(**api_params) as stream:
-                    self.last_response = await stream.get_final_message()
-            else:
-                self.last_response = await self._client.messages.create(**api_params)
+            # F9: on a 400 naming the beta, rebuilds un-deferred and retries once.
+            self.last_response = await call_with_deferral_retry(
+                self, api_params, use_streaming)
 
             success = True
 
@@ -396,7 +391,7 @@ class AnthropicClient(LLMClient):
 
         # Make API request with tools
         # Convert system to list form + add prompt-cache breakpoint (D4-a).
-        system_param = _build_cached_system_param(system)
+        system_param = _build_cached_system_param(system, ttl=self._cache_ttl())
 
         # Build API call params - only include system if not None
         api_params = {
@@ -410,8 +405,10 @@ class AnthropicClient(LLMClient):
         }
         if system_param is not None:
             api_params['system'] = system_param
-        # B1: cache the conversation prefix (system + last 3 msgs = 4 breakpoints).
-        api_params['messages'] = _apply_conversation_cache(api_params['messages'])
+        # B1/F12: 4 breakpoints — system, the end of the foundation, 2 transactions.
+        api_params['messages'] = _apply_conversation_cache(
+            api_params['messages'], ttl=self._cache_ttl(),
+            foundation_len=self._foundation_len())
 
         # UP-07: extended-thinking block from the registry budget (gated, default OFF).
         # Anthropic requires max_tokens > budget_tokens and temperature == 1 when
@@ -451,7 +448,15 @@ class AnthropicClient(LLMClient):
                         api_params['temperature'] = 1  # required by the API when thinking is on
                         api_params['max_tokens'] = max_tokens_value
 
-        return api_params
+        # F9 (LAST, after the cache breakpoints): <tool-addition> envelopes ->
+        # `tool_addition` messages + the beta header, else every trace stripped.
+        api_params = prepare_deferred_tools(
+            api_params, enabled=deferred_tools_enabled(self))
+        return self._route_sampling_params(api_params)
+
+    def _route_sampling_params(self, api_params: Dict[str, Any]) -> Dict[str, Any]:
+        """⚠️ anthropic 1.6.0 dropped temperature/top_p/top_k from create() — see anthropic_sampling."""
+        return route_for_client(getattr(self, "_client", None), api_params)
 
     def _parse_agent_blocks(self, response) -> Tuple[str, List[Dict[str, Any]]]:
         """Extract (text, tool_calls) from an Anthropic message's content blocks.
@@ -510,16 +515,13 @@ class AnthropicClient(LLMClient):
             api_params.pop('tools', None)
             api_params.pop('tool_choice', None)
 
+        # F9: stamps, streams, self-heals ONCE before the first token is yielded.
         try:
-            async with self._client.messages.stream(**api_params) as stream:
-                async for event in stream:
-                    if getattr(event, 'type', '') == 'content_block_delta':
-                        delta = getattr(event, 'delta', None)
-                        if delta is not None and getattr(delta, 'type', '') == 'text_delta':
-                            text = getattr(delta, 'text', None)
-                            if text:
-                                yield {"type": "text", "text": text}
-                final = await stream.get_final_message()
+            async for kind, item in stream_with_deferral_retry(self, api_params):
+                if kind == "text":
+                    yield {"type": "text", "text": item}
+                else:
+                    final = item
         except Exception as e:
             self._extract_usage_and_capture_telemetry(
                 start_time, False, str(e), kwargs.get('metadata'))
@@ -688,7 +690,7 @@ class AnthropicClient(LLMClient):
 
             # Make API request
             # Convert system to list form + add prompt-cache breakpoint (D4-a).
-            system_param = _build_cached_system_param(system)
+            system_param = _build_cached_system_param(system, ttl=self._cache_ttl())
 
             # Build API call params - only include system if not None
             api_params = {
@@ -700,12 +702,16 @@ class AnthropicClient(LLMClient):
             }
             if system_param is not None:
                 api_params['system'] = system_param
-            # B1: cache the conversation prefix (system + last 3 msgs = 4 breakpoints).
-            api_params['messages'] = _apply_conversation_cache(api_params['messages'])
+            # B1/F12: 4 breakpoints — system, the end of the foundation, 2 transactions.
+            api_params['messages'] = _apply_conversation_cache(
+                api_params['messages'], ttl=self._cache_ttl(),
+                foundation_len=self._foundation_len())
 
             # FIXED: Use streaming for high max_tokens to avoid Anthropic SDK error
             # "Streaming is required for operations that may take longer than 10 minutes"
             use_streaming = max_tokens_value > 8192
+            api_params = self._route_sampling_params(api_params)  # SDK-aware temperature
+            stamp_client(self, api_params)   # F20: prefix identity
 
             if use_streaming:
                 self.logger.debug(f"Using streaming for _generate (max_tokens={max_tokens_value})")
@@ -895,6 +901,7 @@ class AnthropicClient(LLMClient):
         cache_read = getattr(usage, 'cache_read_input_tokens', 0) or 0
         cache_creation = getattr(usage, 'cache_creation_input_tokens', 0) or 0
         total_input = None if input_tokens is None else input_tokens + cache_read + cache_creation
+        from modules.llm.usage_extract import cache_creation_1h_from  # F4: 1h write slice (2.0x)
 
         # Calculate total
         total_tokens = None
@@ -906,7 +913,8 @@ class AnthropicClient(LLMClient):
             'completion_tokens': output_tokens,
             'total_tokens': total_tokens,
             'cached_tokens': cache_read,
-            'cache_creation_tokens': cache_creation
+            'cache_creation_tokens': cache_creation,
+            'cache_creation_1h_tokens': cache_creation_1h_from(usage, cache_creation),
         }
 
         self.logger.debug(f"Extracted usage: {usage_data}")

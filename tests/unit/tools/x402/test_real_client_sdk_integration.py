@@ -52,13 +52,13 @@ if x402_installed:
     KEY = b"\x11" * 32
 
     def _requirements(amount_atomic: str, network: str = NETWORK, asset: str = ASSET,
-                       extra: dict = None) -> "PaymentRequired":
+                       extra: dict = None, max_timeout_seconds: int = 60) -> "PaymentRequired":
         return PaymentRequired(
             x402_version=2,
             accepts=[
                 PaymentRequirements(
                     scheme="exact", network=network, asset=asset, amount=amount_atomic,
-                    pay_to=PAY_TO, max_timeout_seconds=60,
+                    pay_to=PAY_TO, max_timeout_seconds=max_timeout_seconds,
                     extra=extra if extra is not None else {"name": "USDC", "version": "2"},
                 )
             ],
@@ -106,6 +106,7 @@ if x402_installed:
             # WIRE-GENUINE V2 challenge (`amount` only) — what a real,
             # standards-compliant V2 x402 resource server actually sends.
             self.legacy_alias = True
+            self.max_timeout_seconds = 60   # CR-L26
 
         def handler(self, request: "httpx.Request") -> "httpx.Response":
             self.requests.append((request.method, str(request.url), bool(request.content)))
@@ -113,7 +114,8 @@ if x402_installed:
                 request.headers.get("payment-signature") or request.headers.get("x-payment")
             )
             if not paid_header:
-                pr = _requirements(self.challenge_amount, self.network, self.asset, self.extra)
+                pr = _requirements(self.challenge_amount, self.network, self.asset, self.extra,
+                                   max_timeout_seconds=self.max_timeout_seconds)
                 data = json.loads(pr.model_dump_json(by_alias=True, exclude_none=True))
                 if self.legacy_alias:
                     data["accepts"][0]["maxAmountRequired"] = data["accepts"][0]["amount"]
@@ -770,3 +772,31 @@ async def test_failed_journal_prevents_signed_payment(fake_transport, monkeypatc
             signer=LocalEoaSigner(KEY), network=NETWORK, max_amount_usd=0.1)
 
     assert signed_requests == []
+
+
+# --- CR-L26: the server-chosen authorization window is capped --------------
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("timeout", [601, 10 * 365 * 86400])
+async def test_cr_l26_refuses_a_long_authorization_window(fake_transport, timeout):
+    fake_transport.legacy_alias = False
+    fake_transport.max_timeout_seconds = timeout
+    client = RealX402Client()
+    with pytest.raises(Exception, match="authorization window"):
+        await client.fetch_with_payment(
+            url="http://fake/paid", method="POST", body="{}",
+            signer=LocalEoaSigner(KEY), network="testnet", max_amount_usd=1.00,
+        )
+    assert len(fake_transport.requests) == 1   # nothing signed, no paid retry
+
+
+@pytest.mark.asyncio
+async def test_cr_l26_allows_the_limit(fake_transport):
+    fake_transport.legacy_alias = False
+    fake_transport.max_timeout_seconds = 600
+    client = RealX402Client()
+    res = await client.fetch_with_payment(
+        url="http://fake/paid", method="POST", body="{}",
+        signer=LocalEoaSigner(KEY), network="testnet", max_amount_usd=1.00,
+    )
+    assert res.paid is True

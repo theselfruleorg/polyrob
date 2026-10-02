@@ -75,15 +75,47 @@ def _bip39_seed(mnemonic: str, passphrase: str = "") -> bytes:
         ("mnemonic" + passphrase).encode("utf-8"), 2048, dklen=64)
 
 
+_MNEMONIC_WORD_COUNTS = (12, 15, 18, 21, 24)
+
+
+def _refuse_mistyped_mnemonic(text: str) -> None:
+    """CR-L29: refuse a phrase that is SHAPED like a BIP-39 mnemonic but fails
+    its checksum.
+
+    PBKDF2 accepts any string, so one mistyped word derived a different, valid,
+    EMPTY address with no error. A string that is not mnemonic-shaped (a legacy
+    raw seed) still derives exactly as before — its address must not move — but
+    note that such a seed is NOT a phrase Phantom can import; only the exported
+    private key opens it there. When ``eth_account`` (the checksum validator) is
+    absent the check cannot run and is skipped rather than guessed.
+    """
+    words = str(text).split()
+    if len(words) not in _MNEMONIC_WORD_COUNTS or not all(
+            w.isascii() and w.isalpha() and w.islower() for w in words):
+        return
+    try:
+        import eth_account  # noqa: F401 — the checksum validator
+    except ImportError:                                          # pragma: no cover
+        return
+    from core.wallet.derivation import is_valid_mnemonic
+    if not is_valid_mnemonic(" ".join(words)):
+        raise ValueError(
+            f"the wallet seed looks like a {len(words)}-word BIP-39 mnemonic but "
+            "fails its checksum (a mistyped word?) — refusing to derive a Solana "
+            "address from it, because a typo derives a different, empty address")
+
+
 def derive_solana_keypair(mnemonic: str, account: int = 0,
                           passphrase: str = "") -> "Keypair":
-    """The ``Keypair`` for *account*. Raises if ``solders`` is unavailable."""
+    """The ``Keypair`` for *account*. Raises if ``solders`` is unavailable, or
+    if *mnemonic* is mnemonic-shaped but fails the BIP-39 checksum (CR-L29)."""
     try:
         from solders.keypair import Keypair
     except ImportError as exc:                                   # pragma: no cover
         raise RuntimeError(
             "Solana support needs `solders` — pip install 'polyrob[solana]'"
         ) from exc
+    _refuse_mistyped_mnemonic(mnemonic)
     key, chain_code = _master_key(_bip39_seed(mnemonic, passphrase))
     for level in (44 | _HARDENED, SOLANA_COIN_TYPE | _HARDENED,
                   int(account) | _HARDENED, 0 | _HARDENED):

@@ -184,3 +184,103 @@ def test_merge_asks_prefers_live_and_dedupes_overlap():
         "Grant defi_trade on the treasury cycle",
         "A genuinely separate markdown-only ask",
     ]
+
+
+def test_parse_git_log_keeps_module_scoped_changes_and_drops_the_noise_scopes():
+    """2026-09-22: the five fixes deployed at 05:09Z were committed as
+    `cron:`, `status:`, `defi:`, `wallet:` and `docs:` lines — none of them
+    `fix|feat|perf` — and the morning digest's "Fixes implemented" listed
+    yesterday's release note instead. A `<scope>: <subject>` line is a real
+    change unless the scope is a known noise word (docs/chore/tests/intel/
+    handoff/ci/style/wip/revert/merge)."""
+    lines = [
+        "72ec91955 cron: rail preflight — a $0 skip when the precondition is already false",
+        "a9d5cc741 wallet: one owner line per settled transaction",
+        "058: align every dependent of the lean base",
+        "18a659b78 docs: regenerate the user-guide configuration reference",
+        "ef861daec tests(gemini): skip, not error, when the extra is absent",
+        "d4f4c5060 intel: scorecard $ cell rounds to cents",
+        "dad6d19dc handoff: validate the completeness of 058",
+        "9b1c78a04 docs(tick 290): recent-notices build",
+        "0000000 chore(deps): bump",
+        "1111111 Merge branch 'x'",
+    ]
+    fixes = ops_digest.parse_git_fixes(lines)
+    assert fixes == [
+        "rail preflight — a $0 skip when the precondition is already false",
+        "one owner line per settled transaction",
+        "align every dependent of the lean base",
+    ]
+
+
+def test_a_filed_observation_or_a_retraction_is_not_a_fix():
+    """⚠️ 2026-09-24 05:20Z, caught 2h40m before the digest fired.
+
+    This loop files findings as commits under `inbox:` and `correction:` — 13
+    `inbox:` commits landed in ONE day. Neither scope was in `_NOISE_SCOPES`, so
+    the digest was about to present the owner with "Fixes implemented" that
+    included a hypothesis I had since PROVED WRONG ("fix is likely dropping the
+    keyword"), a retraction ("my fix may not be the fix"), and a claim I had
+    corrected ("no per-call timeout" — there is one, 60 s). It also counted one
+    incident five times.
+
+    A note about a bug is not a bug fixed. The owner reads this list at 08:00 to
+    learn what CHANGED; anything that only changed a document belongs elsewhere.
+    """
+    lines = [
+        "b290e08d5 correction: the registry DOES thread sync actions — fix is likely dropping the keyword",
+        "f3c886917 inbox: the 60s tool timeout cannot fire — every defi_data provider blocks the loop",
+        "aaaaaaaaa note: the SAFETY batch hangs, not defi_data_portfolio specifically",
+        "11504144e fix(defi): thread the blocking money-read verbs off the event loop",
+        "c425b0028 perf(defi): one pooled HTTP client for the providers",
+        "1c8b0c78a defi: thread the remaining 11 verbs, and ratchet async-in-name-only shut",
+    ]
+    fixes = ops_digest.parse_git_fixes(lines)
+    assert fixes == [
+        "thread the blocking money-read verbs off the event loop",
+        "one pooled HTTP client for the providers",
+        "thread the remaining 11 verbs, and ratchet async-in-name-only shut",
+    ], fixes
+    blob = " ".join(fixes).lower()
+    for ghost in ("likely dropping the keyword", "cannot fire", "may not be the fix"):
+        assert ghost not in blob, f"a filed observation reached the owner's fix list: {ghost!r}"
+
+
+def test_a_noise_SUB_scope_is_noise_too():
+    """`fix(inbox):` is the shape my own habit produces, and the prefix alone
+    cannot catch it — `fix` is legitimate. Real example from 2026-09-23:
+    `fix(inbox): the portfolio stall is an unbounded per-holding loop … —
+    corrected from the code`, which is a note about a diagnosis, not a change to
+    what runs. The parenthetical is the honest signal; read it.
+
+    ⚠️ Only the NOTE sub-scopes count. My first version of this test also
+    expected `feat(docs)` to be dropped, and the pre-existing
+    `test_parse_git_log_filters_to_fix_feat` caught the over-reach: it pins
+    `feat(ops): self-sufficient alerts` as a REAL feature, because a
+    parenthetical names the AREA a change landed in, not its kind. The test was
+    wrong, not the rule.
+    """
+    lines = [
+        "b4b2c1484 fix(inbox): the portfolio stall is an unbounded per-holding loop — corrected from the code",
+        "def456 feat(ops): self-sufficient alerts",
+        "11504144e fix(defi): thread the blocking money-read verbs off the event loop",
+    ]
+    assert ops_digest.parse_git_fixes(lines) == [
+        "self-sufficient alerts",
+        "thread the blocking money-read verbs off the event loop",
+    ]
+
+
+def test_collect_asks_skips_a_fulfilled_or_closed_meta_block(tmp_path):
+    """2026-09-22 08:09Z digest: two asks the owner had already settled — the
+    gate-1 A/B pick (meta ends `— CLOSED**]`) and the OpenRouter top-up (meta
+    starts `[FULFILLED BY OWNER …]`) — still rendered under "Asks (need you)"
+    because neither carried one of the recognised resolution markers."""
+    repo = _write_backlog(tmp_path, (
+        "- [2026-09-20 10:20Z; ALERTED; **ANSWERED by the owner 10:16Z (= B); "
+        "maint recorded B and fulfilled the ask — CLOSED**] **Gate-1 reference — A or B?** text\n"
+        "- [FULFILLED BY OWNER 2026-09-20 ~16:30Z — balance $9.82] [was: 2026-09-20 01:15Z] "
+        "**OpenRouter budget below the $3 line** text\n"
+        "- [2026-09-19 12:45Z] **R6 ratchet-floor reading — \"A or B?\"** still open\n"
+    ))
+    assert ops_digest.collect_asks(repo) == ['R6 ratchet-floor reading — "A or B?"']

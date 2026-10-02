@@ -11,6 +11,9 @@ action closures whose param models the registry resolves.
 import asyncio
 import logging
 import os
+import shlex
+import time
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -19,6 +22,8 @@ from pydantic import BaseModel, Field, model_validator
 from tools.base_tool import BaseTool
 from tools.coding.edit import apply_str_replace_ex, apply_patch, EditError
 from tools.coding.search import search_files
+from tools.coding.textio import (NotTextError, atomic_write_bytes, read_text,
+                                 to_file_eol, write_text)
 
 
 class CodingError(Exception):
@@ -109,6 +114,46 @@ class RestoreParams(BaseModel):
     )
 
 
+# Coding-agent review B3 (2026-09-24): a test runner prints its verdict LAST
+# (pytest's summary, jest's totals), but the backend kept the HEAD of the
+# output, killed the suite at CODE_EXEC_MAX_OUTPUT_BYTES, and the result cap
+# kept the head again. run_tests now writes the output to a workspace log and
+# returns only the tail — small enough to pass TOOL_RESULT_MAX_TOKENS whole.
+# The log is capped (a runaway suite cannot fill the disk), private (umask
+# 077), and uniquely named. The HOST never opens it: the path lives in a tree
+# the sandboxed command controls, so reading it back on the host could follow
+# a planted symlink (codex review 2026-09-25).
+_RUN_TESTS_LOG_DIR = ".polyrob/logs"
+_RUN_TESTS_TAIL_BYTES = 12000
+_RUN_TESTS_LOG_MAX_BYTES = 20 * 1024 * 1024
+_RUN_TESTS_LOGS_KEPT = 10
+
+
+def _spill_test_command(command: str, log_rel: str) -> str:
+    """Wrap *command* so its output lands in *log_rel* and the tail prints.
+
+    The command runs in a subshell, so an ``exit`` inside it cannot skip the
+    tail, and its exit status (``PIPESTATUS[0]``) is the script's. Past
+    ``_RUN_TESTS_LOG_MAX_BYTES`` the writer gets SIGPIPE, like any capped
+    capture. Only the newest ``_RUN_TESTS_LOGS_KEPT`` logs are kept.
+    """
+    log = shlex.quote(log_rel)
+    logs = shlex.quote(_RUN_TESTS_LOG_DIR)
+    return (
+        f"umask 077\nmkdir -p {logs}\n"
+        f"( {command}\n) 2>&1 < /dev/null | head -c {_RUN_TESTS_LOG_MAX_BYTES} > {log}\n"
+        "__polyrob_rc=${PIPESTATUS[0]}\n"
+        f"__polyrob_n=$(wc -c < {log} | tr -d ' ')\n"
+        f"if [ \"$__polyrob_n\" -gt {_RUN_TESTS_TAIL_BYTES} ]; then "
+        f"printf '[%s bytes of output; the last {_RUN_TESTS_TAIL_BYTES} follow; full log: %s]\\n' "
+        f"\"$__polyrob_n\" {log}; fi\n"
+        f"tail -c {_RUN_TESTS_TAIL_BYTES} {log}\n"
+        f"ls -1t {logs}/run_tests-*.log 2>/dev/null "
+        f"| tail -n +{_RUN_TESTS_LOGS_KEPT + 1} | while IFS= read -r f; do rm -f -- \"$f\"; done\n"
+        "exit \"${__polyrob_rc:-1}\"\n"
+    )
+
+
 class CodingTool(BaseTool):
     """Edit/search/test the workspace. Gated by CODING_TOOLS_ENABLED."""
 
@@ -139,7 +184,7 @@ class CodingTool(BaseTool):
         return session_workspace_root(ctx, override=self._root_override,
                                       fallback_cwd=True)
 
-    def _confine(self, file_path: str, root: str) -> str:
+    def _confine(self, file_path: str, root: str, *, write: bool = True) -> str:
         target = os.path.abspath(os.path.join(root, file_path))
         # Confine on realpath (both sides) so an in-root symlink can't redirect a
         # write outside; operate on the lexical target so a legitimate in-root
@@ -147,12 +192,18 @@ class CodingTool(BaseTool):
         from core.path_safety import is_within_root
         if not is_within_root(target, root):
             raise CodingError(f"path escapes the workspace root: {file_path}")
-        # .git guard (P1 finalization, parity with self_env._confine): a patched
-        # .git/config (fsmonitor/core.hooksPath) or .git/hooks/* is an RCE
-        # persistence vector that fires on the next git operation. The shadow-
-        # snapshot dir is named `git` (no dot), so this never blocks snapshots.
-        if ".git" in Path(target).parts:
-            raise CodingError(f"refusing to touch the .git directory: {file_path}")
+        # The ONE agent-file deny seam (core.path_safety.agent_file_refusal),
+        # shared with the filesystem tool:
+        #  - .git (read AND write): a patched .git/config (fsmonitor/
+        #    core.hooksPath) or .git/hooks/* is an RCE persistence vector that
+        #    fires on the next git operation. The shadow-snapshot dir is named
+        #    `git` (no dot), so this never blocks snapshots.
+        #  - writes to auto-loaded skill dirs and project-context files (H11);
+        #  - the data-home subtree outside the workspace (H12).
+        from core.path_safety import agent_file_refusal
+        reason = agent_file_refusal(target, root, write=write)
+        if reason:
+            raise CodingError(f"refusing to touch {reason}: {file_path}")
         # Secret-content guard: refuse credential-shaped targets (.env*, *.pem,
         # config/.env.*, …) even when in-root. Under POLYROB_LOCAL the workspace is
         # the project cwd, so confinement alone can't stop a coding action from
@@ -300,7 +351,7 @@ class CodingTool(BaseTool):
         """Record a coding-tool write in the artifact ledger (fail-open).
 
         The filesystem tool records its writes at its choke point; the coding
-        tool writes with bare open(), so without this a file the agent BUILT via
+        tool writes through its own textio seam, so without this a file the agent BUILT via
         str_replace/apply_patch/create_file is invisible to the ledger and the
         `artifact` acceptance check reports it "never produced" (a real goal
         failing on evidence that exists).
@@ -355,19 +406,23 @@ class CodingTool(BaseTool):
             target = self._confine(params.file_path, root)
             if not os.path.isfile(target):
                 return self._err(f"file not found: {params.file_path}")
-            with open(target, "r", encoding="utf-8") as f:
-                content = f.read()
+            try:
+                src = read_text(target)
+            except NotTextError as e:
+                return self._err(str(e))
+            content = src.content
+            old_string = to_file_eol(params.old_string, src.eol)
+            new_string = to_file_eol(params.new_string, src.eol)
             try:
                 updated, rung = apply_str_replace_ex(
-                    content, params.old_string, params.new_string, params.replace_all
+                    content, old_string, new_string, params.replace_all
                 )
             except EditError as e:
                 return self._err(str(e))
             await self._snapshot_before_edit(target, root, execution_context)
-            with open(target, "w", encoding="utf-8") as f:
-                f.write(updated)
+            write_text(target, updated, src.eol, src.bom, root=root)
             artifact_id = self._record_artifact(target, execution_context)
-            n = content.count(params.old_string) if params.replace_all else 1
+            n = content.count(old_string) if params.replace_all else 1
             if rung == "exact" or params.replace_all:
                 msg = f"Edited {params.file_path} ({n} replacement{'s' if n != 1 else ''})."
             else:
@@ -383,7 +438,8 @@ class CodingTool(BaseTool):
             return self._err(f"str_replace failed: {e}")
 
     @BaseTool.action(
-        "Apply a unified-diff patch to one file (reject-on-context-mismatch; fails loudly if context doesn't match)",
+        "Apply a unified-diff patch to one file: each hunk applies where its context matches nearest its @@ line "
+        "(exact, then whitespace-tolerant); fails loudly if the context matches nowhere or ambiguously",
         param_model=ApplyPatchParams,
     )
     async def apply_patch(self, params: ApplyPatchParams, execution_context=None):
@@ -392,15 +448,16 @@ class CodingTool(BaseTool):
             target = self._confine(params.file_path, root)
             if not os.path.isfile(target):
                 return self._err(f"file not found: {params.file_path}")
-            with open(target, "r", encoding="utf-8") as f:
-                content = f.read()
             try:
-                updated = apply_patch(content, params.patch)
+                src = read_text(target)
+            except NotTextError as e:
+                return self._err(str(e))
+            try:
+                updated = apply_patch(src.content, to_file_eol(params.patch, src.eol))
             except EditError as e:
                 return self._err(str(e))
             await self._snapshot_before_edit(target, root, execution_context)
-            with open(target, "w", encoding="utf-8") as f:
-                f.write(updated)
+            write_text(target, updated, src.eol, src.bom, root=root)
             artifact_id = self._record_artifact(target, execution_context)
             msg = f"Patched {params.file_path}."
             metadata = {"artifact_id": artifact_id} if artifact_id else None
@@ -418,22 +475,35 @@ class CodingTool(BaseTool):
     async def grep(self, params: GrepParams, execution_context=None):
         try:
             root = self._resolve_root(execution_context)
-            search_root = self._confine(params.path, root) if params.path else root
+            search_root = self._confine(params.path, root, write=False) if params.path else root
             # P1 finalization: run the (agent-supplied, unbounded) regex search in a
             # thread so a catastrophic-backtracking pattern (ReDoS) or a large tree
             # can't freeze the event loop — the loop stays responsive while the
             # worker thread does the CPU/IO work.
+            def allow(path):
+                # The SAME read policy as a direct read, per file: credential
+                # files, the .git deny, and realpath confinement (a symlink
+                # out of the workspace) all refuse here too.
+                try:
+                    self._confine(os.path.relpath(path, root), root, write=False)
+                    return True
+                except CodingError:
+                    return False
+            refused = []
             hits = await asyncio.to_thread(
                 search_files,
                 search_root, params.pattern, glob=params.glob, output_mode=params.output_mode,
+                allow=allow, refused=refused,
             )
+            note = (f"\n[{len(refused)} file(s) not searched: the read policy refuses them]"
+                    if refused else "")
             if not hits:
-                return self._ok("(no matches)")
+                return self._ok("(no matches)" + note)
             if params.output_mode == "files":
                 rels = [os.path.relpath(p, root) for p in hits]
-                return self._ok("\n".join(rels))
+                return self._ok("\n".join(rels) + note)
             lines = [f"{os.path.relpath(h.path, root)}:{h.line_no}:{h.line}" for h in hits]
-            return self._ok("\n".join(lines))
+            return self._ok("\n".join(lines) + note)
         except CodingError as e:
             return self._err(str(e))
         except Exception as e:
@@ -463,9 +533,13 @@ class CodingTool(BaseTool):
             except Exception:
                 dev_mode = False
             backend = await self._get_code_exec_backend(execution_context, dev_mode=dev_mode)
+            from tools.code_exec.limits import dev_exec_max_timeout_sec
+            log_rel = (f"{_RUN_TESTS_LOG_DIR}/run_tests-{time.strftime('%Y%m%d-%H%M%S')}-"
+                       f"{uuid.uuid4().hex[:8]}.log")
             req = ExecutionRequest(
-                language="bash", code=command, timeout=params.timeout, workdir=root,
-                dev_mode=dev_mode,
+                language="bash", code=_spill_test_command(command, log_rel),
+                timeout=params.timeout, workdir=root, dev_mode=dev_mode,
+                ceiling=dev_exec_max_timeout_sec(),
             )
             result = await backend.run(req)
             parts = []
@@ -477,7 +551,11 @@ class CodingTool(BaseTool):
                 parts.append("[output truncated]")
             content = "\n".join(parts) if parts else "(no output)"
             if result.timed_out:
-                return self._err(f"tests timed out after {result.duration_sec:.1f}s\n{content}")
+                # The kill landed before the wrapper printed the tail. The log
+                # holds what ran; name it for the agent to read with its own
+                # confined tools — never open it here (see _spill_test_command).
+                return self._err(f"tests timed out after {result.duration_sec:.1f}s\n{content}\n"
+                                 f"[partial output: {log_rel}]")
             if result.exit_code not in (0, None):
                 return self._err(f"tests failed (exit {result.exit_code})\n{content}")
             return self._ok(content)
@@ -502,8 +580,7 @@ class CodingTool(BaseTool):
             if os.path.exists(target):
                 await self._snapshot_before_edit(target, root, execution_context)
             os.makedirs(os.path.dirname(target) or root, exist_ok=True)
-            with open(target, "w", encoding="utf-8") as f:
-                f.write(params.content or "")
+            atomic_write_bytes(target, (params.content or "").encode("utf-8"), root=root)
             artifact_id = self._record_artifact(target, execution_context)
             msg = f"Created {params.file_path} ({len(params.content or '')} bytes)."
             metadata = {"artifact_id": artifact_id} if artifact_id else None
@@ -576,7 +653,7 @@ class CodingTool(BaseTool):
             rel = None
             if params.file_path:
                 try:
-                    target = self._confine(params.file_path, root)
+                    target = self._confine(params.file_path, root, write=False)
                 except CodingError as e:
                     return self._err(str(e))
                 rel = os.path.relpath(target, root)

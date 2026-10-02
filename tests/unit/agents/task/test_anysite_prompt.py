@@ -21,9 +21,9 @@ def test_anysite_guidance_routes_data_retrieval_here(monkeypatch):
 
 
 def test_anysite_guidance_is_wired_into_tools_section(monkeypatch):
+    import pytest
+    pytest.importorskip("polyrob_discovery")  # the live gate is the pack's
     monkeypatch.delenv("ANYSITE_TOOL_ENABLED", raising=False)  # default ON
-    import importlib, tools.anysite
-    importlib.reload(tools.anysite)
     from agents.task.agent.prompts import SystemPrompt
     # Block renders only when anysite is actually loaded THIS session.
     sp = SystemPrompt(action_description="", use_native_tools=True,
@@ -38,8 +38,6 @@ def test_anysite_guidance_absent_when_not_loaded_even_if_flag_on(monkeypatch):
     anysite isn't loaded this session, the prompt must NOT advertise it (else the
     agent reaches for a tool it cannot call)."""
     monkeypatch.delenv("ANYSITE_TOOL_ENABLED", raising=False)  # default ON
-    import importlib, tools.anysite
-    importlib.reload(tools.anysite)
     from agents.task.agent.prompts import SystemPrompt
     sp = SystemPrompt(action_description="", use_native_tools=True,
                       include_browser_tools=False, tool_ids=["twitter", "web_fetch"])
@@ -48,8 +46,6 @@ def test_anysite_guidance_absent_when_not_loaded_even_if_flag_on(monkeypatch):
 
 def test_anysite_guidance_absent_when_disabled(monkeypatch):
     monkeypatch.setenv("ANYSITE_TOOL_ENABLED", "false")
-    import importlib, tools.anysite
-    importlib.reload(tools.anysite)
     from agents.task.agent.prompts import SystemPrompt
     sp = SystemPrompt(action_description="", use_native_tools=True,
                       include_browser_tools=False, tool_ids=["anysite"])

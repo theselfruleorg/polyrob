@@ -41,7 +41,6 @@ async def _build_inline_schema(db_path: Path):
     from modules.database.x402_tables import X402Tables
     from modules.database.user_profiles import UserProfiles
     from modules.database.user_mcp_servers import UserMCPServersHandler
-    from modules.database.polymarket import PolymarketDBHandler
 
     db = DatabaseConnection(str(db_path))
     await db.connect()
@@ -49,8 +48,29 @@ async def _build_inline_schema(db_path: Path):
     await X402Tables(db).create_tables()
     await UserProfiles(db).create_table()
     await UserMCPServersHandler(db, encryption=MagicMock()).ensure_tables()
-    await PolymarketDBHandler(db, encryption=MagicMock()).ensure_tables()
+    store = _markets_store()
+    if store is not None:
+        await store.PolymarketDBHandler(db, encryption=MagicMock()).ensure_tables()
     return db
+
+
+#: Migrations whose tables belong to a pack (067 P4): the pack's store creates
+#: them inline; without the pack installed nothing creates them, so their
+#: verify() is not part of the core contract.
+_PACK_MIGRATIONS = {"v1_4_0_polymarket_credentials.py": "polyrob_markets"}
+
+
+def _markets_store():
+    try:
+        import polyrob_markets.polymarket.store as store
+    except ImportError:
+        return None
+    return store
+
+
+def _skipped(name: str) -> bool:
+    pack = _PACK_MIGRATIONS.get(name)
+    return pack is not None and _markets_store() is None
 
 
 async def _stamp_at_head(db):
@@ -69,6 +89,8 @@ def test_fresh_inline_schema_passes_every_migration_verify(tmp_path):
             await _stamp_at_head(db)
             failures = []
             for path in sorted(VERSIONS_DIR.glob("v*.py")):
+                if _skipped(path.name):
+                    continue
                 module = _load_module(path)
                 verify = getattr(module, "verify", None)
                 if verify is None:

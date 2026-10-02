@@ -8,7 +8,8 @@ URL, issue the same server-side request, and (for fetch) return the response BOD
 to the agent — had none of it.
 
 This module is that hardening, factored so both verbs and the SDK leg use one
-policy. It does NOT re-implement the validator or the loopback exception; it
+policy. The pinned/bounded transports themselves live in
+``core/security/pinned_transport.py``; this module binds the x402 bounds to them. It does NOT re-implement the validator or the loopback exception; it
 delegates to the same ones web_fetch and discovery use.
 
 Pure infrastructure — no action closures, so `from __future__` is safe here.
@@ -26,6 +27,8 @@ from typing import Optional
 from urllib.parse import urlparse
 
 import httpx
+
+from core.security import pinned_transport as _core_transport
 
 logger = logging.getLogger(__name__)
 
@@ -67,69 +70,28 @@ async def validate_x402_url(url: str, *, validator=None):
     return (None, pinned) if ok and pinned else (f"blocked URL ({err})", None)
 
 
-class BoundedAsyncTransport(httpx.AsyncBaseTransport):
-    """Bound raw responses before SDK/HTTPX decoding, retaining payment headers."""
+class _X402Bounds:
+    """Bind the transport bounds to THIS module's names, read per request, so
+    ``MAX_X402_BODY_BYTES`` / ``X402_HTTP_TIMEOUT_SEC`` stay the x402 policy
+    (and the targets a test patches)."""
 
-    def __init__(self, inner=None):
-        self._inner = inner if inner is not None else httpx.AsyncHTTPTransport()
+    @property
+    def max_body_bytes(self) -> int:
+        return MAX_X402_BODY_BYTES
 
-    async def handle_async_request(self, request):
-        request.headers["Accept-Encoding"] = "identity"
-
-        async def bounded_response():
-            response = await self._inner.handle_async_request(request)
-            extensions = dict(response.extensions)
-            body = bytearray()
-            try:
-                encoding = response.headers.get("Content-Encoding", "identity").strip().lower()
-                if encoding not in ("", "identity"):
-                    raise ValueError("compressed x402 response refused before decoding")
-                async for chunk in response.stream:
-                    room = MAX_X402_BODY_BYTES - len(body)
-                    body.extend(chunk[:room])
-                    if len(chunk) > room:
-                        extensions["polyrob_body_truncated"] = True
-                        break
-            finally:
-                await response.aclose()
-            headers = response.headers.copy()
-            # The bounded body may differ in length from the upstream framing.
-            for name in ("Content-Length", "Transfer-Encoding", "Content-Encoding"):
-                headers.pop(name, None)
-            return httpx.Response(response.status_code, headers=headers,
-                                  content=bytes(body), extensions=extensions)
-
-        return await asyncio.wait_for(bounded_response(), timeout=X402_HTTP_TIMEOUT_SEC)
-
-    async def aclose(self):
-        await self._inner.aclose()
+    @property
+    def timeout_sec(self) -> float:
+        return X402_HTTP_TIMEOUT_SEC
 
 
-class PinnedAsyncTransport(BoundedAsyncTransport):
-    """httpx transport that connects to ``pinned_ip`` while keeping the original
-    host identity.
+# The transports live in core/security/pinned_transport.py (067 P0.10); these
+# names keep every existing import and isinstance check working.
+class BoundedAsyncTransport(_X402Bounds, _core_transport.BoundedAsyncTransport):
+    """``core.security.pinned_transport.BoundedAsyncTransport`` at the x402 bounds."""
 
-    Validating a hostname and then letting the HTTP client re-resolve it leaves a
-    DNS-rebinding window: the attacker answers publicly for the validation lookup
-    and privately for the connection. Pinning closes it. The rewrite MUST preserve
-    the ``Host`` header (virtual hosting) and ``extensions["sni_hostname"]`` (TLS
-    SNI + certificate verification), or the fix trades SSRF for a broken TLS chain.
-    """
 
-    def __init__(self, hostname: str, pinned_ip: str, inner=None):
-        self._hostname = hostname
-        self._pinned_ip = pinned_ip
-        self._inner = inner if inner is not None else httpx.AsyncHTTPTransport()
-
-    async def handle_async_request(self, request):
-        url = request.url
-        if self._pinned_ip and url.host == self._hostname:
-            request.url = url.copy_with(host=self._pinned_ip)
-            request.headers["Host"] = self._hostname
-            request.extensions = dict(request.extensions or {})
-            request.extensions["sni_hostname"] = self._hostname
-        return await super().handle_async_request(request)
-
+class PinnedAsyncTransport(_X402Bounds, _core_transport.PinnedAsyncTransport):
+    """``core.security.pinned_transport.PinnedAsyncTransport`` at the x402 bounds."""
 
 
 def _make_transport(url: str, pinned_ip: Optional[str]):

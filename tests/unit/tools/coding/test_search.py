@@ -89,3 +89,35 @@ def test_missing_path_raises_naming_it(tmp_path):
     with pytest.raises(FileNotFoundError) as ei:
         search_files(str(tmp_path / "nope.md"), "x")
     assert "nope.md" in str(ei.value)
+
+
+# --- codex review 2026-09-25: the read policy applies to every file ------------
+
+import asyncio  # noqa: E402
+import logging  # noqa: E402
+
+
+def _coding_tool(root):
+    from tools.coding.tool import CodingTool
+    t = object.__new__(CodingTool)
+    t.logger = logging.getLogger("coding-test")
+    t._root_override = str(root)
+    t._backend = None
+    return t
+
+
+def test_recursive_grep_skips_credentials_and_outside_symlinks(tmp_path):
+    from tools.coding.tool import GrepParams
+
+    ws = tmp_path / "ws"
+    (ws / "cfg").mkdir(parents=True)
+    (ws / "app.py").write_text("TOKEN_NAME = 'x'\n")
+    (ws / "cfg" / ".env").write_text("TOKEN=sk-live-123\n")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("TOKEN=from-outside\n")
+    (ws / "link.txt").symlink_to(outside)
+    res = asyncio.run(_coding_tool(ws).grep(GrepParams(pattern="TOKEN")))
+    out = res.extracted_content
+    assert "app.py" in out
+    assert "sk-live-123" not in out and "from-outside" not in out
+    assert "2 file(s) not searched" in out

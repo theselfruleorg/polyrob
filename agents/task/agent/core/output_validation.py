@@ -88,6 +88,27 @@ class OutputValidationMixin:
 			component="judge", purpose="output_validation",
 		)
 
+	def _judged_output(self) -> str:
+		"""What the user actually received — the text the judge grades (A5).
+
+		A top-level agent speaks with send_message only; its done() text is an
+		internal record the user never sees, so grading it graded the wrong
+		thing. The judge reads the last send_message plus any error of the final
+		step. A sub-agent's done() text IS its report to the parent, so a
+		sub-agent keeps the legacy final-step reading.
+		"""
+		results = list(getattr(self, "_last_result", None) or [])
+		if getattr(self, "_is_sub_agent", False):
+			return "\n".join(
+				(r.extracted_content or r.error or "")
+				for r in results if (r.extracted_content or r.error)
+			) or "(no output produced)"
+		from agents.task.runtime.run_outcome import agent_user_messages
+		sent = agent_user_messages(self)
+		parts = [sent[-1]] if sent else ["(the agent sent the user no message)"]
+		parts.extend(f"Error: {r.error}" for r in results if getattr(r, "error", None))
+		return "\n".join(parts)
+
 	def _get_llm_parameters(self) -> dict:
 		"""Extract LLM parameters for logging purposes - delegates to MessageManager"""
 		return self.message_manager.get_llm_parameters()
@@ -132,14 +153,9 @@ class OutputValidationMixin:
 			# the final answer as text instead of skipping validation. Previously this
 			# branch unconditionally returned True ("can't validate"), which made
 			# validate_output a no-op for every non-browser task.
-			result_text = "\n".join(
-				(r.extracted_content or r.error or "")
-				for r in (self._last_result or [])
-				if (r.extracted_content or r.error)
-			) or "(no output produced)"
 			msg = [
 				SystemMessage(content=system_msg),
-				HumanMessage(content=f"Agent's final output:\n{result_text}"),
+				HumanMessage(content=f"Agent's final output:\n{self._judged_output()}"),
 			]
 
 		class ValidationResult(BaseModel):

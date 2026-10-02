@@ -90,3 +90,37 @@ def test_dashboard_host_port_override(monkeypatch):
     assert result.exit_code == 0, result.output
     assert captured["host"] == "0.0.0.0"
     assert captured["port"] == 9099
+
+
+def test_dashboard_leaves_no_data_dir_in_an_empty_cwd(monkeypatch, tmp_path):
+    """With no DATA_ROOT / POLYROB_DATA_DIR the console's session tree anchors on
+    the data home (<cwd>/.polyrob/sessions, the tree `polyrob` writes), so the
+    legacy ./data/task is never created in the caller's folder."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("DATA_ROOT", raising=False)
+    monkeypatch.delenv("POLYROB_DATA_DIR", raising=False)
+    import uvicorn
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: None)
+    try:
+        from cli.commands.dashboard import dashboard
+        result = CliRunner().invoke(dashboard, ["--no-browser"])
+        assert result.exit_code == 0, result.output
+
+        from agents.task.path import PathManager
+        from core.runtime_paths import resolve_data_home, resolve_session_data_root
+        root = resolve_session_data_root()
+        assert root == (resolve_data_home() / "sessions").resolve()
+        PathManager()  # what the console startup builds
+        assert not (tmp_path / "data").exists()
+    finally:
+        os.environ.pop("DATA_ROOT", None)
+
+
+def test_dashboard_keeps_an_operator_data_root(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path / "mine"))
+    import uvicorn
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: None)
+    from cli.commands.dashboard import dashboard
+    assert CliRunner().invoke(dashboard, ["--no-browser"]).exit_code == 0
+    assert os.environ["DATA_ROOT"] == str(tmp_path / "mine")

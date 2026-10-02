@@ -35,6 +35,10 @@ class MCPToolMetadata:
     input_schema: Dict[str, Any]
     server_name: str
     server_tool_name: str = ""  # Actual name the server expects (may differ from canonical name)
+    #: 033: the spec's tool annotations (readOnlyHint, destructiveHint, ...) as
+    #: the server sent them. A third party's claim: it may only NARROW the effect
+    #: classification (core/effects.py), never raise trust.
+    annotations: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -733,7 +737,9 @@ class MCPServerManager:
                     description=tool.get("description", ""),
                     input_schema=tool.get("inputSchema", {}),
                     server_name=connection.name,
-                    server_tool_name=server_tool_name  # What server expects
+                    server_tool_name=server_tool_name,  # What server expects
+                    annotations=(tool.get("annotations")
+                                 if isinstance(tool.get("annotations"), dict) else {}),
                 ))
 
                 self.logger.debug(

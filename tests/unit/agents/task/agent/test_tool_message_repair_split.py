@@ -22,9 +22,18 @@ def test_validate_tool_message_pairs_on_empty_is_true():
 
 
 def test_no_circular_import_either_order():
-    # importing the repair module first must not deadlock/raise
-    import importlib
-    import agents.task.agent.message_manager.tool_message_repair as a  # noqa
-    import agents.task.agent.message_manager.tool_call_builder as b  # noqa
-    importlib.reload(a)
-    assert hasattr(b, "repair_and_normalize")
+    # Cold imports belong in a fresh interpreter: reload changes function
+    # identities while import-time reexports elsewhere retain their originals.
+    import subprocess
+    import sys
+
+    prefix = "agents.task.agent.message_manager."
+    for first, second in (("tool_message_repair", "tool_call_builder"),
+                          ("tool_call_builder", "tool_message_repair")):
+        subprocess.run(
+            [sys.executable, "-c",
+             "import importlib; "
+             f"importlib.import_module({prefix + first!r}); "
+             f"importlib.import_module({prefix + second!r})"],
+            check=True, capture_output=True, text=True,
+        )

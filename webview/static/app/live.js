@@ -10,7 +10,9 @@
  *    server — a stranger is refused and nothing here changes that) and
  *    re-dispatches every `activity_event` on `document` as
  *    `polyrob:activity`, so any destination module can redraw itself;
- * 2. ticks `polyrob:tick` every 30 s as the fallback when the socket is down;
+ * 2. ticks `polyrob:tick` every 30 s ONLY while the socket is down (070 W0.14:
+ *    a tick re-read the workspace tree and the feed on every open chat, all
+ *    day, even with the socket up);
  * 3. refreshes the frame's own two lines — the head truth and the Inbox badge —
  *    from `/api/webgate/head`, which renders them with the SAME Python the page
  *    used, so the words never fork.
@@ -67,7 +69,48 @@ function dispatch(name, detail) {
   document.dispatchEvent(new CustomEvent(name, { detail }));
 }
 
-async function connect() {
+/** The socket state the tick reads. `connected` is false until a connect. */
+export function liveState() {
+  return { connected: false };
+}
+
+/** One interval beat: `polyrob:tick` only while the socket is down; the head
+ *  line is refreshed either way. Exported for tests. */
+export function beat(state, fire = dispatch, refresh = refreshHead) {
+  if (!state.connected) fire('polyrob:tick');
+  refresh();
+}
+
+/** Bind the activity socket's events to *state* and `document`. Exported for tests. */
+export function wireSocket(socket, state, fire = dispatch, later = setTimeout) {
+  socket.on('connect', () => {
+    state.connected = true;
+    // 070 W0.17: a good (re)connect clears the head's live notice.
+    fire('polyrob:live-ok');
+    socket.emit('join_activity', {});
+  });
+  socket.on('disconnect', () => { state.connected = false; });
+  socket.on('connect_error', () => { state.connected = false; });
+  socket.on('activity_event', (ev) => fire('polyrob:activity', ev));
+  // A32: `join_activity` is owner/admin-gated and the server answers a refusal
+  // on the `error` event. Nothing listened for it, so a seat that may not join
+  // the cross-tenant stream simply saw a console that never updated again —
+  // indistinguishable from a quiet agent. pause.js renders the sentence.
+  socket.on('error', (body) => {
+    fire('polyrob:live-refused', body);
+    // 070 W0.17: the server keeps the socket on a rate limit; join again once
+    // the window has passed, and the next good join clears the notice.
+    if (body && body.code === 'rate_limited') {
+      const wait = Number(body.retry_after) > 0 ? Number(body.retry_after) : 60;
+      later(() => {
+        socket.emit('join_activity', {});
+        fire('polyrob:live-ok');
+      }, wait * 1000);
+    }
+  });
+}
+
+async function connect(state) {
   let io;
   try {
     io = await loadSocketIo();
@@ -76,13 +119,7 @@ async function connect() {
     return;
   }
   const socket = io({ path: '/socket.io', transports: ['polling', 'websocket'], reconnection: true });
-  socket.on('connect', () => socket.emit('join_activity', {}));
-  socket.on('activity_event', (ev) => dispatch('polyrob:activity', ev));
-  // A32: `join_activity` is owner/admin-gated and the server answers a refusal
-  // on the `error` event. Nothing listened for it, so a seat that may not join
-  // the cross-tenant stream simply saw a console that never updated again —
-  // indistinguishable from a quiet agent. pause.js renders the sentence.
-  socket.on('error', (body) => dispatch('polyrob:live-refused', body));
+  wireSocket(socket, state);
 }
 
 function bind() {
@@ -93,8 +130,9 @@ function bind() {
     pending = setTimeout(() => { pending = null; refreshHead(); }, HEAD_DEBOUNCE_MS);
   };
   document.addEventListener('polyrob:activity', headSoon);
-  setInterval(() => { dispatch('polyrob:tick'); refreshHead(); }, TICK_MS);
-  connect();
+  const state = liveState();
+  setInterval(() => beat(state), TICK_MS);
+  connect(state);
 }
 
 if (typeof document !== 'undefined') {

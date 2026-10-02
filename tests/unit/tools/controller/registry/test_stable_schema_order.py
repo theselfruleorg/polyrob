@@ -32,11 +32,19 @@ def _registry(names):
 _NAMES = ["zeta_action", "alpha_action", "mid_action", "beta_action"]
 
 
-def test_default_is_registration_order(monkeypatch):
+def test_default_is_sorted_order(monkeypatch):
+    """2026-09-22 harness/cache review F1: the default is the stable order."""
     monkeypatch.delenv("TOOL_SCHEMA_STABLE_ORDER", raising=False)
     emitted = _registry(_NAMES).get_all_actions_for_provider("openai")
     got = [t["function"]["name"] for t in emitted if isinstance(t, dict)]
-    assert got == _NAMES, "default must stay byte-identical to pre-057"
+    assert got == sorted(_NAMES), "default must be the registration-independent order"
+
+
+def test_false_restores_registration_order(monkeypatch):
+    monkeypatch.setenv("TOOL_SCHEMA_STABLE_ORDER", "false")
+    emitted = _registry(_NAMES).get_all_actions_for_provider("openai")
+    got = [t["function"]["name"] for t in emitted if isinstance(t, dict)]
+    assert got == _NAMES, "`false` is the pre-057 escape"
 
 
 def test_two_registries_with_the_same_ids_emit_identical_bytes(monkeypatch):

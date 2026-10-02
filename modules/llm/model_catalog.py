@@ -264,6 +264,13 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
     # the claude-api model catalog (cached 2026-06-24).
     # ----------------------------------------
 
+    # F9 (063 WS-4, 2026-09-23): `supports_mid_conversation_tool_changes` is the
+    # ONE table that answers "may this model be sent `defer_loading` tools and
+    # `tool_addition` messages" (beta mid-conversation-tool-changes-2026-07-01).
+    # Available on Claude Opus 5 onward — Opus 5, Fable 5, Fable 5.1 and the
+    # Mythos 5 family. Deliberately NOT set on Opus 4.8 or older, on Sonnet 4.6,
+    # or on Sonnet 5 (unverified — treated as unsupported).
+
     # Claude Fable 5 - most capable widely-released model (thinking always on)
     register(ModelConfig(
         name="claude-fable-5",
@@ -273,9 +280,44 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
         pricing=ModelPricing(input_price=10.00, output_price=50.00),
         capabilities=ModelCapabilities(
             supports_thinking=True,  # always-on adaptive; budget_tokens rejected
+            supports_mid_conversation_tool_changes=True,
         ),
         chars_per_token=5.0,
         aliases=["claude-fable", "fable-5", "fable", "claude-fable5"]
+    ))
+
+    # Claude Fable 5.1 - 128K max output; its cache READ is a flat $0.25/MTok,
+    # NOT the 0.1x the derivation would produce, so the price is explicit here.
+    register(ModelConfig(
+        name="claude-fable-5-1",
+        provider=ModelProvider.ANTHROPIC,
+        context_window=1000000,
+        max_completion_tokens=128000,
+        pricing=ModelPricing(
+            input_price=10.00, output_price=50.00, cached_input_price=0.25),
+        capabilities=ModelCapabilities(
+            supports_thinking=True,  # always-on adaptive; budget_tokens rejected
+            supports_mid_conversation_tool_changes=True,
+        ),
+        chars_per_token=5.0,
+        aliases=["claude-fable-5.1", "fable-5-1", "fable-5.1"]
+    ))
+
+    # Claude Opus 5 - the current flagship Opus and the first model with
+    # mid-conversation tool changes. Also the fallback target for any unknown
+    # `claude-opus-*` id (F31 family chain in model_registry.py).
+    register(ModelConfig(
+        name="claude-opus-5",
+        provider=ModelProvider.ANTHROPIC,
+        context_window=1000000,
+        max_completion_tokens=64000,
+        pricing=ModelPricing(input_price=5.00, output_price=25.00),
+        capabilities=ModelCapabilities(
+            supports_thinking=True,  # adaptive; budget_tokens rejected (400)
+            supports_mid_conversation_tool_changes=True,
+        ),
+        chars_per_token=5.0,
+        aliases=["claude-opus5", "opus-5", "claude-5-opus"]
     ))
 
     # Claude Opus 4.8 - most capable Opus-tier (current flagship Opus)

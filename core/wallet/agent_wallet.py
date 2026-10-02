@@ -8,11 +8,14 @@ funds (`AgentWallet.address`) is exactly the address spent from.
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Callable, List, Mapping, Optional
 
 from core.wallet.config import WalletConfig
-from core.wallet.policy import PolicyGate
+from core.money.ledger import SpendLedger as PolicyGate
 from core.wallet.signer import LocalEoaSigner
+
+logger = logging.getLogger(__name__)
 
 VENUES = frozenset({"treasury", "x402", "polymarket", "hyperliquid"})
 # Venues whose derived key holds a same-chain float the agent spends directly.
@@ -108,6 +111,16 @@ class AgentWallet:
             _derivation.maybe_warn_legacy_mnemonic(self._seed, self._scheme)
         except Exception:
             pass
+        # CR-L31: a seeded wallet plants the audit ledger's genesis mark BEFORE
+        # anything publishes a wallet of record, so a later "no ledger, no mark,
+        # but a wallet of record" state reads as tampering, not a fresh install.
+        if config.enabled and self._signing_available:
+            genesis = getattr(audit_sink, "ensure_genesis", None)
+            if callable(genesis):
+                try:
+                    genesis()
+                except Exception:
+                    logger.warning("wallet audit genesis mark not written", exc_info=True)
         self._signers: dict[str, LocalEoaSigner] = {}
         self._policy = PolicyGate(
             max_per_tx_usd=config.max_per_tx_usd,

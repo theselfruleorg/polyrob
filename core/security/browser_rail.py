@@ -27,6 +27,7 @@ never rendered.
 from __future__ import annotations
 
 import os
+import re
 import socket
 import time
 from dataclasses import dataclass
@@ -88,6 +89,8 @@ class BrowserRailStatus:
         if self.state == "unset":
             return f"none (custody) → {self.remedy}"
         if self.state == "configured":
+            if self.reason:
+                return f"remote {self.endpoint} configured ({self.reason})"
             return f"remote {self.endpoint} configured (not probed)"
         return f"remote {self.endpoint} configured, unreachable ({self.reason or 'probe failed'}) → {self.remedy}"
 
@@ -180,7 +183,7 @@ def browser_rail_status(*, refresh: bool = False, probe: bool = True) -> Browser
             and now - _cache["at"] < PROBE_TTL_SEC):
         return cached
     status = _compute(probe=probe)
-    if status.state != "configured":
+    if status.state != "configured" or status.reason:
         _cache["at"] = now
         _cache["value"] = status
         _cache["key"] = key
@@ -211,4 +214,69 @@ def _compute(*, probe: bool = True) -> BrowserRailStatus:
     ok, reason, version = (_probe_cdp if endpoint == "cdp" else _probe_tcp)(url or "")
     if ok:
         return BrowserRailStatus("ok", endpoint, custody, version=version)
+    if (reason == "connection refused" and _is_loopback(url or "")
+            and _uid_rule_closes(url or "") and _local_unit_active()):
+        # The browser egress rules close the loopback CDP port to every UID but
+        # root/browser/agent (server security assessment M1, 2026-09-25), so a
+        # console process is refused while the rail is up. Report the unit, not a fault.
+        return BrowserRailStatus("configured", endpoint, custody, reason=UID_CLOSED_REASON)
     return BrowserRailStatus("unreachable", endpoint, custody, reason=reason)
+
+
+UID_CLOSED_REASON = "port closed to this process; polyrob-browser.service active"
+
+
+#: Where ``polyrob browser install`` puts the egress rule (cli/commands/browser.py
+#: ``EGRESS_SCRIPT_PATH``; a test pins the two equal — core may not import cli).
+EGRESS_SCRIPT = "/usr/local/sbin/polyrob-browser-egress.sh"
+_RULE_DEFAULT = re.compile(r'^(USER_NAME|CDP_PORT|CDP_CLIENT_NAMES)="\$\{[A-Z_]+:-([^}"]*)\}"', re.M)
+_RULE_ENV = {"USER_NAME": "POLYROB_BROWSER_USER", "CDP_PORT": "POLYROB_BROWSER_CDP_PORT",
+             "CDP_CLIENT_NAMES": "POLYROB_BROWSER_CDP_CLIENTS"}
+
+
+def _installed_rule(path: Optional[str] = None) -> Optional[dict]:
+    """The installed egress rule's port / browser user / clients, or None.
+
+    Read from the INSTALLED script (the rule itself), not from a default of
+    ours, so a ``browser install --port N`` host reads N. The process's own
+    env overrides a value the same way the script's ``${VAR:-default}`` does.
+    """
+    try:
+        with open(path or EGRESS_SCRIPT, encoding="utf-8") as fh:
+            text = fh.read(65536)
+    except OSError:
+        return None
+    found = dict(_RULE_DEFAULT.findall(text))
+    if set(found) != set(_RULE_ENV) or "CDP_ALLOW" not in text:
+        return None
+    return {k: os.environ.get(env) or found[k] for k, env in _RULE_ENV.items()}
+
+
+def _uid_rule_closes(url: str) -> bool:
+    """Whether the installed browser egress rule refuses THIS process on *url*.
+
+    True only with evidence: the rule is installed, *url*'s port is the rule's
+    port, and this process's user is outside its allowed set (root, the
+    browser user, the CDP clients). Anything else keeps ``unreachable``.
+    """
+    rule = _installed_rule()
+    if rule is None:
+        return False
+    try:
+        if urlsplit(url).port != int(rule["CDP_PORT"]):
+            return False
+        import pwd
+        me = pwd.getpwuid(os.geteuid()).pw_name
+    except (ValueError, KeyError, OSError, ImportError):
+        return False
+    return me not in {"root", rule["USER_NAME"], *rule["CDP_CLIENT_NAMES"].split()}
+
+
+def _local_unit_active() -> bool:
+    """Whether the local isolated browser unit runs (a local read, 2 s cap)."""
+    import subprocess
+    try:
+        return subprocess.run(["systemctl", "is-active", "--quiet", "polyrob-browser.service"],
+                              timeout=2, check=False).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False

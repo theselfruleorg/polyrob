@@ -162,6 +162,44 @@ def run_quick_key_setup() -> bool:
     return ok
 
 
+def _seed_identity_docs(instance_id: str) -> str:
+    """Seed the SOUL docs on a fresh install; return the seed digest (or "").
+
+    062: a reference agent writes a real default persona file at install time and POLYROB
+    wrote nothing, so a fresh instance had no identity at all and `doctor` said
+    "author with `polyrob soul init`" forever. Seeding is a courtesy, not a
+    promotion — SOUL stays operator-authored, the agent still cannot write it,
+    and the digest we record is what keeps "seeded default" honestly separate
+    from "the owner wrote this".
+    """
+    try:
+        from core.runtime_paths import resolve_data_home
+
+        from cli.commands.soul import scaffold_soul
+        data_home = Path(resolve_data_home())
+        if (data_home / "identity" / "identity.md").exists():
+            return ""
+        _path, sha = scaffold_soul(data_home, name=instance_id or "polyrob",
+                                   mission="be genuinely useful")
+        return sha
+    except Exception:
+        return ""
+
+
+def _ensure_user_skills_home() -> Path | None:
+    """Create ``~/.agents/skills`` — the place a user's own skills go.
+
+    The directory has always been READ (``agents/task/agent/skill_discovery``)
+    and never created, so "where do I put a skill" had no visible answer.
+    """
+    try:
+        target = Path.home() / ".agents" / "skills"
+        target.mkdir(parents=True, exist_ok=True)
+        return target
+    except OSError:
+        return None
+
+
 def _write_env(env_path: Path, updates: dict) -> None:
     """Upsert KEY=VALUE lines into env_path, then lock it to 0600."""
     lines = env_path.read_text().splitlines() if env_path.exists() else []
@@ -264,7 +302,7 @@ def init_cmd(
     if openai_key:
         collected_keys["OPENAI_API_KEY"] = openai_key
 
-    # Populated by Section 6/6 (Autonomy & guardrails), below; skipped entirely
+    # Populated by Section 6/7 (Autonomy & guardrails), below; skipped entirely
     # (stays empty) under --quick / --no-prompt / --non-interactive.
     guardrail_updates: dict[str, str] = {}
 
@@ -274,18 +312,18 @@ def init_cmd(
         # interactive provider sweep (quick = fast, non-nagging). The full interactive
         # wizard (non-quick) still prompts every provider.
         if not (quick and collected_keys) and not skip_keys:
-            click.echo("\n=== Section 1/6: LLM provider keys ===")
+            click.echo("\n=== Section 1/7: LLM provider keys ===")
             click.echo("Recommended: OpenRouter — one key, access to every model, auto-failover.")
             _prompt_provider_keys(collected_keys)
 
         # ── Section (b): Default model ───────────────────────────────────────
-        click.echo("\n=== Section 2/6: Default model ===")
+        click.echo("\n=== Section 2/7: Default model ===")
         default_model = default_model or click.prompt(
             "Default model (blank to skip)", default="", show_default=False)
 
         if not quick:
             # ── Section (c): Toolset ─────────────────────────────────────────
-            click.echo("\n=== Section 3/6: Toolset ===")
+            click.echo("\n=== Section 3/7: Toolset ===")
             toolset_choices = list(TOOLSETS.keys())
             click.echo(f"Available toolsets: {', '.join(toolset_choices)}")
             default_ts = effective_toolset or "default"
@@ -298,7 +336,7 @@ def init_cmd(
                 effective_toolset = "default"
 
             # ── Section (d): Template / persona ──────────────────────────────
-            click.echo("\n=== Section 4/6: Template / persona ===")
+            click.echo("\n=== Section 4/7: Template / persona ===")
             from agents.task.templates import TEMPLATES
             template_choices = list(TEMPLATES.keys())
             click.echo(f"Available templates: {', '.join(template_choices)}")
@@ -340,7 +378,7 @@ def init_cmd(
             # Pair this instance to an owner id so autonomy/self-evolution surfaces
             # know who to answer to. Single-user local: the owner id and instance id
             # are typically the same (both default "polyrob"). Explicit flags win.
-            click.echo("\n=== Section 5/6: Owner pairing ===")
+            click.echo("\n=== Section 5/7: Owner pairing ===")
             from core.instance import DEFAULT_INSTANCE_ID
             if instance_id is None:
                 instance_id = click.prompt(
@@ -350,13 +388,13 @@ def init_cmd(
                     "Owner user id (blank = same as instance id)",
                     default=(instance_id or DEFAULT_INSTANCE_ID), show_default=True) or None
 
-            # ── Section 6/6: Autonomy & guardrails ───────────────────────────
+            # ── Section 6/7: Autonomy & guardrails ───────────────────────────
             # All prompts blank-to-skip. Env keys land in ``guardrail_updates``
             # (merged into the ~/.polyrob/.env upsert below); the digest choice
             # writes a typed preference instead when an owner uid is known
             # (which it always is here — Owner pairing above just defaulted
             # one), falling back to an env note only if it somehow isn't.
-            click.echo("\n=== Section 6/6: Autonomy & guardrails ===")
+            click.echo("\n=== Section 6/7: Autonomy & guardrails ===")
             # 030 WS-F7 (C8): name the capability axes ONCE, before the prompts —
             # a new operator used to meet a 4-axis cascade with no introduction.
             click.echo(
@@ -414,10 +452,45 @@ def init_cmd(
                 else:
                     guardrail_updates["OWNER_DIGEST_ENABLED"] = "true"
                     click.echo(
-                        "No owner id known yet — set OWNER_DIGEST_ENABLED=true "
-                        "in ~/.polyrob/.env; pair an owner (`polyrob owner "
-                        "invite`) to get per-owner digest preferences instead."
+                        "No owner id known yet — the digest stays on through "
+                        "OWNER_DIGEST_ENABLED (written now); pair an owner "
+                        "(`polyrob owner invite`) to get per-owner digest "
+                        "preferences instead."
                     )
+
+            # ── Section 7/7: Reach me ────────────────────────────────────────
+            # 062: the wizard configured everything EXCEPT the one thing that
+            # makes the agent reachable. A chat surface needs BOTH its token
+            # and its *_SURFACE_ENABLED flag — `polyrob gateway` starts a
+            # surface only when the flag is on, and doctor has been explaining
+            # that trap to people the wizard itself created.
+            click.echo("\n=== Section 7/7: Reach me ===")
+            from cli.surfaces_config import flag_var, surface_choices, token_var
+            click.echo("Talk to the agent from a chat app (blank = terminal only).")
+            click.echo(f"Options: {', '.join(surface_choices())}")
+            picked = (click.prompt("Surface", default="", show_default=False) or "").strip().lower()
+            if picked and picked in surface_choices():
+                tvar, fvar = token_var(picked), flag_var(picked)
+                if tvar:
+                    token = click.prompt(f"{tvar} (blank to skip)", default="",
+                                         show_default=False, hide_input=True).strip()
+                    if token:
+                        guardrail_updates[tvar] = token
+                        guardrail_updates[fvar] = "true"
+                        click.echo(f"{picked}: token stored and {fvar}=true")
+                        click.echo("  Run it:  polyrob gateway   "
+                                   "(or keep it running: polyrob service install)")
+                    else:
+                        click.echo(f"Skipped — later: polyrob config set {tvar} <token> "
+                                   f"--global && polyrob config set {fvar} true --global")
+                else:
+                    # email has no token of its own; it needs IMAP/SMTP or an
+                    # AgentMail key, which `polyrob doctor` names.
+                    guardrail_updates[fvar] = "true"
+                    click.echo(f"{fvar}=true — `polyrob doctor` names the mailbox "
+                               "credentials it still needs.")
+            elif picked:
+                click.echo(f"Unknown surface '{picked}' — skipped.")
 
             # ── Optional: agent crypto wallet (fully optional; default No) ────
             # M17 (2026-07-15): don't promise invoicing unconditionally — the
@@ -526,6 +599,30 @@ def init_cmd(
     sessions = Path.cwd() / ".polyrob" / "sessions"
     sessions.mkdir(parents=True, exist_ok=True)
 
+    # 062 — seed the self, then record the install. The marker is written LAST
+    # so it can only describe steps that actually happened.
+    seed_sha = _seed_identity_docs(instance_id or "")
+    skills_home = _ensure_user_skills_home()
+    try:
+        from core.bootstrap_marker import write_marker
+        from core.version import get_version
+
+        from cli.update.detect import detect_install
+        from cli.update.extras import installed_extras
+        ctx_install = detect_install()
+        try:
+            extras = installed_extras(ctx_install.repo_root)
+        except Exception:
+            extras = []
+        # No path: the record goes to the per-user config home. The data home
+        # is cwd-scoped by design, and an install fact written there reads as
+        # "never bootstrapped" from every other directory.
+        write_marker(version=get_version(),
+                     install_method=ctx_install.method, extras=extras,
+                     soul_seed_sha=seed_sha)
+    except Exception:
+        pass  # a missing install record must never fail an install
+
     # 027 WP5: only inside a git work tree — `polyrob init` in ~/Documents used
     # to leave a spurious .gitignore behind.
     from cli.gitignore import ensure_polyrob_gitignored
@@ -567,11 +664,14 @@ def init_cmd(
             click.echo(line)
     except Exception:
         pass
+    if skills_home:
+        click.echo(f"Your own skills go in: {skills_home}")
     click.echo("\nNext steps (all optional):")
     click.echo("  • agent wallet:   polyrob wallet init")
-    click.echo("  • avatar:         polyrob pfp generate   (or /pfp in the chat)")
-    click.echo("  • surfaces:       polyrob gateway --help  (telegram, email, …)")
+    click.echo("  • avatar:         polyrob avatar set <image>   (or /avatar in the chat)")
+    click.echo("  • surfaces:       polyrob setup           (re-run — section 7 wires a chat app)")
+    click.echo("  • keep running:   polyrob service install (background service)")
     click.echo("  • character:      polyrob persona init <slug>  (give it its own voice)")
-    click.echo("  • identity:       polyrob soul init      (author who this instance is)")
+    click.echo("  • identity:       polyrob soul init --force    (the seeded docs are generic)")
     click.echo("  • health check:   polyrob doctor")
     click.echo('\nAsk me anything about myself — try "what can you do?"')

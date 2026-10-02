@@ -22,6 +22,8 @@ from agents.task.agent.tool_call_tracker import ToolCallTracker  # Robust tool c
 
 from dotenv import load_dotenv
 
+from core.context_fences import has_control_fence, strip_control_fences
+
 # Import centralized constants
 from agents.task.constants import (
     IMG_TOKENS,
@@ -215,6 +217,14 @@ class MemoryWriterMixin:
 			# Extract memory from brain_state.memory (PRIMARY source)
 			raw_memory = brain_state.get('memory', '').strip()
 
+			# 070 W1.5: an injected context block (<owner-thread>, <group-context>…)
+			# copied into brain memory is context, not a finding. Strip it; a
+			# finding that was ONLY a fence skips the H-MEM write entirely.
+			fence_only = False
+			if raw_memory and has_control_fence(raw_memory):
+				raw_memory = strip_control_fences(raw_memory).strip()
+				fence_only = not raw_memory
+
 			# CO-F4 / A1: the "Synthesis pending..." placeholder brain is not a real
 			# finding — it must be treated as empty for BOTH the H-MEM write (handled
 			# by the fallback at the bottom) AND the loop-duplicate heuristic. Setting
@@ -275,7 +285,7 @@ class MemoryWriterMixin:
 			# REFLECTION_LLM_ENABLED=true, blocks on an aux-LLM call (run_coroutine_sync, up to
 			# 30s) that would otherwise freeze every concurrent session in this process. We await
 			# the result so per-session ordering is preserved (mirrors _save_conversation).
-			success = await asyncio.to_thread(
+			success = False if fence_only else await asyncio.to_thread(
 				self.task_context_manager.add_step_memory,
 				session_id=self.session_id,
 				step=step_number,
@@ -308,6 +318,8 @@ class MemoryWriterMixin:
 							)
 				except Exception as val_error:
 					self.logger.debug(f"H-MEM validation check failed: {val_error}")
+			elif fence_only:
+				self.logger.debug(f"H-MEM write skipped at step {step_number}: memory was only a control fence")
 			else:
 				self.logger.warning(f"⚠️  H-MEM save returned False for step {step_number}")
 
@@ -350,10 +362,12 @@ class MemoryWriterMixin:
 				# it to the live session feed. Fail-open.
 				try:
 					from agents.task.telemetry.memory_events import emit_memory_event
+					from modules.memory.scope import session_scope, telemetry_attrs
 					ev_attrs = emit_memory_event("memory_write", user_id=self.user_id or "",
 					                             session_id=self.session_id, source="sync_turn",
 					                             scope="cross_session", content=content,
-					                             count=len(promoted))
+					                             count=len(promoted),
+					                             **telemetry_attrs(session_scope(self.session_id)))
 					if ev_attrs and getattr(self, "orchestrator", None) is not None:
 						try:
 							await self.orchestrator.add_to_feed(

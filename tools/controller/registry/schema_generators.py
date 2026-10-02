@@ -43,8 +43,17 @@ class ToolSchemaGenerator(ABC):
         pass
 
     @abstractmethod
-    def generate_tools_list(self, actions: List[RegisteredAction]) -> Any:
-        """Generate the complete tools list/object for the provider"""
+    def generate_tools_list(self, actions: List[RegisteredAction],
+                            deferred_names: frozenset = frozenset()) -> Any:
+        """Generate the complete tools list/object for the provider.
+
+        F9 (063 WS-4, 2026-09-23): *deferred_names* are the actions registered
+        AFTER this session's first emit. Only the Anthropic generator acts on
+        them (it stamps ``"defer_loading": true``, which keeps the tool out of
+        the model's context and therefore out of the cached prefix); every other
+        generator accepts the argument and ignores it, so the Registry can pass
+        one list to every provider.
+        """
         pass
 
     def _get_json_schema(self, param_model: Type[BaseModel]) -> Dict[str, Any]:
@@ -199,8 +208,12 @@ class OpenAISchemaGenerator(ToolSchemaGenerator):
 
         return schema
 
-    def generate_tools_list(self, actions: List[RegisteredAction]) -> List[Dict[str, Any]]:
-        """Generate OpenAI tools list with deduplication by name + error policy."""
+    def generate_tools_list(self, actions: List[RegisteredAction],
+                            deferred_names: frozenset = frozenset()) -> List[Dict[str, Any]]:
+        """Generate OpenAI tools list with deduplication by name + error policy.
+
+        ``deferred_names`` is ignored — deferral is an Anthropic-only shape.
+        """
         seen_names = set()
         tools = []
         for action in actions:
@@ -242,8 +255,16 @@ class AnthropicSchemaGenerator(ToolSchemaGenerator):
 
         return schema
 
-    def generate_tools_list(self, actions: List[RegisteredAction]) -> List[Dict[str, Any]]:
-        """Generate Anthropic tools list with deduplication by name + error policy."""
+    def generate_tools_list(self, actions: List[RegisteredAction],
+                            deferred_names: frozenset = frozenset()) -> List[Dict[str, Any]]:
+        """Generate Anthropic tools list with deduplication by name + error policy.
+
+        F9 shape (b): an action in *deferred_names* is emitted with
+        ``"defer_loading": true`` — the request KNOWS the tool but the model's
+        context does not hold it, so adding one is explicitly not an edit to the
+        cached prefix. It is surfaced later by a ``tool_addition`` message
+        (``modules/llm/deferred_tools.py``).
+        """
         seen_names = set()
         tools = []
         for action in actions:
@@ -255,6 +276,8 @@ class AnthropicSchemaGenerator(ToolSchemaGenerator):
                 self.generate_tool_schema(action, validate=False), action.name
             )
             if schema is not None:
+                if action.name in deferred_names:
+                    schema["defer_loading"] = True
                 tools.append(schema)
         return tools
 
@@ -291,8 +314,12 @@ class GeminiSchemaGenerator(ToolSchemaGenerator):
 
         return schema
 
-    def generate_tools_list(self, actions: List[RegisteredAction]) -> List[Dict[str, Any]]:
-        """Generate Gemini tools list with function declarations + error policy."""
+    def generate_tools_list(self, actions: List[RegisteredAction],
+                            deferred_names: frozenset = frozenset()) -> List[Dict[str, Any]]:
+        """Generate Gemini tools list with function declarations + error policy.
+
+        ``deferred_names`` is ignored — deferral is an Anthropic-only shape.
+        """
         if not actions:
             return []
 
@@ -319,8 +346,9 @@ class JSONFallbackSchemaGenerator(ToolSchemaGenerator):
             "parameters": self._get_json_schema(action.param_model)
         }
 
-    def generate_tools_list(self, actions: List[RegisteredAction]) -> Dict[str, Any]:
-        """Generate JSON schema for all actions"""
+    def generate_tools_list(self, actions: List[RegisteredAction],
+                            deferred_names: frozenset = frozenset()) -> Dict[str, Any]:
+        """Generate JSON schema for all actions (``deferred_names`` ignored)."""
         # This creates a schema that expects: {"action": [{"action_name": {...params}}]}
         action_properties = {}
 

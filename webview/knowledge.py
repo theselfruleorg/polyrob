@@ -42,7 +42,7 @@ from webview.pages import (
 
 router = APIRouter()
 
-_CHANGE_KINDS = ("self_modification", "memory_write")
+_CHANGE_KINDS = ("self_modification", "memory_write", "memory_promoted")  # 025: a promotion IS a knowledge change
 
 
 def _not_configured(**extra) -> JSONResponse:

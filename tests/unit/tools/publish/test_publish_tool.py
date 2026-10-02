@@ -139,3 +139,13 @@ def test_publish_list_shows_the_url_and_status(tool):
     assert "rob-status" in out
     assert "https://pub.example.com/rob-status/" in out
     assert "live" in out
+
+
+def test_a_failed_promotion_is_reported_not_announced(tool, monkeypatch):
+    # Codex review 2026-09-25: approve() returning False (promotion rolled
+    # back) was ignored and the tool still said "Published".
+    monkeypatch.setattr(tool._store, "approve", lambda *a, **k: False)
+    res = _run(tool.publish(PublishParams(slug="rob-status", files=["index.html"]),
+                            execution_context=_ctx()))
+    assert res.error and "could not be promoted" in res.error
+    assert not res.extracted_content

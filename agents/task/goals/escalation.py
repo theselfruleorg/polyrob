@@ -54,11 +54,26 @@ def build_blocker_escalation(goal: Any) -> str:
     )
 
 
-def build_empty_pipeline_escalation(objective_title: str | None) -> str:
-    """An owner-facing ask when the board has drained with no next goal to run."""
+def build_empty_pipeline_escalation(objective_title: str | None, *,
+                                    stall_number: int | None = None,
+                                    stalled_since: float | None = None) -> str:
+    """An owner-facing ask when the board has drained with no next goal to run.
+
+    ``stall_number``/``stalled_since`` name WHICH stall this is. Once-per-stall
+    is enforced durably on the board, but the delivery rail dedups identical
+    text — without them a second, later stall produced the same bytes and was
+    dropped as a duplicate."""
     obj = objective_title or "the current objective"
+    facts = []
+    if stall_number:
+        facts.append(f"stall #{int(stall_number)}")
+    if stalled_since:
+        import time as _time
+        facts.append("no work queued since "
+                     + _time.strftime("%Y-%m-%d %H:%M UTC", _time.gmtime(stalled_since)))
+    detail = f" ({', '.join(facts)})" if facts else ""
     return (
-        f"🫗 My goal pipeline is empty — I have nothing queued for {obj}.\n"
+        f"🫗 My goal pipeline is empty — I have nothing queued for {obj}{detail}.\n"
         f"Tell me the next concrete step, or what's blocking progress, and I'll pick it up."
     )
 
@@ -94,12 +109,20 @@ async def maybe_escalate_blocked(task_agent: Any, goal: Any) -> bool:
 
 async def maybe_escalate_empty_pipeline(task_agent: Any, *,
                                         objective_title: str | None = None,
-                                        planner_summary: str | None = None) -> bool:
+                                        planner_summary: str | None = None,
+                                        planner_word_visible: bool = False,
+                                        stall_number: int | None = None,
+                                        stalled_since: float | None = None) -> bool:
     """Escalate a drained goal pipeline to the owner if enabled. Fail-open.
 
     Gated ``GOAL_BLOCKER_ESCALATION`` (same flag as the blocked-goal producer —
     both are "the board can't advance without you"). A planner run that reported
     "queue healthy" is a legitimate non-blocker outcome and is never escalated.
+
+    The planner's summary is its done() text — a bookkeeping record. It rides
+    the message only when ``planner_word_visible`` (the caller resolves
+    ``core.prefs.done_records_visible``); the "queue healthy" check reads it
+    either way.
     """
     try:
         from agents.task.constants import AutonomyConfig
@@ -107,8 +130,9 @@ async def maybe_escalate_empty_pipeline(task_agent: Any, *,
             return False
         if planner_summary and "queue healthy" in planner_summary.lower():
             return False
-        text = build_empty_pipeline_escalation(objective_title)
-        if planner_summary:
+        text = build_empty_pipeline_escalation(
+            objective_title, stall_number=stall_number, stalled_since=stalled_since)
+        if planner_summary and planner_word_visible:
             text += f"\nMy planner's last word: {planner_summary.strip()[:400]}"
         container = getattr(task_agent, "container", None)
         from core.self_evolution import push_owner_message

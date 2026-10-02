@@ -98,6 +98,15 @@ def full_autonomy_enabled() -> bool:
     return True
 
 
+def autonomous_work_enabled() -> bool:
+    """The agent may start its OWN recurring work (a cron job from a goal /
+    cron / planner run). An autonomy rule, not a money one (067 P1b moved it
+    here from ``money_regime``, which re-exports it): true exactly when
+    :func:`full_autonomy_enabled` is — the ``autonomous`` and ``armed`` money
+    regimes."""
+    return full_autonomy_enabled()
+
+
 def autonomy_mode_display() -> str:
     """One-line human display of the resolved autonomy mode (T10 control-plane
     visibility — Telegram `/status`, `polyrob owner show`, `polyrob doctor`).

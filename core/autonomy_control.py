@@ -41,7 +41,7 @@ LEGACY_FACETS: Tuple[Tuple[str, str], ...] = (
 )
 
 SCOPES: Tuple[str, ...] = ("all", "trading", "streams", "planner", "cron",
-                           "social", "oversight", "pings", "apps")
+                           "social", "oversight", "pings", "apps", "release")
 
 #: activity kind -> the scopes whose pause denies it ("all" always denies).
 KIND_SCOPES: Dict[str, Tuple[str, ...]] = {
@@ -61,6 +61,11 @@ KIND_SCOPES: Dict[str, Tuple[str, ...]] = {
     "trade_exit": ("all",),
     "spend": ("all",),
     "social_post": ("all", "social"),
+    # 033: an autonomous DIRECTED message (a DM, an email, a `message` send) the
+    # Controller effect gate sees. Only a full `/pause` covers it: the per-tool
+    # gates (`message_pause_refusal`, the email send path) already key a send to
+    # anyone but the owner on `social_post`, and they stay the finer judge.
+    "outbound_comms": ("all",),
     "oversight_seed": ("all", "oversight"),
     "oversight_dial": ("all", "oversight"),
     "oversight_deploy": ("all", "oversight"),
@@ -83,6 +88,15 @@ KIND_SCOPES: Dict[str, Tuple[str, ...]] = {
     # silent default on an obligation — the same reasoning that leaves the 031
     # cold-start requeue ungated.
     "room_action_offer": ("all", "social"),
+    # 064 phase 2: the release train (`scripts/release_train.py`). `/pause
+    # release` holds the cut and the publish; `/pause all` holds them too. The
+    # train reads this FRESH at every step (never cached at cut). A pause is not
+    # the release gate — the owner's tap (045 D1) still is; this is the stop.
+    "release_cut": ("all", "release"),
+    "release_publish": ("all", "release"),
+    # The daily factory build session (`scripts/factory_build.sh`). Its shell
+    # reads the record itself today, so no Python caller exists yet.
+    "factory_build": ("all", "oversight"),
 }
 
 #: 043 A8/A42: kinds declared above with no caller anywhere in the tree yet —
@@ -91,8 +105,8 @@ KIND_SCOPES: Dict[str, Tuple[str, ...]] = {
 #: keeps this set bidirectionally honest: a kind gains a caller, it comes out
 #: of here the same day; a kind loses its last caller, it goes back in.
 DORMANT_KINDS = frozenset({
-    "trade_exit", "oversight_seed", "oversight_dial", "oversight_deploy",
-    "oversight_alert",
+    "trade_exit", "oversight_seed", "oversight_dial",
+    "oversight_alert", "factory_build",
 })
 
 
@@ -555,14 +569,16 @@ def resume(data_dir: Optional[str] = None, *, scopes: Optional[Tuple[str, ...]] 
 
 
 #: The half of a pause refusal that is TRUE regardless of what the record says:
-#: it is not a separate lever, it binds the owner's own typed command, here is the
-#: remedy, and nothing happened. Kept beside the record so no caller can ship a
-#: refusal that carries only some of these (census, 2026-09-12).
+#: it is not a separate lever, it stops only the agent's OWN work (2026-09-26: a
+#: genuine owner turn — the owner asking in chat, or an owner verb — is not bound
+#: by it, see ``core.money.authority.owner_direct_turn``), here is the remedy, and
+#: nothing happened. Kept beside the record so no caller can ship a refusal that
+#: carries only some of these (census, 2026-09-12).
 _PAUSE_REFUSAL_TAIL = (
-    " This is the autonomy pause, NOT a separate kill-switch, and it binds YOUR"
-    " OWN seat too: typing the command yourself hits this same check, because it"
-    " runs before any seat distinction. Lift it with `/resume` (or `polyrob"
-    " autonomy resume`), then run this again. Nothing was broadcast."
+    " This is the autonomy pause, NOT a separate kill-switch: it stops what the"
+    " agent does on its own. The owner's own request (asked in chat, or an owner"
+    " verb such as /send) is not bound by it. Lift it with `/resume`, then run"
+    " this again. Nothing was broadcast."
 )
 
 

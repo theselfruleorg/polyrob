@@ -140,7 +140,6 @@ ALLOWLISTED_UPWARD_EDGES = frozenset({
     ('agents/task/agent/orchestrator.py', 'tools.controller.service'),
     ('agents/task/agent/orchestrator.py', 'tools.descriptors'),
     ('agents/task/agent/orchestrator.py', 'tools.filesystem'),
-    ('agents/task/agent/prompts.py', 'tools.anysite'),
     ('agents/task/agent/prompts.py', 'tools.browser.views'),
     ('agents/task/agent/service.py', 'tools.browser.views'),
     ('agents/task/agent/sub_agent_manager.py', 'tools.controller.delegation'),
@@ -153,10 +152,8 @@ ALLOWLISTED_UPWARD_EDGES = frozenset({
     ('agents/task/agent/views.py', 'tools.dom.views'),
     ('agents/task/goals/dispatcher.py', 'cron.scheduler'),
     ('agents/task/goals/dispatcher.py', 'tools.goal_tools'),
-    ('agents/task/goals/dispatcher.py', 'tools.hf_deploy'),
     ('agents/task/session/browser_pool.py', 'tools.browser.browser'),
     ('agents/task/session/cleanup.py', 'tools.shell.backend_pool'),
-    ('agents/task/tool_defaults.py', 'tools.anysite'),
     ('agents/task/tool_defaults.py', 'tools.coding'),
     ('core/__init__.py', 'modules'),
     ('core/activity_evidence.py', 'modules.credits.unified_ledger'),
@@ -167,17 +164,13 @@ ALLOWLISTED_UPWARD_EDGES = frozenset({
     ('core/autonomy_runtime.py', 'tools.code_exec'),
     ('core/autonomy_runtime.py', 'tools.code_exec.backends.docker'),
     ('core/autonomy_runtime.py', 'tools.cronjob_tools'),
-    ('core/autonomy_runtime.py', 'tools.hf_deploy'),
-    ('core/autonomy_runtime.py', 'tools.hf_deploy.reconcile'),
-    ('core/autonomy_runtime.py', 'tools.hf_deploy.registry'),
     ('core/bootstrap.py', 'modules.llm.llm_client'),
     ('core/bootstrap.py', 'modules.llm.llm_manager'),
     ('core/bootstrap.py', 'modules.llm.profiles'),
-    ('core/bootstrap.py', 'tools.anysite'),
     # S3 dynamic tool rig (2026-07-19/20): the CLI registrar's browser special-case
     # (function-level import, mirrors core/initialization.py's server special-case)
-    # and the mcp gate's local-server-files probe. Same class as the tools.anysite/
-    # tools.descriptors seams above — register_cli_tools IS the tools-touching
+    # and the mcp gate's local-server-files probe. Same class as the
+    # tools.descriptors seam — register_cli_tools IS the tools-touching
     # module in core by design.
     ('core/bootstrap.py', 'tools.browser.browser_manager'),
     ('core/bootstrap.py', 'tools.descriptors'),
@@ -214,9 +207,6 @@ ALLOWLISTED_UPWARD_EDGES = frozenset({
     ('core/surfaces/continuity.py', 'modules.memory.registry'),
     ('core/surfaces/message_router.py', 'modules.llm.brain_scrubber'),
     ('core/surfaces/transcription.py', 'modules.transcription'),
-    ('modules/auth/identity_mapper.py', 'tools.alchemy.alchemy_tool'),
-    ('modules/database/hyperliquid.py', 'tools.hyperliquid.models'),
-    ('modules/database/polymarket.py', 'tools.polymarket.models'),
     ('modules/memory/episodic.py', 'agents.task.runtime'),
     # 2026-08-09: invoicing.py + subscriptions.py's byte-identical _emit copies
     # were consolidated into _db.py — TWO event_log edges became ONE (net shrink).

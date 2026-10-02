@@ -25,7 +25,6 @@ SIDECAR_DB_NAMES = (
     "cron.db",
     "skill_usage.db",
     "users.db",
-    "tg_dedup.db",
     "autonomy_state.db",
     # D11 (2026-07-11): previously missing from the manifest — backup/rollback
     # silently skipped them. R-2 T1 (2026-07-17): telemetry_events.db now resolves
@@ -41,8 +40,6 @@ SIDECAR_DB_NAMES = (
     "surfaces.db",       # core/surfaces/bootstrap.py + telegram outbound allowlist
     "pairing.db",        # core/pairing.py
     "messages.db",       # agents/task/agent/messages/persistence.py (opt-in mirror)
-    "wa_dedup.db",       # surfaces/whatsapp/harness.py
-    "email_dedup.db",    # surfaces/email/harness.py
     "defi_tokens.db",    # core/wallet/tokens.py (frozen first-seen token metadata)
     # 037: in-flight cross-chain bridges. MUST be in a backup — an unbacked
     # in-flight row is an unrecoverable bridge (core/wallet/bridge_guard.py).
@@ -57,13 +54,9 @@ SIDECAR_DB_NAMES = (
     # T1 (2026-07-16): surface/deploy sidecars that were missing — backup/rollback
     # silently skipped them (second generation of the D11 class; the grep-based
     # contract test in tests/unit/core/test_db_manifest_sidecars.py now guards this).
-    "slack_dedup.db",       # surfaces/slack/harness.py
-    "signal_dedup.db",      # surfaces/signal/harness.py
-    "discord_dedup.db",     # surfaces/discord/harness.py
-    "x_dedup.db",           # surfaces/x/harness.py
-    "wa_window.db",         # surfaces/whatsapp/harness.py (24h send-window tracker)
     "group_allowlist.db",   # core/surfaces/access.py (group ingress allowlist)
     "conversations.db",     # core/surfaces/bootstrap.py (ConversationStore)
+    "owner_thread.db",      # core/surfaces/owner_thread.py (061: the ONE owner transcript)
     "outbox.db",            # core/surfaces/bootstrap.py (durable outbound queue)
     "surface_state.db",     # core/surfaces/bootstrap.py (surface cursor/state KV)
     "deployed_apps.db",     # tools/hf_deploy/registry.py
@@ -96,7 +89,18 @@ SIDECAR_DB_NAMES = (
     # outage began — losing it re-probes every dead rail and resets every
     # "since <first failure>" line to now.
     "verdicts.db",          # core/credential_verdicts.py
+    # 2026-09-27: action cards. An open or confirmed card is a decision in
+    # flight; a restore without it turns every Confirm button into "no such card".
+    "cards.db",             # core/surfaces/cards.py
 )
+
+# 064 F1: every chat surface's own state files (dedup stores, the WhatsApp send
+# window) come from its surface-catalog row, so a new surface is backed up with
+# no edit here.
+from core.surfaces.catalog import state_dbs as _surface_state_dbs  # noqa: E402
+
+SIDECAR_DB_NAMES = SIDECAR_DB_NAMES + tuple(
+    n for n in _surface_state_dbs() if n not in SIDECAR_DB_NAMES)
 
 _PathLike = Union[str, Path]
 
@@ -136,7 +140,11 @@ def candidate_sqlite_dbs(
     else:
         bot_cands = [home.joinpath(*layout) for layout in _BOT_DB_RELATIVE_LAYOUTS]
     paths: List[Path] = list(bot_cands)
-    paths.extend(home / name for name in SIDECAR_DB_NAMES)
+    # 067 P3b: a pack surface's state files join the catalog in the loader's
+    # phase 1, which may run after this module's import-time snapshot.
+    names = list(SIDECAR_DB_NAMES) + [n for n in _surface_state_dbs()
+                                      if n not in SIDECAR_DB_NAMES]
+    paths.extend(home / name for name in names)
     if extra_dbs:
         paths.extend(Path(p) for p in extra_dbs)
 

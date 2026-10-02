@@ -4,10 +4,30 @@ import asyncio
 import click
 
 
-@click.group()
-def model():
-    """Manage LLM models and providers."""
-    pass
+@click.group(invoke_without_command=True)
+@click.pass_context
+def model(ctx):
+    """Manage LLM models and providers.
+
+    062: called bare, this now RUNS the picker instead of printing help. The
+    picker already existed behind `model set-default` with no arguments — a
+    newcomer had to know that to find it, which is the whole gap: every other
+    agent CLI answers `<tool> model` with a chooser.
+    """
+    if ctx.invoked_subcommand is not None:
+        return
+    import os
+
+    from cli.commands._bootstrap import ensure_env_loaded
+    ensure_env_loaded()
+    from modules.llm.profiles import usable_providers_with_credentials
+    if not usable_providers_with_credentials(dict(os.environ)):
+        click.echo("No usable provider key yet.")
+        click.echo("  Connect one:  polyrob auth add openrouter    "
+                   "(or anthropic, openai, gemini, …)")
+        click.echo("  Guided setup: polyrob setup")
+        return
+    ctx.invoke(model_set_default)
 
 
 @model.command("list")

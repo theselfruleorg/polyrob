@@ -169,6 +169,7 @@ _ALCHEMY_NETWORK = {
     "base": "base-mainnet",
     "arbitrum": "arb-mainnet",
     "polygon": "polygon-mainnet",
+    "optimism": "opt-mainnet",     # 064 S1 stage R: reads only
 }
 
 
@@ -195,7 +196,8 @@ def rpc_url_for_chain(chain: str) -> str:
     The public endpoints are shared, rate-limited and unauthenticated; pinning a
     real one is the supported way to stop a provider hiccup degrading reads.
     """
-    pinned = os.getenv(f"DEFI_EVM_RPC_{chain.upper()}", "").strip()
+    from core.wallet.chains import rpc_env_name
+    pinned = os.getenv(rpc_env_name(chain), "").strip()
     if pinned:
         return pinned
     alchemy_key = os.getenv("ALCHEMY_API_KEY", "").strip()

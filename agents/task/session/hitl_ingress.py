@@ -21,6 +21,28 @@ _TRUSTED_CONTEXT_REF_KINDS = {"comment", "continuation"}
 # negligible (a few writes per turn), so a module-level lock keeps it simple.
 _TAINT_LOCK = threading.Lock()
 
+# M02 (2026-09-23): the taint used to live ONLY in memory, so an eviction or a
+# restart dropped it while the correspondent's message was restored with the
+# history — the recreated session ran ungated on attacker text. A small sidecar
+# in the session's data dir records it; the recreate path restores it. Cleared
+# (file removed) at the same drain point that clears the in-memory flag.
+_TAINT_FILE = "correspondent_taint.json"
+
+
+def session_taint_recorded(session_id: Optional[str], user_id: Optional[str]) -> bool:
+    """M02/M03: is a correspondent taint on record for this session (the
+    sidecar that ``_set_correspondent_taint`` writes)? For callers that hold a
+    session id but no orchestrator (the KB auto-ingest hook). Never creates a
+    directory. Fail-CLOSED: a probe error answers True."""
+    if not session_id:
+        return False
+    try:
+        from agents.task.path import pm
+        root = pm().get_session_root(str(session_id), user_id)
+        return (root / "data" / _TAINT_FILE).exists()
+    except Exception:
+        return True
+
 
 class HITLIngressMixin:
     """User-message + approval-decision ingress for SessionOrchestrator."""
@@ -35,6 +57,8 @@ class HITLIngressMixin:
                 self._correspondent_taint_sources = set()
             self._correspondent_taint_sources.add(src)
             self._correspondent_tainted = True
+            sources = sorted(self._correspondent_taint_sources)
+        self._write_taint_sidecar(sources)
 
     def _clear_correspondent_taint(self) -> None:
         """A genuine owner turn re-opens the gate — clear the flag AND the sources.
@@ -54,6 +78,66 @@ class HITLIngressMixin:
         with _TAINT_LOCK:
             self._correspondent_tainted = False
             self._correspondent_taint_sources = set()
+        self._write_taint_sidecar(None)
+
+    # --- M02: durable taint ---------------------------------------------------
+    def _taint_sidecar_path(self):
+        sid = getattr(self, "session_id", None)
+        if not sid or not isinstance(sid, str):
+            return None
+        from agents.task.path import pm
+        return pm().get_data_dir(sid, getattr(self, "user_id", None)) / _TAINT_FILE
+
+    def _write_taint_sidecar(self, sources) -> None:
+        """Write (sources is a list) or remove (None) the taint sidecar.
+
+        Fail-open on I/O (the in-memory flag still gates THIS process), but loud:
+        a lost write means a restart would forget the taint."""
+        try:
+            path = self._taint_sidecar_path()
+            if path is None:
+                return
+            if sources is None:
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    pass
+                return
+            import json
+            import time
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps({"tainted": True, "ts": time.time(),
+                                       "sources": [list(x) for x in sources]}))
+            os.replace(tmp, path)
+        except Exception as e:
+            logger = getattr(self, "logger", None)
+            if logger is not None:
+                logger.warning(f"correspondent taint sidecar write failed: {e}")
+
+    def restore_correspondent_taint(self) -> bool:
+        """Recreate path: re-taint from the sidecar. Returns True when tainted.
+
+        Fail-CLOSED: a sidecar that exists but cannot be parsed still taints (with
+        no scoped-reply sources) — an unreadable record is not an absent one."""
+        try:
+            path = self._taint_sidecar_path()
+        except Exception:
+            return False
+        if path is None or not path.exists():
+            return False
+        sources = set()
+        try:
+            import json
+            data = json.loads(path.read_text() or "{}")
+            for pair in data.get("sources") or []:
+                if isinstance(pair, (list, tuple)) and len(pair) == 2:
+                    sources.add((str(pair[0] or ""), str(pair[1] or "").strip().lower()))
+        except Exception:
+            sources = set()
+        with _TAINT_LOCK:
+            self._correspondent_taint_sources = sources
+            self._correspondent_tainted = True
+        return True
 
     async def submit_user_message(
         self,
@@ -175,13 +259,13 @@ class HITLIngressMixin:
             return False
         from modules.llm.messages import make_control_message, MessageOrigin
         from core.security.untrusted_wrap import wrap_untrusted
-        # Delimiter-injection defense (Fusion HIGH): neutralize any closing fence the
+        # Delimiter-injection defense (Fusion HIGH): neutralize any fence the
         # correspondent embeds, so they can't break out of the untrusted/correspondent
-        # blocks and present forged text as trusted instruction.
-        safe = (text or "")
-        for _tag in ("</untrusted_tool_result>", "</correspondent-message>"):
-            safe = safe.replace(_tag, _tag.replace("<", "&lt;").replace(">", "&gt;"))
-            safe = safe.replace(_tag.upper(), _tag.replace("<", "&lt;").replace(">", "&gt;"))
+        # blocks and present forged text as trusted instruction. C8: the ONE fence
+        # neutralizer (case-insensitive, whitespace- and attribute-tolerant) — the
+        # old exact/UPPER replace let `</Correspondent-Message>` through.
+        from core.surfaces.group_turn import defang
+        safe = defang(text or "")
         msg = make_control_message(wrap_untrusted(source, safe), MessageOrigin.CORRESPONDENT)
         mm.push_ephemeral_message(msg)
         # Taint the session: the capability gate now blocks high-impact tools until the

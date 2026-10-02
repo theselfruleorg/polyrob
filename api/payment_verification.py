@@ -117,38 +117,21 @@ def payment_required_response(
     request: Request,
     cost_credits: int = 1
 ) -> Dict[str, Any]:
-    """Generate 402 response with both payment options."""
-    from modules.x402.x402_integration import get_x402_price_usd
-    from modules.x402.middleware import build_x402_challenge
-
+    """Generate 402 response with every payment option: credits, plus each
+    contributed option (067 P5a, ``api/contributions.py``; today x402)."""
+    from api.contributions import payment_options
     cost_usd = cost_credits * 0.01
-    # C2: single price SSOT — the quoted x402 price MUST equal the live charge.
-    x402_cost_usd = get_x402_price_usd()
-
-    # G-16: share the SAME challenge builder the middleware's own early 402 uses
-    # (`build_x402_challenge`) instead of reading `app.state.x402_handler` — that
-    # attribute is never assigned anywhere (api/app.py: "x402 is now handled via
-    # fastapi-x402 middleware, no custom handler needed"), so this branch always
-    # produced an EMPTY payment_details dict. A payer hitting either 402 producer
-    # (the middleware's early challenge, or this endpoint-layer 402 once a request
-    # gets further with no valid payment) now gets the same usable `accepts` block.
-    x402_challenge = build_x402_challenge(request.url.path, cost_usd=x402_cost_usd)
-    payment_details = x402_challenge["accepts"][0]
-
+    options: Dict[str, Any] = {
+        "credits": {
+            "cost_usd": cost_usd,
+            "cost_credits": cost_credits,
+            "instructions": "Login with wallet at /api/auth/verify"
+        },
+    }
+    for name, build in payment_options():
+        options[name] = build(request, cost_credits)
     return {
         "error": "Payment Required",
         "code": "PAYMENT_REQUIRED",
-        "payment_options": {
-            "credits": {
-                "cost_usd": cost_usd,
-                "cost_credits": cost_credits,
-                "instructions": "Login with wallet at /api/auth/verify"
-            },
-            "x402": {
-                "cost_usd": x402_cost_usd,
-                "payment_details": payment_details,
-                "accepts": x402_challenge["accepts"],
-                "x402Version": x402_challenge["x402Version"],
-            }
-        }
+        "payment_options": options,
     }

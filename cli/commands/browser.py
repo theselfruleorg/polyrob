@@ -89,6 +89,12 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 CapabilityBoundingSet=
 AmbientCapabilities=
 ReadWritePaths={data}
+# A renderer escape lands in this UID: it must not reach the agent's data home
+# (owner thread, sessions, the shared project) or its config. The browser never
+# reads either: the X login reaches it over CDP (new_context storage_state), not
+# as a file. `-`: a host without the path still starts. Its own files are 0660.
+InaccessiblePaths=-{agent_data} -/etc/polyrob
+UMask=0007
 
 [Install]
 WantedBy=multi-user.target
@@ -171,9 +177,32 @@ EGRESS_SCRIPT_TEMPLATE = """#!/usr/bin/env bash
 # established traffic and pass; DNS to the local resolver stub is allowed
 # explicitly. The Playwright route guard in the agent is the second line;
 # this chain is the first. Idempotent: the table is replaced on every run.
+#
+# The CDP port has no authentication of its own: any local UID that connects
+# to it drives the logged-in browser. So a loopback connection to the CDP port
+# is REJECTED unless it comes from root, the browser UID or a named CDP client
+# (the agent; its Playwright driver runs as polyrob-agent). Client UIDs are
+# resolved by NAME on every run; a name that does not exist on this host is
+# skipped (warned). The port rule is ALWAYS installed: when no client resolves
+# the allowed set is root and the browser UID only (fail closed) — a missing
+# or misnamed client identity must never reopen CDP to every local UID.
 set -euo pipefail
 USER_NAME="${{POLYROB_BROWSER_USER:-{user}}}"
 id -u "$USER_NAME" >/dev/null
+CDP_PORT="${{POLYROB_BROWSER_CDP_PORT:-{port}}}"
+CDP_CLIENT_NAMES="${{POLYROB_BROWSER_CDP_CLIENTS:-polyrob-agent}}"
+CDP_UIDS=""
+for _name in $CDP_CLIENT_NAMES; do
+  if _uid="$(id -u "$_name" 2>/dev/null)"; then CDP_UIDS+="${{CDP_UIDS:+, }}$_uid"
+  else echo "polyrob-browser-egress: CDP client $_name does not exist - skipped" >&2; fi
+done
+if [[ -z "$CDP_UIDS" ]]; then
+  echo "polyrob-browser-egress: no CDP client UID resolved - port $CDP_PORT is open to root and $USER_NAME only" >&2
+fi
+CDP_ALLOW="0, $(id -u "$USER_NAME")${{CDP_UIDS:+, $CDP_UIDS}}"
+CDP_RULES="    ip daddr 127.0.0.0/8 tcp dport $CDP_PORT meta skuid != {{ $CDP_ALLOW }} counter reject with tcp reset
+    ip6 daddr ::1 tcp dport $CDP_PORT meta skuid != {{ $CDP_ALLOW }} counter reject with tcp reset
+"
 # Loopback resolvers (systemd-resolved's 127.0.0.53, a local unbound, …) must
 # stay reachable on 53 or the browser cannot resolve anything.
 DNS_RULES=""
@@ -188,7 +217,7 @@ delete table inet polyrob_browser
 table inet polyrob_browser {{
   chain output {{
     type filter hook output priority filter; policy accept;
-    meta skuid != "$USER_NAME" accept
+${{CDP_RULES}}    meta skuid != "$USER_NAME" accept
     ct state established,related accept
 ${{DNS_RULES}}    ip daddr {{ 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16 }} counter drop
     ip6 daddr {{ ::1/128, fe80::/10, fc00::/7 }} counter drop
@@ -216,9 +245,39 @@ profile polyrob-browser {root}/{{,**/}}{{chrome,headless_shell}} flags=(unconfin
 """
 
 
+AGENT_DATA_HOME = Path("/var/lib/polyrob")
+AGENT_ENVFILE = Path("/etc/polyrob/polyrob.env")
+
+
 def render_unit(*, user: str = SERVICE_USER, root: Path = INSTALL_ROOT,
-                data: Path = DATA_ROOT, port: int = DEFAULT_PORT) -> str:
-    return UNIT_TEMPLATE.format(user=user, root=root, data=data, port=port)
+                data: Path = DATA_ROOT, port: int = DEFAULT_PORT,
+                agent_data: Path = AGENT_DATA_HOME) -> str:
+    return UNIT_TEMPLATE.format(user=user, root=root, data=data, port=port,
+                                agent_data=agent_data)
+
+
+def agent_data_home(envfile: Path = AGENT_ENVFILE) -> Path:
+    """The agent's data home the unit must hide: ``POLYROB_DATA_DIR`` from the
+    environment, else from the agent env file (the value deploy_prod.sh reads),
+    else the default. An existing path is resolved like the deps renderer
+    (symlinks followed); a
+    path that is not a plain systemd value is refused, never mis-rendered."""
+    import re
+    value = os.environ.get("POLYROB_DATA_DIR", "")
+    if not value:
+        try:
+            for line in envfile.read_text(encoding="utf-8").splitlines():
+                m = re.match(r"^(?:export\s+)?POLYROB_DATA_DIR=(.*)$", line.strip())
+                if m:
+                    value = m.group(1).strip().strip("'\"")
+        except OSError:
+            pass
+    raw = value.rstrip("/") or str(AGENT_DATA_HOME)
+    home = Path(os.path.realpath(raw) if os.path.exists(raw) else raw)
+    if not re.fullmatch(r"/[A-Za-z0-9/_.-]+", str(home)) or str(home) == "/":
+        raise click.ClickException(f"agent data home {home} is not a plain absolute path; "
+                                   "refusing to render the browser unit")
+    return home
 
 
 def render_server_unit(*, user: str = SERVICE_USER, root: Path = INSTALL_ROOT,
@@ -231,8 +290,8 @@ def render_egress_unit(*, script: Path = EGRESS_SCRIPT_PATH) -> str:
     return EGRESS_UNIT_TEMPLATE.format(script=script)
 
 
-def render_egress_script(*, user: str = SERVICE_USER) -> str:
-    return EGRESS_SCRIPT_TEMPLATE.format(user=user)
+def render_egress_script(*, user: str = SERVICE_USER, port: int = DEFAULT_PORT) -> str:
+    return EGRESS_SCRIPT_TEMPLATE.format(user=user, port=port)
 
 
 def render_apparmor_profile(*, root: Path = INSTALL_ROOT) -> str:
@@ -406,7 +465,10 @@ def install(mode: str, port: int | None, listen: str | None, with_deps: bool, dr
         names = ("server-unit" if mode == "server" else "unit", "egress-unit", "egress-script", "apparmor")
         for name in names:
             click.echo(f"--- {name}")
-            click.echo(TEMPLATES[name](**({"port": port} if name == "unit" else {})), nl=False)
+            kw = {"port": port} if name in ("unit", "egress-script") else {}
+            if name == "unit":
+                kw["agent_data"] = agent_data_home()
+            click.echo(TEMPLATES[name](**kw), nl=False)
         return
     if not sys.platform.startswith("linux"):
         raise click.ClickException("the isolated browser service is a Linux systemd unit")
@@ -425,9 +487,9 @@ def install(mode: str, port: int | None, listen: str | None, with_deps: bool, dr
     INSTALL_ROOT.mkdir(parents=True, exist_ok=True)
     rev = _install_chromium(INSTALL_ROOT, SERVICE_USER, with_deps)
     click.echo(f"chromium {rev} installed under {INSTALL_ROOT}")
-    _write(EGRESS_SCRIPT_PATH, render_egress_script(), 0o755)
+    _write(EGRESS_SCRIPT_PATH, render_egress_script(port=port), 0o755)
     _write(EGRESS_UNIT_PATH, render_egress_unit())
-    _write(UNIT_PATH, render_unit(port=port))
+    _write(UNIT_PATH, render_unit(port=port, agent_data=agent_data_home()))
     _write(APPARMOR_PROFILE_PATH, render_apparmor_profile())
     if shutil.which("apparmor_parser"):
         res = _run(["apparmor_parser", "-r", str(APPARMOR_PROFILE_PATH)])

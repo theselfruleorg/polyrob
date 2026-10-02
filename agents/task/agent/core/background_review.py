@@ -8,8 +8,12 @@ This is the "learning" loop: experience → distilled skill → available next s
 Design:
 - **Non-blocking** — ``asyncio.create_task`` so the run loop returns immediately; a
   review never delays the user-facing turn.
-- **Cheap** — runs on the aux/judge model (``_provision_aux_llm("judge")``) and
-  inherits the cached system prefix → prefix-cache hit (Reference's ~26% saving).
+- **Cheap** — runs on the aux/judge model (``_provision_aux_llm("judge")``) when one
+  resolves. The child is a fresh sub-agent session: it builds its OWN system prompt
+  and does NOT share the parent's cached prefix or see the parent's messages.
+- **Grounded** — because the child sees nothing of the parent, the task carries a
+  bounded digest of the parent's recent steps (``build_review_digest``: last
+  ``_DIGEST_MAX_STEPS`` steps, ``_DIGEST_MAX_CHARS`` chars, framed as untrusted DATA).
 - **Least-privilege** — spawned through ``SubAgentManager.run_subtask`` as a depth-1
   LEAF (UP-05 child controller: no code-exec/cron, cannot re-delegate).
 - **Bounded** — at most ``BG_REVIEW_MAX_STEPS`` steps; exempt for sub-agents (a
@@ -29,7 +33,8 @@ logger = logging.getLogger(__name__)
 
 _REVIEW_PROMPT = (
     "You are a background reviewer for an AI agent. The agent just finished a run of "
-    "work in this session. Review the recent conversation/work and decide whether a "
+    "work in this session. Review the digest of its recent steps below (it is all "
+    "you see of that work) and decide whether a "
     "DURABLE, REUSABLE procedure emerged that would help in future sessions.\n\n"
     "If yes: call skill_manage(action='create', skill_id=<short-kebab-id>, "
     "content=<a concise SKILL.md: a '# Title' heading then when-to-use + steps>). "
@@ -54,17 +59,79 @@ _SELF_CONTEXT_REVIEW_ADDENDUM = (
 )
 
 
-def build_review_prompt() -> str:
+_DIGEST_MAX_STEPS = 8
+_DIGEST_MAX_CHARS = 4000
+_DIGEST_FIELD_CHARS = 240
+
+
+def _clip(text, n: int = _DIGEST_FIELD_CHARS) -> str:
+    t = " ".join(str(text or "").split())
+    return t if len(t) <= n else t[: n - 1] + "…"
+
+
+def build_review_digest(history_items, *, max_steps: int = _DIGEST_MAX_STEPS,
+                        max_chars: int = _DIGEST_MAX_CHARS) -> str:
+    """A bounded, plain-text digest of the parent's last *max_steps* steps: the
+    step's memory/next goal, the actions it called, and a clipped result or error.
+    Pure; ``""`` when there is nothing to show. Never raises on odd items."""
+    lines: list[str] = []
+    items = list(history_items or [])[-max(1, int(max_steps)):]
+    for i, item in enumerate(items, 1):
+        try:
+            out = getattr(item, "model_output", None)
+            brain = getattr(out, "current_state", None)
+            parts = []
+            memory = getattr(brain, "memory", "") if brain is not None else ""
+            if memory:
+                parts.append(f"memory: {_clip(memory)}")
+            names = []
+            for act in (getattr(out, "action", None) or []):
+                try:
+                    dumped = act.model_dump(exclude_none=True)
+                    names.extend(k for k, v in dumped.items() if v is not None)
+                except Exception:
+                    continue
+            if names:
+                parts.append("actions: " + ", ".join(names[:6]))
+            for res in (getattr(item, "result", None) or [])[:2]:
+                err = getattr(res, "error", None)
+                content = getattr(res, "extracted_content", None)
+                if err:
+                    parts.append(f"error: {_clip(err, 160)}")
+                elif content:
+                    parts.append(f"result: {_clip(content, 160)}")
+            if parts:
+                lines.append(f"step {i}: " + " | ".join(parts))
+        except Exception:
+            continue
+    text = "\n".join(lines)
+    if len(text) > max_chars:
+        text = "…" + text[-(max_chars - 1):]  # keep the most recent steps
+    return text
+
+
+def build_review_prompt(digest: str = "") -> str:
     """The reviewer task. Adds the SELF-context-refinement invitation only when the
-    SELF_CONTEXT_WRITABLE tool is actually available (else the legacy skills-only
-    prompt, byte-identical)."""
+    SELF_CONTEXT_WRITABLE tool is actually available, and the parent's step digest
+    (framed as untrusted DATA — tool results carry third-party text) when given."""
+    prompt = _REVIEW_PROMPT
     try:
         from agents.task.constants import AutonomyConfig
         if AutonomyConfig.self_context_writable():
-            return _REVIEW_PROMPT + _SELF_CONTEXT_REVIEW_ADDENDUM
+            prompt += _SELF_CONTEXT_REVIEW_ADDENDUM
     except Exception:
         pass
-    return _REVIEW_PROMPT
+    if digest:
+        try:
+            from core.security.untrusted_wrap import wrap_untrusted
+            framed = wrap_untrusted("parent_step_digest", digest)
+        except Exception:
+            framed = digest
+        prompt += "\n\nRECENT STEPS OF THE AGENT YOU REVIEW:\n" + framed
+    else:
+        prompt += ("\n\nNo step digest is available for this run: if you cannot see "
+                   "a reusable procedure, call done() with that reason.")
+    return prompt
 
 
 def _prefs_home_dir() -> str:
@@ -180,8 +247,13 @@ class BackgroundReviewMixin:
                     "to route it to a cheaper model",
                     getattr(self.llm, "model_name", getattr(self.llm, "model_type", "?")),
                 )
+            try:
+                _hist = getattr(getattr(self, "history", None), "history", None)
+                digest = build_review_digest(_hist)
+            except Exception:
+                digest = ""
             await manager.run_subtask(
-                task=build_review_prompt(),
+                task=build_review_prompt(digest),
                 parent_agent_id=self.agent_id,
                 profile_id="executor",
                 max_steps=AutonomyConfig.bg_review_max_steps(),

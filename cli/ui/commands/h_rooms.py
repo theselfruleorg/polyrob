@@ -258,7 +258,8 @@ def h_cancel(ctx) -> None:
     except Exception as exc:
         ctx.emit(f"{candy.GUTTER}(could not cancel: {exc})", title="cancel")
         return
-    ctx.emit("Task cancelled.", title="cancel")
+    from surfaces.telegram.harness import CANCEL_REACH
+    ctx.emit(f"Task cancelled. {CANCEL_REACH}", title="cancel")
 
 
 def h_new(ctx) -> None:

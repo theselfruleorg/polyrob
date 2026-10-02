@@ -27,6 +27,18 @@ from modules.skills.skill_usage import SkillUsageStore
 # (a) catalog cap — the priority-6 tail must fit at max_skills=50
 # =====================================================================
 
+@pytest.fixture(autouse=True)
+def _hermetic_home(tmp_path, monkeypatch):
+    """D8: the catalog reads ecosystem roots under HOME (~/.claude/skills) and
+    user skills under the data home. Point both at tmp so a developer's own
+    skills can never change what these catalog assertions see."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    from agents.task.agent import skill_discovery, skill_store
+    monkeypatch.setattr(skill_discovery, "user_external_roots",
+                        lambda: [tmp_path / "home" / ".claude" / "skills"])
+    monkeypatch.setattr(skill_store, "skills_data_home", lambda: tmp_path / "data")
+
+
 def test_catalog_includes_priority6_tail():
     """web-scraping/lead-research are real priority-6 builtin rules (verified against
     data/prompts/skills/rules.json) that the old default cap(20) could cut. At the

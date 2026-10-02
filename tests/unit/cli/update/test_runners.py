@@ -34,7 +34,7 @@ def test_git_without_repo_root_returns_none():
 def test_editable_install_uses_editable_pip_and_pulls(tmp_path):
     calls, run, capture = _rec()
     ctx = InstallContext(EDITABLE_GIT, tmp_path, tmp_path, "editable")
-    r = build_runners(ctx, python="/py", run=run, capture=capture)
+    r = build_runners(ctx, python="/py", run=run, capture=capture, extras=[])
     assert r is not None
     r.install()
     cmds = [c[0] for c in calls]
@@ -47,7 +47,7 @@ def test_target_ref_checks_out_tag_not_pull(tmp_path):
     target tag — `git pull --ff-only` fails on the detached-HEAD pinned-tag prod posture."""
     calls, run, capture = _rec()
     ctx = InstallContext(GIT, tmp_path, tmp_path, "git")
-    r = build_runners(ctx, target_ref="v0.5.0", python="/py", run=run, capture=capture)
+    r = build_runners(ctx, target_ref="v0.5.0", python="/py", run=run, capture=capture, extras=[])
     r.install()
     cmds = [c[0] for c in calls]
     assert ["git", "check-ref-format", "refs/tags/v0.5.0"] in cmds
@@ -71,7 +71,7 @@ def test_no_target_ref_keeps_branch_fast_forward(tmp_path):
 def test_rollback_resets_to_captured_sha(tmp_path):
     calls, run, capture = _rec()
     ctx = InstallContext(GIT, tmp_path, tmp_path, "git")
-    r = build_runners(ctx, python="/py", run=run, capture=capture)
+    r = build_runners(ctx, python="/py", run=run, capture=capture, extras=[])
     r.rollback_code()
     assert calls == []  # nothing mutated yet → nothing to undo
     r.install()
@@ -123,16 +123,18 @@ def test_verify_smoke_imports(tmp_path):
     ctx = InstallContext(GIT, tmp_path, tmp_path, "git")
     r = build_runners(ctx, python="/py", run=run, capture=capture)
     r.verify()
-    assert (["/py", "-I", "-c", "import core, cli.polyrob"], str(tmp_path)) in calls
+    assert (["/py", "-I", "-c", "import core, core.avatar, cli.polyrob, modules.llm.llm_factory, tools.filesystem, "
+                          "modules.memory.task, modules.cards.cards, utils.gif_utils, "
+                          "tools.document_parser, core.lazy_deps"], str(tmp_path)) in calls
 
 
 # ---------------------------------------------------------------------------
 # The update must verify that runtime ASSETS landed, not only that code imports
 #
-# ⚠️ `avatar/` and `assets/` are read by path at runtime (mindprint.js, the
-# DejaVu invoice-card fonts). A wheel that loses a package-data glob still
-# imports perfectly — `import core, cli.polyrob` passes — and the install is
-# quietly faceless, with invoice cards falling back to PIL's default font. The
+# ⚠️ `assets/` is read by path at runtime (the brand mark, the DejaVu
+# invoice-card fonts). A wheel that loses a package-data glob still imports
+# perfectly — `import core, cli.polyrob` passes — and invoice cards quietly
+# lose their header and fall back to PIL's default font. The
 # whole point of a verify step is to make that roll back instead.
 # ---------------------------------------------------------------------------
 
@@ -143,8 +145,8 @@ def test_verify_also_checks_the_runtime_assets_resolve(tmp_path):
     r.verify()
     probes = [c[0] for c in calls if c[0][:3] == ["/py", "-I", "-c"]]
     joined = "\n".join(p[3] for p in probes)
-    assert "mindprint.js" in joined, (
-        "verify does not check the avatar engine resolved after install")
+    assert "polyrob-mark-256.png" in joined, (
+        "verify does not check the card's brand mark resolved after install")
     assert "DejaVuSans.ttf" in joined, (
         "verify does not check the invoice-card fonts resolved after install")
 
@@ -170,10 +172,10 @@ def test_the_asset_probe_FAILS_when_an_asset_is_absent(tmp_path):
     from cli.update.runners import _ASSET_PROBE
     repo = Path(__file__).resolve().parents[4]
     fake = tmp_path / "site"
-    (fake / "modules" / "pfp").mkdir(parents=True)
+    (fake / "modules" / "cards").mkdir(parents=True)
     (fake / "modules" / "__init__.py").write_text("")
-    (fake / "modules" / "pfp" / "__init__.py").write_text("")
-    # avatar/ and assets/ deliberately NOT created — the lost-package-data case.
+    (fake / "modules" / "cards" / "__init__.py").write_text("")
+    # assets/ deliberately NOT created — the lost-package-data case.
     r = subprocess.run([sys.executable, "-c", _ASSET_PROBE],
                        cwd=str(tmp_path), env={"PYTHONPATH": str(fake),
                                                "PATH": "/usr/bin:/bin"},
@@ -191,3 +193,29 @@ def test_the_asset_probe_is_a_real_failure_not_a_warning():
     assert "_run(" in block
     assert "try:" not in block, (
         "a swallowed asset probe cannot trigger the auto-rollback")
+
+
+def test_install_carries_the_installed_extras_under_the_lock(tmp_path, monkeypatch):
+    """058: a bare `pip install -e .` dropped every extra this install had and
+    could move a pinned core package; the update now reinstalls `.[<present>]`
+    constrained by requirements.lock, and the rollback reinstall does the same."""
+    (tmp_path / "requirements.lock").write_text("openai==1.0\n")
+    import cli.update.runners as rn
+    monkeypatch.setattr("cli.update.extras.installed_extras", lambda repo: ["gemini", "docs"])
+    calls, run, capture = _rec()
+    ctx = InstallContext(EDITABLE_GIT, tmp_path, tmp_path, "editable")
+    r = build_runners(ctx, python="/py", run=run, capture=capture)
+    r.install()
+    # 066 P1 / D2: hash-checked — the lock's closure of the extras, then the project.
+    ran = [c[0] for c in calls]
+    closure = next(c for c in ran if len(c) > 1 and c[1].endswith("lock_closure.py"))
+    assert closure[closure.index("--extras") + 1] == "docs,gemini"
+    assert closure[closure.index("--lock") + 1] == str(tmp_path / "requirements.lock")
+    deps = closure[closure.index("-o") + 1]
+    hashed = ["/py", "-m", "pip", "install", "--require-hashes", "--prefer-binary", "-r", deps]
+    project = ["/py", "-m", "pip", "install", "--no-deps", "--no-build-isolation", "-e", "."]
+    assert ran.index(closure) < ran.index(hashed) < ran.index(project)
+    calls.clear()
+    r.rollback_code()
+    ran = [c[0] for c in calls]
+    assert hashed in ran and project in ran

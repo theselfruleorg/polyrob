@@ -23,31 +23,33 @@ every screen shares.
 STRINGS = {
     # ---------------------------------------------------------------- the frame
     "shell.skip": "Skip to content",
-    "shell.search": "Search and commands",
-    "shell.title": "{page}",
+    "shell.search": "Open your chats",
+    # 070 E.7: the chats button has a visible word beside its ⌘K hint.
+    "shell.chats": "Chats",
+    "shell.title": "{page} – Rob",
 
     # The five destinations. Five is the ceiling for a bottom bar, so this list
     # is a mobile-viability constraint and not a matter of taste.
-    "nav.new": "New",
+    "nav.new": "Chat",
     "nav.inbox": "Inbox",
     "nav.work": "Work",
     "nav.money": "Money",
-    "nav.agent": "Agent",
+    "nav.agent": "Rob",
 
     # The badge is aria-hidden; these are what a screen reader announces, so
     # they must never be more certain than the list behind them.
     "nav.inbox_waiting_one": "Inbox, 1 waiting",
     "nav.inbox_waiting": "Inbox, {count} waiting",
-    "nav.inbox_uncertain_one": "Inbox, at least 1 waiting, one list unreadable",
-    "nav.inbox_uncertain": "Inbox, at least {count} waiting, one list unreadable",
+    "nav.inbox_uncertain_one": "Inbox, at least 1 waiting. I could not check everything.",
+    "nav.inbox_uncertain": "Inbox, at least {count} waiting. I could not check everything.",
     # …and when it is more than one. Saying "one list" over three of them is a
     # small lie in the direction of "it is fine", which is the direction this
     # badge may never lean.
     "nav.inbox_uncertain_one_lists": (
-        "Inbox, at least 1 waiting, {lists} lists unreadable"
+        "Inbox, at least 1 waiting. I could not check {lists} lists."
     ),
     "nav.inbox_uncertain_lists": (
-        "Inbox, at least {count} waiting, {lists} lists unreadable"
+        "Inbox, at least {count} waiting. I could not check {lists} lists."
     ),
 
     # --- the head truth: the pause half ------------------------------------- #
@@ -63,12 +65,11 @@ STRINGS = {
     # The pause record is read fail-CLOSED: unreadable IS paused, because that
     # is what the runtime then does. Say both halves.
     "shell.state.paused_unreadable": (
-        "Rob is paused, because I could not read the pause record and I stop "
-        "rather than guess."
+        "Rob is paused to be safe. It could not read its pause setting."
     ),
-    "shell.state.unknown": (
-        "I cannot tell you whether I am running: the pause record did not answer."
-    ),
+    "shell.state.unknown": "Rob's state is not known right now.",
+    # A pause of everything with no end says since when (070 E.7).
+    "shell.state.paused_since": "Rob is paused since {when}.",
     # A pause has SCOPES (031). A scoped pause rendered as a full stop is the
     # one line that may never be confidently wrong: every other seat says
     # "trading only", so this one may not say "everything".
@@ -84,17 +85,17 @@ STRINGS = {
     "shell.waiting.none": "Nothing needs you.",
     "shell.waiting.one": "One thing needs you.",
     "shell.waiting.many": "{count} things need you.",
-    "shell.waiting.uncertain_none": "Nothing needs you here, and one list is unreadable.",
-    "shell.waiting.uncertain_one": "One thing needs you, and one list is unreadable.",
-    "shell.waiting.uncertain_many": "{count} things need you, and one list is unreadable.",
+    "shell.waiting.uncertain_none": "I could not check everything. Nothing I checked needs you.",
+    "shell.waiting.uncertain_one": "One thing needs you. I could not check everything.",
+    "shell.waiting.uncertain_many": "{count} things need you. I could not check everything.",
     "shell.waiting.uncertain_none_lists": (
-        "Nothing needs you here, and {lists} lists are unreadable."
+        "I could not check {lists} lists. Nothing I checked needs you."
     ),
     "shell.waiting.uncertain_one_lists": (
-        "One thing needs you, and {lists} lists are unreadable."
+        "One thing needs you. I could not check {lists} lists."
     ),
     "shell.waiting.uncertain_many_lists": (
-        "{count} things need you, and {lists} lists are unreadable."
+        "{count} things need you. I could not check {lists} lists."
     ),
 
     # ------------------------------------------------------------- the Chats
@@ -103,36 +104,41 @@ STRINGS = {
     # is what the search button is for. So it is an overlay on the frame.
     "chats.title": "Your chats",
     "chats.close": "Close",
-    "chats.loading": "Reading your chats.",
-    "chats.empty": "No chats yet. Say something below and this is where it will be.",
-    "chats.unreadable": (
-        "I could not read the list. That is not the same as having none, so I "
-        "am not showing you an empty list."
-    ),
-    "chats.untitled": "A chat with no first line",
+    "chats.loading": "Loading your chats…",
+    "chats.empty": "No chats yet. Start one from Chat.",
+    # A failed read is not an empty list, so it never renders as one.
+    "chats.unreadable": "I could not load your chats. Try again in a moment.",
+    "chats.untitled": "Untitled chat",
+    # A row with a part that would not read (a missing status.json, say). The
+    # raw reason never reaches the row text; it rides in the tooltip only.
+    "chats.part_missing": "Part of this chat is missing.",
 
     # WHO started it. The difference between a chat you had and a run Rob
     # started by itself at four in the morning; a list that cannot tell them
     # apart is a list you stop opening.
     "chats.creator_owner": "you",
-    "chats.creator_cli": "you, in a terminal",
-    "chats.creator_api": "a program",
-    "chats.creator_cron": "a schedule",
+    "chats.creator_cli": "you, in the terminal",
+    "chats.creator_api": "this console or an app",
+    "chats.creator_cron": "a scheduled job",
     "chats.creator_goal": "Rob, working on a goal",
     "chats.creator_correspondent": "someone Rob wrote to",
-    "chats.creator_unknown": "started by someone I cannot name",
+    "chats.creator_unknown": "not known",
 
     # Three states, and an unrecognised status is UNKNOWN rather than one of
     # them. A status nobody has seen before is not "done".
-    "chats.status_running": "working",
-    "chats.status_done": "finished",
-    "chats.status_stopped": "stopped",
-    "chats.status_unknown": "state unknown",
+    "chats.status_running": "Working",
+    "chats.status_done": "Done",
+    "chats.status_stopped": "Stopped",
+    "chats.status_unknown": "Unknown",
+    # 070 W0.11: a suspended run waits for you; a failed run did not finish,
+    # which is not the same as being stopped.
+    "chats.status_waiting": "Waiting for you",
+    "chats.status_failed": "Did not finish",
 
     # A32 — a row whose live session runs in Rob's own process, not this
     # console. It can be watched from here but not steered from here, and the
     # chip says so rather than letting the row look ordinary.
-    "chats.live_at_agent": "live in the agent",
+    "chats.live_at_agent": "Watch only",
 
     # ---------------------------------------------------------- the palette
     # One list of everything a person can type, grouped the way the terminal
@@ -158,40 +164,26 @@ STRINGS = {
 
     # --- read-only ---------------------------------------------------------- #
     # Said once, in the frame, instead of one greyed button at a time.
-    "shell.read_only.lead": "You are looking at Rob, not driving it.",
-    "shell.read_only.body": (
-        "This console is set to look, not touch, so every button that would change "
-        "something is off. It says so here once, instead of one greyed button at a time."
-    ),
+    "shell.read_only.lead": "View only.",
+    "shell.read_only.body": "You can see everything here, but you cannot change anything.",
 
     # -------------------------------------------------------- the destinations
     # Phase 1 places the frame. Each destination says plainly that it is not
     # built yet and where the capability lives meanwhile — never a blank page,
     # never a spinner that never resolves.
-    "new.title": "New",
-    "new.placeholder": (
-        "Chat is coming in the next phase. Until then, talk to me on Telegram, or "
-        "run polyrob in a terminal."
-    ),
+    "new.title": "Chat",
 
     "inbox.snapshot": "Decisions shown when this page loaded.",
     "inbox.refresh": "Refresh decisions",
     "inbox.title": "Inbox",
-    "inbox.placeholder": (
-        "The Inbox is coming in the next phase. Until then, the things that need "
-        "you reach you on Telegram, and the pending queue lives on the legacy pages."
-    ),
 
     "work.title": "Work",
-    "work.placeholder": (
-        "Work is coming in the next phase. Until then, goals and cron live on the "
-        "legacy pages."
-    ),
 
     "money.title": "Money",
-    "money.placeholder": (
-        "Money is coming in the next phase. Until then, the book, the positions and "
-        "the invoices live on the legacy pages."
+    # 067 P5a: no pack contributes the Money readers (the wallet pack does).
+    "money.not_installed": (
+        "Money needs the wallet pack. Install it with polyrob pack install wallet, "
+        "then restart the console."
     ),
 
     # ---------------------------------------------------------------- Money › Book
@@ -208,6 +200,23 @@ STRINGS = {
     # live.
     "money.tab.book": "Book",
     "money.tab.moves": "Moves",
+    # Make a move (action cards): a /send or /swap quote built from pickers.
+    "money.move.title": "Make a move",
+    "money.move.aside": "Quote first. Nothing moves until you tap Confirm on the card.",
+    "money.move.kind": "Action",
+    "money.move.kind_send": "Send",
+    "money.move.kind_swap": "Swap",
+    "money.move.chain": "Chain",
+    "money.move.amount": "Amount",
+    "money.move.token": "Token (address, or native)",
+    "money.move.to": "To (address)",
+    "money.move.buy": "Buy (token address, or native)",
+    "money.move.slippage": "Slippage (basis points, optional)",
+    "money.move.quote": "Get a quote",
+    "money.move.native": "native",
+    "money.move.note": ("The quote shows the value and the caps. Confirm sends exactly that "
+                        "quote, at most the quote + 5%, once."),
+    "money.move.unreadable": "Some choices could not be read; type the value instead.",
     "money.tab.cash": "Cash",
     "money.tab.invoices": "Invoices",
     "money.tab.limits": "Limits",
@@ -236,6 +245,39 @@ STRINGS = {
         "Rob has not written down a position on any chain it can read.",
     "money.book.total_label": "Positions, at today's prices",
     "money.book.total_excludes": "not counted here: {chains}",
+
+    # W1: what the rail tracks that the ledger does not, a position's
+    # lifecycle, the one-symbol-two-contracts warning, and the tokens Rob
+    # trusts. Every button asks before it acts.
+    "money.book.tracked_title": "Tracked by the rail, not in the ledger",
+    "money.book.tracked_aside": "the identity check reads these",
+    "money.book.state_quarantined": "quarantined — a look-alike, not the real token",
+    "money.book.state_written_off": "written off",
+    "money.book.cost": "cost {price}",
+    "money.book.no_cost": "no cost recorded",
+    "money.book.collision": "One symbol, more than one contract",
+    "money.tokens.title": "Tokens Rob trusts",
+    "money.tokens.aside": "a buy of any other contract is checked first",
+    "money.tokens.src_canonical": "the chain registry",
+    "money.tokens.src_own_launch": "our own launch",
+    "money.tokens.src_owner_pin": "your pin",
+    "money.tokens.src_owner_approved": "you approved it",
+    "money.tokens.rejected_title": "You said these are not the real token",
+    "money.tokens.unreadable": "I could not read {what}, so this list may be incomplete.",
+    "money.tokens.trust": "Trust",
+    "money.tokens.untrust": "Not trusted",
+    "money.tokens.writeoff": "Write off",
+    "money.tokens.unquarantine": "Undo quarantine",
+    "money.tokens.confirm_trust": "Trust {address} on {chain}? Buys of it then pass the identity check.",
+    "money.tokens.confirm_untrust": "Mark {address} on {chain} not trusted? Rob will never buy it.",
+    "money.tokens.confirm_writeoff": "Write off {address} on {chain}? The loss is its recorded cost; nothing is sold.",
+    "money.tokens.confirm_unquarantine": "Undo the quarantine of {address} on {chain}?",
+    "money.tokens.form_chain": "Chain",
+    "money.tokens.form_address": "Contract address",
+    "money.tokens.form_symbol": "Symbol",
+    "money.tokens.failed": "That did not reach the console.",
+    "money.tokens.bad_action": "There is no such token action.",
+    "money.tokens.need_address": "Name the chain and the contract address.",
 
     # The chains Rob checked, with the cache age. An unreadable chain is dashed
     # with its reason, never a zero that reads like an empty wallet. Spendable
@@ -278,35 +320,6 @@ STRINGS = {
     "money.book.when_min": "{count} min ago",
     "money.book.when_hour": "{count} h ago",
     "money.book.when_day": "{count} d ago",
-
-    "money.book.sources": (
-        "The verdict is a typed value, not a regex over the verb's prose — "
-        "<b>read_book</b> loops over every money chain and "
-        "<b>verdict_from_report</b> derives <b>BookVerdict</b> from the report's "
-        "own lists, worst chain wins; the console reads it through <b>api_book</b>. "
-        "The positions are the rows <b>read_open_positions</b> parses from the "
-        "ledger the agent writes, joined to each chain's reading, over "
-        "<b>money_chains</b> plus Solana. Entry and since-entry read a dash with "
-        "their reason until the rail-written store lands. A chain that could not "
-        "be read is unverified, never zero and never green, and the total names "
-        "what it left out. "
-        "Moves reads three stores: in flight is <b>open_bridges</b> "
-        "(a bridge past its deadline is 'in flight', never 'failed'), with "
-        "<b>chain_name_for_id</b> and <b>explorer_url</b> for the origin link; "
-        "recent moves are the <b>wallet_spend</b> events; and what Rob has made "
-        "is <b>_creations_section</b> over the same events. "
-        "Cash is <b>build_ledger</b>'s two blocks — treasury (Rob's cash flow) "
-        "and runtime (the owner's compute bill) — which are never summed, and "
-        "an unavailable block reads a dash with its reason, never a $0.00. "
-        "The wallet identity above those books is the owner-only "
-        "<b>wallet_view</b>: public account roles, an identity-bound cached "
-        "balance snapshot and unresolved submissions, with no signing action. "
-        "Invoices is <b>list_payment_requests</b>, settled by owner attestation "
-        "(<b>settle_payment_request</b>) or on-chain by the <b>settlement_watcher</b>; "
-        "per-request machine income is undercounted and the page says so. "
-        "Limits shows today's used and cap from the same PolicyGate read the "
-        "ledger carries, and links to Agent, where the caps are set."
-    ),
 
     # -------------------------------------------------------------- Money › Moves
     # In flight (open bridges), recent moves (wallet_spend), and what Rob has
@@ -454,11 +467,7 @@ STRINGS = {
     "money.limits.body": "The limits Rob spends within live in Agent, where you set them.",
     "money.limits.link": "Open Agent",
 
-    "agent.title": "Agent",
-    "agent.placeholder": (
-        "Agent is coming in the next phase. Until then, settings, identity and "
-        "diagnostics live on the legacy pages."
-    ),
+    "agent.title": "Rob",
 
     # What the Agent destination's write actions say back (043 AB2). An edit to
     # what Rob has learned about itself is always a proposal you review, never a
@@ -486,59 +495,73 @@ STRINGS = {
     # ----------------------------------------------------------- the Agent screen
     # Six tabs of one screen (043 WS-AF1). Everything below the subnav is drawn
     # client-side by agent.js from the tenant-scoped Agent readers; the four
-    # posture axes ride as data and render once, as four plain sentences.
+    # posture axes ride as data and render once, one plain sentence per axis.
     "agent.sub": "Who Rob is, what it can do, and the rules it runs under.",
     "agent.tab_overview": "Overview",
     "agent.tab_identity": "Identity",
-    "agent.tab_capabilities": "Capabilities",
+    "agent.tab_capabilities": "Abilities",
     "agent.tab_memory": "Memory",
     "agent.tab_settings": "Settings",
     "agent.tab_advanced": "Advanced",
-    "agent.unreachable": "That did not reach the console.",
+    "agent.unreachable": "That did not go through. Try again.",
     "agent.when_now": "just now",
     "agent.when_min": "{count} min ago",
     "agent.when_hour": "{count} h ago",
     "agent.when_day": "{count} d ago",
 
-    # Overview — the ranked health block leads, then the face, then the four
+    # Overview — the ranked health block leads, then the face, then the
     # posture axes, then what Rob is connected to.
     "agent.ov_health_title": "Health",
     "agent.ov_health_aside": "what Rob checks, and what needs you",
     "agent.ov_health_unreadable": "I could not run the health check.",
     "agent.ov_health_unreadable_why": "Why",
-    "agent.ov_health_ok_title": "Everything else checked out",
+    "agent.ov_health_ok_title": "Everything else is fine",
     "agent.ov_health_none": "Everything checked out",
-    "agent.ov_health_ok_body": (
-        "Memory, the goal board, scheduled runs, the wallet, the chat surfaces "
-        "and the apps all answered."
-    ),
-    "agent.ov_report_link": "See the full report",
-    "agent.ov_unverified": "I could not check these: {sources}",
-    "agent.ov_identity_no_avatar":
-        "Rob has no face yet. You can make one from the terminal.",
-    "agent.ov_posture_title": "What Rob is allowed to do",
-    "agent.ov_posture_aside": "four rules, in plain words",
-    "agent.ov_axis_local_title": "Treat this machine as yours alone",
-    "agent.ov_axis_local_why":
-        "Turns on the tools a single owner wants. Never on a shared server.",
-    "agent.ov_axis_mode_title": "Act, and tell you after",
-    "agent.ov_axis_mode_why": (
-        "For everyday actions Rob acts and reports. Money and self-changes "
-        "always still ask."
-    ),
-    "agent.ov_axis_loop_title": "Run background work on its own",
+    "agent.ov_report_link": "See the full health report",
+    "agent.ov_unverified": "I could not check: {sources}",
+    "agent.ov_identity_no_avatar": "No avatar set. Set one with `polyrob avatar set <image>`.",
+    "agent.ov_posture_title": "What Rob may do",
+    "agent.ov_posture_aside": "How Rob is set up to act",
+    "agent.ov_axis_local_title": "Treat this computer as yours alone?",
+    "agent.ov_axis_local_why": "Turns on abilities for one owner. Never on a shared server.",
+    "agent.ov_axis_mode_title": "Act without asking first?",
+    "agent.ov_axis_mode_why": "Money and changes to Rob itself always ask first.",
+    "agent.ov_axis_loop_title": "Start work on its own?",
     "agent.ov_axis_loop_why":
         "Rob starts goals, wakes itself and keeps its own schedule.",
-    "agent.ov_axis_compute_title": "Reach the computer it runs on",
-    "agent.ov_axis_compute_why": "Run a shell, install things, restart itself.",
-    "agent.ov_axis_compute_locked": (
-        "This one is set when Rob starts and cannot change while it runs. It is "
-        "deliberate."
-    ),
+    "agent.ov_axis_compute_title": "Use the computer it runs on?",
+    "agent.ov_axis_compute_why": "Run commands, install things, restart itself.",
+    "agent.ov_axis_compute_locked": "Set when Rob starts. It cannot change while Rob runs.",
+    "agent.ov_axis_builder_title": "Publish apps and pages?",
+    "agent.ov_axis_builder_why": "Put what it builds online. Never money, never the computer, never a secret.",
     "agent.ov_connected_title": "Connected to",
-    "agent.ov_models_label": "Models",
-    "agent.ov_memory_label": "Where memory is kept",
-    "agent.ov_change": "Change",
+    "agent.ov_models_label": "AI model",
+    "agent.ov_memory_label": "Memory",
+    "agent.ov_change": "Change settings",
+
+    # The raw posture value as an answer to the axis question (070 E.23). The
+    # page maps `agent.axis_value.<axis>_<raw>`; a value with no key reads
+    # "Not known", never a guessed Yes or No.
+    "agent.axis_value.local_on": "Yes",
+    "agent.axis_value.local_off": "No",
+    "agent.axis_value.mode_autonomous": "Yes",
+    "agent.axis_value.mode_supervised": "No, asks first",
+    "agent.axis_value.loop_silent": "Yes, without telling you",
+    "agent.axis_value.loop_owner_visible": "Yes, and tells you",
+    "agent.axis_value.loop_full": "Yes, all of it",
+    "agent.axis_value.loop_off": "No",
+    "agent.axis_value.compute_0": "No, only in a sandbox",
+    "agent.axis_value.compute_1": "In a sandbox, with installs",
+    "agent.axis_value.compute_2": "In a sandbox, and it can fix itself with your approval",
+    "agent.axis_value.compute_3": "Yes, the whole computer",
+    "agent.axis_value.builder_off": "No",
+    "agent.axis_value.builder_build": "Yes, pages only",
+    "agent.axis_value.builder_ship": "Yes, pages and apps",
+    "agent.axis_value.unknown": "Not known",
+    # Where memory is kept, in words (the doctor's raw backend id is the key).
+    "agent.memory_backend.sqlite": "On this computer",
+    "agent.memory_backend.local_vector": "On this computer, with search",
+    "agent.memory_backend.none": "Off",
 
     # Identity — the persona you wrote (read-only, frozen) and what Rob has
     # learned about itself (a reviewable change; an edit lands in review, never live).
@@ -547,12 +570,10 @@ STRINGS = {
     "agent.id_unreadable_why": "Why",
     "agent.id_face_title": "Rob's face",
     "agent.id_face_body": (
-        "A face is generated once from Rob's own identity and then kept, so it "
-        "stays the same everywhere you see it."
+        "Rob's avatar is one image, used everywhere: this console, chat, its "
+        "accounts and its identity on the network. Set or change it with "
+        "`polyrob avatar set <image>` (a file, a URL, or an NFT)."
     ),
-    "agent.id_reroll": "Make a new face",
-    "agent.id_reroll_done": "I made a new face.",
-    "agent.id_reroll_failed": "I could not make a new face.",
     "agent.id_persona_title": "How Rob should behave",
     "agent.id_persona_aside": "written by you",
     "agent.id_persona_empty": "You have not written a persona yet.",
@@ -686,30 +707,6 @@ STRINGS = {
     "agent.adv_diag_unreadable_why": "Why",
     "agent.adv_search": "Search every setting",
 
-    # The one sources note. Every bold name resolves in the tree
-    # (tests/unit/webview/test_sources_note.py), and no first-screen word is a
-    # flag, a shout or a call form (test_copy_layer_ratchet.py).
-    "agent.sources": (
-        "Health &mdash; <b>build_status_snapshot</b>, its ranked health block, "
-        "the same one every seat renders. The posture axes &mdash; "
-        "<b>build_posture_card</b>, as four plain sentences and not two "
-        "vocabularies.<br>"
-        "Identity &mdash; the persona you wrote is <b>load_self_context</b>, "
-        "read-only and frozen; what Rob has learned is <b>load_self_doc</b>, and "
-        "every edit goes through <b>SelfContextWriter</b> into review before it "
-        "is ever live.<br>"
-        "Capabilities &mdash; one list from <b>tool_capabilities</b>, "
-        "<b>get_catalog_skills</b> and <b>load_local_mcp_servers</b>; the helpers "
-        "are <b>get_profiles_dir</b>, read-only.<br>"
-        "Memory &mdash; recall is <b>LocalVectorMemoryProvider</b>, your notes "
-        "are <b>note_create</b> and <b>note_archive</b>, and what Rob has read is "
-        "<b>kb_list_sources</b>, all tenant-scoped.<br>"
-        "Settings &mdash; the preferences are <b>PrefSpec</b>, read through "
-        "<b>display_effective</b>, the same store the terminal writes. Advanced "
-        "&mdash; the <b>flags_catalog</b>, search-first, and <b>doctor_report</b> "
-        "behind a disclosure."
-    ),
-
     # ---------------------------------------------------------------- Work › Log
     # The four Work tabs. Only Log is live this phase; the other three are the
     # names of what is coming, rendered but not yet reachable.
@@ -777,18 +774,6 @@ STRINGS = {
     "work.log.when_min": "{count} min ago",
     "work.log.when_hour": "{count} h ago",
     "work.log.when_day": "{count} d ago",
-
-    "work.log.sources": (
-        "One stream over several stores, newest first — <b>webview/activity.py</b> "
-        "reads the per-session feed and the durable rows, and its "
-        "<b>activity_backfill</b> hands the console one list. The plain classes "
-        "are a reading of the event kinds, not a new field, and "
-        "<b>core/activity_class.py</b> is that reading. The machine's own lines — "
-        "ticks, skips, retries — are what <b>is_diagnostic</b> names, and they "
-        "stay behind one switch rather than mixed into the reading. The raw "
-        "record is one disclosure away, and it is the event exactly as it was "
-        "written, never a prettied copy of it."
-    ),
 
     # ------------------------------------------------------- Work › Now & next
     # Drawn client-side by work-now.js from GET /api/webgate/goals (the goal
@@ -898,34 +883,6 @@ STRINGS = {
     ),
     "work.apps.empty_action": "Ask Rob to build something",
 
-    # The ONE sources note for the whole Work screen (043 R11): every tab names
-    # what it read, in one paragraph, because a screen names its sources once.
-    "work.sources": (
-        "One screen over its stores. Now and Next read "
-        "<b>GoalBoard.list_recent</b> and <b>status_counts</b> — the newest "
-        "rows and the count of every one, never <b>board.list</b>, which is the "
-        "dispatcher's order. The helper lines are the background delegations in "
-        "<b>AutonomyStateStore.list_running</b>, scoped to you. On a clock is "
-        "<b>CronService</b> over its own store. Apps is the "
-        "<b>AppServiceRegistry</b> (the <b>app_services</b> store) for what is "
-        "online, and the artifact ledger (<b>get_artifact_ledger</b>) for the "
-        "published and made-but-not-shared tiers — that ledger is session-scoped, "
-        "so those two tiers fill on a per-chat view, not the whole-Work one. Log "
-        "is one stream over the per-session feed and the durable rows — "
-        "<b>activity_backfill</b> hands the console one list, the plain classes "
-        "are a reading of the event kinds, and <b>is_diagnostic</b> names the "
-        "machine's own lines, which stay behind one switch. A decision is never "
-        "here — it waits in the Inbox."
-    ),
-
-    # Every screen names what it read (043 R11) — a number nobody can trace is
-    # a number nobody can trust. A destination that is not built yet reads
-    # nothing, and says so rather than leaving the line off.
-    "placeholder.sources": (
-        "This screen reads nothing yet, so it claims nothing. The legacy pages "
-        "still serve what it will show."
-    ),
-
     # ------------------------------------------------------------------- Inbox
     # An Inbox item is a durable record, for this tenant, blocked on an owner
     # decision, that Rob cannot resolve alone. All four tests must hold — which
@@ -946,8 +903,15 @@ STRINGS = {
 
     # Card grammar: what Rob wants, why, what yes costs, what no costs, and how
     # long it has waited. Every card answers all five.
-    "inbox.waiting_for": "Waiting {age}.",
-    "inbox.expires_in": "It expires in {age}, and I will tell you when it does.",
+    "inbox.waiting_for": "Waiting for {age}.",
+    "inbox.expires_in": "Expires in {age}.",
+    # The {age} words. Under a minute counts as one minute.
+    "inbox.age.minute_one": "1 minute",
+    "inbox.age.minutes": "{count} minutes",
+    "inbox.age.hour_one": "1 hour",
+    "inbox.age.hours": "{count} hours",
+    "inbox.age.day_one": "1 day",
+    "inbox.age.days": "{count} days",
     "inbox.not_stuck": "Here because you may want to act, not because I am stuck.",
 
     # The honest-state rule in pixels. An unreadable source is an ENTRY with its
@@ -961,8 +925,6 @@ STRINGS = {
         "I could not open this list. The store did not answer, so I do not know "
         "whether anything is waiting in it. A dash is not the same as none."
     ),
-    "inbox.unreadable.meta": "Last read successfully {age} ago.",
-    "inbox.unreadable.retry": "Try again",
     "inbox.unreadable.why": "Why it failed",
 
     "inbox.empty.title": "Nothing needs you.",
@@ -975,7 +937,6 @@ STRINGS = {
         "had not, this page would say so instead."
     ),
     "inbox.empty.see_work": "See what it is working on",
-    "inbox.empty.history": "What you decided before",
 
     # Shared card verbs. An item type adds its own; these are the ones more than
     # one card uses. A verb says what it does, never "Confirm" or "Submit".
@@ -985,8 +946,6 @@ STRINGS = {
     "inbox.action.keep": "Keep it",
     "inbox.action.discard": "Throw it away",
     "inbox.action.publish": "Put it online",
-    "inbox.action.chase": "Chase it",
-    "inbox.action.write_off": "Write it off",
     # The seat-neutral vocabulary core.surfaces.inbox exposes. A card that has
     # its own better word (an app goes online, a note is kept) overrides these;
     # these are what every other kind falls back to.
@@ -995,26 +954,10 @@ STRINGS = {
     "inbox.action.fulfill": "I have done it",
     "inbox.action.show": "Show me",
 
-    # What the page says it read. Five stores answer or refuse, and the page
-    # names them either way — that is what makes the count trustworthy.
-    "inbox.sources.lead": "Read {sources}.",
-    "inbox.sources.all_answered": "All of them answered.",
-    "inbox.sources.refused": "Could not read {sources}.",
-    "inbox.sources.what_counts": (
-        "The count is decisions. An item listed under Not blocking is not one, "
-        "because it closes on its own."
-    ),
-    # The citations. They carry <b> markup and are rendered with |safe, which
-    # is why nothing here is ever built from a value a person supplied. Every
-    # name is checked against the tree by
-    # tests/unit/webview/test_sources_note.py, so a note can never outlive the
-    # thing it names.
-    "inbox.sources.cites": (
-        "Read by <b>core.self_evolution</b>, "
-        "<b>list_pending_tool_approvals</b>, <b>pending_correspondent_items</b>, "
-        "<b>GoalBoard.asks</b> and the <b>app_services</b> registry, composed by "
-        "<b>core.surfaces.inbox</b>."
-    ),
+    # One plain line under the list: did every list answer? An unreadable
+    # source is named, never folded into "all checked".
+    "inbox.checked_all": "I checked every list just now.",
+    "inbox.checked_some": "I could not check {sources}. More may be waiting.",
 
     # The endpoint's own answers. Short, and each says what happened rather
     # than that something happened.
@@ -1045,6 +988,10 @@ STRINGS = {
     "inbox.unbound_owner": (
         "This console has no bound owner, so it cannot tell whose queue to read."
     ),
+    "inbox.cards.title": "Cards",
+    "inbox.cards.aside": "A quote to confirm, or a question to answer. One tap, once.",
+    "inbox.cards.unreadable": "The card store could not be read, so open cards are not shown.",
+    "inbox.cards.bad_tap": "That is not a button on a card.",
     "inbox.unreachable": (
         "That did not reach me, so nothing was decided. Try again, or decide it "
         "on Telegram."
@@ -1055,12 +1002,23 @@ STRINGS = {
     # it is the product describing the agent. Rob speaks about itself in the
     # first person. The mockups do exactly this, and the split is the point.
     "chat.title": "Chat",
+    # 070 W0.12: a run that Rob or a job started is not a chat with you.
+    "chat.run_head.cron": "A scheduled job started this run. It is not a chat with you.",
+    "chat.run_head.goal": "Rob started this run for one of its goals. It is not a chat with you.",
+    "chat.run_head.correspondent": "Someone who writes to Rob started this run.",
+    "chat.run_head.task": "What it was asked to do",
     "chat.composer.label": "Message Rob",
     "chat.composer.placeholder": "Ask Rob, or tell it what to do",
     "chat.composer.placeholder_busy": "Add something while it works",
     "chat.composer.hint": "Type a slash for commands.",
     "chat.send": "Send",
     "chat.stop": "Stop",
+    # Action cards (core/surfaces/cards.py): the buttons under a money quote the
+    # console answered. Each posts the card's own tap token, like typing it.
+    "chat.card.ok": "Confirm",
+    "chat.card.re": "Refresh",
+    "chat.card.no": "Cancel",
+    "chat.card.pick": "Pick {n}",
     "chat.steer": "Steer",
 
     # The transcript's action line is narrated in Python (narrate.py) and shipped
@@ -1101,29 +1059,41 @@ STRINGS = {
     "chat.open.goals_many": "{count} goals",
     "chat.open.income_none": "nothing came in",
     "chat.open.income_some": "{amount} came in",
-    "chat.open.starters_label": "Things you could ask",
-    "chat.sources": (
-        "The sentence above is <b>build_recap</b> over the last day, the same "
-        "reader the terminal and the phone use. The count of what needs you is "
-        "the Inbox's own sources, composed by <b>core.surfaces.inbox</b>. The "
-        "pane beside the chat reads this chat's own folder through "
-        "<b>get_workspace_dir</b>, its finished files from <b>core.artifacts</b> "
-        "(the <b>ArtifactLedger</b>, each with its verdict), and its timeline "
-        "from the session feed, <b>add_to_feed</b>, one line per action."
+    # 070 W0.13: the console process has no language model (until the seat).
+    "chat.open.no_model": (
+        "Rob cannot answer from this console yet. Your text is still here. "
+        "Talk to Rob on Telegram or in the terminal."
     ),
+    "chat.open.starters_label": "Things you could ask",
 
     "chat.starter.away": "What did you do while I was away?",
     "chat.starter.book": "What is the book worth right now?",
     "chat.starter.cost": "What did that cost?",
     "chat.starter.pause": "Pause trading until Monday",
 
-    "chat.receipt.working": "Working {elapsed}, {actions} actions so far, {cost}.",
-    "chat.receipt.done": "Worked {elapsed}, took {actions} actions, cost {cost}.",
-    "chat.receipt.stopped": (
-        "Stopped after {elapsed}, having taken {actions} actions, cost {cost}."
-    ),
-    # A cost the transcript has not read yet is a dash, never a confident $0.00.
-    "chat.receipt.cost_unknown": "—",
+    # The turn's receipt. {elapsed} runs from the turn's FIRST event to its
+    # last (event timestamps, not the render time); {steps} is one of the
+    # steps_* words; {cost} is the cost_known sentence or cost_unknown.
+    "chat.receipt.working": "Working for {elapsed}. {steps} so far.",
+    "chat.receipt.done": "Done in {elapsed} with {steps}. {cost}",
+    "chat.receipt.stopped": "Stopped after {elapsed} and {steps}. {cost}",
+    # A turn still working when you wrote again: what it had done so far.
+    "chat.receipt.so_far": "{elapsed} and {steps} before your message.",
+    "chat.receipt.waiting": "Waiting for your answer. {elapsed} so far.",
+    "chat.receipt.failed": "This did not finish. It failed after {elapsed} and {steps}.",
+    # A working turn whose run is no longer live (no process holds it) and
+    # that never wrote a closing event: it ended without a final word. Never
+    # "Working for …" forever (070 E.13). {elapsed} ends at its last event.
+    "chat.receipt.ended": "Stopped after {elapsed} and {steps}, without a final word.",
+    # A run that failed before Rob drew anything. The reason is not in the feed
+    # yet; the wave-1 turn record carries it.
+    "chat.turn_failed": "This chat failed before Rob could answer.",
+    "chat.receipt.steps_none": "no steps",
+    "chat.receipt.steps_one": "1 step",
+    "chat.receipt.steps_many": "{count} steps",
+    "chat.receipt.cost_known": "Cost {amount}.",
+    # A cost the transcript has not read yet says so, never a confident $0.00.
+    "chat.receipt.cost_unknown": "Cost not known yet.",
 
     # A32 — a Steer that came back 409: this chat is live in Rob's OWN process,
     # not this console, so the console cannot steer it from here. It is an honest
@@ -1134,21 +1104,6 @@ STRINGS = {
         "it from this console. Watch it below, and try again in a moment, or "
         "steer it from the terminal."
     ),
-
-    # A failure names its LAYER, says what it does NOT mean, gives the part that
-    # did work, and offers the recovery. The trace stays behind one disclosure.
-    # This is the answer to the terminal's 242-line traceback.
-    "chat.failed.not_your_money": (
-        "This is the network between me and the chain, not your wallet and not "
-        "your money."
-    ),
-    "chat.failed.no_total": (
-        "I am not showing you a total, because a total I cannot verify is worse "
-        "than none."
-    ),
-    "chat.failed.partial": "What I could read: {what}.",
-    "chat.failed.retry": "Try again",
-    "chat.failed.trace": "What the node returned",
 
     # ⚠️ The ownership PROBE failed. That is not "this session does not exist",
     # which is what a 404 says — and it is not "you may look", which is what
@@ -1173,32 +1128,33 @@ STRINGS = {
     # Beside the chat on a bound session: what this chat MADE (Files, three
     # tiers) and what it DID (Timeline). Read-only. workpane.js reads these off
     # #workpane-copy's data attributes, the way chats.js reads its own.
+    # 070 W0.16: below 900 px the pane is a drawer this button opens.
+    "workpane.toggle": "Files and steps",
     "workpane.files_title": "Files",
-    "workpane.files_aside": "this chat's folder",
-    "workpane.files_note": (
-        "These live with this chat. Rob can send them to you, put them online "
-        "or publish them, and it asks you first every time."
-    ),
-    "workpane.files_empty": "This chat has not made or been given any files yet.",
-    "workpane.files_unreadable": "I could not read this chat's folder.",
+    # 070 W0.15: THIS chat's files come from the artifact ledger, which keeps
+    # the session that LAST wrote a path — hence "from this chat". The folder
+    # behind the chat (on a server, the one shared project folder) is a link.
+    "workpane.files_aside": "from this chat",
+    "workpane.files_note": "Rob asks you before it sends or publishes a file.",
+    "workpane.files_empty": "No files yet.",
+    "workpane.files_unreadable": "I could not load this chat's files.",
     # One Files source failed while the other read fine. Naming which one is what
     # keeps a half-read from reading as "nothing here".
     "workpane.files_tree_unreadable": (
-        "I could not read this chat's folder, so I am showing only what it "
-        "recorded as finished."
+        "I could not load all files. These are only the finished ones."
     ),
     "workpane.files_ledger_unreadable": (
-        "I could not read the record of what this chat finished, so I cannot "
-        "tell which of these are ready for you."
+        "I cannot tell which of these files are finished."
     ),
-    "workpane.tier_folder": "In this chat's folder",
-    "workpane.tier_folder_why": "everything it holds right now",
     "workpane.tier_ready": "Ready for you",
-    "workpane.tier_ready_why": "Finished things",
-    "workpane.tier_working": "Working files",
-    "workpane.tier_working_why": "What Rob made to do the job, not for you",
-    "workpane.tier_given": "Things you gave Rob",
-    "workpane.tier_given_why": "What you handed it",
+    "workpane.tier_working": "Rob's working files",
+    "workpane.tier_given": "From you",
+    "workpane.show_all": "Show all {count}",
+    "workpane.shared_link": "Browse the shared folder ({count})",
+    "workpane.shared_link_more": "Browse the shared folder ({count} or more)",
+    "workpane.folder_link": "Browse this chat's folder ({count})",
+    "workpane.shared_title": "Shared files",
+    "workpane.shared_note": "Every chat and job writes here. These are not only this chat's files.",
     "workpane.verdict_ok": "ready",
     "workpane.verdict_changed": "changed since it was made",
     "workpane.verdict_missing": "no longer there",
@@ -1207,7 +1163,8 @@ STRINGS = {
     "workpane.timeline_note": "Every line is one action, newest last.",
     "workpane.timeline_empty": "Nothing has happened in this chat yet.",
     "workpane.timeline_unreadable": "I could not read what this chat did.",
-    "workpane.timeline_count": "{count} actions",
+    "workpane.timeline_count": "{count} steps",
+    "workpane.timeline_count_one": "1 step",
     "workpane.loading": "Reading this chat's work.",
 }
 
@@ -1247,30 +1204,48 @@ STRINGS.update({"chats.more": "Load older chats"})
 # seat a person can actually reach, never a flag.
 STRINGS.update({
     # A2 — the pause headline names a control; this is that control.
-    "shell.pause": "Pause",
-    "shell.resume": "Resume",
-    "shell.pause_label": "Pause or resume background work",
-    "shell.pause_unreachable": "The request did not reach the console.",
+    "shell.pause": "Pause Rob",
+    "shell.resume": "Resume Rob",
+    "shell.pause_label": "Pause or resume Rob's own work",
+    "shell.pause_unreachable": "That did not go through. Try again.",
     # A32 — the activity room refused this seat; say so instead of going quiet.
-    "shell.live_refused": "Live updates are not available for this seat.",
+    "shell.live_refused": "Live updates are off here. Reload the page to try again.",
+    # 070 E.31: the server refuses with a code; these are the console's words.
+    "shell.live_busy": "Too many reconnects. Live updates start again in a minute.",
+    "shell.busy": "Rob is busy. Try again in a minute.",
 
-    # A1 — Rob's face on Agent, read from the record the avatar store writes.
-    "agent.ov_identity_kept": "Kept. This face and this voice are permanent.",
-    "agent.ov_identity_draft": "A draft. Keep it under Identity to make it permanent.",
-    "agent.ov_identity_traits": "Traits: {traits}",
-    "agent.ov_identity_voice": "Voice: {voice}",
-    "agent.ov_identity_made": "Made {when}",
-    "agent.ov_identity_instance": "Instance {instance}",
-    "agent.ov_identity_unreadable": "There is a face here, but I could not read what it is made of.",
+    # ------------------------------------------- the owner sign-in (070 E.32)
+    # A page outside the shell (own_ops and multitenant; local has none). The
+    # server passes a KEY for each error, never a sentence.
+    "login.title": "Sign in – Rob",
+    "login.heading": "Sign in to Rob",
+    "login.username": "Username",
+    "login.password": "Password",
+    "login.submit": "Sign in",
+    "login.too_many": "Too many tries. Wait a few minutes, then try again.",
+    "login.expired": "This page expired. Reload it and try again.",
+    "login.wrong": "That username or password is not right.",
+
+    # ---------------------------------------------- the error page (070 E.34)
+    # One plain lead per status class; the raw detail sits behind "Show details".
+    "error.title": "Something went wrong – Rob",
+    "error.heading": "Something went wrong.",
+    "error.not_found": "This page does not exist.",
+    "error.forbidden": "You cannot open this page.",
+    "error.server": "Something broke on Rob's side. Try again in a minute.",
+    "error.other": "This page could not open.",
+    "error.details": "Show details",
+    "error.hint_chat": "This chat may have been deleted.",
+    "error.hint_url": "Check the address and try again.",
+    "error.repair": "Try to repair this chat",
+    "error.home": "Go to Chat",
+
+    # A1 — Rob's face on Agent, read from the one avatar slot (core/avatar.py).
+    "agent.ov_identity_default": "The default polyrob mark. Set your own with `polyrob avatar set <image>`.",
+    "agent.ov_identity_source": "Set from {source}",
+    "agent.ov_identity_made": "Set on {when}",
+    "agent.ov_identity_unreadable": "There is an avatar here, but I could not read its record.",
     "agent.ov_identity_unreadable_why": "Why",
-
-    # A19 — the keep ceremony, which had no seat in the console at all.
-    "agent.id_keep": "Keep this face",
-    "agent.id_keep_hint": "Keeping is permanent. Nothing can change the face or the voice afterwards.",
-    "agent.id_keep_done": "Kept. This is the face from now on.",
-    "agent.id_keep_failed": "I could not keep the face.",
-    "agent.id_kept_title": "Kept for good",
-    "agent.id_kept_body": "The face and the voice are permanent. There is nothing left to decide here.",
 
     # A26 — connected services are an inventory here, and the label says where
     # the verbs live.

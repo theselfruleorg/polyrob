@@ -116,7 +116,7 @@ def test_fetch_text_rejects_non_text_content_type(monkeypatch):
     import urllib.request
 
     monkeypatch.setattr(
-        urllib.request, "urlopen",
+        skill_install, "_https_open",
         lambda req, timeout=30: _FakeResponse("image/png", b"\x89PNG\r\n"),
     )
     with pytest.raises(skill_install.InstallError):
@@ -128,7 +128,7 @@ def test_fetch_text_allows_text_markdown_content_type(monkeypatch):
 
     body = b"---\nname: ok\ndescription: An ok skill. Use it.\n---\n# b\nx"
     monkeypatch.setattr(
-        urllib.request, "urlopen",
+        skill_install, "_https_open",
         lambda req, timeout=30: _FakeResponse("text/markdown", body),
     )
     text = skill_install._fetch_text("https://example.com/x/SKILL.md")
@@ -140,3 +140,23 @@ def test_fetch_text_allows_text_markdown_content_type(monkeypatch):
 def test_fetch_text_rejects_file_scheme():
     with pytest.raises(skill_install.InstallError):
         skill_install._fetch_text("file:///etc/passwd")
+
+
+def test_plain_http_is_refused_for_urls_and_git(monkeypatch):
+    """Low (2026-09-23 analysis): a skill fetched over plain http can be rewritten
+    by any network hop — https only, for a SKILL.md URL and a git clone URL."""
+    with pytest.raises(skill_install.InstallError, match="https"):
+        skill_install._fetch_text("http://example.com/x/SKILL.md")
+    with pytest.raises(skill_install.InstallError, match="https"):
+        skill_install._resolve_git_spec("http://example.com/repo.git")
+
+
+def test_redirect_off_https_is_refused():
+    import urllib.request
+
+    h = skill_install._https_only_redirect_handler()
+    req = urllib.request.Request("https://example.com/x/SKILL.md")
+    with pytest.raises(skill_install.InstallError, match="redirect off https"):
+        h.redirect_request(req, None, 302, "Found", {}, "http://evil.example/SKILL.md")
+    ok = h.redirect_request(req, None, 302, "Found", {}, "https://cdn.example/SKILL.md")
+    assert ok.full_url == "https://cdn.example/SKILL.md"

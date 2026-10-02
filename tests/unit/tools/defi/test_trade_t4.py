@@ -283,6 +283,15 @@ async def test_swap_refuses_without_a_sufficient_allowance(monkeypatch):
     assert "approve_token" in res.error
 
 
+def _inner_swap_call(data: str) -> str:
+    """The single call inside `multicall(uint256 deadline, bytes[] data)`."""
+    from eth_abi import decode
+    assert data.startswith("0x5ae401dc")
+    _deadline, calls = decode(["uint256", "bytes[]"], bytes.fromhex(data[10:]))
+    assert len(calls) == 1
+    return "0x" + calls[0].hex()
+
+
 @pytest.mark.asyncio
 async def test_swap_bounds_slippage_into_amount_out_minimum(monkeypatch):
     """amountOutMinimum is the ONLY on-chain protection against a bad fill —
@@ -293,7 +302,7 @@ async def test_swap_bounds_slippage_into_amount_out_minimum(monkeypatch):
     tool, _ = _tool(quote=_quote(amount_out=out))
     await tool.swap(SwapParams(token_in=USDC, token_out=WETH, amount_in=1.0,
                                max_spend_usd=2.0, slippage_bps=100, dry_run=True))
-    data = _Rail.last.built["data"]
+    data = _inner_swap_call(_Rail.last.built["data"])
     # word 6 of exactInputSingle is amountOutMinimum
     min_out = int(data[2 + 8 + 64 * 5: 2 + 8 + 64 * 6], 16)
     assert min_out == out * 9900 // 10000
@@ -321,7 +330,9 @@ async def test_swap_targets_the_router_not_the_token(monkeypatch):
     await tool.swap(SwapParams(token_in=USDC, token_out=WETH, amount_in=1.0,
                                max_spend_usd=2.0, dry_run=True))
     assert _Rail.last.built["to"].lower() == ROUTER.lower()
-    assert _Rail.last.built["data"].startswith("0x04e45aaf")
+    # CR-L14: exactInputSingle rides a deadline-checked multicall.
+    assert _Rail.last.built["data"].startswith("0x5ae401dc")
+    assert _inner_swap_call(_Rail.last.built["data"]).startswith("0x04e45aaf")
 
 
 @pytest.mark.asyncio

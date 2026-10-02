@@ -56,6 +56,9 @@ def test_posture_zero_adds_nothing(monkeypatch):
 def test_effective_autonomous_tools_drop_email_after_smtp_rejection(monkeypatch):
     from agents.task import constants as c
     _reset_email_memory()
+    # The drop is the legacy (056 WS4) behaviour; since 2026-09-22 the default
+    # freezes the toolset (harness/cache review F2), so opt out explicitly.
+    monkeypatch.setenv("STABLE_AUTONOMOUS_TOOLSET", "false")
     monkeypatch.delenv("EMAIL_PROVIDER", raising=False)
     monkeypatch.delenv("AGENTMAIL_API_KEY", raising=False)
     assert "email" in c.effective_autonomous_tools(), "no rejection yet → email stays"
@@ -82,6 +85,7 @@ def test_effective_autonomous_tools_keep_email_on_agentmail(monkeypatch):
 def test_default_goal_tools_use_the_effective_set(monkeypatch):
     from agents.task.goals import dispatcher as d
     _reset_email_memory()
+    monkeypatch.setenv("STABLE_AUTONOMOUS_TOOLSET", "false")  # legacy drop; default freezes
     monkeypatch.delenv("EMAIL_PROVIDER", raising=False)
     monkeypatch.delenv("AGENTMAIL_API_KEY", raising=False)
     monkeypatch.setattr("agents.task.constants.full_autonomy_enabled", lambda: True)

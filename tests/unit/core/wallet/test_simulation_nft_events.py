@@ -197,8 +197,9 @@ def test_erc1155_transfer_batch_yields_one_entry_per_id():
     )
 
 
-def test_a_transfer_batch_with_mismatched_array_lengths_is_skipped():
-    """Malformed, so unreadable — and an unreadable log is skipped, as today."""
+def test_a_transfer_batch_with_mismatched_array_lengths_refuses():
+    """Malformed, so unreadable. It touches the holder, so CR-L17 refuses the
+    simulation instead of skipping it: an unread movement is not no movement."""
     log = _transfer_batch(NFT, HOLDER, HOLDER, OTHER, [7, 9], [1, 2])
     ids_at = 0x40
     values_at = ids_at + 0x20 * 3
@@ -206,8 +207,8 @@ def test_a_transfer_batch_with_mismatched_array_lengths_is_skipped():
                    + _raw_word(2) + _raw_word(7) + _raw_word(9)
                    + _raw_word(1) + _raw_word(1))  # says 1 value, sends 2 ids
     d = _sim(_entry(log))
-    assert d.ok is True
-    assert d.holder_nft_out == ()
+    assert d.ok is False
+    assert "cannot be read" in d.error
 
 
 # --- ApprovalForAll — the drain vector -------------------------------------

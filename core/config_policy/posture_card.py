@@ -12,6 +12,11 @@ import os
 from typing import List, Optional
 
 from core.config_policy import policy as _p
+from core.config_policy.builder_mode import (
+    agent_builder_mode,
+    effective_builder_mode,
+    ship_clamp_reason,
+)
 
 
 def _env_or_default(name: str) -> str:
@@ -71,6 +76,34 @@ def build_posture_card() -> List[dict]:
     _row("compute posture", "AGENT_COMPUTE_POSTURE", _p.compute_posture,
          _compute_note)
 
+    def _builder_note() -> str:
+        """A `ship` instance clamped to `build` for want of a domain or a
+        certificate must SAY so. Before 058 WS-3 the clamp was a one-time WARN
+        in the log and nothing else — `builder_mode_display()` had existed since
+        032 with the docstring "one-line display for status seats" and ZERO
+        callers outside its own test, so an operator who set `ship` could be
+        running `build` with every seat silent about it.
+
+        ⚠️ Gated on what was REQUESTED. ``ship_clamp_reason()`` answers for any
+        deployment without a base domain, so reading it unconditionally made an
+        `off` instance report a clamp that never happened — a confident lie
+        about a downgrade, which is worse than the silence it replaced."""
+        if agent_builder_mode() != "ship":
+            return ""
+        reason = ship_clamp_reason()
+        return f"CLAMPED to build — {reason}" if reason else ""
+
+    _row("builder mode", "AGENT_BUILDER_MODE", effective_builder_mode, _builder_note)
+
+    # The money regime: derived from AUTONOMY_MODE + the DEFI_* arm keys + the
+    # daily cap (core/config_policy/money_regime.py). A partial arm names the
+    # missing keys here rather than surfacing as a refusal inside a goal run.
+    def _money_regime() -> str:
+        from core.config_policy.money_regime import money_regime_display
+        return money_regime_display()
+
+    _row("money regime", "DEFI_AGENT_AUTONOMY", _money_regime)
+
     def _pause() -> str:
         try:
             from core.autonomy_control import read_state
@@ -90,6 +123,21 @@ def build_posture_card() -> List[dict]:
         rows.append({"axis": "console posture", "env": "POLYROB_POSTURE",
                      "effective": raw_console, "source": "env",
                      "note": "webview auth surface"})
+
+    # 058 WS-3: the card's last line, so an operator who has never opened
+    # CONFIGURATION.md learns from the card itself that the BUNDLES above are the
+    # intended surface and the 700-odd individual knobs are the advanced lane.
+    # Imported here, not at module scope: core/config_policy/ must not take an
+    # import-time dependency on the generated catalog literal.
+    try:
+        from core.flags_catalog import CATALOG
+        knobs = f"{len(CATALOG)} documented"
+    except Exception:
+        knobs = "unknown"
+    rows.append({"axis": "knobs", "env": "—", "effective": knobs,
+                 "source": "catalog",
+                 "note": "the axes above set their defaults; "
+                         "`polyrob doctor --flags --changed` shows what you moved"})
     return rows
 
 

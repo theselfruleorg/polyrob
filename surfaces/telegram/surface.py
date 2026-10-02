@@ -6,7 +6,7 @@ session_key (the chat segment — same convention every surface uses), splits me
 over Telegram's 4096-char limit, and calls bot.send_message.
 
 Streaming: default is the Surface ABC's buffered path (partials buffer, one send() on
-finalize). With TELEGRAM_INCREMENTAL_STREAM on (#8), stream() instead opens one message
+finalize). With owner preference `stream.telegram` enabled, stream() opens one message
 and live-edits it in place via editMessageText as deltas arrive, flood-throttled
 (TELEGRAM_STREAM_EDIT_INTERVAL_SEC) and RetryAfter-aware (the minimal rate limiter).
 
@@ -87,6 +87,8 @@ class TelegramSurface(Surface):
             max_message_bytes=_TELEGRAM_MAX,
             markdown_flavor="html",        # agent markdown -> Telegram HTML (see core.surfaces.rendering)
             media_out=True,                # can render OutboundMessage.media as photo/document
+            supports_actions=True,         # 064 F2: inline keyboard (surfaces/telegram/actions.py)
+            voice_out="ogg_opus",          # 064 F5: sendVoice (core/surfaces/speech_out.py)
         )
 
     def _parse_mode(self) -> str | None:
@@ -125,7 +127,8 @@ class TelegramSurface(Surface):
         return self.render_outbound(text or "")
 
     async def send_text(self, chat_id: str, text: str, *, reply_to: Optional[str] = None,
-                        thread_id: Optional[str] = None) -> Optional[Any]:
+                        thread_id: Optional[str] = None,
+                        actions: Optional[list] = None) -> Optional[Any]:
         """The ONE outbound text seam: split, convert to Telegram HTML, send.
 
         Retries a chunk as plain text (the original markdown source) if Telegram rejects
@@ -135,6 +138,9 @@ class TelegramSurface(Surface):
         message was deleted/inaccessible) self-heals — the send is retried once without
         it rather than the reply being lost. Returns the last message_id. Raises only if
         every attempt fails.
+
+        064 F2: the LAST chunk carries an inline keyboard for ``actions`` (explicit
+        only — never inferred from the text; ``core/surfaces/actions.py``).
         """
         limit = self.capabilities.max_message_bytes
         rendered = render_for_flavor(text or "", self.capabilities.markdown_flavor, limit)
@@ -155,8 +161,13 @@ class TelegramSurface(Surface):
                 extra["reply_to_message_id"] = int(reply_to)
             except (TypeError, ValueError):
                 logger.debug("TelegramSurface: bad reply_to %r ignored", reply_to)
+        from surfaces.telegram.actions import reply_markup_for
+        markup = reply_markup_for(actions)
         last_id = None
-        for body, source in zip(rendered, sources):
+        final = len(rendered) - 1
+        for i, (body, source) in enumerate(zip(rendered, sources)):
+            if i == final and markup is not None:
+                extra["reply_markup"] = markup
             try:
                 sent = await self._send_chunk(chat_id, body, parse_mode, extra)
             except Exception as e:
@@ -198,7 +209,8 @@ class TelegramSurface(Surface):
         try:
             last_id = await self.send_text(
                 chat_id, msg.text or "", reply_to=msg.reply_to,
-                thread_id=thread_id_from_session_key(msg.session_key))
+                thread_id=thread_id_from_session_key(msg.session_key),
+                actions=getattr(msg, "actions", None) or None)
             # Media is best-effort ON TOP of the text: a media send failure (missing
             # file, bot rejection, ...) never takes the text down with it — the text
             # above has already landed. See _send_media.
@@ -216,10 +228,50 @@ class TelegramSurface(Surface):
                         chat_id,
                         f"(I could not attach {failed} file(s) — everything "
                         f"you need is in the message above.)")
+            if self._voice_reply_wanted(msg, chat_id):
+                await self.send_voice(chat_id, msg.text or "")
             return SendResult(success=True, surface_message_id=str(last_id) if last_id is not None else None)
         except Exception as e:  # fail-open: never raise into the loop
             logger.error("TelegramSurface.send to %s failed: %s", chat_id, e, exc_info=True)
             return SendResult(success=False, error=str(e))
+
+    def _voice_reply_wanted(self, msg: OutboundMessage, chat_id) -> bool:
+        """064 F5: speak a committed agent reply in the OWNER's DM when the owner
+        turned on ``voice.replies``. Never in a room, never a stream delta."""
+        try:
+            from core.surfaces.envelopes import MessageKind
+            if msg.partial or msg.kind != MessageKind.AGENT_TEXT or not (msg.text or "").strip():
+                return False
+            from core.instance import resolve_owner_principal, resolve_owner_telegram_id
+            if str(chat_id) != str(resolve_owner_telegram_id() or ""):
+                return False
+            from core.surfaces.speech_out import voice_replies_enabled
+            return voice_replies_enabled(resolve_owner_principal() or "")
+        except Exception:
+            logger.debug("TelegramSurface: voice-reply check failed (no voice)", exc_info=True)
+            return False
+
+    async def send_voice(self, chat_id, text: str) -> bool:
+        """The text as a Telegram voice note (``sendVoice``), best effort ON TOP of
+        the text already sent. No engine / no ffmpeg is logged as the reason,
+        never raised: the reader already has every word in the message above."""
+        from core.surfaces.speech_out import OGG_OPUS, speak
+        result = await speak(text, OGG_OPUS)
+        if not result.ok:
+            logger.info("TelegramSurface: no voice reply — %s", result.reason)
+            return False
+        try:
+            try:
+                from aiogram.types import BufferedInputFile
+                voice = BufferedInputFile(result.audio, filename="reply.ogg")
+            except Exception:  # no aiogram (tests): the raw bytes
+                voice = result.audio
+            await self._call_flood_controlled(
+                str(chat_id), "voice", lambda: self._bot.send_voice(chat_id, voice))
+            return True
+        except Exception as e:
+            logger.warning("TelegramSurface: sendVoice failed: %s", e)
+            return False
 
     def _caption_for(self, text: str) -> Optional[str]:
         if not text:

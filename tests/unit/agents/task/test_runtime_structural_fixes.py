@@ -149,8 +149,11 @@ class TestRegistrySchemaMemoization:
 
         first = reg.get_all_actions_for_provider("openai")
         second = reg.get_all_actions_for_provider("openai")
-        # Cache hit returns the very same list object (memoized).
-        assert first is second
+        # Cache hit returns the same schemas — but a fresh list object each time
+        # (F24: handing out the live cached list let one consumer poison the next
+        # step's tool bytes).
+        assert first == second
+        assert first is not second
 
     def test_registering_action_busts_cache(self):
         reg = self._registry()
@@ -180,8 +183,8 @@ class TestRegistrySchemaMemoization:
         openai_list = reg.get_all_actions_for_provider("openai")
         anthropic_list = reg.get_all_actions_for_provider("anthropic")
         assert openai_list is not anthropic_list
-        # And each provider is independently memoized.
-        assert reg.get_all_actions_for_provider("openai") is openai_list
+        # And each provider is independently memoized (equal contents, copied list).
+        assert reg.get_all_actions_for_provider("openai") == openai_list
 
 
 # ------------------------------------------------------------- dead-cache removal

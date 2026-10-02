@@ -48,7 +48,10 @@ def test_supervised_interactive_default_unchanged(monkeypatch):
     monkeypatch.delenv("AUTONOMY_MODE", raising=False)
     monkeypatch.delenv("INTERACTIVE_TOOL_IDS", raising=False)
     from surfaces.telegram.interactive_tools import interactive_tool_ids
-    assert interactive_tool_ids() == ["goal", "twitter", "web_fetch", "filesystem", "task"]
+    # 071: the read-only defi_data joins the supervised owner chat (it registers
+    # only under DEFI_DATA_ENABLED; the spend tool stays behind the armed key).
+    assert interactive_tool_ids() == ["goal", "twitter", "web_fetch", "filesystem", "task",
+                                      "defi_data"]
 
 
 def test_autonomous_interactive_widens_and_env_still_wins(monkeypatch):

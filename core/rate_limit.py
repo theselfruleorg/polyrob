@@ -29,11 +29,58 @@ so there is no budget shape here for it to configure.
 
 A shrink-only name ratchet (``tests/test_rate_limiter_ratchet.py``) keeps new
 forks from appearing outside this module.
+
+045 lane 4 — a limiter TRIP is a perimeter signal. A ``SlidingWindowLimiter``
+built with ``name=`` records one ``rate_limited`` event when ``check`` denies,
+and a wrapper over the other two shapes (the api middleware) calls
+:func:`report_trip` itself. An unnamed limiter records nothing, so pacing
+limiters (the outbound dispatcher, the X post budget) stay silent. The record
+is itself throttled — at most one row per ``(limiter, key)`` per window — so a
+flood that trips the limiter ten thousand times writes one row, not ten
+thousand. The key is the limiter's own key (an IP, a session, a caller id),
+truncated; no request content ever reaches this module.
 """
 from __future__ import annotations
 
 import time
 from typing import Callable, Dict, Hashable, List, Optional, Tuple
+
+#: Throttle state for :func:`report_trip`: (limiter, key) -> last recorded ts.
+#: Bounded; the oldest entry goes first when full.
+_TRIP_LAST: Dict[Tuple[str, str], float] = {}
+_TRIP_MAX_KEYS = 2048
+_TRIP_KEY_MAX_LEN = 64
+
+
+def report_trip(limiter: str, key: Hashable, *, window_sec: float = 60.0,
+                now: Optional[float] = None) -> bool:
+    """Record ONE ``rate_limited`` event for a denied call (045 lane 4).
+
+    Returns True when a row was written, False when the throttle (one row per
+    ``(limiter, key)`` per ``window_sec``) or a disabled log suppressed it.
+    Fail-open: a raising event log never changes the limiter's decision — the
+    caller has already decided, this only makes the decision visible.
+    """
+    try:
+        ts = time.time() if now is None else float(now)
+        k = (str(limiter), str(key)[:_TRIP_KEY_MAX_LEN])
+        last = _TRIP_LAST.get(k)
+        if last is not None and ts - last < max(1.0, float(window_sec)):
+            return False
+        _TRIP_LAST.pop(k, None)
+        _TRIP_LAST[k] = ts
+        while len(_TRIP_LAST) > _TRIP_MAX_KEYS:
+            del _TRIP_LAST[next(iter(_TRIP_LAST))]
+        from core.surfaces.access_log import deployment_tenant, security_log_enabled
+        if not security_log_enabled():
+            return False
+        from core.event_kinds import RATE_LIMITED
+        from core.event_log import emit
+        emit(RATE_LIMITED, source="rate_limit", user_id=deployment_tenant(),
+             attrs={"limiter": k[0], "key": k[1], "window_sec": float(window_sec)})
+        return True
+    except Exception:
+        return False
 
 
 class SlidingWindowLimiter:
@@ -51,7 +98,9 @@ class SlidingWindowLimiter:
         window_seconds: float = 60,
         time_fn: Optional[Callable[[], float]] = None,
         max_keys: Optional[int] = None,
+        name: Optional[str] = None,
     ):
+        self.name = name
         self.max_calls = max_calls
         self.window_seconds = float(window_seconds)
         self._time_fn = time_fn
@@ -106,6 +155,8 @@ class SlidingWindowLimiter:
         allowed = len(kept) < limit
         if allowed:
             kept.append(now)
+        elif self.name:
+            report_trip(self.name, key, window_sec=win, now=now)
         if self._max_keys is not None:
             while len(self._calls) > self._max_keys:
                 del self._calls[next(iter(self._calls))]

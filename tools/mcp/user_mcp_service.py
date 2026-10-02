@@ -158,6 +158,13 @@ class UserMCPService:
                 error=f"Invalid URL: {url_error}"
             )
 
+        # M06: the SSE POST endpoint gets the same URL policy and must share
+        # the server URL's origin.
+        endpoint_error = self._message_endpoint_error(
+            server_url, options.get('message_endpoint'))
+        if endpoint_error:
+            return AddServerResult(success=False, error=endpoint_error)
+
         # Validate server name format
         if not self._validate_server_name(server_name):
             return AddServerResult(
@@ -429,6 +436,18 @@ class UserMCPService:
             message_endpoint=server.message_endpoint  # For SSE servers
         )
 
+    def _message_endpoint_error(self, server_url: str, endpoint) -> Optional[str]:
+        """Why an SSE ``message_endpoint`` is refused, or None (M06)."""
+        if endpoint is None or not str(endpoint).strip():
+            return None
+        from tools.mcp.protocol import message_endpoint_refusal, resolve_message_endpoint
+        target = resolve_message_endpoint(server_url, endpoint)
+        ok, err = self.validator.validate(target)
+        if not ok:
+            return f"Invalid message_endpoint: {err}"
+        refusal = message_endpoint_refusal(server_url, endpoint)
+        return f"Invalid message_endpoint: {refusal}" if refusal else None
+
     async def update_server(
         self,
         user_id: str,
@@ -451,6 +470,22 @@ class UserMCPService:
             url_valid, url_error = self.validator.validate(updates['server_url'])
             if not url_valid:
                 raise ValueError(f"Invalid URL: {url_error}")
+
+        # M06: re-check the POST endpoint whenever it OR the server URL moves —
+        # a new server_url must not leave an old endpoint on another origin.
+        if 'message_endpoint' in updates or 'server_url' in updates:
+            endpoint = updates.get('message_endpoint')
+            server_url = updates.get('server_url')
+            if endpoint is None or server_url is None:
+                existing = await self.db.get_server(user_id, server_name)
+                if endpoint is None:
+                    endpoint = getattr(existing, 'message_endpoint', None)
+                if server_url is None:
+                    server_url = getattr(existing, 'server_url', None)
+            if endpoint:
+                endpoint_error = self._message_endpoint_error(server_url or '', endpoint)
+                if endpoint_error:
+                    raise ValueError(endpoint_error)
 
         # Validate server_type if being updated
         if 'server_type' in updates:
