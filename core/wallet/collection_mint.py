@@ -45,7 +45,7 @@ from typing import Optional, Sequence
 from core.wallet import abi
 
 MINT_SIGNATURE = "mint(address,uint256,uint256)"
-MINT_SELECTOR = abi.selector(MINT_SIGNATURE)
+MINT_SELECTOR = "0x156e29f6"  # abi.selector(MINT_SIGNATURE), a literal for a bare install
 
 #: The collection's spec — ``uint256 public constant PRICE = 0.042 ether``.
 MINT_PRICE_WEI = 42 * 10 ** 15
@@ -55,15 +55,13 @@ MAX_MINT_QTY = 10
 _ZERO_WORD = "0x" + "0" * 64
 
 
-def _topic(signature: str) -> str:
-    from eth_utils import keccak
-    return "0x" + keccak(signature.encode()).hex()
-
-
-TOPIC_TRANSFER = _topic("Transfer(address,address,uint256)")
+# keccak256 of each event signature, as literals: computing them at import needs
+# eth_utils, which a bare install lacks (pack discovery imports this module).
+# tests/unit/core/wallet/test_collection_topics.py pins each value.
+TOPIC_TRANSFER = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"  # Transfer(address,address,uint256)
 #: The collection's spec — ``Minted(uint256 indexed id, address indexed to, address account,
 #: uint256 pnl, uint256 eth, uint64 revealBlock)``, one per id.
-TOPIC_MINTED = _topic("Minted(uint256,address,address,uint256,uint256,uint64)")
+TOPIC_MINTED = "0x4ef2d867c71b71127c9eb99425de0cf63abb4a0ed115e644e764379f1fe793f8"  # Minted(uint256,address,address,uint256,uint256,uint64)
 
 #: Dust on the signer's native balance — the same constant ``tx_guard`` uses everywhere.
 _NATIVE_DUST_WEI = 10 ** 12

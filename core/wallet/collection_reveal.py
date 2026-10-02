@@ -35,25 +35,23 @@ from typing import List, Optional, Sequence, Tuple
 from core.wallet import abi
 
 REVEAL_SIGNATURE = "reveal(uint256[])"
-REVEAL_SELECTOR = abi.selector(REVEAL_SIGNATURE)          # 0xb93f208a
+REVEAL_SELECTOR = "0xb93f208a"  # abi.selector(REVEAL_SIGNATURE), a literal for a bare install
 
 #: Hard ceiling on ids in ONE reveal transaction. The verb's own default is 10
 #: (``reveal(10)`` measured 369,566 gas on a 4663 fork, ≈35k per id).
 MAX_REVEAL_IDS = 64
 
 
-def _topic(signature: str) -> str:
-    from eth_utils import keccak
-    return "0x" + keccak(signature.encode()).hex()
-
-
+# keccak256 of each event signature, as literals: computing them at import needs
+# eth_utils, which a bare install lacks (pack discovery imports this module).
+# tests/unit/core/wallet/test_collection_topics.py pins each value.
 #: The events a reveal emits (the collection's spec). ``Revealed`` or ``Recommitted`` is the
 #: receipt (one per id); ``MetadataUpdate`` (ERC-4906) and ``TraitUpdated`` (ERC-7496)
 #: ride a ``Revealed``. Nothing else may appear in the log.
-TOPIC_REVEALED = _topic("Revealed(uint256,string)")
-TOPIC_RECOMMITTED = _topic("Recommitted(uint256,uint64)")
-TOPIC_METADATA_UPDATE = _topic("MetadataUpdate(uint256)")
-TOPIC_TRAIT_UPDATED = _topic("TraitUpdated(bytes32,uint256,bytes32)")
+TOPIC_REVEALED = "0xc811fa426354a91dd1520fee1f353bc0a55e337ab4095a1b1ac0a99167b9413e"  # Revealed(uint256,string)
+TOPIC_RECOMMITTED = "0x5eedaff34ab8605f6efee3419a11414cb708985314ba1952f39df960e7c481e8"  # Recommitted(uint256,uint64)
+TOPIC_METADATA_UPDATE = "0xf8e1a15aba9398e019f0b49df1a4fde98ee17ae345cb5f6b5e2c27f5033e8ce7"  # MetadataUpdate(uint256)
+TOPIC_TRAIT_UPDATED = "0x8386f3b08e49490d0c5a9d2c401c091f13b01a17d75ce4a2f0f8f923b410ff7d"  # TraitUpdated(bytes32,uint256,bytes32)
 _ALLOWED_TOPICS = frozenset({TOPIC_REVEALED, TOPIC_RECOMMITTED,
                              TOPIC_METADATA_UPDATE, TOPIC_TRAIT_UPDATED})
 
