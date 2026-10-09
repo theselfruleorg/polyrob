@@ -16,6 +16,7 @@ import importlib
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from tests.unit.webview.owner_session import owner_headers
 
 
 def _client(monkeypatch, tmp_path, user_id="u1"):
@@ -129,7 +130,7 @@ def test_the_pending_page_is_gone(monkeypatch):
     monkeypatch.setenv("ENV", "development")
     import webview.server as server
     server = importlib.reload(server)
-    client = TestClient(server._fastapi)
+    client = TestClient(server._fastapi, headers=owner_headers(monkeypatch))
     assert client.get("/pending").status_code == 404
 
 

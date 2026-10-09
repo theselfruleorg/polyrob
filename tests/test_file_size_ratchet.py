@@ -31,7 +31,7 @@ CEILINGS = {
     # (/signin, /profile, /settings, /admin*) moved to webview/posture_routes.py
     # as ONE posture table — they were seven hand-registered routes that
     # disagreed about what a denial looks like.
-    "webview/server.py": 3193,  # 043 A12/A29/A30: the full-tree session catalog, the per-session stats route and the four consumer-less socket emits deleted; 070 W0.10: the feed events route moved to webview/feed_routes.py; 070 W0.14: the workspace tree moved to webview/workspace_routes.py; 070 W0.17: socket joins through webview/socket_limits.py; 070 W0.18/E.34: the error handler delegates to webview/error_page.py
+    "webview/server.py": 2992,  # 043 A12/A29/A30: the full-tree session catalog, the per-session stats route and the four consumer-less socket emits deleted; 070 W0.10: the feed events route moved to webview/feed_routes.py; 070 W0.14: the workspace tree moved to webview/workspace_routes.py; 070 W0.17: socket joins through webview/socket_limits.py; 070 W0.18/E.34: the error handler delegates to webview/error_page.py
     # S8 (2026-08-29): chat / delivery / lifecycle mixins + support helpers extracted
     # (agents/task/task_agent_{chat,delivery,lifecycle,support}.py).
     # Tightened 2026-09-08: the public session-control verbs (get_session_status /

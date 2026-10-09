@@ -29,8 +29,9 @@ def test_count_authored_skills_matches_bundled_library_size():
     # 067 P3b moved x-engagement + social-discovery into the x pack; 067 P4 moved the
     # six polymarket-*/hyperliquid-* skills into the markets pack (19). 068 W2 added the
     # ten basic trading procedure skills (29); Codex A10 split treasury-trading's
-    # 57 KB body into five sibling skills (34).
-    assert mgr.count_authored_skills() == 34
+    # 57 KB body into five sibling skills (34). incident-response and
+    # adversarial-consensus added the two generic procedure skills (36).
+    assert mgr.count_authored_skills() == 36
 
 
 def test_cli_skills_validate_no_arg_exits_zero_for_compliant_library():

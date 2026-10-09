@@ -1,7 +1,7 @@
 services:
   polyrob:
     build: .
-    ports: ["8000:8000"]
+    ports: ["127.0.0.1:8000:8000"]
     environment: ["UVICORN_PORT=8000"]
     # Tracked example so a fresh clone's `docker compose up` resolves without error.
     # For real secrets: cp config/.env.example config/.env.development (gitignored),

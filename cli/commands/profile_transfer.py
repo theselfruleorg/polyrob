@@ -6,16 +6,18 @@ own machines. Export discipline:
 
 - credential files NEVER enter the archive (``.env``, ``auth.json``, wallet
   material, anything ``is_credential_file`` matches);
-- every staged text file is force-scrubbed with the repo's secret-shape SSOT
-  (``core.secret_patterns.apply_ssot_shapes``) — "share archives must not emit
-  raw keys", regardless of any live-redaction setting;
-- staging works on a COPY (symlinks materialized), so the live profile is
-  byte-unchanged and redaction can never follow a link back into the source;
+- UTF-8 text files up to 5 MiB are force-scrubbed with the secret-shape SSOT;
+  binary and larger files may contain secrets, so archives are private backups;
+- staging copies confined regular files, refusing hard links and skipping
+  symbolic links; the live profile stays unchanged;
+- the archive is created privately (0600) and never replaces an existing path;
 - extraction is traversal-guarded (no absolute members, no ``..``, no links).
 """
 import shutil
 import tarfile
 import tempfile
+import os
+import secrets
 from pathlib import Path
 
 import click
@@ -44,7 +46,7 @@ def _is_excluded(rel: Path) -> bool:
 
 def _scrub_staged_tree(stage: Path) -> int:
     """Force-redact secret shapes in every staged TEXT file. Returns hits."""
-    from core.secret_patterns import apply_ssot_shapes
+    from core.secret_scrub import scrub_secret_shapes
     hits = 0
     for p in sorted(stage.rglob("*")):
         try:
@@ -56,7 +58,7 @@ def _scrub_staged_tree(stage: Path) -> int:
                 continue  # binary — never scrubbed, and DBs may hold anything:
                 # they are the owner's own data; the credential FILES are what
                 # must never ship.
-            scrubbed = apply_ssot_shapes(text)
+            scrubbed = scrub_secret_shapes(text)
             if scrubbed != text:
                 p.write_text(scrubbed, encoding="utf-8")
                 hits += 1
@@ -67,7 +69,9 @@ def _scrub_staged_tree(stage: Path) -> int:
 
 def export_profile(name: str, out_path: Path) -> dict:
     """Stage → exclude creds → scrub → tar.gz. Returns a summary dict."""
-    from core.profiles import ProfileNotFoundError, profiles_root
+    from core.profiles import ProfileNotFoundError, profiles_root, is_safe_profile_name, InvalidProfileNameError
+    if not is_safe_profile_name(name):
+        raise InvalidProfileNameError(name)
     home = profiles_root() / name
     if not home.is_dir():
         raise ProfileNotFoundError(name, home)
@@ -80,23 +84,40 @@ def export_profile(name: str, out_path: Path) -> dict:
             skip = []
             for n in names:
                 rel = (Path(src) / n).relative_to(home)
-                if _is_excluded(rel):
+                if _is_excluded(rel) or (Path(src) / n).is_symlink():
                     skip.append(n)
                     excluded.append(str(rel))
             return skip
 
-        # symlinks=False FOLLOWS links => the staged copy is materialized;
-        # a dangling link is skipped rather than failing the export.
-        shutil.copytree(home, stage, ignore=_ignore, symlinks=False,
-                        ignore_dangling_symlinks=True)
+        def _copy_file(src, dst):
+            from core.security.workspace_io import read_bytes
+            from core.security.secret_guard import is_credential_file
+            if Path(src).is_symlink() or is_credential_file(Path(src).resolve()):
+                raise OSError("refusing linked or credential content in profile export")
+            Path(dst).write_bytes(read_bytes(src, home))
+            return dst
+
+        shutil.copytree(home, stage, ignore=_ignore, copy_function=_copy_file)
         scrub_hits = _scrub_staged_tree(stage)
 
-        out_path = Path(out_path)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        with tarfile.open(out_path, "w:gz") as tar:
-            for p in sorted(stage.rglob("*")):
-                tar.add(p, arcname=str(Path(name) / p.relative_to(stage)),
-                        recursive=False)
+        out_path = Path(out_path).absolute()
+        from core.security.confined_write import confined_parent
+        with confined_parent(out_path, out_path.parent, create=True) as (directory, leaf):
+            temporary = ".export-" + secrets.token_hex(16) + ".tmp"
+            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                         0o600, dir_fd=directory)
+            try:
+                with os.fdopen(fd, "wb") as stream:
+                    with tarfile.open(fileobj=stream, mode="w:gz") as tar:
+                        for p in sorted(stage.rglob("*")):
+                            tar.add(p, arcname=str(Path(name) / p.relative_to(stage)), recursive=False)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                # Publish only a complete private archive, never overwrite a link/file.
+                os.link(temporary, leaf, src_dir_fd=directory, dst_dir_fd=directory,
+                        follow_symlinks=False)
+            finally:
+                os.unlink(temporary, dir_fd=directory)
     return {"out": out_path, "excluded": sorted(excluded), "scrubbed_files": scrub_hits}
 
 
@@ -183,8 +204,9 @@ def export_cmd(name, output):
         click.echo("Excluded (credentials/volatile): " + ", ".join(result["excluded"]))
     if result["scrubbed_files"]:
         click.echo(f"Scrubbed secret-shaped strings in {result['scrubbed_files']} file(s).")
-    click.echo("Note: .env/auth.json/wallet material never enter an export — "
-               "re-add keys on the importing machine.")
+    click.echo("Private backup: named credential files are excluded and text up to 5 MiB "
+               "is scrubbed. Binary databases and larger files may contain sensitive data. "
+               "Re-add keys on the importing machine.")
 
 
 @click.command("import")

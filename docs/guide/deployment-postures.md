@@ -16,12 +16,11 @@ documents the posture model **as built**; the code is the source of truth
 
 | Posture | Who it's for | What `/` shows a visitor | Bind default | Auth |
 |---|---|---|---|---|
-| `local` (Posture 0) | Single-user, own machine | The console itself, no gate | `127.0.0.1` (loopback only) | None — the loopback operator *is* the owner |
+| `local` (Posture 0) | Single-user, own machine | Owner login | `127.0.0.1` (loopback only) | Owner username/password → JWT cookie |
 | `own_ops` (Posture 1) | You self-host on a public host, for yourself only | A minimal "polyrob is live" status page; the console appears after login | `0.0.0.0` | Owner username/password login |
 | `multitenant` (Posture 2) | Several tenants with their own accounts | The same status page until sign-in; account and admin pages exist only here | `0.0.0.0` | Wallet/SIWE JWT + admin pages |
 
-The primitive is `local`: loopback bind, zero auth, every session owned by
-the local user. `own_ops` and `multitenant` are layers on top, gated by
+The primitive is `local`: loopback bind and owner login; the authenticated owner can open every session. `own_ops` and `multitenant` are layers on top, gated by
 posture — they don't replace the local behavior, they add to it.
 
 ### How posture is resolved
@@ -33,7 +32,7 @@ posture — they don't replace the local behavior, they add to it.
 3. **Derived from an explicit `WEBGATE_HOST` / `WEBVIEW_HOST` override**: a loopback
    address (`127.0.0.1`, `localhost`, `::1`) → `local`; anything else → `own_ops`.
 4. **No override, `WEBGATE_MULTITENANT` not set** → `local` (today's default:
-   loopback, no auth — this must never regress).
+   loopback with owner login).
 
 `webgate.bind_host()` mirrors that logic for the actual bind: `local` → `127.0.0.1`,
 `own_ops`/`multitenant` → `0.0.0.0`, unless `WEBGATE_HOST`/`WEBVIEW_HOST` is set
@@ -42,7 +41,7 @@ explicitly (which always wins).
 ### Running it
 
 ```bash
-# Posture 0 — local (default): loopback, no auth
+# Posture 0 — local (default): loopback with owner login
 polyrob dashboard
 
 # Posture 1 — own_ops: public status page + owner login for the console
@@ -63,8 +62,12 @@ is OFF by default), not from the Console process alone.
 
 ### Safe-by-default guarantees
 
-- **`local` never exposes anything** — no login surface is even registered;
-  a request to `/owner-login` 404s.
+- **Every posture authenticates callers**, including local HTTP and Socket.IO clients.
+  On a workstation, `polyrob dashboard` makes its own `JWT_SECRET_KEY` on first run
+  and, when no owner password is set, prints a one-time password for that run;
+  `polyrob dashboard --set-password` saves a lasting one. A server console needs
+  `POLYROB_OWNER_USERNAME`, `POLYROB_OWNER_PASSWORD_HASH` and `JWT_SECRET_KEY`
+  (32+ characters, or it refuses to boot); see the owner-login setup below.
 - **`--host 0.0.0.0` auto-derives `own_ops`.** Passing `--host` without an
   explicit `--posture`/`--multitenant` feeds the host into `WEBGATE_HOST`,
   which `webgate.posture()` reads for its host-derivation branch — so a bare
@@ -83,7 +86,7 @@ is OFF by default), not from the Console process alone.
 
 A deployment that fronts polyrob with a reverse proxy (nginx, Caddy) binds the app
 itself to `127.0.0.1`, so posture derivation sees loopback and would answer
-`local` — no auth — for a site the internet can reach. **Set
+`local` for a site the internet can reach. **Set
 `POLYROB_POSTURE=own_ops` (or `multitenant`) in the app's environment** and do not
 rely on host-derivation.
 
@@ -163,8 +166,8 @@ path to maintain.
 
 `/owner-login` is registered for both `own_ops` and `multitenant` (not
 `multitenant`-only) — in `multitenant`, wallet sign-in (`/signin`) is still
-available too; owner login is just one more way in. In `local`, neither login
-route is registered at all.
+available too; owner login is just one more way in. In `local`, `/owner-login`
+is registered as well (a loopback console still signs in); `/signin` is not.
 
 ### Wallet sign-in stays optional
 
@@ -272,7 +275,7 @@ even behind owner-login — run it as `local` (loopback-only, the default) and
 reach it through a private tunnel instead of opening a port:
 
 ```bash
-polyrob dashboard          # Posture 0: binds 127.0.0.1:5050, no auth
+polyrob dashboard          # Posture 0: binds 127.0.0.1:5050, owner login
 
 # On a machine joined to the same Tailscale network:
 tailscale serve https / http://127.0.0.1:5050
@@ -280,7 +283,7 @@ tailscale serve https / http://127.0.0.1:5050
 ssh -L 5050:localhost:5050 you@your-host
 ```
 
-This keeps the app itself in Posture 0 (no login code path exposed at all)
+This keeps the app in Posture 0 with owner login
 while still letting you reach it from another device — the console never
 listens on a public interface, and traffic never leaves your private
 network/tunnel. Prefer this over `own_ops` when the only person who ever

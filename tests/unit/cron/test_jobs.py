@@ -85,12 +85,12 @@ def test_cancel_missing_returns_false(tmp_path):
 
 
 def test_claim_for_run_is_cas(tmp_path):
-    # CAS: only the first claim of a 'scheduled' job wins; a second returns False.
+    # CAS: only the first claim of a 'scheduled' job wins; a second returns None.
     s = _store(tmp_path)
     s.add(_job(id="c1"))
-    assert s.claim_for_run("c1") is True
+    assert s.claim_for_run("c1").id == "c1"
     assert s.get("c1").status == "running"
-    assert s.claim_for_run("c1") is False  # already running
+    assert s.claim_for_run("c1") is None  # already running
 
 
 def test_reclaim_not_called_in_init_does_not_reset_live_running(tmp_path):
@@ -99,7 +99,7 @@ def test_reclaim_not_called_in_init_does_not_reset_live_running(tmp_path):
     db = str(tmp_path / "cron.db")
     s1 = CronJobStore(db)
     s1.add(_job(id="r1"))
-    assert s1.claim_for_run("r1") is True  # now 'running'
+    assert s1.claim_for_run("r1") is not None  # now 'running'
     # Second store instance (mid-tick) must NOT reclaim the live job.
     CronJobStore(db)
     assert s1.get("r1").status == "running"

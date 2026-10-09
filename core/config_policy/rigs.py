@@ -36,9 +36,10 @@ analysis H05. Two layers now hold that line:
   passes, so a row written before the refusal existed is narrowed too.
 
 An owner seat (``polyrob cron rig``, ``/trade``, ``polyrob goals create``)
-stamps no agent marker, so an owner-set rig is honoured as written. So is a
-rig ``goal_create`` / ``cronjob_schedule`` write on a GENUINE owner turn (the
-owner asked in chat): those stamp ``authored_by="owner"``. Under the ``armed``
+stamps no agent marker, so an owner-set rig is honoured as written.
+``goal_create`` / ``cronjob_schedule`` stamp ``authored_by="owner"`` only on a
+genuine owner turn that has read no third-party content
+(``tools.goal_tools.owner_authored_turn``); any other turn stamps ``agent``. Under the ``armed``
 money regime (``core/config_policy/money_regime.py``) the ceiling itself holds
 ``defi_trade``, so a self-authored ``money_rail`` passes too. Every
 execution-time gate (money authority in ``load_tools_from_container``, the
@@ -130,10 +131,10 @@ def default_rig_name() -> str:
 #: written before ``authored_by`` existed is still recognised as the agent's.
 AUTHORED_BY_KEY = "authored_by"
 AGENT_AUTHOR = "agent"
-#: A goal / cron row the agent's tool wrote on a GENUINE OWNER TURN (the owner
-#: asked for it in chat — ``tools.goal_tools.owner_seat_turn``). It is treated
-#: like an owner-seat row: its rig is honoured as written. Only code writes a
-#: payload (the tools build it field by field), so the model cannot forge it.
+#: A goal / cron row an OWNER SEAT wrote (``/cron add``, ``/goal``, the CLI, the
+#: console — ``core/owner_create.py``), or the agent's tool on an owner turn that
+#: has read no third-party content (``tools.goal_tools.owner_authored_turn``).
+#: Its rig is honoured as written. Only code writes a payload.
 OWNER_AUTHOR = "owner"
 
 
@@ -149,6 +150,24 @@ def is_agent_authored(payload: Optional[Mapping]) -> bool:
     if author:
         return author != OWNER_AUTHOR
     return bool(payload.get("created_by_session_id"))
+
+
+def is_owner_authored(payload: Optional[Mapping]) -> bool:
+    """True ONLY for a row the owner wrote: an explicit ``authored_by: owner``
+    stamp, or an owner-seat grant (``owner_granted``, goals).
+
+    The POSITIVE check every standing owner authority reads — the rig as
+    written (no agent ceiling), ``payload.tools`` verbatim, an X post or room
+    moderation without a per-run approval, a write verb, a trusted buy target.
+    An unstamped row is NOT the owner's: rows from before cron authorship was
+    stamped (``d2ef4acff``, 2026-09-23) may be the agent's, and every owner path
+    stamps since (``core/owner_create.py``, the CLI, the seeders, room service;
+    ``python -m cron.stamp_authorship`` stamps the old rows once)."""
+    if not isinstance(payload, Mapping):
+        return False
+    if payload.get("owner_granted"):
+        return True
+    return str(payload.get(AUTHORED_BY_KEY) or "").strip().lower() == OWNER_AUTHOR
 
 
 def rig_ungrantable_ids(name: Optional[str],
@@ -173,7 +192,8 @@ def resolve_rig_tools(
     Precedence: ``payload.tools`` (verbatim) > ``payload.rig`` >
     ``AUTONOMOUS_RIG_DEFAULT`` > *default_tools*.
 
-    ``agent_ceiling`` (H05): when given AND the payload is agent-authored, the
+    ``agent_ceiling`` (H05): when given AND the payload is not OWNER-authored
+    (:func:`is_owner_authored` — an unstamped row included), the
     ids the rig resolves to are intersected with it (order kept) — a
     ``payload.rig`` AND the deploy-wide ``AUTONOMOUS_RIG_DEFAULT``. The default
     is the operator's, but it is a DEFAULT: ``AUTONOMOUS_RIG_DEFAULT=money_rail``
@@ -187,8 +207,6 @@ def resolve_rig_tools(
     """
     data = payload if isinstance(payload, Mapping) else {}
     own = data.get("tools")
-    if own:
-        return list(own)
     # An EXPLICIT rig on the row — including `full` — outranks the deploy-wide
     # default: a job that says "I want everything" must not be narrowed by an
     # operator setting AUTONOMOUS_RIG_DEFAULT later. A row with no rig key (or a
@@ -197,8 +215,10 @@ def resolve_rig_tools(
     if named and not is_rig(named):
         rig_tools(named)  # logs the unknown-rig warning, returns None
         named = ""
-    ids = rig_tools(named) if named else rig_tools(default_rig_name())
-    if ids is not None and agent_ceiling is not None and is_agent_authored(data):
+    ids = list(own) if own else (rig_tools(named) if named else rig_tools(default_rig_name()))
+    if ids is None and default_tools is not None:
+        ids = list(default_tools)
+    if ids is not None and agent_ceiling is not None and not is_owner_authored(data):
         allowed = set(agent_ceiling)
         dropped = [t for t in ids if t not in allowed]
         if dropped:

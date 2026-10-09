@@ -87,10 +87,13 @@ A pause is live and needs no restart. Turning autonomy **off** is a durable
 configuration change that applies to the next process:
 
 ```bash
-polyrob autonomy off
-polyrob autonomy on [--mode supervised|autonomous] [--global]
+polyrob autonomy off --global
+polyrob autonomy on [--mode supervised|autonomous] --global
 polyrob autonomy status
 ```
+
+Pass `--global` on the command line: without it the flag goes to
+`./.polyrob/.env`, which the CLI does not read.
 
 Use `pause` to stop what is happening now; use `off` when you do not want the
 loops to start at all. What each mode moves:
@@ -242,6 +245,10 @@ time, so a stale one decides nothing.
 A plain "approve" or "reject" is a message to the agent, not a decision: only
 the slash verbs and the tap tokens decide an item.
 
+An outbound write that a background run queued for you — an X post, reply or
+DM, or a mail — can be approved after that run ended. The approval sends exactly
+the text you approved, once; it does not re-run the job or goal that wrote it.
+
 On the command line the same queue is `polyrob owner pending`, and
 `polyrob owner promote|reject <kind> <id>` (or `… promote all`) decides it.
 In the REPL it is `/pending` and `/pending approve <kind> <id>`.
@@ -263,10 +270,37 @@ that it may proceed, not what you decided — which is how the same ask comes
 back a second time. The answer is kept on the ask too, so you can see later
 what you said.
 
+An answer to an ask that a cron job raised re-runs that job now, not at its next
+slot. Every seat's reply says where the answer went: the goals it unblocked, or
+the job that will read it.
+
 When the agent asks a question with lettered options (`A) … or B) …`), the
 Telegram notice carries one answer button per option. A button sends
 `/fulfill_<id>_<letter>`; that is the same as `/fulfill <id>` with the option's
 own text as your answer. A button only answers the ask the notice is about.
+
+### Making the agent's work your own
+
+A cron job or goal records who wrote it. Work you create from a seat (`/cron
+add`, `polyrob cron schedule`, the console) is **owner-authored**; work the agent
+schedules for itself is **agent-authored**. So is work created in your own turn
+after the agent had read third-party content in that turn — a page, a post, a
+mail, a tool result — and the agent tells you so when it creates it.
+Agent-authored work runs under agent limits: the agent's tool ceiling, and no X
+post, room moderation, money rig or write job without your approval on each run.
+
+```
+/adopt                     # the agent-authored jobs and goals
+/adopt <id>                # one of them in full, then an action card to confirm
+```
+
+`/adopt <id>` shows the whole task, the schedule, rig, tools, target, delivery and
+every payload key, and each pinned skill with a content digest. Confirm on the
+card makes it yours; a row that changed after you saw it is refused. Adoption
+drops money tools from the row (grant those yourself) and never trusts the row's
+buy target. If a pinned skill changes later, the row runs as the agent's again
+until you adopt it again. `/adopt` works on Telegram, in the REPL and in the
+console, never in a group, and the agent can only propose it.
 
 ## Apps
 

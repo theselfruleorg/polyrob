@@ -7,14 +7,14 @@ network pin, a capped authorization window (CR-L26), turn origin, the owner
 pause, idempotency, and the LLM-never-sees-key invariant (returns
 body/tx_hash/address only).
 
-⚠️ There is NO payTo binding (CR-L27): the recipient is whatever address the
-resource's own 402 challenge names. Nothing ties that address to the URL's
-host, so a paid fetch trusts the server for WHO receives the money; the caps
-above bound HOW MUCH.
+Paid requests require expected_pay_to from a prior quote/probe. The approval
+card shows it in full and the SDK hook pins the signed recipient to that value.
+This binds consent to an address, not to a claimed identity behind the URL.
 """
 from __future__ import annotations  # safe: @BaseTool.action uses explicit param_model
 
 import logging
+import asyncio
 import types
 from typing import Optional
 
@@ -44,6 +44,9 @@ class FetchParams(BaseModel):
             "resource's price WITHOUT paying, call x402_quote first instead."
         ),
     )
+    expected_pay_to: Optional[str] = Field(None, max_length=42, description=(
+        "Recipient address from x402_quote or x402_probe, shown on the approval. "
+        "Required to pay: the SDK refuses a missing or changed recipient."))
     request_id: Optional[str] = Field(None, max_length=128, description=(
         "Name THIS paid call. A retry of the same call MUST reuse its id (so it "
         "can never pay twice); a new, deliberate call to the same metered URL "
@@ -103,8 +106,8 @@ def _render_sweep(ledger: dict) -> str:
 
 class ProbeParams(BaseModel):
     url: str = Field(..., description="URL to probe read-only for an x402 paywall")
-    method: str = Field("GET", description="HTTP method — POST reveals POST-only 402s (JSON-RPC, A2A)")
-    body: Optional[str] = Field(None, description="Request body for POST (JSON string)")
+    method: str = Field("GET", description="Read-only method: GET, HEAD or OPTIONS")
+    body: Optional[str] = Field(None, description="Bodies are refused by read-only discovery; leave unset")
 
 
 class SweepParams(BaseModel):
@@ -177,15 +180,23 @@ class X402PayTool(BaseTool):
                 _net = getattr(getattr(_wallet, "config", None), "network", None)
             except Exception:
                 _net = None
-            price = await self._get_client().quote(params.url, pinned_ip=pinned_ip,
-                                                   network=_net)
+            client = self._get_client()
+            details = None
+            if callable(getattr(client, "quote_details", None)):
+                details = await client.quote_details(params.url, pinned_ip=pinned_ip, network=_net)
+                price = details.get("amount") if details else None
+            else:
+                price = await client.quote(params.url, pinned_ip=pinned_ip, network=_net)
             if price is None:
                 return self._ar(content=(
                     f"{params.url}: no x402 price found on a plain GET. This is NOT "
                     f"proof it is free — a POST-only paywall (JSON-RPC, A2A) or an "
                     f"unparseable challenge looks identical here. Use x402_probe for "
-                    f"the full read (method/body, accepts[], payability score)."))
-            return self._ar(content=f"{params.url} requires x402 payment of ${price:.4f} USD")
+                    f"the full read (accepts[], payability score); POST-only discovery is unavailable."))
+            payee = details.get("pay_to") if details else None
+            return self._ar(content=(f"{params.url} requires x402 payment of ${price:.4f} USD\n"
+                                     f"payTo: {payee or 'unknown — probe before paying'}\n"
+                                     "Use this address as expected_pay_to; a changed recipient is refused."))
         except Exception as e:
             logging.getLogger(__name__).error(f"x402_quote failed: {e}")
             return self._ar(error=f"x402_quote failed: {e}")
@@ -287,6 +298,16 @@ class X402PayTool(BaseTool):
         # idempotency replay-guard) must run UNCONDITIONALLY before fetch_with_payment.
         # When the probe can't price it, fail closed to the agent's authorized
         # ceiling (max_amount_usd) as the worst-case spend — never skip the gate.
+        from core.wallet.signer_envelope import UNANSWERED_TEXT, envelope, signer_unanswered
+        if signer_unanswered():
+            # Its $0 clamp is not a cap to pay under: say the signer is down.
+            return self._ar(error=f"x402 payment refused: {UNANSWERED_TEXT}. Nothing was paid.")
+        signer_cap = envelope("x402_per_payment_usd")
+        if signer_cap is not None and params.max_amount_usd > signer_cap:
+            return self._ar(error=(
+                f"max_amount_usd ${params.max_amount_usd:.2f} is above the wallet signer's "
+                f"x402 per-payment cap ${signer_cap:.2f} (/etc/polyrob/signer.toml); "
+                f"use a max_amount_usd at or below it"))
         try:
             # 068 B8: price the entry the payer will actually pay.
             price = await self._get_client().quote(params.url, pinned_ip=pinned_ip,
@@ -315,6 +336,14 @@ class X402PayTool(BaseTool):
         # failed fetch must stay retryable, so we do not mark the key "seen" here;
         # only record() (after an actual payment) adds it to the replay-guard set.
         idem = x402_idempotency_key(params)
+        # An earlier payment whose server never settled it leaves an unresolved
+        # journal row that refuses every rail. Once its authorization expired,
+        # the chain decides it (fail closed on any doubt) — see x402_expiry.
+        try:
+            from core.wallet.x402_expiry import resolve_expired
+            await asyncio.to_thread(resolve_expired)
+        except Exception as exc:  # noqa: BLE001 — the gate below still refuses
+            logging.getLogger(__name__).warning("x402 expiry resolution failed: %s", type(exc).__name__)
         # M4 (2026-07-15): PolicyGate.check() -> (network pay leg) -> record() is
         # the value-moving critical section. Without holding the gate's reserve
         # lock across it, two concurrent x402_fetch calls can both check() a
@@ -333,13 +362,16 @@ class X402PayTool(BaseTool):
                 if not decision.allowed:
                     return self._ar(error=f"payment blocked: {decision.reason}")
                 try:
-                    res = await self._get_client().fetch_with_payment(
+                    res = await asyncio.wait_for(self._get_client().fetch_with_payment(
                         url=params.url, method=params.method, body=params.body,
                         signer=signer, network=cfg.network,
                         max_amount_usd=params.max_amount_usd,
+                        expected_pay_to=params.expected_pay_to,
                         pinned_ip=pinned_ip,
                         idempotency_key=idem,
-                    )
+                    ), timeout=60.0)
+                except asyncio.TimeoutError:
+                    return self._ar(error="payment outcome unconfirmed after the request deadline; inspect the payment ledger before retrying")
                 except Exception as e:
                     logging.getLogger(__name__).error(f"x402_fetch failed: {e}")
                     return self._ar(error=f"x402_fetch failed: {e}")
@@ -359,6 +391,8 @@ class X402PayTool(BaseTool):
                                          counterparty=res.pay_to, idempotency_key=idem,
                                          result_ref=res.tx_hash, chain=None,
                                          submission_ref=getattr(res, "submission_ref", None))
+                    from tools.x402.notifications import notify_payment
+                    notify_payment(self, execution_context, res, cap_charge)
                     # Finding 2 (Task 4 review, cheap-related): amount_is_estimate was
                     # captured on X402Result but never surfaced — the audit/user trail
                     # couldn't tell a confirmed-settled figure from a pre-settlement
@@ -462,8 +496,8 @@ class X402PayTool(BaseTool):
                 lines.append("On-chain balance: unavailable")
         else:
             lines.append("On-chain balance: (testnet — not shown)")
-        daily = getattr(cfg, "daily_cap_usd", None)
-        lines.append(f"Spend caps: max ${cfg.max_per_tx_usd:.2f}/tx"
+        daily = wallet.policy.daily_cap_usd
+        lines.append(f"Spend caps: max ${wallet.policy.per_tx_cap_usd:.2f}/tx"
                      + (f" · ${daily:.2f}/day" if daily is not None else ""))
         # G-12: count/sum the SAME filtered (venue == "x402") set the total is
         # labeled as. `audit` is the FULL cross-venue log, and with the

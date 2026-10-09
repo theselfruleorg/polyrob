@@ -32,6 +32,7 @@ SLACK_FILE_SHARE = {
 }
 
 SIGNAL_ATTACHMENT = {
+    "sourceUuid": "d71910b1-9c34-4b90-9cd8-88428d03e1b2",
     "sourceNumber": "+15550001111", "sourceName": "Owner", "timestamp": 1727000000123,
     "dataMessage": {
         "message": None, "timestamp": 1727000000123,

@@ -57,7 +57,7 @@ async def test_contract_propose_writes_the_rules_doc(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_contract_propose_applies_now_on_an_owner_turn(monkeypatch, tmp_path):
+async def test_contract_propose_stays_pending_on_an_owner_turn(monkeypatch, tmp_path):
     monkeypatch.setenv("PREFS_TOOL_ENABLED", "true")
     monkeypatch.setenv("OWNER_RULES_IMMEDIATE", "true")
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
@@ -68,7 +68,8 @@ async def test_contract_propose_applies_now_on_an_owner_turn(monkeypatch, tmp_pa
         a.param_model(operation="contract_propose", text="Never post to the den."),
         execution_context=_ctx())
     root = tmp_path / "identity" / "polyrob" / "user_rob"
-    assert (root / "owner.md").is_file(), "an owner turn binds its own rule"
+    assert (root / ".pending" / "owner.md").is_file()
+    assert not (root / "owner.md").exists()
 
 
 def test_an_existing_contract_draft_stays_promotable(tmp_path):

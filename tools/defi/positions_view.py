@@ -24,7 +24,8 @@ from dataclasses import asdict, dataclass
 from typing import Callable, Dict, List, Optional, Tuple
 
 QTY_SOURCE_WORDS = {
-    "receipt": "measured from the swap receipt",
+    "receipt": "legacy Transfer events, unverified quantity",
+    "simulation": "SIMULATED balance change, final fill not measured",
     "quote": "QUOTED size, not measured",
     "inherited": "held when the account was adopted",
     "": "size source not recorded (row written before 071)",
@@ -106,17 +107,17 @@ def figures(entry, price_info, realized=None,
     if conf == "disputed":
         # 071 review: the sources disagree beyond tolerance — no value, P&L or
         # distance-from-high is computed on it (an exit rule must not fire on a
-        # number the sources do not agree on). A LOW price is still shown,
-        # flagged, because thin memecoins rarely grade higher.
+        # number the sources do not agree on). LOW prices remain indicative
+        # values, but cannot produce stop/target/trailing barrier figures.
         price = None
     value = qty * price if price is not None else None
     unreal = unreal_pct = None
-    if value is not None and basis is not None:
+    if value is not None and basis is not None and conf == "high":
         unreal = value - basis
         unreal_pct = (unreal / basis * 100.0) if basis > 0 else None
     hw = high_water if high_water is not None else entry.high_water_usd
     from_high = ((price - hw) / hw * 100.0
-                 if (price is not None and hw is not None and hw > 0) else None)
+                 if (price is not None and hw is not None and hw > 0 and conf == "high") else None)
     r_known = int(getattr(realized, "known_legs", 0) or 0)
     r_unknown = int(getattr(realized, "unknown_legs", 0) or 0)
     r_usd = (float(realized.realized_usd) if realized is not None and r_known else
@@ -182,6 +183,8 @@ def render(rows: List[PositionFigures], closed: List[dict], *,
                 unreal = f"unrealized {_signed_usd(r.unrealized_usd)} ({_pct(r.unrealized_pct)})"
             elif r.basis_usd is None:
                 unreal = "unrealized unknown (basis unknown)"
+            elif r.price_usd is not None and r.price_confidence != "high":
+                unreal = "unrealized unknown (price is not corroborated)"
             else:
                 unreal = "unrealized unknown (no price)"
             line = (f"    {unreal} · "
@@ -195,7 +198,8 @@ def render(rows: List[PositionFigures], closed: List[dict], *,
                 out.append("    high-water not observed yet")
             if r.price_confidence == "low":
                 out.append("    ⚠ low-confidence price: thin liquidity — the value "
-                           "and P&L above may be fabricated by one trade")
+                           "is indicative only; stop, target and trailing figures are unavailable. "
+                           "Obtain an independent executable exit quote before a price barrier can fire.")
             elif r.price_confidence == "disputed":
                 out.append("    ⚠ price DISPUTED: the sources disagree too much — no "
                            "value or P&L is computed until they agree")

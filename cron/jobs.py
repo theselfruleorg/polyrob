@@ -209,7 +209,22 @@ class CronJobStore:
         return [self._row_to_job(r) for r in rows]
 
     def update_after_run(self, job_id: str, *, last_run_at: datetime,
-                         next_run_at: Optional[datetime], status: str) -> None:
+                         next_run_at: Optional[datetime], status: str,
+                         expected: Optional[CronJob] = None) -> None:
+        if expected is not None:
+            # Compare and write in ONE statement: completion must not undo a
+            # schedule edit or cancellation that landed during the run.
+            unchanged = "schedule_spec=? AND one_shot=? AND next_run_at IS ?"
+            match = (expected.schedule_spec, int(expected.one_shot), _iso(expected.next_run_at))
+            execute_retry(
+                self.db_path,
+                f"""UPDATE cron_jobs SET last_run_at=?,
+                    next_run_at=CASE WHEN {unchanged} THEN ? ELSE next_run_at END,
+                    status=CASE WHEN {unchanged} THEN ? ELSE 'scheduled' END
+                    WHERE id=? AND enabled=1 AND status='running'""",
+                (_iso(last_run_at), *match, _iso(next_run_at), *match, status, job_id),
+            )
+            return
         execute_retry(
             self.db_path,
             "UPDATE cron_jobs SET last_run_at=?, next_run_at=?, status=? WHERE id=?",
@@ -228,20 +243,30 @@ class CronJobStore:
     def set_status(self, job_id: str, status: str) -> None:
         execute_retry(self.db_path, "UPDATE cron_jobs SET status=? WHERE id=?", (status, job_id))
 
-    def claim_for_run(self, job_id: str) -> bool:
+    def claim_for_run(self, job_id: str, *, now: Optional[datetime] = None,
+                      preempting_only: bool = False) -> Optional[CronJob]:
         """Atomically transition a job 'scheduled' -> 'running'.
 
-        Returns True iff THIS caller won the claim (rowcount == 1). A compare-and-set
-        on status='scheduled' so two ticks can never both run the same job — the
-        non-CAS set_status('running') it replaces could double-run a job if a tick
-        ever raced a reclaim.
+        Return the current row from the atomic claim, or None. The due list is
+        only a candidate list: another seat may edit a waiting job mid-tick.
         """
-        rowcount = execute_retry(
-            self.db_path,
-            "UPDATE cron_jobs SET status='running' WHERE id=? AND status='scheduled'",
-            (job_id,),
-        )
-        return bool(rowcount)
+        where = "id=? AND enabled=1 AND status='scheduled'"
+        params = (job_id,)
+        if now is not None:
+            where += " AND next_run_at IS NOT NULL AND next_run_at<=?"
+            params += (_iso(now),)
+        if preempting_only:
+            current = self.get(job_id)
+            if current is None or not job_preempts(current):
+                return None
+            # Preserve the Python predicate as the only pre-emption policy;
+            # a concurrent payload edit loses this claim and waits one tick.
+            where += " AND json(payload)=json(?)"
+            params += (json.dumps(current.payload),)
+        row = execute_retry(self.db_path,
+                            f"UPDATE cron_jobs SET status='running' WHERE {where} RETURNING *",
+                            params, fetch="one")
+        return self._row_to_job(row) if row is not None else None
 
     def reclaim_stale_running(self) -> int:
         """Reset jobs stuck in 'running' (process died mid-run) back to 'scheduled'.
@@ -297,13 +322,14 @@ class CronJobStore:
         row untouched. Tenant-scoped like ``cancel``."""
         from cron.schedule import parse_schedule, ScheduleError
         try:
-            nxt = parse_schedule(schedule_spec).next_run_after(now or datetime.now())
+            schedule = parse_schedule(schedule_spec)
+            nxt = schedule.next_run_after(now or datetime.now())
         except ScheduleError:
             return False
         if nxt is None:
             return False
-        sql = "UPDATE cron_jobs SET schedule_spec=?, next_run_at=? WHERE id=? AND status IN ('scheduled','running')"
-        params: tuple = (schedule_spec, nxt.isoformat(), job_id)
+        sql = "UPDATE cron_jobs SET schedule_spec=?, one_shot=?, next_run_at=? WHERE id=? AND status IN ('scheduled','running')"
+        params: tuple = (schedule_spec, int(schedule.one_shot), nxt.isoformat(), job_id)
         if user_id is not None:
             sql += " AND user_id=?"
             params = params + (user_id,)

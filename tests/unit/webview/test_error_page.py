@@ -10,6 +10,7 @@ import importlib
 import pytest
 from bs4 import BeautifulSoup
 from fastapi.testclient import TestClient
+from tests.unit.webview.owner_session import owner_headers
 
 
 @pytest.fixture()
@@ -24,7 +25,7 @@ def client(monkeypatch, tmp_path):
     importlib.reload(wg)
     import webview.server as srv
     importlib.reload(srv)
-    yield TestClient(srv._fastapi)
+    yield TestClient(srv._fastapi, headers=owner_headers(monkeypatch))
     for key in ("POLYROB_POSTURE", "ENV"):
         monkeypatch.delenv(key, raising=False)
     importlib.reload(wg)

@@ -193,7 +193,9 @@ def shadow(signer_home, monkeypatch):
         from core.wallet.signer import LocalEoaSigner
         local = service.wallet.operational_signer()   # the same key in both, as on prod
         assert isinstance(local, LocalEoaSigner)
-        return ShadowEvmSigner(local, client=LoopbackClient(service, **client_kw))
+        client = LoopbackClient(service, **client_kw)
+        monkeypatch.setattr("core.signer.client.SignerClient", lambda **kw: client)
+        return ShadowEvmSigner(local, client=client)
     return _make
 
 
@@ -212,24 +214,17 @@ def test_shadow_agree_is_logged_and_the_local_key_signs(rig, shadow):
     assert [e["kind"] for e in _shadow_log()] == ["agree"]
 
 
-def test_shadow_disagreement_is_logged_and_never_blocks(make_rig, shadow):
+def test_shadow_respects_the_confirmed_signer_cap(make_rig, shadow):
     rig = make_rig(per_tx_usd=5.0)                            # the signer's hard cap is lower
     signer = shadow(rig.service)
     intent, tx = native_intent(), native_tx()
-    assert _authorize(intent, tx, _gate()).allowed
-    raw = signer.sign_transaction(tx)                         # still signed locally
-    assert raw
-    log = _shadow_log()
-    assert [e["kind"] for e in log] == ["disagree"]
-    assert log[0]["code"] == protocol.APPROVAL_REQUIRED
+    assert not _authorize(intent, tx, _gate()).allowed
 
 
-def test_shadow_with_the_signer_down_logs_unreachable_and_signs(rig, shadow):
+def test_shadow_with_no_confirmed_signer_caps_refuses_authorization(rig, shadow):
     signer = shadow(rig.service, down=True)
     intent, tx = native_intent(), native_tx()
-    assert _authorize(intent, tx, _gate()).allowed
-    assert signer.sign_transaction(tx)
-    assert [e["kind"] for e in _shadow_log()] == ["unreachable"]
+    assert not _authorize(intent, tx, _gate()).allowed
 
 
 def test_shadow_flags_a_send_that_skipped_the_guard(rig, shadow):
@@ -279,7 +274,7 @@ def test_host_execution_relaxes_only_when_remote_is_active_and_verified(signer_h
     monkeypatch.setenv("WALLET_SIGNER", "remote")
     assert host_execution_refusal()                           # remote but not verified
     remote_mod._set_verified(True, "test")
-    assert host_execution_refusal() is None                   # remote + verified + no key
+    assert host_execution_refusal()                           # same-UID children can use the signer
     monkeypatch.setenv("AGENT_WALLET_MASTER_SEED", SEED)
     assert host_execution_refusal()                           # a key is back in the env
     monkeypatch.delenv("AGENT_WALLET_MASTER_SEED")

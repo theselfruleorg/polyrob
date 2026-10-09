@@ -25,6 +25,9 @@ async def write_entry(tool, *, held, signer, kind: str, text: str, dry_run: bool
     from core.wallet.tx_guard import TxIntent
     from tools.agent_nft.guarded import guarded_call
     from tools.defi.account_mode import journal_line, prepare_journal
+    from core.secret_scrub import scrub_secret_shapes
+    if scrub_secret_shapes(text) != text:
+        return tool._ar(error="Journal text contains credential material; nothing was signed or written")
     if not held.journal_log:
         if dry_run:
             return tool._ar(content=(f"JOURNAL {held.label} ({kind}): no JournalLog is pinned for this "

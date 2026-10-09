@@ -27,6 +27,7 @@ def _ctx(**kw):
 @pytest.fixture
 def goal_turn(monkeypatch):
     """A goal/cron-dispatched turn on the main agent: forged-shaped, admitted."""
+    monkeypatch.setenv("WALLET_VENUE_DAILY_CAP_X402_USD", "10")
     monkeypatch.setattr(spend_gate, "_forged_fn", lambda c, t: True)
     import tools.controller.turn_origin as to
     monkeypatch.setattr(to, "_is_autonomous_goal_turn", lambda c, t: True)
@@ -222,3 +223,10 @@ def test_the_telegram_seat_passes_the_update_id():
     import surfaces.telegram.harness as h
     src = inspect.getsource(h._handle_owner_admin)
     assert "request_id=(f\"tg:{_key}\"" in src
+
+
+def test_autonomous_x402_requires_a_venue_cap(goal_turn, monkeypatch):
+    monkeypatch.delenv("WALLET_VENUE_DAILY_CAP_X402_USD", raising=False)
+    from tools.x402.spend_gate import x402_spend_refusal
+    refusal = x402_spend_refusal(_ctx(), None, max_amount_usd=0.5)
+    assert refusal and "WALLET_VENUE_DAILY_CAP_X402_USD" in refusal

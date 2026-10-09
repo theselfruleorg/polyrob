@@ -61,7 +61,7 @@ def test_a_failed_fetch_never_logs_the_key(monkeypatch, caplog):
     monkeypatch.setenv("ALCHEMY_API_KEY", KEY)
 
     class _BoomClient:
-        def post(self, url, **kwargs):
+        def stream(self, method, url, **kwargs):
             raise httpx.HTTPStatusError(
                 f"Client error '401 Unauthorized' for url '{url}'",
                 request=None, response=None)

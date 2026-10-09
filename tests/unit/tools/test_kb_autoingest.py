@@ -93,7 +93,7 @@ async def test_ingest_reuses_the_one_ingest_path(tmp_path, monkeypatch):
     got = await ai.ingest_artifact("rob", _write(tmp_path, "brief.md"),
                                    session_id="s1")
     assert got == {"ingested": 1, "n_chunks": 3}
-    assert calls["collection"] == ai.AUTO_COLLECTION == "default"
+    assert calls["collection"] == ai.AUTO_COLLECTION == "artifacts_unreviewed"
     assert calls["user_id"] == "rob" and calls["recursive"] is False
 
 
@@ -103,6 +103,7 @@ async def test_force_skips_enablement_but_never_the_kind_rule(tmp_path, monkeypa
     seen = []
 
     async def fake_kb_ingest(path, **kw):
+        assert kw['collection'] == 'default'  # explicit owner reindex only
         seen.append(path)
         return {"ingested": 1}
 

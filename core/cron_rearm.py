@@ -36,3 +36,22 @@ def cron_db_beside(sibling_db_path: Optional[str]) -> Optional[str]:
         return None
     path = os.path.join(os.path.dirname(os.path.abspath(sibling_db_path)), "cron.db")
     return path if os.path.exists(path) else None
+
+
+def job_state(cron_db_path: str, job_id: str) -> Optional[tuple]:
+    """``(status, next_run_at_iso)`` for *job_id*, or None when the row or the
+    store cannot be read. Read-only; never creates the database."""
+    import os
+    if not cron_db_path or not os.path.exists(cron_db_path):
+        return None
+    try:
+        rows = execute_retry(
+            cron_db_path,
+            "SELECT status, next_run_at FROM cron_jobs WHERE id=?",
+            (job_id,), fetch="all") or []
+    except Exception:
+        return None
+    if not rows:
+        return None
+    row = rows[0]
+    return (str(row[0] or ""), str(row[1] or ""))

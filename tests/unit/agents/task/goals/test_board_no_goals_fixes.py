@@ -29,7 +29,7 @@ def board(tmp_path):
 def _done(board, uid, title, **kw):
     g = board.create(user_id=uid, title=title, force=True, **kw)
     board.claim(g.id, "w", ttl_seconds=60)
-    board.record_success(g.id, result="ok")
+    board.record_success(g.id, result="ok", claim_token=board.get(g.id).claim_token)
     return g
 
 
@@ -73,7 +73,8 @@ def test_has_live_goals_sees_running_and_waiting_work(board):
     board.create(user_id="rob", title="tail leg", force=True, depends_on=[head.id])
     board.claim(head.id, "w", ttl_seconds=60)  # head running, tail waiting
     assert board.has_live_goals(user_id="rob") is True
-    board.record_success(head.id, result="ok")  # tail auto-readies
+    board.record_success(head.id, result="ok",
+        claim_token=board.get(head.id).claim_token)  # tail auto-readies
     assert board.has_live_goals(user_id="rob") is True
 
 

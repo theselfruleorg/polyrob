@@ -26,10 +26,11 @@ import json
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 #: Field order is the owner-facing order; also the diff order.
-FINGERPRINT_FIELDS = ("cmd", "container_port", "health_path", "egress", "egress_allow",
+FINGERPRINT_FIELDS = ("source_dir", "cmd", "container_port", "health_path", "egress", "egress_allow",
                       "env_keys")
 
 _LABELS = {
+    "source_dir": "the source directory",
     "cmd": "the start command",
     "container_port": "the container port",
     "health_path": "the health path",
@@ -41,13 +42,14 @@ _LABELS = {
 
 def approval_config(*, cmd: Sequence[str], container_port: Any, health_path: Any,
                     egress: Any, egress_allow: Optional[Sequence[str]],
-                    env: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+                    env: Optional[Mapping[str, Any]], source_dir: str = "") -> Dict[str, Any]:
     """The normalized, order-insensitive view the fingerprint hashes."""
     try:
         port = int(container_port)
     except (TypeError, ValueError):
         port = 0
     return {
+        "source_dir": str(source_dir),
         "cmd": [str(c) for c in (cmd or [])],
         "container_port": port,
         "health_path": str(health_path or "/"),
@@ -60,6 +62,7 @@ def approval_config(*, cmd: Sequence[str], container_port: Any, health_path: Any
 def config_from_row(row: Mapping[str, Any]) -> Dict[str, Any]:
     """The approval config a (parsed) registry row currently describes."""
     return approval_config(
+        source_dir=row.get("source_dir") or "",
         cmd=row.get("cmd") or [],
         container_port=row.get("container_port") or 0,
         health_path=row.get("health_path"),

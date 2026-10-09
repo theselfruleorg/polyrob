@@ -172,8 +172,21 @@ def hmem_placement() -> str:
 	return "tail" if hmem_tail_placement() else "prefix"
 
 
+def layer_visible(manager: Any, layer: FoundationLayer) -> bool:
+	"""Owner documents never cross a live correspondent/public-session boundary."""
+	if layer.group != "self_context" and layer.key != "project_context":
+		return True
+	try:
+		guard = getattr(manager, "_owner_context_allowed", None)
+		return guard is None or bool(guard())
+	except Exception:
+		return False
+
+
 def layer_messages(manager: Any, layer: FoundationLayer) -> List[Any]:
 	"""The message(s) one layer contributes right now (empty when unset)."""
+	if not layer_visible(manager, layer):
+		return []
 	value = getattr(manager, layer.attr, None)
 	if value is None:
 		return []

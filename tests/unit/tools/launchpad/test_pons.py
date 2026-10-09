@@ -311,7 +311,7 @@ def test_the_launched_address_is_read_from_the_RECEIPT():
     nonce-based prediction does not apply and guessing would name the wrong
     contract."""
     logs = [{"topics": ["0xdeadbeef"], "data": "0x"},
-            {"topics": [P.TOPIC_TOKEN_LAUNCHED,
+            {"address": P.FACTORY, "topics": [P.TOPIC_TOKEN_LAUNCHED,
                         "0x" + "00" * 12 + "11" * 20,
                         "0x" + "00" * 12 + "22" * 20,
                         "0x" + "00" * 12 + "33" * 20], "data": "0x"}]
@@ -324,3 +324,20 @@ def test_no_launch_event_returns_None_rather_than_inventing_an_address():
     assert pons.parse_token_launched([{"topics": ["0x00"], "data": "0x"}]) is None
     assert pons.parse_token_launched([]) is None
     assert pons.parse_token_launched(None) is None
+
+
+def test_forged_launch_event_emitter_cannot_name_the_new_token():
+    log = {"address": "0x" + "99" * 20,
+           "topics": [P.TOPIC_TOKEN_LAUNCHED] + ["0x" + "00" * 12 + "11" * 20] * 3}
+    assert pons.parse_token_launched([log]) is None
+    assert pons.parse_token_launched([{**log, "address": P.FACTORY}]) is not None
+
+
+@pytest.mark.parametrize("decimals", [6, 8, 18])
+def test_token_decimals_comes_from_the_quoted_token(decimals):
+    def rpc(method, params):
+        assert method == "eth_call"
+        assert params[0]["to"] == HOLDER
+        assert params[0]["data"] == "0x313ce567"
+        return "0x" + f"{decimals:064x}"
+    assert pons.token_decimals(rpc, HOLDER) == decimals

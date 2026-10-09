@@ -102,6 +102,18 @@ def _req_float(env: Mapping[str, str], key: str, default: float) -> float:
     return val
 
 
+def explicit_operator_caps(env: Mapping[str, str]) -> Dict[str, float]:
+    """Independent signer caps: explicit operator values, without preferences."""
+    out = {}
+    for leg, name in (("per_tx_usd", "AGENT_WALLET_MAX_PER_TX_USD"),
+                      ("daily_usd", "WALLET_DAILY_CAP_USD")):
+        value = _cap_float(env, name, 0.0)
+        if value is None or value <= 0:
+            raise ValueError(f"{name} must explicitly set a finite positive hard cap")
+        out[leg] = value
+    return out
+
+
 def _venue_cap_float(env: Mapping[str, str], key: str) -> Optional[float]:
     """Per-venue cap parse (``WALLET_VENUE_DAILY_CAP_<VENUE>_USD``): unset/
     blank -> None (no venue-specific cap — there is no built-in per-venue
@@ -144,6 +156,16 @@ def _load_per_venue_caps(env: Mapping[str, str]) -> Dict[str, float]:
 
 def effective_daily_cap_usd(user_id: Optional[str], home_dir,
                             env: Optional[Mapping[str, str]] = None) -> Optional[float]:
+    """The rolling-24h cap the gate enforces: the configured cap
+    (:func:`configured_daily_cap_usd`) clamped to the signer's hard cap when a
+    signer is installed (``core.wallet.signer_envelope`` — the signer is the
+    envelope, owner decision 2026-10-06)."""
+    from core.wallet.signer_envelope import clamp
+    return clamp(configured_daily_cap_usd(user_id, home_dir, env=env), "daily_usd")
+
+
+def configured_daily_cap_usd(user_id: Optional[str], home_dir,
+                             env: Optional[Mapping[str, str]] = None) -> Optional[float]:
     """Owner's rolling-24h wallet spend cap: pref (min-merged, spec
     ``budget.wallet_daily_usd``) over ``WALLET_DAILY_CAP_USD``.
 
@@ -174,6 +196,15 @@ def effective_daily_cap_usd(user_id: Optional[str], home_dir,
 
 def effective_max_per_tx_usd(user_id: Optional[str], home_dir,
                              env: Optional[Mapping[str, str]] = None) -> float:
+    """The per-transaction ceiling the gate enforces: the configured ceiling
+    (:func:`configured_max_per_tx_usd`) clamped to the signer's hard cap when a
+    signer is installed (``core.wallet.signer_envelope``)."""
+    from core.wallet.signer_envelope import clamp
+    return clamp(configured_max_per_tx_usd(user_id, home_dir, env=env), "per_tx_usd")
+
+
+def configured_max_per_tx_usd(user_id: Optional[str], home_dir,
+                              env: Optional[Mapping[str, str]] = None) -> float:
     """Owner's per-transaction wallet ceiling: an owner-approved pref
     (``budget.wallet_per_tx_usd``, guarded — only an owner tap writes it) over
     the ``AGENT_WALLET_MAX_PER_TX_USD`` default, **clamped to the daily cap**.
@@ -206,7 +237,7 @@ def effective_max_per_tx_usd(user_id: Optional[str], home_dir,
     if value > env_value:
         # A RAISE above the operator default is the only case the daily
         # envelope must bound; a pref at or below it was always allowed.
-        daily = effective_daily_cap_usd(user_id, home_dir, env=env_map)
+        daily = configured_daily_cap_usd(user_id, home_dir, env=env_map)
         if daily is not None and daily > 0 and value > daily:
             value = daily
     return value
@@ -278,6 +309,30 @@ def live_caps_resolver(env: Optional[Mapping[str, str]] = None, *,
             daily = _UNRESOLVED
         return per_tx, daily
     return _resolve
+
+
+def configured_caps_now(env: Optional[Mapping[str, str]] = None, *,
+                        user_id: Optional[str] = None, home_dir=None):
+    """``(per_tx, daily)`` from the env + owner prefs BEFORE the signer
+    envelope clamps them (status readouts only; the gate uses the effective
+    resolvers). Daily ``None`` = disabled."""
+    env_map = os.environ if env is None else env
+    resolved_user = user_id if user_id is not None else _fail_open_owner_user_id()
+    resolved_home = home_dir if home_dir is not None else _fail_open_home_dir()
+    return (configured_max_per_tx_usd(resolved_user, resolved_home, env=env_map),
+            configured_daily_cap_usd(resolved_user, resolved_home, env=env_map))
+
+
+def shown_caps(env, per_tx, daily):
+    """``(per_tx, daily)`` for a readout: what the gate enforces right now
+    (owner prefs + the signer envelope); the given parsed env values for any
+    leg that does not resolve."""
+    try:
+        eff_tx, eff_daily = live_caps_resolver(env)()
+    except Exception:
+        return per_tx, daily
+    return (per_tx if eff_tx is None else eff_tx,
+            daily if eff_daily is _UNRESOLVED else eff_daily)
 
 
 #: Sentinel: the daily leg could not be resolved (distinct from ``None`` =

@@ -62,6 +62,7 @@ async def test_duplicate_message_processed_once(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_voice_guard_fires_route_not_called(tmp_path, monkeypatch):
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u2")
     """A voice-only message with no text must NOT reach route_inbound; _send_immediate fires."""
     route_calls = []
     async def fake_route(container, inbound, **k):
@@ -84,6 +85,7 @@ async def test_voice_guard_fires_route_not_called(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_voice_transcribed_text_reaches_route(tmp_path, monkeypatch):
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u2")
     """When transcription succeeds, the resulting text is set and the message is routed."""
     route_calls = []
     async def fake_route(container, inbound, **k):
@@ -100,7 +102,8 @@ async def test_voice_transcribed_text_reaches_route(tmp_path, monkeypatch):
     wa = _VoiceWA(IdempotencyStore(os.path.join(tmp_path, "v2.db")))
     result = await wa.handle_post(None, {}, b"{}", task_agent=object())
     assert result["ok"] is True
-    assert route_calls == ["hello world"]        # transcribed text forwarded
+    # transcribed text forwarded, marked as voice (never a "/" COMMAND)
+    assert route_calls == ["[voice message, auto-transcribed] hello world"]
     assert len(wa.immediate_calls) == 0          # no guard notice
 
 

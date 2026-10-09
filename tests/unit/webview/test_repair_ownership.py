@@ -11,6 +11,7 @@ import importlib
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.unit.webview.owner_session import owner_headers
 
 
 def _client(monkeypatch, posture: str, read_only: bool = False, env: str = "production"):
@@ -26,7 +27,7 @@ def _client(monkeypatch, posture: str, read_only: bool = False, env: str = "prod
     importlib.reload(wg)
     import webview.server as srv
     importlib.reload(srv)
-    return TestClient(srv._fastapi)
+    return TestClient(srv._fastapi, headers=owner_headers(monkeypatch) if posture == "local" else {})
 
 
 @pytest.fixture(autouse=True)

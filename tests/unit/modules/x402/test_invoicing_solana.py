@@ -40,6 +40,10 @@ def _svm_env(monkeypatch):
                 "X402_SETTLE_ONCHAIN_DETECT", "X402_INVOICE_AMOUNT_JITTER"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setattr(invoicing, "_svm_treasury", lambda: SOLANA_TREASURY)
+    # DEFI-16: a devnet wallet's Solana invoice is a TEST invoice and is
+    # refused on a production x402 rail; these tests mean a mainnet wallet.
+    monkeypatch.setattr("core.payments.assets.solana_default_asset_id",
+                        lambda network=None: "usdc-solana")
 
 
 @pytest.mark.asyncio

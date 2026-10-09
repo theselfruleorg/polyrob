@@ -13,7 +13,7 @@ it, ``teardown`` reaps it, ``capabilities`` advertises ``{"network": bool,
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Callable, Dict, List
+from typing import Callable, Dict, List, Optional
 
 from tools.code_exec.result import ExecutionRequest, ExecutionResult
 
@@ -51,12 +51,25 @@ class ExecutionBackendRegistry:
 
     def __init__(self) -> None:
         self._factories: Dict[str, Callable[[], ExecutionBackend]] = {}
+        #: 073 W6: called once with an unknown name before ``create`` gives up —
+        #: the default registry pulls pack backends here
+        #: (``tools/code_exec/pack_backends.py::discover``).
+        self.on_miss: Optional[Callable[[str], None]] = None
 
     def register(self, name: str, factory: Callable[[], ExecutionBackend]) -> None:
         self._factories[name] = factory
 
+    def unregister(self, name: str) -> None:
+        self._factories.pop(name, None)
+
     def create(self, name: str) -> ExecutionBackend:
         factory = self._factories.get(name)
+        if factory is None and self.on_miss is not None:
+            try:
+                self.on_miss(name)
+            except Exception:
+                pass
+            factory = self._factories.get(name)
         if factory is None:
             raise ExecutionBackendError(
                 f"unknown execution backend '{name}' (known: {sorted(self._factories)})"

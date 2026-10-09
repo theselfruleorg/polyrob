@@ -235,11 +235,17 @@ class X402InvoiceTool(BaseTool):
         # which the oldest-first on-chain matcher settles against a DIFFERENT,
         # older $7.50 invoice — a cross-tenant misdirected settlement).
         from modules.x402.artifact import format_invoice_amount
+        from modules.x402.income_chains import is_income_chain
         lines = ["Payment requests (newest first):"]
         for r in rows:
+            # DEFI-16: name the chain on every row, and mark a test network —
+            # a "[completed]" faucet payment is not money and not paid work.
+            chain = r.get("chain") or "base"
+            if not is_income_chain(r.get("chain"), r.get("asset_id")):
+                chain = f"{chain} TEST NETWORK, not income"
             line = (
                 f"  {r['request_id']}: ${format_invoice_amount(r['amount_usd'])} "
-                f"[{r['status']}] — {r.get('purpose') or '(no purpose)'} "
+                f"[{r['status']} · {chain}] — {r.get('purpose') or '(no purpose)'} "
                 f"(created {r.get('created_at')})")
             if r.get("payer_contact"):
                 line += f" — billed to: {r['payer_contact']}"

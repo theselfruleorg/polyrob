@@ -473,7 +473,10 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
 
     # Project session storage — created only AFTER the key gate (027 WP5:
     # a declined zero-key start must leave the directory as found).
-    (Path.cwd() / ".polyrob" / "sessions").mkdir(parents=True, exist_ok=True)
+    # The data home's session tree (resolve_data_home, the CLI container's rule) —
+    # never cwd/.polyrob, which polyrob no longer loads.
+    from core.runtime_paths import resolve_data_home
+    (resolve_data_home() / "sessions").mkdir(parents=True, exist_ok=True)
 
     # Narrow bootstrap-only suppression (proposal §9): silence MCP config /
     # gRPC bootstrap prints, then hand stdout back to the renderer. Errors after

@@ -279,6 +279,12 @@ class SessionManager:
 
             # Always clean the session ID
             session_id = pm().clean_session_id(session_id)
+            from agents.task.path import is_reserved_session_id
+            if is_reserved_session_id(session_id):
+                # WEB-1: console seat / global stream names are never sessions
+                # (a SessionOwnershipError, so the HTTP creator answers 403).
+                from core.exceptions import SessionOwnershipError
+                raise SessionOwnershipError(f"Session id {session_id!r} is reserved")
 
             # Use default user if not specified
             user_id = user_id or DEFAULT_USER_ID

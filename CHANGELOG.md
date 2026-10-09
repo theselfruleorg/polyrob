@@ -10,6 +10,141 @@ short, user-facing notes for each release are on its GitHub Release page.
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-10-09
+
+### Added
+
+- **Terminal parity:** host shell at posture 3 behind one command guard; jobs with stdin, PTY, notify and receipts;
+  sudo prompt; ssh, Podman, Modal, Daytona, Vercel and Singularity backends; egress proxy; tool-calling scripts and
+  a persistent Python kernel in `run_code`.
+- **Full mailbox for the agent:** list, read, save attachment, threaded reply, forward, folders, mark, move and delete
+  to Trash; `email_send` gains cc, bcc, html and attachments, every recipient gated. `email_read_machine_mail` returns
+  activation links and codes from auto-generated mail only.
+- **Room moderation:** `room_moderate` mutes, unmutes, bans, unbans and deletes messages in an allowlisted room; owner
+  and admins are never targets, and a room turn or tainted session cannot call it. `room_read` lines carry `{uid=… msg=…}`.
+- **Telegram post deletion:** receipts carry a message id; `message(action="posts")` lists the agent's posts and
+  `message(action="delete")` removes them by row, id or last N on owner instruction (not past 48 h or others' posts).
+- **`/adopt`:** the owner makes an agent-authored cron job or goal their own from an action card that shows the whole
+  task, every payload key and each pinned skill with a content digest, and binds them.
+- **Procedure skills:** `incident-response`, `adversarial-consensus` (blind `delegate_task` panel, judged, never
+  averaged) and four `coding-workflow` references (review, triage, debugging, cleanup).
+- **The agent knows the version it runs:** `<environment>`, status and `agent_status` show `get_version()` and the
+  deployed sha; `agent_status(release_notes=...)` reads the shipped CHANGELOG.md.
+- `defi_data.wallet_activity` on another address lists our own recorded payments to it from the wallet audit ledger
+  (an unreadable ledger reads UNKNOWN).
+
+### Changed
+
+- **Wallet caps:** with a signer installed, every agent limit (per-tx, daily, x402 per-payment and window) clamps to
+  the signer's; the signer is the one envelope, raised only by root. Each limit flag has one resolver.
+- **Shell defaults:** ceiling 300 → 600 s and a longer timeout becomes a background job; a gated `shell_run` waits for
+  the owner only on a dangerous command (`SHELL_APPROVAL_MODE=every` restores the old behavior).
+- **One authorship rule for standing work:** owner authority reads a positive `authored_by=owner` stamp; an owner turn
+  that read outside text writes agent work and says so. Owner goals carry owner cron jobs' standing authority.
+- **Fewer owner taps:** trusted Solana and EVM buys, Polymarket and plain Hyperliquid cancels, sends to the owner's or
+  own address, `$(…)`, relative `rm -r`, `env | grep`, workspace dev commands and 12 console settings need no approval.
+- **Cron runs follow the owner:** a run opens with every newer owner rule marked as overriding the job text; an
+  approved answer to a run's ask re-runs the job now, and every seat says where the answer went.
+- **Rules docs hold twice as much** (owner 16000, contract 8000, self 12000 chars), and a background run's patch of an
+  active rules doc lands a pending revision for `owner promote` instead of a refusal.
+- `DEFAULT_TOOL_TIMEOUT_SECONDS` defaults to 180 s instead of 60 s, still below the step timeout.
+- The unconfigured local data home is `~/.polyrob/data`, never `./.polyrob`; the Docker image uses `/app/.polyrob`.
+
+### Removed
+- The deprecated `/api/polymarket/*` and `/api/hyperliquid/*` mounts that 1.2.0 kept for one release; use
+  `/api/packs/markets/...` (the old paths now answer 404).
+
+### Fixed
+- A bare `pip install polyrob` could not import `tools` (and refused the `discovery` pack): `openai` 3.x moved to
+  `httpx2`, so `httpx` is now a direct base dependency.
+
+- The agent's file tools read, copy, grep and edit a world-readable hard-linked file (uv/pnpm cache trees) and
+  app snapshots ship it; a link to a private file, every append and every store/ledger read stay refused.
+- `defi_data.wallet_holdings` (an explicit, public address) is a read-job verb again.
+- A measured insufficient balance/allowance (LP builders) and a vetted Solana simulation that reverted are
+  tagged preconditions and no longer taint the run; the LP node-rejected broadcast carries its kind.
+- `polyrob autonomy on/off` and `config set` write the home `.env` the CLI reads; `--project` (a never-loaded
+  `./.polyrob/.env`) is refused and names that file. `init`/the REPL no longer create `./.polyrob/sessions`;
+  `uninstall`, profile and help texts name the real data home.
+- An autonomous X post waits in-run for the owner's tap and ends inside the `twitter` action timeout; a late approval
+  sends exactly the approved parameters once. An untainted owner-authored cron job posts without a per-run approval.
+- X DMs work on encrypted X Chat: unsigned sender keys read as `verified: false`, and plaintext is used only for a cold
+  open X Chat refuses, when the owner approval names it. An account with no tweets reads as an empty timeline.
+- The agent can click and type in the browser again: the indexed element list reaches the prompt, and page extraction
+  uses `aria_snapshot()` since Playwright 1.63 removed `page.accessibility`.
+- `defi_data.wallet_activity` and `token_origin` work again: an explicit param model reaches an unannotated or dotted
+  `params` argument as the model instead of splatted kwargs.
+- `defi_data.reconcile` reuses an unchanged dust verdict (6 h), so airdrops no longer time out the money rails' gate;
+  a market or precondition error no longer taints a run's public rails.
+- Jupiter swaps decode every v6 route variant and the `route_v2` layouts; Solana swaps resolve lookup tables; a declared
+  `max_spend_usd` asserts the value only, with the network fee charged to the caps.
+- Wallet: an expired unsettled x402 payment resolves from chain state, our own bridge's arrival is not an "unmatched
+  payment", and the agent-NFT send card shows the holdings.
+- `hf_deploy`/`app_deploy` refuse a file that changed after the last green `run_tests`; a delegated child stopped at
+  its step limit reads "stopped before finishing"; `done` turns back once while todos are open.
+- A goal run whose `done()` opens with `BLOCKED:` is blocked, not done; a blocked goal has one open owner ask; goal
+  claims fence each run, so a stale run cannot overwrite its replacement.
+- Scheduled jobs respect live edits and cancellations; stepped day fields such as `*/2` keep their days; `cronjob_show`
+  names when and via which surface a job was cancelled.
+- A turn never delivers the same reply twice, and the LLM-timeout notice says the step is retrying instead of asking
+  the owner to resend (which could pay twice).
+- A tool's deliberate `ServiceError` refusal reaches the agent without a traceback; the log keeps it.
+- A failed lookup is not proof of absence: a not-found read names the path tried and offers same-name files; a finding
+  beside a failed tool call is stored `[unverified]`.
+- The workspace note never invents an upload: relative paths, record-backed upload claims and declared `authored_by:`;
+  A2A peer messages are labelled as not the owner, and an unreadable self-context doc is named.
+- SQLite opens tolerate a sidecar unlinked by another account, and the shared data root is never sticky, so the outbox
+  dispatcher no longer fails with "readonly database".
+- Cancelled, failed and resumed autonomous runs release their sandbox; sandbox reapers skip when the Docker socket is
+  unreachable; the cross-session turn store has its own 100k-row bound.
+- Room moderation no longer repeats (room posts join the room ledger, deleted lines are marked), and Telegram polling
+  logs one recovery line after an outage streak.
+- `config set/unset` and `tools enable/disable` keep the home scope with `--global`; Microsoft 365
+  `Authentication-Results` that open with a result are read; owner CLI API-key creation works under the strict tier.
+
+### Security
+
+- Deployment: ops loops run as an unprivileged account; the agent never runs as root and its HOME leaves the data home;
+  root steps use pinned no-follow descriptors; rollbacks stay inside configured paths; console vhosts pin TLS and HSTS.
+- Signer: its own venv; serves only a client's main process; keeps full approval details in a bounded queue; needs
+  on-box approval for owner-queue verdicts; Hyperliquid RPC signs cancellations only; clients refuse before cap check.
+- The spend ledger is sealed with a seed-derived MAC; browser egress closes the host's own and special-use addresses;
+  `CODE_EXEC_SSH_KNOWN_HOSTS` pins the ssh backend's host key.
+- CI and release: least-privilege workflows, SHA-pinned actions, digest-pinned base images, a checksummed gitleaks
+  download, a read-only build job and tag-only release; PyJWT and multidict floors rise.
+- Console: owner authentication on local consoles including Socket.IO; session JWT audience, strict cookies and one
+  origin check; login budgets persist and group IPv6 by /64; logout is a same-origin POST; scripts are self-only.
+- Console and API isolation: tenants cannot read MCP, health, telemetry or instance flags; trust and money flags are
+  file-only; `polyrob dashboard` boots with a one-time password; session feeds cannot join global rooms.
+- API keys carry read/write scopes and bounded expiry (legacy keys are replaced via wallet sign-in); rate limits key on
+  an IPv6 /64; SIWE nonces, the A2A list page and live SSE streams per caller are bounded.
+- Billing: credits reserve before inference and settle once; the compute tier gate covers every paid surface; unpriced
+  models are refused; billed sessions get standard step and tool bounds; continuations recheck payment admission.
+- Payments: settlement validates hash, chain and replay; test-network invoices and deposits are never income; inbound
+  submissions persist before settlement; x402 recipients are bound at approval and signing.
+- Spend accounting counts EVM gas, Solana fees and rent, rounds risk upward and keeps decimal deposit precision; direct
+  transfers need owner approval, and payees that look like a recent payee (address poisoning) are refused.
+- Swaps, bridges and LPs verify LI.FI, Jupiter and v3 calldata minimums and recipients before signing; floors compare
+  against independent prices; Solana routes refuse unrelated outflows; positions size from simulated balance changes.
+- Venue orders reserve at the network boundary, use live reference prices with a price band and worst-case slippage,
+  enforce exposure and leverage limits, and never book a rejected order; worst market fees count against the caps.
+- Untrusted content: repository, filesystem, delegated and paid-server results are framed as data; forged control
+  fences are neutralized; room titles, blocked members' history and pool labels stay out of instructions.
+- Provenance: model-created goals and cron jobs keep agent provenance; persistent rules and skills need owner review;
+  an `owner_ask` answer must quote the owner's turn; correspondent turns cannot keep private owner documents.
+- Shell guard: newline boundaries, wrappers and brace groups are judged; wildcard grants over shell syntax are refused;
+  git takes plain branch names; non-Python `run_code` runs through the guard; owner-only CLI verbs refuse under the agent.
+- Surfaces: non-owner DMs are denied on non-Telegram surfaces; the WhatsApp webhook secret is required; email senders
+  need an MX-authenticated From; IMAP verifies certificates; voice media is bounded; pairing codes expire.
+- Filesystem: SQLite stores are created private and linked stores refused; publication, export and attachment reads are
+  confined; file tools use `O_NOFOLLOW` descriptors; CLI startup ignores project-local env and MCP files.
+- Secrets: endpoint credentials are redacted in config listings, errors and logs; X cookies import through hidden
+  prompts; provider failures omit credential-bearing URLs; legacy unguarded Twitter writes are retired.
+- Packs and updates: a third-party pack builds to a wheel with no outside files; index rows admit only plain names; a
+  profile review shows its env keys, MCP, cron and skill content; app deploys bind the approved directory and digest.
+- Memory and identity: planner and recall writes stay scoped and new notes await owner review; correspondent sessions
+  write no owner episode; ERC-8004 identity selects only a self-minted token.
+
 ## [1.2.1] — 2026-10-03
 
 ### Changed
@@ -30,6 +165,10 @@ short, user-facing notes for each release are on its GitHub Release page.
 
 ### Fixed
 
+- **Reconcile gate timeout:** `defi_data.reconcile` prices the chain side from the batch prefetch (booked tokens
+  first) and values rows on a small pool; a 116-token treasury fell from >90 s (past the 60 s budget) to ~13 s.
+- **Sandbox reapers:** both skip when the process cannot open the Docker socket (the agent identity is outside
+  `docker` by design), ending ~100 refused `docker ps` WARNING lines a day.
 - **Identity doc caps:** owner facts rise 4000 → 8000 chars and SELF 2200 → 6000 (both had filled and refused a new
   owner rule); tool descriptions quote the live caps.
 - **X login:** building an X client no longer spends the rotating refresh token, refresh logs name
@@ -53,6 +192,75 @@ short, user-facing notes for each release are on its GitHub Release page.
   op signs the account journal template and nothing else; before, no entry was ever written.
 
 ### Security
+
+- Owner authority needs an `authored_by=owner` stamp (`python -m cron.stamp_authorship`); `/adopt` shows
+  all and binds pinned skills; the shell guard resolves symlinks and state-db writes; taint exemptions
+  are tagged at the source; an autonomous X post waits for the owner's tap, not "denied".
+- Entry points run isolated; the data home never comes from the cwd; the shell guard sees through
+  wrappers; pack wheels, profile installs, git refs, app deploys and file ops are pinned; scrubbing,
+  the X lock, TLS and CI permissions are tightened.
+- Deployment counters replace legacy agent-owned files atomically with private inodes,
+  preserving open aliases and refusing link redirection during upgrades.
+
+- Require an approved USD ceiling for Hyperliquid orders and show venue USD amounts on every approval card; live price or slippage changes cannot exceed the approved ceiling.
+
+- Bound Telegram chat dispatch and voice transcription; a cancelled or timed-out transcription retains its CPU slot until the worker finishes.
+
+- Refuse third-party code packs when remote signing is available and refuse their installation as root, preventing pack builds from sharing signer privileges.
+
+- Enforce atomic per-tenant memory row and content-size limits, preserving existing knowledge when an oversized replacement is refused.
+
+- Publish profile backups atomically with owner-only permissions, refuse existing output links/files and clarify the limits of text redaction.
+
+- Detect unlabelled English BIP-39 seed phrases by checksum and Solana key arrays by their public key before persistence or export.
+
+- Default new-wallet welcome credits to zero and refresh stale DEN holder entitlement before access; unverifiable ownership fails closed.
+
+- Broaden address-poisoning checks, refuse unreadable history and apply the same recipient check to agent-account NFT handovers.
+
+- Mark settled x402 payments for refund review when HTTP-200 JSON reports an application failure, including JSON-RPC errors.
+
+- Share durable hourly X write limits across API and browser tools, workers and sessions; reserve all thread posts before sending.
+
+- Scrub episode content and structured metadata, and use the same scrubbed knowledge text for keyword storage and vector embedding.
+
+- Verify the expected X account before persisting an OAuth callback; bind login links and refreshed credentials to that account ID.
+
+- Keep Signal identity stable across phone-number privacy changes by requiring the daemon account UUID; legacy phone-based permissions need review on upgrade.
+
+- Label human transcript authors without implying owner authority and keep different senders distinct.
+
+- Validate local dependency overlays, retain root ownership of fresh browser installations, and run deployment imports and migrations as the agent service account.
+
+- Bind profile installs and updates to reviewed content digests and immutable remote commits; reject linked, special and oversized source files.
+
+- Disable generated mass mentions and application links across chat transports; keep private command replies out of rooms and bound denial notices.
+
+- Require authentication for API docs, schema and model discovery; expose detailed health metrics only on the administrator route.
+
+- Reject lossy session identifiers instead of stripping or truncating them; API and console data paths require canonical IDs.
+
+- Keep automatically indexed agent documents in a separate unreviewed collection; only explicit ingestion adds them to default knowledge recall.
+
+- Enforce the autonomous tool ceiling during progressive loading and show the same restriction in catalog, search and describe results.
+
+- Preserve brain and reasoning scrub state across streamed chunks; public rooms receive only complete, scrubbed replies.
+
+- Confine browser downloads, frame automation alerts as quoted reports, and require PKCE with expiring, principal-bound OAuth callback state.
+
+- Pin portal Markdown dependencies to current releases and verify their CDN bytes with SHA-384 subresource integrity.
+
+- Drop Fly startup privileges before loading volume code, refuse root checkout installs, and stop persisting or sourcing process secrets as shell text.
+
+- Require hashed release wheels for legacy optional installs, run the API container without root, bind Compose to localhost, and disable the retired TLS-key copying script.
+
+- Autonomous coding-agent launchers refuse root; workspace and coding I/O reject hard-link escapes.
+- Room and correspondent findings cannot enter owner memory; explicit job tools obey the current agent ceiling,
+  resumed autonomous sessions retain their classification, and persona/toolset edits require owner review.
+- API accounts obey administrator blocks across protected routes; tenant consoles cannot create owner-authored
+  work, MCP hints cannot disable effect gates, and shared X credentials are unavailable to delegates.
+- Persisted text redacts quoted credential keys, Basic authentication, URL userinfo, cookies and GitHub tokens;
+  file guards cover Docker, Kubernetes, GitHub and Solana credential stores.
 
 - **The REPL history keeps no secrets:** `/config set` of a secret key and any line with a 64-hex key are not
   recorded, the file is `0600`, and the display scrubber redacts a labelled private key.
@@ -728,6 +936,7 @@ All flag-gated and default-inert unless noted; prod arms them per the proposal's
   five money-rail cap cuts in one afternoon on prod).
 
 ### Fixed
+
 - `anysite_api`: an empty answer from a `/search/` endpoint to a query longer than two words now
   carries a hint that the endpoint silently rejects long phrasings and names the two-word retry —
   the agent had twice recorded a live theme as "exhausted" on a query-shape artefact.
@@ -5080,6 +5289,7 @@ says otherwise.
   403-blocked for automated accounts).
 
 ### Fixed
+
 - CI: removed five test modules that imported private (non-exported) helper scripts and broke
   test collection on a clean checkout (`tests/unit/test_battletest_metrics.py`,
   `tests/unit/test_seed_battletest.py`, `tests/unit/test_seed_cron_outreach.py`,

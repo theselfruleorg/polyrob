@@ -71,7 +71,9 @@ def apply_update(
         except BaseException as exc:  # restore even on KeyboardInterrupt
             errors = []
             for name, undo in (("code", runners.rollback_code),
-                               ("data", lambda: restore_snapshot(snap.path))):
+                               ("data", lambda: restore_snapshot(
+                                   snap.path, data_home=ctx.data_home,
+                                   allowed_paths=[*ctx.config_paths, *ctx.dir_paths, *ctx.db_paths]))):
                 try:
                     undo()
                 except BaseException as rollback_exc:

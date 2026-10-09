@@ -83,7 +83,7 @@ def test_server_unit_keeps_the_token_out_of_the_unit_and_binds_privately():
     unit = b.render_server_unit(python="/srv/venv/bin/python")
     assert "EnvironmentFile=/etc/polyrob/browser-server.env" in unit
     assert "--path /${BROWSER_SERVER_TOKEN}" in unit and "--host ${BROWSER_SERVER_HOST}" in unit
-    assert "/srv/venv/bin/python -m playwright run-server" in unit
+    assert "/srv/venv/bin/python -I -m playwright run-server" in unit
     assert "PLAYWRIGHT_BROWSERS_PATH=/opt/polyrob-browser" in unit
     assert "--no-sandbox" not in unit and "--unsafe" not in unit
     assert "Requires=polyrob-browser-egress.service" in unit
@@ -102,7 +102,7 @@ def test_server_mode_refuses_a_public_bind_and_needs_a_listen_address():
 
 def test_egress_chain_drops_loopback_rfc1918_and_metadata_for_the_browser_uid():
     script = b.render_egress_script()
-    assert 'meta skuid != "$USER_NAME" accept' in script
+    assert 'meta skuid != \\"$USER_NAME\\" accept' in script
     assert "ct state established,related accept" in script
     for cidr in ("127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16"):
         assert cidr in script, cidr
@@ -123,7 +123,7 @@ def test_cdp_port_is_closed_to_every_local_uid_but_root_browser_and_agent():
     v4 = "ip daddr 127.0.0.0/8 tcp dport $CDP_PORT meta skuid != { $CDP_ALLOW } counter reject"
     v6 = "ip6 daddr ::1 tcp dport $CDP_PORT meta skuid != { $CDP_ALLOW } counter reject"
     assert v4 in script and v6 in script
-    assert script.index("${CDP_RULES}") < script.index('meta skuid != "$USER_NAME" accept')
+    assert script.index("${CDP_RULES}") < script.index('meta skuid != \\"$USER_NAME\\" accept')
     import re
     assert not re.search(r"skuid != \{ ?\d", script)  # no hard-coded UID
     assert "9333" in b.render_unit(port=9333)
@@ -193,3 +193,61 @@ def test_install_dry_run_writes_nothing(tmp_path, monkeypatch):
 def test_group_is_registered():
     from cli.polyrob import _LAZY_SUBCOMMANDS
     assert _LAZY_SUBCOMMANDS["browser"] == "cli.commands.browser:browser"
+
+
+def test_egress_chain_closes_the_host_itself_and_the_special_ranges(tmp_path):
+    """IO-B2: 0.0.0.0 reaches loopback services on Linux, and the host's own
+    public address reaches every port bound to 0.0.0.0. Both are dropped; the
+    public web ports of the host stay open (an app the agent built)."""
+    rules, _ = _run_egress(tmp_path, {"polyrob-browser": 998, "polyrob-agent": 997})
+    assert "fib daddr type local counter drop" in rules
+    for cidr in ("0.0.0.0/8", "198.18.0.0/15", "::ffff:0:0/96", "fec0::/10"):
+        assert cidr in rules, cidr
+    assert "ip daddr != 127.0.0.0/8 fib daddr type local tcp dport { 80, 443 } accept" in rules
+    # the self-port accept sits before the local drop
+    assert rules.index("tcp dport { 80, 443 } accept") < rules.index("fib daddr type local counter drop")
+    assert 'meta skuid != "polyrob-browser" accept' in rules
+
+
+def _egress_script_with_stubs(tmp_path, nft_body):
+    import shutil
+    if not shutil.which("bash"):
+        pytest.skip("no bash")
+    bin_ = tmp_path / "bin"
+    bin_.mkdir(exist_ok=True)
+    (bin_ / "id").write_text('#!/bin/sh\ncase "$1" in -u) [ -n "$2" ] && echo 998 || echo 1000;; esac\n')
+    (bin_ / "nft").write_text(f"#!/bin/sh\n{nft_body}\n")
+    for f in ("id", "nft"):
+        (bin_ / f).chmod(0o755)
+    script = tmp_path / "egress.sh"
+    script.write_text(b.render_egress_script())
+    return script, {**os.environ, "PATH": f"{bin_}:{os.environ['PATH']}"}
+
+
+def test_egress_dry_run_prints_and_applies_nothing(tmp_path):
+    import subprocess
+    marker = tmp_path / "applied"
+    script, env = _egress_script_with_stubs(tmp_path, f'echo "$*" >> {marker}; cat >/dev/null')
+    r = subprocess.run(["bash", str(script), "--dry-run"], env=env, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert "table inet polyrob_browser {" in r.stdout and "nothing applied" in r.stdout
+    assert not marker.exists() or "-f -" not in marker.read_text().replace("-c -f -", "")
+
+
+def test_egress_rollback_deletes_the_table_and_is_idempotent(tmp_path):
+    import subprocess
+    calls = tmp_path / "calls"
+    script, env = _egress_script_with_stubs(tmp_path, f'echo "$*" >> {calls}')
+    r = subprocess.run(["bash", str(script), "--rollback"], env=env, capture_output=True, text=True)
+    assert r.returncode == 0 and "delete table inet polyrob_browser" in calls.read_text()
+    script, env = _egress_script_with_stubs(tmp_path, f'echo "$*" >> {calls}; exit 1')
+    r = subprocess.run(["bash", str(script), "--rollback"], env=env, capture_output=True, text=True)
+    assert r.returncode == 0 and "nothing to roll back" in r.stdout
+
+
+def test_egress_refuses_a_bad_self_port(tmp_path):
+    import subprocess
+    script, env = _egress_script_with_stubs(tmp_path, "cat >/dev/null")
+    env["POLYROB_BROWSER_SELF_PORTS"] = "443; drop"
+    r = subprocess.run(["bash", str(script)], env=env, capture_output=True, text=True)
+    assert r.returncode == 64

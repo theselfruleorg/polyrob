@@ -235,15 +235,31 @@ async def get_payment_history(
     Previously this endpoint returned ANY wallet's full history by (guessable) address.
     """
     from api.dependencies import get_user_id
-    from modules.x402 import generate_user_id_from_wallet
+    from core.identity import wallet_user_id_candidates
 
     caller_id = get_user_id(request)  # 401 if unauthenticated
-    if caller_id != generate_user_id_from_wallet(wallet_address.lower()):
-        raise HTTPException(status_code=403, detail="Not authorized for this wallet")
 
     from core.container import DependencyContainer
-    container = DependencyContainer.get_instance()
-    db = container.get_service('database_manager')
+
+    def _db():
+        try:
+            return DependencyContainer.get_instance().get_service('database_manager')
+        except Exception:
+            return None
+
+    # The caller owns the wallet when its own account holds it (a SIWE or an
+    # x402 profile row) or when the caller id is one this wallet derives.
+    owned = caller_id in wallet_user_id_candidates(wallet_address.lower())
+    if not owned:
+        db = _db()
+        row = await db.fetch_one(
+            "SELECT 1 FROM user_profiles WHERE wallet_address = ? AND user_id = ?",
+            (wallet_address.lower(), caller_id)) if db else None
+        owned = bool(row)
+    if not owned:
+        raise HTTPException(status_code=403, detail="Not authorized for this wallet")
+
+    db = _db()
 
     if not db:
         raise HTTPException(status_code=503, detail="Database unavailable")
@@ -457,18 +473,17 @@ async def pay_invoice(request_id: str, request: Request):
     # loser fails the CAS and never calls the facilitator).
     if not await claim_for_settlement(request_id):
         raise HTTPException(status_code=409, detail="invoice already being settled")
+    from modules.x402.facilitator import SettlementPending
     try:
         ok_verify, tx, error = await _verify_and_settle_invoice(request_id, row, payment_header)
+    except SettlementPending:
+        return JSONResponse(status_code=202, content={
+            "request_id": request_id, "status": "settling",
+            "detail": "Settlement is unconfirmed. Do not pay again; reconciliation is required."})
     except (asyncio.CancelledError, Exception):
-        # H7: CancelledError derives from BaseException — a client disconnect
-        # during the (up to 300s) facilitator round-trip cancels this request
-        # task (Starlette BaseHTTPMiddleware). The old bare `except Exception`
-        # let that skip the revert, stranding the row in 'settling' forever
-        # (nothing else re-checks 'settling'; the stale-settling reaper is the
-        # crash backstop). revert_settlement_claim only reverts a row STILL in
-        # 'settling', so a settle that already completed is left untouched
-        # (revert-unless-settled). Mirrors modules/x402/subscriptions.py.
-        await revert_settlement_claim(request_id)  # facilitator error/cancel -> payable again
+        # This only releases a claim that never reached submission. Once the
+        # durable marker is set, cancellation/errors preserve the interlock.
+        await revert_settlement_claim(request_id)
         raise
     if not ok_verify:
         await revert_settlement_claim(request_id)  # verify/settle rejected -> payable again
@@ -484,8 +499,9 @@ async def _verify_and_settle_invoice(request_id, row, payment_header):
 
     Isolated so the endpoint tests can stub the facilitator (fastapi_x402 is a
     prod-only dependency). Returns (verified_and_settled, tx_hash, error_detail).
-    A facilitator/network error raises HTTPException(502) — never settles."""
-    from fastapi_x402 import init_x402, get_facilitator_client
+    Submission errors remain uncertain; only verification failures are payable again."""
+    from fastapi_x402 import init_x402
+    from modules.x402.facilitator import get_facilitator_client, SettlementPending
     from fastapi_x402.models import PaymentRequirements
     cfg = _invoice_asset_cfg(row["chain"])
     # B30: ONE derivation. The challenge the payer signed against was built by
@@ -504,13 +520,28 @@ async def _verify_and_settle_invoice(request_id, row, payment_header):
         init_x402(app=None, pay_to=row["recipient"], network=row["chain"],
                   auto_add_middleware=False, load_dotenv_file=False)
         client = get_facilitator_client()
+        from modules.x402.settlement_attempt import authorization_record, mark_invoice_submitted
+        submitted = {}
+        async def before_settle():
+            details = authorization_record(payment_header, payment_requirements)
+            await mark_invoice_submitted(request_id, details)
+            submitted.update(details)
         verify_resp, settle_resp = await client.verify_and_settle_payment(
-            payment_header=payment_header, payment_requirements=payment_requirements)
-    except Exception as e:  # facilitator/network error — do not settle
+            payment_header=payment_header, payment_requirements=payment_requirements,
+            before_settle=before_settle)
+    except SettlementPending:
+        raise
+    except Exception as e:  # verification or local preparation failed
         logger.warning("x402 invoice %s facilitator error: %s", request_id, e)
         raise HTTPException(status_code=502, detail="payment facilitator error")
     if not getattr(verify_resp, "isValid", False):
         return (False, None, getattr(verify_resp, "error", None) or "invalid payment")
-    if not getattr(settle_resp, "success", False):
+    if not getattr(settle_resp, "success", False) or not getattr(settle_resp, "transaction", None):
+        # DEFI-2: the strict facilitator returns a failed SettleResponse only
+        # for a DEFINITE refusal (an unknown outcome raises SettlementPending),
+        # so the submitted claim is released and the real payer can still pay.
+        if submitted.get("nonce"):
+            from modules.x402.settlement_holds import reopen_rejected_settlement
+            await reopen_rejected_settlement(request_id, submitted["nonce"])
         return (False, None, getattr(settle_resp, "errorReason", None) or "settlement failed")
     return (True, getattr(settle_resp, "transaction", None), None)

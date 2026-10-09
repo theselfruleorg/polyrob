@@ -20,7 +20,7 @@ def check_playwright_browsers() -> bool:
     try:
         # Use playwright's own check mechanism  
         result = subprocess.run(
-            [sys.executable, "-m", "playwright", "install", "--dry-run"],
+            [sys.executable, "-I", "-m", "playwright", "install", "--dry-run"],
             capture_output=True,
             text=True,
             timeout=5,
@@ -88,7 +88,7 @@ def install_playwright_browsers(with_deps: bool = False) -> Tuple[bool, Optional
         logger.info("Installing Playwright browsers")
         
         # Build command
-        cmd = [sys.executable, "-m", "playwright", "install"]
+        cmd = [sys.executable, "-I", "-m", "playwright", "install"]
         if with_deps:
             cmd.append("--with-deps")
         cmd.append("chromium")

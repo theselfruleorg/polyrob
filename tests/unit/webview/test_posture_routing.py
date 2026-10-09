@@ -64,9 +64,9 @@ class TestPosture0Local:
         c = _client(monkeypatch, "local")
         assert "POLYROB is live" not in c.get("/").text
 
-    def test_no_owner_login_surface(self, monkeypatch):
+    def test_owner_login_surface(self, monkeypatch):
         c = _client(monkeypatch, "local")
-        assert c.get("/owner-login").status_code == 404
+        assert c.get("/owner-login").status_code == 200
 
     def test_no_signin_surface(self, monkeypatch):
         c = _client(monkeypatch, "local")

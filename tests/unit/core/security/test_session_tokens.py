@@ -1,3 +1,4 @@
+from core.security.session_tokens import SESSION_AUDIENCE
 import time
 
 import jwt
@@ -17,11 +18,20 @@ def test_invalid_or_unbounded_session_claims_are_refused(change):
     claims = {"user_id": "owner", "exp": time.time() + 60, "jti": "session"}
     claims.update(change)
     claims = {key: value for key, value in claims.items() if value is not None}
-    token = jwt.encode(claims, SECRET)
+    token = jwt.encode({"aud": SESSION_AUDIENCE, **claims}, SECRET)
     with pytest.raises(jwt.InvalidTokenError):
         decode_session_token(token, SECRET)
 
 
 def test_valid_session_and_logout_decode_of_expired_token():
-    token = jwt.encode({"exp": 1, "jti": "expired-session"}, SECRET)
+    token = jwt.encode({"aud": SESSION_AUDIENCE, **{"exp": 1, "jti": "expired-session"}}, SECRET)
     assert decode_session_token(token, SECRET, verify_exp=False)["jti"] == "expired-session"
+
+
+@pytest.mark.parametrize('audience', [None, 'another-app', ['polyrob-session'], ''])
+def test_session_audience_is_required_and_exact(audience):
+    claims = {'exp': time.time() + 60, 'jti': 'session'}
+    if audience is not None:
+        claims['aud'] = audience
+    with pytest.raises(jwt.InvalidTokenError):
+        decode_session_token(jwt.encode(claims, SECRET), SECRET)

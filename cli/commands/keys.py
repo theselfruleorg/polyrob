@@ -27,6 +27,7 @@ from pathlib import Path
 import click
 
 from cli._admin_home import as_root_option
+from core.security.api_keys import DEFAULT_EXPIRY_DAYS, MAX_EXPIRY_DAYS
 
 # The ``api_keys`` DDL is owned by ``modules/database/auth_tables.py`` (the
 # server's schema init); this is a byte-compatible ``IF NOT EXISTS`` mirror so
@@ -95,7 +96,7 @@ class _OwnerTier:
     """
 
     async def get_user_tier(self, user_id: str) -> str:
-        return "owner"
+        return "admin"
 
 
 def _bot_db_path(*, write: "bool | None" = None) -> Path:
@@ -170,7 +171,7 @@ def list_cmd():
     for r in rows:
         state = "active" if r.get("is_active") else "revoked"
         name = r.get("name") or "(unnamed)"
-        prefix = r.get("key_prefix") or "?"
+        prefix = r.get("prefix") or "?"
         expiry = r.get("expires_at") or "no expiry"
         click.echo(f"  {prefix}…  {name}  [{state}, {expiry}]")
 
@@ -178,8 +179,9 @@ def list_cmd():
 @keys.command("create")
 @click.option("--name", "-n", default="Default",
               help="A label for the key (shown by `list`).")
-@click.option("--expires-days", type=int, default=None,
-              help="Days until the key expires (default: never).")
+@click.option("--expires-days", type=click.IntRange(1, MAX_EXPIRY_DAYS),
+              default=DEFAULT_EXPIRY_DAYS, show_default=True,
+              help="Days until the key expires.")
 @as_root_option
 def create_cmd(name, expires_days):
     """Mint a new API key and print it ONCE.

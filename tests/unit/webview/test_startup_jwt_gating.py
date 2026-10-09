@@ -45,12 +45,12 @@ def _stub_core(monkeypatch):
     monkeypatch.setattr(core.initialization, "initialize_core", _noop_init)
 
 
-def test_single_user_startup_does_not_require_jwt(monkeypatch, _stub_core):
+def test_single_user_startup_requires_jwt(monkeypatch, _stub_core):
     """WEBGATE_MULTITENANT OFF + no JWT → startup must not raise on JWT."""
     monkeypatch.delenv("WEBGATE_MULTITENANT", raising=False)  # default = single-user
     monkeypatch.delenv("JWT_SECRET_KEY", raising=False)
-    # Must complete without the "JWT_SECRET_KEY not configured" RuntimeError.
-    asyncio.run(_jwt_startup_handler()())
+    with pytest.raises(RuntimeError, match="JWT_SECRET_KEY"):
+        asyncio.run(_jwt_startup_handler()())
 
 
 def test_multitenant_startup_still_requires_jwt(monkeypatch, _stub_core):
@@ -90,13 +90,15 @@ def test_own_ops_boots_with_login_config():
 
 
 def test_multitenant_needs_only_the_jwt_secret():
-    posture_guard.assert_login_configured(env={"JWT_SECRET_KEY": "k"}, posture="multitenant")
+    posture_guard.assert_login_configured(env={"JWT_SECRET_KEY": "k" * 32}, posture="multitenant")
     with pytest.raises(RuntimeError, match="JWT_SECRET_KEY"):
         posture_guard.assert_login_configured(env={}, posture="multitenant")
 
 
-def test_local_needs_no_login_config():
-    posture_guard.assert_login_configured(env={}, posture="local")
+def test_local_needs_login_config():
+    with pytest.raises(RuntimeError, match="JWT_SECRET_KEY"):
+        posture_guard.assert_login_configured(env={}, posture="local")
+    posture_guard.assert_login_configured(env=_OWNER, posture="local")
 
 
 def test_own_ops_startup_refuses_without_jwt(monkeypatch, _stub_core):
@@ -109,3 +111,9 @@ def test_own_ops_startup_refuses_without_jwt(monkeypatch, _stub_core):
     monkeypatch.delenv("JWT_SECRET_KEY", raising=False)
     with pytest.raises(RuntimeError, match="JWT_SECRET_KEY"):
         asyncio.run(_jwt_startup_handler()())
+
+
+@pytest.mark.parametrize("posture", ["local", "own_ops", "multitenant"])
+def test_every_console_refuses_weak_jwt_secret(posture):
+    with pytest.raises(RuntimeError, match="at least 32"):
+        posture_guard.assert_login_configured(env={**_OWNER, "JWT_SECRET_KEY": "short"}, posture=posture)

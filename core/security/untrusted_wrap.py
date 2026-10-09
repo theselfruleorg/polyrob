@@ -1,7 +1,7 @@
 """Untrusted-tool-result wrapping (UP-06 — prompt-injection defense, Reference parity).
 Canonical home: core.security (R-4 promotion, 2026-07-17).
 
-Results from web/browser/MCP/search tools carry attacker-controllable bytes (a poisoned
+Results from web, file, repository and delegate tools carry attacker-controllable bytes (a poisoned
 web page, a GitHub issue body, a malicious MCP response). Without framing, an indirect
 prompt injection embedded in fetched content is read by the model as if it were operator
 instructions. This module frames such content in
@@ -31,16 +31,15 @@ _WRAP_DELIM_RE = re.compile(r"<\s*/?\s*untrusted_tool_result", re.IGNORECASE)
 
 def _defang_delimiters(content: str) -> str:
     """Neutralize embedded ``<untrusted_tool_result>`` open/close tags in untrusted content."""
-    return _WRAP_DELIM_RE.sub("<filtered_untrusted_tool_result", content)
+    from core.context_fences import defang_control_fences, normalize_fence_text
+    return defang_control_fences(
+        _WRAP_DELIM_RE.sub("<filtered_untrusted_tool_result", normalize_fence_text(content)))
 
 # Untrusted by the action's registered ``tool`` namespace (authoritative). DERIVED
 # (067 P1) from the ``untrusted_output`` field of the per-tool rows in
-# ``core/tool_capabilities.py`` — mark a tool there, not here. Today: mcp, browser,
-# x_browser, perplexity, twitter, email, web_fetch, anysite (scraped third-party
-# content) and defi_data (a token's name/symbol are chosen by whoever deployed the
-# contract; contract_read returns arbitrary bytes). Blockchain/market tools
-# (alchemy/polymarket/hyperliquid) return mostly structured API data and are
-# intentionally NOT marked.
+# ``core/tool_capabilities.py`` — mark a tool there, not here. Files and repository
+# content can carry instructions authored by anyone; a local path does not give
+# those bytes owner authority. Delegate output has the same boundary.
 # 067 P4 prerequisite: LAZY (``core/lazy_views.py``) — built on first read, not at
 # import, so importing this module (e.g. via the goal dispatcher) before the pack
 # loader's phase 1 no longer freezes it. Read it in this module via ``_namespaces()``.
@@ -63,7 +62,9 @@ def _namespaces() -> frozenset:
 _UNTRUSTED_RESERVED_NAMES = frozenset(
     {"web_search", "web_extract", "extract_content", "fetch", "fetch_url"}
 )
-UNTRUSTED_TOOL_NAMES = frozenset({"perplexity_search"}) | _UNTRUSTED_RESERVED_NAMES
+UNTRUSTED_TOOL_NAMES = frozenset({
+    "perplexity_search", "delegate_task", "subtask", "parallel_subtasks",
+}) | _UNTRUSTED_RESERVED_NAMES
 
 # Untrusted by action-name prefix (legacy mcp_*/browser_* wrappers + web_* family).
 # NOT derived from the rows on purpose: a ``<tool>_`` prefix for every
@@ -93,7 +94,9 @@ def wrap_untrusted(source: str, content: str) -> str:
     Embedded wrapper delimiters in ``content`` are defanged first so attacker content
     cannot close the frame early (breakout) and smuggle trailing text as instructions.
     """
-    safe_source = _WRAP_DELIM_RE.sub("filtered", str(source)).replace('"', "'")
+    import html
+    from core.context_fences import normalize_fence_text
+    safe_source = html.escape(" ".join(normalize_fence_text(source).split())[:200], quote=True)
     content = _defang_delimiters(content)
     return (
         f'<untrusted_tool_result source="{safe_source}">\n'

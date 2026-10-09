@@ -5,7 +5,7 @@ Replaces expensive Privy with free industry-standard SIWE.
 
 from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 import jwt
 import uuid
 from datetime import datetime, timedelta
@@ -98,8 +98,28 @@ class AuthResponse(BaseModel):
     expires_at: str
 
 
+#: API-11: an anonymous caller writes one auth_nonces row per /nonce call.
+#: Bound issuance per client (an IPv6 client is its /64).
+from core.rate_limit import SlidingWindowLimiter as _SlidingWindowLimiter  # noqa: E402
+
+_NONCE_LIMITER = _SlidingWindowLimiter(max_calls=10, window_seconds=60, max_keys=10000)
+
+
+def _nonce_rate_refusal(http_request: Optional[Request]) -> None:
+    if http_request is None:
+        return
+    from api.dependencies import get_trusted_client_ip, rate_key_for_ip
+    try:
+        key = rate_key_for_ip(get_trusted_client_ip(http_request))
+    except AttributeError:
+        return
+    if key and not _NONCE_LIMITER.check(key):
+        raise HTTPException(status_code=429, detail="Too many sign-in requests; try again shortly.",
+                            headers={"Retry-After": "60"})
+
+
 @router.post("/nonce", response_model=NonceResponse)
-async def get_nonce(request: NonceRequest):
+async def get_nonce(request: NonceRequest, http_request: Request = None):
     """
     Generate SIWE message and nonce for wallet authentication.
 
@@ -116,6 +136,8 @@ async def get_nonce(request: NonceRequest):
     import os
 
     from api.dependencies import optional_container
+
+    _nonce_rate_refusal(http_request)
 
     # B19 (revalidation): resolve the container through the tolerant seam —
     # `DependencyContainer.get_instance()` RAISES on a process whose lifespan
@@ -242,6 +264,8 @@ async def verify_signature(request: VerifyRequest):
         "iat": datetime.utcnow(),
         "exp": expires_at
     }
+    from core.security.session_tokens import SESSION_AUDIENCE
+    token_payload["aud"] = SESSION_AUDIENCE
 
     token = jwt.encode(token_payload, jwt_secret, algorithm="HS256")
 
@@ -275,7 +299,7 @@ async def verify_signature(request: VerifyRequest):
     is_production = os.environ.get("ENVIRONMENT", "production") == "production"
     secure = is_production  # Only require HTTPS in production
     httponly = True
-    samesite = "lax"
+    samesite = "strict"
     max_age = OWNER_COOKIE_TTL_SECONDS  # W5: ≤24h, agrees with the owner minter
 
     logger.debug(f"🍪 Setting auth cookie: secure={secure}, httponly={httponly}, samesite={samesite}, is_production={is_production}")
@@ -333,7 +357,14 @@ async def get_current_user(request: Request):
 class CreateAPIKeyRequest(BaseModel):
     """Request to create a new API key."""
     name: str = "Default"
-    expires_days: Optional[int] = None  # None = never expires
+    expires_days: int = Field(default=90, ge=1, le=365, strict=True)
+    scopes: list[str] = Field(default_factory=lambda: ['read', 'write'])
+
+    @field_validator('scopes')
+    @classmethod
+    def valid_scopes(cls, value):
+        from core.security.api_keys import scopes
+        return scopes(value)
 
 
 class APIKeyResponse(BaseModel):
@@ -341,9 +372,8 @@ class APIKeyResponse(BaseModel):
     api_key: str
     name: str
     prefix: str
-    # None = never expires. `str = None` refused the manager's explicit None,
-    # so a no-expiry key was written and the caller got a 403 instead of it.
-    expires_at: Optional[str] = None
+    expires_at: str
+    scopes: list[str]
     created_at: str
     warning: str
 
@@ -353,8 +383,9 @@ class APIKeyInfo(BaseModel):
     prefix: str
     name: str
     created_at: str
-    last_used: str = None
-    expires_at: str = None
+    last_used: Optional[str] = None
+    expires_at: Optional[str] = None
+    scopes: list[str] = Field(default_factory=list)
     is_active: bool
 
 
@@ -419,7 +450,8 @@ async def create_api_key(request: Request, key_request: CreateAPIKeyRequest):
         result = await api_key_manager.generate_api_key(
             user_id=user_id,
             name=key_request.name,
-            expires_days=key_request.expires_days
+            expires_days=key_request.expires_days,
+            scopes=key_request.scopes,
         )
         return APIKeyResponse(**result)
     except ValueError as e:

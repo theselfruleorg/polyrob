@@ -123,6 +123,18 @@ class SubAgentResult:
     usage: SubAgentUsage = field(default_factory=SubAgentUsage)
     # UPGRADE: Virtual session ID for aggregation queries
     virtual_session_id: Optional[str] = None
+    # ``success`` says the child run returned without an exception; ``finished``
+    # says the child itself called done. False = it stopped first (step limit),
+    # so its output is partial. None = not known.
+    finished: Optional[bool] = None
+
+    @property
+    def status_label(self) -> str:
+        if not self.success:
+            return "Failed"
+        if self.finished is False:
+            return "Stopped before finishing (no done — step limit)"
+        return "Completed"
 
     @property
     def output_text(self) -> str:
@@ -768,6 +780,10 @@ class SubAgentManager:
 
                 # UPGRADE: Extract structured output (not just string)
                 output = self._extract_output_structured(sub_agent, history)
+                try:
+                    finished = bool(history.is_done()) if hasattr(history, 'is_done') else None
+                except Exception:
+                    finished = None
 
                 # UPGRADE: Aggregate usage to parent session
                 usage = await self._aggregate_usage_to_parent(virtual_session_id, sub_agent_id, task)
@@ -782,7 +798,8 @@ class SubAgentManager:
                     steps_taken=sub_agent.state.n_steps if hasattr(sub_agent, 'state') else 0,
                     duration_seconds=duration,
                     usage=usage,
-                    virtual_session_id=virtual_session_id
+                    virtual_session_id=virtual_session_id,
+                    finished=finished,
                 )
 
                 self._results[sub_agent_id] = result
@@ -1227,7 +1244,7 @@ class SubAgentManager:
         total_duration = 0.0
 
         for i, result in enumerate(results, 1):
-            status = "✅" if result.success else "❌"
+            status = ("⚠️" if result.finished is False else "✅") if result.success else "❌"
             total_credits += result.usage.credits_charged
             total_duration += result.duration_seconds
 
@@ -1244,7 +1261,7 @@ class SubAgentManager:
             formatted.append(f"""
 ## Subtask {i} {status}
 **Task:** {result.task}
-**Status:** {'Completed' if result.success else 'Failed'}
+**Status:** {result.status_label}
 **Duration:** {result.duration_seconds:.1f}s | **Credits:** {result.usage.credits_charged} | **Steps:** {result.steps_taken}
 
 **Output:**

@@ -49,6 +49,11 @@ def _tool(monkeypatch):
     t.api_v1 = MagicMock()
     t._write_times = []
     t._dm_times = []
+    # These tests are about the post cooldown; WHO may write (the owner
+    # approval for an autonomous turn) has its own tests in test_twitter_actions.
+    async def _no_gate(*a, **k):
+        return None
+    t._approval_gate = _no_gate
     return t
 
 

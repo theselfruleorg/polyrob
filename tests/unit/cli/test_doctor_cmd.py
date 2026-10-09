@@ -167,7 +167,10 @@ def test_doctor_perms_strict_exits_nonzero_on_an_offender(tmp_path, monkeypatch)
 
 @pytest.mark.skipif(_IS_ROOT, reason="run as root every tmp entry is root-owned, which IS the offender class")
 def test_doctor_perms_strict_is_zero_when_clean(tmp_path, monkeypatch):
-    _perms_home(tmp_path, monkeypatch)
+    import stat
+    home = _perms_home(tmp_path, monkeypatch)
+    if not home.stat().st_mode & stat.S_ISGID:
+        pytest.skip("the test filesystem does not preserve setgid on directories")
     import core.data_perms as dp
     real = dp.audit_data_perms
     monkeypatch.setattr(dp, "audit_data_perms",

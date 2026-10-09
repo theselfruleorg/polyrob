@@ -315,8 +315,8 @@ def test_dev_mode_timeout_ceiling_follows_shell_max_when_unset(monkeypatch):
     monkeypatch.delenv("CODE_EXEC_MAX_TIMEOUT_SEC", raising=False)
     monkeypatch.delenv("SHELL_MAX_TIMEOUT_SEC", raising=False)
     b = DockerBackend(docker_runner=_RecordingDocker(), dev_mode=True)
-    assert b.max_timeout == 300.0
-    assert b._clamp_timeout(9999) == 300.0
+    assert b.max_timeout == 600.0  # 073 W3: SHELL_MAX_TIMEOUT_SEC default 300 -> 600
+    assert b._clamp_timeout(9999) == 600.0
     monkeypatch.setenv("SHELL_MAX_TIMEOUT_SEC", "200")
     b = DockerBackend(docker_runner=_RecordingDocker(), dev_mode=True)
     assert b.max_timeout == 200.0

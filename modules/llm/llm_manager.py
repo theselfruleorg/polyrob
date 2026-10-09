@@ -645,16 +645,16 @@ class LLMManager(InventoryMixin, BaseComponent):
             # per-provider client's model, build an isolated client rather than let
             # create_chat_model mutate the shared client's model_type/capabilities in
             # place — that mutation bleeds across concurrent sessions using the same
-            # provider with different models (openrouter/nvidia/gemini). Same rationale
-            # as the isolated_client=True path above. Fail-open: if isolation can't be
-            # built, fall back to the shared client (legacy mutate behavior).
+            # provider with different models. Refuse when isolation fails:
+            # the shared client can belong to another tenant's active request.
             if llm_client is not None and getattr(llm_client, "model_type", model) != model:
                 try:
                     isolated = await self._create_isolated_client(provider, model)
-                    if isolated is not None:
-                        llm_client = isolated
+                    if isolated is None:
+                        raise ValueError("Could not isolate the requested model")
+                    llm_client = isolated
                 except Exception as e:
-                    self.logger.debug(f"per-model isolated client fell back to shared: {e}")
+                    raise ValueError("Could not isolate the requested model; shared client unchanged") from e
 
         if not llm_client:
             # FIXED: Don't fall back to different provider - fail with clear error

@@ -154,8 +154,7 @@ def allowed_programs() -> frozenset:
     return BASE_ALLOWED_PROGRAMS | extra_allowed_programs()
 
 
-#: `getMultipleAccounts` refuses more than 100 keys, and the pre-state read is
-#: ONE call — so this bounds the whole observation set, not one simulation.
+#: RPC batch limit, never a cap on the wallet's complete observation set.
 MAX_OBSERVED_ACCOUNTS = 100
 
 #: The fee (base + priority) a transaction may carry. The old whole-native
@@ -191,6 +190,19 @@ _TOK_APPROVE_CHECKED = 13
 _TOK_GRANT_TAGS = {_TOK_APPROVE: "Approve", _TOK_APPROVE_CHECKED: "ApproveChecked",
                    _TOK_SET_AUTHORITY: "SetAuthority",
                    _TOK_FREEZE_ACCOUNT: "FreezeAccount"}
+#: Token instructions that take value OUT of their first account (tag -> name). MintTo /
+#: MintToChecked are held to the same rule (their first account is the mint: only a mint
+#: this transaction created may be minted from).
+_TOK_OUTFLOW_TAGS = {3: "Transfer", 7: "MintTo", 8: "Burn", 12: "TransferChecked",
+                     14: "MintToChecked", 15: "BurnChecked"}
+TOKEN_2022_PROGRAM_ID = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+#: Token-2022 extension instructions (tag, sub-instruction): value-moving ones, held to the
+#: outflow rule, and account-policy ones (a CPI guard or confidential-transfer setup on an
+#: existing account can block every later route sell), held to the grant rule.
+_T22_TRANSFER_FEE = 26          # TransferFeeExtension; sub 1 = TransferCheckedWithFee
+_T22_OUTFLOW = {(_T22_TRANSFER_FEE, 1): "TransferCheckedWithFee"}
+_T22_POLICY_TAGS = {27: "ConfidentialTransferExtension", 30: "MemoTransferExtension",
+                    34: "CpiGuardExtension"}
 
 _COMPUTE_SET_LIMIT = 2
 _COMPUTE_SET_PRICE = 3
@@ -334,6 +346,10 @@ class TxInspection:
     #: Every top-level instruction, decoded (CR-H05).
     instructions: Tuple["DecodedIx", ...] = ()
     num_signatures: int = 0
+    #: EVERY account the transaction can touch (static keys + lookup-table loads), or
+    #: None when a lookup table was not resolved. The runtime gives a transaction (and
+    #: every program it calls) access to these accounts and no others.
+    touched_accounts: Optional[Tuple[str, ...]] = None
 
 
 @dataclass(frozen=True)
@@ -410,7 +426,7 @@ def fee_lamports(instructions: Sequence[DecodedIx], num_signatures: int) -> int:
 
 
 def instruction_refusal(instructions: Sequence[DecodedIx], *,
-                        owner: str) -> Optional[str]:
+                        owner: str, locally_built_transfer: bool = False) -> Optional[str]:
     """Why the decoded instructions must not be signed, or None (CR-H05/M05).
 
     Refused, at the TOP level:
@@ -445,6 +461,21 @@ def instruction_refusal(instructions: Sequence[DecodedIx], *,
                             f"account's lamports to another program")
         elif ix.program in SPL_TOKEN_PROGRAMS and ix.data:
             tag = ix.data[0]
+            if ix.program == TOKEN_2022_PROGRAM_ID and tag in (_T22_TRANSFER_FEE, *_T22_POLICY_TAGS):
+                sub = ix.data[1] if len(ix.data) > 1 else None
+                name = _T22_OUTFLOW.get((tag, sub)) or _T22_POLICY_TAGS.get(tag)
+                target = _account(ix, 0)
+                if name and (target is None or target not in created):
+                    return (f"instruction #{n} is a Token-2022 {name} on "
+                            f"{target or 'a lookup-table account'}, which this transaction "
+                            f"did not create — a transfer or an account policy change outside "
+                            f"the route program")
+                continue
+            if tag in _TOK_OUTFLOW_TAGS and not (locally_built_transfer and tag in {3, 12}):
+                source = _account(ix, 0)
+                if source is None or source not in created:
+                    return (f"instruction #{n} is a token {_TOK_OUTFLOW_TAGS[tag]} "
+                            "from an existing or unresolved account outside the route program")
             if tag in _TOK_GRANT_TAGS:
                 target = _account(ix, 0)
                 if target is None or target not in created:
@@ -483,9 +514,53 @@ def system_value_move_refusal(instructions: Sequence[DecodedIx]) -> Optional[str
     return None
 
 
+ADDRESS_LOOKUP_TABLE_PROGRAM_ID = "AddressLookupTab1e1111111111111111111111111"
+_LOOKUP_TABLE_META_SIZE = 56
+
+
+def _lookup_table_addresses(table: str, rpc: Callable) -> Tuple[str, ...]:
+    """The addresses an on-chain address-lookup table holds, in index order.
+
+    A table only ever APPENDS (an index never changes while the table exists, and a
+    closed table's address cannot be recreated), so what the pinned RPC reports here is
+    what the runtime loads for the same bytes. Raises on any doubt."""
+    import base64
+    from solders.pubkey import Pubkey
+    info = rpc("getAccountInfo", [table, {"encoding": "base64"}])
+    value = info.get("value") if isinstance(info, dict) else None
+    if not isinstance(value, dict) or value.get("owner") != ADDRESS_LOOKUP_TABLE_PROGRAM_ID:
+        raise ValueError(f"{table} is not an address-lookup table at the pinned RPC")
+    data = value.get("data")
+    raw = base64.b64decode(data[0] if isinstance(data, list) else data)
+    if len(raw) < _LOOKUP_TABLE_META_SIZE or (len(raw) - _LOOKUP_TABLE_META_SIZE) % 32:
+        raise ValueError(f"{table} has a malformed lookup-table layout")
+    body = raw[_LOOKUP_TABLE_META_SIZE:]
+    return tuple(str(Pubkey.from_bytes(body[i:i + 32])) for i in range(0, len(body), 32))
+
+
+def loaded_addresses(message: Any, rpc: Callable) -> Tuple[str, ...]:
+    """The accounts a v0 message loads from its lookup tables, in runtime order: every
+    table's writable indexes, then every table's readonly indexes. Raises when a table
+    cannot be read or an index is out of range."""
+    writable: List[str] = []
+    readonly: List[str] = []
+    for lookup in getattr(message, "address_table_lookups", None) or ():
+        table = str(lookup.account_key)
+        held = _lookup_table_addresses(table, rpc)
+        for target, indexes in ((writable, lookup.writable_indexes),
+                                (readonly, lookup.readonly_indexes)):
+            for i in bytes(indexes):
+                if i >= len(held):
+                    raise ValueError(f"lookup index {i} is outside table {table}")
+                target.append(held[i])
+    return tuple(writable + readonly)
+
+
 def inspect_transaction(raw_tx: Any, *,
                        extra_allowed: frozenset = frozenset(),
-                       owner: Optional[str] = None) -> TxInspection:
+                       owner: Optional[str] = None,
+                       locally_built_transfer: bool = False,
+                       rpc: Optional[Callable] = None) -> TxInspection:
     """Decode *raw_tx*, vet its TOP-LEVEL program ids against the allowlist,
     and decode its token and System instructions (:func:`instruction_refusal`).
 
@@ -496,17 +571,33 @@ def inspect_transaction(raw_tx: Any, *,
 
     ``owner`` defaults to the fee payer (static key 0), which the signer
     already requires to be this wallet.
+
+    ``rpc``: resolve accounts a v0 message loads from address-lookup tables (a
+    Jupiter route uses them), so an instruction's accounts are known instead of
+    ``None``. Program ids are always static keys (the runtime refuses a program
+    loaded from a table). Without ``rpc`` a table account stays ``None``; a
+    table that cannot be read refuses (fail closed).
     """
     try:
         from solders.transaction import VersionedTransaction
         tx = VersionedTransaction.from_bytes(bytes(raw_tx))
         message = tx.message
         keys = tuple(str(k) for k in message.account_keys)
+        static_count = len(keys)
+        all_keys = keys
+        if rpc is not None and getattr(message, "address_table_lookups", None):
+            try:
+                all_keys = keys + loaded_addresses(message, rpc)
+            except Exception as exc:  # noqa: BLE001
+                return TxInspection(
+                    False, f"the transaction's address-lookup tables could not be read "
+                           f"({type(exc).__name__}) — its accounts are unknown",
+                    account_keys=keys)
         programs: List[str] = []
         decoded: List[DecodedIx] = []
         for ix in message.instructions:
             index = int(ix.program_id_index)
-            if index < 0 or index >= len(keys):
+            if index < 0 or index >= static_count:
                 return TxInspection(
                     False,
                     f"an instruction names program index {index}, which is "
@@ -517,7 +608,7 @@ def inspect_transaction(raw_tx: Any, *,
                 programs.append(keys[index])
             decoded.append(DecodedIx(
                 program=keys[index], data=bytes(ix.data),
-                accounts=tuple(keys[int(i)] if int(i) < len(keys) else None
+                accounts=tuple(all_keys[int(i)] if int(i) < len(all_keys) else None
                                for i in bytes(ix.accounts))))
         num_signatures = int(message.header.num_required_signatures)
     except Exception as exc:
@@ -540,7 +631,7 @@ def inspect_transaction(raw_tx: Any, *,
             program_ids=tuple(programs), account_keys=keys,
             unknown_programs=unknown)
     payer = owner or (keys[0] if keys else "")
-    refusal = instruction_refusal(decoded, owner=payer)
+    refusal = instruction_refusal(decoded, owner=payer, locally_built_transfer=locally_built_transfer)
     if refusal is None:
         fee = fee_lamports(decoded, num_signatures)
         if fee > MAX_FEE_LAMPORTS:
@@ -552,9 +643,12 @@ def inspect_transaction(raw_tx: Any, *,
             False, f"REFUSED: {refusal}. Nothing was signed.",
             program_ids=tuple(programs), account_keys=keys,
             instructions=tuple(decoded), num_signatures=num_signatures)
+    lookups = getattr(message, "address_table_lookups", None)
     return TxInspection(True, program_ids=tuple(programs), account_keys=keys,
                         instructions=tuple(decoded),
-                        num_signatures=num_signatures)
+                        num_signatures=num_signatures,
+                        touched_accounts=(all_keys if (not lookups or len(all_keys) > static_count)
+                                          else None))
 
 
 def inspect_bridge_transaction(raw_tx: Any, *, owner: str) -> TxInspection:
@@ -684,7 +778,8 @@ def simulation_addresses(owner: str, *, mints: Sequence[str] = (),
 
 
 def observation_plan(owner: str, *, mints: Sequence[str] = (),
-                     rpc: Callable, created: Sequence[str] = ()) -> tuple:
+                     rpc: Callable, created: Sequence[str] = (),
+                     touched: Optional[Sequence[str]] = None) -> tuple:
     """``(addresses, ours)`` for the money path — UNCAPPED (CR-H05).
 
     ``addresses`` is every account the simulation must report: the owner, the
@@ -692,12 +787,20 @@ def observation_plan(owner: str, *, mints: Sequence[str] = (),
     and the accounts the transaction creates with our lamports. ``ours`` is the
     subset that is the wallet's (see :func:`simulation_address_split` for why
     the two must stay apart). Raises :class:`ObservationError` when the owned
-    accounts cannot be enumerated or the set is larger than one pre-state read.
+    accounts cannot be enumerated. Pre-state reads are chunked without truncation.
+
+    ``touched`` (every account the transaction names, lookup tables resolved): an owned
+    account it does not name cannot change, so only named ones are observed. Spam token
+    accounts anyone can create for the wallet then cost no simulations (each RPC call is
+    one more chance of a rate-limit refusal). ``None`` = observe every owned account.
     """
     addresses: List[str] = []
     ours: List[str] = []
+    named = None if touched is None else set(touched)
 
     def _add(value, mine):
+        if named is not None and value != owner and value not in named:
+            return
         if value and value not in addresses:
             addresses.append(value)
         if mine and value and value not in ours:
@@ -711,16 +814,12 @@ def observation_plan(owner: str, *, mints: Sequence[str] = (),
         _add(account, True)
     for account in created:
         _add(account, False)
-    if len(addresses) > MAX_OBSERVED_ACCOUNTS:
-        raise ObservationError(
-            f"the wallet needs {len(addresses)} accounts observed, more than "
-            f"the {MAX_OBSERVED_ACCOUNTS} one pre-state read can return — "
-            f"close unused token accounts")
     return addresses, ours
 
 
 def simulate(raw_tx: Any, *, owner: str, mints: Sequence[str] = (),
-             rpc: Callable, extra_allowed: frozenset = frozenset()) -> SolanaDeltas:
+             rpc: Callable, extra_allowed: frozenset = frozenset(),
+             locally_built_transfer: bool = False, swap_bounds=None) -> SolanaDeltas:
     """Vet, simulate and parse — the whole pre-broadcast observation.
 
     Fails CLOSED at every step: an undecodable or unrecognized transaction, an
@@ -734,21 +833,33 @@ def simulate(raw_tx: Any, *, owner: str, mints: Sequence[str] = (),
     silently dropped every owned account past the fifth.
     """
     inspection = inspect_transaction(raw_tx, extra_allowed=extra_allowed,
-                                     owner=owner)
+                                     owner=owner, locally_built_transfer=locally_built_transfer,
+                                     rpc=rpc)
     if not inspection.ok:
         return SolanaDeltas(False, inspection.reason)
+    if swap_bounds is not None:
+        from core.wallet.solana_swap_bounds import refusal
+        why = refusal(inspection.instructions, swap_bounds, owner=owner)
+        if why:
+            return SolanaDeltas(False, why)
     created = created_accounts(inspection.instructions, funder=owner,
                                strict=False)
     fee = fee_lamports(inspection.instructions, inspection.num_signatures)
     try:
         import base64
         addresses, ours = observation_plan(owner, mints=mints, rpc=rpc,
-                                           created=created)
+                                           created=created,
+                                           touched=getattr(inspection, "touched_accounts", None))
         # The PRE-state, in the SAME order, so parse_deltas has something to
         # compare against — `simulateTransaction` alone returns POST-state only.
-        pre = (rpc("getMultipleAccounts",
-                   [addresses, {"encoding": "jsonParsed"}])
-               or {}).get("value") or []
+        pre = []
+        for start in range(0, len(addresses), MAX_OBSERVED_ACCOUNTS):
+            chunk = addresses[start:start + MAX_OBSERVED_ACCOUNTS]
+            values = (rpc("getMultipleAccounts", [chunk, {"encoding": "jsonParsed"}])
+                      or {}).get("value")
+            if not isinstance(values, list) or len(values) != len(chunk):
+                return SolanaDeltas(False, "RPC did not return every pre-state account")
+            pre.extend(values)
         encoded = base64.b64encode(bytes(raw_tx)).decode()
         cap = sim_max_addresses()
         post: List[Any] = []
@@ -765,7 +876,8 @@ def simulate(raw_tx: Any, *, owner: str, mints: Sequence[str] = (),
                 return parse_deltas(sim, owner=owner, owned_pubkeys=addresses,
                                     ours=ours)
             if value.get("err") is not None:
-                return SolanaDeltas(False, f"simulation reverted: {value['err']}")
+                return SolanaDeltas(False, f"simulation reverted: {value['err']}",
+                                    reverted=True)
             accounts = list(value.get("accounts") or [])
             if len(accounts) != len(chunk):
                 return SolanaDeltas(

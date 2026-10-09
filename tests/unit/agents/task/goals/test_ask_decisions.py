@@ -21,9 +21,10 @@ def board(tmp_path):
 def test_decide_ask_approve_is_equivalent_to_fulfill(board):
     g = board.create(user_id="rob", title="Post the launch thread")
     board.claim(g.id, "w", ttl_seconds=60)
-    board.record_failure(g.id, error="no access")
+    board.record_failure(g.id, error="no access", claim_token=board.get(g.id).claim_token)
     board.claim(g.id, "w", ttl_seconds=60)
-    board.record_failure(g.id, error="no access")  # trips breaker -> blocked
+    board.record_failure(g.id, error="no access",
+        claim_token=board.get(g.id).claim_token)  # trips breaker -> blocked
     a = board.create_ask(user_id="rob", what="Grant access", blocks_goal_ids=[g.id])
 
     ok, unblocked = board.decide_ask(a.id, user_id="rob", approved=True)
@@ -38,9 +39,9 @@ def test_decide_ask_approve_is_equivalent_to_fulfill(board):
 def test_decide_ask_reject_never_unblocks(board):
     g = board.create(user_id="rob", title="Post the launch thread")
     board.claim(g.id, "w", ttl_seconds=60)
-    board.record_failure(g.id, error="no access")
+    board.record_failure(g.id, error="no access", claim_token=board.get(g.id).claim_token)
     board.claim(g.id, "w", ttl_seconds=60)
-    board.record_failure(g.id, error="no access")
+    board.record_failure(g.id, error="no access", claim_token=board.get(g.id).claim_token)
     a = board.create_ask(user_id="rob", what="Grant access", blocks_goal_ids=[g.id])
 
     ok, unblocked = board.decide_ask(a.id, user_id="rob", approved=False)
@@ -177,9 +178,9 @@ def test_decide_ask_answer_rides_into_the_unblocked_goal(board):
     from agents.task.goals.context import build_goal_run_task
     g = board.create(user_id="rob", title="Post the launch thread")
     board.claim(g.id, "w", ttl_seconds=60)
-    board.record_failure(g.id, error="which key?")
+    board.record_failure(g.id, error="which key?", claim_token=board.get(g.id).claim_token)
     board.claim(g.id, "w", ttl_seconds=60)
-    board.record_failure(g.id, error="which key?")
+    board.record_failure(g.id, error="which key?", claim_token=board.get(g.id).claim_token)
     a = board.create_ask(user_id="rob", what="Which API key?", blocks_goal_ids=[g.id])
 
     ok, unblocked = board.decide_ask(a.id, user_id="rob", approved=True,

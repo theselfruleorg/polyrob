@@ -75,9 +75,9 @@ def test_browser_alias_resolves_to_the_capability_row():
     assert classify_effect("browser", "browser_go_to_url") is None
 
 
-def test_mcp_read_only_hint_narrows_but_never_raises():
+def test_mcp_server_hint_cannot_disable_effect_gates():
     assert classify_effect("mcp", "srv_list_files").effect == "network"
-    assert classify_effect("mcp", "srv_list_files", mcp_read_only=True) is None
+    assert classify_effect("mcp", "srv_list_files", mcp_read_only=True).effect == "network"
     # a hint on a NON-mcp tool is ignored
     assert classify_effect("twitter", "twitter_post", mcp_read_only=True).effect == "social"
 

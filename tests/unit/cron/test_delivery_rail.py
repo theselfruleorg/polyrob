@@ -75,6 +75,7 @@ async def test_router_surface_delivery_resolves_owner_address(monkeypatch):
     """030 D8: a cron job can deliver to any router surface; the recipient is
     the owner's address on that surface (owner-address contract)."""
     monkeypatch.setenv("OWNER_SLACK_ID", "C0FFEE")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
 
     class _Router:
         def __init__(self):

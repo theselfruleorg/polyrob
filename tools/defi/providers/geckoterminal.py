@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import logging
+from core.wallet.tokens import clean_name
 import re
 import urllib.request
 from dataclasses import dataclass
@@ -311,8 +312,8 @@ def parse_pools(payload: Any, chain: str, gt_network: str) -> List[PoolCandidate
             chain=chain,
             pool_address=str(attrs.get("address") or ""),
             base_token=_base_token(rel, gt_network, chain),
-            name=str(attrs.get("name") or ""),
-            dex=str(((rel.get("dex") or {}).get("data") or {}).get("id") or "unknown"),
+            name=clean_name(attrs.get("name")) or "",
+            dex=clean_name(((rel.get("dex") or {}).get("data") or {}).get("id")) or "unknown",
             created_at=attrs.get("pool_created_at"),
             liquidity_usd=_positive(attrs.get("reserve_in_usd")),
             volume_h24_usd=_f(vol.get("h24")),

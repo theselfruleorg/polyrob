@@ -11,6 +11,7 @@ import types
 import pytest
 from argon2 import PasswordHasher
 from fastapi.testclient import TestClient
+from tests.unit.webview.owner_session import owner_headers
 
 _ENV_KEYS = (
     "POLYROB_POSTURE", "WEBGATE_MULTITENANT", "WEBGATE_HOST", "WEBGATE_PORT",
@@ -44,7 +45,7 @@ def _client(monkeypatch, posture, owner_creds=False):
         monkeypatch.setenv("POLYROB_OWNER_PASSWORD_HASH", PasswordHasher().hash("s3cret"))
         monkeypatch.setenv("ENVIRONMENT", "development")
     srv = _reload_webview()
-    return TestClient(srv._fastapi)
+    return TestClient(srv._fastapi, headers=owner_headers(monkeypatch) if posture == "local" else {})
 
 
 def test_local_page_and_backfill_are_both_gone(monkeypatch):
@@ -112,7 +113,8 @@ def test_multitenant_tenant_denied_owner_allowed(monkeypatch):
         activity._require_activity_access(_req("tenant-b"))
     assert exc.value.status_code == 404
 
-    activity._require_activity_access(_req("whoever", tier="admin"))  # no raise
+    with pytest.raises(HTTPException):
+        activity._require_activity_access(_req("whoever", tier="admin"))
     activity._require_activity_access(_req("anyone", is_admin=True))  # no raise
 
     import webview.webgate as wg

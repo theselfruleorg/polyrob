@@ -49,12 +49,20 @@ class BaseTool(BaseComponent):
         self.logger.debug(f"- Container: {'Present' if container else 'None'}")
         
     def _ar(self, *, content: Optional[str] = None, error: Optional[str] = None,
-            metadata: Optional[Dict[str, Any]] = None):
+            metadata: Optional[Dict[str, Any]] = None,
+            error_kind: Optional[str] = None):
         """One ``ActionResult`` shape for every tool: an error result when
         *error* is given, else content (+ optional metadata). Six money/data
-        tools carried this four-liner each."""
+        tools carried this four-liner each.
+
+        ``error_kind`` — set ONLY by the line that built *error*, from what it
+        knows (``core.security.refusal_taint.PRECONDITION`` for an unmet
+        precondition or a market error); never derived from the error text."""
         from tools.controller.types import ActionResult
         if error is not None:
+            if error_kind:
+                from core.security.refusal_taint import ERROR_KIND_KEY
+                return ActionResult(error=error, metadata={ERROR_KIND_KEY: str(error_kind)})
             return ActionResult(error=error)
         if metadata is not None:
             return ActionResult(extracted_content=content, metadata=metadata)

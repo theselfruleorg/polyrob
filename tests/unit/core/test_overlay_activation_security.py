@@ -32,7 +32,7 @@ def _virtual_trusted_overlay(monkeypatch):
     for p in [feature, library]:
         metadata[p] = SimpleNamespace(st_uid=990, st_mode=stat.S_IFDIR | 0o755)
     for p in [package, complete]:
-        metadata[p] = SimpleNamespace(st_uid=990, st_mode=stat.S_IFREG | 0o644)
+        metadata[p] = SimpleNamespace(st_uid=990, st_mode=stat.S_IFREG | 0o644, st_nlink=1)
     metadata[Path('/var/lib/polyrob')].st_mode = stat.S_IFDIR | 0o3771
     monkeypatch.setattr(pwd, 'getpwnam', lambda name: SimpleNamespace(pw_uid=990))
     monkeypatch.setattr(Path, 'lstat', lambda p: metadata[p])
@@ -88,7 +88,7 @@ def test_trusted_system_overlay_activates_under_privileged_checks(tmp_path, monk
     original = Path.lstat
     def ownership(path):
         info = original(path)
-        return SimpleNamespace(st_mode=info.st_mode,
+        return SimpleNamespace(st_mode=info.st_mode, st_nlink=info.st_nlink,
                                st_uid=990 if path == root or root in path.parents else 0)
     monkeypatch.setattr(Path, 'lstat', ownership)
     monkeypatch.setattr(pwd, 'getpwnam', lambda name: SimpleNamespace(pw_uid=990))
@@ -97,3 +97,28 @@ def test_trusted_system_overlay_activates_under_privileged_checks(tmp_path, monk
     monkeypatch.setattr(ld, 'local_root', lambda: tmp_path / 'local')
     monkeypatch.setattr(sys, 'path', list(sys.path))
     assert str(feature / 'lib') in ld.activate_overlay()
+
+
+def test_local_overlay_rejects_group_writes_and_links(tmp_path, monkeypatch):
+    import os
+    import core.lazy_deps as ld
+    root = tmp_path / 'pylibs'
+    feature = root / ld._lock_digest() / 'provider.anthropic'
+    (feature / 'lib').mkdir(parents=True)
+    (feature / '.complete').touch()
+    module = feature / 'lib' / 'example.py'
+    module.write_text('trusted = True')
+    monkeypatch.setattr(ld, '_custody', lambda: False)
+    monkeypatch.setattr(ld, 'spool_provisioned', lambda: False)
+    monkeypatch.setattr(ld, 'system_root', lambda: tmp_path / 'absent')
+    monkeypatch.setattr(ld, 'local_root', lambda: root)
+    assert feature / 'lib' in ld.overlay_paths()
+    module.chmod(0o664)
+    assert ld.overlay_paths() == []
+    module.chmod(0o600)
+    os.link(module, feature / 'lib' / 'second.py')
+    assert ld.overlay_paths() == []
+    (feature / 'lib' / 'second.py').unlink()
+    module.unlink()
+    module.symlink_to(tmp_path / 'outside')
+    assert ld.overlay_paths() == []

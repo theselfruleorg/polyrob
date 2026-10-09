@@ -100,6 +100,6 @@ def test_dispatch_intersects_a_legacy_agent_rig(_supervised):
 def test_dispatch_honours_an_owner_set_rig(_supervised):
     from core.config_policy.rigs import RIGS, resolve_rig_tools
     from tools.goal_tools import allowed_self_goal_tools
-    got = resolve_rig_tools({"rig": "money_rail"}, ["x"],
+    got = resolve_rig_tools({"rig": "money_rail", "authored_by": "owner"}, ["x"],
                             agent_ceiling=sorted(allowed_self_goal_tools()))
     assert got == list(RIGS["money_rail"])

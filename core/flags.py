@@ -27,6 +27,7 @@ from typing import Callable, Optional
 
 from core.env import parse_bool
 from core.flags_catalog import CATALOG
+from core.security.redaction import redact_config_urls
 
 # Suffix-based so LLM_MAX_OUTPUT_TOKENS / POLYROB_PROJECT_SECRET_REFUSE stay visible.
 # _SEED covers wallet seed material (PAYMENT_MASTER_SEED/MASTER_SEED — "KEEP
@@ -58,6 +59,7 @@ def is_secret_flag(name: str) -> bool:
     """Whether a flag's value must be masked in any report output."""
     upper = name.upper()
     return (upper.endswith(_SECRET_SUFFIXES)
+            or upper in {"BROWSER_WSS_URL", "BROWSER_CDP_URL", "MCP_SERVER_URL"}
             or any(part in upper for part in _SECRET_NAME_PARTS))
 
 
@@ -203,13 +205,14 @@ def resolve_flag(name: str, env: dict, dynamic_default: Optional[DynamicDefault]
             try:
                 return ResolvedFlag(name, flag.group, int(str(raw).strip()), "env")
             except ValueError:
-                return ResolvedFlag(name, flag.group, str(raw), "env")
-        return ResolvedFlag(name, flag.group, str(raw), "env")
+                return ResolvedFlag(name, flag.group, redact_config_urls(str(raw)), "env")
+        return ResolvedFlag(name, flag.group, redact_config_urls(str(raw)), "env")
 
     if dynamic_default is not None:
         dyn = dynamic_default(name)
         if dyn is not None:
             value, source = dyn
+            value = "(set, masked)" if is_secret_flag(name) and value else redact_config_urls(value)
             return ResolvedFlag(name, flag.group, value, source)
 
     if is_secret_flag(name):

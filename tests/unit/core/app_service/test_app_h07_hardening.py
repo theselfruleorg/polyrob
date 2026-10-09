@@ -106,6 +106,7 @@ def test_logs_refresh_does_not_follow_a_planted_symlink(rig, tmp_path):  # noqa:
     asyncio.run(rig.sup.tick())
     assert target.read_text() == "root-owned secret\n"
     assert not logs.is_symlink() and "hello from app" in logs.read_text()
+    assert not logs.stat().st_mode & 0o007
 
 
 def test_row_container_name_is_never_used(rig):  # noqa: F811
@@ -162,3 +163,11 @@ def test_health_probe_does_not_follow_redirects():
         srv.shutdown()
     assert ok is False
     assert hits == ["/health"]
+
+
+def test_source_moved_under_signed_approval_is_refused(rig):
+    _sql(rig.reg, "UPDATE app_services SET source_dir=? WHERE slug='rob-status'",
+         (str(rig.proj.parent),))
+    asyncio.run(rig.sup.tick())
+    assert rig.reg.get("rob-status", "owner-1")["status"] == "pending"
+    assert rig.docker.argv_of(["run", "-d"]) == []

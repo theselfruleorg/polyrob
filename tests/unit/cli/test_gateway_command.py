@@ -105,6 +105,7 @@ def test_gateway_builds_whatsapp_harness_with_container_data_dir(monkeypatch):
     monkeypatch.setenv("WHATSAPP_ACCESS_TOKEN", "t")
     monkeypatch.setenv("WHATSAPP_PHONE_NUMBER_ID", "p")
     monkeypatch.setenv("WHATSAPP_VERIFY_TOKEN", "v")
+    monkeypatch.setenv("WHATSAPP_WEBHOOK_SECRET", "s")
 
     captured = {}
 

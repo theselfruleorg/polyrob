@@ -12,11 +12,11 @@ def test_mark_and_check():
     assert is_autonomous("") is False
 
 
-def test_lru_cap_keeps_recent():
+def test_new_sessions_cannot_erase_older_sessions_authority_boundary():
     for i in range(600):
         mark_autonomous(f"cap-{i}")
     assert is_autonomous("cap-599") is True
-    assert is_autonomous("cap-0") is False
+    assert is_autonomous("cap-0") is True
 
 
 class _FakeAgent:

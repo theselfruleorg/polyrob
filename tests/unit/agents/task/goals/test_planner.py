@@ -20,15 +20,17 @@ def _seed(board, tmp_path):
                                body="1 real post/day; X is distribution.")
     done = board.create(user_id="rob", title="Write welcome post draft entirely")
     board.claim(done.id, "w", ttl_seconds=60)
-    board.record_success(done.id, result="ok\nOUTCOME: project/welcome.md")
+    board.record_success(done.id, result="ok\nOUTCOME: project/welcome.md",
+        claim_token=board.get(done.id).claim_token)
     board.set_outcome(done.id, "project/welcome.md")
     blocked = board.create(user_id="rob", title="Broken goal wholly unrelated")
     # NB: after T2's guards record_failure only acts on RUNNING rows — re-claim
     # between failures (first failure returns the goal to 'ready').
     board.claim(blocked.id, "w", ttl_seconds=60)
-    board.record_failure(blocked.id, error="tool starved")
+    board.record_failure(blocked.id, error="tool starved", claim_token=board.get(blocked.id).claim_token)
     board.claim(blocked.id, "w", ttl_seconds=60)
-    board.record_failure(blocked.id, error="tool starved")  # trips breaker (max 2)
+    board.record_failure(blocked.id, error="tool starved",
+        claim_token=board.get(blocked.id).claim_token)  # trips breaker (max 2)
     d = tmp_path / "proj"; d.mkdir()
     (d / "welcome.md").write_text("# Welcome post\nbody")
     return o, done, blocked, d
@@ -151,7 +153,8 @@ def test_is_live_waiting_goal_false_when_diamond_shared_prereq_is_dead(board):
     revisit into a false positive)."""
     dead = board.create(user_id="u1", title="dead root", max_retries=1)
     board.claim(dead.id, "w", ttl_seconds=900)
-    board.record_failure(dead.id, error="boom")  # trips breaker -> blocked
+    board.record_failure(dead.id, error="boom",
+        claim_token=board.get(dead.id).claim_token)  # trips breaker -> blocked
     assert board.get(dead.id).status == STATUS_BLOCKED
 
     d = board.create(user_id="u1", title="shared waiting prereq", depends_on=[dead.id])
@@ -329,3 +332,12 @@ def test_planner_disabled_by_default(board, monkeypatch):
     asyncio.run(d.dispatch_once())
     asyncio.run(asyncio.sleep(0.05))
     assert agent.requests == []
+def test_planner_memory_is_quarantined_per_tenant(monkeypatch):
+    from agents.task.goals.planner import planner_memory_fields
+    monkeypatch.setenv("MEMORY_SCOPES_ENABLED", "true")
+    first = planner_memory_fields("tenant-a")
+    assert first["memory_regime"] == "scoped"
+    assert first == planner_memory_fields("tenant-a")
+    assert first["memory_scope"] != planner_memory_fields("tenant-b")["memory_scope"]
+    monkeypatch.setenv("MEMORY_SCOPES_ENABLED", "false")
+    assert planner_memory_fields("tenant-a") == {}

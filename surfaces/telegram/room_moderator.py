@@ -59,6 +59,23 @@ class RoomModerator:
         from surfaces.telegram.moderation import member_status
         return await member_status(bot, chat_id, user_id)
 
+    async def rights_async(self, surface: str, chat_id: str) -> set:
+        """The bot's own rights in the chat. EMPTY on any fault (fail-closed)."""
+        bot = self._resolve_bot()
+        if bot is None:
+            return set()
+        from surfaces.telegram.moderation import bot_rights
+        return set(await bot_rights(bot, chat_id) or ())
+
+    async def delete_message_async(self, surface: str, chat_id: str,
+                                   message_id: str):
+        """Delete one message (the agent's `room_moderate` delete). Never raises."""
+        from surfaces.telegram.moderation import ModResult, delete_message
+        bot = self._resolve_bot()
+        if bot is None:
+            return ModResult(False, "no chat connection was available")
+        return await delete_message(bot, chat_id, message_id)
+
     def member_status_sync(self, surface: str, chat_id: str, user_id: str) -> str:
         """A TARGET's live status in the chat, synchronously (046 T5).
 

@@ -194,9 +194,11 @@ async def test_blocked_goal_creates_ask_even_when_push_flag_off(tmp_path, monkey
     board = GoalBoard(str(tmp_path / "g.db"))
     g = board.create(user_id="rob", title="Post the announcement")
     board.claim(g.id, "w", ttl_seconds=60)
-    board.record_failure(g.id, error="needs twitter write access")
+    board.record_failure(g.id, error="needs twitter write access",
+        claim_token=board.get(g.id).claim_token)
     board.claim(g.id, "w", ttl_seconds=60)
-    board.record_failure(g.id, error="needs twitter write access")  # trips breaker
+    board.record_failure(g.id, error="needs twitter write access",
+        claim_token=board.get(g.id).claim_token)  # trips breaker
     assert board.get(g.id).status == STATUS_BLOCKED
 
     class _Agent:

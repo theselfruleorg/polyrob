@@ -36,6 +36,8 @@ def _token_transport(responses):
     calls = []
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json={"data": {"id": "12345", "username": "agent"}})
         calls.append({"form": dict(httpx.QueryParams(request.content.decode())),
                       "auth": request.headers.get("authorization", "")})
         status, body = responses.pop(0)
@@ -161,7 +163,7 @@ def test_exchange_code_persists_pkce_pair(store):
     transport, calls = _token_transport([(200, {"access_token": "A", "refresh_token": "R",
                                                 "expires_in": 7200, "scope": "dm.read"})])
     rec = xo.exchange_code("thecode", redirect_uri="http://127.0.0.1:8765/callback",
-                           code_verifier="ver", store=store, transport=transport)
+                           code_verifier="ver", store=store, transport=transport, expected_account_id="12345")
     f = calls[0]["form"]
     assert f["grant_type"] == "authorization_code" and f["code"] == "thecode"
     assert f["code_verifier"] == "ver" and f["redirect_uri"] == "http://127.0.0.1:8765/callback"
@@ -317,7 +319,7 @@ def test_successful_exchange_clears_the_verdict_and_rearms_refresh(store, fresh_
     xo.resolve_access_token(store=store, transport=transport)
     assert verdict("x_oauth2") is not None
     xo.exchange_code("c", redirect_uri="http://127.0.0.1:8765/callback",
-                     code_verifier="v", store=store, transport=transport)
+                     code_verifier="v", store=store, transport=transport, expected_account_id="12345")
     assert verdict("x_oauth2") is None
     assert xo.status(store=store)["relogin_needed"] is False
     assert xo.resolve_access_token(store=store, transport=transport) == "A2"
@@ -434,3 +436,67 @@ def test_env_seed_never_clobbers_an_undecryptable_record(store, monkeypatch, tmp
     assert xo.resolve_access_token(store=other, transport=transport) == "env-acc"
     assert (tmp_path / "x.json").read_text() == raw_before  # NOT overwritten
     assert calls == []
+
+
+def test_wrong_x_account_cannot_replace_existing_pair(store):
+    xo.import_pair("old", "old-refresh", store=store)
+    before = store.load()
+    def handler(request):
+        if request.method == "POST":
+            return httpx.Response(200, json={"access_token": "new", "refresh_token": "new-refresh"})
+        return httpx.Response(200, json={"data": {"id": "999", "username": "wrong"}})
+    with pytest.raises(RuntimeError, match="different account"):
+        xo.exchange_code("code", redirect_uri="http://localhost/callback", code_verifier="v",
+                         store=store, transport=httpx.MockTransport(handler), expected_account_id="12345")
+    assert store.load() == before
+
+
+def test_unpinned_x_login_refuses_before_exchanging_code(store):
+    with pytest.raises(RuntimeError, match="account-id"):
+        xo.exchange_code("code", redirect_uri="http://localhost/callback", code_verifier="v",
+                         store=store, transport=httpx.MockTransport(lambda r: pytest.fail("network called")))
+
+
+def test_x_account_pin_survives_token_refresh(store):
+    xo.import_pair("A", "R", store=store)
+    rec = store.load()
+    rec.update(account_id="12345", account_username="agent")
+    store.save(rec)
+    transport, _ = _token_transport([(200, {"access_token": "A2", "refresh_token": "R2"})])
+    refreshed = xo.refresh(store=store, transport=transport)
+    assert refreshed["account_id"] == "12345"
+    assert xo.expected_account(store) == "12345"
+
+
+def test_refresh_lock_needs_only_read_access_and_is_group_shared(tmp_path):
+    """A lock another identity created without write access for us must still
+    serialise the refresh (no silent in-process fallback), and in a
+    group-writable home the lock is group-openable, never world-openable."""
+    import os
+    import stat
+
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    os.chmod(shared, 0o2770)
+    store = xo.XOAuth2Store(shared / "x.json")
+    lock = shared / "x.json.lock"
+    lock.write_text("")
+    os.chmod(lock, 0o440)
+    xo._LOCK_WARNED.clear()
+    with xo._refresh_lock(store):
+        pass
+    assert str(lock) not in xo._LOCK_WARNED
+    assert stat.S_IMODE(lock.stat().st_mode) == 0o660
+
+
+def test_refresh_lock_still_refuses_a_symlink(tmp_path):
+    import os
+
+    target = tmp_path / "elsewhere"
+    target.write_text("")
+    store = xo.XOAuth2Store(tmp_path / "x.json")
+    os.symlink(str(target), str(tmp_path / "x.json.lock"))
+    xo._LOCK_WARNED.clear()
+    with xo._refresh_lock(store):
+        pass
+    assert str(tmp_path / "x.json.lock") in xo._LOCK_WARNED

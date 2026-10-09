@@ -3,6 +3,7 @@
 
 Each test pins the defect the audit named.
 """
+from core.security.session_tokens import SESSION_AUDIENCE
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -17,11 +18,11 @@ class _FakeKeyManager:
         self.minted = []
         self.revoked = []
 
-    async def generate_api_key(self, user_id, name, expires_days=None):
+    async def generate_api_key(self, user_id, name, expires_days=90, scopes=('read', 'write')):
         self.minted.append(user_id)
         return {"api_key": "rob_" + "x" * 40, "name": name,
                 "prefix": "rob_xxxxxx", "expires_at": "2030-01-01", "created_at": "t",
-                "warning": "w"}
+                "warning": "w", "scopes": list(scopes)}
 
     async def revoke_key(self, user_id, prefix):
         self.revoked.append((user_id, prefix))
@@ -107,22 +108,11 @@ def test_api1_authentication_middleware_marks_an_api_key_identity():
     assert state.auth_method == "api_key"
 
 
-def test_api1_a_never_expiring_key_is_returned_not_403(monkeypatch):
-    """The manager returns expires_at=None for a key with no expiry; the
-    response model refused None, so the key row was written and the caller
-    got a 403 without ever seeing the key."""
+def test_api1_never_expiring_keys_are_refused_before_minting(monkeypatch):
     client, mgr = _key_app(monkeypatch, None)
-
-    async def _gen(user_id, name, expires_days=None):
-        mgr.minted.append(user_id)
-        return {"api_key": "rob_" + "x" * 40, "name": name,
-                "prefix": "rob_xxxxxx", "expires_at": None,
-                "created_at": "t", "warning": "w"}
-
-    mgr.generate_api_key = _gen
-    resp = client.post("/api/auth/api-keys", json={"name": "n"})
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["expires_at"] is None
+    resp = client.post("/api/auth/api-keys", json={"name": "n", "expires_days": None})
+    assert resp.status_code == 422, resp.text
+    assert not mgr.minted
 
 
 @pytest.fixture()
@@ -141,7 +131,8 @@ def test_api1_end_to_end_an_x_api_key_cannot_mint(monkeypatch, real_app):
 
     async def _valid(key):
         return {"user_id": "0xOwner", "tier": "free", "role": "user",
-                "auth_method": "api_key"}
+                "auth_method": "api_key", "permissions": ['read', 'write'],
+                "api_key_expires_at": 4102444800}
 
     monkeypatch.setattr(api_key_auth, "validate_api_key", _valid)
     mgr = _FakeKeyManager()
@@ -161,7 +152,7 @@ def _patched_validator(monkeypatch, answers):
     from api import api_key_auth
 
     async def _validate(key):
-        return answers[0]
+        return dict(answers[0], permissions=['read', 'write'], api_key_expires_at=4102444800) if answers[0] else None
 
     monkeypatch.setattr(api_key_auth, "validate_api_key", _validate)
 
@@ -211,7 +202,7 @@ def _wallet_jwt(secret, **extra):
     payload = {"sub": "0xWALLET", "user_id": "user-42", "tier": "free",
                "role": "user", "jti": "j1", "exp": int(_t.time()) + 600}
     payload.update(extra)
-    return jwt.encode(payload, secret, algorithm="HS256")
+    return jwt.encode({"aud": SESSION_AUDIENCE, **payload}, secret, algorithm="HS256")
 
 
 def test_api3_authentication_middleware_keeps_the_account_id(monkeypatch):
@@ -239,6 +230,10 @@ def test_api3_a_token_without_user_id_still_falls_back_to_sub(monkeypatch):
 
 def test_api3_the_real_stack_resolves_the_account_id(monkeypatch, real_app):
     from fastapi import Request
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr("api.dependencies.require_service", lambda *a, **kw:
+                        SimpleNamespace(fetch_one=AsyncMock(return_value=None)))
 
     seen = {}
 
@@ -374,7 +369,8 @@ def test_api6_end_to_end_bearer_api_key(monkeypatch, real_app):
 
     async def _valid(key):
         return {"user_id": "0xOwner", "tier": "free", "role": "user",
-                "auth_method": "api_key"}
+                "auth_method": "api_key", "permissions": ['read', 'write'],
+                "api_key_expires_at": 4102444800}
 
     monkeypatch.setattr(api_key_auth, "validate_api_key", _valid)
     resp = real_app.get("/api/task/sessions",
@@ -684,7 +680,7 @@ def _settling_app(monkeypatch, *, fail_at):
 
     class _Facilitator:
         async def verify_and_settle_payment(self, payment_header,
-                                            payment_requirements):
+                                            payment_requirements, before_settle=None):
             return (SimpleNamespace(isValid=True, error=None),
                     SimpleNamespace(success=True, errorReason=None,
                                     transaction="0x" + "b" * 64))
@@ -695,6 +691,7 @@ def _settling_app(monkeypatch, *, fail_at):
     async def _profile(addr, uid):
         if fail_at == "profile":
             raise RuntimeError("boom at /secret/path/bot.db")
+        return True
 
     async def _record(**kw):
         calls["recorded"].append(kw["payment_id"])
@@ -711,6 +708,9 @@ def _settling_app(monkeypatch, *, fail_at):
         "network": "base-sepolia", "pay_to": "0x" + "a" * 40, "enabled": True})
     monkeypatch.setattr(xm, "get_x402_price_usd", lambda: 0.01)
     monkeypatch.setattr(xm, "ensure_user_profile_for_payer", _profile)
+    async def _resolve(addr):
+        return "usr_" + "0" * 16
+    monkeypatch.setattr(xm, "resolve_payer_user_id", _resolve)
     monkeypatch.setattr(xm, "record_x402_payment", _record)
     monkeypatch.setattr(xm, "mark_payment_refund_due", _refund)
     monkeypatch.setattr(xm, "resolve_owner_user_id", lambda: "owner")

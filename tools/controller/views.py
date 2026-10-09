@@ -74,10 +74,16 @@ class MessageTargetAction(BaseModel):
 		default=None,
 		description=("Recipient/chat id on that surface (chat id, @user, or email address). "
 		             "Omit, or pass 'owner', to message the owner."))
-	text: str = Field(description="Message body to send")
-	action: str = Field(default="send", description="send | reply (edit/delete/react are not supported)")
+	text: str = Field(default="", description="Message body to send (unused for delete/posts)")
+	action: str = Field(
+		default="send",
+		description=("send | reply | posts (list what I posted, with ledger rows) | delete "
+		             "(my OWN post, owner's instruction only, telegram <48h: give post=<row>, "
+		             "or message_id + target, or last=N + target)"))
 	reply_to: Optional[str] = Field(default=None, description="Message id to reply to")
-	message_id: Optional[str] = Field(default=None, description="Unused (edit/delete/react are not supported)")
+	message_id: Optional[str] = Field(default=None, description="delete: the message id in target's chat")
+	post: Optional[int] = Field(default=None, description="delete: the post-ledger row a send receipt named")
+	last: Optional[int] = Field(default=None, description="delete/posts: the N most recent posts to target")
 	media_paths: Optional[List[str]] = Field(
 		default=None,
 		description=(

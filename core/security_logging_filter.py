@@ -217,13 +217,33 @@ class SecretScrubbingFilter(logging.Filter):
         # bare OAuth token would be gated out of the battery entirely (base64url
         # `-`/`_` chars break the 32-char alnum run in _MARKERLESS_PRECHECK).
         "eyj",
+        # SUP-8: every shared-battery rule must have a trigger here or in
+        # _MARKERLESS_PRECHECK, or the battery is skipped for that shape.
+        "cookie", "seed", "mnemonic", "passw", "passphrase", "private", "dsn",
+        "aiza", "github_pat", "_live_", "_test_", "basic ", "keystore",
     )
 
     # Single-scan stand-in for the three marker-less LEGACY_PATTERNS: matches iff
     # one of them COULD match ("claude-"/"pc-" literal prefix, or any ≥32-char
     # base64 run). Keeps the benign fast path (one search, no substitution) while
     # never gating those secret shapes out of the battery.
-    _MARKERLESS_PRECHECK = re.compile(r'claude-|pc-|[a-zA-Z0-9+/]{32}')
+    #
+    # SUP-8 additions, one per battery rule that needs no marker word:
+    #   * URL credentials in any scheme (``https://user@``, ``postgres://u:p@``);
+    #   * a Telegram bot token, bare or in a ``/bot<id>:<secret>`` URL — its
+    #     ``-``/``_`` characters break the 32-char run, so it needs its own shape;
+    #   * an opaque vendor token (``gho_…``): a prefix, then a 24-char run;
+    #   * a Solana keypair as a JSON integer array;
+    #   * a BIP-39 phrase: twelve short words in a row (plain or numbered).
+    #     This also fires on ordinary prose, which only costs the battery run.
+    _MARKERLESS_PRECHECK = re.compile(
+        r'claude-|pc-|[a-zA-Z0-9+/]{32}'
+        r'|://[^\s/@]*@'
+        r'|\d{5,12}:[A-Za-z0-9_-]{30}'
+        r'|[a-z0-9][_-][A-Za-z0-9]{24}'
+        r'|\[\s*\d{1,3}\s*,(?:\s*\d{1,3}\s*,){62}'
+        r"|(?:[A-Za-z]{3,8}(?:[\s,'\"]|\d{1,2}[.):])+){11}[A-Za-z]{3,8}"
+    )
 
     # Fields that should always be scrubbed if they contain potential secrets
     SENSITIVE_FIELDS = {

@@ -553,6 +553,9 @@ def resolve_telegram_recipient(container: Any, user_id: str) -> Optional[str]:
         pass
     if uid.isdigit():
         return uid
+    from core.surfaces.owner_address import is_owner_tenant
+    if not is_owner_tenant(uid):
+        return None
     try:
         import core.instance as _instance
         owner = _instance.resolve_owner_telegram_id()
@@ -687,6 +690,8 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
     if event_log is ...:
         event_log = _default_event_log()
     uid = str(user_id or "")
+    if not uid:
+        return "no_sink"
     h = _content_hash(body)
     now = time.time()
     # Round-2 review: the EFFECTIVE lane, resolved once. `_record` used to

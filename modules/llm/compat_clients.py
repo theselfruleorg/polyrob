@@ -82,6 +82,7 @@ class OpenAICompatClient(OpenRouterClient):
 
         cfg = config.get_llm_config().get(self._spec.name, {}) or {}
         self.api_key = _resolve_key(self._spec, cfg)
+        self._credential_source = cfg.get("credential_source", "env")
         self.model_type = cfg.get("model") or get_default_model(self._spec.name)
         self.last_response = None
 

@@ -186,6 +186,11 @@ A2A_TO_ROB_STATE: Dict[A2ATaskState, str] = {
 # Task Handler
 # =============================================================================
 
+
+#: API-11: the most tasks one tasks/list page may build.
+MAX_LIST_PAGE_SIZE = 100
+
+
 class A2ATaskHandler:
     """Handles A2A task operations by delegating to TaskAgent."""
 
@@ -594,6 +599,8 @@ class A2ATaskHandler:
         # Ownership guard BEFORE any write/inject/resume: a non-owner must not be
         # able to inject a message into or resume another tenant's session.
         self._authorize_owner(session_info, task_id, user_id)
+        from agents.task.billed_request import validate_billed_session
+        validate_billed_session(session_info)
 
         # Check if task is in terminal state
         current_state = self._session_status_to_a2a_state(
@@ -709,6 +716,12 @@ class A2ATaskHandler:
         Returns:
             Tuple of (tasks, next_page_token)
         """
+        # API-11: each listed task is built (an rglob of its workspace), so a
+        # caller-chosen page size is a CPU/IO lever. Clamp it.
+        try:
+            page_size = max(1, min(int(page_size or 20), MAX_LIST_PAGE_SIZE))
+        except (TypeError, ValueError):
+            page_size = 20
         sm = self._get_session_manager()
         if not sm:
             return [], None

@@ -218,6 +218,11 @@ def pack_install(source, accept_capabilities):
 
 
 def _refuse_under_custody() -> None:
+    import os
+    if getattr(os, "geteuid", lambda: -1)() == 0:
+        raise click.ClickException(
+            "third-party pack installation as root is refused: build backends and "
+            "installed Python hooks execute code; use a separate unprivileged instance")
     from core.packs.loader import custody_refusal
     reason = custody_refusal()
     if reason:
@@ -228,7 +233,7 @@ def _pip(args) -> None:
     """``python -m pip install <args>`` in this environment, scrubbed env."""
     import subprocess
     from core.lazy_installer import child_env
-    cmd = [sys.executable, "-m", "pip", "install", "--disable-pip-version-check", *args]
+    cmd = [sys.executable, "-I", "-m", "pip", "install", "--disable-pip-version-check", *args]
     proc = subprocess.run(cmd, env=child_env(), capture_output=True, text=True, timeout=600)
     if proc.returncode != 0:
         raise click.ClickException(f"pip install failed:\n{(proc.stderr or proc.stdout)[-2000:]}")
@@ -318,7 +323,60 @@ def _find_manifest(root: Path) -> Path:
     return found[0]
 
 
+def wheel_refusal(names, package: str, dist: str) -> "str | None":
+    """Why a third-party pack wheel's file list must not reach the shared venv.
+
+    The pack installs into the venv every polyrob process (and the signer)
+    imports from, so it may add exactly its own package and its metadata: no
+    ``.pth`` / ``__editable__`` start-up hook, no ``.data`` scheme (scripts,
+    headers, purelib remaps) and no second top-level name that could replace
+    polyrob or a dependency (SUP-3)."""
+    from packaging.utils import canonicalize_name
+    want = canonicalize_name(dist or "")
+    for name in names:
+        top = name.split("/", 1)[0]
+        if top.endswith(".dist-info"):
+            if canonicalize_name(top[:-len(".dist-info")].rsplit("-", 1)[0]) != want:
+                return f"foreign metadata directory {top}"
+            continue
+        if top != package:
+            return f"file outside the pack's package {package!r}: {name}"
+        if name.endswith(".pth") or "__editable__" in name:
+            return f"start-up hook {name}"
+    return None
+
+
+def _install_reviewed_wheel(root: Path, package: str, dist: str) -> None:
+    """Build the source to a wheel in a scratch directory, check its file list,
+    then install that wheel — never ``pip install <source>`` straight into the venv."""
+    import subprocess
+    import tempfile
+    import zipfile
+    from importlib.metadata import packages_distributions
+    from packaging.utils import canonicalize_name
+    from core.lazy_installer import child_env
+    owners = packages_distributions().get(package) or []
+    if any(canonicalize_name(o) != canonicalize_name(dist or "") for o in owners):
+        raise click.ClickException(f"package {package!r} already belongs to "
+                                   f"{', '.join(sorted(owners))}; a pack cannot replace it")
+    with tempfile.TemporaryDirectory(prefix="polyrob-pack-") as out:
+        cmd = [sys.executable, "-I", "-m", "pip", "wheel", "--disable-pip-version-check",
+               "--no-deps", "-w", out, str(root)]
+        proc = subprocess.run(cmd, env=child_env(), capture_output=True, text=True, timeout=600)
+        if proc.returncode != 0:
+            raise click.ClickException(f"pack build failed:\n{(proc.stderr or proc.stdout)[-2000:]}")
+        wheels = sorted(Path(out).glob("*.whl"))
+        if len(wheels) != 1:
+            raise click.ClickException(f"pack build produced {len(wheels)} wheels; expected one")
+        with zipfile.ZipFile(wheels[0]) as zf:
+            reason = wheel_refusal(zf.namelist(), package, dist)
+        if reason:
+            raise click.ClickException(f"pack wheel refused: {reason}")
+        _pip(["--no-deps", str(wheels[0])])
+
+
 def _install_third_party(root: Path, origin: str, accepted: bool) -> None:
+    _refuse_under_custody()
     import tomllib
     from core.packs import index
     from core.packs.manifest import ManifestError, parse
@@ -365,15 +423,18 @@ def _install_third_party(root: Path, origin: str, accepted: bool) -> None:
                    f" · actions: {', '.join(v.name for v in tool.verbs)}")
     click.echo("It runs inside the agent process and can read what the agent can read.")
     _accept(accepted)
-    _pip(["--no-deps", str(root)])
+    _install_reviewed_wheel(root, path.parent.name, dist)
     deps = project.get("dependencies", [])
     click.echo(f"pack {m.id} installed (--no-deps).")
     if deps:
         click.echo("It declares these dependencies, NOT installed:")
         for dep in deps:
             click.echo(f"  {dep}")
-        click.echo(f"install them with: {sys.executable} -m pip install " +
-                   " ".join(f"'{d}'" for d in deps))
+        # Never print an unpinned, unhashed install line: review each dependency,
+        # pin it to an exact version with its wheel hash, then install the file.
+        click.echo("review each one, pin it as `name==version --hash=sha256:<wheel hash>` in a "
+                   f"file, then: {sys.executable} -I -m pip install --require-hashes "
+                   "--no-deps -r <that file>")
     click.echo(f"load it in a new process with: polyrob pack enable {m.id}")
 
 

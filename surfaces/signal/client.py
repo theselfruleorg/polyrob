@@ -28,11 +28,45 @@ def extract_envelope(payload: dict) -> dict:
             or payload)
 
 
+def daemon_url_problem(url: str) -> Optional[str]:
+    """Why ``url`` may not name the signal-cli daemon, or None when it may.
+
+    CHAT-21: the daemon has no authentication of its own. Plain ``http://`` is
+    acceptable only to a LOOPBACK host; anywhere else, anyone on the path can
+    send as the bot or feed forged envelopes. A remote daemon must sit behind
+    ``https://`` (a TLS proxy the operator controls).
+    """
+    import ipaddress
+    from urllib.parse import urlsplit
+    try:
+        parts = urlsplit(str(url or "").strip())
+        host = (parts.hostname or "").lower()
+    except ValueError as e:
+        return f"SIGNAL_DAEMON_URL is not a URL ({e})"
+    if parts.scheme not in ("http", "https") or not host:
+        return "SIGNAL_DAEMON_URL must be an http(s):// URL with a host"
+    if parts.scheme == "https":
+        return None
+    if host == "localhost":
+        return None
+    try:
+        if ipaddress.ip_address(host).is_loopback:
+            return None
+    except ValueError:
+        pass
+    return (f"SIGNAL_DAEMON_URL {parts.scheme}://{host} is plain HTTP to a "
+            "non-loopback host; the signal-cli daemon has no authentication. "
+            "Bind it to 127.0.0.1 or put it behind https://")
+
+
 class SignalClient:
     def __init__(self, daemon_url: Optional[str] = None,
                  account: Optional[str] = None) -> None:
         self.daemon_url = (daemon_url or os.getenv("SIGNAL_DAEMON_URL")
                            or "http://127.0.0.1:8080").rstrip("/")
+        problem = daemon_url_problem(self.daemon_url)
+        if problem:
+            raise ValueError(problem)
         self.account = account or os.getenv("SIGNAL_ACCOUNT", "")
         self._session = None
         self._rpc_id = 0
@@ -101,6 +135,9 @@ class SignalEventStream:
     """Consume the daemon's SSE feed; ``handler`` gets each ``envelope`` dict."""
 
     def __init__(self, daemon_url: str) -> None:
+        problem = daemon_url_problem(daemon_url)
+        if problem:
+            raise ValueError(problem)
         self._url = daemon_url.rstrip("/") + "/api/v1/events"
         self._stopped = asyncio.Event()
 

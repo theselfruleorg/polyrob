@@ -22,6 +22,11 @@ def _ctx(user="u1"):
                                  is_sub_agent=False, metadata={}, session_id=None)
 
 
+@pytest.fixture(autouse=True)
+def bound_owner(monkeypatch):
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u1")
+
+
 def test_actions_carry_decorator_metadata():
     # decorated => discoverable by the controller's get_actions()
     for name in ("cronjob_schedule", "cronjob_list", "cronjob_cancel"):
@@ -159,14 +164,17 @@ async def test_agent_job_cap_counts_only_self_scheduled_jobs(tmp_path):
     # Owner-created jobs never count against the agent's cap.
     for i in range(3):
         svc.schedule(task=f"owner job {i}", schedule_spec="1h", user_id="u1")
+    # A turn that has read third-party content schedules AGENT jobs.
+    agent_ctx = _ctx()
+    agent_ctx.metadata = {"untrusted_read": True}
     for i in range(AGENT_MAX_ACTIVE_JOBS):
         res = await t.cronjob_schedule(
             CronScheduleAction(task=f"agent job number {i}", schedule="1h"),
-            execution_context=_ctx())
+            execution_context=agent_ctx)
         assert res.error is None, res.error
     res = await t.cronjob_schedule(
         CronScheduleAction(task="one agent job too many", schedule="1h"),
-        execution_context=_ctx())
+        execution_context=agent_ctx)
     assert res.error and "cap" in res.error
     # Another tenant is unaffected.
     res = await t.cronjob_schedule(

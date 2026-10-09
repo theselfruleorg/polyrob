@@ -98,3 +98,32 @@ async def test_scrub_equivalence_mixed(wired):
     assert surf.sent[0].text == scrub_brain_blocks(mixed)
     assert "current_state" not in surf.sent[0].text
     assert "Here is the answer." in surf.sent[0].text
+
+
+@pytest.mark.asyncio
+async def test_split_brain_never_reaches_a_live_surface(wired):
+    router, surf = wired
+    for chunk in ['hello ', '{"curr', 'ent_state":{"memory":"PRIVATE"', '}}', ' world']:
+        await router.publish(OutboundMessage(session_key='k1', text=chunk, partial=True))
+    assert ''.join(msg.text for msg in surf.streamed) == 'hello  world'
+    await router.publish(OutboundMessage(session_key='k1', text='final'))
+    assert not router._stream_scrubbers
+
+
+@pytest.mark.asyncio
+async def test_public_rooms_never_receive_partial_secret_fragments(wired):
+    router, surf = wired
+    key = 'agent:main:telegram:group:-123:u'
+    for chunk in ['sk-', 'proj-', 'secret']:
+        assert not await router.publish(OutboundMessage(session_key=key, text=chunk, partial=True))
+    assert not surf.streamed
+
+
+@pytest.mark.asyncio
+async def test_full_filter_capacity_does_not_evict_unfinished_parser(wired):
+    router, surf = wired
+    for i in range(128):
+        await router.publish(OutboundMessage(session_key='k1', stream_id=str(i), text='{', partial=True))
+    assert not await router.publish(OutboundMessage(session_key='k1', stream_id='overflow', text='PRIVATE', partial=True))
+    assert len(router._stream_scrubbers) == 128
+    assert not surf.streamed

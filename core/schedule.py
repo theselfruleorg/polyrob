@@ -66,12 +66,10 @@ class Schedule:
             # job runs when EITHER matches (union); otherwise AND the restricted one.
             if self.dom_restricted and self.dow_restricted:
                 day_match = (dt.day in doms) or (cron_dow in dows)
-            elif self.dom_restricted:
-                day_match = dt.day in doms
-            elif self.dow_restricted:
-                day_match = cron_dow in dows
             else:
-                day_match = True
+                # A wildcard prefix selects AND semantics, not "every day":
+                # */2 still has an expanded set that must filter the date.
+                day_match = (dt.day in doms) and (cron_dow in dows)
             if (dt.minute in minutes and dt.hour in hours
                     and dt.month in months and day_match):
                 return dt

@@ -1,7 +1,8 @@
 """Email transport providers (Phase 1, 2026-08-18 agent-mail plan).
 
 The `email` tool speaks two transports behind ONE public surface
-(`send_email_ex` / `read_emails` / the `email_send` action):
+(`send_email_ex` / `read_emails` / the `email_*` actions in `tools/email_tool.py`
++ `tools/email_mailbox.py`):
 
 - ``smtp`` — the legacy stdlib smtplib/imaplib path (GMAIL_* creds), unchanged.
 - ``agentmail`` — a managed HTTP inbox (api.agentmail.to): the agent provisions

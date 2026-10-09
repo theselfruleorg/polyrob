@@ -57,6 +57,7 @@ def _no_indexer_network(monkeypatch):
     monkeypatch.setattr("core.wallet.address_kind._evm_probe", _blocked, raising=False)
     monkeypatch.setattr("core.wallet.address_kind._svm_probe", _blocked, raising=False)
     monkeypatch.setattr("core.wallet.solana_onchain.token_holdings", _blocked, raising=False)
+    monkeypatch.setattr("core.wallet.solana_onchain._rpc", _blocked, raising=False)
     # 071 W4: the history / origin reads (Blockscout GET + Solana RPC).
     monkeypatch.setattr("core.wallet.activity._get", _blocked, raising=False)
     monkeypatch.setattr("core.wallet.activity._rpc", _blocked, raising=False)

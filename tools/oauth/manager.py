@@ -24,6 +24,8 @@ first caller already stored and returns it as-is, instead of refreshing again.
 from __future__ import annotations
 
 import asyncio
+import secrets
+import time
 from typing import Any, Dict, MutableMapping, Optional, Tuple
 
 from tools.oauth.provider import OAuthError, OAuthProvider, OAuthToken
@@ -41,6 +43,42 @@ class OAuthManager:
         self._encryption = encryption or self._default_encryption()
         # Per-(user_id, provider) refresh lock — see class docstring.
         self._locks: Dict[Key, asyncio.Lock] = {}
+        self._authorizations: dict[str, tuple] = {}
+
+    def begin_authorization(self, user_id: str, provider: str, *, redirect_uri: Optional[str] = None) -> str:
+        """Create a bounded, ten-minute PKCE transaction bound to this principal."""
+        now = time.monotonic()
+        self._authorizations = {state: row for state, row in self._authorizations.items()
+                                if row[0] > now}
+        if len(self._authorizations) >= 128:
+            raise OAuthError('Too many pending OAuth authorizations')
+        if not user_id:
+            raise OAuthError('OAuth authorization requires a user identity')
+        prov = self.get_provider(provider)
+        state, verifier = secrets.token_urlsafe(32), secrets.token_urlsafe(48)
+        redirect = redirect_uri or getattr(prov, 'redirect_uri', None)
+        if not redirect:
+            raise OAuthError('OAuth authorization requires a redirect URI')
+        url = prov.authorize_url(state=state, code_verifier=verifier, redirect_uri=redirect)
+        # Keep this exact provider object: re-registering the name must not send
+        # an in-flight code/verifier to a different endpoint.
+        self._authorizations[state] = (now + 600, user_id, provider, prov, verifier, redirect)
+        return url
+
+    async def finish_authorization(self, user_id: str, provider: str, *, state: str, code: str) -> OAuthToken:
+        """Consume state before the HTTP exchange; expired, wrong-user and replayed callbacks refuse."""
+        if not isinstance(state, str):
+            raise OAuthError('Invalid OAuth state')
+        row = self._authorizations.get(state)
+        if row is None or row[0] <= time.monotonic() or row[1:3] != (user_id, provider):
+            raise OAuthError('Invalid, expired or mismatched OAuth state')
+        if not isinstance(code, str) or not code or len(code) > 8192:
+            raise OAuthError('Invalid OAuth authorization code')
+        del self._authorizations[state]  # no await before consumption
+        _, _, _, prov, verifier, redirect = row
+        token = await prov.exchange_code(code, code_verifier=verifier, redirect_uri=redirect)
+        self.store_token(user_id, provider, token)
+        return token
 
     @staticmethod
     def _default_encryption():

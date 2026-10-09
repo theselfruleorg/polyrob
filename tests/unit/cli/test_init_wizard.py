@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
+from core.runtime_paths import _local_default_data_home as _REAL_LOCAL_DATA_HOME
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -309,6 +311,9 @@ def test_init_writes_files_regression(tmp_path, monkeypatch):
     (proj / ".git").mkdir(exist_ok=True)  # 027 WP5: gitignore only inside a git work tree
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
     monkeypatch.chdir(proj)
+    # the REAL local default (conftest points it at the cwd for isolation)
+    import core.runtime_paths as _rp
+    monkeypatch.setattr(_rp, "_local_default_data_home", _REAL_LOCAL_DATA_HOME)
     from cli.commands.init import init_cmd
     res = CliRunner().invoke(
         init_cmd,
@@ -319,5 +324,15 @@ def test_init_writes_files_regression(tmp_path, monkeypatch):
     assert "ANTHROPIC_API_KEY=sk-x" in env
     assert "DEFAULT_MODEL=claude-opus-4-8" in env
     assert (home / ".polyrob" / ".env").stat().st_mode & 0o777 == 0o600
-    assert (proj / ".polyrob" / "sessions").is_dir()
+    assert (home / ".polyrob" / "data" / "sessions").is_dir()
+    assert not (proj / ".polyrob" / "sessions").exists()  # cwd/.polyrob is never loaded
     assert ".polyrob/" in (proj / ".gitignore").read_text()
+
+
+def test_env_writer_validates_all_keys_before_writing(tmp_path):
+    from cli.commands.init import _write_env
+    path = tmp_path / ".env"
+    path.write_text("OLD=1\n")
+    with pytest.raises(ValueError):
+        _write_env(path, {"GOOD": "first", "KEY": "secret\u2028INJECTED=1"})
+    assert path.read_text() == "OLD=1\n"

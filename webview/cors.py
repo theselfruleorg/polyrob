@@ -23,20 +23,15 @@ def webview_domain() -> str:
 
 def compute_cors_origins(bind_port: int) -> List[str]:
     """Explicit ``CORS_ALLOW_ORIGINS`` wins verbatim; otherwise the default list:
-    legacy localhost:3000 entries + ``WEBVIEW_DOMAIN`` + the console's own serving
+    explicitly configured ``WEBVIEW_DOMAIN`` + the console's own serving
     origins (bind port on localhost/127.0.0.1) — the webview serves its own UI, so
     the serving origin must be allowed or the browser's same-origin Socket.IO
     handshake is rejected with a 400 (P0-1, 2026-07-06)."""
     raw = os.environ.get("CORS_ALLOW_ORIGINS", "").strip()
     if raw:
         return [origin.strip() for origin in raw.split(",") if origin.strip()]
-    domain = webview_domain()
-    origins = [
-        "http://localhost:3000",
-        "https://localhost:3000",
-        f"https://{domain}",
-        f"http://{domain}",
-    ]
+    domain = os.environ.get("WEBVIEW_DOMAIN", "").strip()
+    origins = [f"https://{domain}", f"http://{domain}"] if domain else []
     for scheme in ("http", "https"):
         for host in ("localhost", "127.0.0.1"):
             origins.append(f"{scheme}://{host}:{bind_port}")

@@ -311,12 +311,31 @@ def exit_price(chain: str, address: str) -> Optional[float]:
     """The weaker price for the guard's exit exemption (028): the primary pool
     price with MEASURED depth behind it, any grade but unknown.
 
-    071 review: a dispute does NOT remove it. A falling thin token is exactly
-    when indexers lag each other, and refusing the stop-loss sell then is the
-    worst outcome; selling out of a position only reduces exposure. This is the
-    pre-071 rule, unchanged. Read fresh, like :func:`spend_price`."""
+    A dispute does NOT remove this execution valuation: it keeps an explicit
+    owner exit available when indexers lag. This value is not evidence that a
+    stop/target/trailing barrier fired; positions withhold those indicators for
+    uncorroborated prices. Read fresh, like :func:`spend_price`."""
     q = quote(chain, address, use_cache=False)
     if q.primary_usd is None or q.primary_confidence == UNKNOWN:
+        return None
+    if not q.primary_liquidity_usd or q.primary_liquidity_usd <= 0:
+        return None
+    return q.primary_usd
+
+
+def trusted_buy_price(chain: str, address: str) -> Optional[float]:
+    """The price a TRUSTED buy (owner pin, own launch, owner target) is checked
+    against when it has no spend-grade price: :func:`exit_price`'s rule, but a
+    DISPUTED quote yields None — the sources disagree, so the route stays
+    unverified and the buy is held to the unchecked ticket.
+
+    Residual, documented (verifier round 3, B4): the second source
+    (GeckoTerminal) indexes the SAME on-chain pools as DexScreener, so on a
+    one-pool token a pumped pool moves both and they agree. This catches a
+    stale or lying indexer, not a manipulated pool; the bound there is the
+    owner's pin of the token, the per-tx / daily caps and the route floor."""
+    q = quote(chain, address, use_cache=False)
+    if q.disputed or q.primary_usd is None or q.primary_confidence == UNKNOWN:
         return None
     if not q.primary_liquidity_usd or q.primary_liquidity_usd <= 0:
         return None

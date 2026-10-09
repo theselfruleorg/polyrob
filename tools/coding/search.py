@@ -69,6 +69,7 @@ def search_files(
     respect_gitignore=True,
     allow=None,
     refused=None,
+    confine_root=None,
 ):
     """Search ``root`` recursively for ``pattern`` (regex).
 
@@ -97,11 +98,30 @@ def search_files(
             refused.append(path)
         return False
 
+    def _open(path):
+        # IO-C1: with a confine root, open through a pinned O_NOFOLLOW walk so a
+        # component swapped after the allow() check cannot redirect the read.
+        if confine_root is None:
+            return open(path, "r", encoding="utf-8")
+        import io
+        from contextlib import contextmanager
+        from core.security.workspace_io import open_read
+
+        @contextmanager
+        def _text():
+            with open_read(path, confine_root, shared_ok=True) as raw:
+                yield io.TextIOWrapper(raw, encoding="utf-8")
+        return _text()
+
+    def _unsafe(exc):
+        from core.security.workspace_io import UnsafePath
+        return isinstance(exc, UnsafePath)
+
     if os.path.isfile(root):
         if not _allowed(root):
             return []
         try:
-            with open(root, "r", encoding="utf-8") as f:
+            with _open(root) as f:
                 for i, line in enumerate(f, start=1):
                     if rx.search(line):
                         if output_mode == "files":
@@ -109,7 +129,9 @@ def search_files(
                         matches.append(Match(path=root, line_no=i, line=line.rstrip("\n")))
                         if len(matches) >= max_results:
                             break
-        except (OSError, UnicodeDecodeError):
+        except (OSError, UnicodeDecodeError) as exc:
+            if confine_root is not None and refused is not None and _unsafe(exc):
+                refused.append(root)
             return []
         return seen_files if output_mode == "files" else matches
     if not os.path.isdir(root):
@@ -135,7 +157,7 @@ def search_files(
             if not _allowed(full):
                 continue
             try:
-                with open(full, "r", encoding="utf-8") as f:
+                with _open(full) as f:
                     for i, line in enumerate(f, start=1):
                         if rx.search(line):
                             if output_mode == "files":
@@ -148,6 +170,10 @@ def search_files(
                             matches.append(Match(path=full, line_no=i, line=line.rstrip("\n")))
                             if len(matches) >= max_results:
                                 return matches
-            except (OSError, UnicodeDecodeError):
+            except (OSError, UnicodeDecodeError) as exc:
+                # A file the confined open refuses (a hard-linked file, a swapped
+                # component) is NAMED in the refused count, never silently absent.
+                if confine_root is not None and refused is not None and _unsafe(exc):
+                    refused.append(full)
                 continue
     return seen_files if output_mode == "files" else matches

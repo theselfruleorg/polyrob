@@ -69,6 +69,9 @@ def _nonnegative_finite(value) -> float:
 class PolicyDecision:
     allowed: bool
     reason: Optional[str]
+    #: True only for a CAP refusal (ceiling, rolling daily cap, venue cap) — what an
+    #: owner grant can lift. A reader decides on this, never on the reason text.
+    cap_exceeded: bool = False
 
 
 class SpendLedger:
@@ -243,7 +246,8 @@ class SpendLedger:
                        "(the owner lifts it with /resume)")
         self._refresh_caps()
         if amount_usd > self._ceiling:
-            return PolicyDecision(False, f"amount ${amount_usd:.2f} exceeds catastrophic ceiling ${self._ceiling:.2f}")
+            return PolicyDecision(False, f"amount ${amount_usd:.2f} exceeds catastrophic ceiling ${self._ceiling:.2f}",
+                                  cap_exceeded=True)
         try:
             journal = _hooks.submission_journal()
             if journal is None:
@@ -276,6 +280,7 @@ class SpendLedger:
                     f"daily spend cap ${self._daily_cap:.2f} would be exceeded "
                     f"(trailing-24h ${spent:.2f} + ${amount_usd:.2f})"
                     + self._frees_at_note(amount_usd),
+                    cap_exceeded=True,
                 )
         venue_cap = self._per_venue_cap.get(str(venue).lower())
         if venue_cap is not None:
@@ -285,6 +290,7 @@ class SpendLedger:
                     False,
                     f"venue '{venue}' daily cap ${venue_cap:.2f} would be exceeded "
                     f"(trailing-24h ${venue_spent:.2f} + ${amount_usd:.2f})",
+                    cap_exceeded=True,
                 )
         return PolicyDecision(True, None)
 

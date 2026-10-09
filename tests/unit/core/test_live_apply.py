@@ -44,7 +44,7 @@ def _iso(monkeypatch, tmp_path, *keys):
 
 def test_live_write_sets_the_process_env(monkeypatch, tmp_path):
     _iso(monkeypatch, tmp_path, "GOALS_ENABLED")
-    res = set_value("GOALS_ENABLED", "true", scope="project", surface="local", live=True)
+    res = set_value("GOALS_ENABLED", "true", scope="global", surface="local", live=True)
     assert res.ok and res.live and res.applies == "live"
     assert os.environ["GOALS_ENABLED"] == "true"
     assert "live in this session" in res.message
@@ -53,15 +53,15 @@ def test_live_write_sets_the_process_env(monkeypatch, tmp_path):
 def test_live_propagates_to_the_runtime_gate(monkeypatch, tmp_path):
     _iso(monkeypatch, tmp_path, "GOALS_ENABLED")
     from core.config_policy import AutonomyConfig
-    set_value("GOALS_ENABLED", "false", scope="project", surface="local", live=True)
+    set_value("GOALS_ENABLED", "false", scope="global", surface="local", live=True)
     assert AutonomyConfig.goals_enabled() is False
-    set_value("GOALS_ENABLED", "true", scope="project", surface="local", live=True)
+    set_value("GOALS_ENABLED", "true", scope="global", surface="local", live=True)
     assert AutonomyConfig.goals_enabled() is True
 
 
 def test_payment_approval_mode_is_never_live(monkeypatch, tmp_path):
     _iso(monkeypatch, tmp_path, "PAYMENT_APPROVAL_MODE")
-    res = set_value("PAYMENT_APPROVAL_MODE", "auto", scope="project",
+    res = set_value("PAYMENT_APPROVAL_MODE", "auto", scope="global",
                     surface="local", live=True)
     assert res.ok and not res.live
     assert "PAYMENT_APPROVAL_MODE" not in os.environ
@@ -70,13 +70,13 @@ def test_payment_approval_mode_is_never_live(monkeypatch, tmp_path):
 
 def test_remote_surface_never_live(monkeypatch, tmp_path):
     _iso(monkeypatch, tmp_path, "GOALS_ENABLED")
-    res = set_value("GOALS_ENABLED", "true", scope="project", surface="console", live=True)
+    res = set_value("GOALS_ENABLED", "true", scope="global", surface="console", live=True)
     assert not res.live
     assert "GOALS_ENABLED" not in os.environ
 
 
 def test_not_live_unless_asked(monkeypatch, tmp_path):
     _iso(monkeypatch, tmp_path, "GOALS_ENABLED")
-    res = set_value("GOALS_ENABLED", "true", scope="project", surface="local")
+    res = set_value("GOALS_ENABLED", "true", scope="global", surface="local")
     assert res.ok and not res.live
     assert "GOALS_ENABLED" not in os.environ

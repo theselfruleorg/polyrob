@@ -32,11 +32,14 @@ class _Container:
         return self._services.get(name)
 
 
-def _identity(user_id, *, raw=None, surface="email", chat_type="dm"):
+def _identity(user_id, *, raw=None, surface="email", chat_type="dm", authenticated=True):
+    # `authenticated` models the receiving MX's Authentication-Results having
+    # proven the From address (CHAT-6); the tier rules below assume it.
     return Identity(
         user_id=user_id,
         source=SessionSource(surface_id=surface, chat_id="c1", chat_type=chat_type),
         raw_user_id=raw if raw is not None else user_id,
+        sender_authenticated=authenticated,
     )
 
 
@@ -182,3 +185,19 @@ def test_a_pack_surface_registered_after_import_is_forgeable(workdir, monkeypatc
     resolve_access_tier(_Container(workdir), _identity("u_x", surface="packmail"),
                         env={})
     assert seen["allow_pairing"] is False
+
+
+@pytest.mark.parametrize("auth", [None, False])
+def test_unauthenticated_email_sender_is_denied_even_as_owner_or_correspondent(workdir, auth):
+    """CHAT-6: a From: the MX did not authenticate is the lowest tier."""
+    reg = CorrespondentRegistry(os.path.join(workdir, "corr.db"))
+    reg.seed(surface="email", address="john@acme.com", session_id="s1",
+             user_id="u_owner", thread_id="t1", provenance="owner", require_approval=False)
+    c = _Container(workdir, registry=reg)
+    env = {"POLYROB_OWNER_USER_ID": "u_owner"}
+    assert resolve_access_tier(c, _identity("u_john", raw="john@acme.com"),
+                               thread_id="t1", env=env) == AccessTier.CORRESPONDENT
+    assert resolve_access_tier(c, _identity("u_owner", authenticated=auth),
+                               env=env) == AccessTier.DENIED
+    assert resolve_access_tier(c, _identity("u_john", raw="john@acme.com", authenticated=auth),
+                               thread_id="t1", env=env) == AccessTier.DENIED

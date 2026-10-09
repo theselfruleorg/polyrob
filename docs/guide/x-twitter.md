@@ -7,17 +7,29 @@ are not equivalent.
 
 X exposes two different private-message protocols:
 
-- **X Chat** (preferred): `GET /2/chat/conversations` and
-  `GET /2/chat/conversations/{id}/events`. It requires an OAuth 2.0 PKCE user
-  token with `dm.read`, `users.read`, and `tweet.read`. Events contain
-  ciphertext; POLYROB uses the official Chat XDK and the account's Chat keys to
-  verify and decrypt them.
-- **Legacy Direct Messages**: `GET /2/dm_events` and its participant/thread
-  variants. OAuth 1.0a user context remains supported, but this rail does not
-  contain encrypted X Chat messages.
+- **X Chat** (where X delivers DMs): `GET /2/chat/conversations`,
+  `GET /2/chat/conversations/{id}/events` and, to send,
+  `POST /2/chat/conversations/{id}/messages` (a first contact registers a
+  conversation key with `POST /2/chat/conversations/{id}/keys`). It requires an
+  OAuth 2.0 PKCE user token with `dm.read`, `dm.write`, `users.read`, and
+  `tweet.read`. Events contain ciphertext; POLYROB uses the official Chat XDK
+  and the account's Chat keys to verify, decrypt and encrypt them.
+- **Legacy Direct Messages**: the plaintext send still delivers (it is the cold
+  open path). The read, `GET /2/dm_events`, is **obsolete**: X stopped delivering
+  new DMs to it in September 2026, so it shows only old history; results are
+  marked `obsolete`.
+
+`twitter_dm` tries X Chat first. When X Chat refuses the send (a 4xx — X Chat
+rejects a cold first contact — or a recipient without X Chat keys), it sends on
+the plaintext endpoint (`POST /2/dm_conversations/with/:id/messages`), which still
+delivers; the result names the rail. A 5xx or timeout is never re-sent on the
+other rail, since the message may have landed. Every decrypted message carries `verified`; a sender whose X
+Chat key record has no identity binding signature is returned with
+`verified: false` and a `trust` note instead of being dropped. A thread whose key
+this account cannot read is never re-keyed; the send goes plaintext instead.
 
 `twitter_get_dms` accepts `rail=auto|chat|legacy`. `auto` selects X Chat when
-`TWITTER_OAUTH2_ACCESS_TOKEN` is configured. An account-wide Chat read lists
+the OAuth 2.0 login is usable (legacy only when that login is dead). An account-wide Chat read lists
 the inbox; pass `participant` or `conversation_id` to fetch that thread's
 events. The response always reports decryption status, so ciphertext or a
 missing key can never be mistaken for an empty thread.
@@ -49,7 +61,7 @@ app's Client ID once:
 TWITTER_OAUTH2_CLIENT_ID=...          # required to refresh
 TWITTER_OAUTH2_CLIENT_SECRET=...      # only for a confidential app
 
-polyrob x-account oauth-login         # PKCE in a browser, logged in AS the agent's account
+polyrob x-account oauth-login --account-id <agent-account-id>  # first verified login
 polyrob x-account oauth-status        # valid for N min · refresh token yes · scope [...]
 polyrob x-account oauth-refresh       # prove the refresh works right now
 ```
@@ -97,14 +109,40 @@ means only that the configured API access tier returned no inbound events. It
 must not be reported as an empty X inbox. DM lookup requires user-context OAuth,
 and endpoint availability remains subject to the X app's access tier.
 
-The current `polyrob x` background surface poller remains on the legacy event
-feed. Interactive and agent reads should use `twitter_get_dms` with the Chat
-rail for X Chat conversations.
+The `polyrob x` background surface poller is **obsolete**: it polls the legacy
+event feed, which no longer receives new DMs. Use `twitter_get_dms` /
+`twitter_dm` (X Chat) instead.
+
+## Who may write on X
+
+Every X write (a post, a thread, a reply, a DM) goes through the same owner rule:
+
+- **A genuine owner turn may post.** With `TWITTER_REQUIRE_APPROVAL` ON (the
+  default) the agent asks you once more before the write; OFF, your request is the
+  approval. A turn that has read third-party content since you last spoke (a page,
+  a mail, another post) always needs a real approval, whatever the flag says.
+- **An owner-authored standing cron job posts without a per-run approval**, as long
+  as its run has not read third-party content. A job the agent wrote, or one made on
+  a turn that had read such content, is agent-authored: each of its posts needs your
+  tap. `/adopt` makes such a job yours after you see what it will do.
+- **An autonomous run waits in the run for your tap.** It queues the ask (a Telegram
+  card, or `/pending`) and waits inside the X action's own timeout. If you do not
+  answer in time, the result reads "waiting for the owner's approval" and nothing
+  was posted; the run does not retry. A later approval sends exactly the approved
+  text once from the agent process, and never re-runs the job.
+- **Any other turn** (a self-wake, a delegation result) needs a real owner approval,
+  and a room turn cannot reach the X tools at all.
+
+Writes are also bounded by count: `TWITTER_WRITE_MAX_PER_HOUR` (default 15) is one
+durable hourly budget shared by the API and the browser rail, and DMs take a separate
+`TWITTER_DM_MAX_PER_HOUR` (default 5) on top of it. An unreadable budget refuses the
+write. Autonomous posts also keep a minimum gap (`TWITTER_POST_COOLDOWN_SEC`, one
+hour by default).
 
 ## Browser rail
 
-The optional `x_browser` tool reads the inbox X renders to the logged-in account,
-so it is the fallback when API reads are incomplete. Capture the login once on a
+The optional `x_browser` tool drives the X web app with a captured login. It is
+**not** needed for DMs: the X Chat API above reads and sends them. Capture the login once on a
 machine with a visible browser:
 
 ```sh
@@ -114,7 +152,7 @@ polyrob x-account capture-session
 When the agent runs on a headless server, capture on the desktop with
 `--out x-session.json`, copy the file over and run
 `polyrob x-account import-session x-session.json --handle <handle>` on the
-server (or pass the two login cookies: `--auth-token … --ct0 …`); the encrypted
+server (or enter the two login cookies at hidden prompts with `--cookies`); the encrypted
 store itself is per-box and cannot be copied. See the self-hosting guide.
 
 Enable the tool with `X_BROWSER_ENABLED=true`. Its dedicated verbs are:
@@ -130,3 +168,9 @@ Enable the tool with `X_BROWSER_ENABLED=true`. Its dedicated verbs are:
 The encrypted session is tenant-scoped. If X expires it, run the capture command
 again. Browser-returned messages are framed as untrusted external data before
 they reach model history.
+
+The first OAuth login requires the expected numeric X account ID. The callback
+checks `/2/users/me` before replacing credentials; another account or an unreadable
+identity leaves the previous pair intact. Later `/x login` links bind the stored
+account ID when minted. Existing unverified installations need one CLI login with
+`--account-id` before phone re-login is available.

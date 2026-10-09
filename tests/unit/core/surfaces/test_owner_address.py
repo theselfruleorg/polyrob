@@ -79,6 +79,7 @@ def test_owner_address_telegram_matches_legacy_resolver():
 
 
 def test_owner_address_env_per_surface(monkeypatch):
+    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda: "u1")
     from core.surfaces.owner_address import owner_address
     monkeypatch.setenv("OWNER_SLACK_ID", "C0FFEE")
     assert owner_address(_Container({}), "slack", "u1") == "C0FFEE"
@@ -103,6 +104,7 @@ def test_default_env_keeps_legacy_telegram_path():
 
 
 def test_owner_surface_routes_to_the_configured_surface(monkeypatch):
+    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda: "u1")
     monkeypatch.setenv("OWNER_SURFACE", "slack")
     monkeypatch.setenv("OWNER_SLACK_ID", "C0FFEE")
     router, ev = _Router(), _EvLog()
@@ -123,6 +125,7 @@ def test_fallback_chain_delivers_on_the_second_surface(monkeypatch):
 
 
 def test_critical_source_broadcasts_to_every_configured_surface(monkeypatch):
+    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda: "12345")
     monkeypatch.setenv("OWNER_SURFACE", "slack,telegram")
     monkeypatch.setenv("OWNER_SLACK_ID", "C0FFEE")
     router, ev = _Router(), _EvLog()

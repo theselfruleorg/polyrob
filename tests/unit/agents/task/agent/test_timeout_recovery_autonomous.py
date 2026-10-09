@@ -53,7 +53,7 @@ def test_interactive_session_still_notifies_the_user(monkeypatch):
     out = _Runner("s-interactive")._timeout_recovery_output(138.0)
     assert len(out.action) == 1
     assert out.action[0].send_message is not None
-    assert "too long" in out.action[0].send_message.text
+    assert "timeout" in out.action[0].send_message.text
 
 
 def test_autonomous_session_never_sends_a_message(monkeypatch):
@@ -71,3 +71,17 @@ def test_autonomous_detection_failure_is_fail_open_to_interactive(monkeypatch):
     monkeypatch.setattr("agents.task.session_class.is_autonomous_session", boom)
     out = _Runner("s-x")._timeout_recovery_output(60.0)
     assert len(out.action) == 1 and out.action[0].send_message is not None
+
+
+# Prod 2026-10-04 17:26: the owner asked for a 60 USDC send; the step timed out
+# twice and the notice said "Please send another message to retry" — but the
+# notice does not pause the session, and the very next step (8 s later) sent the
+# money. An owner who obeyed the notice would have paid twice. The notice must
+# say what actually happens: the agent is retrying, do NOT resend.
+
+def test_interactive_notice_never_asks_the_owner_to_resend(monkeypatch):
+    monkeypatch.setattr("agents.task.session_class.is_autonomous_session", lambda sid: False)
+    text = _Runner("s-interactive")._timeout_recovery_output(127.0).action[0].send_message.text
+    assert "send another message" not in text.lower()
+    assert "retry" in text.lower()
+    assert "don't resend" in text.lower() or "do not resend" in text.lower()

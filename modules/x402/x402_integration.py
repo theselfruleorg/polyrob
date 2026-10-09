@@ -58,7 +58,39 @@ def is_x402_paid_request() -> bool:
     return is_prepaid()
 
 
-async def ensure_user_profile_for_payer(wallet_address: str, user_id: str) -> bool:
+async def resolve_payer_user_id(wallet_address: str, db=None) -> Optional[str]:
+    """The tenant an x402 payer acts as, decided BEFORE anything settles.
+
+    Read-both: a ``user_profiles`` row that already holds this wallet wins,
+    whatever its id shape (a SIWE ``usr_<16hex>`` account or a legacy x402
+    ``usr_<12hex>`` account). A wallet with no row gets the 64-bit
+    ``wallet_user_id``. None = the wallet cannot be bound (no database, or the
+    id is held by a different wallet) — the caller must refuse unpaid.
+    """
+    try:
+        from core.identity import wallet_user_id
+        from modules.x402._db import resolve_db
+        db = await resolve_db(db)
+        if not db:
+            return None
+        wallet = wallet_address.lower()
+        row = await db.fetch_one(
+            "SELECT user_id FROM user_profiles WHERE wallet_address = ? "
+            "ORDER BY created_at ASC LIMIT 1", (wallet,))
+        if row and row["user_id"]:
+            return str(row["user_id"])
+        candidate = wallet_user_id(wallet)
+        bound = await db.fetch_one(
+            "SELECT wallet_address FROM user_profiles WHERE user_id = ?", (candidate,))
+        if bound and str(bound["wallet_address"] or "").lower() != wallet:
+            return None
+        return candidate
+    except Exception as e:
+        logger.error(f"Failed to resolve the x402 payer tenant: {e}")
+        return None
+
+
+async def ensure_user_profile_for_payer(wallet_address: str, user_id: str, db=None) -> bool:
     """Ensure a user_profiles record exists for x402 payer.
 
     Creates a new user profile if one doesn't exist for this wallet.
@@ -71,22 +103,30 @@ async def ensure_user_profile_for_payer(wallet_address: str, user_id: str) -> bo
         True if profile exists or was created, False on error
     """
     try:
-        from core.container import DependencyContainer
-        container = DependencyContainer.get_instance()
-        db = container.get_service('database_manager')
+        from modules.x402._db import resolve_db
+        db = await resolve_db(db)
 
         if not db:
             logger.warning("Database not available for user profile creation")
             return False
 
-        # Check if user already exists
+        # The historical id is truncated. Never grant its tenant to a different
+        # wallet, even if that wallet can produce the same derived id.
+        bound = await db.fetch_one(
+            "SELECT wallet_address FROM user_profiles WHERE user_id = ?", (user_id,))
+        if bound:
+            return (str(bound["wallet_address"] or "").lower() == wallet_address.lower())
+
+        # Check if user already exists under another identity.
         existing = await db.fetch_one(
             "SELECT user_id FROM user_profiles WHERE wallet_address = ?",
             (wallet_address.lower(),)
         )
 
         if existing:
-            return True
+            # The middleware passes the id resolve_payer_user_id chose, which
+            # IS this row's id — any other id is a different tenant.
+            return existing["user_id"] == user_id
 
         # Create new user profile for x402 payer
         await db.execute("""
@@ -124,7 +164,7 @@ def settlement_payment_id(
     retry of the identical settlement dedups instead of double-recording.
     """
     if transaction_hash:
-        return f"x402_{transaction_hash[:16]}"
+        return f"x402_{transaction_hash.lower()}"
     digest = hashlib.sha256(
         f"{payer_address.lower()}:{resource_path}:{minute_bucket}".encode()
     ).hexdigest()[:16]
@@ -144,6 +184,7 @@ async def record_x402_payment(
     deadline: Optional[int] = None,
     asset: str = "usdc",
     tenant_id: Optional[str] = None,
+    attempt_id: Optional[str] = None,
     db=None,
 ) -> bool:
     """Record a settled x402 payment in our database.
@@ -185,15 +226,15 @@ async def record_x402_payment(
             omitted, so every existing caller is unaffected.
 
     Returns:
-        True if recorded (or already recorded), False on error.
+        True for a new payment, False on replay. Storage failures raise so the
+        caller can record a refund obligation instead of treating them as replay.
     """
     try:
         from modules.x402._db import resolve_db
         db = await resolve_db(db)
 
         if not db:
-            logger.warning("Database not available for payment recording")
-            return False
+            raise RuntimeError("Database not available for payment recording")
 
         # Never drop revenue: a tx-less settlement still gets a row, flagged for
         # the reconciliation job, with a deterministic surrogate dedup key.
@@ -223,10 +264,22 @@ async def record_x402_payment(
         # path gains a non-EVM network (the 1dadf3ad landmine, second writer).
         from modules.x402.invoicing import normalize_recipient
 
+        if attempt_id is not None:
+            if attempt_id != payment_id or not transaction_hash:
+                raise ValueError("invalid settlement attempt completion")
+            cur = await db.execute(
+                "UPDATE x402_payment_requests SET status='completed', transaction_hash=?, "
+                "user_id=?, payment_id=?, metadata=json_patch(metadata, ?), "
+                "completed_at=datetime('now'), updated_at=datetime('now') "
+                "WHERE id=? AND status='settling' "
+                "AND json_extract(metadata, '$.facilitator_submitted')=1",
+                (transaction_hash, user_id, payment_id, metadata, attempt_id))
+            return cur.rowcount == 1
+
         # Bare ON CONFLICT DO NOTHING makes a replayed PK/nonce a no-op while a
         # NOT NULL violation still RAISES (so a future missing-column bug is loud,
         # not silently swallowed like N1).
-        await db.execute("""
+        cursor = await db.execute("""
             INSERT INTO x402_payment_requests (
                 id, user_id, payer_address, amount, amount_usd, asset, chain,
                 recipient, nonce, deadline, status, transaction_hash, payment_id,
@@ -252,16 +305,15 @@ async def record_x402_payment(
         ))
 
         logger.info(f"Recorded x402 payment: {payment_id} (${amount_usd}, {status})")
-        return True
+        return cursor.rowcount == 1
 
     except Exception as e:
-        # Money already moved; do not crash the request, but make the loss LOUD
-        # and reconcilable rather than silently returning False (N1 class).
+        # Money already moved. The middleware's failure path records refund-due.
         logger.error(
             f"x402.record_failed payment_id={payment_id} amount_usd={amount_usd} "
             f"tx={transaction_hash}: {e}"
         )
-        return False
+        raise RuntimeError("Payment recording failed") from e
 
 
 def get_x402_max_tokens_per_request() -> int:
@@ -314,7 +366,11 @@ def get_x402_price_usd() -> float:
     raw = os.environ.get("X402_PRICE_USD")
     if raw is not None:
         try:
-            return float(raw)
+            import math
+            explicit = float(raw)
+            if not math.isfinite(explicit) or explicit <= 0:
+                raise ValueError("price must be finite and positive")
+            return explicit
         except (TypeError, ValueError):
             logger.warning(f"Invalid X402_PRICE_USD={raw!r}; deriving price from model economics")
 
@@ -323,7 +379,8 @@ def get_x402_price_usd() -> float:
         markup = float(os.getenv("X402_PRICE_MARKUP", "2.0"))
         max_rate = _max_output_price_per_token()
         derived = budget * max_rate * markup
-        if derived > 0:
+        import math
+        if math.isfinite(derived) and derived > 0:
             return round(derived, 6)
         logger.warning("x402 price derivation yielded 0 (no model pricing); using $0.01 fallback")
     except Exception as e:
@@ -348,11 +405,13 @@ def should_refund_on_status(status_code: int) -> bool:
       had already settled — the x402 payment IS their credential, so this is
       the server's misconfiguration, not a client error.
 
-    Every other 4xx (400/404/422/429) is the caller's own malformed or
+    - a 429 means the server could not provide its already-paid capacity.
+
+    Other 4xx (400/404/422) describe the caller's own malformed or
     out-of-scope request and is not refundable here.
     """
     code = int(status_code)
-    return code >= 500 or code in REFUNDABLE_AUTH_STATUSES
+    return code >= 500 or code in REFUNDABLE_AUTH_STATUSES or code == 429
 
 
 #: Telemetry kind emitted when a settled payment is flagged for refund.

@@ -232,6 +232,7 @@ def test_a_new_surface_is_one_row_and_one_package(fake_surface, monkeypatch):
     assert "fakesurf" in delivery.router_targets()
 
     # owner fan-out: `message(target="owner")` reaches it at OWNER_FAKESURF_ID
+    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda *a, **k: "u1")
     monkeypatch.setenv("OWNER_FAKESURF_ID", "fake-owner-1")
     from tools.controller.message_send import build_owner_targets, resolve_message_defaults
     targets = build_owner_targets(None, "u1")
@@ -278,3 +279,22 @@ def test_the_row_agrees_with_its_surface_class(spec):
     surface = _surface_class(spec)(object())
     assert surface.surface_id == spec.id
     assert surface.capabilities.max_message_bytes == spec.max_message_chars, spec.id
+
+
+@pytest.mark.parametrize("sid", ["cli", "local", "repl"])
+def test_a_pack_row_may_not_take_a_local_owner_id(sid):
+    """CHAT-26: `cli`/`local`/`repl` carry the POLYROB_LOCAL owner bypass in
+    `core.surfaces.access`; a pack surface with that id would hand its remote
+    sender the local owner."""
+    row = catalog.SurfaceSpec(
+        id=sid, label="X", module="mypack.surf",
+        enabled_flag="X_SURFACE_ENABLED", owner_env=None,
+        owner_seat=False, forgeable=False, transport="ws", extra=None,
+        cron_target=False, region="global", max_message_chars=1000)
+    with pytest.raises(ValueError, match="reserved"):
+        catalog.validate_surface(row, pack_id="mypack", package="mypack")
+
+
+def test_reserved_ids_match_the_access_local_owner_set():
+    from core.surfaces import access
+    assert catalog.RESERVED_LOCAL_IDS == frozenset(access._LOCAL_OWNER_SURFACES)

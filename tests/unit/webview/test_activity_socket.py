@@ -59,7 +59,7 @@ async def test_own_ops_non_owner_denied(monkeypatch):
     monkeypatch.setattr(server, "_sio", fake)
     monkeypatch.setattr(server, "check_rate_limit", lambda ip: True)
     server._socket_user["sid-x"] = "not-the-owner"
-    server._socket_tier["sid-x"] = None
+    server._socket_role["sid-x"] = None
 
     await server.join_activity("sid-x", {})
 
@@ -76,7 +76,7 @@ async def test_own_ops_owner_allowed_joins_the_room(monkeypatch):
     monkeypatch.setattr(server, "_sio", fake)
     monkeypatch.setattr(server, "check_rate_limit", lambda ip: True)
     server._socket_user["sid-o"] = wg.local_owner_id()
-    server._socket_tier["sid-o"] = "admin"
+    server._socket_role["sid-o"] = "admin"
 
     await server.join_activity("sid-o", {})
 
@@ -99,6 +99,8 @@ async def test_local_open_and_flag_off_denied(monkeypatch):
     monkeypatch.setattr(server, "_sio", fake)
     monkeypatch.setattr(server, "check_rate_limit", lambda ip: True)
 
+    server._socket_user["sid-l"] = server.webgate.local_owner_id()
+    server._socket_role["sid-l"] = "owner"
     await server.join_activity("sid-l", {})
     assert ("sid-l", "activity") in fake.entered_rooms
 
@@ -121,6 +123,8 @@ async def test_disconnect_cleans_activity_membership(monkeypatch):
     monkeypatch.setattr(server, "_sio", fake)
     monkeypatch.setattr(server, "check_rate_limit", lambda ip: True)
 
+    server._socket_user["sid-d"] = server.webgate.local_owner_id()
+    server._socket_role["sid-d"] = "owner"
     await server.join_activity("sid-d", {})
     assert activity.get_hub().started is True
     await server.disconnect("sid-d")

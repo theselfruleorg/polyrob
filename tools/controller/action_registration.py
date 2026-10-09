@@ -83,17 +83,20 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 				# here so every return path is safe on branches that skip the mirror.
 				_attach_note = None
 				import time
-				
 				# Check if this is a sub-agent (skip side effects for isolation)
 				is_sub_agent = execution_context.is_sub_agent if execution_context else False
-				
+
 				if is_sub_agent:
 					# Sub-agent: Just log and return - output captured via normal result flow
 					self.logger.debug(f"💬 Sub-agent message (captured in result): {params.text[:100]}...")
-					return ActionResult(
-						extracted_content=f"Message: {params.text}",
-						include_in_memory=True
-					)
+					return ActionResult(extracted_content=f"Message: {params.text}", include_in_memory=True)
+				# 2026-10-06: never deliver the identical reply twice in one turn.
+				from core.surfaces.turn_reply import REPEAT_REPLY_NOTE, is_repeat_reply
+				if is_repeat_reply(getattr(self, 'orchestrator', None), params.text):
+					# Never order done() here: the repeat may be the synthetic timeout notice
+					# (llm_runner) sent twice mid-task, and "call done() now" then abandons
+					# the request the notice just promised to retry.
+					return ActionResult(extracted_content=REPEAT_REPLY_NOTE, include_in_memory=True)
 
 				self.logger.info(f"💬 Message to user: {params.text[:100]}...")
 
@@ -244,31 +247,13 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 					self.logger.debug(f"✅ Sub-agent done: {completion_msg[:100]}...")
 					return ActionResult(is_done=True, extracted_content=completion_msg)
 				
-				# Main agent: Full processing with todos check and feed updates
-				# Opportunistically check todos if TaskTool available
-				task_tool = self.get_tool('task')
-				if task_tool and hasattr(task_tool, '_get_or_create_todo_manager'):
-					try:
-						todo_mgr = task_tool._get_or_create_todo_manager(
-							self.session_id,
-							getattr(self, 'user_id', None)
-						)
-						if todo_mgr:
-							progress = todo_mgr.get_progress()
-							if progress['total'] > 0 and progress['percentage'] < 80:
-								warning_msg = (
-									f"⚠️ WARNING: Completing with only {progress['percentage']:.0f}% "
-									f"todos done ({progress['completed']}/{progress['total']}). "
-									f"Consider completing more todos for thorough task completion."
-								)
-								self.logger.warning(warning_msg)
-								return ActionResult(
-									is_done=True,
-									extracted_content=f"{params.text}\n\n{warning_msg}"
-								)
-					except Exception as e:
-						self.logger.debug(f"Could not check todo progress: {e}")
-						# Continue anyway - don't block completion
+				# Main agent: one bounded "continue" when the session's own todo list
+				# still has open items. (Until 2026-10-08 this called a TaskTool method
+				# that does not exist, so the check never ran; and its warning went into
+				# done's text, which nobody reads.)
+				_todo_nudge = self._open_todo_nudge(execution_context)
+				if _todo_nudge:
+					return ActionResult(extracted_content=_todo_nudge, include_in_memory=True)
 
 				# Add completion message to conversation history - find correct agent
 				if hasattr(self, 'orchestrator') and self.orchestrator:
@@ -563,6 +548,46 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 
 		# Register subtask action for sub-agent delegation
 		self._register_subtask_action()
+
+	def _open_todo_nudge(self, execution_context=None) -> Optional[str]:
+		"""The text that turns a ``done`` back once, or None to let it through.
+
+		Bounded: at most ONE nudge per session, so a todo the agent cannot or
+		should not finish never traps the run — the second ``done`` always ends
+		it. Fail-open: no task tool, no session, or an unreadable list is no
+		nudge (an advisory never blocks completion).
+		"""
+		# Last step: a turn-back would only end the run WITHOUT done (goal unfinished).
+		meta = getattr(execution_context, 'metadata', None)
+		if isinstance(meta, dict) and meta.get('last_step'):
+			return None
+		get_tool = getattr(self, 'get_tool', None)
+		task_tool = get_tool('task') if callable(get_tool) else None
+		if task_tool is None or not hasattr(task_tool, 'get_all_tasks'):
+			return None
+		try:
+			sid = task_tool._get_session_id(execution_context)
+			uid = task_tool._get_user_id(execution_context)
+			nudged = getattr(self, '_todo_nudged_sessions', None)
+			if nudged is None:
+				nudged = self._todo_nudged_sessions = set()
+			if sid in nudged:
+				return None
+			open_items = [t for t in task_tool.get_all_tasks(sid, uid) if not t.get('completed')]
+		except Exception as e:
+			self.logger.debug(f"Could not check todo progress: {e}")
+			return None
+		if not open_items:
+			return None
+		nudged.add(sid)
+		shown = "\n".join(f"- [{t.get('id')}] {t.get('text')}" for t in open_items[:8])
+		more = f"\n- … and {len(open_items) - 8} more" if len(open_items) > 8 else ""
+		return (
+			f"Not done yet: {len(open_items)} todo(s) are still open.\n{shown}{more}\n"
+			"Finish them, or mark each one finished or no longer needed with "
+			"task_todo_complete, then call done again. The next done ends the task "
+			"whatever the list says."
+		)
 
 	def _register_session_search_action(self):
 		"""Register `session_search` when a cross-session memory backend is active.
@@ -1032,39 +1057,8 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 				from agents.task.agent.skill_manager import get_skill_manager
 				sm = get_skill_manager()
 				if params.action == "promote":
-					# Owner-gated (T3-02): promoting a pending draft into ACTIVE content
-					# is the entire security boundary of the writable-skills quarantine —
-					# an active skill auto-activates in future sessions. A forged turn is
-					# blocked, AND (mirroring self_context_manage promote, permissions
-					# audit F4) a non-owner genuine turn is blocked too: otherwise the
-					# agent could `create` (-> .pending under REQUIRE_REVIEW) then
-					# `promote` in the SAME turn, activating a body the owner never saw —
-					# e.g. an injected "author skill X and promote it" from fetched content.
-					# is_owner_local_safe is the surface-independent owner check (a
-					# forgeable network sender's uid is never the local tenant).
-					owner_ok = False
-					try:
-						from core.config_policy import local_mode_enabled
-						from core.instance import is_owner_local_safe, resolve_owner_principal
-						owner_ok = is_owner_local_safe(
-							user_id, owner_principal=resolve_owner_principal(),
-							local_enabled=local_mode_enabled())
-					except Exception:
-						owner_ok = False
-					if is_forged or not owner_ok:
-						return ActionResult(
-							error="promote is owner-only; your pending draft awaits operator review.",
-							include_in_memory=True)
-					res = sm.promote_pending_skill(params.skill_id, user_id=user_id,
-					                               description=params.description,
-					                               expected_revision=params.expected_revision)
-					if not res.ok:
-						return ActionResult(error=f"promote failed: {'; '.join(res.errors)}",
-						                    include_in_memory=True)
-					forget_activated_skill(self, params.skill_id)  # body changed — allow a reload
-					_self_mod_ev("promote", pending=False, created_by="owner")
 					return ActionResult(
-						extracted_content=f"Skill `{params.skill_id}` promoted (active next session).",
+						error="Promotion requires the owner to review the draft through /pending; a model tool call cannot approve it.",
 						include_in_memory=True)
 				if params.action == "create":
 					if not params.content:
@@ -1132,13 +1126,13 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 			return
 
 		from core.surfaces.catalog import surface_ids
-		from tools.controller.message_send import perform_message_send
+		from tools.controller.message_send import perform_message_action
 		from tools.controller.views import MessageTargetAction
 
 		@self.registry.action(
 			'Send a message — and any FILES you made — to a chat/recipient on a surface '
 			f'({"/".join(surface_ids())}). Attach with media_paths, '
-			'one call per file; a path in text is NOT a delivery. Owner/allowlisted only.',
+			'one call per file; a path in text is NOT a delivery. Owner/allowlisted only. action=posts/delete: name/delete my own posts.',
 			param_model=MessageTargetAction,
 		)
 		async def message(params: MessageTargetAction, execution_context=None) -> ActionResult:
@@ -1166,11 +1160,11 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 			if cooldown_refusal is not None:
 				return cooldown_refusal
 
-			res = await perform_message_send(
+			res = await perform_message_action(
 				router=router, allowlist=allowlist, owner_targets=owner_targets,
 				user_id=user_id, surface=surface, target=target,
 				text=params.text, action=params.action, reply_to=params.reply_to,
-				message_id=params.message_id, media_paths=params.media_paths,
+				message_id=params.message_id, media_paths=params.media_paths, post=params.post, last=params.last,
 				session_id=session_id, container=container, execution_context=execution_context, controller=self)
 			return _message_action_result(res, surface, target, params.text)
 
@@ -1845,9 +1839,13 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 						is_parent_sub_agent=caller_is_sub,
 					)
 					if result.success:
+						_head = ("## Delegated goal STOPPED before it finished ⚠️ (the child hit its "
+							"step limit without calling done — the result is partial; check it "
+							"before you rely on it)" if getattr(result, 'finished', None) is False
+							else "## Delegated goal completed ✅")
 						return ActionResult(
 							extracted_content=(
-								f"## Delegated goal completed ✅\n\n**Goal:** {goal}\n\n"
+								f"{_head}\n\n**Goal:** {goal}\n\n"
 								f"**Result:**\n{result.output}"
 							),
 							include_in_memory=True,
@@ -1877,11 +1875,13 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 					parent_agent_id=parent_agent_id,
 				)
 				output = mgr.format_results_for_prompt(results)
-				successful = sum(1 for r in results if r.success)
+				successful = sum(1 for r in results if r.success and getattr(r, 'finished', None) is not False)
+				stopped = sum(1 for r in results if r.success and getattr(r, 'finished', None) is False)
+				_stopped = f", {stopped} stopped before finishing" if stopped else ""
 				return ActionResult(
 					extracted_content=(
 						f"## Delegated tasks complete\n\n"
-						f"**Results:** {successful}/{len(results)} succeeded\n\n{output}"
+						f"**Results:** {successful}/{len(results)} succeeded{_stopped}\n\n{output}"
 					),
 					include_in_memory=True,
 				)

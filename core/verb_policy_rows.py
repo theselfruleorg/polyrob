@@ -26,6 +26,7 @@ CORE_VERB_ROWS = {
         # owner.md: the richest PII target in the process plus a write path; its own forged-turn
         # guard keys on is_sub_agent/leaf/turn_kind, none of which correspondent injection sets.
         "owner_doc_manage": dict(effect="self", correspondent_blocked=True, room_denied=True),
+        "agent_avatar": dict(effect="self", correspondent_blocked=True, room_denied=True),
         "preferences": dict(effect="self", correspondent_blocked=True, room_denied=True),
         "mcp_install": dict(
             effect="self", approval=("recommended", "always_queued"), correspondent_blocked=True,
@@ -78,6 +79,9 @@ CORE_VERB_ROWS = {
         # The group ledger holds the owner's own room lines: the disclosure class of
         # contact_history.
         "room_read": dict(effect="none", correspondent_blocked=True),
+        # Mute/ban/delete a member: an act on an identified third party. Never from a room turn
+        # (a member line must not steer a ban) nor a tainted session.
+        "room_moderate": dict(effect="comms", correspondent_blocked=True, room_denied=True),
         "worker_manage": dict(correspondent_blocked=True),
     },
     "app_service": {
@@ -154,9 +158,11 @@ CORE_VERB_ROWS = {
         "defi_data_portfolio": dict(correspondent_blocked=True, room_denied=True),
         # 2026-09-15: the collectibles twin of the holdings read; a collection name is often
         # more identifying than a balance. defi_data_lp_positions: the same reconnaissance.
-        "defi_data_nft_holdings": dict(correspondent_blocked=True),
-        "defi_data_lp_positions": dict(correspondent_blocked=True),
-        "defi_data_reconcile": dict(room_denied=True),
+        "defi_data_nft_holdings": dict(correspondent_blocked=True, room_denied=True),
+        "defi_data_lp_positions": dict(correspondent_blocked=True, room_denied=True),
+        "defi_data_reconcile": dict(correspondent_blocked=True, room_denied=True),
+        "defi_data_wallet_holdings": dict(correspondent_blocked=True, room_denied=True),
+        "defi_data_wallet_activity": dict(correspondent_blocked=True, room_denied=True),
         # 071 W3: the rail book — sizes, cost basis and P&L of the OPERATOR's own positions.
         "defi_data_positions": dict(correspondent_blocked=True, room_denied=True),
     },
@@ -179,14 +185,14 @@ CORE_VERB_ROWS = {
         # to the lamport/raw unit, the outflow (incl. recipient-account rent) held to
         # max_spend_usd, PolicyGate, and the autonomous ceiling.
         "defi_trade_solana_transfer": dict(
-            effect="money", lane="defi", side="spend", simulatable=True, approval_owner="hook",
+            effect="money", lane="owner_always", side="spend", simulatable=True, approval_owner="hook",
             correspondent_blocked=True,
         ),
         # 023 T3/T4: every defi_trade verb is SPEND-side on the hook: irreversible and self-
         # custodial, never act-and-report in any mode. Loosening to the tiered lane is the
         # explicit owner flag DEFI_TIERED_SPEND_LANE, not a default.
         "defi_trade_transfer": dict(
-            effect="money", lane="defi", side="spend", simulatable=True, approval_owner="hook",
+            effect="money", lane="owner_always", side="spend", simulatable=True, approval_owner="hook",
             correspondent_blocked=True,
         ),
         "defi_trade_approve_token": dict(
@@ -308,7 +314,7 @@ CORE_VERB_ROWS = {
             correspondent_blocked=True,
         ),
         "agent_nft_bind_identity": dict(
-            effect="money", lane="defi", side="spend", simulatable=True, approval_owner="hook",
+            effect="money", lane="owner_always", side="spend", simulatable=True, approval_owner="hook",
             correspondent_blocked=True,
         ),
         # 050: fee-only writes. A journal anchor and a bind cost only the fee (held to
@@ -330,8 +336,26 @@ CORE_VERB_ROWS = {
         ),
     },
     "email": {
-        # room_denied: outbound to anywhere but this room.
+        # room_denied on every verb: outbound to anywhere but this room, or the
+        # owner's mailbox (its contents and its organisation).
         "email_send": dict(effect="comms", room_denied=True),
+        # The agent's own inbox (activation links / codes): a read, but of the agent's
+        # private mailbox, so the agent_status disclosure class.
+        "email_read_machine_mail": dict(effect="none", correspondent_blocked=True,
+                                        room_denied=True),
+        "email_reply": dict(effect="comms", room_denied=True),
+        "email_forward": dict(effect="comms", room_denied=True),
+        # Reads of the agent's own mailbox (read-only select, BODY.PEEK) and a
+        # save into the session workspace: no external write.
+        "email_list": dict(effect="none", correspondent_blocked=True, room_denied=True),
+        "email_read": dict(effect="none", correspondent_blocked=True, room_denied=True),
+        "email_folders": dict(effect="none", correspondent_blocked=True, room_denied=True),
+        "email_save_attachment": dict(effect="none", correspondent_blocked=True, room_denied=True),
+        # Mailbox organisation is classed comms on purpose: an owner pause on
+        # comms also holds changes to the mailbox.
+        "email_mark": dict(effect="comms", room_denied=True, correspondent_blocked=True),
+        "email_move": dict(effect="comms", room_denied=True, correspondent_blocked=True),
+        "email_delete": dict(effect="comms", room_denied=True, correspondent_blocked=True),
     },
     "git": {
         # Local repository work is not public; only a push reaches a public address.
@@ -435,7 +459,13 @@ CORE_VERB_ROWS = {
         "process_list": dict(effect="none", correspondent_blocked=True),
         "process_log": dict(effect="none", correspondent_blocked=True),
         "process_poll": dict(effect="none", correspondent_blocked=True),
+        "process_wait": dict(effect="none", correspondent_blocked=True),
         "process_kill": dict(effect="code", correspondent_blocked=True),
+        # 073 W4: stdin to a running job (FIFO / PTY). A write can drive any program
+        # the job runs, so it carries the same weight as the shell itself.
+        "process_write": dict(effect="code", correspondent_blocked=True),
+        "process_submit": dict(effect="code", correspondent_blocked=True),
+        "process_close": dict(effect="code", correspondent_blocked=True),
     },
     "publish": {
         "publish_list": dict(effect="none"),
@@ -460,7 +490,12 @@ CORE_VERB_ROWS = {
         ),
     },
     "shell": {
-        "shell_run": dict(effect="code", approval=("posture2",), correspondent_blocked=True),
+        # 073 W2: `always_queued` — under AUTONOMY_MODE=autonomous a dangerous command
+        # waits for the OWNER (owner_queue), never act-and-report. A safe command skips
+        # the wait in every mode (tools/controller/command_guard_hook.py exemption).
+        "shell_run": dict(
+            effect="code", approval=("posture2", "always_queued"), correspondent_blocked=True,
+        ),
     },
     "x402_invoice": {
         # P1-4: the request verb mints a payment request (the canonical forged-email target);

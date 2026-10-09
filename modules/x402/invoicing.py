@@ -25,7 +25,6 @@ telemetry event (``payment_requested`` / ``payment_settled`` / ``payment_expired
 import asyncio
 import json
 import logging
-import os
 import sqlite3
 import time
 import uuid
@@ -62,17 +61,17 @@ def _norm_tx(tx_hash) -> Optional[str]:
 
 
 def invoice_max_usd() -> float:
-    try:
-        return float(os.getenv("X402_INVOICE_MAX_USD", "50"))
-    except ValueError:
-        return 50.0
+    """X402_INVOICE_MAX_USD, the ONE resolver; NaN/inf/negative -> default 50."""
+    from core.env import float_env
+    val = float_env("X402_INVOICE_MAX_USD", 50.0)
+    return val if val >= 0 else 50.0
 
 
 def invoice_daily_max() -> int:
-    try:
-        return int(os.getenv("X402_INVOICE_DAILY_MAX", "10"))
-    except ValueError:
-        return 10
+    """X402_INVOICE_DAILY_MAX, the ONE resolver; bad/negative -> default 10."""
+    from core.env import int_env
+    val = int_env("X402_INVOICE_DAILY_MAX", 10)
+    return val if val >= 0 else 10
 
 
 def x402_invoicing_enabled() -> bool:
@@ -350,6 +349,17 @@ async def create_payment_request(
     # BEFORE the daily-cap query so an unknown asset is refused without ever
     # touching the store.
     asset = resolve_invoice_asset(chain, asset_id)
+    # DEFI-16: a test-network invoice is paid in faucet tokens. It is minted
+    # only when the operator configured the x402 rail itself on a test network
+    # (X402_DEFAULT_CHAIN); a caller-chosen chain or a devnet Solana wallet
+    # never turns a production deployment's invoice into one.
+    from modules.x402.income_chains import is_income_chain
+    testnet = not is_income_chain(chain, asset.asset_id)
+    if testnet and is_income_chain(cfg.get("network") or "base"):
+        raise ValueError(
+            f"cannot invoice on the test network {chain} ({asset.asset_id}): "
+            "test-network payments are not income. Invoice on a production "
+            "chain, or set X402_DEFAULT_CHAIN to a test network for a dev run")
     raw = _size_invoice_raw(amount_usd, asset, amount_raw, quoter)
     # The jitter below moves the dollars AFTER this one sizing decision, so
     # every later raw figure scales it — never re-quotes. See `invoice_sizing`.
@@ -433,6 +443,7 @@ async def create_payment_request(
             "wake_delivered": False,
             "correspondent_ref": _sanitize_correspondent_ref(correspondent_ref),
             "subscription_id": subscription_id,
+            "testnet": testnet,
         }
         if extra_metadata:
             metadata_dict.update(extra_metadata)
@@ -644,6 +655,7 @@ async def list_payment_requests(
             "payer_contact": meta.get("payer_contact") or meta.get("payer_hint"),
             "session_id": meta.get("session_id"),
             "chain": row.get("chain"),
+            "asset_id": row.get("asset_id"),
             "created_at": row.get("created_at"),
             "completed_at": row.get("completed_at"),
             "deadline": row.get("deadline"),
@@ -771,8 +783,8 @@ async def claim_for_settlement(request_id: str, *, db=None) -> bool:
 
     The payable endpoint claims BEFORE calling the facilitator so two concurrent
     distinct payers can never both settle the same invoice on-chain: the loser's
-    claim fails (rowcount 0) and it never touches the facilitator. On a facilitator
-    failure the winner reverts via :func:`revert_settlement_claim`."""
+    claim fails (rowcount 0) and it never touches the facilitator. Only a failure
+    BEFORE submission may revert via :func:`revert_settlement_claim`."""
     database = await _resolve_db(db)
     if database is None:
         return False
@@ -785,7 +797,7 @@ async def claim_for_settlement(request_id: str, *, db=None) -> bool:
 
 
 async def revert_settlement_claim(request_id: str, *, db=None) -> None:
-    """Revert settling→pending after a facilitator/verify failure (payable again).
+    """Revert an unsubmitted claim after a local/verification failure.
 
     Only a row THIS caller left in 'settling' is reverted (guarded on status), so a
     concurrently-completed row is never resurrected."""
@@ -794,68 +806,22 @@ async def revert_settlement_claim(request_id: str, *, db=None) -> None:
         return
     await database.execute(
         "UPDATE x402_payment_requests SET status = 'pending', updated_at = datetime('now') "
-        "WHERE id = ? AND status = 'settling'",
+        "WHERE id = ? AND status = 'settling' "
+        "AND COALESCE(json_extract(metadata, '$.facilitator_submitted'), 0)=0",
         (request_id,),
     )
 
 
 async def revert_stale_settling(*, max_age_seconds: int = 600, db=None,
                                 ) -> List[Dict[str, Any]]:
-    """H7 stale-``settling`` reaper: heal invoices STRANDED in ``settling``.
+    """Never infer non-settlement from age, including for legacy unmarked claims.
 
-    A ``claim_for_settlement`` flips ``pending -> settling`` BEFORE the
-    facilitator round-trip; ``settle_payment_request`` then flips
-    ``settling -> completed``. If the settling task is cancelled/crashes in
-    between (client disconnect cancels the request task; a process crash), the
-    row is stranded in ``settling`` forever — ``expire_stale_requests`` only
-    ever touches ``pending`` rows, and nothing else re-checks ``settling``.
-
-    A genuine settle completes well within the 300s facilitator timeout, so a
-    row still ``settling`` past ``max_age_seconds`` (default 600s = 10min) is
-    stranded. Revert it to ``pending`` (payable + expirable again) UNLESS it
-    already carries a ``transaction_hash`` that ALREADY settled some invoice
-    (defensive — a ``settling`` row should never carry one, but never resurrect
-    a genuine settle). Returns the reverted invoice dicts so the caller can emit
-    an owner notice. The tx-hash uniqueness guard in ``settle_payment_request``
-    means a reverted-then-re-paid invoice can never double-settle on-chain."""
-    database = await _resolve_db(db)
-    if database is None:
-        return []
-    rows = await database.fetch_all(
-        """SELECT * FROM x402_payment_requests
-           WHERE status = 'settling'
-             AND updated_at < datetime('now', ?)
-             AND json_extract(metadata, '$.kind') IN (SELECT value FROM json_each(?))""",
-        (f'-{int(max(1, max_age_seconds))} seconds', json.dumps(list(PAYABLE_KINDS))),  # CR-M17
-    )
-    reverted = []
-    for row in rows or []:
-        tx = _norm_tx(row.get("transaction_hash"))
-        if tx and await transaction_hash_already_settled(tx, db=database):
-            # Genuinely settled elsewhere (should be 'completed', not 'settling')
-            # — never resurrect it back to pending.
-            continue
-        cur = await database.execute(
-            "UPDATE x402_payment_requests SET status='pending', updated_at=datetime('now') "
-            "WHERE id = ? AND status = 'settling'",
-            (row["id"],),
-        )
-        if not getattr(cur, "rowcount", 0):
-            continue  # lost a race to a concurrent settle — leave it
-        meta = _row_metadata(row)
-        reverted.append({
-            "request_id": row["id"],
-            "amount_usd": row.get("amount_usd"),
-            "session_id": meta.get("session_id") or "",
-            "user_id": meta.get("tenant_id") or row.get("user_id") or "",
-            "purpose": meta.get("purpose") or "",
-        })
-    if reverted:
-        logger.warning(
-            "x402 invoicing: reverted %d invoice(s) stranded in 'settling' past "
-            "%ds back to 'pending' (H7 stale-settling reaper): %s",
-            len(reverted), max_age_seconds, [r["request_id"] for r in reverted])
-    return reverted
+    A facilitator can broadcast before losing its response. Reopening an old
+    claim could charge a second payer. The owner must reconcile the chain and
+    use settle_payment_request for a proven payment; time alone proves nothing.
+    Kept as a compatibility seam for the watcher and older callers.
+    """
+    return []
 
 
 async def transaction_hash_already_settled(transaction_hash: str, *, db=None) -> bool:
@@ -1012,6 +978,8 @@ async def settled_unnotified_invoices(*, db=None) -> List[Dict[str, Any]]:
             "request_id": row["id"],
             "amount_usd": row.get("amount_usd"),
             "transaction_hash": row.get("transaction_hash"),
+            "chain": row.get("chain"),
+            "asset_id": row.get("asset_id"),
             "session_id": meta.get("session_id") or "",
             "user_id": meta.get("tenant_id") or row.get("user_id") or "",
             "purpose": meta.get("purpose") or "",

@@ -273,7 +273,8 @@ async def test_a_cold_room_start_never_stores_the_context_block(monkeypatch, tmp
     request = ta.created[0]["request"]
     assert "<group-context" not in request, request
     assert "anyone tried the bridge?" not in request
-    assert "<addressed>" in request and "which chains?" in request
+    assert request.startswith('<untrusted_tool_result source="group-member">')
+    assert "which chains?" in request and "<addressed>" not in request
     # ... and the block WAS shown — as an ephemeral, after the session exists.
     assert len(ta.pushed_context) == 1
     sid, ctx = ta.pushed_context[0]

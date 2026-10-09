@@ -1,3 +1,4 @@
+from core.security.session_tokens import SESSION_AUDIENCE
 import importlib
 import pytest
 from argon2 import PasswordHasher
@@ -110,7 +111,7 @@ def test_issue_owner_session_cookie_contract_shape(owner_auth, monkeypatch):
     resp = Response()
     token = owner_auth.issue_owner_session_cookie(resp)
 
-    decoded = pyjwt.decode(token, "test-secret", algorithms=["HS256"])
+    decoded = pyjwt.decode(token, "test-secret", algorithms=["HS256"], audience=SESSION_AUDIENCE)
     assert decoded["role"] == "owner"
     assert decoded["tier"] == "admin"
     assert decoded.get("payment_method") is None
@@ -119,7 +120,7 @@ def test_issue_owner_session_cookie_contract_shape(owner_auth, monkeypatch):
     set_cookie_header = resp.headers.get("set-cookie", "")
     assert "auth_token=" in set_cookie_header
     assert "httponly" in set_cookie_header.lower()
-    assert "samesite=lax" in set_cookie_header.lower()
+    assert "samesite=strict" in set_cookie_header.lower()
 
 
 def test_issue_owner_session_cookie_raises_without_jwt_secret(owner_auth, monkeypatch):

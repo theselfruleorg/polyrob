@@ -18,7 +18,10 @@ capital between canonical assets is unchanged, and an agent-authored target can
 never widen what a verb allows — an agent-authored job may declare one too.
 
 W0: an OWNER-authored target is also TRUST for that run. The owner wrote the
-address into the job (``authored_by`` is not ``agent``), so the identity gate
+address into the job: an owner SEAT (``/cron add … target=``, the CLI, the
+console), or an owner-authored chat turn whose owner message names the address
+VERBATIM (DEFI-5; otherwise ``target_authored_by: agent`` keeps it
+restrict-only). So the identity gate
 treats that contract as verified for this run only (``owner_target_matches``).
 The runner stamps ``authored_by: owner`` onto the run's target; the model never
 writes the run metadata, so it cannot forge the stamp.
@@ -33,6 +36,11 @@ METADATA_KEY = "money_target"
 #: declared it is owner-authored.
 AUTHOR_KEY = "authored_by"
 OWNER = "owner"
+AGENT = "agent"
+#: Stored on a goal/cron PAYLOAD: ``agent`` when the row is owner-authored but
+#: the owner did not type its target address (DEFI-5) — the target restricts
+#: and is never identity trust.
+TARGET_AUTHOR_KEY = "target_authored_by"
 
 
 def normalize_target(raw: Any) -> Optional[Dict[str, str]]:
@@ -56,16 +64,41 @@ def normalize_target(raw: Any) -> Optional[Dict[str, str]]:
 def with_authorship(target: Optional[Dict[str, str]],
                     payload: Any) -> Optional[Dict[str, str]]:
     """The run's target, stamped ``authored_by: owner`` when the job/goal that
-    declared it is NOT agent-authored (``core.config_policy.rigs``). A target
-    only reaches an unstamped legacy row through an owner turn (``cronjob_edit``
-    on an owner job requires one), so "not the agent's" is the owner's."""
+    declared it is OWNER-authored (``core.config_policy.rigs.is_owner_authored``,
+    a positive stamp — an unstamped legacy row is not trusted)."""
     if not target:
         return target
-    from core.config_policy.rigs import is_agent_authored
+    from core.config_policy.rigs import is_owner_authored
     out = {"chain": target["chain"], "address": target["address"]}
-    if not is_agent_authored(payload if isinstance(payload, dict) else {}):
+    p = payload if isinstance(payload, dict) else {}
+    if is_owner_authored(p) and p.get(TARGET_AUTHOR_KEY) != AGENT:
         out[AUTHOR_KEY] = OWNER
     return out
+
+
+def address_in_owner_text(execution_context, address: Optional[str]) -> bool:
+    """DEFI-5: True when *address* stands VERBATIM in the owner's own message
+    for this turn (``metadata["owner_text"]``, set at the drain). An EVM address
+    matches without case (checksum case is cosmetic); any other chain's address
+    is case-sensitive (base58)."""
+    meta = getattr(execution_context, "metadata", None)
+    text = meta.get("owner_text") if isinstance(meta, dict) else None
+    addr = str(address or "").strip()
+    if not addr or not isinstance(text, str):
+        return False
+    if addr.lower().startswith("0x"):
+        return addr.lower() in text.lower()
+    return addr in text
+
+
+def target_provenance(execution_context, target: Optional[Dict[str, str]],
+                      owner_authored: bool) -> Optional[str]:
+    """The ``TARGET_AUTHOR_KEY`` stamp for a target an owner-authored row
+    declares, or None. A target the owner did not TYPE in this turn is the
+    model's choice — restrict-only (``AGENT``) even on an owner-authored row."""
+    if not target or not owner_authored:
+        return None
+    return None if address_in_owner_text(execution_context, target.get("address")) else AGENT
 
 
 def owner_target_matches(execution_context, *, chain: str,

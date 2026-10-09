@@ -89,7 +89,7 @@ def _bridge(*, armed=ORIGIN, taint_probe=None, lane="autonomous", approver=None)
     return B.WalletBridge(
         envelope=env, wallet=_Wallet(), execution_context=None,
         rail_factory=_Rail, guard_fn=_guard, price_fn=lambda c, a: 1.0,
-        rpc_fn=lambda chain, method, params: "0x1", approver=approver,
+        rpc_fn=lambda chain, method, params: "0x6000" if method == "eth_getCode" else "0x1", approver=approver,
         armed_origin=armed, taint_probe=taint_probe)
 
 

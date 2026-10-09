@@ -24,5 +24,5 @@ def test_count_running_excludes_completed(tmp_path):
     g1 = board.create(user_id="u", title="a", body="a")
     board.claim(g1.id, "w1", ttl_seconds=900)
     assert board.count_running() == 1
-    board.record_success(g1.id, session_id="s1", result="ok")
+    board.record_success(g1.id, session_id="s1", result="ok", claim_token=board.get(g1.id).claim_token)
     assert board.count_running() == 0

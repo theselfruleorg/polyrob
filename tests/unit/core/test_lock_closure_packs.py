@@ -100,4 +100,5 @@ def test_deps_maps_a_pack_to_its_extra():
 
 def test_the_real_tree_maps_each_first_party_pack_to_its_sdk_extra():
     assert {p.id: p.extra for p in lc.first_party_packs(ROOT)} == {
-        "discovery": "anysite", "markets": "crypto", "x": "twitter"}
+        "daytona": "daytona", "discovery": "anysite", "markets": "crypto", "modal": "modal",
+        "singularity": "", "vercel_sandbox": "vercel-sandbox", "x": "twitter"}

@@ -112,15 +112,43 @@ def test_import_refuses_symlink_member(env, tmp_path):
         import_profile(evil, name="x")
 
 
-def test_export_materializes_symlinks(env, tmp_path):
+def test_export_excludes_symlinks(env, tmp_path):
     p = _seed_profile(env)
     secret_src = tmp_path / "outside.txt"
     secret_src.write_text("outside content")
     (p / "data" / "linked.txt").symlink_to(secret_src)
     out = tmp_path / "rob.tar.gz"
     export_profile("rob", out)
-    with tarfile.open(out, "r:gz") as tar:
-        member = tar.getmember("rob/data/linked.txt")
-        assert member.isfile() and not member.issym()  # materialized copy
-        assert tar.extractfile(member).read() == b"outside content"
+    assert "rob/data/linked.txt" not in _member_names(out)
     assert (p / "data" / "linked.txt").is_symlink()  # live profile untouched
+
+
+def test_export_refuses_hardlinks(env, tmp_path):
+    import os
+    import shutil
+    p = _seed_profile(env)
+    outside = tmp_path / "outside"
+    outside.write_text("private data")
+    os.link(outside, p / "data" / "linked.txt")
+    archive = tmp_path / "export.tar.gz"
+    with pytest.raises(shutil.Error, match="single-link"):
+        export_profile("rob", archive)
+    assert not archive.exists()
+
+
+def test_export_is_private_and_cannot_replace_an_existing_target(env, tmp_path):
+    import stat
+    _seed_profile(env)
+    archive = tmp_path / 'private.tar.gz'
+    export_profile('rob', archive)
+    assert stat.S_IMODE(archive.stat().st_mode) == 0o600
+    prior = archive.read_bytes()
+    with pytest.raises(FileExistsError):
+        export_profile('rob', archive)
+    assert archive.read_bytes() == prior
+    link = tmp_path / 'linked.tar.gz'
+    link.symlink_to(archive)
+    with pytest.raises(FileExistsError):
+        export_profile('rob', link)
+    assert archive.read_bytes() == prior
+    assert not list(tmp_path.glob('.export-*.tmp'))

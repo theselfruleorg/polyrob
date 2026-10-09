@@ -26,8 +26,11 @@ class _FakeExchange:
         self.calls = []
 
     def order(self, **kwargs):
+        return self.post("/exchange", kwargs)
+
+    def post(self, url, kwargs):
         self.calls.append(kwargs)
-        return {"status": "ok"}
+        return {"status": "ok", "response": {"data": {"statuses": [{"resting": {"oid": 1}}]}}}
 
 
 def _tool(monkeypatch, *, exposure_cap, current_ntl=0.0, state_ok=True):
@@ -40,11 +43,15 @@ def _tool(monkeypatch, *, exposure_cap, current_ntl=0.0, state_ok=True):
             max_total_exposure_usd=exposure_cap,
         ),
     )
+    from ._risk_fixtures import hyperliquid
+    hyperliquid(tool, creds, monkeypatch)
     monkeypatch.setattr(tool, "ensure_initialized", lambda: _async(None))
     monkeypatch.setattr(tool, "rate_limit", lambda *a, **k: _async(None))
     monkeypatch.setattr(tool, "_get_user_credentials", lambda: _async(creds))
     monkeypatch.setattr(tool, "_check_trading_limits", lambda *a, **k: _async((True, "OK")))
-    state = {"success": state_ok, "total_ntl_pos": current_ntl}
+    monkeypatch.setattr(tool, "get_current_price", lambda *a, **k: _async({"success": True, "mid_price": 100.0}))
+    state = {"success": state_ok, "total_ntl_pos": current_ntl,
+             "positions": [{"coin": "ETH", "position_value": current_ntl, "unrealized_pnl": 0}]}
     monkeypatch.setattr(tool, "get_account_state", lambda *a, **k: _async(state))
     ex = _FakeExchange()
     monkeypatch.setattr(tool, "_get_exchange_client", lambda: _async((ex, None)))
@@ -57,7 +64,7 @@ def _tool(monkeypatch, *, exposure_cap, current_ntl=0.0, state_ok=True):
 async def test_open_blocked_when_exposure_exceeds_cap(monkeypatch):
     tool, ex = _tool(monkeypatch, exposure_cap=1000.0, current_ntl=950.0)
     res = await tool.place_limit_order(
-        PlaceLimitOrderParams(coin="ETH", is_buy=True, size=1.0, price=100.0)
+        PlaceLimitOrderParams(max_usd=1000, coin="ETH", is_buy=True, size=1.0, price=100.0)
     )  # +100 -> 1050 > 1000
     assert res["success"] is False
     assert "exposure" in res["error"].lower()
@@ -68,7 +75,7 @@ async def test_open_blocked_when_exposure_exceeds_cap(monkeypatch):
 async def test_reduce_only_exempt_from_exposure_cap(monkeypatch):
     tool, ex = _tool(monkeypatch, exposure_cap=1000.0, current_ntl=5000.0)
     res = await tool.place_limit_order(
-        PlaceLimitOrderParams(coin="ETH", is_buy=False, size=1.0, price=100.0, reduce_only=True)
+        PlaceLimitOrderParams(max_usd=1000, coin="ETH", is_buy=False, size=1.0, price=100.0, reduce_only=True)
     )
     assert res["success"] is True  # de-risking always allowed
     assert len(ex.calls) == 1
@@ -78,7 +85,7 @@ async def test_reduce_only_exempt_from_exposure_cap(monkeypatch):
 async def test_open_fails_closed_when_state_unavailable(monkeypatch):
     tool, ex = _tool(monkeypatch, exposure_cap=1000.0, state_ok=False)
     res = await tool.place_limit_order(
-        PlaceLimitOrderParams(coin="ETH", is_buy=True, size=0.01, price=100.0)
+        PlaceLimitOrderParams(max_usd=1000, coin="ETH", is_buy=True, size=0.01, price=100.0)
     )
     assert res["success"] is False
     assert ex.calls == []
@@ -88,7 +95,7 @@ async def test_open_fails_closed_when_state_unavailable(monkeypatch):
 async def test_open_allowed_within_exposure_cap(monkeypatch):
     tool, ex = _tool(monkeypatch, exposure_cap=10_000.0, current_ntl=100.0)
     res = await tool.place_limit_order(
-        PlaceLimitOrderParams(coin="ETH", is_buy=True, size=0.1, price=100.0)
+        PlaceLimitOrderParams(max_usd=1000, coin="ETH", is_buy=True, size=0.1, price=100.0)
     )
     assert res["success"] is True
     assert len(ex.calls) == 1

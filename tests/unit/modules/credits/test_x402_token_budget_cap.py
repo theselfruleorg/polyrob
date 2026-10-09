@@ -48,22 +48,22 @@ def test_budget_accumulates_across_calls(monkeypatch):
         t._enforce_x402_budget("u", "s1", 500)      # 1100 > 1000
 
 
-# ── _get_user_tier caching ───────────────────────────────────────────────────
+# ── _get_user_tier refresh ───────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_tier_is_cached_after_first_lookup():
+async def test_tier_demotion_takes_effect_on_next_lookup():
     t = _tracker()
     calls = {"n": 0}
 
     class _DB:
         async def fetch_one(self, *a, **k):
             calls["n"] += 1
-            return {"tier": "x402"}
+            return {"tier": "admin" if calls["n"] == 1 else "free"}
 
     t.db = _DB()
-    assert await t._get_user_tier("u") == "x402"
-    assert await t._get_user_tier("u") == "x402"
-    assert calls["n"] == 1  # second call served from cache
+    assert await t._get_user_tier("u") == "admin"
+    assert await t._get_user_tier("u") == "free"
+    assert calls["n"] == 2
 
 
 # ── integration through record_llm_usage ─────────────────────────────────────

@@ -20,6 +20,24 @@ def test_high_impact_set_covers_the_dangerous_tools():
         assert is_high_impact(name), name
 
 
+def test_install_enforces_existing_taint_when_admission_is_disabled(monkeypatch):
+    from types import SimpleNamespace
+    from agents.task.agent.core.correspondent_gate import install_correspondent_gate
+    from core.surfaces.config import SurfaceConfig
+    monkeypatch.setattr(SurfaceConfig, "correspondent_access_enabled", staticmethod(lambda: False))
+    registered = []
+    controller = SimpleNamespace(
+        get_action_details=lambda name: SimpleNamespace(tool="shell"),
+        register_pre_tool_call_hook=lambda hook, **kwargs: registered.append((hook, kwargs)),
+    )
+    orch = SimpleNamespace(_correspondent_tainted=True, user_id="owner")
+    hook = install_correspondent_gate(controller, orch)
+    assert registered == [(hook, {"fail_mode": "closed"})]
+    assert "blocked" in hook("shell_run", {}, None)
+    orch._correspondent_tainted = False
+    assert hook("shell_run", {}, None) is None
+
+
 def test_compute_posture_verbs_are_name_high_impact():
     # shell + self_env + process verbs enumerated by NAME (not just tool-id), so a
     # tainted session can't reach them even if the tool-id resolver faults.

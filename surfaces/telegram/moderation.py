@@ -135,11 +135,18 @@ async def unban_member(bot, chat_id, user_id) -> ModResult:
         chat_id=chat_id, user_id=int(user_id), only_if_banned=True))
 
 
+async def delete_message(bot, chat_id, message_id) -> ModResult:
+    """Delete one message. Telegram refuses a message older than 48 h."""
+    return await _call("delete", lambda: bot.delete_message(
+        chat_id=chat_id, message_id=int(message_id)))
+
+
 # ⚠️ `set_slow_mode` was removed with the `slowmode` catalog verb (046 phase 2).
 # `Bot.set_chat_slow_mode_delay` does not exist on aiogram and there is no Bot
 # API method behind it, so every slowmode sale took money and wrote a credit.
 
 
 __all__ = ["ModResult", "ban_member", "bot_rights", "clamp_until",
+           "delete_message",
            "member_status", "restrict_member", "unban_member",
            "unrestrict_member"]

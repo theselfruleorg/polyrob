@@ -283,14 +283,14 @@ async def test_contract_propose_quarantines_for_background_author(monkeypatch, t
     monkeypatch.setenv("OWNER_RULES_IMMEDIATE", "true")
     action = _register(monkeypatch, tmp_path)
 
-    # Genuine (non-forged) owner turn: the rule BINDS immediately.
+    # Model-written rules require review even in a genuine owner turn.
     genuine_res = await action.function(
         action.param_model(operation="contract_propose",
                           text="Always ask before spending more than $50."),
         execution_context=_ctx())
     assert genuine_res.error is None
-    assert "IN EFFECT NOW" in genuine_res.extracted_content
-    assert (tmp_path / "identity" / "polyrob" / "user_u1" / "owner.md").exists()
+    assert "NOT YET IN EFFECT" in genuine_res.extracted_content
+    assert not (tmp_path / "identity" / "polyrob" / "user_u1" / "owner.md").exists()
 
     # Forged (self-wake) turn: STILL quarantined, even with immediacy ON.
     forged_res = await action.function(
@@ -301,8 +301,7 @@ async def test_contract_propose_quarantines_for_background_author(monkeypatch, t
     assert "NOT YET IN EFFECT" in forged_res.extracted_content
     assert (tmp_path / "identity" / "polyrob" / "user_u1" / ".pending" / "owner.md").exists()
     # The ACTIVE doc from the genuine turn must be untouched by the forged propose.
-    active = (tmp_path / "identity" / "polyrob" / "user_u1" / "owner.md").read_text()
-    assert "spending" in active
+    assert not (tmp_path / "identity" / "polyrob" / "user_u1" / "owner.md").exists()
 
 
 @pytest.mark.asyncio

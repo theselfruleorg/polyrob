@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import time
 from typing import Any, Dict, List, Optional
@@ -65,7 +66,7 @@ def _migrate_effect_column(db_path: str) -> None:
 
 
 class TelemetryEventLog:
-    """Append-only durable event sink. Every method is fail-open."""
+    """Append-only sink. Writes fail open; financial aggregation raises on bad reads."""
 
     def __init__(self, db_path: str):
         self.db_path = db_path
@@ -304,21 +305,39 @@ class TelemetryEventLog:
             return 0
 
     def aggregate(self, *, since_ts: Optional[float] = None,
-                  user_id: Optional[str] = None) -> Dict[str, Any]:
-        """Cross-session rollup: counts per kind + total wallet spend."""
+                  user_id: Optional[str] = None,
+                  kind: Optional[str] = None) -> Dict[str, Any]:
+        """Complete rollup, without the display query's pagination limit.
+
+        Unreadable or malformed financial data raises: callers must display
+        unavailable rather than a plausible but incomplete spend total.
+        """
         from core.event_kinds import WALLET_SPEND
-        rows = self.query(since_ts=since_ts, user_id=user_id, limit=100000)
-        counts: Dict[str, int] = {}
-        total_spend = 0.0
-        for r in rows:
-            counts[r["kind"]] = counts.get(r["kind"], 0) + 1
-            if r["kind"] == WALLET_SPEND:
-                try:
-                    total_spend += float(r["attrs"].get("amount_usd") or 0.0)
-                except Exception:
-                    pass
+        if not self._ready:
+            raise RuntimeError("Event log unavailable")
+        clauses, params = [], [WALLET_SPEND, WALLET_SPEND]
+        for column, value, op in (("ts", since_ts, ">="),
+                                  ("user_id", user_id, "="), ("kind", kind, "=")):
+            if value is not None:
+                clauses.append(f"{column} {op} ?")
+                params.append(value)
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        rows = execute_retry(self.db_path, """
+            SELECT kind, COUNT(*) AS n,
+              SUM(CASE WHEN kind = ? THEN json_extract(attrs, '$.amount_usd')
+                  ELSE 0 END) AS spend,
+              SUM(CASE WHEN kind = ? AND (
+                    COALESCE(json_type(attrs, '$.amount_usd'), '') NOT IN ('integer', 'real')
+                    OR json_extract(attrs, '$.amount_usd') < 0)
+                  THEN 1 ELSE 0 END) AS invalid
+            FROM telemetry_events
+        """ + where + " GROUP BY kind", tuple(params), fetch="all")
+        counts = {r["kind"]: int(r["n"]) for r in rows}
+        total_spend = sum(float(r["spend"] or 0) for r in rows)
+        if any(r["invalid"] for r in rows) or not math.isfinite(total_spend):
+            raise ValueError("Event log contains invalid wallet spend")
         return {"counts_by_kind": counts, "wallet_spend_usd": total_spend,
-                "total_events": len(rows)}
+                "total_events": sum(counts.values())}
 
 
 # --- process-wide singleton keyed by db path -------------------------------------

@@ -75,17 +75,20 @@ class SlackClient:
 
     async def send_message(self, channel: str, text: str,
                            thread_ts: Optional[str] = None) -> dict:
+        from html import escape
         body: dict = {"channel": await self._resolve_channel(channel),
-                      "text": text}
+                      "text": escape(text, quote=False), "mrkdwn": False,
+                      "parse": "none", "link_names": False}
         if thread_ts:
             body["thread_ts"] = str(thread_ts)
         return await self._call("chat.postMessage", token=self._bot_token,
                                 json=body)
 
     async def edit_message(self, channel: str, ts: str, text: str) -> dict:
+        from html import escape
         return await self._call("chat.update", token=self._bot_token,
                                 json={"channel": channel, "ts": str(ts),
-                                      "text": text})
+                                      "text": escape(text, quote=False), "parse": "none", "link_names": False})
 
     async def open_dm(self, user_id: str) -> str:
         payload = await self._call("conversations.open", token=self._bot_token,

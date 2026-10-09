@@ -175,6 +175,13 @@ def test_qty_source_measured_then_quoted_reads_quote(db):
     assert get_position("u1", "base", MEME, db_path=db).qty_source == "quote"
 
 
+@pytest.mark.parametrize("legacy", ["receipt", "", "quote"])
+def test_new_simulation_does_not_upgrade_legacy_quantity(db, legacy):
+    apply_delta("u1", PositionDelta("base", MEME, "MEME", 1, 1.0, qty_source=legacy), db_path=db)
+    apply_delta("u1", PositionDelta("base", MEME, "MEME", 1, 1.0, qty_source="simulation"), db_path=db)
+    assert get_position("u1", "base", MEME, db_path=db).qty_source == legacy
+
+
 def test_observe_price_only_raises_the_high_water(db, tmp_path):
     assert observe_price("u1", "base", MEME, 2.0, db_path=str(tmp_path / "none.db")) is None
     assert not (tmp_path / "none.db").exists()

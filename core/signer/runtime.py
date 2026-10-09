@@ -58,6 +58,10 @@ def continuity_problems(identity: Mapping, expected: Mapping[str, str]) -> List[
 
 def prepare_process(cfg: SignerConfig, *, harden: Callable = None) -> None:
     os.environ["POLYROB_DATA_DIR"] = cfg.state_dir
+    # The signer resolves caps through the agent's code (tx_guard's autonomous
+    # backstop); it must never ask its own socket for the envelope.
+    from core.wallet.signer_envelope import SIGNER_PROCESS_ENV
+    os.environ[SIGNER_PROCESS_ENV] = "1"
     apply_env(cfg)
     from core.security import process_hardening as ph
     result = (harden or ph.harden_custody_process)()

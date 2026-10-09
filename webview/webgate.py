@@ -2,7 +2,7 @@
 
 POLYROB's `webview/` was built multitenant-first (JWT/SIWE auth, ownership,
 profile/billing/admin pages, bound on `0.0.0.0`). The *primitive* is the
-single-user, local-first webgate: loopback bind, no auth, no admin pages, every
+single-user, local-first webgate: loopback bind, owner login, no admin pages, every
 session owned by the local owner. Own-ops (public status page + owner login)
 and multitenant (full SaaS UI) are layers on top, gated by posture.
 
@@ -50,13 +50,13 @@ def posture() -> str:
       3. Derive from an explicit WEBGATE_HOST/WEBVIEW_HOST override: loopback -> "local",
          anything else -> "own_ops".
       4. No explicit host override and WEBGATE_MULTITENANT is not truthy -> "local"
-         (today's default: loopback, no auth — Posture 0 must not regress).
+         (today's default: loopback with owner login).
 
     An explicit POLYROB_POSTURE that doesn't match one of the valid values (a typo,
     e.g. "own-ops") is NOT silently ignored (B1-LOW): it logs a warning naming the
     bad value, then falls through to the rest of the derivation below — so a
     misconfigured operator gets a signal instead of silently landing on "local"
-    (no auth) when they thought they set a public posture.
+    when they thought they set a public posture.
     """
     explicit_raw = os.environ.get("POLYROB_POSTURE", "").strip()
     explicit = explicit_raw.lower()
@@ -93,7 +93,7 @@ def is_own_ops() -> bool:
 
 
 def is_local() -> bool:
-    """True when posture() == "local" (loopback, no auth — the primitive)."""
+    """True when posture() == "local" (loopback with owner login)."""
     return posture() == "local"
 
 
@@ -161,11 +161,8 @@ def request_is_admin(request) -> bool:
 
 
 def requires_owner_login() -> bool:
-    """True for own_ops/multitenant — console access needs SOME authenticated identity.
-
-    False only for "local": the loopback operator IS the owner, no login needed.
-    """
-    return posture() != "local"
+    """Every console caller authenticates, including clients on loopback."""
+    return True
 
 
 def activity_enabled() -> bool:
@@ -215,6 +212,7 @@ MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 #: (``api/auth_endpoints.py``). Never widen this to a prefix; add the exact path.
 _READ_ONLY_EXEMPT_PATHS = frozenset({
     "/owner-login",
+    "/logout",
     "/api/auth/nonce",
     "/api/auth/verify",
     "/api/internal/emit",
@@ -257,78 +255,35 @@ async def read_only_guard(request: Request) -> None:
 
 
 def _origin_of(url_like: str):
-    """``(host, port_or_None)`` from an Origin/Referer value, or None if unusable."""
-    from urllib.parse import urlsplit
-    try:
-        parts = urlsplit((url_like or "").strip())
-    except ValueError:
-        return None
-    if not parts.hostname:
-        return None
-    port = parts.port
-    if port is None:
-        port = {"http": 80, "https": 443}.get((parts.scheme or "").lower())
-    return (parts.hostname.lower(), port)
+    """Compatibility alias for the shared scheme/host/port parser."""
+    from core.security.browser_origin import origin_of
+    return origin_of(url_like)
 
 
 async def csrf_guard(request: Request) -> None:
-    """Same-origin check on every console mutation (043 W1) — the other half of
-    :data:`MUTATION_DEPS`.
-
-    The console authenticates with an AMBIENT cookie (``auth_token``, 7 days on
-    own_ops), so before this, every ``POST /api/webgate/*`` was reachable from
-    any page the owner happened to have open: pause the agent, settle an
-    invoice, approve an app, write a config flag. The tree's only CSRF defence
-    was the owner-LOGIN form's double-submit token — which protects the one POST
-    that has no session yet.
-
-    The check: on a mutating method, the ``Origin`` (else ``Referer``) host must
-    equal the request's own ``Host``. ``Host`` is a browser-FORBIDDEN request
-    header, so a cross-origin page cannot make the two agree — the same
-    reasoning ``server.py::_cors_origin_allowed`` already relies on for the
-    Socket.IO handshake. Ports are compared with the scheme default filled in,
-    so ``https://console`` against a proxied request carrying no explicit port
-    is the same origin rather than a 403 on every mutation.
-
-    ⚠️ The "no header" branch is a deliberate PASS, not a hole — and it is
-    narrowed by a second condition: **no cookie either**. A browser attaches
-    ``Origin`` to every cross-origin mutation (fetch, XHR and form POST alike)
-    and the page cannot suppress it; that is the whole basis of this check. So a
-    request with NEITHER ``Origin`` NOR ``Referer`` is not a browser-driven
-    cross-site request: it is a machine client — the telemetry push to
-    ``/api/internal/emit`` (localhost-only), the agent's stream POST, a
-    bearer-token API caller, curl/CI. Refusing those would break the live
-    telemetry rail to buy nothing. Requiring them to carry NO cookie makes the
-    pass match its own justification exactly: the CSRF risk is the AMBIENT
-    credential, so a request that presents one is held to the origin check even
-    when it claims no origin.
-    """
-    if request.method.upper() not in MUTATING_METHODS:
-        return
-    stated = request.headers.get("origin") or request.headers.get("referer")
-    if not stated and not request.headers.get("cookie"):
-        return
-    claimed = _origin_of(stated) if stated else None
-    host_header = request.headers.get("host") or ""
-    scheme = request.url.scheme or "http"
-    mine = _origin_of(f"{scheme}://{host_header}") if host_header else None
-    if mine is None:
-        mine = (request.url.hostname or "", request.url.port
-                or {"http": 80, "https": 443}.get(scheme))
-    if claimed is None or claimed != mine:
-        logger.warning("CSRF refusal: %s %s claims origin %r, host is %r",
-                       request.method, request.url.path, stated, host_header)
-        raise HTTPException(
-            status_code=403,
-            detail=("Cross-origin request refused: the Origin header does not "
-                    "match this console's host" if stated else
-                    "Cross-origin request refused: a cookie-bearing request must "
-                    "state its Origin"))
+    """Check console mutations using the same origin rule as API cookies."""
+    from core.security.browser_origin import mutation_origin_refusal
+    if reason := mutation_origin_refusal(request):
+        logger.warning("CSRF refusal: %s %s", request.method, request.url.path)
+        raise HTTPException(status_code=403, detail=reason)
 
 
 #: The dependency list every mutating console route carries. Kept as ONE list so
 #: a new cross-cutting request guard is added in a single place.
 MUTATION_DEPS: List = [Depends(read_only_guard), Depends(csrf_guard)]
+
+
+async def owner_console_guard(request: Request) -> None:
+    """Instance-wide readers (health, telemetry, operator config) belong to the
+    owner console; a multitenant tenant is refused (WEB-3)."""
+    if not is_owner_console():
+        raise HTTPException(
+            status_code=403,
+            detail="this reader requires the owner console (local/own_ops posture)")
+
+
+#: Route ``dependencies=`` for an instance-wide READER (WEB-3).
+OWNER_CONSOLE_DEPS: List = [Depends(owner_console_guard)]
 
 
 def bind_host() -> str:
@@ -340,7 +295,7 @@ def bind_host() -> str:
     """
     default = "127.0.0.1" if is_local() else "0.0.0.0"
     host = os.environ.get("WEBGATE_HOST", os.environ.get("WEBVIEW_HOST", default))
-    # P1 finalization: local posture has NO auth (the loopback operator IS the owner),
+    # P1 finalization: local posture retains a loopback bind restriction,
     # so a non-loopback bind would expose an UNAUTHENTICATED console to the network.
     # Refuse the override and force loopback — to serve the console on the network,
     # use an authenticated posture (own_ops/multitenant).
@@ -523,6 +478,7 @@ __all__ = [
     # 043 W1/W3 — the two request guards and the ONE list every mutating console
     # route carries.
     "MUTATING_METHODS", "MUTATION_DEPS", "read_only_guard", "csrf_guard",
+    "OWNER_CONSOLE_DEPS", "owner_console_guard",
     # 043 W7 — "does this console know whose it is?"
     "owner_is_bound", "warn_shared_registry_once", "UNBOUND_OWNER_MESSAGE",
     "bind_host", "bind_port", "local_owner_id", "console_display_name", "branding_config",

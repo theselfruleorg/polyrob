@@ -99,8 +99,8 @@ def refusal(payload: Dict[str, Any]) -> Optional[Tuple[str, str]]:
         return ("write_jobs_disabled",
                 f"write job refused: {FLAG} is off — the owner enables scheduled write jobs. "
                 f"Nothing was broadcast.")
-    from core.config_policy.rigs import is_agent_authored
-    if is_agent_authored(payload):
+    from core.config_policy.rigs import is_owner_authored
+    if not is_owner_authored(payload):
         return ("write_job_not_owner",
                 "write job refused: only a job the owner scheduled may run a write verb. "
                 "Nothing was broadcast.")

@@ -40,12 +40,21 @@ def _gate():
     return PolicyGate(max_per_tx_usd=2.0, daily_cap_usd=10.0)
 
 
+def _revoke_tx_or(intent, tx):
+    """A revoke must be signed as exactly ``token.approve(spender, 0)`` (the guard asserts
+    the shape); every other fixture keeps its stub transaction."""
+    if intent is not None and intent.is_allowance_op and not intent.expected_allowance_grants:
+        return {"to": intent.token, "data": "0x095ea7b3" + "0" * 24
+                + str(intent.to).lower()[2:] + "0" * 64, "value": 0, "chainId": 8453}
+    return tx
+
+
 def _authorize(intent=None, deltas=None, *, gate=None, ctx=None,
                price=1.0, fallback_price="_unset", pinned_rpc=True, halted=False,
                entry_paused=False, forged=None):
     return tx_guard.authorize(
         intent or _intent(),
-        {"to": USDC, "data": "0xa9059cbb", "value": 0, "chainId": 8453},
+        _revoke_tx_or(intent, {"to": USDC, "data": "0xa9059cbb", "value": 0, "chainId": 8453}),
         holder=HOLDER,
         gate=gate or _gate(),
         execution_context=ctx,
@@ -599,3 +608,12 @@ def test_an_exit_bounded_grant_that_the_fallback_CAN_price_still_passes():
                    deltas=_approve_deltas(grant=1_000_000), price=None,
                    fallback_price=0.000001)
     assert d.allowed is True, d.reason
+
+
+def test_authorized_decision_carries_an_independent_copy_of_simulated_balance_deltas():
+    deltas = _clean_deltas()
+    decision = _authorize(deltas=deltas)
+    assert decision.allowed
+    assert decision.simulated_token_deltas == {USDC: -250_000}
+    deltas.token_deltas.clear()
+    assert decision.simulated_token_deltas == {USDC: -250_000}

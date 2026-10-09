@@ -49,6 +49,7 @@ from agents.task.constants import AutonomyConfig
 from agents.task.goals.board import GoalBoard
 from cli.commands.doctor import doctor_report, local_flag_on, resolve_memory_backend
 from core.instance import (
+    is_unreadable_note,
     load_self_context,
     load_self_doc,
     resolve_instance_id,
@@ -519,6 +520,8 @@ def _identity_read(load, paths) -> tuple:
         text = load() or None
     except Exception as exc:
         return None, _safe_reason(exc)
+    if text is not None and is_unreadable_note(text):
+        text = None  # the loader's prompt-only note; name the error below
     if text is None:
         error = _doc_unreadable(paths)
         if error:
@@ -535,14 +538,15 @@ def _avatar_data_dir() -> str:
     """Data home to read the avatar from.
 
     The avatar is usually SET from the CLI, whose data home defaults to
-    ``cwd/.polyrob`` when ``POLYROB_DATA_DIR`` is unset (``core.bootstrap.
+    ``<polyrob_home>/data`` when ``POLYROB_DATA_DIR`` is unset (``core.bootstrap.
     _resolve_cli_data_home``). Mirror that so set↔serve agree in local dev; in
     prod (``POLYROB_DATA_DIR`` set) this is identical to :func:`_data_dir`.
     """
     env = os.environ.get("POLYROB_DATA_DIR")
     if env:
         return env
-    local = Path.cwd() / ".polyrob"
+    from core.runtime_paths import resolve_data_home
+    local = resolve_data_home()
     return str(local) if local.exists() else _data_dir()
 
 
@@ -669,12 +673,7 @@ def _ledger_caps(ledger: dict = None) -> dict:
     ledger passed at all) — ``wallet_daily_cap_state`` still reflects the
     env parse's own state (default/explicit/disabled/misconfigured)
     unchanged, since prefs don't have an equivalent state taxonomy."""
-    def _f(name, default):
-        try:
-            v = os.environ.get(name)
-            return float(v) if v not in (None, "") else default
-        except (TypeError, ValueError):
-            return default
+    from modules.x402.invoicing import invoice_daily_max, invoice_max_usd
     # H3 (2026-08-22): wallet_daily_cap_state still delegates to the SAME
     # parser load_wallet_config() uses. _wallet_daily_cap_display() never
     # raises (fail-open, this endpoint must keep working); a genuinely
@@ -690,8 +689,8 @@ def _ledger_caps(ledger: dict = None) -> dict:
     return {
         "wallet_daily_cap_usd": displayed_cap,
         "wallet_daily_cap_state": _daily["state"],
-        "invoice_max_usd": _f("X402_INVOICE_MAX_USD", 50.0),
-        "invoice_daily_max": _f("X402_INVOICE_DAILY_MAX", 10.0),
+        "invoice_max_usd": invoice_max_usd(),
+        "invoice_daily_max": invoice_daily_max(),
         "daily_used_usd": ledger_caps.get("daily_used_usd"),
         "daily_left_usd": ledger_caps.get("daily_left_usd"),
     }
@@ -891,6 +890,8 @@ async def api_config_search(request: Request, query: str = ""):
     items = []
     for info in config_service.search(query, user_id=user_id,
                                       home_dir=_data_dir(), limit=500):
+        if info.namespace == "flag" and not webgate.is_owner_console():
+            continue
         items.append({
             "key": info.key, "namespace": info.namespace, "kind": info.kind,
             "group": info.group, "description": info.description,
@@ -908,6 +909,9 @@ async def api_config_search(request: Request, query: str = ""):
 async def api_config_explain(request: Request, key: str):
     """018 P3: full provenance chain for one setting (secrets masked)."""
     user_id = _effective_user_id(request)
+    from core.prefs import PREF_SCHEMA
+    if key not in PREF_SCHEMA and not webgate.is_owner_console():
+        raise HTTPException(403, "Instance configuration requires the owner console")
     from core import config_service
     try:
         info = config_service.explain(key, user_id=user_id, home_dir=_data_dir())
@@ -946,12 +950,6 @@ async def api_config_set(request: Request, key: str):
     # lands in ./.polyrob/.env, which polyrob.service loads AFTER its own env
     # file, so a console write would OUTRANK the operator on the next restart.
     # Use the local CLI (`polyrob config set …`).
-    if config_service.is_console_unwritable(key):
-        return JSONResponse(
-            {"error": f"'{key}' controls the agent's owner binding, money "
-                      "bounds, approval policy, trust posture or credential "
-                      "surface and is not writable from the console — set it "
-                      "from the local CLI"}, status_code=403)
     try:
         body = await request.json()
     except Exception:
@@ -959,6 +957,13 @@ async def api_config_set(request: Request, key: str):
     if not isinstance(body, dict):
         # Audit WR12: a list/string body is a bad request, not an AttributeError 500.
         return JSONResponse({"error": "JSON body must be an object"}, status_code=400)
+    # WEB-4: a raise-only safety stop (AUTONOMY_HALT) may be SET, never cleared.
+    if config_service.remote_write_refused(key, body.get("value", "")):
+        return JSONResponse(
+            {"error": f"'{key}' controls the agent's owner binding, money "
+                      "bounds, approval policy, trust posture or credential "
+                      "surface and is not writable from the console — set it "
+                      "from the local CLI"}, status_code=403)
     res = config_service.set_value(
         key, str(body.get("value", "")),
         scope=body.get("scope"), user_id=user_id, home_dir=_data_dir(),
@@ -1020,7 +1025,7 @@ async def api_preferences_patch(request: Request):
     fail-closed ``_effective_user_id`` as GET (never writes as the owner).
 
     List-shrink routes through review (owner-UX P2-4 final review, item 3):
-    the local webview posture has no auth, so a confirmed wholesale-replace of
+    the authenticated console still queues removals; a wholesale-replace of
     a GUARDED list key (``approvals.require``/``approvals.deny``) could
     silently DROP a pref-added gate — bypassing the ``remove_entry`` owner
     review flow every other surface enforces (``/gates remove``, the
@@ -1516,7 +1521,7 @@ async def api_cron_cancel(request: Request, job_id: str):
         return JSONResponse(
             {"ok": False, "message": f"no cron job {job_id} for this tenant"},
             status_code=404)
-    ok = service.cancel(job_id, user_id=user_id)
+    ok = service.cancel(job_id, user_id=user_id, via="webview")
     if not ok:
         return JSONResponse(
             {"ok": False, "message": f"could not cancel {job_id}"},
@@ -1702,7 +1707,11 @@ async def api_doctor(request: Request):
     resolve with ``absent_means_on=False`` (matching what
     ``modules.memory.backend_factory`` actually does at runtime). One shared
     resolution, so the page can never contradict itself again (P0-4).
+
+    Instance-wide health (paths, providers, env checks): the OWNER console
+    only — a multitenant tenant is refused (WEB-3).
     """
+    _owner_console_required("the instance health checks")
     from core.security.custody_env import custody_environ
     env = custody_environ()  # 066 P0.2: a loaded seed is held, not in os.environ
     checks_error = None

@@ -94,6 +94,7 @@ MAX_BODY_CHARS = 3000
 CONFIRMABLE_VERBS = frozenset({
     "/send", "/swap", "/bridge", "/pay", "/claim", "/launch", "/deploy",
     "/nft", "/identity", "/writeoff", "/unquarantine", "/wallet",
+    "/adopt",  # 2026-10-08: not money, but the same quote -> owner confirm shape
 })
 
 #: A card tap token: ``/card_<10 hex>_<act>``. Acts: ``ok`` (confirm), ``no``
@@ -590,7 +591,14 @@ def _bound_only(extra: List[str]) -> bool:
         return True
     if len(extra) == 1:
         return _is_number(extra[0])
-    return len(extra) == 2 and extra[0].lower() == "max" and _is_number(extra[1])
+    if len(extra) in (2, 4):
+        pairs = list(zip(extra[::2], extra[1::2]))
+        keys = [key.lower() for key, _ in pairs]
+        return (len(set(keys)) == len(keys) and
+                all(key.lower() in {"max", "min_raw"} and _is_number(value)
+                    and (key.lower() != "min_raw" or value.isdecimal())
+                    for key, value in pairs))
+    return False
 
 
 def confirm_line_in(verb: str, typed_args: List[str], text: str) -> Optional[List[str]]:
@@ -606,6 +614,7 @@ def confirm_line_in(verb: str, typed_args: List[str], text: str) -> Optional[Lis
     if not typed or executes(typed):
         return None
     found: Optional[List[str]] = None
+    distinct: set = set()
     for raw in (text or "").splitlines():
         idx = raw.find(verb + " ")
         if idx < 0:
@@ -616,11 +625,18 @@ def confirm_line_in(verb: str, typed_args: List[str], text: str) -> Optional[Lis
         args = words[1:-1]
         if len(args) < len(typed):
             continue
-        if [a.lower() for a in args[:len(typed)]] != [a.lower() for a in typed]:
+        if args[:len(typed)] != typed:
             continue
         if not _valid_args(args) or not _bound_only(args[len(typed):]):
             continue
         found = args
+        distinct.add(tuple(args))
+    # CHAT-24: the quote text can carry third-party data (a token name, a
+    # memo, a page title). Taking the LAST matching line made safety depend on
+    # every verb printing its own hint last. Two DIFFERENT candidate lines are
+    # ambiguous: make no card rather than pick one.
+    if len(distinct) > 1:
+        return None
     return found
 
 

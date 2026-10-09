@@ -152,8 +152,8 @@ async def test_probe_network_error_is_reported_not_raised():
 
 
 @pytest.mark.asyncio
-async def test_probe_post_only_surface_needs_the_method():
-    """JSON-RPC / A2A surfaces only reveal their 402 on POST."""
+async def test_probe_refuses_post_before_any_network_call():
+    """An unpaid POST can still mutate a server; discovery cannot issue it."""
     from tools.x402.discovery import probe_endpoint
 
     url = "https://rpc.test/"
@@ -166,9 +166,9 @@ async def test_probe_post_only_surface_needs_the_method():
     r = await probe_endpoint(url, method="post", body='{"jsonrpc":"2.0"}',
                              fetch=_fetch, validator=_no_validate())
 
-    assert seen["method"] == "POST"
-    assert seen["body"] == '{"jsonrpc":"2.0"}'
-    assert r["status"] == 402 and r["score"] == 5
+    assert seen == {}
+    assert r["status"] is None and r["score"] == 0
+    assert "Read-only" in r["error"]
 
 
 @pytest.mark.asyncio
@@ -299,3 +299,13 @@ async def test_sweep_is_bounded():
 
     with pytest.raises(ValueError, match="at most"):
         await sweep_endpoints(too_many, fetch=fake_fetch({}), validator=_no_validate())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('method,body', [('DELETE', None), ('PATCH', None), ('GET', 'payload')])
+async def test_unsafe_probes_never_reach_transport(method, body):
+    from tools.x402.discovery import probe_endpoint
+    async def forbidden(*args, **kw):
+        pytest.fail('unsafe discovery reached the network')
+    result = await probe_endpoint('https://example.test', method=method, body=body, fetch=forbidden)
+    assert result['error'] and result['score'] == 0

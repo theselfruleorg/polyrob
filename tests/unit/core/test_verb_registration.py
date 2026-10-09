@@ -12,6 +12,8 @@ SEND = ("/send",)
 #: 2026-09-27: /swap, contributed WITH Telegram + REPL handlers like /send.
 SWAP = ("/swap",)
 CHECK = ("/check",)  # 071: any address or ticker, read-only
+#: 2026-10-08: /adopt (core.standing_verbs) — not money, same contributed shape.
+ADOPT = ("/adopt",)
 
 
 @pytest.fixture
@@ -34,7 +36,7 @@ def test_the_money_verbs_are_contributed_not_core_rows():
     # A pack's rows (the x pack's `/x`) register in phase 2 and are routed too.
     assert V.routed_names() - V.pack_verb_names() == (
         frozenset(MONEY) | frozenset(HOLDINGS) | frozenset(SEND) | frozenset(SWAP)
-        | frozenset(CHECK))
+        | frozenset(CHECK) | frozenset(ADOPT))
 
 
 def test_no_money_verb_carries_a_handler_yet():

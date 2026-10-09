@@ -46,7 +46,7 @@ def prepare(tx_hash, chain, holder, nonce, *, state='prepared', venue=None,
         raise ValueError('replay key too long to journal exactly; refusing the submission')
     with connection(journal_path(), write=True) as db:
         db.execute('BEGIN IMMEDIATE')
-        row = db.execute("SELECT tx_hash FROM submissions WHERE state != 'booked' LIMIT 1").fetchone()
+        row = db.execute("SELECT tx_hash FROM submissions WHERE state NOT IN ('booked', 'rejected') LIMIT 1").fetchone()
         if row:
             raise ValueError(f'unaccounted wallet submission {row[0]}; reconcile before another send')
         db.execute('INSERT INTO submissions (tx_hash, chain, holder, nonce, created, state, '
@@ -87,7 +87,7 @@ def mark_booked(tx_hash, *, amount_usd=None, venue=None):
     with connection(journal_path(), write=True) as db:
         with db:
             row = db.execute('SELECT * FROM submissions WHERE tx_hash=?', (_identifier(tx_hash),)).fetchone()
-            if row is None or row['state'] == 'booked':
+            if row is None or row['state'] in ('booked', 'rejected'):
                 return
             if row['state'] == 'reserved':
                 raise ValueError('unresolved signing attempt cannot be booked without its transaction identifier')
@@ -116,7 +116,7 @@ def unresolved(data_dir=None):
             # columns are read by the release, under the journal lock.
             from core.wallet.submission_store import _ROW_KEYS
             return [{k: row[k] for k in _ROW_KEYS} for row in
-                    db.execute("SELECT * FROM submissions WHERE state != 'booked'")]
+                    db.execute("SELECT * FROM submissions WHERE state NOT IN ('booked', 'rejected')")]
     except PermissionError:
         return read_public_summary(path)
 
@@ -140,6 +140,75 @@ def prepare_attempt(venue, holder, amount_usd, *, idempotency_key=None):
     return reference
 
 
+def bind_x402_authorization(reference, *, authorizer, nonce, valid_before, asset, network):
+    """Record the PUBLIC terms of the EIP-3009 authorization an x402 row signed.
+
+    Only these terms let ``core.wallet.x402_expiry`` prove, after
+    ``validBefore``, whether the authorization was used (``authorizationState``)
+    — a paid server that answers a second 402 or drops the connection can then
+    no longer hold every money rail until an operator acts. No signature is
+    stored. A row without them stays operator-only (fail closed).
+    """
+    import json
+    import re
+    from core.wallet.submission_store import connection
+    if not str(reference or '').startswith('attempt:'):
+        raise ValueError('only an x402 attempt row carries an authorization')
+    authorizer, nonce, asset = (str(v or '').lower() for v in (authorizer, nonce, asset))
+    if (not re.fullmatch(r'0x[0-9a-f]{40}', authorizer) or not re.fullmatch(r'0x[0-9a-f]{40}', asset)
+            or not re.fullmatch(r'0x[0-9a-f]{64}', nonce)):
+        raise ValueError('invalid x402 authorization terms')
+    valid_before = int(valid_before)
+    if not 0 < valid_before < 2 ** 63:
+        raise ValueError('invalid x402 authorization validBefore')
+    terms = json.dumps({'authorizer': authorizer, 'nonce': nonce, 'valid_before': valid_before,
+                        'asset': asset, 'network': str(network or '')[:64]}, sort_keys=True)
+    with connection(journal_path(), write=True) as db:
+        with db:
+            changed = db.execute(
+                "UPDATE submissions SET x402_auth=? WHERE tx_hash=? AND venue='x402' "
+                "AND state='prepared' AND x402_auth IS NULL",
+                (terms, reference)).rowcount
+            if changed != 1:
+                raise ValueError('x402 authorization does not match a prepared attempt')
+
+
+def x402_authorizations(data_dir=None):
+    """The unresolved x402 rows that carry authorization terms (for the expiry
+    resolver). Raises on unreadable storage — never a false empty list."""
+    import json
+    from core.wallet.submission_store import connection
+    with connection(journal_path(data_dir)) as db:
+        if db is None:
+            return []
+        if 'x402_auth' not in {c[1] for c in db.execute('PRAGMA table_info(submissions)')}:
+            return []  # a legacy journal no writer has migrated holds no terms
+        out = []
+        for row in db.execute("SELECT * FROM submissions WHERE state NOT IN ('booked', 'rejected') "
+                              "AND venue='x402' AND x402_auth IS NOT NULL"):
+            out.append({**dict(row), 'x402_auth': json.loads(row['x402_auth'])})
+        return out
+
+
+def mark_rejected(reference, *, venue):
+    """Retain a venue's explicit single-order rejection without charging a fill.
+
+    Only the venue adapter calls this after parsing its authenticated response.
+    Timeouts, malformed replies and on-chain signing reservations cannot use it.
+    """
+    from core.wallet.submission_store import connection
+    if venue not in ('hyperliquid', 'polymarket') or not reference.startswith('attempt:'):
+        raise ValueError('only a venue order attempt can be rejected')
+    with connection(journal_path(), write=True) as db:
+        with db:
+            changed = db.execute(
+                "UPDATE submissions SET state='rejected' WHERE tx_hash=? AND chain=? "
+                "AND venue=? AND state IN ('prepared', 'rejected')",
+                (reference, venue, venue)).rowcount
+            if changed != 1:
+                raise ValueError('venue rejection does not match a prepared order')
+
+
 def operator_release(reference, book, *, data_dir=None):
     """068 B7: book and release ONE row as a single serialized operation.
 
@@ -158,7 +227,7 @@ def operator_release(reference, book, *, data_dir=None):
     with connection(journal_path(data_dir), write=True) as db:
         db.execute('BEGIN IMMEDIATE')
         try:
-            row = db.execute("SELECT * FROM submissions WHERE tx_hash=? AND state != 'booked'",
+            row = db.execute("SELECT * FROM submissions WHERE tx_hash=? AND state NOT IN ('booked', 'rejected')",
                              (ref,)).fetchone()
             if row is None:
                 raise ValueError(f'no unresolved submission {ref} (already released or booked)')
@@ -187,7 +256,7 @@ def operator_book(reference, *, data_dir=None):
     with connection(journal_path(data_dir), write=True) as db:
         with db:
             changed = db.execute(
-                "UPDATE submissions SET state='booked' WHERE tx_hash=? AND state != 'booked'",
+                "UPDATE submissions SET state='booked' WHERE tx_hash=? AND state NOT IN ('booked', 'rejected')",
                 (ref,)).rowcount
     if changed != 1:
         raise ValueError(f'no unresolved submission {ref}')

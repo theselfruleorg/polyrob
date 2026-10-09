@@ -19,10 +19,10 @@ anything the guard refuses. ``LP_ETH_CAP`` defaults to 0: no v4 native deposit
 until the owner sets a program cap.
 """
 import time
-import uuid
 from decimal import Decimal
 from typing import Optional
 
+from core.security.refusal_taint import PreconditionUnmet
 from core.wallet import chains, dex_registry, tx_guard
 from tools.defi import lp_abi as A, lp_reads as R, lp_v4 as V
 
@@ -108,19 +108,19 @@ def prepare_add_v4(p, rpc, holder, npm, price_fn=None):
         else:
             to_permit2 = R.allowance(rpc, p.chain, cur, holder, row.permit2)
             if to_permit2 < n:
-                raise ValueError(
+                raise PreconditionUnmet(
                     f"Permit2 holds an ERC-20 allowance of {to_permit2} on {cur}, need {n}. The "
                     f"owner runs defi_trade.approve_token(chain={p.chain}, token={cur}, "
                     f"spender={row.permit2}, amount=<program size>) once (owner turn only).")
             granted, expiration = V.permit2_allowance(rpc, p.chain, holder, cur, npm)
             if granted < n or expiration <= now + DEADLINE_S:
-                raise ValueError(
+                raise PreconditionUnmet(
                     f"Permit2 grant to the v4 PositionManager is {granted} (expires {expiration}), "
                     f"need {n}. Run defi_trade.approve_token(chain={p.chain}, token={cur}, "
                     f"spender={npm}, amount={Decimal(n) / 10 ** dec}, via='permit2') first.")
             balance = int(R.view(rpc, cur, A.NPM_BALANCE_OF, [holder]))
         if balance < n:
-            raise ValueError(f"insufficient balance of {cur}: {balance} < {n}")
+            raise PreconditionUnmet(f"insufficient balance of {cur}: {balance} < {n}")
         out.append((None if cur == V.ZERO else cur, n))
         held.append((None if cur == V.ZERO else cur, balance))
     unlock = V.encode_mint_unlock(key, lo, hi, liq, maxima[0], maxima[1], holder)
@@ -131,7 +131,7 @@ def prepare_add_v4(p, rpc, holder, npm, price_fn=None):
         is_liquidity_op=True, lp_outflows=tuple(out), lp_held_balances=tuple(held),
         watch_spenders=(row.permit2,), lp_position=(npm, None), lp_position_effect="mint",
         expected_events=((row.pool_manager, V.TOPIC_MODIFY_LIQUIDITY),),
-        idempotency_key="lp_add:v4:" + uuid.uuid4().hex)
+        idempotency_key=None)
     return Plan(intent, data, value, pid, (c0, c1), (dec0, dec1),
                 f"v4 pool: {pid} (Pons PoolKey, hooks {key['hooks']}); ticks [{lo}, {hi}] full range\n"
                 f"liquidity: {liq}; outflows (raw maxima): {out}\n"

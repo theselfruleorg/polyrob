@@ -20,9 +20,10 @@ class _Gate:
 
 
 class _Tool:
-    def __init__(self, usd=250.0):
+    def __init__(self, usd=250.0, valuation_basis="outflow"):
         self.calls = []
         self.usd = usd
+        self.valuation_basis = valuation_basis
 
     def _get_wallet(self):
         return SimpleNamespace(policy=_Gate())
@@ -34,13 +35,15 @@ class _Tool:
                 f"  simulated value: ${self.usd:.4f}\n")
         body += ("  RESULT: DRY RUN (simulation only)" if params.dry_run
                  else "  RESULT: SENT tx 0xswap")
-        return SimpleNamespace(error=None, extracted_content=body)
+        return SimpleNamespace(error=None, extracted_content=body, metadata={
+            "min_out_raw": 248750000, "valuation_basis": self.valuation_basis})
 
     async def solana_swap(self, params, ctx):
         self.calls.append((params, ctx))
         body = f"solana swap\n  valued: ${self.usd:.2f} (declared max $1.00)\n"
         body += ("\n[DRY RUN] simulation only" if params.dry_run else "SENT sig abc")
-        return SimpleNamespace(error=None, extracted_content=body)
+        return SimpleNamespace(error=None, extracted_content=body, metadata={
+            "min_out_raw": 248750000, "valuation_basis": self.valuation_basis})
 
 
 def test_parse_orders_and_refusals():
@@ -63,7 +66,7 @@ def test_bare_swap_quotes_with_a_bound_and_go_line():
         "owner", ["0.1", "native", "to", USDC, "on", "base"], tool=tool))
     assert [p.dry_run for p, _ in tool.calls] == [True]
     assert "min after 50bps" in out
-    assert out.rstrip().endswith(f"/swap 0.1 native to {USDC} on base max 262.51 go")
+    assert out.rstrip().endswith(f"/swap 0.1 native to {USDC} on base min_raw 248750000 max 262.51 go")
 
 
 def test_go_with_max_refuses_when_the_price_moved_above_it():
@@ -117,3 +120,37 @@ def test_the_bound_reads_the_guards_value_not_a_symbol():
     assert swap_ops._quoted_usd(r) == 250.0
     from surfaces.telegram import send_ops
     assert send_ops._simulated_usd(r) == 250.0
+
+
+def test_confirm_line_carries_output_floor_into_the_live_swap():
+    tool = _Tool()
+    typed = ["0.1", "native", "to", USDC, "on", "base"]
+    reply = asyncio.run(swap_ops.swap_reply("owner", typed, tool=tool))
+    confirm = cards.confirm_line_in("/swap", typed, reply)
+    assert confirm and "min_raw" in confirm
+    asyncio.run(swap_ops.swap_reply("owner", confirm + ["go"], tool=tool))
+    assert tool.calls[-1][0].minimum_output_raw == 248750000
+
+
+@pytest.mark.parametrize("chain,token_out", [("base", USDC), ("solana", MINT)])
+def test_inflow_quote_accepts_better_return_within_absolute_cap(chain, token_out):
+    tool = _Tool(valuation_basis="inflow")
+    typed = ["0.1", "native", "to", token_out, "on", chain]
+    reply = asyncio.run(swap_ops.swap_reply("owner", typed, tool=tool))
+    assert "better return is allowed" in reply
+    confirm = cards.confirm_line_in("/swap", typed, reply)
+    assert confirm and "min_raw" in confirm and "3000.00" in confirm
+    tool.usd = 400  # More than the original quote + 5%, but a favorable move.
+    reply = asyncio.run(swap_ops.swap_reply("owner", confirm + ["go"], tool=tool))
+    live = [p for p, _ in tool.calls if not p.dry_run]
+    assert "SENT" in reply and len(live) == 1
+    assert live[0].minimum_output_raw == 248750000
+    assert live[0].max_spend_usd == 3000
+
+
+def test_inflow_quote_still_respects_explicit_owner_maximum():
+    tool = _Tool(usd=400, valuation_basis="inflow")
+    reply = asyncio.run(swap_ops.swap_reply("owner", [
+        "0.1", "native", "to", USDC, "on", "base", "max", "300", "go"], tool=tool))
+    assert "price moved" in reply
+    assert all(p.dry_run for p, _ in tool.calls)

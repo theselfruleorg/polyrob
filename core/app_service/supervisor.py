@@ -245,7 +245,12 @@ class AppSupervisor:
     # --- deploy ------------------------------------------------------------
 
     def _resolve_source(self, row: Dict[str, Any]) -> str:
-        src = os.path.realpath(str(row.get("source_dir") or ""))
+        approved = os.path.normpath(str(row.get("source_dir") or ""))
+        src = os.path.realpath(approved)
+        if not os.path.isabs(approved) or src != approved:
+            # The tool records the resolved directory and the owner MAC covers
+            # that string; a path that now resolves elsewhere is a swap (IO-A1).
+            raise DeployError(f"app dir {approved} no longer resolves to itself (symlink in the path)")
         if not any(src == root or src.startswith(root + os.sep) for root in self.source_roots):
             raise DeployError(f"app dir {src} is outside the allowed source roots")
         if not os.path.isdir(src):
@@ -263,6 +268,11 @@ class AppSupervisor:
             src = self._resolve_source(row)
             digest = str(row["workspace_digest"])[:12]
             snap_dir, total, files, skipped = self._snapshot(row, src, digest)
+            from core.ship_tree import tree_digest
+            if not tree_digest(snap_dir).startswith(str(row["workspace_digest"])):
+                # ship == tested: publish only the bytes the tests ran on.
+                raise DeployError("the snapshot does not match the tested workspace digest "
+                                  "— run the tests and request the deploy again")
             host_port = int(row["host_port"]) if row.get("host_port") else self.allocate_port()
             await self._docker(["rm", "-f", name], timeout=60)
             code, _out, err = await self._docker(["network", "create", "--driver", "bridge", net],
@@ -462,10 +472,10 @@ class AppSupervisor:
             fd = open_owned_dir(self.data_dir, ["apps", safe_tenant(row["user_id"]), row["slug"]])
             try:
                 tmp = f".logs.{secrets.token_hex(8)}.tmp"
-                out = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644,
+                out = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o640,
                               dir_fd=fd)
                 try:
-                    os.fchmod(out, 0o644)
+                    os.fchmod(out, 0o640)
                     os.write(out, text.encode("utf-8", errors="replace"))
                 finally:
                     os.close(out)

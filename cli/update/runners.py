@@ -144,9 +144,12 @@ def build_runners(
         if not retired:
             retired.append(pk.retired_installed())
         return wanted[0]
-    deps_file = Path(tempfile.gettempdir()) / f"polyrob-update-deps-{os.getpid()}.txt"
-
     def _pip_install() -> None:
+        # A private, unpredictable directory prevents shared-/tmp link attacks.
+        with tempfile.TemporaryDirectory(prefix="polyrob-update-") as staging:
+            _install_into(Path(staging) / "dependencies.txt")
+
+    def _install_into(deps_file: Path) -> None:
         notes: List[str] = []
         ids = _wanted_packs()
         hashed = lock_path(repo) is not None

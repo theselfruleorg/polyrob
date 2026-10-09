@@ -28,8 +28,10 @@ import errno
 import os
 import shutil
 import stat
+from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from core.security.confined_write import confined_parent
 from core.ship_tree import SKIP_DIRS, walk_shippable  # noqa: F401  (SKIP_DIRS re-exported)
 
 _COPY_CHUNK = 1024 * 1024
@@ -111,25 +113,33 @@ def _remove_entry(parent_fd: int, name: str) -> None:
         os.unlink(name, dir_fd=parent_fd)
 
 
-def _copy_nofollow(src: str, dst_dir_fd: int, name: str, *, budget: int) -> int:
+def _copy_nofollow(src: str, dst_dir_fd: int, name: str, *, budget: int, source_root: str) -> int:
     """Copy *src* -> ``dst_dir_fd/name`` without ever following a symlink on
     either side. Returns the byte count. Raises ``SnapshotTooLarge`` when the
     file would blow *budget*, and ``OSError(ELOOP)`` when *src* is (or became)
     a symlink."""
-    fd = os.open(src, os.O_RDONLY | os.O_NOFOLLOW)
+    with confined_parent(Path(src), Path(source_root)) as (parent, leaf):
+        fd = os.open(leaf, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
     try:
         st = os.fstat(fd)
-        if not stat.S_ISREG(st.st_mode):
-            raise OSError(errno.ELOOP, "not a regular file", src)
+        # A hard-linked file ships only when world-readable (uv/pnpm cache
+        # trees hard-link 0644 files); a link to a private file stays skipped.
+        if not stat.S_ISREG(st.st_mode) or (
+                st.st_nlink != 1 and not st.st_mode & stat.S_IROTH):
+            raise OSError(errno.ELOOP, "not a single-link regular file", src)
         if st.st_size > budget:
             raise SnapshotTooLarge(f"{src} exceeds the remaining snapshot budget")
         out_fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600,
                          dir_fd=dst_dir_fd)
+        copied = 0
         try:
             while True:
-                chunk = os.read(fd, _COPY_CHUNK)
+                chunk = os.read(fd, min(_COPY_CHUNK, budget - copied + 1))
                 if not chunk:
                     break
+                copied += len(chunk)
+                if copied > budget:
+                    raise SnapshotTooLarge("file grew beyond the snapshot budget")
                 view = memoryview(chunk)
                 while view:
                     n = os.write(out_fd, view)
@@ -138,7 +148,7 @@ def _copy_nofollow(src: str, dst_dir_fd: int, name: str, *, budget: int) -> int:
             os.utime(out_fd, (st.st_atime, st.st_mtime))
         finally:
             os.close(out_fd)
-        return int(st.st_size)
+        return copied
     finally:
         os.close(fd)
 
@@ -186,14 +196,14 @@ def snapshot_tree(src: str, dst: str, *, max_mb: int,
                 rel_dir, _, fname = rel.rpartition("/")
                 try:
                     size = _copy_nofollow(full, _dir_fd(rel_dir), _check_name(fname),
-                                          budget=limit - total)
+                                          budget=limit - total, source_root=src_real)
                 except SnapshotTooLarge:
                     raise SnapshotTooLarge(
                         f"tree exceeds APP_SERVICE_SNAPSHOT_MAX_MB={max_mb} at {rel}")
                 except UnsafePath:
                     raise
                 except OSError as e:
-                    if e.errno in (errno.ELOOP, errno.EMLINK, errno.ENOENT):
+                    if e.errno in (errno.ELOOP, errno.EMLINK, errno.ENOENT, errno.ENOTDIR):
                         # Swapped to a symlink (or vanished) after the walk saw a
                         # regular file: refuse it exactly like a declared symlink.
                         skipped.append(f"{rel} (symlink)")

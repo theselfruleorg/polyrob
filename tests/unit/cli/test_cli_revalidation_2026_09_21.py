@@ -201,7 +201,7 @@ def test_durably_revoked_does_not_create_the_store(monkeypatch, tmp_path):
     assert not os.path.exists(db)
 
     fake = types.SimpleNamespace(
-        _ctx=types.SimpleNamespace(session_id="sess-1"),
+        _ctx=types.SimpleNamespace(session_id="sess-1"), _revocation_probe=None,
         envelope=types.SimpleNamespace(revoked=False))
     assert WalletBridge._durably_revoked(fake) is False
     assert not os.path.exists(db), f"a READ created {db}"
@@ -223,7 +223,7 @@ def test_durably_revoked_reads_a_real_revocation(monkeypatch, tmp_path):
     store.mark_revoked("sess-1")
 
     fake = types.SimpleNamespace(
-        _ctx=types.SimpleNamespace(session_id="sess-1"),
+        _ctx=types.SimpleNamespace(session_id="sess-1"), _revocation_probe=None,
         envelope=types.SimpleNamespace(revoked=False))
     assert WalletBridge._durably_revoked(fake) is True
     assert fake.envelope.revoked is True

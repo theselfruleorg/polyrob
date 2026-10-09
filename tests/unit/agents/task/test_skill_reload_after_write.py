@@ -62,5 +62,5 @@ def test_skill_manage_busts_the_cache_on_every_successful_write():
 
     from tools.controller import action_registration as ar
     src = inspect.getsource(ar.ActionRegistrationMixin._register_skill_manage_action)
-    # create/patch, promote and delete all change what `load_skill` should emit.
-    assert src.count("forget_activated_skill(self, params.skill_id)") == 3
+    # create/patch share a call, delete has its own; model promotion is refused.
+    assert src.count("forget_activated_skill(self, params.skill_id)") == 2

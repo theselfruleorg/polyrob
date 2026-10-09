@@ -235,6 +235,37 @@ at all, and a room turn cannot reach an approval-gated verb in the first place. 
 breadcrumbs are capped at one per room per 30 minutes, so a room in a crash loop cannot
 flood the owner's DM.
 
+## The agent as reader and moderator (`room_read`, `room_moderate`)
+
+Outside the room, in the owner's private session or an autonomous run, the agent has
+three verbs for the rooms on the allowlist:
+
+- **`room_read`** reads a room's local ledger: the lines the bot saw, kept 14 days
+  or 2,000 rows per chat. It is not a live Telegram history, and every read says so.
+  A room that is not on the allowlist is refused with the list of real rooms. Room
+  lines are third-party text, so the turn that read them is tainted.
+- **`room_moderate`** mutes, unmutes, bans, unbans or deletes in a room, through the
+  same adapter as the owner's own `/mute` and `/ban`. A mute defaults to 1 hour and a
+  ban to 30 days; a mute or ban can also delete the target's lines from the last 48
+  hours, and `delete` takes message ids from `room_read`. The target is refused if it
+  is the owner, a live chat administrator or creator, a room admin, or cannot be read.
+  The bot must hold the Telegram right (`can_restrict_members` / `can_delete_messages`).
+- **`message(action="delete")`** removes one of the agent's own posts, using its
+  record of what it posted as the proof of ownership, within Telegram's 48-hour window.
+  Owner turns only; `message(action="posts")` lists what it posted.
+
+Whose decision a moderation is:
+
+| The turn | What happens |
+|---|---|
+| An owner turn that has read no third-party content | It runs: this is the owner's own instruction |
+| An owner turn that read room lines (or any other outside text) | Each moderation waits for the owner's tap |
+| An autonomous run | Only under a standing owner-authored cron job whose text names the room (by chat id or title); any other run is refused |
+| A room turn, or a correspondent-tainted session | Refused |
+
+So a member line in a room can never talk the agent into banning another member: the
+agent may read the room, but the decision is the owner's, now or in a job he wrote.
+
 ## Owner commands from inside a room
 
 The owner's money, host and control verbs do not RUN from a room, even for the owner
@@ -536,8 +567,9 @@ that case is a credit.
 
 ### What this does NOT do
 
-- The agent does not decide to mute anyone. A member asks, pays, and Telegram
-  performs it.
+- On this rail the agent does not decide to mute anyone. A member asks, pays, and
+  Telegram performs it. (The agent's own `room_moderate`, above, is a separate,
+  owner-decided path.)
 - The room's LLM session is not on this path at all. It still has no money tool
   and cannot create an invoice; `/mute` is a deterministic command, so it works
   when the model is down, out of credit, or paused.

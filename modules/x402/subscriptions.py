@@ -364,15 +364,16 @@ async def apply_settlement(subscription_id: str, request_id: str, *, db=None) ->
             sub.get("user_id"))
         return SettlementResult.REFUSED
 
-    await database.begin_transaction()
+    transaction = database if callable(getattr(database, "begin_transaction", None)) else database.connection
+    await transaction.begin_transaction()
     try:
         cur = await database.execute(
             "INSERT INTO subscription_applied_settlements (request_id, subscription_id, applied_at) "
-            "VALUES (?, ?, datetime('now'))",
+            "VALUES (?, ?, datetime('now')) ON CONFLICT(request_id) DO NOTHING",
             (request_id, subscription_id),
         )
     except sqlite3.IntegrityError:
-        await database.rollback()
+        await transaction.rollback()
         # With the atomic write, a PK conflict now RELIABLY means a PRIOR
         # call already committed the ledger row AND the extension together
         # — never a partial state. Safe to treat as "already settled".
@@ -393,12 +394,12 @@ async def apply_settlement(subscription_id: str, request_id: str, *, db=None) ->
         # core/tickers.py + core/autonomy_runtime.py's own idiom) still
         # rolls back and re-raises — cancellation is never swallowed, it
         # just no longer bypasses cleanup.
-        await database.rollback()
+        await transaction.rollback()
         raise
 
     if not getattr(cur, "rowcount", 0):
-        await database.rollback()
-        return SettlementResult.UNKNOWN
+        await transaction.rollback()
+        return SettlementResult.ALREADY_APPLIED
 
     # M8 (lost extension under concurrent application): compute the new
     # paid_through IN SQL (read-modify-write in ONE atomic statement) rather
@@ -427,7 +428,7 @@ async def apply_settlement(subscription_id: str, request_id: str, *, db=None) ->
              STATUS_CANCELED),
         )
         if not getattr(upd, "rowcount", 0):
-            await database.rollback()
+            await transaction.rollback()
             logger.warning(
                 "subscriptions: apply_settlement REFUSED — subscription %s is "
                 "canceled; invoice %s does not reactivate it", subscription_id,
@@ -439,10 +440,10 @@ async def apply_settlement(subscription_id: str, request_id: str, *, db=None) ->
         # crux of the Finding 1 fix. Also catches asyncio.CancelledError
         # explicitly (fix pass 3 — see the twin comment above): otherwise a
         # cancellation mid-UPDATE would leak _in_transaction=True forever.
-        await database.rollback()
+        await transaction.rollback()
         raise
 
-    await database.commit()
+    await transaction.commit()
     # Re-read the atomically-computed paid_through for the telemetry emit (the
     # UPDATE computed it in SQL, so it isn't available in Python). Best-effort —
     # telemetry, never money-critical.

@@ -45,9 +45,12 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 
 # Request/Response Models
 
+from modules.credits.balance_manager import MAX_CREDIT_CHANGE
+
+
 class AddCreditsRequest(BaseModel):
     """Request to add credits to user."""
-    amount: int
+    amount: int = Field(..., gt=0, le=MAX_CREDIT_CHANGE, strict=True)
     reason: str
     transaction_type: str = "admin_grant"
 
@@ -1030,12 +1033,19 @@ async def block_user(
 
     # Check user exists
     user = await db.fetch_one(
-        "SELECT 1 FROM user_profiles WHERE user_id = ?", (user_id,)
+        "SELECT role, wallet_address FROM user_profiles WHERE user_id = ?", (user_id,)
     )
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
     admin_id = getattr(request.state, 'user_id', 'unknown')
+
+    from core.constants import is_admin
+    from core.instance import resolve_owner_user_id
+    if user_id in (admin_id, resolve_owner_user_id()) or user.get("role") == "owner":
+        raise HTTPException(status_code=403, detail="The owner and your own account cannot be blocked")
+    if is_admin(user.get("role"), user.get("wallet_address")) and getattr(request.state, "role", None) != "owner":
+        raise HTTPException(status_code=403, detail="Only the owner can block an administrator")
 
     # Insert or update blocked_users record
     await db.execute("""
@@ -1415,7 +1425,7 @@ async def resolve_billing_failure(
 
     # Verify failure exists and is pending
     failure = await db.fetch_one("""
-        SELECT id, user_id, credits_owed, status
+        SELECT id, user_id, credits_owed, status, request_id
         FROM billing_failures WHERE id = ?
     """, (failure_id,))
 
@@ -1432,8 +1442,16 @@ async def resolve_billing_failure(
     resolution = resolution_request.resolution
     notes = resolution_request.notes
 
-    # If resolution is "charged", try to actually deduct credits
-    if resolution == "charged":
+    reserved = str(failure['request_id'] or '').startswith('llm-reserve:')
+    if reserved:
+        from modules.credits.reservations import settle_reservation
+        balance_mgr = require_service('balance_manager', missing="Balance service unavailable")
+        success = await settle_reservation(
+            balance_mgr, failure['user_id'], failure['request_id'],
+            failure['credits_owed'] if resolution == 'charged' else 0)
+        if not success:
+            raise HTTPException(status_code=409, detail="Reservation could not be reconciled; no new charge was made")
+    elif resolution == "charged":
         balance_mgr = require_service('balance_manager', missing="Balance service unavailable")
         success = await balance_mgr.deduct_credits(
             user_id=failure['user_id'],

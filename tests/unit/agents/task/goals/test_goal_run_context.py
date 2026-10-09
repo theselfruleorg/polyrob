@@ -73,7 +73,7 @@ def test_set_outcome_on_done_goal(tmp_path):
     b = GoalBoard(str(tmp_path / "g.db"))
     g = b.create(user_id="rob", title="t goal")
     b.claim(g.id, "w", ttl_seconds=60)
-    b.record_success(g.id, result="OUTCOME: x")
+    b.record_success(g.id, result="OUTCOME: x", claim_token=b.get(g.id).claim_token)
     assert b.set_outcome(g.id, "x") is True
     assert b.get(g.id).payload["outcome"] == "x"
 

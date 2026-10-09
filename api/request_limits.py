@@ -59,8 +59,10 @@ def _client_key(scope):
     try:
         from starlette.requests import Request
 
-        from api.dependencies import get_trusted_client_ip
-        return get_trusted_client_ip(Request(scope))
+        from api.dependencies import get_trusted_client_ip, rate_key_for_ip
+        # API-11: an IPv6 client is its /64, so it cannot take every slot by
+        # rotating addresses inside one prefix.
+        return rate_key_for_ip(get_trusted_client_ip(Request(scope)))
     except Exception:
         return None
 

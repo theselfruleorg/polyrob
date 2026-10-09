@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "polyrob"
-version = "1.2.1"
+version = "1.3.0"
 description = "POLYROB — autonomous AI agent framework"
 requires-python = ">=3.11"
 license = "MIT"
@@ -24,13 +24,16 @@ dependencies = [
   # installs on first use (local) or names in a refusal (server).
   "openai>=1.26.0",
   "tiktoken>=0.7.0", "aiohttp>=3.14.3", "aiofiles>=23.0.0", "aiosqlite>=0.19.0",
-  "requests>=2.30.0", "certifi>=2024.0.0", "cryptography>=50.0.0", "pyjwt>=2.8.0",
+  "requests>=2.30.0", "certifi>=2024.0.0", "cryptography>=50.0.0", "pyjwt>=2.15.1",
   "rich>=13.0.0", "prompt_toolkit>=3.0.43", "click>=8.0", "colorama>=0.4.6",
   "markdown>=3.5.0", "markdownify>=0.11.0",
   "pillow>=12.3.0",
   # Security floors for transitive parsers/HTTP clients; see the system security review.
-  "httplib2>=0.32.0", "pyasn1>=0.6.4",
+  "httplib2>=0.32.0", "pyasn1>=0.6.4", "multidict>=6.9.1",
   "pyyaml>=6", "packaging>=23.2", "h2>=4.4.1",
+  # openai 3.x moved to httpx2, so httpx is no longer transitive; core, tools and
+  # the email provider import it directly.
+  "httpx>=0.27",
 ]
 
 [project.optional-dependencies]
@@ -80,8 +83,15 @@ voice = ["faster-whisper>=1.0.0"]
 feishu = ["lark-oapi>=1.4,<2"]
 # 067 P0.4: the HF Spaces deploy broker (tools/hf_deploy/broker.py, lazy import).
 hf = ["huggingface_hub>=0.20.0"]
+# 073 W7: the SDKs of the cloud-sandbox packs (packs/modal, packs/daytona,
+# packs/vercel_sandbox; each pack.toml names its extra). Imported only in the
+# backend's setup(). In `all` so CI resolves them; prod opts into none.
+# packs/singularity drives the apptainer/singularity CLI and has no extra.
+modal = ["modal>=0.73"]
+daytona = ["daytona>=0.21"]
+vercel-sandbox = ["vercel>=0.3"]
 dev = ["pytest>=7.0.0", "pytest-asyncio>=0.23.0", "ruff>=0.6", "build", "twine"]
-all = ["polyrob[gemini,anthropic,server,browser,memory-vector,media,docs,anysite,crypto,solana,telegram,twitter,voice,feishu,hf]"]
+all = ["polyrob[gemini,anthropic,server,browser,memory-vector,media,docs,anysite,crypto,solana,telegram,twitter,voice,feishu,hf,modal,daytona,vercel-sandbox]"]
 
 [project.urls]
 Homepage = "https://github.com/theselfruleorg/polyrob"
@@ -94,21 +104,31 @@ polyrob = "cli.polyrob:main"
 # 067 (owner decision 2026-09-25, "one install"): the first-party packs ship
 # INSIDE this distribution. Their identity is (dist "polyrob", this entry point)
 # — core/packs/index.json. Their SDKs stay optional through the extras each
-# pack.toml names (`extra =`): x -> twitter, discovery -> anysite, markets -> crypto.
+# pack.toml names (`extra =`): x -> twitter, discovery -> anysite, markets -> crypto,
+# modal -> modal, daytona -> daytona, vercel_sandbox -> vercel-sandbox (singularity: none).
 # A new first-party pack = a packs/<dir>/<package>/ with a pack.toml, a row here,
 # its root in `where` and its package in `include` below.
 [project.entry-points."polyrob.packs"]
+daytona = "polyrob_daytona:pack"
 discovery = "polyrob_discovery:pack"
 markets = "polyrob_markets:pack"
+modal = "polyrob_modal:pack"
+singularity = "polyrob_singularity:pack"
+vercel_sandbox = "polyrob_vercel_sandbox:pack"
 x = "polyrob_x:pack"
 
 [tool.setuptools.packages.find]
 # The first-party pack roots (067, one install): each packs/<dir> holds one
 # top-level package (polyrob_x, ...), found beside core's.
-where = [".", "packs/discovery", "packs/markets", "packs/x"]
+where = [".", "packs/daytona", "packs/discovery", "packs/markets", "packs/modal",
+         "packs/singularity", "packs/vercel_sandbox", "packs/x"]
 include = ["cli*","core*","agents*","modules*","tools*","api*","utils*","cron*","surfaces*","webview*","datagen*","data","assets*","migrations*",
-           "polyrob_discovery*","polyrob_markets*","polyrob_x*"]
-exclude = ["*.node_modules", "*.node_modules.*", "*.__pycache__", "*.__pycache__.*"]
+           "polyrob_daytona*","polyrob_discovery*","polyrob_markets*","polyrob_modal*",
+           "polyrob_singularity*","polyrob_vercel_sandbox*","polyrob_x*"]
+# webview/dev is the console's dev-only test rig (node, vitest, axe results); it
+# is discovered as a namespace package by name, so exclude it explicitly.
+exclude = ["*.node_modules", "*.node_modules.*", "*.__pycache__", "*.__pycache__.*",
+           "webview.dev", "webview.dev.*"]
 
 [tool.setuptools.package-data]
 "*" = ["*.json","*.txt","*.md"]
@@ -147,6 +167,12 @@ exclude = ["*.node_modules", "*.node_modules.*", "*.__pycache__", "*.__pycache__
 "polyrob_discovery" = ["pack.toml", "skills/**/*"]
 "polyrob_markets" = ["pack.toml", "skills/**/*"]
 "polyrob_x" = ["pack.toml", "skills/**/*"]
+"polyrob_daytona" = ["pack.toml"]
+"polyrob_modal" = ["pack.toml"]
+"polyrob_singularity" = ["pack.toml"]
+"polyrob_vercel_sandbox" = ["pack.toml"]
 
 [tool.setuptools.exclude-package-data]
 "*" = ["**/__pycache__/*", "**/*.pyc", "**/*.pyo"]
+# The console internals doc is private-tree documentation, not package data.
+"webview" = ["README.md"]

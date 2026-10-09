@@ -25,7 +25,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from tools.tool_disclosure import _one_liner, resolve_tool_status
+from tools.tool_disclosure import _one_liner, resolve_tool_status, disclosure_ceiling
 
 _STATUS_RANK = {"loaded": 0, "loadable": 1, "gated": 2}
 
@@ -92,7 +92,7 @@ def _score(query: str, tokens: List[str], hay_id: str, hay_desc: str) -> int:
     return score
 
 
-def search_tools(query: str, *, container, loaded_ids, is_leaf: bool = False,
+def search_tools(query: str, *, container, loaded_ids, is_leaf: bool = False, allowed_ids=None,
                  mcp_tools: Optional[List[Dict[str, Any]]] = None,
                  limit: int = 8) -> SearchResult:
     """Rank every callable tool (built-ins + connected MCP tools) against *query*.
@@ -112,7 +112,7 @@ def search_tools(query: str, *, container, loaded_ids, is_leaf: bool = False,
         if s <= 0:
             continue
         st = resolve_tool_status(display, container=container,
-                                 loaded_ids=loaded, is_leaf=is_leaf)
+                                 loaded_ids=loaded, is_leaf=is_leaf, allowed_ids=allowed_ids)
         scored.append((-s, _STATUS_RANK.get(st.status, 3), display,
                        ToolHit(display, "builtin", st.status, st.reason, st.remedy, d)))
 
@@ -178,6 +178,7 @@ async def perform_tool_search(controller, query: str, limit: int = 8,
 
     sr = search_tools(query, container=getattr(controller, "container", None),
                       loaded_ids=set(controller.list_tools()),
+                      allowed_ids=disclosure_ceiling(controller),
                       is_leaf=_is_leaf(controller, execution_context),
                       mcp_tools=_mcp_metadata(controller), limit=limit)
     if not sr.results:
@@ -199,7 +200,7 @@ async def perform_tool_search(controller, query: str, limit: int = 8,
 
 
 def describe_tool(tool_id: str, *, container, loaded_ids, is_leaf: bool,
-                  mcp_tools: List[Dict[str, Any]], registry) -> str:
+                  mcp_tools: List[Dict[str, Any]], registry, allowed_ids=None) -> str:
     """Render the full detail block for one id. Pure over its inputs; the wrapper
     supplies them from the controller."""
     from core.tool_capabilities import TOOL_CAPABILITIES
@@ -229,7 +230,7 @@ def describe_tool(tool_id: str, *, container, loaded_ids, is_leaf: bool,
                 "tool_search('<keyword>') or browse the <tool-catalog>.")
 
     st = resolve_tool_status(display, container=container,
-                             loaded_ids=set(loaded_ids or ()), is_leaf=is_leaf)
+                             loaded_ids=set(loaded_ids or ()), is_leaf=is_leaf, allowed_ids=allowed_ids)
     caps = TOOL_CAPABILITIES.get(display)
     cap_line = ("capabilities: (unclassified)" if caps is None
                 else "capabilities: " + (", ".join(sorted(caps)) if caps else "(none)"))
@@ -291,6 +292,7 @@ async def perform_tool_describe(controller, tool_id: str, execution_context=None
         tool_id,
         container=getattr(controller, "container", None),
         loaded_ids=set(controller.list_tools()),
+        allowed_ids=disclosure_ceiling(controller),
         is_leaf=_is_leaf(controller, execution_context),
         mcp_tools=_mcp_metadata(controller),
         registry=getattr(controller, "registry", None))

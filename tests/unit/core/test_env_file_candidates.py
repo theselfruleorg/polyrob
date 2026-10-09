@@ -27,11 +27,9 @@ def test_local_candidate_order_and_tiers(tmp_path, monkeypatch):
     home, proj = _make_local_layout(tmp_path, monkeypatch)
     from core.paths import env_file_candidates
     cands = env_file_candidates("development", local_mode=True)
-    assert [c.tier for c in cands] == [
-        "project", "home", "legacy-home", "root", "config-env", "config-env-local"]
-    assert cands[0].path == proj / ".polyrob" / ".env"
-    assert cands[1].path == home / ".polyrob" / ".env"
-    assert cands[2].path == home / ".rob" / ".env"
+    assert [c.tier for c in cands] == ["home", "legacy-home"]
+    assert cands[0].path == home / ".polyrob" / ".env"
+    assert cands[1].path == home / ".rob" / ".env"
 
 
 def test_server_candidate_order_and_tiers(tmp_path, monkeypatch):

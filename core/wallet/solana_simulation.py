@@ -66,6 +66,10 @@ class SolanaDeltas:
     ok: bool
     reason: str = ""
     native_delta: int = 0                     # lamports
+    #: The transaction passed vetting and REVERTED in simulation (the node's
+    #: structured ``err``) — set only at that branch; a refusal-taint
+    #: precondition (``refusal_taint.simulation_kind``), never read from text.
+    reverted: bool = False
     token_deltas: Dict[str, int] = field(default_factory=dict)
     #: Re-derived from the EVM ``allowance_deltas``. Tuples of
     #: ``(kind, mint, party)`` where kind is one of ``delegate``,
@@ -193,7 +197,7 @@ def parse_deltas(sim: Any, *, owner: str,
     if not isinstance(value, dict):
         return SolanaDeltas(False, "simulation returned no value block")
     if value.get("err") is not None:
-        return SolanaDeltas(False, f"simulation reverted: {value['err']}")
+        return SolanaDeltas(False, f"simulation reverted: {value['err']}", reverted=True)
 
     pre: List[Any] = list(sim.get("_pre") or [])
     post: List[Any] = list(value.get("accounts") or [])

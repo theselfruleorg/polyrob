@@ -72,6 +72,44 @@ def last_reply_text(orchestrator):
     return value if isinstance(value, str) and value.strip() else None
 
 
+def is_repeat_reply(orchestrator, text: str) -> bool:
+    """Did this turn already say exactly ``text`` to the user?
+
+    Prod 2026-10-06: the model re-sent an identical reply one step after the
+    first was delivered, and the owner got it twice. ``send_message`` asks this
+    before publishing. Fail-open to False — a fault never swallows a message.
+    """
+    try:
+        if not isinstance(text, str) or not text.strip():
+            return False
+        prior = last_reply_text(orchestrator)
+        if prior is None:
+            return False
+        a, b = prior.strip(), text.strip()
+        if a == b:
+            return True
+        # 13:32:57 / 13:33:01 the same day: a re-send with a few words reworded
+        # reached the owner twice too. Long, near-identical text is the same message.
+        if min(len(a), len(b)) >= _NEAR_MIN_CHARS:
+            from difflib import SequenceMatcher
+            return SequenceMatcher(None, a, b).ratio() >= _NEAR_RATIO
+        return False
+    except Exception:
+        return False
+
+
+#: What ``send_message`` tells the agent instead of re-sending. It does NOT say
+#: "call done()": a repeat can come mid-task (two identical timeout notices from
+#: ``llm_runner``), and ending the turn there drops the owner's request.
+REPEAT_REPLY_NOTE = ("Not re-sent: the user already has this exact message from this turn. "
+                     "Do not send it again. Continue the task; call done() only if the work "
+                     "is finished.")
+
+#: A reply this long that matches the turn's earlier reply this closely is a re-send.
+_NEAR_MIN_CHARS = 80
+_NEAR_RATIO = 0.85
+
+
 def reset_turn(orchestrator) -> None:
     """Clear the record at a turn boundary."""
     if orchestrator is None:

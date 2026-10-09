@@ -310,3 +310,12 @@ def test_an_undecodable_image_format_says_so_rather_than_posing_as_a_document(ws
     assert "Attached image" in text
     assert "CANNOT see it" in text
     assert rel in text
+
+
+def test_inline_attachment_refuses_hardlinked_secret(ws, tmp_path):
+    secret = tmp_path / "secret"
+    secret.write_text("private secret content")
+    os.link(secret, os.path.join(ws, "innocent.txt"))
+    text, images = inject_file_content(ws, "innocent.txt", "read this")
+    assert "private secret content" not in text
+    assert images is None

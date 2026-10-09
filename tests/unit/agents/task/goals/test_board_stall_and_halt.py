@@ -57,7 +57,7 @@ def test_stalled_board_suppressed_when_waiting_goal_has_live_dependency(tmp_path
     # a blocked goal too, proving the guard isn't just "no blocked goals"
     doomed = board.create(user_id="rob", title="doomed work entirely", max_retries=1)
     board.claim(doomed.id, "w", ttl_seconds=60)
-    board.record_failure(doomed.id, error="boom")
+    board.record_failure(doomed.id, error="boom", claim_token=board.get(doomed.id).claim_token)
 
     p = build_planner_prompt(board, "rob", None)
     assert "STALLED BOARD" not in p
@@ -70,7 +70,7 @@ def test_stalled_board_still_fires_without_waiting_goals(tmp_path):
     board.create_objective(user_id="rob", title="mission")
     doomed = board.create(user_id="rob", title="doomed work alone", max_retries=1)
     board.claim(doomed.id, "w", ttl_seconds=60)
-    board.record_failure(doomed.id, error="boom")
+    board.record_failure(doomed.id, error="boom", claim_token=board.get(doomed.id).claim_token)
 
     p = build_planner_prompt(board, "rob", None)
     assert "STALLED BOARD" in p
@@ -93,7 +93,8 @@ def test_case_a_stalled_present_when_waiting_prereq_is_agent_blocked(tmp_path):
     prereq = board.create(user_id="rob", title="prerequisite that goes agent-blocked",
                           max_retries=3)
     board.claim(prereq.id, "w", ttl_seconds=60)
-    board.record_failure(prereq.id, error="transient")  # 1 < max_retries=3 -> back to 'ready'
+    board.record_failure(prereq.id, error="transient",
+        claim_token=board.get(prereq.id).claim_token)  # 1 < max_retries=3 -> back to 'ready'
     assert board.get(prereq.id).status == "ready"
     assert board.block_from_ready(prereq.id, error="agent declared BLOCKED: needs creds") is True
     assert board.get(prereq.id).status == "blocked"  # NOT cascaded to its dependent
@@ -120,7 +121,7 @@ def test_case_b_stalled_suppressed_when_waiting_prereq_is_running(tmp_path):
     assert dependent.status == "waiting"
     doomed = board.create(user_id="rob", title="unrelated doomed goal", max_retries=1)
     board.claim(doomed.id, "w", ttl_seconds=60)
-    board.record_failure(doomed.id, error="boom")
+    board.record_failure(doomed.id, error="boom", claim_token=board.get(doomed.id).claim_token)
 
     p = build_planner_prompt(board, "rob", None)
     assert "STALLED BOARD" not in p
@@ -139,7 +140,7 @@ def test_case_c_stalled_suppressed_for_waiting_on_waiting_chain_with_live_root(t
     assert leaf.status == "waiting"
     doomed = board.create(user_id="rob", title="unrelated doomed goal two", max_retries=1)
     board.claim(doomed.id, "w", ttl_seconds=60)
-    board.record_failure(doomed.id, error="boom")
+    board.record_failure(doomed.id, error="boom", claim_token=board.get(doomed.id).claim_token)
 
     p = build_planner_prompt(board, "rob", None)
     assert "STALLED BOARD" not in p
@@ -155,7 +156,8 @@ def test_stalled_suppression_is_boardwide_one_live_chain_covers_a_dead_one(tmp_p
     # dead chain
     dead_prereq = board.create(user_id="rob", title="dead prereq", max_retries=3)
     board.claim(dead_prereq.id, "w", ttl_seconds=60)
-    board.record_failure(dead_prereq.id, error="transient")
+    board.record_failure(dead_prereq.id, error="transient",
+        claim_token=board.get(dead_prereq.id).claim_token)
     board.block_from_ready(dead_prereq.id, error="agent declared BLOCKED: needs creds")
     board.create(user_id="rob", title="dead dependent", depends_on=[dead_prereq.id])
     # live chain

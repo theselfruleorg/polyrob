@@ -65,8 +65,8 @@ def test_the_console_csp_dropped_unsafe_inline_from_script_src():
     carry inline scripts — so this pins the console (non-serve) directive only.
     """
     server = (Path(__file__).resolve().parents[3] / "webview" / "server.py").read_text()
-    # Isolate the console (else-branch) CSP: the directive that lists cdn.socket.io.
-    m = re.search(r'"script-src \'self\'[^"]*cdn\.socket\.io[^"]*"', server)
+    # Console scripts are exclusively same-origin; artifacts have their own CSP.
+    m = re.search(r'"script-src \'self\'; "', server)
     assert m, "could not find the console script-src directive in server.py"
     assert "'unsafe-inline'" not in m.group(0), (
         "the console CSP script-src still carries 'unsafe-inline': " + m.group(0))

@@ -116,7 +116,7 @@ async def test_read_actions_record_nothing(tlog):
 
 
 @pytest.mark.asyncio
-async def test_mcp_read_only_hint_narrows_the_record(tlog):
+async def test_mcp_read_only_hint_cannot_suppress_the_record(tlog):
     from tools.controller.effect_hooks import make_effect_record_hook
 
     async def fn():
@@ -128,7 +128,7 @@ async def test_mcp_read_only_hint_narrows_the_record(tlog):
     await hook("srv_list", {}, None, _Forged())
     await hook("srv_write", {}, None, _Forged())
     rows = tlog().query(kind="external_write")
-    assert [r["attrs"]["action"] for r in rows] == ["srv_write"]
+    assert {r["attrs"]["action"] for r in rows} == {"srv_list", "srv_write"}
     assert rows[0]["effect"] == "network"
 
 

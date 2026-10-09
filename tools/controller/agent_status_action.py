@@ -115,15 +115,24 @@ def register_agent_status_action(controller) -> None:
 		return
 
 	class AgentStatusAction(BaseModel):
-		pass
+		release_notes: str = ""
 
 	@controller.registry.action(
 		"Report your own runtime state: health (credit sentinel, open asks, blocked "
 		"goals, suppressed owner messages, dead loops), steps used/remaining, active "
-		"tools, context usage, and wallet/ledger balance. Read-only.",
+		"tools, context usage, and wallet/ledger balance. Read-only. Set release_notes "
+		"to 'latest' or a version ('1.2.0', 'unreleased') to read instead what shipped "
+		"in that release, from the CHANGELOG.md deployed with your code.",
 		param_model=AgentStatusAction,
 	)
 	async def agent_status(params: AgentStatusAction, execution_context=None) -> ActionResult:
+		if (params.release_notes or "").strip():
+			from core.version import release_notes, running_version_line
+			return ActionResult(
+				extracted_content=f"running: {running_version_line()}\n"
+				+ release_notes(params.release_notes),
+				include_in_memory=True,
+			)
 		user_id = getattr(execution_context, 'user_id', None) or getattr(controller, 'user_id', None)
 		lines = []
 		# 0) the shared status snapshot — health FIRST, then every section

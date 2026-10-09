@@ -68,7 +68,11 @@ async def test_local_mode_promote_activates_and_reads(monkeypatch, tmp_path):
     await action.function(action.param_model(action="update", content="Owner uses metric units."),
                           execution_context=ctx)
     res = await action.function(action.param_model(action="promote"), execution_context=ctx)
-    assert res.extracted_content and "promoted" in res.extracted_content.lower()
+    assert res.error and "owner" in res.error.lower()
+    from core import self_evolution
+    ok, message = self_evolution.promote("owner_doc", ctx.user_id, user_id=ctx.user_id,
+                                       home_dir=tmp_path, instance_id="polyrob")
+    assert ok, message
     rd = await action.function(action.param_model(action="read"), execution_context=ctx)
     assert "metric" in rd.extracted_content
 

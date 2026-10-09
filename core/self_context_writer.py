@@ -299,10 +299,12 @@ class SelfContextWriter:
         if not src.is_file():
             return SelfContextWriteResult(False, errors=["no self-context doc to patch"])
 
-        # A forged turn may refine its OWN pending draft but NEVER an active doc
-        # (when no pending exists, src is the active doc → block the forged author).
-        if created_by in _NON_USER_AUTHORS and not target_is_pending:
-            return SelfContextWriteResult(False, errors=["a background turn cannot patch the active self-context"])
+        # A forged turn NEVER edits an active doc. Patching one lands a PENDING
+        # revision for the owner's promote instead (prod 2026-10-04 16:24: the
+        # outright refusal meant an owner rule never reached the owner to approve;
+        # skills made the same move on 2026-09-19). `_resolve_pending` already
+        # forces quarantine for these authors; `pending=True` below makes it explicit.
+        background_revision = created_by in _NON_USER_AUTHORS and not target_is_pending
 
         try:
             current = src.read_text(encoding="utf-8")
@@ -322,7 +324,8 @@ class SelfContextWriter:
         # against is the SAME `src` we just read — so only the patched line is
         # new/changed, which is exactly the line that gets stamped.
         return self.propose(updated, user_id=uid, created_by=created_by,
-                            pending=pending if pending is not None else target_is_pending,
+                            pending=True if background_revision else (
+                                pending if pending is not None else target_is_pending),
                             source=source, observed_at=observed_at)
 
     def list_pending(self, user_id: str) -> Optional[dict]:

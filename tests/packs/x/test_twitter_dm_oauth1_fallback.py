@@ -101,7 +101,7 @@ async def test_dm_send_401_on_oauth2_retries_with_oauth1(monkeypatch):
     t = _tool(monkeypatch)
     t.dm_client.create_direct_message.side_effect = _Unauth()
     t.client.create_direct_message.return_value = MagicMock(data={"dm_event_id": "7"})
-    res = await t.twitter_dm(TwitterDMAction(recipient="123456", text="hi"))
+    res = await t.twitter_dm(TwitterDMAction(recipient="123456", text="hi", allow_plaintext=True))
     assert res.error is None, res.error
     assert t.client.create_direct_message.call_args.kwargs["user_auth"] is True
 
@@ -110,7 +110,7 @@ async def test_dm_send_401_on_oauth2_retries_with_oauth1(monkeypatch):
 async def test_final_401_names_the_remedy(monkeypatch):
     t = _tool(monkeypatch, oauth1=False)
     t.dm_client.create_direct_message.side_effect = _Unauth()
-    res = await t.twitter_dm(TwitterDMAction(recipient="123456", text="hi"))
+    res = await t.twitter_dm(TwitterDMAction(recipient="123456", text="hi", allow_plaintext=True))
     assert res.error and "401" in res.error
     assert "/x login" in res.error and "polyrob x-account oauth-login" in res.error
     assert "no fallback rail" in res.error

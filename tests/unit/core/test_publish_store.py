@@ -269,3 +269,28 @@ def test_a_failed_update_leaves_the_live_version_served(store, tmp_path, monkeyp
     store.stage("u1", "live", [str(ws / "index.html")], confine_to=str(ws))
     assert open(served).read() == "v2"
     assert not [d for d in os.listdir(store.root) if d.startswith((".build-", ".old-"))]
+
+
+@pytest.mark.parametrize("content", [
+    b'{"api_key":"sk-' + b'a' * 40 + b'"}',
+    b'\xff\x00 Authorization: Basic dXNlcjpwYXNzd29yZA==',
+])
+def test_publication_refuses_secret_content(store, tmp_path, content):
+    source = tmp_path / "innocent.bin"
+    source.write_bytes(content)
+    with pytest.raises(ValueError, match="secret-shaped"):
+        store.stage("rob", "leak", [str(source)])
+    assert not os.path.exists(store.dir_for("leak"))
+    assert not os.path.exists(store.staging_dir_for("leak"))
+
+
+def test_publication_refuses_hardlinked_file(store, tmp_path):
+    outside = tmp_path / "outside"
+    outside.write_text("private")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    source = workspace / "page.txt"
+    os.link(outside, source)
+    with pytest.raises(ValueError, match="source changed"):
+        store.stage("rob", "leak", [str(source)], confine_to=str(workspace))
+    assert not os.path.exists(store.dir_for("leak"))

@@ -391,6 +391,9 @@ def make_control_message(text: str, origin: str) -> "HumanMessage":
         A ``HumanMessage`` with ``origin`` set and content enveloped as needed.
     """
     tag = _ORIGIN_ENVELOPE.get(origin)
+    if origin == MessageOrigin.COMPACTION_SUMMARY:
+        from core.context_fences import defang_control_fences
+        text = defang_control_fences(text)
     content = f"<{tag}>\n{text}\n</{tag}>" if tag else text
     return HumanMessage(content=content, origin=origin)
 

@@ -61,9 +61,10 @@ def _write_flag(key: str, value: str, *, is_global: bool) -> None:
     """Route ONE flag write through ``core.config_service.set_value`` and echo
     its message (which already carries the post_write_notes: shadow, clamp
     echo, restart honesty). Raises ``ClickException`` on refusal/invalid."""
+    # Always the home .env: ./.polyrob/.env is never loaded (a cloned directory
+    # could supply it), so a project-scope write here had no effect at all.
     from core.config_service import set_value
-    res = set_value(key, value, scope="global" if is_global else "project",
-                    surface="local")
+    res = set_value(key, value, scope="global", surface="local")
     if not res.ok:
         raise click.ClickException(res.message)
     click.echo(res.message)
@@ -154,8 +155,9 @@ def status_cmd(as_json):
 @autonomy.command("on")
 @click.option("--mode", "mode", default=None,
               help="Also set AUTONOMY_MODE (supervised|autonomous)")
-@click.option("--global", "is_global", is_flag=True, default=False,
-              help="Write to ~/.polyrob/.env (default: ./.polyrob/.env)")
+@click.option("--global", "is_global", is_flag=True, default=True,
+              help="Accepted for old scripts: the write always goes to the home "
+                   ".env (~/.polyrob/.env), the only file the CLI loads.")
 def on_cmd(mode, is_global):
     """Turn the autonomy master ON (writes AUTONOMY_ENABLED=true).
 
@@ -173,8 +175,9 @@ def on_cmd(mode, is_global):
 @autonomy.command("off")
 @click.option("--mode", "mode", default=None,
               help="Also set AUTONOMY_MODE (supervised|autonomous)")
-@click.option("--global", "is_global", is_flag=True, default=False,
-              help="Write to ~/.polyrob/.env (default: ./.polyrob/.env)")
+@click.option("--global", "is_global", is_flag=True, default=True,
+              help="Accepted for old scripts: the write always goes to the home "
+                   ".env (~/.polyrob/.env), the only file the CLI loads.")
 def off_cmd(mode, is_global):
     """Turn the autonomy master OFF (writes AUTONOMY_ENABLED=false).
 

@@ -2,6 +2,7 @@
 (core/avatar.py). Read-only: the console shows the face, it never sets it."""
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from tests.unit.webview.owner_session import owner_headers
 
 from core import avatar
 from core.instance import resolve_instance_id
@@ -79,7 +80,7 @@ def test_the_svg_csp_survives_the_console_security_middleware(monkeypatch, tmp_p
     import webview.server as server
     monkeypatch.setattr(pages, "_avatar_data_dir", lambda: str(tmp_path))
     avatar.set_avatar(tmp_path, resolve_instance_id(), SVG, source="nft:base:0x1:1")
-    r = TestClient(server._fastapi).get("/avatar.png")
+    r = TestClient(server._fastapi, headers=owner_headers(monkeypatch)).get("/avatar.png")
     assert r.status_code == 200
     csp = r.headers["content-security-policy"]
     assert csp.startswith("default-src 'none'") and "sandbox" in csp

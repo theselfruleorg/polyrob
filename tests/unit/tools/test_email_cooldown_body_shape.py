@@ -67,7 +67,8 @@ def test_the_email_tool_passes_the_body_it_records():
     src = inspect.getsource(et)
     assert "text=body)" in src, \
         "the cooldown must be given the same string record_outbound stores"
-    assert 'store.record_outbound(user_id, "email", params.to, body' in src
+    # 2026-10-04: one gated rail (`_gated_send`) records each recipient.
+    assert 'store.record_outbound(user_id, "email", addr, body' in src
     # D66: and that ONE string is the SCRUBBED body — scrubbed above the gate,
     # so the gate, the transcript and SMTP all see the same bytes.
-    assert "body = scrub_secret_shapes(params.body" in src
+    assert "body = scrub_secret_shapes(raw_body)" in src

@@ -396,7 +396,8 @@ class TaskAgentLifecycleMixin:
                 if user_tier == 'admin':
                     logger.debug(f"Admin user {user_id} bypassed credit check")
                     return
-                if user_tier == 'x402':
+                from core.billing_context import is_prepaid
+                if user_tier == 'x402' and is_prepaid():
                     # x402 users pay per-request via middleware, not via credits
                     logger.debug(f"x402 user {user_id} bypassed credit check (paid via x402)")
                     return
@@ -421,7 +422,7 @@ class TaskAgentLifecycleMixin:
         except AgentError:
             raise  # Re-raise our own error
         except Exception as e:
-            logger.warning(f"Credit check failed (allowing session): {e}")
+            raise AgentError("Credit verification is unavailable; retry before starting a paid session.") from e
     def is_autonomous_session(self, session_id: str) -> bool:
         """031: is *session_id* an autonomous run (goal/cron/planner) rather than
         an owner-driven chat session? Read by ``core.autonomy_runtime`` on the

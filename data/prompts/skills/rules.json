@@ -246,7 +246,8 @@
     },
     "priority": 3,
     "auto_activate": true,
-    "description": "Edit code safely (read, plan, edit, run tests, iterate)"
+    "description": "Edit code safely (read, plan, edit, run tests, iterate)",
+    "version": "2"
   },
   "task-planning": {
     "triggers": {
@@ -1028,5 +1029,67 @@
     "auto_activate": true,
     "description": "Uniswap v3 liquidity positions with the lp verbs: reading positions, pricing a deposit, adding, removing and collecting, the fee unit, and why a Pons graduation pool is different.",
     "version": "2"
+  },
+  "incident-response": {
+    "triggers": {
+      "tool_ids": [],
+      "keywords": [
+        "incident response",
+        "production incident",
+        "live incident",
+        "security incident",
+        "outage",
+        "postmortem",
+        "post-mortem",
+        "leaked key",
+        "leaked secret",
+        "leaked token",
+        "leaked credentials",
+        "exposed secret",
+        "credential leak",
+        "wallet drained",
+        "account compromised",
+        "key compromised"
+      ],
+      "action_names": [],
+      "task_patterns": [
+        "\\b(prod|production|site|website|service|server|api|bot|agent|app|endpoint|database|db)\\b.{0,40}\\b(is|went|goes|has gone|keeps going)\\s+down\\b",
+        "\\bleak(ed|s|ing)?\\b.{0,40}\\b(api ?keys?|secrets?|tokens?|credentials?|passwords?|seed phrase|mnemonic|private keys?)\\b",
+        "\\b(api ?keys?|secrets?|tokens?|credentials?|passwords?|seed phrase|mnemonic|private keys?)\\b.{0,40}\\b(leaked|exposed|compromised|stolen)\\b",
+        "\\b(wallet|account|server|vps)\\b.{0,30}\\b(drained|compromised|hacked|breached)\\b"
+      ]
+    },
+    "priority": 2,
+    "auto_activate": true,
+    "description": "Run a live incident (impact first, stabilise before root cause, roll back before you debug, one change at a time, observed recovery) and contain a leaked secret (revoke or rotate, scope, purge, prove the old credential dead, record)",
+    "requires": [
+      "secret-handling"
+    ],
+    "version": "1"
+  },
+  "adversarial-consensus": {
+    "triggers": {
+      "tool_ids": [],
+      "keywords": [
+        "adversarial consensus",
+        "adversarial review",
+        "adversarial panel",
+        "blind panel",
+        "consensus panel",
+        "red team this",
+        "red-team this",
+        "independent opinions",
+        "independent second opinions"
+      ],
+      "action_names": [],
+      "task_patterns": [
+        "\\b(run|convene|use|get|start)\\b.{0,20}\\b(an? )?(adversarial|blind|independent) (panel|council|review|consensus)\\b",
+        "\\b(stress[- ]test|red[- ]team)\\b.{0,30}\\b(this|the|my|our)\\b.{0,20}\\b(decision|plan|proposal|thesis|design|strategy)\\b"
+      ]
+    },
+    "priority": 5,
+    "auto_activate": true,
+    "description": "Blind independent answers from delegate_task children, cross-critique of anonymised answers, then your own judgement of agreements, disagreements and blind spots; for large decisions or when the owner asks",
+    "version": "1"
   }
 }

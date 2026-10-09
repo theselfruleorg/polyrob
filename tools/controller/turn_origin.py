@@ -303,6 +303,29 @@ def _message_action_result(res: dict, surface: str, target: str, text: str) -> "
 	from tools.controller.types import ActionResult
 
 	note = f" [{res['note']}]" if res.get('note') else ""
+	if 'posts' in res:  # 0008: action=posts — what I posted, by ledger row
+		lines = [f"post #{r['post']} -> {surface}:{r['chat']} msg {','.join(r['message_ids'])} "
+		         f"{r['age_h']}h ago{'' if r['deletable'] else ' (too old to delete)'}: "
+		         f"{r['preview']!r}" for r in res['posts']]
+		return ActionResult(extracted_content=(
+			f"my posts on {surface}" + (f":{target}" if res.get('target') else "") + ":\n"
+			+ ("\n".join(lines) or "(none in the post ledger)")), include_in_memory=True)
+	if 'deleted_posts' in res:  # 0008: action=delete
+		done = ", ".join(f"#{r}" for r in res['deleted_posts'])
+		if res['success']:
+			return ActionResult(extracted_content=f"deleted post(s) {done} on {surface}{note}",
+			                    include_in_memory=True)
+		return ActionResult(
+			extracted_content=(f"message delete -> {surface}: "
+			                   + (f"deleted {done}; " if done else "")
+			                   + f"FAILED: {res.get('error') or ''}{note}"),
+			error=res.get('error') or 'delete failed', include_in_memory=True)
+	# 0008: the receipt names the surface's message id and the ledger row, so the
+	# post can be named — and deleted on the owner's word — later.
+	if res.get('message_id'):
+		note += f" [message_id {res['message_id']}"
+		note += (f"; post #{res['post']} — delete with message(action='delete', "
+		         f"post={res['post']})]" if res.get('post') is not None else "]")
 	# Overnight 2026-07-19 sibling fix: an attachment-blind result made the agent
 	# resend ~12x and declare BLOCKED — success must NAME what rode the message.
 	attached = (f" [attached {len(res['media_attached'])} file(s): "

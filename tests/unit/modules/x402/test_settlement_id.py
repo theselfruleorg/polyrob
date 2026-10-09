@@ -5,7 +5,7 @@ from modules.x402.x402_integration import settlement_payment_id
 
 def test_uses_tx_hash_when_present():
     pid = settlement_payment_id("0xDEADBEEFcafebabe1234", "0xpayer", "/a2a/rpc", 100)
-    assert pid == "x402_0xDEADBEEFcafeba"  # x402_ + first 16 chars of tx
+    assert pid == "x402_0xdeadbeefcafebabe1234"
 
 
 def test_txless_is_deterministic_for_same_window():

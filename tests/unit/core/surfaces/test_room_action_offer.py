@@ -78,7 +78,7 @@ def _quoter(price=0.10, liq=50_000.0, verdict="SURVIVOR", ts=None):
     class _Q:
         def quote(self, asset):
             return PriceQuote("rob", price, liq, verdict, "test",
-                              ts if ts is not None else time.time())
+                              ts if ts is not None else time.time(), confidence="high")
     return _Q()
 
 

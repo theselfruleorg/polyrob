@@ -19,6 +19,11 @@ def build_stream_publish(
     the legacy stream callback path stays byte-identical. Fail-open — a publish error
     never propagates into the run loop.
     """
+    if router is not None and session_key:
+        reset = getattr(router, 'reset_stream', None)
+        if callable(reset):
+            reset(session_key)
+
     async def _publish(chunk: str, step: int = 0) -> None:
         from core.surfaces.config import SurfaceConfig
 

@@ -95,3 +95,29 @@ def test_evaluate_access_after_approval_allowed(tmp_path):
     s.approve(d1.pairing_code)
     d2 = evaluate_access("u2", store=s, required=True)
     assert d2.allowed and d2.reason == "paired"
+
+
+def test_expired_code_cannot_be_approved_and_is_replaced(tmp_path, monkeypatch):
+    import core.pairing as pairing
+    clock = [1000.0]
+    monkeypatch.setattr(pairing.time, "time", lambda: clock[0])
+    store = _store(tmp_path)
+    first = store.request("u1")
+    clock[0] += pairing.PAIRING_CODE_TTL_SEC + 1
+    assert store.approve(first) is None
+    assert not store.list_pending()
+    second = store.request("u1")
+    assert first != second
+    assert store.approve(second) == "u1"
+    assert store.approve(second) is None
+
+
+def test_pairing_store_failure_denies_remote_user(monkeypatch):
+    import core.pairing as pairing
+    monkeypatch.setenv("POLYROB_REQUIRE_PAIRING", "true")
+    def failed(*a, **kw):
+        raise OSError("unreadable")
+    monkeypatch.setattr(pairing, "PairingStore", failed)
+    decision = pairing.guard_inbound(None, "stranger", surface_id="telegram")
+    assert decision is not None and not decision.allowed
+    assert "unavailable" in decision.reason

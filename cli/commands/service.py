@@ -63,8 +63,12 @@ def _exec_argv() -> list[str]:
     ``sys.executable`` is the venv the user installed into — the same
     interpreter the ``polyrob`` shim execs — so the unit can never drift onto a
     different checkout the way a bare ``polyrob`` on ``PATH`` can.
+
+    ``-I`` (isolated mode): ``-m`` otherwise puts the working directory first on
+    ``sys.path``, so a ``cli/`` or ``core/`` package in it would run in place of
+    polyrob's own (SUP-1) — the same flag the install.sh shim uses.
     """
-    argv = [sys.executable, "-m", "cli.polyrob"]
+    argv = [sys.executable, "-I", "-m", "cli.polyrob"]
     profile = _active_profile()
     if profile:
         argv += ["-P", profile]

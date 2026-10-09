@@ -57,6 +57,23 @@ from tools.browser.actions import (
 from tools.controller.execution_context import ActionExecutionContext
 
 
+async def _semantic_snapshot(page, format_tree) -> tuple:
+	"""The page as semantic text: (text, method). Empty text => caller falls back.
+
+	Playwright removed `page.accessibility` (gone in the pinned 1.63, prod
+	2026-10-04: every extract fell back to raw HTML); its replacement is
+	`locator.aria_snapshot()` (>= 1.49), a YAML-like role tree. A Playwright that
+	still has the old API keeps the old path, formatted by `format_tree`."""
+	legacy = getattr(page, 'accessibility', None)
+	if legacy is not None:
+		tree = await legacy.snapshot()
+		formatted = format_tree(tree) if tree else ''
+		if not isinstance(formatted, str):  # the formatter returns str or list
+			formatted = '\n'.join(formatted)
+		return formatted, 'accessibility_snapshot'
+	return (await page.locator('body').aria_snapshot()) or '', 'aria_snapshot'
+
+
 def _check_url_ssrf(url: str) -> Optional[str]:
 	"""SSRF guard for agent-supplied navigation URLs.
 
@@ -917,11 +934,10 @@ class Browser(BaseTool):
 			MAX_EXTRACT_CHARS = 25000  # 8x increase from 3k - reasonable for 128k+ models
 
 			try:
-				snapshot = await page.accessibility.snapshot()
+				formatted_content, snapshot_method = await _semantic_snapshot(
+					page, self._format_accessibility_snapshot)
 
-				if snapshot:
-					# Format snapshot as readable text
-					formatted_content = self._format_accessibility_snapshot(snapshot)
+				if formatted_content:
 
 					# Add page metadata
 					page_title = await page.title()
@@ -942,7 +958,7 @@ class Browser(BaseTool):
 					else:
 						result_text = full_content
 						self.logger.info(
-							f"Extracted page content - {len(result_text):,} chars (accessibility API)"
+							f"Extracted page content - {len(result_text):,} chars ({snapshot_method})"
 						)
 
 					return ActionResult(
@@ -951,7 +967,7 @@ class Browser(BaseTool):
 						metadata={
 							'url': page_url,
 							'title': page_title,
-							'method': 'accessibility_snapshot',
+							'method': snapshot_method,
 							'size': len(result_text),
 							'truncated': len(full_content) > MAX_EXTRACT_CHARS
 						}

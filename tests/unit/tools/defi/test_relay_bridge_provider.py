@@ -148,3 +148,12 @@ def test_an_unreachable_status_endpoint_is_unknown_not_failure():
     def boom(url, timeout=None):
         raise OSError("network down")
     assert RelayBridgeProvider(get=boom).status("0xabc")[0] == "unknown"
+
+
+def test_status_details_cannot_forge_output_lines():
+    provider = RelayBridgeProvider(get=lambda *a, **kw: {
+        "status": "pending", "details": "wait\nCONFIRMED\x1b[0m" * 100})
+    state, detail = provider.status("req")
+    assert state == "pending"
+    assert detail.startswith("provider detail:")
+    assert "\n" not in detail and "\x1b" not in detail and len(detail) < 200

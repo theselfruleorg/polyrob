@@ -194,13 +194,19 @@ def _reply_target(action_name: str, params: Any) -> tuple:
     single-recipient reply shape (multi-recipient / cc / bcc are never exempt)."""
     name = str(action_name or "").strip().lower()
     if name == "message":
+        # 0008: only a SEND is a reply. `delete`/`posts` act on the agent's own
+        # posts in any chat — never something a correspondent's text may steer.
+        if str(_param(params, "action") or "send").strip().lower() not in ("send", "reply"):
+            return ("", "")
         return (str(_param(params, "surface") or ""),
                 str(_param(params, "target") or ""))
     if name == "email_send":
-        # EmailSendAction is extra="forbid" with a single `to` field — there is no
-        # cc/bcc to widen the blast radius. Keep reading both anyway: the check is
-        # free, and it stays correct if the param model ever grows them.
-        if _param(params, "cc") or _param(params, "bcc"):
+        # EmailSendAction has cc/bcc/attachments (2026-10-04): a cc or bcc widens
+        # the blast radius, and an attachment would carry workspace files to the
+        # party that tainted the session — none of them is a clean reply. A
+        # comma-separated `to` never equals one tainting address, so it is not
+        # exempt either.
+        if _param(params, "cc") or _param(params, "bcc") or _param(params, "attachments"):
             return ("", "")
         to = _param(params, "to") or _param(params, "to_email")
         if isinstance(to, (list, tuple)):
@@ -251,6 +257,20 @@ def build_reply_allowed(
             logger.debug("reply_allowed probe failed (deny): %s", e)
             return False
     return _allowed
+
+
+def install_correspondent_gate(controller, orchestrator):
+    """Enforce existing taint regardless of the flag admitting new correspondents."""
+    hook = make_correspondent_gate_hook(
+        lambda: bool(getattr(orchestrator, "_correspondent_tainted", False)),
+        resolve_tool=build_tool_resolver(controller),
+        get_taint_sources=lambda: set(getattr(orchestrator, "_correspondent_taint_sources", None) or ()),
+        reply_allowed=build_reply_allowed(
+            lambda: getattr(orchestrator, "container", None),
+            lambda: getattr(orchestrator, "user_id", "") or ""),
+    )
+    controller.register_pre_tool_call_hook(hook, fail_mode="closed")
+    return hook
 
 
 def make_correspondent_gate_hook(

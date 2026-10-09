@@ -14,6 +14,7 @@ import pathlib
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.unit.webview.owner_session import owner_headers
 
 _REPO = pathlib.Path(__file__).resolve().parents[3]
 
@@ -30,7 +31,7 @@ def _client(monkeypatch, posture="local", read_only=False, env="development"):
     importlib.reload(wg)
     import webview.server as srv
     importlib.reload(srv)
-    return TestClient(srv._fastapi)
+    return TestClient(srv._fastapi, headers=owner_headers(monkeypatch) if posture == "local" else {})
 
 
 @pytest.fixture(autouse=True)

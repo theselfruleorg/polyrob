@@ -19,7 +19,7 @@ def _tool(tmp_path):
 
 
 def _ctx(user):
-    return types.SimpleNamespace(user_id=user)
+    return types.SimpleNamespace(user_id=user, role="orchestrator", is_sub_agent=False, metadata={}, session_id=None)
 
 
 # ── store layer ────────────────────────────────────────────────────────────
@@ -54,7 +54,8 @@ def test_store_get_scoped_hides_other_tenants_job(tmp_path):
 # ── the real exploited surface: the agent tool ─────────────────────────────
 
 @pytest.mark.asyncio
-async def test_cronjob_cancel_tool_cross_tenant_denied(tmp_path):
+async def test_cronjob_cancel_tool_cross_tenant_denied(tmp_path, monkeypatch):
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "tenant-b")
     t = _tool(tmp_path)
     job = t._cron_service.schedule(
         task="tenant a's private recurring task", schedule_spec="1h", user_id="tenant-a",
@@ -67,7 +68,8 @@ async def test_cronjob_cancel_tool_cross_tenant_denied(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_cronjob_cancel_tool_owner_still_works(tmp_path):
+async def test_cronjob_cancel_tool_owner_still_works(tmp_path, monkeypatch):
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "tenant-a")
     t = _tool(tmp_path)
     job = t._cron_service.schedule(
         task="tenant a's own recurring task", schedule_spec="1h", user_id="tenant-a",

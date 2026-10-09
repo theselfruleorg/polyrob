@@ -304,7 +304,7 @@ async def test_m11_renewal_grant_expired_by_ttl_not_consumed(tmp_path, monkeypat
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_h7_stale_settling_reaper_reverts_to_pending(tmp_path):
+async def test_stale_settling_never_reopens_without_chain_proof(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
@@ -316,9 +316,9 @@ async def test_h7_stale_settling_reaper_reverts_to_pending(tmp_path):
             "WHERE id = ?", (inv["request_id"],))
 
         reverted = await invoicing.revert_stale_settling(max_age_seconds=600, db=db)
-        assert [r["request_id"] for r in reverted] == [inv["request_id"]]
+        assert reverted == []
         row = await invoicing.get_payment_request(inv["request_id"], db=db)
-        assert row["status"] == "pending"  # payable again
+        assert row["status"] == "settling"  # age is not evidence that nothing settled
     finally:
         await db.close()
 
@@ -350,9 +350,9 @@ async def test_h7_sweep_wired_into_tick(tmp_path):
             "WHERE id = ?", (inv["request_id"],))
         watcher = SettlementWatcher(_Agent(), db=db, goal_board=_board(tmp_path))
         out = await watcher.tick_once()
-        assert out["settling_reverted"] == 1
+        assert out["settling_reverted"] == 0
         row = await invoicing.get_payment_request(inv["request_id"], db=db)
-        assert row["status"] == "pending"
+        assert row["status"] == "settling"
     finally:
         await db.close()
 

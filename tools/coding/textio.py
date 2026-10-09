@@ -9,7 +9,7 @@ put the file back the way it was (line ending, BOM); ``write_text`` restores
 both and replaces the file atomically (temp file in the same directory, fsync,
 ``os.replace``, then fsync of the directory), keeping the file's mode, writing
 THROUGH a symlink rather than replacing the link — after re-checking that the
-resolved target is still inside the workspace — and in place for a hard link.
+resolved target is still inside the workspace — and refusing hard links with unknown destinations.
 
 A file with MIXED line endings is passed through untouched (no normalisation),
 so an edit never rewrites lines it did not touch.
@@ -17,7 +17,6 @@ so an edit never rewrites lines it did not touch.
 LANDMINE: NO ``from __future__ import annotations`` anywhere in ``tools/coding/``.
 """
 import os
-import tempfile
 from dataclasses import dataclass
 from typing import Optional
 
@@ -36,9 +35,9 @@ class TextFile:
     bom: bool
 
 
-def read_text(path: str) -> TextFile:
-    with open(path, "rb") as f:
-        raw = f.read()
+def read_text(path: str, *, root: Optional[str] = None) -> TextFile:
+    from core.security.workspace_io import read_bytes
+    raw = read_bytes(path, root or os.path.dirname(os.path.realpath(path)), shared_ok=True)
     if b"\x00" in raw[:_SNIFF_BYTES]:
         raise NotTextError(f"binary file (NUL byte): {os.path.basename(path)}")
     try:
@@ -74,74 +73,20 @@ def write_text(path: str, content: str, eol: str = "\n", bom: bool = False, *,
 
 
 def atomic_write_bytes(path: str, data: bytes, *, root: Optional[str] = None) -> None:
-    """Replace *path* with *data* atomically.
-
-    *root* re-checks confinement on the RESOLVED destination right before the
-    write: the caller's check ran before an awaited snapshot, and a symlink
-    swapped in meanwhile must not redirect the write outside the workspace
-    (codex review 2026-09-25). A read-only file is refused (a rename would
-    replace it anyway), and a hard-linked file is rewritten in place so every
-    link keeps seeing the change.
-    """
+    """Replace a confined, single-link file through pinned directory descriptors."""
+    from core.security.workspace_io import write_bytes
     dest = os.path.realpath(path)
     if root is not None:
         from core.path_safety import is_within_root
         if not is_within_root(dest, root):
             raise PermissionError(f"refusing to write outside the workspace: {path}")
-    directory = os.path.dirname(dest) or "."
     try:
         st = os.stat(dest)
     except FileNotFoundError:
         st = None
+    # A hard-linked file (uv/pnpm trees) is fine: write_bytes replaces the
+    # directory ENTRY, so the other links keep their bytes and nothing is
+    # written through the link.
     if st is not None and not os.access(dest, os.W_OK):
         raise PermissionError(f"file is read-only: {path}")
-    if st is not None and st.st_nlink > 1:
-        with open(dest, "r+b") as f:
-            f.write(data)
-            f.truncate()
-            f.flush()
-            os.fsync(f.fileno())
-        return
-    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".polyrob-edit-", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(data)
-            f.flush()
-            os.fsync(f.fileno())
-        os.chmod(tmp, (st.st_mode & 0o7777) if st is not None else (0o666 & ~_umask()))
-        os.replace(tmp, dest)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-    _fsync_dir(directory)
-
-
-def _umask() -> int:
-    """The process umask WITHOUT setting it (``os.umask`` must write to read,
-    which races every other thread's file creation). Linux exposes it in
-    /proc; elsewhere assume the common 022."""
-    try:
-        with open("/proc/self/status") as f:
-            for line in f:
-                if line.startswith("Umask:"):
-                    return int(line.split()[1], 8)
-    except (OSError, ValueError, IndexError):
-        pass
-    return 0o022
-
-
-def _fsync_dir(directory: str) -> None:
-    """Make the rename durable (best effort: not every platform allows it)."""
-    try:
-        fd = os.open(directory, os.O_RDONLY)
-    except OSError:
-        return
-    try:
-        os.fsync(fd)
-    except OSError:
-        pass
-    finally:
-        os.close(fd)
+    write_bytes(dest, root or os.path.dirname(dest), data)

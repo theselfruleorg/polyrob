@@ -1,5 +1,4 @@
-"""CR-M17: room-action invoices expire and are reset from 'settling' like
-agent invoices. Both sweeps used to filter kind='agent_invoice' only."""
+"""Room invoices expire only while pending; an unconfirmed submission stays held."""
 import json
 import uuid
 
@@ -43,9 +42,9 @@ async def test_room_action_invoice_expires_past_its_deadline(x402_db):
 
 
 @pytest.mark.asyncio
-async def test_room_action_stranded_in_settling_is_reverted(x402_db):
+async def test_room_action_unconfirmed_submission_is_not_reopened(x402_db):
     room = await _mint(x402_db, kind="room_action", status="settling",
                        deadline=9_999_999_999, stale=True)
     reverted = await invoicing.revert_stale_settling(max_age_seconds=600, db=x402_db)
-    assert [r["request_id"] for r in reverted] == [room]
-    assert await _status(x402_db, room) == "pending"
+    assert reverted == []
+    assert await _status(x402_db, room) == "settling"

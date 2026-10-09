@@ -6,6 +6,8 @@ from this service so display and mutation semantics can never drift per
 surface again. Security invariants pinned here: secrets never readable back,
 guarded prefs keep the confirm/queue pipeline, unknown keys hard-refuse.
 """
+from pathlib import Path
+
 import pytest
 
 from core import config_service as cs
@@ -67,7 +69,8 @@ def test_explain_pref_chain_shows_merge_inputs(home, monkeypatch):
 
 
 def test_explain_flag_chain_attributes_env_file(home, monkeypatch, tmp_path):
-    envfile = tmp_path / ".polyrob" / ".env"
+    from core.paths import polyrob_home
+    envfile = polyrob_home() / ".env"
     envfile.parent.mkdir(parents=True, exist_ok=True)
     envfile.write_text("GOALS_ENABLED=true\n")
     monkeypatch.setenv("GOALS_ENABLED", "true")
@@ -126,16 +129,41 @@ def test_set_pref_guarded_confirm_writes(home):
     assert res.ok and res.outcome == "written"
 
 
-def test_set_flag_shape_checked_project_scope(home, tmp_path):
-    res = cs.set_value("GOALS_ENABLED", "on", scope="project",
+def test_set_flag_shape_checked(home, tmp_path):
+    res = cs.set_value("GOALS_ENABLED", "on", scope="global",
                        user_id="u1", home_dir=home)
     assert res.ok and res.outcome == "written"
     assert "restart" in res.applies
-    assert "GOALS_ENABLED=on" in (tmp_path / ".polyrob" / ".env").read_text()
 
-    bad = cs.set_value("GOAL_DAILY_QUOTA", "not-a-number", scope="project",
+    bad = cs.set_value("GOAL_DAILY_QUOTA", "not-a-number", scope="global",
                        user_id="u1", home_dir=home)
     assert not bad.ok and bad.outcome == "invalid"
+
+
+@pytest.mark.parametrize("key,value", [("GOALS_ENABLED", "on"),
+                                       ("FOO_API_KEY", "abcdefghijklmnop")])
+def test_project_scope_env_write_is_refused_and_names_the_read_file(home, tmp_path,
+                                                                    key, value):
+    """``./.polyrob/.env`` is never loaded (a cloned directory could supply
+    it): a project write would be dead, so it is refused, nothing is written,
+    and the message names the home .env the CLI DOES read."""
+    res = cs.set_value(key, value, scope="project", user_id="u1", home_dir=home)
+    assert not res.ok and res.outcome == "refused"
+    assert str(tmp_path / "polyrob-home" / ".env") in res.message
+    assert not (tmp_path / ".polyrob" / ".env").exists()
+
+
+def test_global_write_is_seen_by_the_cli_env_loader(home, tmp_path):
+    """Regression: a write and a read through the SAME resolution agree — the
+    file set_value writes is a file core.bootstrap.load_env loads in local
+    mode (``core.paths.env_file_candidates``), holding the value."""
+    from core.env_file import read_env_file
+    from core.paths import env_file_candidates
+    res = cs.set_value("GOAL_DAILY_QUOTA", "7", scope="global")
+    assert res.ok, res.message
+    loaded = [c.path for c in env_file_candidates(local_mode=True)]
+    assert Path(res.store) in loaded
+    assert read_env_file(Path(res.store))["GOAL_DAILY_QUOTA"] == "7"
 
 
 def test_set_flag_global_scope_writes_home_env(home, tmp_path):
@@ -152,7 +180,7 @@ def test_set_unknown_key_refused(home):
 
 
 def test_set_import_frozen_flag_warns_restart_semantics(home):
-    res = cs.set_value("AGENT_COMPUTE_POSTURE", "1", scope="project",
+    res = cs.set_value("AGENT_COMPUTE_POSTURE", "1", scope="global",
                        user_id="u1", home_dir=home)
     assert res.ok
     assert "frozen at import" in res.message

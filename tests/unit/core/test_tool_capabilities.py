@@ -25,7 +25,7 @@ def test_delegate_blocked_derivation_exact():
         "code_execution", "coding", "cronjob", "x402_pay", "x402_invoice",
         "hyperliquid", "polymarket", "git", "github", "process", "tool_manage",
         "mcp", "shell", "self_env", "hf_deploy", "defi_trade", "x_browser",
-        "publish", "app_service", "launchpad", "dapp_browser", "worker_manage", "agent_nft",
+        "publish", "app_service", "launchpad", "dapp_browser", "worker_manage", "agent_nft", "twitter",
     })
 
 
@@ -67,10 +67,11 @@ def test_no_unknown_capability_tokens():
 
 
 def test_polarities_preserved():
-    # email/twitter/browser: delegable-but-high-impact.
-    for t in ("email", "twitter", "browser"):
+    # email/browser: delegable-but-high-impact. X requires an owner turn.
+    for t in ("email", "browser"):
         assert "high_impact" in TOOL_CAPABILITIES[t]
         assert "delegate_blocked" not in TOOL_CAPABILITIES[t]
+    assert {"high_impact", "delegate_blocked"} <= TOOL_CAPABILITIES["twitter"]
     # trading venues: readable while tainted (NOT high_impact as a tool_id), money.
     for t in ("hyperliquid", "polymarket"):
         caps = TOOL_CAPABILITIES[t]

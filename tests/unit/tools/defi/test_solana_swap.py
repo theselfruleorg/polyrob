@@ -17,6 +17,14 @@ ME = "HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk"
 MEME = "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"
 
 
+@pytest.fixture(autouse=True)
+def _known_mint_decimals(monkeypatch):
+    def rpc(method, params):
+        assert method == "getTokenSupply"
+        return {"value": {"decimals": 9 if params[0] == WSOL else 6}}
+    monkeypatch.setattr("core.wallet.solana_onchain._rpc", rpc)
+
+
 def _params(**kw):
     base = dict(token_in=USDC, token_out=WSOL, amount_in=1.0, max_spend_usd=2.0)
     base.update(kw)
@@ -59,6 +67,9 @@ async def test_no_route_is_reported_as_unknown(monkeypatch):
     res = await tool.solana_swap(_params())
     assert res.error and ("no route" in res.error.lower()
                           or "unknown" in res.error.lower())
+    # A market condition, tagged where it is built (as the EVM "cannot route"
+    # is): it must not taint the run and hold the owner's standing buyback notice.
+    assert (res.metadata or {}).get("error_kind") == "precondition"
 
 
 # -- the guard --------------------------------------------------------------
@@ -132,6 +143,26 @@ async def test_a_failed_simulation_refuses(monkeypatch):
                          solana_simulate_fn=lambda **k: SolanaDeltas(False, "reverted"))
     res = await tool.solana_swap(_params(dry_run=True))
     assert res.error and "simul" in res.error.lower()
+    # A vetting refusal (no `reverted` flag) still taints the run.
+    assert (res.metadata or {}).get("error_kind") is None
+
+
+@pytest.mark.asyncio
+async def test_a_reverted_simulation_is_a_precondition_not_a_taint(monkeypatch):
+    """Insufficient balance on Solana is a program error in simulation: the
+    node's structured `err`, flagged `reverted` at the branch that read it."""
+    monkeypatch.setenv("SOLANA_TRADE_ENABLED", "true")
+    from core.wallet.solana_simulation import SolanaDeltas, parse_deltas
+    reverted = parse_deltas({"value": {"err": {"InstructionError": [2, {"Custom": 1}]}}},
+                            owner=ME, owned_pubkeys=())
+    assert reverted.reverted is True and not reverted.ok
+    tool = DefiTradeTool(wallet=_Wallet(),
+                         solana_quote_fn=lambda ti, to, amt, **k: _quote(ti=ti, to=to, amt=amt),
+                         solana_build_fn=lambda *a, **k: b"\x01",
+                         solana_simulate_fn=lambda **k: reverted)
+    res = await tool.solana_swap(_params(dry_run=True))
+    assert res.error and "simul" in res.error.lower()
+    assert (res.metadata or {}).get("error_kind") == "precondition"
 
 
 @pytest.mark.asyncio
@@ -139,7 +170,7 @@ async def test_a_clean_dry_run_broadcasts_nothing(monkeypatch):
     monkeypatch.setenv("SOLANA_TRADE_ENABLED", "true")
     from core.wallet.solana_simulation import SolanaDeltas
     sent = []
-    tool = DefiTradeTool(wallet=_Wallet(),
+    tool = DefiTradeTool(wallet=_Wallet(), price_fn=lambda c, a: 100.0 if a == WSOL else None,
                          solana_quote_fn=lambda ti, to, amt, **k: _quote(ti=ti, to=to, amt=amt),
                          solana_build_fn=lambda *a, **k: b"\x01",
                          solana_simulate_fn=lambda **k: SolanaDeltas(
@@ -179,7 +210,8 @@ async def test_rent_sized_native_movement_is_allowed(monkeypatch):
                              token_deltas={USDC: -1_000_000, MEME: 10_000_000}),
                          # CR-L06: the SOL beyond fee + retained rent is charged,
                          # so SOL needs a price.
-                         price_fn=lambda c, a: 100.0,
+                         price_fn=lambda c, a: {USDC: 1.0, WSOL: 100.0, MEME: 0.1}.get(a),
+                         solana_decimals_fn=lambda mint: 6,
                          # CR-L10: the MEME buy is screened; this one is clean.
                          solana_screen_fn=lambda m: __import__(
                              "tools.defi.providers.base", fromlist=["x"]).ScreenVerdict(
@@ -292,6 +324,7 @@ async def test_a_swap_with_real_observed_movement_passes(monkeypatch):
     monkeypatch.setenv("SOLANA_TRADE_ENABLED", "true")
     from core.wallet.solana_simulation import SolanaDeltas
     tool = DefiTradeTool(wallet=_Wallet(), solana_decimals_fn=lambda m: 6,
+                         price_fn=lambda c, a: 100.0 if a == WSOL else None,
                          solana_quote_fn=lambda ti, to, amt, **k: _quote(ti=ti, to=to, amt=amt),
                          solana_build_fn=lambda *a, **k: b"\x01",
                          solana_simulate_fn=lambda **k: SolanaDeltas(

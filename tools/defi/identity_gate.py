@@ -107,6 +107,49 @@ def _own_launch(chain: str, token: str, *, probe: bool) -> bool:
         return False
 
 
+def _own_launches_for_symbol(chain: str, symbol: str, token_out: str) -> list:
+    """Rule 1, own launches (DEFI-5): addresses THIS instance launched/deployed on
+    *chain* whose first-seen symbol is *symbol*, other than ``token_out``.
+
+    Our own launch is the real token by definition, so a different contract that
+    calls itself by its symbol is the look-alike — whatever else vouches for it
+    (an owner-written target included). Read-only (the frozen first-sight symbol,
+    no chain read); fails OPEN to "no evidence", like every rule-1/2 read here.
+    Empty when ``token_out`` is itself one of our launches (two launches, one
+    symbol: neither is a look-alike)."""
+    if not symbol:
+        return []
+    try:
+        from core.wallet.addresses import same_address
+        from core.wallet.token_provenance import all_own_tokens
+        from core.wallet.tokens import frozen_record
+        out = []
+        for row in all_own_tokens():
+            if row.get("chain") != chain or same_address(row.get("address"), token_out):
+                continue
+            try:
+                rec = frozen_record(chain, row["address"]) or {}
+            except Exception:
+                continue
+            if _norm_symbol(rec.get("symbol")) == symbol:
+                out.append(row["address"])
+    except Exception:
+        logger.debug("identity gate: own-launch symbol read failed", exc_info=True)
+        return []
+    if not out:
+        return []
+    try:
+        # The owner's explicit pin of THIS contract is their word; it stands.
+        from core.wallet.token_pins import owner_pin
+        if owner_pin(chain, token_out) is not None:
+            return []
+    except Exception:
+        logger.debug("identity gate: pin read failed", exc_info=True)
+    if _own_launch(chain, token_out, probe=True):
+        return []
+    return out
+
+
 def _trust_source(id_out, *, chain: str, token_out: str, execution_context) -> str:
     """Why ``token_out`` is trusted for this buy, or ``""`` when it is not."""
     if getattr(id_out, "verified", False):
@@ -129,6 +172,24 @@ def _trust_source(id_out, *, chain: str, token_out: str, execution_context) -> s
     if _own_launch(chain, token_out, probe=True):
         return "own_launch"
     return ""
+
+
+def trusted_buy(id_out, *, chain: str, token_out: str, execution_context) -> bool:
+    """True when ``token_out`` is trusted for this buy (owner pin, own launch,
+    the run's owner-authored target, or a verified identity) and the owner has
+    not marked it NOT trusted. The swap's route check then may use the weaker,
+    liquidity-backed exit-grade price for it (DEFI-6 keeps an independent
+    check; the trust only selects the price grade). Fails closed to False."""
+    try:
+        from core.wallet.token_pins import norm_chain, rejection
+        chain = norm_chain(chain)
+        if rejection(chain, token_out, strict=True):
+            return False
+        return bool(_trust_source(id_out, chain=chain, token_out=token_out,
+                                  execution_context=execution_context))
+    except Exception:
+        logger.debug("identity gate: trust read failed", exc_info=True)
+        return False
 
 
 def _claimant_trusted(chain: str, address: str) -> bool:
@@ -230,6 +291,14 @@ def buy_identity_refusal(*, chain: str, token_out: str, id_out,
                     f"is a claim any contract can make; the pin is the owner's "
                     f"word for which one is real. Use the pinned address. "
                     + _PIN_REMEDY)
+        if not canonical:
+            ours = _own_launches_for_symbol(chain, symbol, token_out)
+            if ours:
+                return (f"refused: {symbol} on {chain} is OUR OWN launch at {ours[0]}, "
+                        f"and you asked to buy a different contract: {shown}. A "
+                        f"contract that takes the name of a token this instance "
+                        f"launched is a look-alike. Use {ours[0]}. Nothing was "
+                        f"broadcast.")
     elif not getattr(id_out, "verified", False):
         # No symbol to collide on: still prove the pin store is readable before
         # an unverified buy, or an unreadable store silently lifts nothing.

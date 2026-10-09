@@ -225,3 +225,32 @@ async def test_other_chain_gas_symbol_is_not_native_on_ethereum():
     tool, _, _ = _native_tool(Decision(True, "authorized", "autonomous", 1.0))
     res = await tool.transfer(_p(chain="ethereum", token="POL"))
     assert res.error
+
+
+# Prod 2026-10-04 17:46: address-poisoning dust from lookalikes of the owner's
+# payees. A transfer to a lookalike of a recent payee is refused before the
+# guard runs, even when the guard would authorize it.
+
+@pytest.mark.asyncio
+async def test_a_lookalike_of_a_recent_payee_is_refused(monkeypatch):
+    from core.wallet import address_lookalike
+    monkeypatch.setattr(address_lookalike, "paid_counterparties",
+                        lambda **kw: ["0x45Dd976d6E2f4557f2dfcD78FB75Bb19DCC32DC0"])
+    _Rail.last = None
+    tool, gate = _tool(Decision(True, "authorized", "owner_direct", 60.0))
+    res = await tool.transfer(_p(to="0x45d4dccbe859ed59ba3a46de6eb3ec214f7c2dc0",
+                                 dry_run=False))
+    assert res.error and "POISONING" in res.error
+    assert _Rail.last is None or _Rail.last.sent is False
+    assert gate.recorded == []
+
+
+@pytest.mark.asyncio
+async def test_the_real_recent_payee_still_goes_through(monkeypatch):
+    from core.wallet import address_lookalike
+    monkeypatch.setattr(address_lookalike, "paid_counterparties",
+                        lambda **kw: ["0x45Dd976d6E2f4557f2dfcD78FB75Bb19DCC32DC0"])
+    tool, gate = _tool(Decision(True, "authorized", "owner_direct", 60.0))
+    res = await tool.transfer(_p(to="0x45Dd976d6E2f4557f2dfcD78FB75Bb19DCC32DC0",
+                                 dry_run=False))
+    assert res.error is None and "SENT AND CONFIRMED" in res.extracted_content

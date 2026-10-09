@@ -58,11 +58,99 @@ def test_a_wrong_peer_uid_is_refused_before_anything(rig):
     _refused(rig.call("identity", {}, uid=AGENT_UID + 1), protocol.PEER_REFUSED)
 
 
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
+def test_nonfinite_spend_declarations_never_reach_signing(rig, value):
+    body = rig.body()
+    body["intent"]["max_spend_usd"] = value
+    _refused(rig.call("evm.send", body), protocol.UNKNOWN_SHAPE)
+    assert FakeRail.sent == []
+
+
+def test_fee_only_asset_risk_needs_independent_signer_review(rig, monkeypatch):
+    from core.wallet.tx_guard import Decision
+    # The valuation seam reports a fee within the cap. That is not a valuation
+    # of the NFT itself and must not suffice to unlock the remote key.
+    monkeypatch.setattr(rig.service, "_authorize", lambda *a, **k: Decision(
+        True, "guard passed", amount_usd=0.01))
+    body = rig.body(intent=native_intent(is_nft_op=True))
+    response = _refused(rig.call("evm.send", body), protocol.APPROVAL_REQUIRED)
+    row = rig.service.store.find_approval(protocol.request_digest(body["intent"],
+                                                                 protocol.tx_from_wire(body["tx"])))
+    assert "UNPRICED" in row["summary"]
+    assert response["approval_id"] == row["id"]
+    assert FakeRail.sent == []
+
+
+def test_agent_side_owner_queue_does_not_authorize_remote_signing(rig, monkeypatch):
+    from core.wallet.tx_guard import Decision
+    monkeypatch.setattr(rig.service, "_authorize", lambda *a, **k: Decision(
+        False, "owner review required", lane="owner_queue", amount_usd=10.0))
+    body = rig.body()
+    response = _refused(rig.call("evm.send", body), protocol.APPROVAL_REQUIRED)
+    assert FakeRail.sent == []
+    aid = response["approval_id"]
+    _refused(rig.call("approvals.decide", {"id": aid, "grant": True}), protocol.NOT_ROOT)
+    _ok(rig.call("approvals.decide", {"id": aid, "grant": True}, uid=0))
+    _ok(rig.call("evm.send", body))
+    assert len(FakeRail.sent) == 1
+
+
+def test_signer_review_retains_actual_transaction_and_assets(rig, monkeypatch):
+    import hashlib
+    import json
+    from types import SimpleNamespace
+    from core.wallet.tx_guard import Decision
+    from core.signer.approvals import pending_items
+    monkeypatch.setattr(rig.service, '_authorize', lambda *a, **k: Decision(
+        False, 'review\nforged heading\x1b]52;bad', lane='owner_queue', amount_usd=10))
+    collection = '0x' + '2' * 40
+    actual = '0x' + '3' * 40
+    data = '0xa9059cbb' + ('0' * 24 + OTHER[2:]) + f'{123:064x}'
+    body = rig.body(intent=native_intent(is_nft_op=True, nft_out=((collection, 'erc721', 42, 1),)))
+    body['tx'].update(to=actual, data=data)
+    response = _refused(rig.call('evm.send', body), protocol.APPROVAL_REQUIRED)
+    row = _ok(rig.call('approvals.list', {}))['pending'][0]
+    review = json.loads(row['summary'])
+    assert len(row['summary']) > 400 and row['id'] == response['approval_id']
+    assert review['actual_contract'] == actual
+    assert review['declared_intent']['to'] == body['intent']['to']
+    assert review['declared_intent']['nft_out'] == [[collection, 'erc721', 42, 1]]
+    assert review['calldata_sha256'] == hashlib.sha256(bytes.fromhex(data[2:])).hexdigest()
+    assert review['calldata_words'][0].endswith(OTHER[2:].lower())
+    assert '\x1b' not in row['summary']
+    assert review['request_digest'] == protocol.request_digest(body['intent'], body['tx'])
+    items = pending_items(SimpleNamespace(call=lambda op: {'pending': [row]}))
+    assert row['summary'] in items[0]['preview']
+
+
+def test_signer_review_refuses_oversize_instead_of_truncating(rig):
+    from core.signer.review import MAX_REVIEW_CHARS
+    with pytest.raises(ValueError, match='review limit'):
+        rig.service.store.open_approval(digest='d', op='evm.send', chain='base', amount_usd=1,
+                                       summary='x' * (MAX_REVIEW_CHARS + 1), ttl_sec=60)
+    assert not rig.service.store.pending()
+
+
+def test_signer_review_queue_is_bounded(rig):
+    from core.signer.review import MAX_PENDING_APPROVALS, MAX_REVIEW_CHARS
+    from core.signer.protocol import MAX_FRAME
+    import json
+    for n in range(MAX_PENDING_APPROVALS):
+        rig.service.store.open_approval(digest=str(n), op='evm.send', chain='base', amount_usd=1,
+                                       summary='\\' * MAX_REVIEW_CHARS, ttl_sec=60)
+    with pytest.raises(ValueError, match='queue is full'):
+        rig.service.store.open_approval(digest='overflow', op='evm.send', chain='base', amount_usd=1,
+                                       summary='bounded review', ttl_sec=60)
+    pending = rig.service.store.pending()
+    assert len(pending) == MAX_PENDING_APPROVALS
+    assert len(json.dumps({'ok': True, 'pending': pending}).encode()) < MAX_FRAME
+
+
 # -- the happy path ------------------------------------------------------------
 
 def test_a_guarded_send_is_signed_by_the_operational_key_and_booked(rig):
     result = _ok(rig.call("evm.send", rig.body()))
-    assert result["amount_usd"] == pytest.approx(10.0)
+    assert result["amount_usd"] == pytest.approx(10.27)
     assert len(FakeRail.sent) == 1
     sent = FakeRail.sent[0]
     assert sent["hash"] == result["tx_hash"]

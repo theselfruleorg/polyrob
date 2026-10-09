@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 
-def test_project_env_overrides_home(tmp_path, monkeypatch):
+def test_project_env_cannot_override_owner_home(tmp_path, monkeypatch):
     home = tmp_path / "home"; (home / ".polyrob").mkdir(parents=True)
     proj = tmp_path / "proj"; (proj / ".polyrob").mkdir(parents=True)
     (home / ".polyrob" / ".env").write_text("DEFAULT_MODEL=global-model\n")
@@ -14,7 +14,7 @@ def test_project_env_overrides_home(tmp_path, monkeypatch):
     monkeypatch.delenv("DEFAULT_MODEL", raising=False)
     from core.bootstrap import load_env
     load_env(local_mode=True)
-    assert os.environ["DEFAULT_MODEL"] == "project-model"
+    assert os.environ["DEFAULT_MODEL"] == "global-model"
 
 
 def test_process_env_wins_over_rob_files(tmp_path, monkeypatch):

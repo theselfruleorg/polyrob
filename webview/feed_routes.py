@@ -19,6 +19,8 @@ under the session OWNER's id (``pm().get_session_user``), else the caller's.
 """
 from __future__ import annotations
 
+from webview.session_access import http_session_id
+
 import json
 import logging
 import re
@@ -68,6 +70,25 @@ def _seq(item: dict) -> int:
         return int(item.get("_seq") or 0)
     except (TypeError, ValueError):
         return 0
+
+
+#: How many 1 s polls a feed watcher waits for the agent to create the feed.
+FEED_WAIT_POLLS = 600
+
+
+async def wait_for_feed_dir(path_manager, clean_id: str, polls: Optional[int] = None):
+    """The session's feed dir once the AGENT has made it, or None (WEB-9).
+
+    Read-only (no mkdir, no ``_anonymous_`` fallback) and off the event loop;
+    an id that never appears gives up, and a later join restarts the watcher.
+    """
+    import asyncio
+    for _ in range(FEED_WAIT_POLLS if polls is None else polls):
+        feed_dir = await asyncio.to_thread(path_manager.find_feed_dir, clean_id)
+        if feed_dir is not None:
+            return feed_dir
+        await asyncio.sleep(1.0)
+    return None
 
 
 def read_feed(feed_dir, *, event_type: Optional[str], limit: int,
@@ -147,15 +168,17 @@ async def api_feed_events(request: Request, session_id: str,
     # The session OWNER's id, so a shared session is readable (unchanged).
     owner = pm().get_session_user(session_id)
     user_id = owner if owner else get_authenticated_user_id(request)
-    clean_id = pm().clean_session_id(session_id)
+    clean_id = http_session_id(session_id, pm())
     logger.debug("feed events: session=%s user=%s type=%s", clean_id, user_id, event_type)
     try:
-        feed_dir = pm().get_feed_dir(clean_id, user_id=user_id)
+        # WEB-9: read-only lookup (no mkdir, no sleep), off the event loop.
+        import asyncio
+        feed_dir = await asyncio.to_thread(pm().find_feed_dir, clean_id, user_id)
     except Exception as exc:
         logger.error("feed events: no feed dir for %s: %s", clean_id, exc)
         raise HTTPException(500, {"error": "internal_error"})
-    if not feed_dir.exists():
-        logger.debug("feed events: feed dir missing: %s", feed_dir)
+    if feed_dir is None:
+        logger.debug("feed events: feed dir missing for %s", clean_id)
         raise HTTPException(404, {"error": "session_not_found"})
     body = read_feed(feed_dir, event_type=event_type, limit=limit, after_seq=after_seq)
     return JSONResponse(body, headers=_NO_STORE)

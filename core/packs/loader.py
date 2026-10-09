@@ -366,18 +366,13 @@ def enabled_set(recs: Iterable["state.PackRecord"]) -> Tuple[Set[str], Dict[str,
 
 
 def custody_refusal() -> Optional[str]:
-    """Why a third-party CODE pack may not load in this process, or None (§7):
-    it would run beside the seed. Allowed once signing lives in polyrob-signer."""
-    from core.security.host_execution import wallet_custody_enabled
-    if not wallet_custody_enabled():
+    """Apply the host-code boundary to packs, including remote signer access."""
+    from core.security.host_execution import host_execution_refusal
+    if host_execution_refusal() is None:
         return None
-    from core.security.custody_env import holds_custody_secret
-    from core.signer import MODE_REMOTE, signer_mode
-    if signer_mode() == MODE_REMOTE and not holds_custody_secret():
-        return None
-    return ("third-party code packs are refused while this process holds wallet custody "
-            "(WALLET_SIGNER is not remote); remedy: move signing to polyrob-signer "
-            "(WALLET_SIGNER=remote) or run the pack on an instance without signing credentials")
+    return ("third-party code packs are refused while wallet custody or remote signing "
+            "is enabled; run the pack in a separate instance and Python environment "
+            "without signing credentials or access to the signer socket")
 
 
 def load_packs() -> None:

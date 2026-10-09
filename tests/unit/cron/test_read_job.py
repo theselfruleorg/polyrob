@@ -47,14 +47,34 @@ def test_a_stored_window_that_no_longer_parses_holds_the_job():
 
 # -- read verbs ---------------------------------------------------------------
 
+#: Reads that are high-impact ONLY for their AUDIENCE (a correspondent or a room
+#: may not run them: wallet reconnaissance). A read job is scheduled only by the
+#: owner or the agent (cronjob is correspondent- and room-blocked), so the
+#: audience gate has nobody to stop here.
+_AUDIENCE_GATED_ONLY = {"defi_data.wallet_holdings"}
+
+
 def test_only_allowlisted_reads_on_non_money_tools():
     from agents.task.agent.core.correspondent_gate import is_high_impact
     from core.tool_capabilities import ids_with
+    from core.verb_policy_rows import CORE_VERB_ROWS
     for verb, (_m, _c, action, _p) in R.READ_VERBS.items():
         tool = verb.split(".")[0]
         assert tool not in set(ids_with("money")), verb
         assert tool not in set(ids_with("high_impact")), verb
+        if verb in _AUDIENCE_GATED_ONLY:
+            row = CORE_VERB_ROWS[tool][f"{tool}_{action}"]
+            assert set(row) <= {"correspondent_blocked", "room_denied"}, verb
+            continue
         assert not is_high_impact(f"{tool}_{action}"), verb
+
+
+def test_cron_scheduling_is_closed_to_correspondents_and_rooms():
+    """The premise of _AUDIENCE_GATED_ONLY."""
+    from agents.task.agent.core.correspondent_gate import is_high_impact_call
+    from core.verb_policy_rows import CORE_VERB_ROWS
+    assert CORE_VERB_ROWS["cronjob"]["cronjob_schedule"].get("room_denied")
+    assert is_high_impact_call("cronjob_schedule", "cronjob")
 
 
 def test_validate_refuses_unknown_verbs_bad_params_and_bad_delivery():
@@ -246,3 +266,12 @@ async def test_a_threshold_hit_makes_the_job_deliver():
     ok, text = await R.call_read_verb(spec, tool_factory=_P)
     assert ok and text.startswith("ALERT: usd")
     assert R.should_deliver("alert", ok, text)
+
+
+def test_a_wallet_holdings_watch_needs_an_explicit_address():
+    """The public read never defaults to the operator wallet (an owner read)."""
+    with pytest.raises(R.ReadJobError):
+        R.validate_read_verb({"verb": "defi_data.wallet_holdings", "params": {"chain": "base"}})
+    spec = R.validate_read_verb({"verb": "defi_data.wallet_holdings",
+                                 "params": {"address": "0x" + "1" * 40, "chain": "base"}})
+    assert spec["verb"] == "defi_data.wallet_holdings"

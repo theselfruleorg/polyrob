@@ -14,7 +14,10 @@ Controller):
   ``core.effects.classify_effect``) that returned an error taints the run
   (``core.security.refusal_taint``). A money verb another pre-hook VETOED is
   marked by :func:`note_denied_action`, called from the veto branch of
-  ``multi_act`` — a vetoed action never reaches the post hooks.
+  ``multi_act`` — a vetoed action never reaches the post hooks. An error that
+  only names an unmet precondition or a market condition (insufficient
+  allowance / balance, no route, stale quote, revert, RPC) does not taint
+  (``core.security.refusal_taint.taints``); a veto always taints.
 - **gate** (pre, fail-closed): in a tainted run, an outbound verb whose
   recipient is not the owner is refused with
   :data:`core.security.refusal_taint.PUBLIC_REFUSAL_TEXT`.
@@ -108,9 +111,14 @@ def reaches_non_owner(controller, action_name, params, user_id):
     if action_name == "message":
         return not _is_owner(controller, user_id, p.get("surface"), p.get("target"))
     if action_name == "email_send":
-        to = p.get("to")
-        return not (isinstance(to, str) and to.strip()
-                    and _is_owner(controller, user_id, "email", to))
+        # EVERY recipient (to, cc, bcc) must be the owner; a reply/forward
+        # (recipients read from a received mail) falls through to True.
+        addrs = []
+        for key in ("to", "cc", "bcc"):
+            value = p.get(key) or []
+            items = value if isinstance(value, list) else str(value).replace(";", ",").split(",")
+            addrs += [str(a).strip() for a in items if str(a).strip()]
+        return not (addrs and all(_is_owner(controller, user_id, "email", a) for a in addrs))
     return True
 
 
@@ -135,7 +143,13 @@ def make_refusal_taint_record_hook(controller):
             err = getattr(result, "error", None)
             if not err or _effect(controller, action_name) != "money":
                 return
-            from core.security.refusal_taint import mark
+            from core.security.refusal_taint import error_kind, mark, taints
+            if not taints(str(err), error_kind(result)):
+                # An unmet precondition / market error (insufficient allowance,
+                # no route, stale quote, RPC): not a refusal of an unsafe act.
+                logger.info("refusal taint: %s precondition error does not taint",
+                            action_name)
+                return
             mark(_session_id(execution_context, controller), action=str(action_name),
                  user_id=_user_id(execution_context, controller), detail=str(err))
         except Exception:

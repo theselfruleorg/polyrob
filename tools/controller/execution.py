@@ -37,6 +37,25 @@ def _dedup_action_error(action_name: str, e: Exception, tb: str) -> str:
     return _scrub_error(f"Error executing action {action_name}: {detail}\n{tb}")
 
 
+def _agent_facing_error(action_name: str, e: BaseException, tb: str) -> str:
+    """The error text the AGENT reads back (and re-sends in every later prompt).
+
+    A ServiceError anywhere in the cause chain is a tool's deliberate refusal
+    (e.g. the record-file guard): its message is the whole story, so the
+    traceback is dropped here. The log keeps the full traceback either way.
+    """
+    try:
+        from core.exceptions import ServiceError
+        cur, seen = e, 0
+        while cur is not None and seen < 8:
+            if isinstance(cur, ServiceError):
+                return _dedup_action_error(action_name, e, "").rstrip("\n")
+            cur, seen = (cur.__cause__ or cur.__context__), seen + 1
+    except Exception:
+        pass
+    return _dedup_action_error(action_name, e, tb)
+
+
 def _scrub_error(text: str) -> str:
     """CR-M08: an action error carries a traceback into ``ActionResult.error`` (agent
     memory, message history, the LLM provider) and the log — redact credential
@@ -221,8 +240,20 @@ class ExecutionMixin:
 						))
 						continue
 						
-					action_type = list(action_dump.keys())[0] if action_dump.keys() else "unknown_action"
-					action_params = action_dump.get(action_type, {})
+					# AGT-18: the hooks must judge the SAME action act() runs. act()
+					# drops None values and runs the first remaining key, so name the
+					# action the same way here — and refuse an object that names more
+					# than one, which act() would run past the hooks' first key.
+					_named = {k: v for k, v in action_dump.items() if v is not None}
+					if len(_named) != 1:
+						results.append(ActionResult(
+							error=(f"Action {i+1}/{action_count} must name exactly one action "
+							       f"(got {sorted(_named) or 'none'}); nothing ran."),
+							include_in_memory=True,
+							tool_call_id=getattr(action, "_tool_call_id", None)
+						))
+						continue
+					action_type, action_params = next(iter(_named.items()))
 
 					# An owner grant belongs to ONE action: drop any left by the previous
 					# action before this one's hooks run (the approval hook re-stamps it
@@ -348,6 +379,11 @@ class ExecutionMixin:
 					await self._run_post_tool_call_hooks(action_type, action_params, result, execution_context)
 					result.tool_call_id = getattr(action, "_tool_call_id", None)
 					self._record_invocation(action_type, result, execution_context, started_ns=started_ns)
+					# AGT-1: third-party bytes entered this turn — what it writes next
+					# is no longer the owner's own word (core/security/read_taint.py).
+					from core.security.read_taint import note_result
+					note_result(getattr(self, 'orchestrator', None), execution_context,
+					            action_type, tool_name, result)
 					results.append(result)
 
 					# Log the result with detailed information
@@ -638,10 +674,11 @@ Check the controller registry and action implementations.
 					return action_result
 				except Exception as e:
 					import traceback
-					error_msg = _dedup_action_error(action_name, e, traceback.format_exc())
+					_tb = traceback.format_exc()
+					error_msg = _dedup_action_error(action_name, e, _tb)
 					self.logger.error(error_msg)
 					action_result = ActionResult(
-						error=error_msg,
+						error=_agent_facing_error(action_name, e, _tb),
 						include_in_memory=True
 					)
 					self._capture_tool_telemetry(

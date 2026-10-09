@@ -104,7 +104,7 @@ mechanical to most conversational:
    turn, with `OWNER_RULES_IMMEDIATE` on (the default), a write **applies
    immediately**; on a forged turn (self-wake, delegation result, sub-agent,
    autonomous goal/cron run) it is queued in `/pending`. The active text is
-   capped at `OWNER_DOC_MAX_CHARS` (4000 characters); a rule a write drops
+   capped at `OWNER_DOC_MAX_CHARS` (16000 characters); a rule a write drops
    moves under `## Superseded`, dated, and is never silently deleted. An older
    install may still show a `## Operating contract` section (a legacy
    `contract.md`); no new one is created. If neither heading is in your

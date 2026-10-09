@@ -30,7 +30,7 @@ import os
 from typing import Any, Dict, List, Optional, Sequence
 
 from core.env import bool_env
-from agents.task.agent.messages.foundation_layers import FOUNDATION_LAYERS
+from agents.task.agent.messages.foundation_layers import FOUNDATION_LAYERS, layer_visible
 from modules.llm.messages import HumanMessage, MessageOrigin, SystemMessage
 
 logger = logging.getLogger(__name__)
@@ -95,8 +95,9 @@ def capture_foundation(manager: Any, tool_names: Optional[Sequence[str]] = None)
 		"provider": str(getattr(manager, "provider_name", "") or ""),
 		"cwd": os.getcwd(),
 	}
-	for key, attr, _tokens_attr, _origin in FOUNDATION_SLOTS:
-		value = getattr(manager, attr, None)
+	for layer in FOUNDATION_LAYERS:
+		key = layer.key
+		value = getattr(manager, layer.attr, None) if layer_visible(manager, layer) else None
 		if isinstance(value, (list, tuple)):
 			# 060 WS-1: a multi-message layer persists as a list of strings.
 			blob[key] = [c for c in (_content_of(m) for m in value) if c is not None] or None
@@ -199,6 +200,9 @@ def replay_foundation(manager: Any, blob: Any, log: Optional[Any] = None) -> boo
 	}
 	for layer in FOUNDATION_LAYERS:
 		key, attr, tokens_attr, origin = layer.key, layer.attr, layer.tokens_attr, layer.origin
+		if not layer_visible(manager, layer):
+			planned.append((attr, tokens_attr, None))
+			continue
 		if key == "worker_catalog":
 			from agents.task.agent.profile_store import workers_enabled
 			if not workers_enabled():

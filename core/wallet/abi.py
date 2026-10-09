@@ -256,6 +256,8 @@ def _decode_value(field: Dict[str, Any], raw: bytes, at: int):
         if count < 0:
             count = int.from_bytes(_slice(raw, at, WORD), "big")
             at += WORD
+        if count > len(raw) // WORD:
+            raise AbiError("array length exceeds the encoded data")
         items, _ = _decode_tuple([inner] * count, raw, at)
         return items
 
@@ -277,7 +279,11 @@ def _decode_value(field: Dict[str, Any], raw: bytes, at: int):
     if kind.startswith("bytes"):
         return "0x" + word[:int(kind[len("bytes"):])].hex()
     if kind.startswith("uint"):
-        return int.from_bytes(word, "big")
+        width = int(kind[len("uint"):] or 256)
+        value = int.from_bytes(word, "big")
+        if width < 8 or width > 256 or width % 8 or value >= 1 << width:
+            raise AbiError(f"encoded value is outside the range of {kind}")
+        return value
     if kind.startswith("int"):
         width = int(kind[len("int"):] or 256)
         value = int.from_bytes(word, "big")

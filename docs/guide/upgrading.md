@@ -48,6 +48,12 @@ back a release. Reverting code automatically is the `--apply` failure path: if t
 post-install verify fails, `--apply` puts both the code and the snapshot back on its
 own.
 
+Snapshots live in `<data home>/snapshots` — `~/.polyrob/data/snapshots` on a local
+install — never in the folder you run the command from, so a cloned directory
+cannot supply one. A rollback writes back only to the stores, config files and
+directories this install names, and refuses a snapshot that holds a link or a
+special file.
+
 Rollback refuses to run while the agent is in use; `--force` overrides that guard and
 risks a corrupted database, so stop the service first instead.
 

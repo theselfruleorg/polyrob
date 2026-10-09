@@ -8,6 +8,16 @@ from __future__ import annotations
 from typing import Iterable, Optional, Tuple
 
 
+def sender_user_id(msg: dict) -> Optional[str]:
+    """A real sender, never Telegram's shared anonymous/channel placeholder."""
+    if msg.get("sender_chat") is not None:
+        return None
+    uid = (msg.get("from") or {}).get("id")
+    if uid is None:
+        return None
+    return str(uid)
+
+
 def entity_text(source: str, offset: int, length: int) -> str:
     if offset < 0 or length <= 0:
         return ""

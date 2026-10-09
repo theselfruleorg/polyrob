@@ -1,10 +1,10 @@
 # The data half of the markets pack (067 P4): read by core.packs.manifest
 # WITHOUT importing this package, registered in the loader's phase 1.
 id = "markets"
-version = "1.2.1"
+version = "1.3.0"
 summary = "Prediction markets and perps: Polymarket and Hyperliquid (read tools, gated trade tools, API routes)"
 pack_api = 1
-requires_core = "==1.2.*"
+requires_core = "==1.3.*"
 requires_packs = []
 tier = "first-party"
 # 067 (one install): the core extra that carries this pack's SDKs. The pack
@@ -84,11 +84,20 @@ effect = "money"
 side = "spend"
 approval_owner = "hook"
 correspondent_blocked = true
+# A cancel retires a resting order and moves no funds (Polymarket has no stop
+# orders, so a cancel never removes protection): risk_reducing on lane none, so
+# the owner's "cancel my orders" does not wait on a second tap.
 [tools.polymarket.verbs.polymarket_cancel_order]
 effect = "money"
+side = "spend"
+risk_reducing = true
+approval_owner = "hook"
 correspondent_blocked = true
 [tools.polymarket.verbs.polymarket_cancel_all_orders]
 effect = "money"
+side = "spend"
+risk_reducing = true
+approval_owner = "hook"
 correspondent_blocked = true
 
 # --- polymarket_data: read-only market data (no wallet, delegable) ------------
@@ -118,9 +127,11 @@ correspondent_blocked = true
 [tools.polymarket_data.verbs.polymarket_data_search_markets]
 
 # --- hyperliquid: the Hyperliquid perps/spot trade tool -----------------------
-# Same shape as polymarket. L9 order verbs on the owner lane; delegation,
-# leverage and cancellations are owner_always too (42833dfa2): these venue
-# mutations have no simulate-and-assert exemption.
+# Same shape as polymarket. L9 order verbs on the owner lane; delegation and
+# leverage are owner_always too (42833dfa2): these venue mutations have no
+# simulate-and-assert exemption. A cancel and revoke_agent only REDUCE exposure
+# or authority (risk_reducing on lane none): a cancel of a TRIGGER order (a
+# stop-loss / take-profit) still asks the owner, inside the verb.
 [tools.hyperliquid]
 # 067 (one install): without this module the tool is withheld and names the pack's extra.
 requires = ["hyperliquid"]
@@ -168,14 +179,14 @@ approval_owner = "hook"
 correspondent_blocked = true
 [tools.hyperliquid.verbs.hyperliquid_cancel_order]
 effect = "money"
-lane = "owner_always"
 side = "spend"
+risk_reducing = true
 approval_owner = "hook"
 correspondent_blocked = true
 [tools.hyperliquid.verbs.hyperliquid_cancel_all_orders]
 effect = "money"
-lane = "owner_always"
 side = "spend"
+risk_reducing = true
 approval_owner = "hook"
 correspondent_blocked = true
 [tools.hyperliquid.verbs.hyperliquid_approve_agent]
@@ -186,8 +197,8 @@ approval_owner = "hook"
 correspondent_blocked = true
 [tools.hyperliquid.verbs.hyperliquid_revoke_agent]
 effect = "money"
-lane = "owner_always"
 side = "spend"
+risk_reducing = true
 approval_owner = "hook"
 correspondent_blocked = true
 [tools.hyperliquid.verbs.hyperliquid_update_leverage]

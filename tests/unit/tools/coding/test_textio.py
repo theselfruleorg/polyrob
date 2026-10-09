@@ -151,11 +151,14 @@ def test_a_read_only_file_is_refused(tmp_path):
     assert f.read_text() == "x\n"
 
 
-def test_a_hard_link_keeps_its_identity(tmp_path):
+def test_a_hard_linked_file_is_replaced_never_written_through(tmp_path):
+    """uv/pnpm trees hard-link files from a cache: an edit replaces the entry
+    (the agent's file gets the new bytes) and never writes through the link."""
     a = tmp_path / "a.txt"
     a.write_text("one\n")
     b = tmp_path / "b.txt"
     os.link(a, b)
     write_text(str(a), "two\n")
-    assert b.read_text() == "two\n"
-    assert os.stat(a).st_ino == os.stat(b).st_ino
+    assert a.read_text() == "two\n"
+    assert b.read_text() == "one\n"
+    assert os.stat(a).st_ino != os.stat(b).st_ino

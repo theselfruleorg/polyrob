@@ -322,9 +322,20 @@ def _register_pack_policies() -> None:
         print(f"polyrob: pack discovery failed: {type(exc).__name__}: {exc}", file=sys.stderr)
 
 
+def _refuse_agent_child_owner_verb() -> None:
+    """EXEC-1: an owner-only verb refuses in a process the agent started
+    (``cli/agent_child_gate.py``). Read verbs stay available to the agent."""
+    from cli.agent_child_gate import refusal
+    message = refusal(sys.argv[1:])
+    if message:
+        print(message, file=sys.stderr)
+        sys.exit(1)
+
+
 def main():
     """Entry point for [project.scripts]."""
     _register_pack_policies()
+    _refuse_agent_child_owner_verb()
     cli()
 
 

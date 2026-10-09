@@ -122,8 +122,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         """Process request with rate limiting."""
-        # Skip rate limiting for health checks and docs
-        if request.url.path in ["/health", "/docs", "/openapi.json"]:
+        # Keep public liveness available during load. Authenticated metadata uses normal limits.
+        if request.url.path == "/health":
             return await call_next(request)
 
         # Get user identifier (from auth header, IP, or session)
@@ -182,8 +182,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         user_id = getattr(request.state, "user_id", None)
         if getattr(request.state, "authenticated", False) and user_id:
             return "user_" + hashlib.sha256(str(user_id).encode()).hexdigest()
-        from api.dependencies import get_trusted_client_ip
-        client_host = get_trusted_client_ip(request) or "unknown"
+        from api.dependencies import get_trusted_client_ip, rate_key_for_ip
+        client_host = rate_key_for_ip(get_trusted_client_ip(request)) or "unknown"
         return f"ip_{client_host}"
 
 
@@ -416,7 +416,7 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         return {
             "user_id": info["user_id"],
             "authenticated": True,
-            "permissions": ["read", "write"],
+            "permissions": info.get('permissions', []),
             "auth_method": "api_key",
         }
 
@@ -445,6 +445,7 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
             return is_admin_role(user_info.get("role"))
 
         # Regular endpoints - check basic permissions
-        required_permission = "write" if request.method in ["POST", "PUT", "DELETE"] else "read"
+        from core.security.api_keys import required_scope
+        required_permission = required_scope(request.method)
         user_permissions = user_info.get("permissions", [])
         return required_permission in user_permissions

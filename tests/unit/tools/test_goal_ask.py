@@ -7,10 +7,16 @@ vanished from every owner seat. The store already dedups OPEN asks (a matching
 one is refreshed), so re-asking is safe.
 """
 import asyncio
+import pytest
 from types import SimpleNamespace
 
 from agents.task.goals.board import GoalBoard
 from tools.goal_tools import GoalAskAction, GoalTool
+
+
+@pytest.fixture(autouse=True)
+def _owner(monkeypatch):
+    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda *a, **k: "rob")
 
 
 def _tool(tmp_path):
@@ -60,7 +66,9 @@ def test_a_leaf_or_sub_agent_cannot_raise_an_owner_ask(tmp_path):
 def test_blocks_goal_ids_are_recorded(tmp_path):
     t = _tool(tmp_path)
     g = t._goal_board.create(user_id="rob", title="buy PNL tranche 15", force=True)
-    r = asyncio.run(t.goal_ask(GoalAskAction(what="decide X", blocks_goal_ids=[g.id]), _ctx()))
+    from agents.task.goals.autonomy_marker import mark_autonomous
+    mark_autonomous("ask-own-goal", g.id)
+    r = asyncio.run(t.goal_ask(GoalAskAction(what="decide X", blocks_goal_ids=[g.id]), _ctx(session_id="ask-own-goal")))
     assert not r.error
     a = t._goal_board.asks(user_id="rob", status="open")[0]
     assert g.id in (a.payload.get("blocks_goal_ids") or [])
@@ -82,3 +90,14 @@ def test_an_option_question_carries_tap_options(tmp_path):
                            _ctx()))
     a = t._goal_board.asks(user_id="rob", status="open")[0]
     assert set((a.payload.get("options") or {}).keys()) == {"A", "B"}
+
+
+def test_autonomous_ask_cannot_hold_an_unrelated_goal(tmp_path):
+    from agents.task.goals.autonomy_marker import mark_autonomous
+    tool = _tool(tmp_path)
+    goal = tool._goal_board.create(user_id="rob", title="unrelated goal", force=True)
+    mark_autonomous("other-goal-run", "own-goal")
+    result = asyncio.run(tool.goal_ask(GoalAskAction(what="please block this goal", blocks_goal_ids=[goal.id]),
+                                     _ctx(session_id="other-goal-run")))
+    assert result.error and "own goal" in result.error
+    assert tool._goal_board.get(goal.id).status != "blocked"

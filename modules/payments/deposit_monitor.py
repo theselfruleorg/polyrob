@@ -90,7 +90,7 @@ class DepositMonitor:
             try:
                 await self._check_all_deposits()
             except Exception as e:
-                self.logger.error(f"Error in deposit monitor loop: {e}", exc_info=True)
+                self.logger.error(f"Error in deposit monitor loop: {type(e).__name__}")
 
             # Sleep until next check
             await asyncio.sleep(self.check_interval)
@@ -121,7 +121,7 @@ class DepositMonitor:
                 try:
                     # Check each chain for deposits
                     for chain_name, chain_config in self.chains.items():
-                        if not chain_config['rpc_url']:
+                        if not chain_config['rpc_url'] or chain_config.get('testnet', True):
                             continue
 
                         deposits = await self._check_chain_deposits(
@@ -142,11 +142,11 @@ class DepositMonitor:
                     """, (user_id,))
 
                 except Exception as e:
-                    self.logger.error(f"Error checking address {address}: {e}")
+                    self.logger.error(f"Error checking address {address}: {type(e).__name__}")
                     continue
 
         except Exception as e:
-            self.logger.error(f"Error in _check_all_deposits: {e}", exc_info=True)
+            self.logger.error(f"Error in _check_all_deposits: {type(e).__name__}")
 
     async def _check_chain_deposits(
         self,
@@ -170,6 +170,9 @@ class DepositMonitor:
             from web3 import Web3
 
             w3 = Web3(Web3.HTTPProvider(chain_config['rpc_url']))
+            actual_chain = await asyncio.to_thread(lambda: w3.eth.chain_id)
+            if actual_chain != chain_config['chain_id']:
+                raise ValueError('Deposit RPC chain does not match configured chain')
 
             # Every balance READING is reported, including zero and dust
             # (CR-H08): `_process_deposit` credits only the INCREASE over the
@@ -177,7 +180,10 @@ class DepositMonitor:
             # to lower its mark — otherwise the next deposit below the old
             # high-water mark is never credited. The minimum-deposit floor
             # applies to the increase, in `_process_deposit`.
-            eth_balance = w3.eth.get_balance(address)
+            # A reversible tip balance must never mint spendable credits.
+            block = await asyncio.to_thread(w3.eth.get_block, "finalized")
+            block_number = int(block["number"])
+            eth_balance = await asyncio.to_thread(w3.eth.get_balance, address, block_number)
             eth_price = None
             if eth_balance > 0:
                 try:
@@ -185,7 +191,7 @@ class DepositMonitor:
                 except Exception as e:
                     self.logger.error(
                         f"ETH price oracle unavailable, skipping ETH deposit check "
-                        f"for {address} this cycle: {e}"
+                        f"for {address} this cycle: {type(e).__name__}"
                     )
             if eth_balance == 0 or eth_price is not None:
                 deposits.append({
@@ -196,7 +202,7 @@ class DepositMonitor:
                     # which is `eth_price * balance` and moves every tick.
                     'amount': str(eth_balance),
                     'amount_wei': eth_balance,
-                    'amount_usd': (eth_price or 0.0) * (eth_balance / 10**18),
+                    'amount_usd': Decimal(str(eth_price or 0)) * Decimal(eth_balance) / 10**18,
                 })
 
             # Check each token on this chain
@@ -205,7 +211,8 @@ class DepositMonitor:
                 balance = await self._get_token_balance(
                     w3,
                     address,
-                    token_address
+                    token_address,
+                    block_number,
                 )
                 if balance is None:
                     continue  # unreadable is not zero: never lower the mark on a failed read
@@ -219,11 +226,12 @@ class DepositMonitor:
                 })
 
         except Exception as e:
-            self.logger.error(f"Error checking {chain_name} for {address}: {e}")
+            self.logger.error("Deposit RPC read failed on %s (%s)", chain_name, type(e).__name__)
 
         return deposits
 
-    async def _get_token_balance(self, w3, address: str, token_address: str) -> Optional[float]:
+    async def _get_token_balance(self, w3, address: str, token_address: str,
+                                 block_identifier="finalized") -> Optional[Decimal]:
         """Get ERC20 token balance.
 
         Args:
@@ -232,20 +240,21 @@ class DepositMonitor:
             token_address: Token contract address
 
         Returns:
-            Token balance as float, or None when the read failed (an
+            Token balance as Decimal, or None when the read failed (an
             unreadable balance is not a zero balance — CR-H08).
         """
         try:
             contract = w3.eth.contract(address=token_address, abi=ERC20_BALANCEOF_ABI)
-            balance_wei = contract.functions.balanceOf(address).call()
+            balance_wei = await asyncio.to_thread(
+                contract.functions.balanceOf(address).call, block_identifier=block_identifier)
 
             # USDC/USDT have 6 decimals
-            balance = balance_wei / 10**6
+            balance = Decimal(balance_wei) / 10**6
 
             return balance
 
         except Exception as e:
-            self.logger.debug(f"Error getting token balance: {e}")
+            self.logger.debug("Token balance read failed (%s)", type(e).__name__)
             return None
 
     async def _get_eth_price(self) -> float:
@@ -267,6 +276,9 @@ class DepositMonitor:
             user_id: User ID
             deposit: Deposit information
         """
+        if self.chains.get(deposit.get('chain'), {}).get('testnet', True):
+            self.logger.warning("Refusing paid credits for an unsupported or test network")
+            return
         try:
             # CR-H08: credit only the INCREASE over the last observed balance
             # for this (user, chain, token). The balance reading is
@@ -283,6 +295,9 @@ class DepositMonitor:
             await self._ensure_marks_table()
             previous = await self._last_balance_mark(
                 user_id, deposit['chain'], deposit['token_symbol'])
+            if (not current.is_finite() or not previous.is_finite()
+                    or current < 0 or previous < 0):
+                raise ValueError('deposit balances must be finite and nonnegative')
 
             if current <= previous:
                 if current < previous:
@@ -297,13 +312,18 @@ class DepositMonitor:
 
             # Only the increase is new money. amount_usd prices the WHOLE
             # reading; scale it to the increase.
-            full_usd = float(deposit['amount_usd'])
-            amount_usd = full_usd * float((current - previous) / current)
-            if amount_usd < self.min_deposit_usd:
+            full_usd = Decimal(str(deposit['amount_usd']))
+            rate = Decimal(str(self.credit_rate))
+            if (not all(v.is_finite() for v in (current, previous, full_usd, rate))
+                    or full_usd <= 0 or rate <= 0):
+                raise ValueError('deposit valuation and credit rate must be finite and positive')
+            delta_usd = full_usd * (current - previous) / current
+            if delta_usd < Decimal(str(self.min_deposit_usd)):
                 # Dust: leave the mark where it is so dust accumulates until
                 # the increase crosses the floor, then it credits once.
                 return
-            credits = int(amount_usd / self.credit_rate)
+            credits = int(delta_usd / rate)
+            amount_usd = float(delta_usd)
 
             # Credit the user's balance AND record the crypto_payments
             # dedup row in ONE transaction (money-safety re-review, MEDIUM):
@@ -356,7 +376,7 @@ class DepositMonitor:
                 user_id, {**deposit, 'amount_usd': amount_usd}, credits)
 
         except Exception as e:
-            self.logger.error(f"Error processing deposit for {user_id}: {e}", exc_info=True)
+            self.logger.error(f"Error processing deposit for {user_id}: {type(e).__name__}")
 
     async def _ensure_marks_table(self):
         """Create the per-address balance mark table once (CR-H08).
@@ -455,7 +475,7 @@ class DepositMonitor:
                 VALUES (?, 'deposit_credited', ?)
             """, (user_id, message))
         except Exception as e:
-            self.logger.error(f"Failed to persist deposit notification for {user_id}: {e}")
+            self.logger.error(f"Failed to persist deposit notification for {user_id}: {type(e).__name__}")
 
         if self.notify_callback:
             try:
@@ -463,7 +483,7 @@ class DepositMonitor:
                 if asyncio.iscoroutine(result):
                     await result
             except Exception as e:
-                self.logger.warning(f"notify_callback failed for {user_id} (non-critical): {e}")
+                self.logger.warning(f"notify_callback failed for {user_id} (non-critical): {type(e).__name__}")
 
 
 # Standalone runner for testing

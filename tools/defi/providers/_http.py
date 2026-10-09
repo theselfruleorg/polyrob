@@ -7,6 +7,7 @@ timeout; ``parse_int`` is the "a malformed number is None (unknown), never
 from __future__ import annotations
 
 import threading
+import json
 from typing import Any, Optional
 
 USER_AGENT = "polyrob-defi/1.0"
@@ -35,6 +36,7 @@ _CLIENT_LOCK = threading.Lock()
 #: Bounded on purpose. A connect that never returns is a rail that never returns.
 CONNECT_TIMEOUT_SEC = 8.0
 READ_TIMEOUT_SEC = 12.0
+MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 
 
 def client():
@@ -51,7 +53,7 @@ def client():
                                         keepalive_expiry=120.0),
                     headers={"user-agent": USER_AGENT,
                              "accept": "application/json"},
-                    follow_redirects=True,
+                    follow_redirects=False,
                 )
     return _CLIENT
 
@@ -70,8 +72,9 @@ class HttpStatusError(Exception):
     """
 
     def __init__(self, url: str, code: int, reason: str = "") -> None:
-        super().__init__(f"HTTP Error {code}: {reason or ''} ({url})".strip())
-        self.url = url
+        from core.security.redaction import redact_url
+        super().__init__(f"HTTP Error {code} ({redact_url(url)})")
+        self.url = redact_url(url)
         self.code = code
         self.reason = reason
 
@@ -82,13 +85,25 @@ def get_json(url: str, *, timeout: float, user_agent: str = USER_AGENT) -> Any:
     ``timeout`` is per call because the callers own different budgets: a
     bridge-status read and a pool listing are not the same kind of wait.
     """
-    resp = client().get(url, timeout=timeout,
-                        headers={"accept": "application/json",
-                                 "user-agent": user_agent})
-    if resp.status_code >= 400:
-        raise HttpStatusError(url, resp.status_code,
-                              getattr(resp, "reason_phrase", ""))
-    return resp.json()
+    return request_json("GET", url, timeout=timeout, user_agent=user_agent)
+
+
+def request_json(method: str, url: str, *, timeout: float, payload=None,
+                 user_agent: str = USER_AGENT) -> Any:
+    """Bounded decoded JSON over the shared pool; redirects never propagate keys."""
+    kwargs = {"json": payload} if payload is not None else {}
+    with client().stream(method, url, timeout=timeout, follow_redirects=False,
+                         headers={"accept": "application/json",
+                                  "user-agent": user_agent}, **kwargs) as resp:
+        if not 200 <= resp.status_code < 300:
+            raise HttpStatusError(url, resp.status_code,
+                                  getattr(resp, "reason_phrase", ""))
+        body = bytearray()
+        for chunk in resp.iter_bytes(chunk_size=65536):
+            body.extend(chunk)
+            if len(body) > MAX_RESPONSE_BYTES:
+                raise ValueError("provider response exceeds the size limit")
+        return json.loads(body)
 
 
 def parse_int(value: Any, default: Optional[int] = None) -> Optional[int]:

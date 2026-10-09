@@ -72,6 +72,7 @@ def pons_key_for(rpc, token: str) -> Dict[str, Any]:
     Refuses a non-Pons token or one still on its curve."""
     from tools.launchpad import pons
     try:
+        pons.verify_pins(rpc)
         record = pons.launched_token(rpc, token)
     except pons.PonsError as exc:
         raise LpReadError(f"the Pons factory record for {token} is unreadable: {exc}") from exc
@@ -263,13 +264,19 @@ def quote_lines(rpc, chain: str, token_a, token_b, amount_a, amount_b,
     st = pool_state(rpc, chain, pid)
     if st.sqrt_price_x96 == 0:
         raise LpReadError(f"v4 pool {pid} is not initialized; nothing to quote")
-    dec0 = 18 if key["currency0"] == ZERO else int(decimals_fn(key["currency0"]))
-    dec1 = int(decimals_fn(key["currency1"]))
+    from core.wallet.tokens import raw_amount, bounded_decimals
+    dec0 = 18 if key["currency0"] == ZERO else bounded_decimals(decimals_fn(key["currency0"]))
+    dec1 = bounded_decimals(decimals_fn(key["currency1"]))
+    if dec0 is None or dec1 is None:
+        raise LpReadError("the pool has unsupported token decimals")
     h0, h1 = (amount_b, amount_a) if flipped else (amount_a, amount_b)
     if h0 is None and h1 is None:
         raise LpReadError("give amount_a and/or amount_b to quote a deposit")
-    raw0 = MAX_UINT128 if h0 is None else int(round(float(h0) * 10 ** dec0))
-    raw1 = MAX_UINT128 if h1 is None else int(round(float(h1) * 10 ** dec1))
+    try:
+        raw0 = MAX_UINT128 if h0 is None else raw_amount(h0, dec0)
+        raw1 = MAX_UINT128 if h1 is None else raw_amount(h1, dec1)
+    except ValueError as exc:
+        raise LpReadError(str(exc)) from exc
     lo, hi, liq, u0, u1 = full_range_quote(st.sqrt_price_x96, key["tickSpacing"], raw0, raw1)
     x, _ = reserves_full_range(st.sqrt_price_x96, st.liquidity)
     after = x + u0

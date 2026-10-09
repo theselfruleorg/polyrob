@@ -21,6 +21,17 @@ from typing import Any, List, Optional
 logger = logging.getLogger(__name__)
 
 
+def is_owner_tenant(user_id: str) -> bool:
+    """Whether a tenant may fall back to the instance owner's private address."""
+    from core.env import bool_env
+    from core.instance import is_owner_local_safe, resolve_owner_principal
+    try:
+        return is_owner_local_safe(user_id, owner_principal=resolve_owner_principal(),
+                                   local_enabled=bool_env("POLYROB_LOCAL", False))
+    except Exception:
+        return False
+
+
 def _env_by_surface() -> dict:
     """``{surface: OWNER_<S>_ID}`` — derived from the surface catalog (064 F1)."""
     from core.surfaces.catalog import owner_env_by_surface
@@ -38,6 +49,9 @@ def owner_address(container: Any, surface_id: str, user_id: str = "") -> Optiona
     """The owner's address on ``surface_id``, or None when unreachable there."""
     sid = (surface_id or "").strip().lower()
     uid = str(user_id or "").strip()
+    if not uid:
+        from core.instance import resolve_owner_principal
+        uid = str(resolve_owner_principal() or "")
     if not sid:
         return None
     # A generic user_directory seam wins when the deployment has one.
@@ -56,6 +70,8 @@ def owner_address(container: Any, surface_id: str, user_id: str = "") -> Optiona
         # alias) so a monkeypatch on either name keeps working.
         import core.surfaces.user_delivery as _ud
         return _ud._resolve_recipient(container, uid)
+    if uid and not is_owner_tenant(uid):
+        return None
     if sid == "email":
         try:
             from core.instance import resolve_owner_email

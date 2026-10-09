@@ -67,3 +67,20 @@ async def test_get_trade_history_uses_public_data_api(monkeypatch):
     assert res["success"] is True
     assert "data-api.polymarket.com" in captured["url"]
     assert "trades" in captured["url"]
+
+
+@pytest.mark.asyncio
+async def test_position_unrealized_pnl_is_computed_from_the_open_position(monkeypatch):
+    tool = _tool(monkeypatch, {})
+    class Response:
+        def raise_for_status(self): pass
+        def json(self):
+            return [{'conditionId': 'market', 'asset': 'token', 'size': 10,
+                     'avgPrice': .2, 'curPrice': .7, 'cashPnl': 7, 'realizedPnl': 2}]
+    async def get(*args, **kw):
+        return Response()
+    tool._http_client = types.SimpleNamespace(get=get)
+    out = await tool.get_all_positions(GetPositionsParams())
+    assert out['success']
+    assert out['positions'][0]['unrealized_pnl'] == pytest.approx(5)
+    assert out['positions'][0]['realized_pnl'] == 2

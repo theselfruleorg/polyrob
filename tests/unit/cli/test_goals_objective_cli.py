@@ -66,7 +66,7 @@ def test_tree(board):
     o = board.create_objective(user_id="rob", title="Earn money")
     g = board.create(user_id="rob", title="Draft pricing brief", parent_id=o.id)
     board.claim(g.id, "w", ttl_seconds=60)
-    board.record_success(g.id, result="OUTCOME: project/p.md")
+    board.record_success(g.id, result="OUTCOME: project/p.md", claim_token=board.get(g.id).claim_token)
     board.set_outcome(g.id, "project/p.md")
     orphan = board.create(user_id="rob", title="Unattached goal words")
     r = CliRunner().invoke(goals, ["tree"])
@@ -79,7 +79,7 @@ def test_tree(board):
 def test_list_marks_missing_outcome(board):
     g = board.create(user_id="rob", title="A done goal lacking outcome")
     board.claim(g.id, "w", ttl_seconds=60)
-    board.record_success(g.id, result="ok")
+    board.record_success(g.id, result="ok", claim_token=board.get(g.id).claim_token)
     r = CliRunner().invoke(goals, ["list"])
     assert "[no outcome]" in r.output
 
@@ -139,7 +139,7 @@ def test_objective_show_labels_the_budget_honestly(board):
     finished = board.create(user_id="rob", title="a finished child",
                             parent_id=o.id, force=True)
     board.claim(finished.id, "w", ttl_seconds=60)
-    board.record_success(finished.id, result="ok")
+    board.record_success(finished.id, result="ok", claim_token=board.get(finished.id).claim_token)
     board.create(user_id="rob", title="a running child", parent_id=o.id, force=True)
 
     r = CliRunner().invoke(goals, ["objective", "show", o.id])

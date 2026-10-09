@@ -9,7 +9,8 @@ Environment required (at runtime, not import time):
     WHATSAPP_ACCESS_TOKEN   — Meta permanent/system-user access token
     WHATSAPP_PHONE_NUMBER_ID — Meta Phone Number ID (sender)
     WHATSAPP_VERIFY_TOKEN   — echoed back on the GET verify handshake
-    WHATSAPP_WEBHOOK_SECRET — (optional) HMAC-SHA256 payload-signing secret
+    WHATSAPP_WEBHOOK_SECRET — HMAC-SHA256 payload-signing secret (the Meta app
+                              secret; unset = every inbound POST is refused)
 
 Set WHATSAPP_SURFACE_ENABLED=true and SINGULAR_CHAT_ENABLED=true, or let the command
 default them for you (explicit env wins).
@@ -40,9 +41,8 @@ async def _run_whatsapp(port: int, verbose: bool) -> None:
     def _check_creds(container, task_agent):
         # Preflight Meta WhatsApp credentials — otherwise the worker prints "online" but
         # the verify handshake + every send fail later (404/401) with no local signal.
-        missing = [v for v in ("WHATSAPP_ACCESS_TOKEN", "WHATSAPP_PHONE_NUMBER_ID",
-                               "WHATSAPP_VERIFY_TOKEN")
-                   if not (os.environ.get(v) or "").strip()]
+        from surfaces.whatsapp.launch import _REQUIRED
+        missing = [v for v in _REQUIRED if not (os.environ.get(v) or "").strip()]
         if missing:
             click.echo(click.style("[polyrob] ERROR: ", fg="red")
                        + "WhatsApp not configured — set " + ", ".join(missing)
@@ -69,6 +69,10 @@ async def _run_whatsapp(port: int, verbose: bool) -> None:
         app = FastAPI(title="polyrob whatsapp webhook worker")
         app.include_router(webhooks_router)
 
+        from surfaces._launch import plain_http_bind_warning
+        bind_warning = plain_http_bind_warning("0.0.0.0")
+        if bind_warning:
+            click.echo(click.style("[polyrob] WARN: ", fg="yellow") + bind_warning)
         config = uvicorn.Config(app, host="0.0.0.0", port=port,
                                 log_level=ctx.log_level.lower())
         server = uvicorn.Server(config)

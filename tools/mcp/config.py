@@ -325,9 +325,9 @@ def create_stdio_server(command: List[str], env_vars: Optional[Dict[str, str]] =
 
 
 def load_local_mcp_servers() -> Dict[str, Any]:
-    """Load MCP server configs from ~/.polyrob/mcp.json then ./.polyrob/mcp.json (R7).
+    """Load MCP server configs from the operator's config home.
 
-    Project (./.polyrob) overrides global (~/.polyrob) on name clash. Each file may
+    Project files are not auto-executed. The operator config may
     use a top-level "servers" or "mcpServers" object. Missing/invalid files are
     skipped. File-first: no DB, no dependency on config/mcp_config.json.
     """
@@ -335,7 +335,7 @@ def load_local_mcp_servers() -> Dict[str, Any]:
     from pathlib import Path
     from core.paths import polyrob_home
     merged: Dict[str, Any] = {}
-    for path in (polyrob_home() / "mcp.json", Path.cwd() / ".polyrob" / "mcp.json"):
+    for path in (polyrob_home() / "mcp.json",):
         if not path.exists():
             continue
         try:
@@ -344,5 +344,5 @@ def load_local_mcp_servers() -> Dict[str, Any]:
             continue
         servers = data.get("servers") or data.get("mcpServers") or {}
         if isinstance(servers, dict):
-            merged.update(servers)   # later (project) wins
+            merged.update(servers)
     return merged

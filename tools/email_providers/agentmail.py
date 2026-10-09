@@ -255,8 +255,11 @@ class AgentMailClient:
         attachments: Optional[List[str]] = None,
         in_reply_to: Optional[str] = None,
         references: Optional[str] = None,
+        extra_parts: Optional[List[dict]] = None,
     ) -> str:
-        """Send from the agent's inbox; return the minted RFC Message-ID."""
+        """Send from the agent's inbox; return the minted RFC Message-ID.
+
+        ``extra_parts`` are in-memory ``{filename, mime, data}`` files (a forward)."""
         if not self.inbox_id:
             raise APIError("agentmail: inbox not provisioned — call provision() first")
         domain = None
@@ -291,6 +294,12 @@ class AgentMailClient:
                         "agentmail: skipping unreadable attachment %r: %s", path, e)
             if parts:
                 body["attachments"] = parts
+        for part in extra_parts or []:
+            if part.get("data"):
+                body.setdefault("attachments", []).append({
+                    "filename": str(part.get("filename") or "attachment"),
+                    "content_type": str(part.get("mime") or "application/octet-stream"),
+                    "content": base64.b64encode(part["data"]).decode("ascii")})
 
         data = await self._request(
             "POST", f"/v0/inboxes/{self.inbox_id}/messages/send", json=body)

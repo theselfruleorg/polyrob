@@ -200,3 +200,18 @@ async def test_a_fetch_outage_records_a_durable_verdict(tmp_path, monkeypatch):
     v = cv.verdict("imap", "imap.x:me@x")
     assert v is not None and v.count == 1
     cv._reset_for_tests()
+
+
+def test_strip_html_is_linear_on_unterminated_markup():
+    """CHAT-7: the stdlib HTMLParser took minutes on "<a" * N; mail anyone can
+    send reaches this stripper."""
+    import time
+    t = time.monotonic()
+    strip_html("<a" * 300_000)
+    strip_html("<a>" * 200_000)
+    assert time.monotonic() - t < 5
+
+
+def test_strip_html_keeps_text_and_drops_script():
+    out = strip_html("<p>Hi&amp;bye</p><script>evil()</script>x < y<br>z<!-- c -->end")
+    assert "evil" not in out and "Hi&bye" in out and "x < y" in out and "end" in out

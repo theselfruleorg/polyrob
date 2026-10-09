@@ -256,6 +256,37 @@ Cron needs `CRON_ENABLED`. Two behaviours are worth knowing:
   since the last tick — a $0 tick rather than a model paid to rediscover that.
   A delivery job is never gated.
 
+### Who wrote it: owner work and agent work
+
+Every goal and cron job carries an author, and the author decides how much the
+work may do on its own:
+
+| Author | How it gets that author | What it may do without asking you |
+|---|---|---|
+| **owner** | You made it (`polyrob cron schedule`, `/cron add`, `/goal`, the console, a manifest) on a turn that had read no third-party content | Its rig and `tools=` as written, X posts; for a cron job also its write verb, its buy target and moderation of the room its text names |
+| **agent** | The agent wrote it, or your turn had read a page, a mail, a post or room lines first | Only the self-goal allowlist above; each post, moderation or spend waits for your tap |
+
+The author is a positive `authored_by=owner` stamp. An unstamped row is the agent's,
+and an edit never upgrades a row. When your own request writes agent-authored work
+(because the turn had read outside text), the reply says so, what the job loses and
+how to make it yours.
+
+**`/adopt`** (Telegram, the console, the REPL) makes an agent-authored job or goal
+yours. It shows the whole task, every payload key and each pinned skill with a
+content digest, and asks you to confirm on an action card. The adoption binds what
+you saw: if a pinned skill changes later, the row runs as the agent's again until you
+adopt it again. `/adopt` is refused in a room.
+
+An install with cron rows from before the stamp existed can stamp them once:
+
+```bash
+python -m cron.stamp_authorship --dry-run   # print the plan
+python -m cron.stamp_authorship             # apply it
+```
+
+Rows newer than the stamp's introduction become the owner's; older rows become the
+agent's and show up in `/adopt` for you to confirm.
+
 ### Recurring work on the board — rails
 
 A **rail** is an objective with a schedule: on each due tick it seeds its legs

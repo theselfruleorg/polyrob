@@ -147,12 +147,18 @@ only watches. Be aware that it disables *everything*, approvals included.
 
 These are deliberate refusals with remedies, not bugs.
 
-**It will not boot as an anonymous console on a server.** At `local` posture there
-is no login and every anonymous request is the owner. If the process also looks
-like a server — a public URL is configured, it runs behind a reverse proxy, or the
-data directory is a system path — the console refuses to start and names what it
-saw. Set a real posture, or `WEBVIEW_ALLOW_LOCAL_POSTURE=1` if you front it with
-your own authentication.
+**It will not boot as a `local` console on a server.** A `local` console still
+requires the owner login, but it trusts the loopback bind and Host header. If the
+process also looks like a server — a public URL is configured, it runs behind a
+reverse proxy, or the data directory is a system path — the console refuses to
+start and names what it saw. Set a real posture, or `WEBVIEW_ALLOW_LOCAL_POSTURE=1`
+if you front it with your own layer; that flag permits the shape only and never
+turns the login off.
+
+**It will not boot without a login key.** Every posture needs `JWT_SECRET_KEY`
+(32+ characters). `polyrob dashboard` on a workstation makes one on first run and,
+with no owner password set, prints a one-time password for that run;
+`polyrob dashboard --set-password` saves a lasting one in `~/.polyrob/.env`.
 
 **It will not boot as a writable console without a bound owner and a shared session
 registry.** Both preconditions, and how to satisfy them, are in

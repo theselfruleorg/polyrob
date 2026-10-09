@@ -813,6 +813,10 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
             from core.wallet.config import _cap_float, _req_float, DEFAULT_DAILY_CAP_USD, DEFAULT_MAX_PER_TX_USD
             _max_tx_val = _req_float(env, "AGENT_WALLET_MAX_PER_TX_USD", DEFAULT_MAX_PER_TX_USD)
             _daily_val = _cap_float(env, "WALLET_DAILY_CAP_USD", DEFAULT_DAILY_CAP_USD)
+            # The parse above validates the env; SHOW what the gate enforces
+            # (owner prefs + the signer envelope), not the raw env value.
+            from core.wallet.config import shown_caps
+            _max_tx_val, _daily_val = shown_caps(env, _max_tx_val, _daily_val)
             _daily = f"${_daily_val:.2f}" if _daily_val is not None else ""
             _caps = f"caps max ${_max_tx_val:.2f}/tx · daily {_daily if _daily else 'UNLIMITED'}"
             lines.append(f"wallet: on (network={_net}, derivation={_scheme}, {_caps}; "
@@ -1452,3 +1456,4 @@ def _emit_doctor(show_full: bool, as_json: bool) -> None:
             click.echo(line)
     else:
         click.echo(DOCTOR_FULL_POINTER)
+

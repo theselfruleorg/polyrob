@@ -20,7 +20,6 @@ from typing import Any, Callable, Dict, List, Optional, Type, TypeVar, Union, Tu
 from collections import deque  # ADDED: Import deque for bounded collections
 from agents.task.agent.tool_call_tracker import ToolCallTracker  # Robust tool call ID tracking
 
-from dotenv import load_dotenv
 
 # Import centralized constants
 from agents.task.constants import (
@@ -184,7 +183,6 @@ from agents.task.logging_config import get_task_logger
 # Import centralized path management
 from agents.task.path import pm
 
-load_dotenv()
 
 # Generic logger for the module itself (not instances)
 
@@ -254,7 +252,15 @@ class AgentConstructionMixin:
 		"""
 		try:
 			from core.surfaces.binding import surface_profile
-			return surface_profile(self.orchestrator)
+			profile = surface_profile(self.orchestrator)
+			if profile is None:
+				# DATA-10: a RESUMED correspondent session binds no chat key, so
+				# no profile resolves — and an unbound session reads as the
+				# owner's DM. A correspondent-facing session is never that.
+				from agents.task.session_class import correspondent_facing
+				if correspondent_facing(self.orchestrator):
+					return {"surface_id": "chat", "correspondent": True}
+			return profile
 		except Exception as e:
 			self.logger.debug(f"surface profile unresolved (non-fatal): {e}")
 			return None
@@ -523,6 +529,7 @@ class AgentConstructionMixin:
 
 		# Loop detection variables with improved thresholds
 		self._previous_actions = deque(maxlen=LoopDetectionConfig.MEMORY_WINDOW_SIZE)  # Use consistent window size
+		self._recent_action_names = deque(maxlen=LoopDetectionConfig.MEMORY_WINDOW_SIZE)  # names, for _has_active_browser_usage
 		self._action_repetition_counter = 0
 		self._max_allowed_repetitions = LoopDetectionConfig.MAX_ALLOWED_REPETITIONS
 		self._last_browser_states = deque(maxlen=3)  # MODIFIED: Use bounded deque instead of list
@@ -834,37 +841,11 @@ class AgentConstructionMixin:
 
 		self.max_actions_per_step = max_actions_per_step
 
-		# WS-A capability gate: while the session is tainted by untrusted correspondent
-		# DATA, deny high-impact tools (money/comms/code-exec/delegation). Registered
-		# fail-CLOSED, gated on the access model + a real orchestrator taint flag. The
-		# owner clears the taint by sending a genuine turn.
-		#
-		# SECURITY (P1 finalization): registration is NOT wrapped in a swallow-all
-		# except. When the access model is ON (an explicit opt-in), a registration
-		# failure must SURFACE — a tainted session that came up WITHOUT this
-		# fail-closed gate could run high-impact tools on untrusted correspondent
-		# DATA. When the model is OFF the `if` is false and nothing is registered.
-		from core.surfaces.config import SurfaceConfig
-		if SurfaceConfig.correspondent_access_enabled() and self.controller is not None \
-				and hasattr(self.controller, "register_pre_tool_call_hook"):
-			from agents.task.agent.core.correspondent_gate import (
-				build_reply_allowed, build_tool_resolver, make_correspondent_gate_hook)
-			_orch = self.orchestrator
-			# Resolve each action's owning tool_id so the tool-id-level denylist
-			# actually fires — the pre-hook only ever sees the bare action name
-			# (run_code, goal_create, x402_fetch, dynamic MCP {server}_{tool}).
-			# D1 (2026-07-13): taint sources + reply budget enable the scoped
-			# reply-to-the-tainting-party exemption (CORRESPONDENT_REPLY_ENABLED,
-			# default OFF -> the exemption never fires, gate unchanged).
-			_gate = make_correspondent_gate_hook(
-				lambda: bool(getattr(_orch, "_correspondent_tainted", False)),
-				resolve_tool=build_tool_resolver(self.controller),
-				get_taint_sources=lambda: set(
-					getattr(_orch, "_correspondent_taint_sources", None) or set()),
-				reply_allowed=build_reply_allowed(
-					lambda: getattr(_orch, "container", None),
-					lambda: getattr(_orch, "user_id", "") or ""))
-			self.controller.register_pre_tool_call_hook(_gate, fail_mode="closed")
+		# An existing taint always enforces its gate, even if correspondent
+		# admission has since been disabled by configuration.
+		if self.controller is not None and hasattr(self.controller, "register_pre_tool_call_hook"):
+			from agents.task.agent.core.correspondent_gate import install_correspondent_gate
+			install_correspondent_gate(self.controller, self.orchestrator)
 
 		# 044 T5: the room gate — registered for EVERY session, decides per call
 		# from the orchestrator's PUBLIC flag, so a session that becomes room-bound
@@ -1260,6 +1241,9 @@ class AgentConstructionMixin:
 		except Exception as _cat_err:
 			self.logger.debug(f"tool-catalog render skipped (non-fatal): {_cat_err}")
 
+		# Recheck disclosure at assembly/replay: a correspondent can enter later.
+		from agents.task.session_class import may_write_owner_memory
+		self.message_manager._owner_context_allowed = lambda: may_write_owner_memory(self.orchestrator)
 		# polyrob Phase C: pin operator-authored SOUL/IDENTITY self-context as a frozen
 		# foundation message, read ONCE at session start from <data_dir>/identity/. This
 		# is operator-write-only (the agent never authors it in this cut). Empty/absent
@@ -1276,16 +1260,18 @@ class AgentConstructionMixin:
 			# 044 T4: a PUBLIC (room) session carries none of the owner tenant's
 			# private state — no SOUL, no owner facts, no evolving SELF doc.
 			_public = is_public_session(getattr(self, "orchestrator", None))
+			from agents.task.session_class import correspondent_facing
+			_private = _public or correspondent_facing(getattr(self, "orchestrator", None))
 			# SOUL tier (operator-only, instance-global) + the evolving SELF tier
 			# (agent-writable, per-(instance,user)). Both frozen at session start.
 			# load_self_doc applies the load-side [BLOCKED] guard; empty => omitted.
-			_soul = "" if _public else load_self_context(_data_dir)
+			_soul = "" if _private else load_self_context(_data_dir)
 			_uid = self.orchestrator.user_id if hasattr(self.orchestrator, "user_id") else None
-			_self_doc = "" if _public else load_self_doc(_data_dir, _uid, resolve_instance_id())
+			_self_doc = "" if _private else load_self_doc(_data_dir, _uid, resolve_instance_id())
 			# Bounded owner-facts doc (agent-maintained, per-(instance,user)): durable
 			# facts/preferences about the OWNER, injected after SOUL and before the
 			# evolving SELF doc. Load-side [BLOCKED] guard applies; empty => omitted.
-			_owner_doc = "" if _public else load_owner_doc(_data_dir, _uid, resolve_instance_id())
+			_owner_doc = "" if _private else load_owner_doc(_data_dir, _uid, resolve_instance_id())
 			from core.doc_age import measure_doc_age as _doc_age, render_age_header as _age_hdr
 			if _owner_doc:
 				# 057 WS-D: once the doc carries `[from: … <date>]` stamps, the
@@ -1311,7 +1297,7 @@ class AgentConstructionMixin:
 			_contract_block = ""
 			try:
 				from agents.task.constants import AutonomyConfig as _ContractAC
-				if not _public and _ContractAC.contract_doc_enabled():
+				if not _private and _ContractAC.contract_doc_enabled():
 					from core.instance import load_contract_doc
 					_contract_doc = load_contract_doc(_data_dir, _uid, resolve_instance_id())
 					if _contract_doc:
@@ -1577,4 +1563,3 @@ class AgentConstructionMixin:
 			log_dir.mkdir(parents=True, exist_ok=True)
 			self.tool_output_log_path = log_dir / "tool_outputs.jsonl"
 			self.logger.debug(f"Tool output logging enabled: {self.tool_output_log_path}")
-

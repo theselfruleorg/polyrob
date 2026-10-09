@@ -235,7 +235,35 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, ToolCa
 		# => byte-identical to the pre-extraction inline composition.
 		from tools.controller.approval import effective_approval_state
 		_gates, _provider_name = effective_approval_state(self.user_id, _pref_data_home)
+		# The other execution rails reach a shell too: when shell_run is gated they
+		# follow ITS rule (owner for the dangerous class), but an action with its own
+		# gate keeps it. `_inherited` lets the exemption apply the shell rule only there.
+		_inherited = ()
+		if "shell_run" in _gates:
+			_gates = dict(_gates)
+			_inherited = tuple(a for a in ("coding_run_tests", "code_execution_run_code")
+							   if a not in _gates)
+			for _execution_action in _inherited:
+				_gates[_execution_action] = _gates["shell_run"]
 		_required = set(_gates.keys())
+		# 073 W2: the shell command guard — BEFORE every approval hook, so a floor
+		# command or an unattended dangerous one is refused without filing an owner
+		# ask. Registered unconditionally (the floor holds at every posture);
+		# `_shell_exempt` narrows a gated shell_run's owner wait to the dangerous
+		# class (SHELL_APPROVAL_MODE=every restores the wait on every call).
+		from tools.controller.command_guard_hook import (
+			make_command_guard_hook, make_shell_command_exemption,
+			orchestrator_llm_factory, shell_approval_mode, shell_lists)
+		_shell_mode = shell_approval_mode()
+		_shell_allow, _shell_deny = shell_lists(self.user_id, _pref_data_home)
+		self.register_pre_tool_call_hook(
+			make_command_guard_hook(
+				shell_gated="shell_run" in _required, deny_globs=_shell_deny,
+				mode=_shell_mode, llm_factory=orchestrator_llm_factory(self.orchestrator)),
+			fail_mode="closed",
+		)
+		_shell_exempt = make_shell_command_exemption(_shell_mode, allow_globs=_shell_allow,
+													 inherited=_inherited)
 		if _required:
 			# H9: importing this module registers the 'interactive_cli' provider so an
 			# operator can actually select it via APPROVAL_PROVIDER.
@@ -296,7 +324,8 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, ToolCa
 							# round-trip timeout, never the in-process 30s default.
 							make_approval_hook(
 								_q_provider, _queued,
-								timeout=approval_wait_timeout_sec("owner_queue")),
+								timeout=approval_wait_timeout_sec("owner_queue"),
+								exempt_fn=_shell_exempt),
 							fail_mode="closed",  # approval failure must DENY
 						)
 					if _reported:
@@ -336,7 +365,8 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, ToolCa
 						# owner_queue wait gets the remote round-trip budget.
 						make_approval_hook(
 							_provider, _required,
-							timeout=approval_wait_timeout_sec(_provider_name)),
+							timeout=approval_wait_timeout_sec(_provider_name),
+							exempt_fn=_shell_exempt),
 						fail_mode="closed",  # approval failure must DENY
 					)
 					self.logger.info(
@@ -367,6 +397,9 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, ToolCa
 			from core.config_policy.spend_lane import (
 				DEFI_SPEND_VERBS, autonomous_ceiling_usd, is_simulation,
 				spend_exemption, tiered_spend_lane_enabled)
+			# The same predicate with the turn in view: a genuine owner turn that
+			# transfers to an address that is OURS waits on no second tap.
+			from tools.controller.self_transfer import spend_exemption_with_turn
 			_payment_tools = set(PAYMENT_APPROVAL_TOOLS)
 			_receive_tools = _payment_tools & set(PAYMENT_RECEIVE_APPROVAL_TOOLS)
 			_spend_tools = _payment_tools - _receive_tools
@@ -412,7 +445,7 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, ToolCa
 					self.register_pre_tool_call_hook(
 						make_approval_hook(_pay_provider, _payment_tools,
 						                   timeout=payment_approval_timeout_sec(),
-						                   exempt_fn=spend_exemption),
+						                   exempt_fn=spend_exemption_with_turn),
 						fail_mode="closed",  # approval failure must DENY
 					)
 					self.logger.info(
@@ -456,7 +489,7 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, ToolCa
 						self.register_pre_tool_call_hook(
 							make_approval_hook(_pay_provider, _spend_tools,
 							                   timeout=payment_approval_timeout_sec(),
-							                   exempt_fn=spend_exemption),
+							                   exempt_fn=spend_exemption_with_turn),
 							fail_mode="closed",  # approval failure must DENY
 						)
 						self.logger.info(
@@ -536,6 +569,10 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, ToolCa
 		# action_registration.py size-ceiling escape hatch.
 		from tools.controller.room_read_action import register_room_read_action
 		register_room_read_action(self)
+		# 2026-10-05: the agent's moderation seat (mute/ban/delete) on the same
+		# `room_moderator` adapter the owner's /mute /ban use. Same gate and hatch.
+		from tools.controller.room_moderate_action import register_room_moderate_action
+		register_room_moderate_action(self)
 		# F9 (063 WS-4): the `tool_call` bridge, gated TOOL_SCHEMAS_FROZEN. Must be
 		# registered BEFORE the first schema emit — the Registry only arms the
 		# freeze when the bridge exists, or a late tool would be unreachable. Own
@@ -731,8 +768,6 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, ToolCa
 	async def _run_transform_tool_result_hooks(self, action_name, params, result, context):
 		"""Run transform hooks in order, chaining replacements."""
 		return await self._hooks.run_transform(action_name, params, result, context)
-
-
 
 
 

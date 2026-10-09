@@ -53,7 +53,13 @@ class KbStoreMixin:
         """
         if self._anon_blocked(user_id) or not chunks or not source_hash:
             return False
-        snapshot = tuple(chunk.strip() for chunk in chunks)
+        from modules.memory.storage_limits import MAX_ROWS, MAX_ROW_BYTES, valid_kb_metadata
+        if (not valid_kb_metadata(collection, source_path, source_hash, mime)
+                or len(chunks) > MAX_ROWS
+                or any(not isinstance(chunk, str) or len(chunk) > MAX_ROW_BYTES for chunk in chunks)):
+            return False
+        from core.secret_scrub import scrub_secret_shapes
+        snapshot = tuple(scrub_secret_shapes(chunk).strip() for chunk in chunks)
         if not all(snapshot):
             return False
         try:
@@ -76,6 +82,8 @@ class KbStoreMixin:
                     "DELETE FROM kb_chunks WHERE user_id = ? AND collection = ? AND source_path = ?",
                     (norm, collection, source_path),
                 )
+                from modules.memory.storage_limits import check_fts_insert
+                check_fts_insert(conn, "kb_chunks", norm, chunks)
                 conn.executemany(
                     "INSERT INTO kb_chunks (user_id, collection, source_path, chunk_idx, content) "
                     "VALUES (?, ?, ?, ?, ?)",
@@ -105,8 +113,14 @@ class KbStoreMixin:
         """
         if self._anon_blocked(user_id):
             return False
+        from modules.memory.storage_limits import MAX_ROW_BYTES, valid_kb_metadata
+        if (not valid_kb_metadata(collection, source_path, source_hash, mime)
+                or not isinstance(content, str) or len(content) > MAX_ROW_BYTES
+                or type(chunk_idx) is not int or not 0 <= chunk_idx <= 1_000_000):
+            return False
         norm = self._norm_user(user_id)
-        content = (content or "").strip()
+        from core.secret_scrub import scrub_secret_shapes
+        content = scrub_secret_shapes(content).strip()
         if not content:
             return False
         try:
@@ -125,6 +139,8 @@ class KbStoreMixin:
         try:
             with conn:
                 conn.execute("BEGIN IMMEDIATE")
+                from modules.memory.storage_limits import check_fts_insert
+                check_fts_insert(conn, "kb_chunks", norm, (content,))
                 conn.execute(
                     "INSERT INTO kb_chunks (user_id, collection, source_path, chunk_idx, content) "
                     "VALUES (?, ?, ?, ?, ?)",

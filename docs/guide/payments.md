@@ -120,7 +120,22 @@ The wallet is the agent's on-chain identity and treasury. **Off by default**
   replay-guard prevents a retried step from double-paying.
 - **Audit** — every spend appends a `wallet_spend` event: an append-only JSONL sink
   (`<data_dir>/wallet/audit.jsonl`) plus a telemetry event. This is what the unified
-  ledger reads for the "spent" leg.
+  ledger reads for the "spent" leg. A process that holds the seed seals the file: the
+  rows are chain-hashed and the head is MAC'd into `audit.jsonl.seal` with a key derived
+  from the master seed, so an edited or removed row fails the load and spending is
+  refused until the ledger is repaired. A seedless process neither seals nor verifies;
+  under `WALLET_SIGNER=remote` the signer's own ledger is the authoritative one.
+- **Address poisoning** — a transfer to an address that only looks like a payee of the
+  last 30 days (matching first and last characters, a different body) is refused, and
+  unreadable payment history refuses the send. Copy an address from its source, not from
+  the wallet's history.
+- **The declared bound** — `max_spend_usd` asserts what the transaction moves or grants;
+  the network fee is charged to the per-tx and daily caps only. A deploy, claim or mint,
+  whose fee is its value, keeps the fee in the declared check.
+- **Transfers to yourself** — set `OWNER_WALLET_ADDRESSES` (file-only) to your own
+  receive addresses. A genuine owner turn that has read no third-party content and
+  transfers to one of them, or to the agent's own wallet, waits on no second tap; a turn
+  that read a page, a post or a mail queues it for your tap like any other.
 
 Enable a testnet wallet:
 
@@ -141,8 +156,15 @@ The agent sends an intent; the signer runs the same transaction guard again and 
 | `shadow` | the agent and the signer | The agent signs locally and also asks the signer for a verdict on the same intent. The result goes to `<data>/wallet/signer_shadow.jsonl` and the `custody` status section. It never blocks a send. |
 | `remote` | the signer only | The agent holds no key; a seed that reaches it is dropped. The signer re-checks the intent against its own caps and ledger, then signs and broadcasts. x402, Hyperliquid orders, ERC-8004 feedback and the deposit sweep use typed signer endpoints; Solana signing is refused. Above the signer's hard cap, the owner approves on the box: `sudo polyrob owner promote signer_approval <id>`. |
 
-An unknown value reads as `local`. On a server, install the `polyrob-signer` unit, set
-`shadow`, and change to `remote` only after a clean week of shadow results. The
+With the signer installed (`shadow` or `remote`), its hard caps are the envelope: the agent enforces the
+lower of its own per-tx/daily cap and the signer's. A raise from chat stops at the signer's cap; raise that
+one as root in `/etc/polyrob/signer.toml` `[caps]`, then restart `polyrob-signer`.
+
+An unknown value reads as `local`. On a server, install the `polyrob-signer` unit (it runs
+from its own venv, never the agent's), set `shadow`, and change to `remote` only after a
+clean week of shadow results. The installer checks that week in the signer's own decision
+log, which the agent cannot rewrite: a refused verdict, no agreed verdict, fewer than 7 days
+of data or an unreadable log stops the cut-over. The
 `WALLET_SIGNER` row in the configuration reference has the full detail.
 
 ### 2.1 Create the wallet in one command
@@ -238,7 +260,7 @@ Exposed as the
 | `x402_probe` | no | not needed | Probe ONE endpoint: price, `accepts[]`, routing, payability score 0–5 |
 | `x402_sweep` | no | not needed | Probe MANY endpoints → one scored ledger |
 | `x402_quote` | no | not needed | Price a single URL (thin; `x402_probe` is the fuller read) |
-| `x402_fetch` | **yes** | required | Fetch, auto-paying up to a caller-set `max_amount_usd` |
+| `x402_fetch` | **yes** | required | Fetch, paying up to `max_amount_usd` only to the approved `expected_pay_to` |
 | `x402_wallet_status` | no | required | Address, on-chain balance, caps, audit |
 
 ### Discovery (`x402_probe` / `x402_sweep`) — read-only, $0
@@ -253,7 +275,7 @@ disclosed · `+1` full routing (`asset` **and** `network` **and** `payTo`). Only
 5 means an agent could pay it today — a 402 that discloses no price or no routing
 is a paywall in name only, and is reported as such rather than as "payable".
 
-Both verbs handle POST-only paywalls (JSON-RPC, A2A `/v1`) via `method`/`body`,
+Both verbs accept GET, HEAD or OPTIONS without a body; POST-only discovery is unavailable,
 and read a challenge from the **response body** as well as the
 `PAYMENT-REQUIRED` header — the spec puts the requirements in the body, and
 POLYROB's own middleware emits exactly that shape. All decoding delegates to the
@@ -347,6 +369,11 @@ The `x402_invoice` tool (`tools/x402/invoice_tool.py`) exposes `x402_request`,
   settlement wake back to the originating session.
 - Tenant-scoped by `json_extract(metadata,'$.tenant_id')`.
 - Emits a first-class `payment_requested` event.
+- **No test-network invoice on a production rail.** When `X402_DEFAULT_CHAIN` is a
+  production chain, an invoice on a test network or a test asset (`*-devnet`,
+  `*-testnet`, `*-sepolia`) is refused: faucet tokens are not income. A devnet payment
+  is never counted as income, and listings name the chain. Set `X402_DEFAULT_CHAIN` to a
+  test network for a dev run.
 
 `x402_request` is **approval-gated, leaf-blocked, and correspondent-taint-blocked.**
 
@@ -664,7 +691,7 @@ calls. The real gate is `ENABLE_AUTH` (off = no billing service registered at al
   pricing. A stable `request_id` column dedupes a retried bill of the same completion.
   Credits are deducted fail-fast (`InsufficientCreditsError` halts on depletion) unless
   `CHAT_SKIP_CREDIT_CHECK` (ON) skips the chat path. `CREDIT_VALUE_USD` = `$0.01`,
-  `WELCOME_BONUS` = `100`.
+  `WELCOME_BONUS` = `0` (automatic grants are opt-in; new wallets are not unique people).
   - **Operational note:** `usage_records.user_id` has a foreign key to `user_profiles`.
     A headless single-owner deployment now **seeds an owner `user_profiles` row at
     startup** (`ensure_owner_profile`) so metering actually persists — without it, every
@@ -1240,6 +1267,9 @@ set.
   the order value within the per-venue cap (`HYPERLIQUID_TRADE_MAX_USD` /
   `POLYMARKET_TRADE_MAX_USD`, default `$5` each). A blocked order returns a `dry_run`
   result, never a silent submission.
+- Hyperliquid order requests must include `max_usd`, the maximum USD notional
+  the owner approves. The live price and worst-case slippage must fit that bound.
+  Approval cards always show this ceiling and Polymarket's `size_usd` amount.
 - The `polymarket`/`hyperliquid` wallet venues never hold a spendable float in the
   hub-and-spoke model — funding those venues for live trading is a deliberate,
   separate operator step.
@@ -1264,8 +1294,11 @@ set.
 > autonomous/forged turn (goal, cron, self-wake) has no one to tap "approve" for it, so it
 > **cannot paper-trade at all** — a goal-driven dry-run trading rig is retired by design;
 > exercise dry-run trading interactively, or call the venue tool directly outside the
-> approval-gated action. Cancel verbs (`cancel_order`/`cancel_all_orders`) are NOT in
-> `PAYMENT_APPROVAL_TOOLS`, but the owner pause (`polyrob autonomy pause` / `/pause`;
+> approval-gated action. A Polymarket cancel (`cancel_order`/`cancel_all_orders`) never
+> waits on a tap — it moves no funds and Polymarket has no stop orders. A Hyperliquid
+> cancel runs without a tap too, unless it would remove a trigger order (a stop-loss or
+> take-profit), or the open orders cannot be read — then it asks; `revoke_agent` never
+> asks (it only reduces authority). The owner pause (`polyrob autonomy pause` / `/pause`;
 > the legacy `AUTONOMY_HALT` facet) freezes them too — during an incident, cancel open orders directly
 > at the venue, not through the agent.
 
@@ -1474,3 +1507,13 @@ Native refunds cannot be verified from receipt logs alone.
 Liquidity activity does not adjust the token-keyed cost book. LP remaining cost
 basis is unavailable, and cumulative deposit spending is not remaining basis.
 The USD charged for collect is gas, not fee revenue or treasury income.
+
+A paid fetch requires `expected_pay_to`, copied from the `payTo` address shown by
+`x402_quote` or `x402_probe`. The approval displays this recipient in full. A
+server that changes the recipient is refused before signing; only EIP-3009
+transfers are supported. This binds the approved address, not the server's claimed
+identity. A fetch without a recipient can read a free response but cannot pay.
+
+Holder entitlement is reverified when its ownership proof is more than five minutes
+old. A transferred DEN loses holder access; unavailable verification blocks access
+instead of preserving a stale entitlement. Administrator grants are independent.

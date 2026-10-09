@@ -15,7 +15,7 @@ def test_config_set_global_and_show(tmp_path, monkeypatch):
     assert (home / ".polyrob" / ".env").stat().st_mode & 0o777 == 0o600
     res = r.invoke(config_group, ["set", "DEFAULT_MODEL", "claude-opus-4-8"])
     assert res.exit_code == 0, res.output
-    assert "DEFAULT_MODEL=claude-opus-4-8" in (proj / ".polyrob" / ".env").read_text()
+    assert "DEFAULT_MODEL=claude-opus-4-8" in (home / ".polyrob" / ".env").read_text()
     res = r.invoke(config_group, ["show"])
     assert res.exit_code == 0, res.output
     assert "sk-secret" not in res.output            # secret redacted
@@ -23,20 +23,20 @@ def test_config_set_global_and_show(tmp_path, monkeypatch):
     assert "claude-opus-4-8" in res.output          # non-secret shown
 
 
-def test_config_set_project_gitignores_polyrob(tmp_path, monkeypatch):
-    # A project-scope `config set` writes a secret to ./.polyrob/.env; it must add
-    # .polyrob/ to .gitignore so a subsequent `git add` can't leak it (the gap:
-    # only init/run gitignored it before, neither of which has run yet).
+def test_config_set_project_is_refused_and_leaves_the_tree_clean(tmp_path, monkeypatch):
+    # ./.polyrob/.env is never loaded (a cloned directory could supply it), so a
+    # project-scope `config set` is refused: no secret lands in the tree at all.
     proj = tmp_path / "proj"
     proj.mkdir()
-    (proj / ".git").mkdir()  # a git repo → require_git_repo=True should write
+    (proj / ".git").mkdir()
     monkeypatch.chdir(proj)
+    monkeypatch.setenv("POLYROB_HOME", str(tmp_path / "home"))
     from cli.commands.config import config as config_group
     res = CliRunner().invoke(config_group, ["set", "OPENAI_API_KEY", "sk-realkey123456", "--project"])
-    assert res.exit_code == 0, res.output
-    gi = proj / ".gitignore"
-    assert gi.exists(), "config set (project scope) must create/append .gitignore"
-    assert any(ln.strip() == ".polyrob/" for ln in gi.read_text().splitlines())
+    assert res.exit_code != 0
+    assert "does not load the project env file" in res.output
+    assert not (proj / ".polyrob").exists()
+    assert not (tmp_path / "home" / ".env").exists()
 
 
 def test_config_set_no_duplicate_on_spaced_key(tmp_path, monkeypatch):
@@ -83,7 +83,7 @@ def test_config_path_lists_files(tmp_path, monkeypatch):
     res = CliRunner().invoke(config_group, ["path"])
     assert res.exit_code == 0, res.output
     assert str(home / ".polyrob" / ".env") in res.output
-    assert str(proj / ".polyrob" / ".env") in res.output
+    assert str(proj / ".polyrob" / ".env") not in res.output
 
 
 # --- 024 T2: VALUE is optional, prompted, and never in shell history ----------
@@ -234,7 +234,7 @@ def test_config_unset_missing_key_fails_honestly(tmp_path, monkeypatch):
     assert "not set" in res.output
 
 
-def test_config_unset_points_at_the_other_scope(tmp_path, monkeypatch):
+def test_config_unset_defaults_to_active_home(tmp_path, monkeypatch):
     # Key lives in the GLOBAL file but the user targeted the (default) project
     # scope — the error must say where it actually is instead of a bare miss.
     home = tmp_path / "home"; (home / ".polyrob").mkdir(parents=True)
@@ -244,8 +244,8 @@ def test_config_unset_points_at_the_other_scope(tmp_path, monkeypatch):
     (home / ".polyrob" / ".env").write_text("ANTHROPIC_API_KEY=sk-bad\n")
     from cli.commands.config import config as config_group
     res = CliRunner().invoke(config_group, ["unset", "ANTHROPIC_API_KEY"])
-    assert res.exit_code != 0
-    assert "--global" in res.output
+    assert res.exit_code == 0
+    assert "ANTHROPIC_API_KEY" not in (home / ".polyrob" / ".env").read_text()
 
 
 # --- `config migrate` ---------------------------------------------------------
@@ -398,6 +398,17 @@ def test_config_path_quiet_without_legacy_files(tmp_path, monkeypatch):
     assert res.exit_code == 0, res.output
     # the two managed files are always shown...
     assert str(home / ".polyrob" / ".env") in res.output
-    assert str(proj / ".polyrob" / ".env") in res.output
+    assert str(proj / ".polyrob" / ".env") not in res.output
     # ...but absent legacy tiers are not listed as noise
     assert "config/.env" not in res.output
+
+
+def test_global_flag_keeps_the_home_scope():
+    # A click bool flag with default=True flips to False when passed unless
+    # flag_value is set — `--global` must never mean the project file.
+    from cli.commands.config import config as config_group
+    from cli.commands.tools import tools as tools_group
+    for group, names in ((config_group, ("set", "unset")), (tools_group, ("enable", "disable"))):
+        for name in names:
+            opt = next(p for p in group.commands[name].params if p.name == "is_global")
+            assert opt.default is True and opt.flag_value is True, (group.name, name)

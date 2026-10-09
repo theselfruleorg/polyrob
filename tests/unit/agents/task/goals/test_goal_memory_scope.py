@@ -55,6 +55,15 @@ def test_a_shared_goal_runs_unscoped(board, on):
     assert GM.goal_request_fields(board, g) == {}
 
 
+def test_scope_resolution_failure_refuses_dispatch(board, on, monkeypatch):
+    goal = board.create(user_id=USER, title="Isolated task")
+    def failed(*args):
+        raise OSError("scope unavailable")
+    monkeypatch.setattr(GM, "goal_regime", failed)
+    with pytest.raises(RuntimeError, match="isolation"):
+        GM.goal_request_fields(board, goal)
+
+
 class _Prov:
     is_external = True
 

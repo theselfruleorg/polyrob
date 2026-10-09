@@ -14,6 +14,7 @@ apply at once; one that removes may). ``revoke`` is free.
 from __future__ import annotations
 
 import logging
+import json
 import shlex
 import time
 from typing import Any, Dict, List, Optional
@@ -130,13 +131,14 @@ def render_show(board: Any, user_id: str, row: Any) -> str:
              f"next seed: {'due now' if due else why} · last seeded "
              f"{_when(R.last_seeded_at(board, row))}"]
     if row.body:
-        lines.append(row.body[:400])
+        lines.append("instructions: " + json.dumps(row.body, ensure_ascii=False))
     if rec.get("rig"):
         lines.append(f"rig: {rec['rig']}")
     lines.append("legs:")
     for i, leg in enumerate(rec.get("legs") or [], 1):
         flag = " (independent)" if leg.get("independent") else ""
         lines.append(f"  {i}. {leg['title']}{flag}")
+        lines.append("     " + json.dumps(leg, ensure_ascii=False, sort_keys=True))
     grants = grants_for(board.db_path, user_id=user_id, rail_id=row.id, include_pending=True)
     if grants:
         armed = money_armed()
@@ -391,7 +393,10 @@ def _proposals(board: Any, user_id: str) -> list:
 
 def _proposal_line(p) -> str:
     needs = f" · needs grant: {', '.join(p.needs)}" if p.needs else ""
+    details = json.dumps({"title": p.title, "instructions": p.body,
+                          "recurrence": p.recurrence}, ensure_ascii=False, indent=2)
     return (f"• {p.key} — {p.recurrence.get('schedule')} · from {p.source}{needs}\n"
+            f"{details}\n"
             f"   /rail accept {p.key}   /rail dismiss {p.key}")
 
 

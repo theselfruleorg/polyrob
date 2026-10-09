@@ -48,6 +48,7 @@ Contract (Anthropic API reference, read 2026-09-23):
 * plain dicts throughout — the SDK typings lag the beta.
 """
 from __future__ import annotations
+from modules.llm.billing_guard import inference_sdk
 
 import logging
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -472,9 +473,9 @@ async def call_with_deferral_retry(client: Any, api_params: Dict[str, Any],
 
     async def _once(params):
         if use_streaming:
-            async with client._client.messages.stream(**params) as stream:
+            async with inference_sdk(client).messages.stream(**params) as stream:
                 return await stream.get_final_message()
-        return await client._client.messages.create(**params)
+        return await inference_sdk(client).messages.create(**params)
 
     try:
         return await _once(api_params)
@@ -499,7 +500,7 @@ async def stream_with_deferral_retry(client: Any, api_params: Dict[str, Any]):
     emitted = False
     for attempt in (0, 1):
         try:
-            async with client._client.messages.stream(**api_params) as stream:
+            async with inference_sdk(client).messages.stream(**api_params) as stream:
                 async for event in stream:
                     if getattr(event, "type", "") == "content_block_delta":
                         delta = getattr(event, "delta", None)

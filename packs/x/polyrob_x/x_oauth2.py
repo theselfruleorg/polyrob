@@ -278,12 +278,26 @@ def _refresh_lock(store: "XOAuth2Store"):
         try:
             import fcntl
             store.path.parent.mkdir(parents=True, exist_ok=True)
-            fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o660)
+            # The lock carries no data: read access is all flock needs, and in
+            # the shared (group-writable) data home every identity that loads the
+            # X pack must be able to open it, or it silently falls back to the
+            # in-process lock and replays a spent refresh token. Never more than
+            # group access; never through a link.
+            import stat
             try:
-                if os.stat(str(store.path.parent)).st_mode & 0o020:
-                    os.fchmod(fd, 0o660)  # the shared-data convention (polyrob-data)
+                shared = bool(os.stat(str(store.path.parent)).st_mode & 0o020)
             except OSError:
-                pass
+                shared = False
+            mode = 0o660 if shared else 0o600
+            fd = os.open(lock_path, os.O_RDONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, mode)
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise OSError("OAuth lock must be a regular file with one link")
+            if info.st_uid == os.geteuid() and stat.S_IMODE(info.st_mode) != mode:
+                try:
+                    os.fchmod(fd, mode)
+                except OSError:
+                    pass
             deadline = time.monotonic() + LOCK_WAIT_SEC
             while True:
                 try:
@@ -378,6 +392,8 @@ def _record_from_response(body: dict, *, source: str, prior: Optional[dict] = No
         "token_type": str(body.get("token_type") or "bearer"),
         "source": source,
         "obtained_at": datetime.now(timezone.utc).isoformat(),
+        "account_id": str((prior or {}).get("account_id") or ""),
+        "account_username": str((prior or {}).get("account_username") or ""),
     }
     return rec
 
@@ -608,14 +624,38 @@ def authorize_url(*, redirect_uri: str, state: str, code_challenge: str,
     return f"{AUTHORIZE_URL}?{urlencode(q)}"
 
 
+def expected_account(store: Optional[XOAuth2Store] = None, explicit: str | None = None) -> str:
+    """Pin the account before opening the browser or exchanging its callback."""
+    expected = str(explicit or ((store or XOAuth2Store()).load() or {}).get("account_id") or "")
+    if not expected.isascii() or not expected.isdigit() or len(expected) > 32:
+        raise RuntimeError("X account identity is not pinned. Run `polyrob x-account "
+                           "oauth-login --account-id <agent-account-id>` first.")
+    return expected
+
+
 def exchange_code(code: str, *, redirect_uri: str, code_verifier: str,
-                  store: Optional[XOAuth2Store] = None, transport: Any = None) -> dict:
+                  store: Optional[XOAuth2Store] = None, transport: Any = None,
+                  expected_account_id: str | None = None) -> dict:
     """Authorization-code → token pair; persisted; returns the record."""
     store = store or XOAuth2Store()
+    expected = expected_account(store, expected_account_id)
     body = _post_token({"grant_type": "authorization_code", "code": code,
                         "redirect_uri": redirect_uri, "code_verifier": code_verifier},
                        transport=transport)
     rec = _record_from_response(body, source="pkce")
+    import httpx
+    with httpx.Client(timeout=20.0, transport=transport, follow_redirects=False) as http:
+        response = http.get("https://api.x.com/2/users/me",
+                            headers={"Authorization": "Bearer " + rec["access_token"]})
+    try:
+        identity = response.json()["data"]
+        actual = str(identity["id"])
+    except (KeyError, ValueError, TypeError):
+        raise RuntimeError("X did not return a verifiable account identity") from None
+    if response.status_code != 200 or actual != expected:
+        raise RuntimeError("X login was for a different account; existing credentials were kept")
+    rec["account_id"] = actual
+    rec["account_username"] = str(identity.get("username") or "")[:64]
     store.save(rec)
     _clear_relogin()
     return rec

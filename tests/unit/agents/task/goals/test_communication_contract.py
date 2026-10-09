@@ -133,10 +133,10 @@ class _Board:
     def __init__(self):
         self.successes, self.failures = [], []
 
-    def record_success(self, gid, session_id=None, result=None):
+    def record_success(self, gid, session_id=None, result=None, claim_token=None):
         self.successes.append(gid)
 
-    def record_failure(self, gid, error=None, session_id=None):
+    def record_failure(self, gid, error=None, session_id=None, claim_token=None):
         self.failures.append((gid, error))
         return Goal(id=gid, user_id="u1", title="t", status=STATUS_READY)
 
@@ -209,7 +209,7 @@ def test_no_escalation_push_when_agent_reported_blocker(monkeypatch):
     board = _Board()
     board_status = {"status": STATUS_BLOCKED}
 
-    def _rf(gid, error=None, session_id=None):
+    def _rf(gid, error=None, session_id=None, claim_token=None):
         board.failures.append((gid, error))
         return Goal(id=gid, user_id="u1", title="t", status=STATUS_BLOCKED)
 
@@ -240,7 +240,7 @@ def test_escalation_push_when_agent_silent_about_block(monkeypatch):
     ta = _ta([_done_step("OUTCOME: BLOCKED — x402 store unavailable")])  # silent
     board = _Board()
 
-    def _rf(gid, error=None, session_id=None):
+    def _rf(gid, error=None, session_id=None, claim_token=None):
         board.failures.append((gid, error))
         return Goal(id=gid, user_id="u1", title="t", status=STATUS_BLOCKED)
 

@@ -1,10 +1,10 @@
 # The data half of the discovery pack (067 P3a): read by core.packs.manifest
 # WITHOUT importing this package, registered in the loader's phase 1.
 id = "discovery"
-version = "1.2.1"
+version = "1.3.0"
 summary = "Structured web data (AnySite) and web search (Perplexity)"
 pack_api = 1
-requires_core = "==1.2.*"
+requires_core = "==1.3.*"
 requires_packs = []
 tier = "first-party"
 # 067 (one install): the core extra that carries this pack's SDKs. The pack

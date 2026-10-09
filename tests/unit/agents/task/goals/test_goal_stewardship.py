@@ -72,7 +72,8 @@ def test_autonomy_runtime_runs_the_sweep(tmp_path, monkeypatch):
 def test_record_failure_appends_attempt_to_payload(board):
     g = board.create(user_id="u1", title="retry me", max_retries=3)
     assert board.claim(g.id, "w1", ttl_seconds=900)
-    board.record_failure(g.id, error="x402 store unavailable", session_id="s1")
+    board.record_failure(g.id, error="x402 store unavailable", session_id="s1",
+        claim_token=board.get(g.id).claim_token)
     got = board.get(g.id)
     attempts = (got.payload or {}).get("attempts") or []
     assert attempts and attempts[-1]["error"].startswith("x402 store unavailable")
@@ -84,7 +85,8 @@ def test_attempts_are_capped(board):
     g = board.create(user_id="u1", title="flaky", max_retries=100)
     for i in range(8):
         assert board.claim(g.id, "w1", ttl_seconds=900)
-        board.record_failure(g.id, error=f"failure {i}", session_id=f"s{i}")
+        board.record_failure(g.id, error=f"failure {i}", session_id=f"s{i}",
+            claim_token=board.get(g.id).claim_token)
     attempts = (board.get(g.id).payload or {}).get("attempts") or []
     assert len(attempts) <= 5, "the ledger is a compact tail, not an unbounded log"
     assert attempts[-1]["error"] == "failure 7"
@@ -95,7 +97,7 @@ def test_retry_prompt_carries_previous_attempt_block(board):
     g = board.create(user_id="u1", title="retry me", body="do the thing", max_retries=3)
     assert board.claim(g.id, "w1", ttl_seconds=900)
     board.record_failure(g.id, error="completion judge: no successful post action",
-                         session_id="s1")
+                         session_id="s1", claim_token=board.get(g.id).claim_token)
     got = board.get(g.id)
     prompt = build_goal_run_task(got, None)
     assert "PREVIOUS ATTEMPT" in prompt
@@ -113,8 +115,8 @@ def test_goal_show_exposes_attempts_and_acceptance(board):
     g = board.create(user_id="u1", title="steward me",
                      payload={"acceptance": "a live url"})
     assert board.claim(g.id, "w1", ttl_seconds=900)
-    board.record_failure(g.id, error="judge: unmet — nothing posted", session_id="s1")
-
+    board.record_failure(g.id, error="judge: unmet — nothing posted", session_id="s1",
+                         claim_token=board.get(g.id).claim_token)
     tool = GoalTool.__new__(GoalTool)
     tool._resolve_board = lambda: board
     tool._user = lambda ec: "u1"
@@ -190,7 +192,8 @@ def test_goal_show_caps_edge_listing_at_ten(board):
 def test_unblock_requeues_with_rationale(board):
     g = board.create(user_id="u1", title="blocked goal", max_retries=1)
     assert board.claim(g.id, "w1", ttl_seconds=900)
-    board.record_failure(g.id, error="boom", session_id="s1")  # trips breaker (max_retries=1)
+    board.record_failure(g.id, error="boom", session_id="s1",
+        claim_token=board.get(g.id).claim_token)  # trips breaker (max_retries=1)
     assert board.get(g.id).status == STATUS_BLOCKED
 
     ok = board.unblock(g.id, user_id="u1", rationale="credentials granted")
@@ -205,7 +208,7 @@ def test_unblock_refuses_wrong_tenant_and_non_blocked(board):
     assert board.unblock(g.id, user_id="u1", rationale="x") is False  # not blocked
     g2 = board.create(user_id="u1", title="blocked goal 2", max_retries=1)
     assert board.claim(g2.id, "w1", ttl_seconds=900)
-    board.record_failure(g2.id, error="boom")
+    board.record_failure(g2.id, error="boom", claim_token=board.get(g2.id).claim_token)
     assert board.unblock(g2.id, user_id="OTHER", rationale="x") is False  # tenant scope
 
 
@@ -213,7 +216,7 @@ def test_ancient_blocked_goals_age_out_to_cancelled(board):
     import sqlite3
     g = board.create(user_id="u1", title="rotting goal", max_retries=1)
     assert board.claim(g.id, "w1", ttl_seconds=900)
-    board.record_failure(g.id, error="boom")
+    board.record_failure(g.id, error="boom", claim_token=board.get(g.id).claim_token)
     assert board.get(g.id).status == STATUS_BLOCKED
     # age the row far past the window (timestamps are float epochs)
     old = time.time() - 40 * 86400
@@ -230,7 +233,7 @@ def test_ancient_blocked_goals_age_out_to_cancelled(board):
 def test_recent_blocked_goals_do_not_age_out(board):
     g = board.create(user_id="u1", title="fresh blocked", max_retries=1)
     assert board.claim(g.id, "w1", ttl_seconds=900)
-    board.record_failure(g.id, error="boom")
+    board.record_failure(g.id, error="boom", claim_token=board.get(g.id).claim_token)
     assert board.age_out_blocked(max_age_days=14) == 0
     assert board.get(g.id).status == STATUS_BLOCKED
 
@@ -246,7 +249,8 @@ async def test_quota_exhaustion_still_plans(board, monkeypatch):
 
     g = board.create(user_id="u1", title="already ran")
     assert board.claim(g.id, "w", ttl_seconds=900)
-    board.record_success(g.id, result="done")  # 1 started in 24h -> quota exhausted
+    board.record_success(g.id, result="done",
+        claim_token=board.get(g.id).claim_token)  # 1 started in 24h -> quota exhausted
 
     from agents.task.goals.dispatcher import GoalDispatcher
 
@@ -265,19 +269,27 @@ async def test_quota_exhaustion_still_plans(board, monkeypatch):
     assert planned, "…but NOT curation/planning (§5.4)"
 
 
-def test_goal_unblock_tool_verb_owner_only(board):
+def test_goal_unblock_tool_verb_owner_only(board, monkeypatch):
     """The unblock verb is agent-visible but autonomy-refused — the agent
     proposes, the owner (interactive session) executes."""
     from tools.goal_tools import GoalTool, GoalUnblockAction
     g = board.create(user_id="u1", title="blocked", max_retries=1)
     assert board.claim(g.id, "w1", ttl_seconds=900)
-    board.record_failure(g.id, error="boom")
+    board.record_failure(g.id, error="boom", claim_token=board.get(g.id).claim_token)
     assert board.get(g.id).status == STATUS_BLOCKED
 
     tool = GoalTool.__new__(GoalTool)
     tool._resolve_board = lambda: board
     tool._user = lambda ec: "u1"
+    params = GoalUnblockAction(goal_id=g.id, rationale="credentials granted")
+    refused = asyncio.run(GoalTool.goal_unblock(tool, params))
+    assert refused.error
+    assert board.get(g.id).status == STATUS_BLOCKED
+    from types import SimpleNamespace
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u1")
+    ctx = SimpleNamespace(user_id="u1", role="orchestrator", is_sub_agent=False,
+                          metadata={}, session_id="owner-stewardship")
     res = asyncio.run(GoalTool.goal_unblock(
-        tool, GoalUnblockAction(goal_id=g.id, rationale="credentials granted")))
+        tool, params, ctx))
     assert not res.error
     assert board.get(g.id).status == STATUS_READY

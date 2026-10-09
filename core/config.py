@@ -388,7 +388,7 @@ class ServerConfig(AgentConfig):
 
         Priority:
         1. Programmatic config (self.mcp already set)
-        2. Local file-first overlay (~/.polyrob/mcp.json, ./.polyrob/mcp.json) — project wins
+        2. Local file-first overlay (~/.polyrob/mcp.json; a project file is never loaded)
         3. JSON file (config/mcp_config.json)
         4. Environment variable (MCP_SERVERS_CONFIG)
         """
@@ -445,12 +445,12 @@ class ServerConfig(AgentConfig):
                 except (json.JSONDecodeError, TypeError) as e:
                     print(f"❌ Failed to parse MCP_SERVERS_CONFIG: {e}")
 
-        # Priority 2 (overlay): local .polyrob/mcp.json servers win on name clash.
+        # Priority 2 (overlay): ~/.polyrob/mcp.json servers win on name clash.
         if local_servers:
             for name, server_config in local_servers.items():
                 mcp_config.servers[name] = server_config
             mcp_config.enabled = True
-            print(f"✅ Overlaid {len(local_servers)} local MCP server(s) from .polyrob/mcp.json")
+            print(f"✅ Overlaid {len(local_servers)} local MCP server(s) from ~/.polyrob/mcp.json")
 
         self.mcp = mcp_config.model_dump()
     

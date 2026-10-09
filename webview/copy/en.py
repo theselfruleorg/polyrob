@@ -23,6 +23,7 @@ every screen shares.
 STRINGS = {
     # ---------------------------------------------------------------- the frame
     "shell.skip": "Skip to content",
+    "chat.invalid_session": "This chat address is not valid. Open it from your chat list.",
     "shell.search": "Open your chats",
     # 070 E.7: the chats button has a visible word beside its ⌘K hint.
     "shell.chats": "Chats",

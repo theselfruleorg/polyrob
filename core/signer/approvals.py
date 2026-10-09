@@ -28,9 +28,9 @@ def pending_items(client=None) -> List[Dict[str, Any]]:
     rows = client.call("approvals.list").get("pending") or []
     out = []
     for row in rows:
-        preview = f"signer hard cap: ${float(row.get('amount_usd') or 0):.2f} — {row.get('summary', '')}"
+        preview = f"signer review: ${float(row.get('amount_usd') or 0):.2f} priced risk\n{row.get('summary', '')}"
         out.append({"kind": KIND, "id": str(row.get("id")), "chars": len(preview),
-                    "preview": preview[:300], "tool": "signer.evm_send"})
+                    "preview": preview, "tool": "signer.evm_send"})
     return out
 
 

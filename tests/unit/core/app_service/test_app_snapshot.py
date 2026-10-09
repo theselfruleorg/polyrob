@@ -129,3 +129,63 @@ def test_a_change_under_node_modules_moves_the_digest(tmp_path):
     before = compute_workspace_digest(str(src))
     (src / "node_modules" / "dep.js").write_text("exfiltrate()\n")
     assert compute_workspace_digest(str(src)) != before
+
+
+def test_snapshot_refuses_source_parent_swap(tmp_path, monkeypatch):
+    import core.app_service.snapshot as snapshot
+    src = tmp_path / "proj"
+    (src / "sub").mkdir(parents=True)
+    (src / "sub" / "x").write_text("ok")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "x").write_text("private")
+    original_walk = snapshot.walk_shippable
+    def swapped(root, skipped):
+        for rel, full in original_walk(root, skipped):
+            (src / "sub").rename(src / "saved")
+            (src / "sub").symlink_to(outside)
+            yield rel, full
+    monkeypatch.setattr(snapshot, "walk_shippable", swapped)
+    dst = tmp_path / "snap"
+    total, files, skipped = snapshot_tree(str(src), str(dst), max_mb=1)
+    assert total == files == 0
+    assert not (dst / "sub" / "x").exists()
+    assert skipped
+
+
+def test_snapshot_refuses_fifo_and_hardlink_without_blocking(tmp_path):
+    from core.app_service.snapshot import _copy_nofollow
+    src = tmp_path / "src"
+    src.mkdir()
+    os.mkfifo(src / "pipe")
+    (tmp_path / "outside").write_text("private")
+    os.chmod(tmp_path / "outside", 0o600)
+    os.link(tmp_path / "outside", src / "link")
+    dst = tmp_path / "snap"
+    dst.mkdir()
+    fd = os.open(dst, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for name in ("pipe", "link"):
+            with pytest.raises(OSError, match="single-link"):
+                _copy_nofollow(str(src / name), fd, name, budget=1024, source_root=str(src))
+            assert not (dst / name).exists()
+    finally:
+        os.close(fd)
+
+
+def test_snapshot_ships_a_world_readable_hard_linked_file(tmp_path):
+    """pnpm/uv trees hard-link 0644 cache files: the app needs them."""
+    from core.app_service.snapshot import _copy_nofollow
+    src = tmp_path / "src"
+    src.mkdir()
+    (tmp_path / "store").write_text("module")
+    os.chmod(tmp_path / "store", 0o644)
+    os.link(tmp_path / "store", src / "index.js")
+    dst = tmp_path / "snap"
+    dst.mkdir()
+    fd = os.open(dst, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        _copy_nofollow(str(src / "index.js"), fd, "index.js", budget=1024, source_root=str(src))
+    finally:
+        os.close(fd)
+    assert (dst / "index.js").read_text() == "module"

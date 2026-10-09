@@ -1,8 +1,7 @@
-"""CR-L27: the x402 pay tool must not claim a payTo binding it does not have."""
+"""The client binds an approved address, without inventing host identity proof."""
 import tools.x402.service as service
 
 
-def test_module_doc_does_not_claim_a_paytto_binding():
-    doc = service.__doc__ or ""
-    assert "payTo-binding (pays only the resource it called)" not in doc
-    assert "NO payTo binding" in doc
+def test_module_documents_recipient_binding():
+    assert "expected_pay_to" in service.__doc__
+    assert "not to a claimed identity" in service.__doc__

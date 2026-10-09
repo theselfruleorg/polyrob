@@ -33,10 +33,10 @@ async def test_the_scan_matches_a_room_action_invoice(x402_db):
     allowed set, a paid offer sits pending forever with the money received."""
     rid = await _mint_room_action(x402_db)
     assert await invoicing.match_pending_invoice(
-        TREASURY, ROB, 5 * 10 ** 18, db=x402_db) is None
+        TREASURY, ROB, 5 * 10 ** 18, chain="robinhood", db=x402_db) is None
     hit = await invoicing.match_pending_invoice(
         TREASURY, ROB, 5 * 10 ** 18, kinds=tuple(invoicing.PAYABLE_KINDS),
-        db=x402_db)
+        chain="robinhood", db=x402_db)
     assert hit["request_id"] == rid
     assert hit["room_action"]["offer_id"] == "off_1"
 

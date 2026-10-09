@@ -31,6 +31,7 @@ and the major venues do.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Optional
 
@@ -126,7 +127,7 @@ async def perform_solana_deploy_token(tool, params, execution_context=None):
 
     rail = SolanaRail(signer=None)
     try:
-        blockhash = rail.recent_blockhash()
+        blockhash = await asyncio.to_thread(rail.recent_blockhash)
     except Exception as exc:
         return tool._ar(error=f"could not read a recent blockhash: {exc}")
 
@@ -137,7 +138,7 @@ async def perform_solana_deploy_token(tool, params, execution_context=None):
     uri = (params.uri or "").strip()
     space = spl_token.MINT_WITH_POINTER_LEN + spl_token.metadata_space(
         name=name, symbol=params.symbol, uri=uri)
-    mint_rent = spl_token.rent_exempt_from_rpc(
+    mint_rent = await asyncio.to_thread(spl_token.rent_exempt_from_rpc,
         space, lambda m, p: solana_onchain._rpc(m, p))
     try:
         tx, mint_kp, mint, ata = spl_token.build_fixed_supply_mint(
@@ -159,12 +160,14 @@ async def perform_solana_deploy_token(tool, params, execution_context=None):
     # so a wallet holding several token accounts no longer pushes the new ATA
     # out of view (CR-L09).
     try:
-        deltas = tool._solana_simulate(raw_tx=bytes(tx), owner=payer, mints=())
+        deltas = await asyncio.to_thread(tool._solana_simulate, raw_tx=bytes(tx), owner=payer, mints=())
     except Exception as exc:
         return tool._ar(error=f"refused: simulation raised ({exc})")
     if not deltas.ok:
+        from core.security.refusal_taint import simulation_kind
         return tool._ar(error=(
-            f"refused: simulation not trustworthy — {deltas.reason}"))
+            f"refused: simulation not trustworthy — {deltas.reason}"),
+            error_kind=simulation_kind(deltas))
 
     refusal = _assert_deltas(deltas, mint=mint, supply_raw=supply_raw)
     if refusal:
@@ -172,7 +175,7 @@ async def perform_solana_deploy_token(tool, params, execution_context=None):
 
     lamports_out = -int(deltas.native_delta)
     sol_out = lamports_out / 1_000_000_000
-    amount_usd = _price_sol(tool, sol_out)
+    amount_usd = await asyncio.to_thread(_price_sol, tool, sol_out)
 
     header = (
         f"deploy SPL token on solana\n"
@@ -239,20 +242,21 @@ async def perform_solana_deploy_token(tool, params, execution_context=None):
                 "funds — set DEFI_SOLANA_RPC. Dry runs are unaffected."))
 
         try:
-            signed = signer.sign_transaction_with(tx, [mint_kp])
+            signed = await asyncio.to_thread(signer.sign_transaction_with, tx, [mint_kp])
         except Exception as exc:
             return tool._ar(error=f"refused at signing: {exc} — nothing was broadcast")
         try:
-            signature = SolanaRail(signer=signer).send_raw(bytes(signed))
+            signature = await asyncio.to_thread(SolanaRail(signer=signer).send_raw, bytes(signed))
         except Exception as exc:
-            return tool._ar(error=f"broadcast failed: {exc} — nothing was deployed")
+            from core.wallet.broadcast.evm import broadcast_error_kind, broadcast_failure_text
+            return tool._ar(error=broadcast_failure_text(exc, nothing="nothing was deployed"),
+                error_kind=broadcast_error_kind(exc))
 
         gate.record(venue="defi", action="solana_deploy_token",
                     amount_usd=amount_usd, counterparty=mint,
                     idempotency_key=idem, result_ref=signature,
                     chain="solana")
 
-    import asyncio
     ok, detail = await asyncio.to_thread(tool._solana_confirm, signature)
     outcome = confirmation_outcome(ok, detail)
     if outcome != "confirmed":
@@ -261,7 +265,7 @@ async def perform_solana_deploy_token(tool, params, execution_context=None):
             f"— {detail}\n  signature: {signature}\n"
             f"  ⚠️ do NOT retry blindly: a second run creates a SECOND mint."))
 
-    proof = _prove_fixed_supply(mint, supply_raw, params.decimals)
+    proof = await asyncio.to_thread(_prove_fixed_supply, mint, supply_raw, params.decimals)
     return tool._ar(content=header + proof + (
         f"  RESULT: DEPLOYED AND CONFIRMED\n"
         f"  mint: {mint}\n  signature: {signature}"))
@@ -392,7 +396,10 @@ def _price_sol(tool, sol_out: float) -> Optional[float]:
         if not wsol:
             return None
         unit = tool._price("solana", wsol)
-        return None if unit is None else round(sol_out * float(unit), 2)
+        if unit is None or float(unit) <= 0:
+            return None
+        from core.money.valuation import usd_ceiling
+        return usd_ceiling(sol_out * float(unit))
     except Exception as exc:
         logger.debug("solana deploy: could not price SOL (%s)", exc)
         return None

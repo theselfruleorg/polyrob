@@ -74,7 +74,7 @@ async def add_server(
     )
 
     if not result.success:
-        raise HTTPException(status_code=400, detail=result.error)
+        raise HTTPException(status_code=400, detail="MCP server setup failed; check the server address and credentials")
 
     server = result.server
     return ServerResponse(
@@ -94,7 +94,7 @@ async def add_server(
         connection_count=server.connection_count,
         tools_discovered=server.tools_discovered,
         last_connected_at=str(server.last_connected_at) if server.last_connected_at else None,
-        last_error=server.last_error,
+        last_error="Connection failed" if server.last_error else None,
         created_at=str(server.created_at),
         updated_at=str(server.updated_at),
         tool_id=f"mcp:user:{server.server_name}"
@@ -136,7 +136,7 @@ async def list_servers(
                 connection_count=s.connection_count,
                 tools_discovered=s.tools_discovered,
                 last_connected_at=str(s.last_connected_at) if s.last_connected_at else None,
-                last_error=s.last_error,
+                last_error="Connection failed" if s.last_error else None,
                 created_at=str(s.created_at),
                 updated_at=str(s.updated_at),
                 tool_id=f"mcp:user:{s.server_name}"
@@ -182,7 +182,7 @@ async def get_server(
         connection_count=server.connection_count,
         tools_discovered=server.tools_discovered,
         last_connected_at=str(server.last_connected_at) if server.last_connected_at else None,
-        last_error=server.last_error,
+        last_error="Connection failed" if server.last_error else None,
         created_at=str(server.created_at),
         updated_at=str(server.updated_at),
         tool_id=f"mcp:user:{server.server_name}"
@@ -217,7 +217,7 @@ async def update_server(
     try:
         await service.update_server(user_id, server_name, **updates)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail="Invalid MCP server configuration")
 
     # Return updated server
     return await get_server(server_name, request, user_id)
@@ -269,7 +269,7 @@ async def test_server_connection(
     return TestConnectionResponse(
         success=result.success,
         latency_ms=result.latency_ms,
-        error=result.error,
+        error="Connection failed" if result.error else None,
         tools_discovered=result.tools_discovered
     )
 

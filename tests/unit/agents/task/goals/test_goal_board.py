@@ -52,7 +52,7 @@ def test_claim_is_atomic_single_winner(tmp_path):
 def test_record_success_resets_and_completes(board):
     g = board.create(user_id="u1", title="t")
     board.claim(g.id, "w", ttl_seconds=900)
-    board.record_success(g.id, session_id="s1", result="ok")
+    board.record_success(g.id, session_id="s1", result="ok", claim_token=board.get(g.id).claim_token)
     got = board.get(g.id)
     assert got.status == STATUS_DONE
     assert got.result == "ok"
@@ -63,12 +63,12 @@ def test_circuit_breaker_trips_to_blocked(board):
     g = board.create(user_id="u1", title="flaky", max_retries=2)
     # first failure -> back to ready
     board.claim(g.id, "w", ttl_seconds=900)
-    after1 = board.record_failure(g.id, error="boom1")
+    after1 = board.record_failure(g.id, error="boom1", claim_token=board.get(g.id).claim_token)
     assert after1.status == STATUS_READY
     assert after1.consecutive_failures == 1
     # second failure -> hits max_retries -> blocked
     board.claim(g.id, "w", ttl_seconds=900)
-    after2 = board.record_failure(g.id, error="boom2")
+    after2 = board.record_failure(g.id, error="boom2", claim_token=board.get(g.id).claim_token)
     assert after2.status == STATUS_BLOCKED
     assert after2.consecutive_failures == 2
     kinds = [e["kind"] for e in board.events(g.id)]
@@ -78,9 +78,9 @@ def test_circuit_breaker_trips_to_blocked(board):
 def test_success_after_failure_resets_counter(board):
     g = board.create(user_id="u1", title="t", max_retries=3)
     board.claim(g.id, "w", ttl_seconds=900)
-    board.record_failure(g.id, error="x")
+    board.record_failure(g.id, error="x", claim_token=board.get(g.id).claim_token)
     board.claim(g.id, "w", ttl_seconds=900)
-    board.record_success(g.id, result="recovered")
+    board.record_success(g.id, result="recovered", claim_token=board.get(g.id).claim_token)
     assert board.get(g.id).consecutive_failures == 0
 
 

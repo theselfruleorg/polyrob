@@ -190,15 +190,11 @@ def test_rpc_prefers_the_operator_pinned_endpoint(monkeypatch):
     configured."""
     seen = {}
 
-    class _Resp:
-        def read(self):
-            return b'{"result": null}'
-
-    def fake_urlopen(req, timeout=15.0):
-        seen["url"] = req.full_url
-        return _Resp()
+    def fake_request(method, url, **kwargs):
+        seen["url"] = url
+        return {"result": None}
 
     monkeypatch.setenv("DEFI_EVM_RPC_BASE", "https://pinned.example/rpc")
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("tools.defi.providers._http.request_json", fake_request)
     univ3._rpc("base", "eth_call", [])
     assert seen["url"] == "https://pinned.example/rpc"

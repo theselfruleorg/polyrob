@@ -154,3 +154,14 @@ async def test_process_update_no_transcriber_is_unchanged(monkeypatch):
         dedup=_FakeDedup(), user_directory=_FakeUD(),
     )
     assert result.inbound.text == "typed"
+
+
+def test_an_oversized_voice_note_is_never_downloaded():
+    """CHAT-4: the declared duration/size is checked before any download."""
+    from surfaces.telegram.voice import extract_voice_file_id
+    long = {"message": {"voice": {"file_id": "v", "duration": 3600}}}
+    big = {"message": {"audio": {"file_id": "a", "file_size": 50 * 1024 * 1024}}}
+    ok = {"message": {"voice": {"file_id": "v", "duration": 12, "file_size": 40000}}}
+    assert extract_voice_file_id(long) is None
+    assert extract_voice_file_id(big) is None
+    assert extract_voice_file_id(ok) == "v"

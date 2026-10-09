@@ -92,7 +92,8 @@ def parse_quote(payload: Any, *, chain: str) -> Optional[JupiterQuote]:
     for hop in (payload.get("routePlan") or []):
         label = ((hop or {}).get("swapInfo") or {}).get("label")
         if label:
-            labels.append(str(label))
+            from core.wallet.tokens import clean_name
+            labels.append(clean_name(str(label)[:256]) or "unknown")
     venue = "jupiter:" + ("+".join(labels[:3]) if labels else "unknown")
     return JupiterQuote(
         chain=chain,
@@ -175,11 +176,10 @@ def build_swap(quote_payload: Dict[str, Any], user_public_key: str,
                        "wrapAndUnwrapSol": True}).encode()
     if post is not None:
         return decode_swap_transaction(post(body))
-    req = urllib.request.Request(SWAP_URL, data=body, headers={
-        "content-type": "application/json", "user-agent": "polyrob-defi/1.0"})
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT_SEC) as r:
-            return decode_swap_transaction(json.loads(r.read()))
+        from tools.defi.providers._http import request_json
+        return decode_swap_transaction(request_json(
+            "POST", SWAP_URL, payload=json.loads(body), timeout=TIMEOUT_SEC))
     except Exception as exc:
         logger.info("jupiter: swap build failed (%s)", exc)
         return None

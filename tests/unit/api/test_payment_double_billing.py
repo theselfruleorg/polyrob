@@ -51,6 +51,10 @@ class _FakeContainer:
         self.config = None
 
     def get_service(self, name):
+        if name == "tier_manager":
+            from types import SimpleNamespace
+            from unittest.mock import AsyncMock
+            return SimpleNamespace(get_user_tier=AsyncMock(return_value="free_access"))
         if name == "balance_manager":
             return self._balance_mgr
         return None

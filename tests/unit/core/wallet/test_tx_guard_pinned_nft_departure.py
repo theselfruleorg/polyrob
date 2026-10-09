@@ -1,6 +1,7 @@
 """069 v4 §5 rule 5 (+ rule 3) in the guard: a PINNED collection's token leaves the holder only
 with the collection's live code matching its pinned runtime_sha256 and its account carrying NO
-open approval (complete scan). Absolute — no owner override — and fail closed.
+open approval (complete scan). No override for a row an NFT owner's transaction granted;
+the owner may accept only a row no owner's transaction emitted (possibly fabricated). Fail closed.
 
 Also: the collection mint and reveal shapes re-check the runtime hash (069 v4 A3)."""
 from core.wallet import collection_registry, erc6551, tx_guard
@@ -50,10 +51,12 @@ def _erc20_approval_log(account=ACCOUNT_42, amount=7):
             "data": "0x" + f"{amount:064x}"}
 
 
-def _run(contract, rpc, *, dest=DEST, token_id=42, ctx=None, forged=lambda c, t: False):
+def _run(contract, rpc, *, dest=DEST, token_id=42, ctx=None, forged=lambda c, t: False,
+         accepted=()):
     intent = tx_guard.TxIntent(chain="robinhood", token=None, to=contract, amount_raw=0,
                                max_spend_usd=5.0, idempotency_key="k", is_nft_op=True,
-                               nft_out=((contract, "erc721", token_id, 1),))
+                               nft_out=((contract, "erc721", token_id, 1),),
+                               accepted_unattributed_approvals=tuple(accepted))
     deltas = Deltas(ok=True, native_delta=0, gas_used=90_000,
                     holder_nft_out=((contract.lower(), "erc721", dest.lower(), token_id, 1),))
     tx = {"to": contract, "data": "0x23b872dd", "value": 0, "chainId": 4663, "nonce": 1,
@@ -164,3 +167,58 @@ def test_runtime_refusal_helper():
     assert collection_registry.runtime_refusal(Rpc(), p) is None
     assert "not the pinned" in collection_registry.runtime_refusal(Rpc(code="0x00"), p)
     assert "could not be read" in collection_registry.runtime_refusal(Rpc(broken="eth_getCode"), p)
+
+
+# ---- a fabricated row (any contract can emit an Approval naming the account) ---------------
+
+GRANT_TX = "0x" + "9a" * 32
+STRANGER = "0x7777777777777777777777777777777777777777"
+KEY = f"erc20:{TOKEN.lower()}:{SPENDER.lower()}:"
+
+
+class SentBy(Rpc):
+    """The approval log carries a tx hash; the tx was SENT by ``sender``."""
+
+    def __init__(self, sender, **kw):
+        log = dict(_erc20_approval_log(), transactionHash=GRANT_TX)
+        super().__init__(logs=[log], **kw)
+        self.sender = sender
+
+    def __call__(self, method, params):
+        if method == "eth_getTransactionByHash":
+            self.calls.append(method)
+            return {"hash": params[0], "from": self.sender}
+        return super().__call__(method, params)
+
+
+def test_an_unattributed_row_refuses_and_names_the_key_the_owner_may_accept(monkeypatch):
+    pin(monkeypatch, PINNED)
+    d = _run(PINNED, SentBy(STRANGER))
+    assert d.allowed is False and KEY in d.reason
+    assert "no transaction an owner of this NFT sent emitted it" in d.reason
+
+
+def test_the_owner_may_accept_an_unattributed_row(monkeypatch):
+    pin(monkeypatch, PINNED)
+    assert _run(PINNED, SentBy(STRANGER), accepted=[KEY]).allowed is True
+
+
+def test_a_row_the_owner_granted_can_never_be_accepted(monkeypatch):
+    pin(monkeypatch, PINNED)
+    d = _run(PINNED, SentBy(HOLDER), accepted=[KEY])
+    assert d.allowed is False and "agent_nft_revoke_all" in d.reason and KEY not in d.reason
+
+
+def test_an_unreadable_origin_may_be_accepted_but_never_counts_as_attributed(monkeypatch):
+    pin(monkeypatch, PINNED)
+    rpc = SentBy(STRANGER)
+    rpc.sender = None
+
+    class Broken(SentBy):
+        def __call__(self, method, params):
+            if method == "eth_getTransactionByHash":
+                raise RuntimeError("down")
+            return super().__call__(method, params)
+    d = _run(PINNED, Broken(STRANGER))
+    assert d.allowed is False and "origin could not be read" in d.reason
+    assert _run(PINNED, Broken(STRANGER), accepted=[KEY]).allowed is True

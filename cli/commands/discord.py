@@ -4,7 +4,7 @@ No public URL needed: connects to the Discord Gateway as a bot, receives DMs
 and (with GROUP_CHAT_ENABLED + an allowlisted channel) guild messages, and
 runs the full Task agent. Group messages are mention-gated by default.
 
-Token: --token or DISCORD_BOT_TOKEN (process env or ./.polyrob/.env). Create a
+Token: --token or DISCORD_BOT_TOKEN (process env or ~/.polyrob/.env). Create a
 bot at https://discord.com/developers/applications, enable the MESSAGE CONTENT
 intent, and invite it with the bot scope.
 """
@@ -25,7 +25,7 @@ def resolve_discord_token(token_opt: Optional[str]) -> str:
     if not tok:
         raise DiscordTokenError(
             "No Discord bot token. Pass --token, or set DISCORD_BOT_TOKEN "
-            "(process env or ./.polyrob/.env). Create a bot at "
+            "(process env or ~/.polyrob/.env). Create a bot at "
             "https://discord.com/developers/applications."
         )
     return tok

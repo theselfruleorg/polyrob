@@ -242,7 +242,9 @@ def test_lp_quote_needs_an_amount():
     assert "amount_a" in res.error
 
 
-def test_lp_quote_v4_on_a_non_pons_pair_is_an_honest_refusal():
+def test_lp_quote_v4_on_a_non_pons_pair_is_an_honest_refusal(monkeypatch):
+    from tools.launchpad import pons
+    monkeypatch.setattr(pons, "verify_pins", lambda rpc: None)
     # 048 phase 3: a v4 quote exists only for a Pons PoolKey; an unreadable
     # factory record is an error, never a guessed pool.
     tool = _tool(FakeRpc())

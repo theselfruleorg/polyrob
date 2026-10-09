@@ -21,6 +21,10 @@ from typing import List, Optional, Union
 # Sidecar DBs opened directly under the data-home by the autonomy/memory/surface layers.
 SIDECAR_DB_NAMES = (
     "memory.db",
+    "feedback_replays.db",  # signed ERC-8004 feedback grants and purchase proofs
+    "refusal_taint.db",     # durable money-refusal public-send restriction
+    "login_attempts.db",    # owner-login budgets shared by workers
+    "x_write_attempts.db",  # shared API/browser write budget
     "goals.db",
     "cron.db",
     "skill_usage.db",

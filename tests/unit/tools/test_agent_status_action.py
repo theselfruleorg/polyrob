@@ -519,3 +519,17 @@ async def test_agent_status_wallet_is_owner_scoped(monkeypatch, uid, visible):
     assert (("0x" + "ab" * 20) in text) is visible
     assert ("So1anaAddr111" in text) is visible
     assert ("wallet: withheld" in text) is (not visible)
+
+
+@pytest.mark.asyncio
+async def test_agent_status_release_notes_reads_the_shipped_changelog(monkeypatch):
+    """`release_notes` returns ONE release's CHANGELOG section, not the status."""
+    from core.version import get_version
+    c = _live_controller(monkeypatch)
+    action = c.registry.registry.actions["agent_status"]
+    result = await action.function(action.param_model(release_notes="latest"),
+                                   execution_context=None)
+    text = result.extracted_content
+    assert text.startswith(f"running: v{get_version()}")
+    assert f"## [{get_version()}]" in text
+    assert "steps:" not in text

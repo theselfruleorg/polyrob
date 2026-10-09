@@ -217,6 +217,8 @@ def build_service_task(container: Any, payload: Any, *, owner_uid: str,
                 now - _FIRST_RUN_LOOKBACK_SEC)
     rows = ledger.tail(src.surface_id, src.chat_id, thread_id=src.thread_id,
                        since_ts=since, limit=_TAIL_LIMIT, unanswered_only=True)
+    from core.surfaces.group_turn import context_rows
+    rows = context_rows(container, src.surface_id, src.chat_id, rows)
     # 2026-09-16: the tail now carries the agent's OWN replies too (the room log
     # had only ever held the human half). Two different questions over one tail:
     #   * is there WORK? — only a human line can ask for an answer, so a tail of

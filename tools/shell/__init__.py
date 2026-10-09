@@ -4,8 +4,10 @@ A stateful shell surface for a posture-entitled OWNER session: env + cwd persist
 across `shell_run` calls (a snapshot-replay model — capture cwd/env after each
 command, replay next call; NOT a long-lived interactive shell, which deadlocks).
 At AGENT_COMPUTE_POSTURE>=1 every command runs INSIDE the session's persistent docker
-sandbox container (`docker exec`); posture 3 (host) is a deliberate single-tenant-box
-tier (deferred here). Gated by `compute_posture_allows(ctx, 1)` — never reachable by a
+sandbox container (`docker exec`); at posture 3 the owner's terminal turn runs on the
+host instead (073 W1, `host_executor.py`, gated by
+`core.security.host_execution.host_shell_refusal`). Every command first passes the
+ONE command guard (`core.security.command_guard`, 073 W2). Gated by `compute_posture_allows(ctx, 1)` — never reachable by a
 correspondent/leaf/forged turn — and registered into DELEGATE_BLOCKED_TOOLS, out of
 CHILD_INHERITABLE_TOOLS and the default tool_ids.
 
@@ -46,7 +48,7 @@ def register_shell_tools(force: bool = False) -> bool:
         ShellTool,
         ToolDescriptor(
             name="shell",
-            description="Run shell commands in a persistent sandbox (cwd/env persist; background jobs)",
+            description="Run shell commands in a persistent sandbox, or on the host at posture 3 (cwd/env persist; background jobs)",
             category=ToolCategory.INTEGRATION,
             is_optional=True,
             init_priority=80,
@@ -60,7 +62,7 @@ def register_shell_tools(force: bool = False) -> bool:
             ProcessTool,
             ToolDescriptor(
                 name="process",
-                description="Manage background shell jobs (list/poll/log/kill)",
+                description="Manage background shell jobs (list/poll/wait/log/kill)",
                 category=ToolCategory.INTEGRATION,
                 is_optional=True,
                 init_priority=80,

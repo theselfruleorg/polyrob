@@ -50,6 +50,18 @@ def _sandbox_reap_enabled() -> bool:
     return bool_env("SANDBOX_REAP_ENABLED", True)
 
 
+def _docker_socket_reachable() -> bool:
+    """False when this process cannot open the Docker socket (prod 2026-10-03: the
+    agent identity is deliberately outside the ``docker`` group, proposal 053, and
+    every reap tick spawned a refused ``docker ps`` — ~100 WARNING lines a day).
+    A probe error fails open: the reaper then runs and reports as before."""
+    try:
+        from tools.code_exec import docker_sandbox_unreachable_reason
+        return docker_sandbox_unreachable_reason() is None
+    except Exception:
+        return True
+
+
 def _x402_invoicing_enabled() -> bool:
     # Read the env directly (core.env SSOT) — importing modules.x402 here would
     # put a server-tier module on the core import graph (C3 boundary), so this
@@ -158,9 +170,16 @@ def _build_wake_drain_ticker(task_agent, data_dir):
                 # (it drops + audits a session it cannot legitimately own), and a
                 # wrongly-recreated session's forged wake still cannot spend.
                 try:
-                    ok = await task_agent.deliver_self_wake(
-                        row.session_id, row.user_id, row.text,
-                        metadata=row.metadata)
+                    # A late-approved ACTION (an X post the owner approved after
+                    # the run stopped waiting) runs here once — not a wake turn.
+                    from core.approved_actions import runner_for
+                    _runner = runner_for(row.metadata)
+                    if _runner is not None:
+                        ok = await _runner(dict(row.metadata), row.user_id, task_agent)
+                    else:
+                        ok = await task_agent.deliver_self_wake(
+                            row.session_id, row.user_id, row.text,
+                            metadata=row.metadata)
                 except Exception:
                     logger.debug("wake drain: deliver raised for %s (fail-open)",
                                  row.session_id, exc_info=True)
@@ -277,11 +296,14 @@ def _build_sandbox_reaper_ticker(task_agent):
                 return  # 031 owner pause
 
             import shutil
-            from tools.code_exec import code_exec_docker_persistent_enabled
+            from tools.code_exec import (
+                code_exec_docker_persistent_enabled, docker_binary, docker_binary_is_daemonless)
 
             if not code_exec_docker_persistent_enabled():
                 return
-            if shutil.which("docker") is None:
+            if shutil.which(docker_binary()) is None:  # 073 W6: Podman too
+                return
+            if not docker_binary_is_daemonless() and not _docker_socket_reachable():
                 return
 
             # Resolve the live session set. If we cannot read the registry we must
@@ -394,6 +416,26 @@ def _build_nft_holdings_watch(task_agent):
     return IntervalTicker(_tick, interval_seconds=nft_holdings.INTERVAL_SEC)
 
 
+def _build_x402_expiry_watch():
+    """Resolve expired, unsettled x402 authorizations from chain state, so a paid
+    server that never settles cannot hold every money rail until the owner acts.
+    Reads the chain only; books under the journal/audit locks. NOT pause-gated:
+    resolving a row moves no money, and a paused owner still needs the rails
+    unblocked when they resume."""
+    from core.tickers import IntervalTicker
+    from core.wallet import x402_expiry
+
+    async def _tick():
+        try:
+            for r in await asyncio.to_thread(x402_expiry.resolve_expired):
+                if r.outcome in ("used", "expired_unused"):
+                    logger.warning("x402 expiry watch: %s %s", r.reference, r.detail)
+        except Exception as e:
+            logger.warning("x402 expiry watch tick failed: %s", type(e).__name__)
+
+    return IntervalTicker(_tick, interval_seconds=x402_expiry.INTERVAL_SEC)
+
+
 def _build_settlement_watcher(task_agent):
     # Lazy server-tier import — only executes when X402_INVOICE_ENABLED is on,
     # so a rob-core-only environment never touches modules.x402.
@@ -430,11 +472,15 @@ def _schedule_cold_start_orphan_reap() -> None:
     async) is logged and swallowed, never allowed to disrupt startup.
     """
     import shutil
-    from tools.code_exec import code_exec_docker_persistent_enabled
+    from tools.code_exec import (
+        code_exec_docker_persistent_enabled, docker_binary, docker_binary_is_daemonless)
 
     if not code_exec_docker_persistent_enabled():
         return
-    if shutil.which("docker") is None:
+    if shutil.which(docker_binary()) is None:  # 073 W6: Podman too
+        return
+    if not docker_binary_is_daemonless() and not _docker_socket_reachable():
+        logger.info("cold-start orphan sweep skipped: this identity cannot open the Docker socket")
         return
 
     async def _sweep() -> None:
@@ -1223,6 +1269,12 @@ def start_autonomy(*, task_agent, data_dir: str | None = None) -> AutonomyHandle
             handles._add("bridges", _build_bridge_watcher(task_agent))
     except Exception as e:
         logger.warning("Could not start the bridge watcher: %s", e)
+    try:
+        from core.env import bool_env as _be
+        if _be("AGENT_WALLET_ENABLED", False):
+            handles._add("x402_expiry", _build_x402_expiry_watch())
+    except Exception as e:
+        logger.warning("Could not start the x402 expiry watch: %s", e)
     try:
         from core.wallet import nft_holdings as _nh
         if _nh.enabled():

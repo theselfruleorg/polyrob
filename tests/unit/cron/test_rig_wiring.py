@@ -32,9 +32,10 @@ def test_resolve_cron_tools_is_unchanged_by_default(monkeypatch):
 
 def test_resolve_cron_tools_honours_the_job_rig(monkeypatch):
     monkeypatch.delenv("AUTONOMOUS_RIG_DEFAULT", raising=False)
-    assert resolve_cron_tools({"rig": "ops"}) == list(RIGS["ops"])
+    own = {"authored_by": "owner"}
+    assert resolve_cron_tools({"rig": "ops", **own}) == list(RIGS["ops"])
     # payload.tools still wins — the owner-grant contract is untouched.
-    assert resolve_cron_tools({"rig": "ops", "tools": ["defi_trade"]}) == ["defi_trade"]
+    assert resolve_cron_tools({"rig": "ops", "tools": ["defi_trade"], **own}) == ["defi_trade"]
 
 
 @pytest.mark.asyncio
@@ -73,7 +74,10 @@ def test_resolve_cron_tools_intersects_an_agent_rig_only(monkeypatch):
     monkeypatch.setattr(gt, "allowed_self_goal_tools", lambda: gt._SELF_GOAL_ALLOWED_TOOLS)
     agent = resolve_cron_tools({"rig": "money_rail", "authored_by": "agent"})
     assert "defi_trade" not in agent and "defi_data" in agent
-    assert resolve_cron_tools({"rig": "money_rail"}) == list(RIGS["money_rail"])
+    assert resolve_cron_tools({"rig": "money_rail", "authored_by": "owner"}) \
+        == list(RIGS["money_rail"])
+    # Round 3: an UNSTAMPED row is not the owner's — it gets the ceiling too.
+    assert "defi_trade" not in resolve_cron_tools({"rig": "money_rail"})
 
 
 @pytest.mark.asyncio

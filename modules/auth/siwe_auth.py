@@ -128,6 +128,14 @@ class SIWEAuthenticator:
         """
         nonce = secrets.token_hex(32)
 
+        # API-11: an expired nonce is dead weight; drop them as new ones are
+        # issued so anonymous issuance cannot grow the table without bound.
+        try:
+            await self.db.execute(
+                "DELETE FROM auth_nonces WHERE expires_at < datetime('now')")
+        except Exception as e:
+            self.logger.warning("auth nonce prune failed: %s", e)
+
         # Store nonce with expiration (5 minutes)
         await self.db.execute("""
             INSERT OR REPLACE INTO auth_nonces (

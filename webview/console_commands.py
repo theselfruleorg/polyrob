@@ -44,6 +44,9 @@ def _console_deliver(task_agent, clean_id: str, user_id: str):
        tab that typed the verb shows the answer where it asked. Skipped on the
        cold-open path (no session, ``clean_id == ""``).
     """
+    from agents.task.path import is_reserved_session_id
+    seat = bool(clean_id) and is_reserved_session_id(clean_id)
+
     async def _deliver(text: str) -> None:
         body = str(text or "").strip()
         if not body:
@@ -52,12 +55,16 @@ def _console_deliver(task_agent, clean_id: str, user_id: str):
             from core.surfaces.user_delivery import deliver_user_message
             await deliver_user_message(
                 getattr(task_agent, "container", None), user_id, body,
-                source="console_command", session_id=clean_id or None,
+                source="console_command",
+                session_id=(None if seat else clean_id) or None,
                 priority="critical")
         except Exception:
             logger.warning("console command: owner-notice delivery failed",
                            exc_info=True)
-        if not clean_id:
+        if not clean_id or seat:
+            # A console SEAT ("money"/"inbox") is not a session: no tab listens
+            # on a session room of that name, and a session that once took the
+            # name must never receive the owner's money result (WEB-1).
             return
         try:
             import time
@@ -65,7 +72,8 @@ def _console_deliver(task_agent, clean_id: str, user_id: str):
             import webview.server as _srv
             event = {"type": COMMAND_REPLY_EVENT, "timestamp": time.time(),
                      "data": {"text": body}}
-            await _srv._sio.emit("feed_update", event, room=clean_id)
+            from webview.session_access import session_room
+            await _srv._sio.emit("feed_update", event, room=session_room(clean_id))
         except Exception:
             logger.debug("console command: live feed push skipped", exc_info=True)
     return _deliver

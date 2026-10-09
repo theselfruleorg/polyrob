@@ -68,14 +68,14 @@ def test_owner_login_route_mounted_in_multitenant_too(multitenant_client):
     assert multitenant_client.get("/owner-login").status_code == 200
 
 
-def test_owner_login_route_NOT_mounted_in_local(local_client):
-    # Posture 0 has no auth at all — no login surface needed or wanted.
-    assert local_client.get("/owner-login").status_code == 404
+def test_owner_login_route_mounted_in_local(local_client):
+    # Local clients must authenticate too.
+    assert local_client.get("/owner-login").status_code == 200
 
 
-def test_owner_login_post_route_NOT_mounted_in_local(local_client):
+def test_owner_login_post_rejects_missing_credentials(local_client):
     resp = local_client.post("/owner-login", data={"username": "x", "password": "y"})
-    assert resp.status_code == 404
+    assert resp.status_code in (401, 403)
 
 
 def test_session_page_requires_auth_in_own_ops(own_ops_client):

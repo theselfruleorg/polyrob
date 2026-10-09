@@ -58,6 +58,27 @@ OBJ_PAUSED = "paused"
 OBJ_DROPPED = "dropped"
 OBJ_DONE = "done"
 
+#: Default lifetime child cap of an objective (env ``OBJECTIVE_GOAL_BUDGET``).
+OBJECTIVE_GOAL_BUDGET_DEFAULT = 25
+
+
+def objective_goal_budget(payload) -> int:
+    """The ONE objective-budget rule: ``GoalBoard.objective_budget`` enforces it
+    and the status snapshot reports it. A stream (``stream_id``) or a rail
+    (``recurrence``) is uncapped (0); an own ``goal_budget`` wins; else
+    ``OBJECTIVE_GOAL_BUDGET`` (default 25)."""
+    p = payload if isinstance(payload, dict) else {}
+    if p.get("stream_id") or p.get("recurrence"):
+        return 0
+    own = p.get("goal_budget")
+    if own is not None:
+        try:
+            return max(0, int(own))
+        except (TypeError, ValueError):
+            pass
+    from core.env import int_env
+    return int_env("OBJECTIVE_GOAL_BUDGET", OBJECTIVE_GOAL_BUDGET_DEFAULT)
+
 
 def normalize_title(title: str) -> str:
     """The ONE title key: lowercase, alnum words, single spaces. The board's

@@ -92,9 +92,10 @@ def _board_with_blocked_goal(data_dir):
     board = GoalBoard(os.path.join(data_dir, "goals.db"))
     goal = board.create(user_id="rob", title="ship it")
     board.claim(goal.id, "w", ttl_seconds=60)
-    board.record_failure(goal.id, error="which account?")
+    board.record_failure(goal.id, error="which account?", claim_token=board.get(goal.id).claim_token)
     board.claim(goal.id, "w", ttl_seconds=60)
-    board.record_failure(goal.id, error="which account?")  # breaker -> blocked
+    board.record_failure(goal.id, error="which account?",
+        claim_token=board.get(goal.id).claim_token)  # breaker -> blocked
     ask = board.create_ask(user_id="rob", what="Which account?",
                            blocks_goal_ids=[goal.id])
     return board, goal, ask

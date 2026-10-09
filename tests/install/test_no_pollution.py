@@ -19,7 +19,9 @@ def _clean_env(tmp_home: Path) -> dict:
     env = {
         "HOME": str(tmp_home),
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-        "PYTHONPATH": str(REPO_ROOT),
+        "PYTHONPATH": os.pathsep.join([str(REPO_ROOT), *sorted({
+            str(p.parent.parent) for p in (REPO_ROOT / "packs").glob("*/polyrob_*/pack.toml")
+        })]),
         "TERM": "dumb",
         "CI": "1",  # never prompt
     }
@@ -66,7 +68,7 @@ def test_doctor_creates_nothing_in_cwd_without_the_crypto_extra(tmp_path):
         "raise ImportError(\"No module named 'eth_account'\")\n"
     )
     env = _clean_env(home)
-    env["PYTHONPATH"] = f"{stub}{os.pathsep}{REPO_ROOT}"
+    env["PYTHONPATH"] = f"{stub}{os.pathsep}{env['PYTHONPATH']}"
     proc = subprocess.run(
         [sys.executable, "-c",
          "import sys; sys.argv=['polyrob','doctor']; "
@@ -97,6 +99,9 @@ def test_declined_zero_key_repl_leaves_cwd_empty(tmp_path):
     )
 
 
+from core.runtime_paths import _local_default_data_home as _REAL_LOCAL_DEFAULT
+
+
 def test_home_cwd_collision_redirects_data_home(monkeypatch, tmp_path):
     home = tmp_path / "home" / ".polyrob"
     home.mkdir(parents=True)
@@ -105,8 +110,10 @@ def test_home_cwd_collision_redirects_data_home(monkeypatch, tmp_path):
     # Running from $HOME: cwd/.polyrob IS the config home.
     monkeypatch.chdir(home.parent)
 
+    import core.runtime_paths as rp
     from core.runtime_paths import resolve_runtime_paths
 
+    monkeypatch.setattr(rp, "_local_default_data_home", _REAL_LOCAL_DEFAULT)
     paths = resolve_runtime_paths(local=True)
     assert paths.data_home != home.resolve(), (
         "running from the config home must not mix .env/auth.json with the "
@@ -122,7 +129,9 @@ def test_init_writes_no_gitignore_outside_git(tmp_path, monkeypatch):
 
     home = tmp_path / "home" / ".polyrob"
     home.mkdir(parents=True)
-    monkeypatch.setattr("core.paths.polyrob_home", lambda: home)
+    # Keep the shared resolver callable intact: modules imported by init retain
+    # their imported reference after monkeypatch restores core.paths.
+    monkeypatch.setenv("POLYROB_HOME", str(home))
     runner = CliRunner()
     with runner.isolated_filesystem(temp_dir=tmp_path) as fs:
         result = runner.invoke(init_cmd, ["--no-prompt"], catch_exceptions=False)

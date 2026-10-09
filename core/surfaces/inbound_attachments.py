@@ -168,8 +168,8 @@ def persist_inbound_file(
         # is the belt-and-braces check that the write lands inside the workspace.
         if _resolve_in_workspace(workspace_dir, os.path.join(INBOUND_DIR, basename)) is None:
             return None, "the attachment path resolved outside the session workspace"
-        with open(full, "wb") as fh:
-            fh.write(data)
+        from core.security.workspace_io import write_bytes
+        write_bytes(full, workspace_dir, data)
     except OSError as e:
         logger.warning("inbound attachment write failed (%s): %s", filename, e)
         return None, f"could not be stored ({type(e).__name__})"
@@ -210,8 +210,11 @@ def inject_file_content(
                     f"({_human_size(size)}, cap {cap:g}MB) to read. It IS saved at "
                     f"{rel_path} — say so rather than guessing its content.]", None)
         try:
-            with open(full_path, "rb") as fh:
-                encoded = base64.b64encode(fh.read()).decode("utf-8")
+            from core.security.workspace_io import read_bytes
+            raw = read_bytes(full_path, workspace_dir, max_bytes=int(cap * 1024 * 1024) + 1)
+            if len(raw) > cap * 1024 * 1024:
+                raise OSError("image grew beyond the size limit")
+            encoded = base64.b64encode(raw).decode("utf-8")
         except OSError as e:
             return (f"{message_text}\n\n[Error: could not read attached image "
                     f"{name}: {type(e).__name__}]", None)
@@ -232,8 +235,11 @@ def inject_file_content(
 
     if size < INLINE_SIZE_THRESHOLD and ext in INLINE_TEXT_EXTENSIONS:
         try:
-            with open(full_path, "r", encoding="utf-8") as fh:
-                content = fh.read()
+            from core.security.workspace_io import read_bytes
+            raw = read_bytes(full_path, workspace_dir, max_bytes=INLINE_SIZE_THRESHOLD + 1)
+            if len(raw) > INLINE_SIZE_THRESHOLD:
+                raise OSError("attachment grew beyond the inline size limit")
+            content = raw.decode("utf-8")
             # F12: an attached file is DATA — it may be a forwarded page or a
             # correspondent's document, and an instruction inside it must not
             # read as the owner's. The owner's own words are message_text.

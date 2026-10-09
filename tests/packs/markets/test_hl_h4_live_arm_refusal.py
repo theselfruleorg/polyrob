@@ -86,6 +86,7 @@ async def test_master_switch_alone_does_not_refuse(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_agent_status_reports_polyrob_signer_and_h4(monkeypatch):
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u1")
     monkeypatch.setenv("AGENT_WALLET_ENABLED", "true")
     monkeypatch.setenv("AGENT_WALLET_MASTER_SEED", "s" * 40)
     wf.reset_agent_wallet_cache()

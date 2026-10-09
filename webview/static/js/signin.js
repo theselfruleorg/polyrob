@@ -3,20 +3,21 @@
  *
  * De-inlined from signin.html (043 phase 5, R6): the console CSP drops
  * `'unsafe-inline'` from `script-src`, so the two former inline blocks (the
- * ethers.js loader with a CDN fallback, and the connect/verify flow) ride this
+ * vendored ethers.js loader, and the connect/verify flow) ride this
  * one external module loaded with `src=`. Behaviour is preserved exactly.
  */
 
-// --- ethers.js loader (local first, CDN fallback) --------------------------- //
+// --- vendored ethers.js loader -------------------------------------------- //
 (function () {
-  const localScript = document.createElement("script");
-  localScript.src = "/static/js/ethers.min.js";
-  localScript.onerror = function () {
-    const cdnScript = document.createElement("script");
-    cdnScript.src = "https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js";
-    document.head.appendChild(cdnScript);
+  const script = document.createElement("script");
+  script.src = "/static/js/ethers.min.js";
+  script.onerror = function () {
+    const status = document.getElementById("statusMessage");
+    if (status) status.textContent = "Wallet sign-in could not load. Reload this page to retry.";
+    const button = document.getElementById("connectBtn");
+    if (button) button.disabled = true;
   };
-  document.head.appendChild(localScript);
+  document.head.appendChild(script);
 })();
 
 // --- connect / SIWE verify -------------------------------------------------- //
@@ -25,7 +26,10 @@
   const connectBtn = document.getElementById("connectBtn");
   const statusMessage = document.getElementById("statusMessage");
   const urlParams = new URLSearchParams(window.location.search);
-  const returnTo = urlParams.get("return_to") || "/";
+  const requestedReturn = urlParams.get("return_to") || "/";
+  const returnTo = requestedReturn.startsWith("/") &&
+    !requestedReturn.startsWith("//") && !/[\\\x00-\x20\x7f]/.test(requestedReturn)
+    ? requestedReturn : "/";
 
   function showStatus(message, type = "info") {
     statusMessage.textContent = message;

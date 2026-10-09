@@ -314,7 +314,7 @@ def test_zai_coding_client_initialises_once_the_closure_is_installed(monkeypatch
     monkeypatch.setattr(ld, "_overlay_writable", lambda: None)
     # The installer double runs as the test UID, not polyrob-deps. Ownership
     # validation has independent positive/negative security regressions.
-    monkeypatch.setattr(ld, "_protected_overlay", lambda feature: True)
+    monkeypatch.setattr(ld, "_protected_overlay", lambda feature, **kwargs: True)
     monkeypatch.setenv("ZAI_API_KEY", "zai-test-key")
     requested = []
 

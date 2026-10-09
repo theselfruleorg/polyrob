@@ -158,16 +158,15 @@ def test_an_owner_pause_holds_the_turn(monkeypatch):
     assert orch.mm.pushed == []
 
 
-def test_the_context_block_carries_exactly_ONE_group_context_fence():
-    """The content arrives already framed twice (untrusted wrap around the
-    rendered block). A THIRD envelope named `group-context` would show the model
-    `</group-context>` twice, and the first close is the INNER one — the
-    delimiter ambiguity the untrusted wrap exists to prevent."""
+def test_the_context_block_carries_one_trusted_outer_fence():
+    """Strip inner control tags so retrieved text cannot close its envelope."""
     orch = _Orch()
     _deliver(_Agent(orch))
     body = orch.mm.pushed[0].content
-    assert body.count("<group-context") == 1
-    assert body.count("</group-context>") == 1
+    assert body.count("<group-context") == 0
+    assert body.count("</group-context>") == 0
+    assert body.count("</untrusted_tool_result>") == 1
+    assert "anyone tried the bridge?" in body
     assert body.startswith('<untrusted_tool_result source="group-context">')
     assert orch.mm.pushed[0].origin == "group_context", "the ORIGIN still records it"
 

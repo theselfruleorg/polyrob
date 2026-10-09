@@ -121,3 +121,32 @@ def test_recursive_grep_skips_credentials_and_outside_symlinks(tmp_path):
     assert "app.py" in out
     assert "sk-live-123" not in out and "from-outside" not in out
     assert "2 file(s) not searched" in out
+
+
+def test_a_file_the_confined_open_refuses_is_counted_not_silently_absent(tmp_path):
+    """A hard link to a PRIVATE file (a planted link to a secret) is refused by
+    the O_NOFOLLOW read; grep must NAME it in the refused list."""
+    import os
+    (tmp_path / "a.py").write_text("VALUE = 1\n")
+    (tmp_path / "linked.py").write_text("VALUE = 2\n")
+    os.chmod(tmp_path / "linked.py", 0o600)
+    os.link(tmp_path / "linked.py", tmp_path / "alias.py")
+    refused = []
+    hits = search_files(str(tmp_path), "VALUE", output_mode="files",
+                        refused=refused, confine_root=str(tmp_path))
+    assert [os.path.basename(h) for h in hits] == ["a.py"]
+    assert sorted(os.path.basename(r) for r in refused) == ["alias.py", "linked.py"]
+
+
+def test_a_world_readable_hard_linked_file_is_searched(tmp_path):
+    """uv and pnpm trees hard-link 0644 files from their caches: ordinary
+    project files the agent must be able to grep."""
+    import os
+    (tmp_path / "cache.py").write_text("VALUE = 3\n")
+    os.chmod(tmp_path / "cache.py", 0o644)
+    os.link(tmp_path / "cache.py", tmp_path / "node_module.py")
+    refused = []
+    hits = search_files(str(tmp_path), "VALUE", output_mode="files",
+                        refused=refused, confine_root=str(tmp_path))
+    assert sorted(os.path.basename(h) for h in hits) == ["cache.py", "node_module.py"]
+    assert refused == []

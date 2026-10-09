@@ -22,7 +22,6 @@ runtime footprint minimal.
 from core.packs.loader import register_policies as _register_pack_policies
 _register_pack_policies()
 
-from collections import OrderedDict
 from pathlib import Path
 import asyncio
 import json
@@ -350,11 +349,11 @@ async def add_security_headers(request: Request, call_next):
         # CSP - strict, unless the route set its own (the SVG /avatar.png). 043 R6: no inline script.
         response.headers.setdefault("Content-Security-Policy", (
             "default-src 'self'; "
-            "script-src 'self' https://cdn.socket.io https://cdnjs.cloudflare.com https://fonts.googleapis.com https://cdn.jsdelivr.net; "
-            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com; "
-            "font-src 'self' https://fonts.gstatic.com; "
+            "script-src 'self'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "font-src 'self'; "
             "img-src 'self' data: https: blob:; "
-            "connect-src 'self' ws: wss: https://cdn.socket.io https://cdnjs.cloudflare.com; "
+            "connect-src 'self' ws: wss:; "
             "frame-src 'self' blob: data:; "
             "frame-ancestors 'none'; "
             "base-uri 'self'; "
@@ -494,6 +493,7 @@ async def _emit_feed_event(entry: dict, room: str) -> bool:
     Fail-safe: if the rate-limit check itself raises, we log and fall through to
     emitting the event rather than crashing the feed watcher's loop.
     """
+    from webview.session_access import session_room
     try:
         allowed = check_event_rate_limit(room)
     except Exception as exc:
@@ -506,11 +506,11 @@ async def _emit_feed_event(entry: dict, room: str) -> bool:
         # refetches the feed after the window; the next allowed emit re-arms it.
         if room not in _gapped_rooms:
             _gapped_rooms.add(room)
-            await _sio.emit("feed_gap", {"session_id": room, "retry_after": RATE_LIMIT_WINDOW}, room=room)
+            await _sio.emit("feed_gap", {"session_id": room, "retry_after": RATE_LIMIT_WINDOW}, room=session_room(room))
         return False
 
     _gapped_rooms.discard(room)
-    await _sio.emit("feed_update", entry, room=room)
+    await _sio.emit("feed_update", entry, room=session_room(room))
     return True
 
 
@@ -564,7 +564,12 @@ def _enrich_llm_event_with_cost(entry: dict) -> dict:
 
 async def get_clean_session_id(session_id: str) -> str:
     """Clean a session ID and return it. Use as a FastAPI dependency."""
-    return pm().clean_session_id(session_id)
+    return _canonical_session_id(session_id)
+
+
+def _canonical_session_id(session_id: str) -> str:
+    from webview.session_access import http_session_id
+    return http_session_id(session_id, pm())
 
 
 def _jti_revoked(jti: Optional[str]) -> bool:
@@ -589,14 +594,6 @@ def _manual_auth_check(request: Request) -> None:
         This is needed for endpoints in public_paths where auth middleware doesn't run.
         For protected endpoints, use the normal auth middleware instead.
     """
-    # Posture "local": loopback operator IS the owner, there is no JWT/SIWE/owner
-    # login, ever — nothing to decode. own_ops/multitenant both mint tokens
-    # (owner-login cookie or wallet/SIWE JWT respectively) that must be
-    # decode-able here too — this is what makes the own_ops "owner logs in →
-    # dashboard" round-trip work (B4).
-    if not webgate.requires_owner_login():
-        return
-
     auth_token = None
     auth_header = request.headers.get("Authorization")
 
@@ -648,15 +645,6 @@ def _check_session_ownership(request: Request, session_id: str) -> tuple[bool, O
         Returns (False, user_id, owner_id) if authenticated but not owner.
         Returns (True, user_id, owner_id) if authenticated and is owner.
     """
-    # Single-user webgate (posture "local"): every session is owned by the local
-    # owner. No 401/403 on interaction, no JWT — the loopback operator IS the
-    # owner. Gated on requires_owner_login() (False only for "local"), NOT
-    # is_multitenant() (B4-M) — own_ops has real auth (owner-login cookie) too,
-    # so it must run the actual ownership check below rather than this bypass.
-    if not webgate.requires_owner_login():
-        local_owner = webgate.local_owner_id()
-        return (True, local_owner, local_owner)
-
     from utils.auth_utils import get_authenticated_user_id, is_authenticated
 
     # Check authentication
@@ -673,7 +661,7 @@ def _check_session_ownership(request: Request, session_id: str) -> tuple[bool, O
     # strict per-session match. The middleware and join_session apply it too.
     from webview.session_access import owner_may_open
     is_owner = owner_may_open(current_user_id, session_owner_id)
-    if is_owner and webgate.is_own_ops():
+    if is_owner and webgate.is_owner_console():
         return (True, current_user_id, session_owner_id or current_user_id)
     return (is_owner, current_user_id, session_owner_id)
 
@@ -804,7 +792,7 @@ except Exception as e:
 
 # Global activity stream (/activity page + /api/activity/*). Mounted in ALL
 # postures; access is enforced at request time inside webview/activity.py
-# (_require_activity_access): local open, own_ops behind the owner cookie
+# (_require_activity_access): local/own_ops require owner authentication
 # (auth middleware — /activity is deliberately NOT a public path), multitenant
 # admin/instance-owner only. Fail-open mount: a failure never breaks boot.
 try:
@@ -823,44 +811,15 @@ def _login_redirect_path() -> str:
     ``_multitenant_get``) — send it to ``/owner-login`` instead. Multitenant
     keeps its existing ``/signin`` target unchanged.
     """
-    return "/owner-login" if webgate.is_own_ops() else "/signin"
+    return "/owner-login" if webgate.is_owner_console() else "/signin"
 
 
 @_fastapi.middleware("http")
 async def auth_middleware(request: Request, call_next):
     """Require authentication (owner login or wallet/SIWE) for all routes except
-    signin/owner-login and static files. Runs for BOTH own_ops and multitenant
-    postures (B4) — only "local" (the loopback operator IS the owner) skips it.
+    signin/owner-login and static files, in every posture.
     """
 
-    # Posture "local" (WEBGATE_MULTITENANT=OFF and no POLYROB_POSTURE override,
-    # the default): no JWT/SIWE/owner-login, ever — fold into the auth-disabled
-    # short-circuit. own_ops/multitenant both require SOME authenticated
-    # identity (webgate.requires_owner_login()) and run the checks below.
-    if not webgate.requires_owner_login():
-        # The loopback operator IS the owner (the same statement
-        # _check_session_ownership's local bypass makes). Stamp the canonical
-        # owner auth state so downstream gates that read request.state — the
-        # task router's payment admin-bypass, catalog scope, template
-        # is_authenticated branches — see the owner instead of an anonymous
-        # user; without this the local console 402s on POST /api/task/sessions
-        # (WS-3 E2E finding, 2026-07-07).
-        try:
-            from api.auth_state import set_auth_state
-            set_auth_state(
-                request.state,
-                user_id=webgate.local_owner_id(),
-                tier="admin",
-                role="owner",
-                payment_method=None,
-                authenticated=True,
-            )
-        except Exception:
-            pass
-        return await call_next(request)
-
-    # own_ops and multitenant always authenticate. Local posture has already
-    # returned above; WEBVIEW_AUTH_ENABLED cannot disable a public control plane.
     path = request.url.path
 
     # Public paths (no auth required)
@@ -885,7 +844,7 @@ async def auth_middleware(request: Request, call_next):
     # it is let through here too (after populating request.state via
     # _manual_auth_check, same as the other public paths) rather than
     # redirected to a login page by this middleware.
-    if path == "/" or any(path.startswith(p) for p in public_paths) or pack_console.is_public(path, request.scope.get("method", "")):
+    if (path == "/" and not webgate.is_local()) or any(path.startswith(p) for p in public_paths) or pack_console.is_public(path, request.scope.get("method", "")):
         # Attempt to authenticate if token present (for better UX)
         # This allows detecting session owners vs viewers
         _manual_auth_check(request)
@@ -1026,22 +985,18 @@ def _catalog_scope(request: Request) -> tuple[str, Optional[str]]:
     """Who may list WHAT in the session catalog: ('all'|'user'|'none', user_id).
 
     Mirrors _check_session_ownership's posture logic exactly:
-      - local: the loopback operator IS the owner → 'all'.
-      - own_ops: the authenticated owner-login identity
+      - local/own_ops: the authenticated owner-login identity
         (webgate.local_owner_id()) → 'all'; any other identity or no auth →
         'none' (a non-owner in own_ops has no sessions of their own).
       - multitenant: authenticated → 'user' (strict per-tenant, unchanged);
         unauthenticated → 'none'.
     """
-    if not webgate.requires_owner_login():
-        return ("all", webgate.local_owner_id())
-
     from utils.auth_utils import is_authenticated
     if not is_authenticated(request):
         return ("none", None)
     current_user_id = getattr(request.state, 'user_id', None)
 
-    if webgate.is_own_ops():
+    if webgate.is_owner_console():
         if current_user_id and current_user_id == webgate.local_owner_id():
             return ("all", current_user_id)
         return ("none", current_user_id)
@@ -1098,7 +1053,8 @@ def _annotate_runtime(sessions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return sessions
 
 
-@_posture_get("/logout", postures=("own_ops", "multitenant"), response_class=HTMLResponse)
+@_posture_post("/logout", postures=("local", "own_ops", "multitenant"),
+               response_class=HTMLResponse, dependencies=webgate.MUTATION_DEPS)
 async def logout(request: Request) -> Response:
     """Log out and return to the posture's login surface.
 
@@ -1120,7 +1076,7 @@ async def logout(request: Request) -> Response:
         }, headers={"Retry-After": "5"})
     # WS1: both postures answer a real 303 — never an inline <script> (the CSP
     # blocks it). Clear-Site-Data drops the multitenant JWT from localStorage.
-    target = "/owner-login" if webgate.is_own_ops() else "/signin"
+    target = "/owner-login" if webgate.is_owner_console() else "/signin"
     response: Response = RedirectResponse(url=target, status_code=303)
     response.headers["Clear-Site-Data"] = '"cookies", "storage"'
     response.delete_cookie("auth_token")
@@ -1128,38 +1084,6 @@ async def logout(request: Request) -> Response:
 
 
 # --- owner-login hardening: throttle + CSRF + return_to sanitizing ---------- #
-# In-memory per-IP sliding window. Argon2 cost alone is not brute-force
-# throttling; 5 attempts / 5 min per IP is generous for one owner.
-_LOGIN_ATTEMPT_WINDOW_SEC = 300
-_LOGIN_ATTEMPT_MAX = 5
-#: Most recently seen IPs kept. W6 (043): the bound used to be enforced with
-#: `_login_attempts.clear()` — one address-churning attacker (trivially cheap
-#: over IPv6, where a single /64 hands out billions) wiped the attempt history of
-#: EVERY honest IP, including its own, and walked straight past the throttle.
-#: An LRU evicts the OLDEST entry instead: a flood loses its own oldest records
-#: and never the live ones.
-_LOGIN_ATTEMPT_LRU_MAX = 10000
-_login_attempts: "OrderedDict[str, list]" = OrderedDict()
-
-
-def _login_throttled(ip: str) -> bool:
-    now = time.time()
-    attempts = [t for t in _login_attempts.get(ip, []) if now - t < _LOGIN_ATTEMPT_WINDOW_SEC]
-    if attempts:
-        _login_attempts[ip] = attempts
-        _login_attempts.move_to_end(ip)
-    elif ip in _login_attempts:
-        del _login_attempts[ip]   # expired window: drop the row, don't pin it
-    return len(attempts) >= _LOGIN_ATTEMPT_MAX
-
-
-def _record_login_attempt(ip: str) -> None:
-    _login_attempts.setdefault(ip, []).append(time.time())
-    _login_attempts.move_to_end(ip)
-    while len(_login_attempts) > _LOGIN_ATTEMPT_LRU_MAX:
-        _login_attempts.popitem(last=False)
-
-
 # The form's own double-submit token and the return_to sanitizer live beside the
 # render they protect (webview/owner_login_flow.py); aliased here because the
 # routes and tests resolve them off this module.
@@ -1179,23 +1103,14 @@ def _render_owner_login(request, *, return_to="/", error=None, status_code=200):
     return render_owner_login(request, return_to=return_to, error=error,
                               status_code=status_code)
 
-@_posture_get("/owner-login", postures=("own_ops", "multitenant"), response_class=HTMLResponse)
+@_posture_get("/owner-login", postures=("local", "own_ops", "multitenant"), response_class=HTMLResponse)
 async def owner_login_page(request: Request) -> Response:
-    """Owner username/password login page (Posture 1, own_ops).
-
-    Registered for own_ops AND multitenant (NOT `_multitenant_get`, which
-    would be multitenant-only) — own_ops posture is NOT multitenant, so this
-    must stay reachable outside that gate. Wallet sign-in (`/signin`) stays
-    available too, as an additional method in multitenant (design doc §1:
-    owner-login is "optionally also selectable" there). Posture 0 (local)
-    has no auth at all — no login surface needed or wanted, so it is NOT
-    registered there (a request → 404).
-    """
+    """Owner login is available in every console posture."""
     return_to = _safe_return_to(request.query_params.get("return_to", "/"))
     return _render_owner_login(request, return_to=return_to)
 
 
-@_posture_post("/owner-login", postures=("own_ops", "multitenant"),
+@_posture_post("/owner-login", postures=("local", "own_ops", "multitenant"),
                dependencies=webgate.MUTATION_DEPS)
 async def owner_login_submit(request: Request) -> Response:
     """Verify owner credentials and, on success, issue the owner session cookie.
@@ -1207,10 +1122,15 @@ async def owner_login_submit(request: Request) -> Response:
     from webview.owner_auth import verify_owner_password, issue_owner_session_cookie
 
     client_ip = request.client.host if request.client else "unknown"
-    if _login_throttled(client_ip):
+    from webview.login_limits import admit, remember
+    try:
+        admitted = await asyncio.to_thread(admit, client_ip)
+    except Exception:
+        logger.error('Owner login budget unavailable; refusing sign-in', exc_info=True)
+        raise HTTPException(status_code=503, detail='Sign-in is temporarily unavailable; retry shortly.')
+    if not admitted:
         return _render_owner_login(request,
             error="login.too_many", status_code=429)
-    _record_login_attempt(client_ip)
 
     form = await request.form()
     username = form.get("username", "")
@@ -1224,12 +1144,13 @@ async def owner_login_submit(request: Request) -> Response:
             return _render_owner_login(request, return_to=return_to,
                 error="login.expired", status_code=403)
 
-    if not verify_owner_password(username, password):
+    if not await asyncio.to_thread(verify_owner_password, username, password):
         return _render_owner_login(request, return_to=return_to,
             error="login.wrong", status_code=401)
 
     response = RedirectResponse(url=return_to, status_code=303)
     issue_owner_session_cookie(response)
+    await remember(client_ip)  # a known-good address escapes the GLOBAL budget
     return response
 
 
@@ -1276,7 +1197,7 @@ async def session_page(request: Request, session_id: str) -> Response:
     bound-session page. A 301 keeps an old bookmark or link landing on the
     session it named.
     """
-    clean_id = pm().clean_session_id(session_id)
+    clean_id = _canonical_session_id(session_id)
     return RedirectResponse(url=f"/c/{clean_id}", status_code=301)
 
 
@@ -1552,8 +1473,8 @@ async def api_repair(request: Request, clean_id: str = Depends(get_clean_session
         )
     try:
         from webview.repair_sessions import repair_session_telemetry
-        session_dir = pm().get_feed_dir(clean_id).parent
-        if not session_dir.exists():
+        session_dir = await asyncio.to_thread(pm().find_session_root, clean_id)
+        if session_dir is None:
             return JSONResponse({"status": "error", "message": "Session not found"}, status_code=404)
         results = await asyncio.to_thread(repair_session_telemetry, session_dir)
         return JSONResponse({"status": "ok", "repair": results})
@@ -1577,17 +1498,11 @@ async def api_screenshot(request: Request, clean_id: str = Depends(get_clean_ses
         session_owner_id = pm().get_session_user(clean_id)
         user_id = session_owner_id if session_owner_id else current_user_id
 
-        session_dir = pm().get_feed_dir(clean_id, user_id=user_id).parent
-        screenshot_dir = session_dir / "screenshots"
-        
-        # Check if the screenshots directory exists. Creating it is a WRITE on a
-        # GET (W13): a read-only console observes, it never materializes a
-        # directory in the agent's session tree — so the side effect is
-        # conditional, while the read itself stays allowed.
-        if not screenshot_dir.exists() and not webgate.read_only():
-            # Try to create it, but no error if it already exists
-            screenshot_dir.mkdir(exist_ok=True, parents=True)
-            logger.info(f"Created screenshots directory for session {clean_id}")
+        # WEB-9: a READ never materializes the session tree (no mkdir, no
+        # `_anonymous_` fallback); a missing session reads as "no screenshot".
+        session_dir = await asyncio.to_thread(pm().find_session_root, clean_id, user_id)
+        screenshot_dir = (session_dir / "screenshots") if session_dir is not None \
+            else Path(os.devnull) / "missing"
         
         # Find the latest screenshot
         screenshots = []
@@ -1638,10 +1553,10 @@ async def api_screenshot(request: Request, clean_id: str = Depends(get_clean_ses
             if not page_url:
                 try:
                     # Get the feed directory
-                    feed_dir = pm().get_feed_dir(clean_id)
+                    feed_dir = pm().find_feed_dir(clean_id, user_id)
                     # Find the most recent step event that contains a URL
                     step_files = sorted(
-                        feed_dir.glob("step_*.json"),
+                        feed_dir.glob("step_*.json") if feed_dir is not None else [],
                         key=lambda p: p.stat().st_mtime,
                         reverse=True
                     )[:5]  # Check the 5 most recent step files
@@ -1706,9 +1621,10 @@ async def api_screenshot_file(request: Request, clean_id: str = Depends(get_clea
         session_owner_id = pm().get_session_user(clean_id)
         user_id = session_owner_id if session_owner_id else current_user_id
 
-        screenshot_dir = pm().get_feed_dir(clean_id, user_id=user_id).parent / "screenshots"
-        
-        if not screenshot_dir.exists():
+        session_dir = await asyncio.to_thread(pm().find_session_root, clean_id, user_id)
+        screenshot_dir = (session_dir / "screenshots") if session_dir is not None else None
+
+        if screenshot_dir is None or not screenshot_dir.exists():
             logger.warning(f"Screenshots directory not found for {clean_id}")
             raise HTTPException(404, "No screenshots directory found")
         
@@ -1837,7 +1753,7 @@ async def api_session_status(request: Request, session_id: str) -> Response:
     Note: Uses session owner's user_id to allow public viewing of shared sessions.
     """
     # Clean the session ID to handle agent prefixes
-    clean_id = pm().clean_session_id(session_id)
+    clean_id = _canonical_session_id(session_id)
     logger.debug(f"API status request for session {session_id} (cleaned: {clean_id})")
 
     try:
@@ -1847,10 +1763,10 @@ async def api_session_status(request: Request, session_id: str) -> Response:
         session_owner_id = pm().get_session_user(clean_id)
         user_id = session_owner_id if session_owner_id else current_user_id
 
-        feed_dir = pm().get_feed_dir(clean_id, user_id=user_id)
-        session_dir = feed_dir.parent
-        
-        if not feed_dir.exists():
+        feed_dir = await asyncio.to_thread(pm().find_feed_dir, clean_id, user_id)
+        session_dir = feed_dir.parent if feed_dir is not None else None
+
+        if feed_dir is None:
             return JSONResponse(
                 {"status": "unknown", "message": "Session not found"},
                 status_code=404,
@@ -1978,7 +1894,7 @@ async def api_session_debug(session_id: str, request: Request) -> Response:
     (``_check_session_ownership``: the local/own_ops owner owns every session;
     multitenant compares the authenticated caller against the session's owner).
     """
-    clean_id = pm().clean_session_id(session_id)
+    clean_id = _canonical_session_id(session_id)
     is_owner, current_user_id, _owner = _check_session_ownership(request, clean_id)
     if not is_owner:
         return JSONResponse(
@@ -1989,8 +1905,11 @@ async def api_session_debug(session_id: str, request: Request) -> Response:
     logger.debug(f"API debug request for session {session_id} (cleaned: {clean_id})")
 
     try:
-        feed_dir = pm().get_feed_dir(clean_id)
-        session_dir = feed_dir.parent
+        # WEB-9: describe the tree WITHOUT creating it.
+        session_dir = pm().find_session_root(clean_id)
+        if session_dir is None:
+            session_dir = pm().data_root / "_missing_" / clean_id
+        feed_dir = session_dir / "feed"
 
         debug_info = {
             "session_id": session_id,
@@ -2063,7 +1982,7 @@ async def api_session_debug(session_id: str, request: Request) -> Response:
         )
 
 
-@_fastapi.get("/api/telemetry/health", response_class=JSONResponse)
+@_fastapi.get("/api/telemetry/health", response_class=JSONResponse, dependencies=webgate.OWNER_CONSOLE_DEPS)
 async def api_telemetry_health() -> Response:
     """Return telemetry system health status."""
     try:
@@ -2147,7 +2066,7 @@ async def _handle_stream_chunk(session_id: str, request: Request) -> Response:
             status_code=403
         )
 
-    clean_id = pm().clean_session_id(session_id)
+    clean_id = _canonical_session_id(session_id)
 
     try:
         data = await request.json()
@@ -2270,7 +2189,7 @@ async def send_message_to_session(session_id: str, request: Request) -> Response
         - Only session owner can send messages (_check_session_ownership,
           posture-aware: the own_ops/local owner owns every session)
     """
-    clean_id = pm().clean_session_id(session_id)
+    clean_id = _canonical_session_id(session_id)
 
     # SECURITY: Check authentication and ownership using centralized helper
     is_owner, current_user_id, session_owner_id = _check_session_ownership(request, clean_id)
@@ -2428,7 +2347,7 @@ async def get_queue_status(session_id: str, request: Request) -> Response:
     In-process TaskAgent when available (single-service deploys, WS-3.1);
     else proxies to the main :9000 API with retry logic (classic shape).
     """
-    clean_id = pm().clean_session_id(session_id)
+    clean_id = _canonical_session_id(session_id)
 
     # In-process path — same read-only data the :9000 handler would return.
     in_proc_agent = _in_process_task_agent() if TASK_ROUTER_MOUNTED else None
@@ -2550,8 +2469,8 @@ async def get_queue_status(session_id: str, request: Request) -> Response:
 
 # Socket.IO auth state: sid -> resolved user_id (None = anonymous/unauthenticated).
 _socket_user: Dict[str, Optional[str]] = {}
-# sid -> JWT tier claim ("admin" for owner-login tokens; None otherwise).
-_socket_tier: Dict[str, Optional[str]] = {}
+# sid -> authenticated role; billing tiers never confer administrative access.
+_socket_role: Dict[str, Optional[str]] = {}
 # sids currently in the global "activity" room (drives hub start/stop).
 _activity_clients: set = set()
 
@@ -2560,7 +2479,7 @@ from webview.socket_auth import SocketAuthMonitor
 
 async def _disconnect_expired_socket(sid):
     _socket_user.pop(sid, None)
-    _socket_tier.pop(sid, None)
+    _socket_role.pop(sid, None)
     await _sio.disconnect(sid)
 
 
@@ -2614,15 +2533,6 @@ def _socket_cookie_token(environ: Dict) -> Optional[str]:
 @_sio.event
 async def connect(sid: str, environ: Dict, auth: Dict | None = None) -> bool | None:  # noqa: D401 – Socket.IO callback
     logger.debug("Client connected: %s", sid)
-    # Posture "local": loopback operator IS the owner — no auth, no friction,
-    # byte-identical to before. own_ops AND multitenant both require some
-    # decoded identity (owner-login cookie or wallet/SIWE bearer token
-    # respectively); short-circuiting only "local" here is what closes the
-    # own_ops anonymous-socket gap (E4 follow-up) without touching Posture 0.
-    if not webgate.requires_owner_login():
-        _socket_user[sid] = webgate.local_owner_id()
-        _socket_tier[sid] = None
-        return
     token = (auth or {}).get("token") if isinstance(auth, dict) else None
     if not token:
         token = _socket_cookie_token(environ)
@@ -2632,7 +2542,7 @@ async def connect(sid: str, environ: Dict, auth: Dict | None = None) -> bool | N
         # retain an anonymous connection on an authenticated console posture.
         return False
     _socket_user[sid] = payload.get("user_id")
-    _socket_tier[sid] = payload.get("tier")
+    _socket_role[sid] = payload.get("role", "user")
     _socket_auth_monitor.register(sid, payload)
 
 
@@ -2653,17 +2563,21 @@ async def disconnect(sid: str) -> None:  # noqa: D401 – Socket.IO callback
     _socket_auth_monitor.remove(sid)
     forget(sid)
     _socket_user.pop(sid, None)
-    _socket_tier.pop(sid, None)
+    _socket_role.pop(sid, None)
     if sid in _activity_clients:
         _activity_clients.discard(sid)
         await _stop_hub_if_activity_empty()
+    await _leave_session(sid)
+
+
+async def _leave_session(sid: str) -> None:
     # Figure out which session this sid belonged to
     sess_id = _client_session.get(sid)
     if sess_id is None:
         return
 
-    # Remove client from room and tracking - use session_id directly
-    await _sio.leave_room(sid, sess_id)
+    from webview.session_access import session_room
+    await _sio.leave_room(sid, session_room(sess_id))
     _client_session.pop(sid, None)
     
     # Remove the client from this session
@@ -2707,17 +2621,17 @@ async def join_session(sid, data):
             return
 
         # Clean the session ID to ensure consistency
-        clean_id = pm().clean_session_id(session_id)
+        clean_id = _canonical_session_id(session_id)
         logger.info("join_session: clean_id=%s for client %s", clean_id, sid)
 
         # E4 (A6 gap 1): tenant-gate the join BEFORE joining the room or streaming any feed.
         # requires_owner_login() covers BOTH own_ops (owner-login cookie) and
         # multitenant (wallet/SIWE JWT) — own_ops was left ungated (E4 follow-up).
         if webgate.requires_owner_login():
-            from webview.session_access import owner_may_open  # WV1: the one rule
+            from webview.session_access import owner_may_open, is_reserved_session_id  # WV1; WEB-1
             current_user_id = _socket_user.get(sid)
             session_owner_id = pm().get_session_user(clean_id)
-            if not owner_may_open(current_user_id, session_owner_id):
+            if is_reserved_session_id(clean_id) or not owner_may_open(current_user_id, session_owner_id):
                 logger.warning(
                     "join_session denied: sid=%s user=%s session_owner=%s",
                     sid, current_user_id, session_owner_id,
@@ -2725,10 +2639,12 @@ async def join_session(sid, data):
                 await _sio.emit("error", refusal("not_yours"), room=sid)
                 return
 
-        # Join socket.io room for this session - use clean_id as room name
-        await _sio.enter_room(sid, clean_id)
-        _client_session[sid] = clean_id
-        _session_clients[clean_id] = _session_clients.get(clean_id, 0) + 1
+        from webview.session_access import session_room
+        if _client_session.get(sid) != clean_id:
+            await _leave_session(sid)
+            await _sio.enter_room(sid, session_room(clean_id))
+            _client_session[sid] = clean_id
+            _session_clients[clean_id] = _session_clients.get(clean_id, 0) + 1
         logger.info("Client %s joined session %s (cleaned: %s)", sid, session_id, clean_id)
 
         # 030 WS-G2 (D-8): a RECONNECTING client that already holds state sends
@@ -2766,8 +2682,8 @@ async def join_activity(sid, data=None):
     """Join the global activity room (the /activity terminal's live stream).
 
     The stream is inherently cross-tenant, so it is gated harder than
-    join_session: local = open (loopback operator); own_ops/multitenant =
-    the instance owner or an admin-tier JWT ONLY. On the first watcher the
+    join_session: every posture requires an authenticated identity with
+    the instance owner or an administrative role ONLY. On the first watcher the
     ActivityHub lazily starts its feed watcher + DB tails; it stops when the
     room empties (leave_activity/disconnect).
     """
@@ -2782,13 +2698,14 @@ async def join_activity(sid, data=None):
 
         if webgate.requires_owner_login():
             current_user_id = _socket_user.get(sid)
-            tier = _socket_tier.get(sid)
+            role = _socket_role.get(sid)
+            from core.constants import is_admin_role
             allowed = bool(current_user_id) and (
-                current_user_id == webgate.local_owner_id() or tier == "admin"
+                current_user_id == webgate.local_owner_id() or is_admin_role(role)
             )
             if not allowed:
                 logger.warning(
-                    "join_activity denied: sid=%s user=%s tier=%s", sid, current_user_id, tier
+                    "join_activity denied: sid=%s user=%s role=%s", sid, current_user_id, role
                 )
                 await _sio.emit("error", refusal("not_yours"), room=sid)
                 return
@@ -2836,16 +2753,17 @@ async def _feed_watcher(session_id: str) -> None:
     Args:
         session_id: The session ID to watch
     """
-    clean_id = pm().clean_session_id(session_id)
-    feed_dir = pm().get_feed_dir(clean_id)
-    logger.info("Starting feed watcher for session %s at %s", session_id, feed_dir)
-    
+    clean_id = _canonical_session_id(session_id)
     # Use session_id directly as the room name
     room = session_id
 
-    # WS8: a console read never creates a session tree — wait for the agent's.
-    while not feed_dir.exists():
-        await asyncio.sleep(1.0)
+    # WS8/WEB-9: wait for the AGENT's feed — read-only, off the loop, bounded.
+    from webview.feed_routes import wait_for_feed_dir
+    feed_dir = await wait_for_feed_dir(pm(), clean_id)
+    if feed_dir is None:
+        logger.info("feed watcher for %s stopped: no session feed appeared", session_id)
+        return
+    logger.info("Starting feed watcher for session %s at %s", session_id, feed_dir)
 
     # Track processed files to avoid duplicates - use bounded set for memory efficiency
     processed_files = set()

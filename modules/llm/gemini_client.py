@@ -1,5 +1,6 @@
 """Google Gemini LLM API Client."""
 
+from modules.llm.billing_guard import billed_google_options
 import logging
 import asyncio
 import time
@@ -502,7 +503,7 @@ class GeminiClient(LLMClient):
             
             # Make API request using native async method
             # FIX (Dec 2, 2025): Use generate_content_async instead of to_thread wrapper
-            response = await model.generate_content_async(gemini_messages)
+            response = await model.generate_content_async(gemini_messages, **billed_google_options())
             
             self.last_response = response
             
@@ -1128,26 +1129,25 @@ class GeminiClient(LLMClient):
 
                     # Send the current message - SDK handles thought signatures automatically
                     response = await asyncio.wait_for(
-                        chat.send_message_async(current_message["parts"]),
+                        chat.send_message_async(current_message["parts"], **billed_google_options()),
                         timeout=float(self.DEFAULT_REQUEST_TIMEOUT)
                     )
                     self.logger.debug(f"[CHAT_SESSION] Used ChatSession for Gemini 3 thought signature handling")
                 else:
                     # Standard path for non-Gemini-3 or no tools
                     response = await asyncio.wait_for(
-                        model.generate_content_async(gemini_messages),
+                        model.generate_content_async(gemini_messages, **billed_google_options()),
                         timeout=float(self.DEFAULT_REQUEST_TIMEOUT)
                     )
             except asyncio.TimeoutError:
                 self.logger.error(f"Gemini API call timed out after {self.DEFAULT_REQUEST_TIMEOUT} seconds")
                 self.logger.error(f"[DEBUG] Request details: messages={len(gemini_messages)}, tools={len(tool_objects)}, system={bool(system_content)}")
-                # Log first message preview
-                if gemini_messages:
-                    msg_preview = str(gemini_messages[0])[:500]
-                    self.logger.error(f"[DEBUG] First message preview: {msg_preview}")
 
-                # Try without tools as fallback
-                if tool_objects:
+                # An unknown paid request retains its reservation; retries must
+                # enter through the adapter and obtain a new one.
+                from core.billing_context import is_billed
+                # Try without tools as fallback only for operator calls.
+                if tool_objects and not is_billed():
                     self.logger.warning(f"[DEBUG] Retrying without tools to isolate issue...")
                     try:
                         model_no_tools = genai.GenerativeModel(
@@ -1156,7 +1156,7 @@ class GeminiClient(LLMClient):
                             system_instruction=system_content if system_content else None
                         )
                         response = await asyncio.wait_for(
-                            model_no_tools.generate_content_async(gemini_messages),
+                            model_no_tools.generate_content_async(gemini_messages, **billed_google_options()),
                             timeout=float(self.DEFAULT_REQUEST_TIMEOUT)
                         )
                         self.logger.warning(f"[DEBUG] SUCCESS without tools! Tools are the problem.")

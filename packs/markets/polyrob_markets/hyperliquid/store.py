@@ -207,6 +207,16 @@ class HyperliquidDBHandler:
 
         self.logger.info(f"Saved credentials for user {user_id[:8]}...")
 
+    async def update_agent_wallet(self, user_id: str, agent_wallet: Optional[AgentWallet]) -> None:
+        """Change delegation without overwriting concurrently changed safety limits."""
+        await self.db.execute("""
+            UPDATE hyperliquid_credentials SET agent_wallet_address = ?,
+                agent_wallet_private_key_encrypted = ?, agent_wallet_name = ?,
+                updated_at = CURRENT_TIMESTAMP WHERE user_id = ?
+        """, (agent_wallet.address if agent_wallet else None,
+              self.encryption.encrypt(agent_wallet.private_key) if agent_wallet else None,
+              agent_wallet.name if agent_wallet else None, user_id))
+
     async def update_trading_limits(
         self,
         user_id: str,

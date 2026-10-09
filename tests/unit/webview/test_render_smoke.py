@@ -19,6 +19,7 @@ import importlib
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.unit.webview.owner_session import owner_headers
 
 #: A surviving ``layout.html`` page, rendered directly (see the module
 #: docstring): no single-user HTTP route serves one any more.
@@ -85,8 +86,8 @@ def test_cors_default_uses_webview_domain(monkeypatch):
 def test_cors_default_unset_uses_local_webview(monkeypatch):
     monkeypatch.delenv("WEBVIEW_DOMAIN", raising=False)
     server = _reload_server(monkeypatch, multitenant=False)
-    assert "https://localhost:3000" in server._cors_origins
-    assert "http://localhost:3000" in server._cors_origins
+    assert "https://localhost:3000" not in server._cors_origins
+    assert "http://localhost:3000" not in server._cors_origins
 
 
 def test_index_page_uses_branding_config_defaults(monkeypatch):
@@ -128,7 +129,7 @@ def test_footer_renders_real_version(monkeypatch):
 
 def test_signin_has_no_placeholder_legal_links(monkeypatch):
     server = _reload_server(monkeypatch, multitenant=False)
-    client = TestClient(server._fastapi)
+    client = TestClient(server._fastapi, headers=owner_headers(monkeypatch))
     html = client.get("/signin").text if server.webgate.is_multitenant() else None
     # /signin only mounts under multitenant; render signin.html directly via
     # the template engine instead so this test runs in default (single-user) mode.

@@ -125,12 +125,9 @@ def _post_page(holder: str, chain: str, key: Optional[str], timeout: float):
         params.append({"pageKey": key})
     try:
         from tools.defi.providers import _http
-        r = _http.client().post(
-            url, json={"jsonrpc": "2.0", "id": 1, "method": "alchemy_getTokenBalances",
-                       "params": params}, timeout=timeout)
-        if r.status_code != 200:
-            return None
-        return r.json()
+        return _http.request_json("POST", url, payload={
+            "jsonrpc": "2.0", "id": 1, "method": "alchemy_getTokenBalances",
+            "params": params}, timeout=timeout)
     except Exception as exc:
         from core.security.redaction import redact_url, scrub_secret
         logger.debug("alchemy_index: page fetch failed for %s via %s: %s", holder,
@@ -162,14 +159,9 @@ def fetch_balances(holder: str, timeout: float = 10.0, *,
     try:
         from tools.defi.providers import _http
         # Pooled client — see the ~6 s per-connection note in _http.
-        r = _http.client().post(
-            url,
-            json={"jsonrpc": "2.0", "id": 1, "method": "alchemy_getTokenBalances",
-                  "params": [holder]},
-            timeout=timeout)
-        if r.status_code != 200:
-            return None
-        return parse_balances(r.json())
+        return parse_balances(_http.request_json("POST", url, payload={
+            "jsonrpc": "2.0", "id": 1, "method": "alchemy_getTokenBalances",
+            "params": [holder]}, timeout=timeout))
     except Exception as exc:
         from core.security.redaction import redact_url, scrub_secret
         logger.debug("alchemy_index: fetch failed for %s via %s: %s", holder,

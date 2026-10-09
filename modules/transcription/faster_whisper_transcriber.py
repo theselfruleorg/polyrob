@@ -5,11 +5,30 @@ import asyncio
 import logging
 import os
 import tempfile
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 from .base import Transcriber
 
 logger = logging.getLogger(__name__)
+# One CPU inference at a time across containers/surfaces. Capacity belongs to
+# the actual worker future, not an async caller that can time out or cancel.
+_SLOTS = threading.BoundedSemaphore(1)
+#: CHAT-4: one more slot only the OWNER's voice may take, so a room member's
+#: long note cannot starve the owner's (``core.surfaces.media_access.OWNER_VOICE``).
+_OWNER_SLOT = threading.BoundedSemaphore(1)
+_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="voice-transcription")
+
+
+def _owner_voice() -> bool:
+    try:
+        from core.surfaces.media_access import OWNER_VOICE
+        return OWNER_VOICE.get() is True
+    except Exception:
+        return False
+INFERENCE_TIMEOUT_SECONDS = 60
+MAX_AUDIO_BYTES = 20 * 1024 * 1024
 
 
 class FasterWhisperTranscriber(Transcriber):
@@ -30,12 +49,32 @@ class FasterWhisperTranscriber(Transcriber):
 
     async def transcribe(self, audio: bytes, *, mime: Optional[str] = None,
                          language: Optional[str] = None) -> str:
-        if not audio:
+        if not audio or len(audio) > MAX_AUDIO_BYTES:
             return ""
+        slots = _SLOTS
+        if not slots.acquire(blocking=False):
+            slots = _OWNER_SLOT
+            if not (_owner_voice() and slots.acquire(blocking=False)):
+                logger.warning("voice transcription unavailable: inference already running")
+                return ""
         try:
-            return await asyncio.to_thread(self._transcribe_sync, audio, language)
-        except Exception as e:  # fail-open: a transcription failure must not drop the msg
-            logger.warning("faster-whisper transcription failed: %s", e)
+            future = _EXECUTOR.submit(self._transcribe_guarded, audio, language)
+        except BaseException:
+            slots.release()
+            raise
+        future.add_done_callback(lambda _: slots.release())
+        try:
+            return await asyncio.wait_for(
+                asyncio.shield(asyncio.wrap_future(future)), INFERENCE_TIMEOUT_SECONDS)
+        except TimeoutError:
+            logger.warning("voice transcription timed out; inference capacity remains reserved")
+            return ""
+
+    def _transcribe_guarded(self, audio, language):
+        try:
+            return self._transcribe_sync(audio, language)
+        except Exception as exc:
+            logger.warning("faster-whisper transcription failed (%s)", type(exc).__name__)
             return ""
 
     def _transcribe_sync(self, audio: bytes, language: Optional[str]) -> str:

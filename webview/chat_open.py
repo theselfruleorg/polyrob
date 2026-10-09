@@ -23,6 +23,8 @@ The money picker and the step slider move to Agent › Settings in phase 4; the
 session request carries only the task, so ``resolve_session_provider_model``
 picks the model the operator's runtime config already names.
 """
+
+from webview.session_access import http_session_id
 import logging
 import re
 
@@ -239,7 +241,7 @@ def _session_folder(session_id: str):
     (``pm().get_session_root`` would)."""
     from agents.task.path import pm
     paths = pm()
-    clean = paths.clean_session_id(session_id)
+    clean = http_session_id(session_id, paths)
     owner = paths.get_session_user(clean)
     if not owner:
         return None
@@ -292,7 +294,7 @@ def run_live(session_id: str) -> str:
 
         from agents.task.path import pm
         from webview import webgate
-        clean = pm().clean_session_id(session_id)
+        clean = http_session_id(session_id, pm())
         agent = webgate.in_process_task_agent()
         route_fn = getattr(agent, "route_session", None) if agent else None
         if route_fn is not None:

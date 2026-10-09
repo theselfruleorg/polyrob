@@ -1,6 +1,8 @@
 """Tier manager for managing user tiers based on NFT ownership."""
 
 import logging
+import asyncio
+from datetime import datetime, timezone
 
 from core.exceptions import TierError, UserNotFoundError
 
@@ -14,7 +16,7 @@ class TierManager:
     """Manage user tiers based on NFT ownership."""
 
     # Tier quotas (SIMPLIFIED: holder = 1+ DEN tokens)
-    # Credits: 100 welcome (everyone) + 2000 DEN Sign Up Allowance per token
+    # Credits: optional welcome grant + 2000 DEN Sign Up Allowance per token
     TIER_LIMITS = {
         "holder": {
             "signup_allowance_per_token": DEN_SIGNUP_ALLOWANCE,  # $20 USD one-time per token ID
@@ -50,18 +52,53 @@ class TierManager:
         """
 
         result = await self.db.fetch_one("""
-            SELECT tier FROM user_profiles WHERE user_id = ?
+            SELECT tier, wallet_address, den_token_verified_at FROM user_profiles WHERE user_id = ?
         """, (user_id,))
 
         tier = result['tier'] if result else 'free'
-
+        if tier == 'holder':
+            tier = await self._refresh_holder(user_id, result)
         return tier
+
+    async def _refresh_holder(self, user_id: str, row) -> str:
+        """A transferred DEN cannot leave a permanent entitlement behind."""
+        verified = row.get('den_token_verified_at')
+        try:
+            when = datetime.fromisoformat(str(verified).replace('Z', '+00:00'))
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=timezone.utc)
+            age = (datetime.now(timezone.utc) - when).total_seconds()
+            if 0 <= age < 300:
+                return 'holder'
+        except (ValueError, TypeError):
+            pass
+        from core.token_check_hook import token_checker
+        checker = token_checker()
+        wallet = row.get('wallet_address')
+        if checker is None or self.alchemy_tool is None or not wallet:
+            raise TierError('DEN ownership verification is unavailable')
+        try:
+            result = await asyncio.wait_for(checker(self.alchemy_tool, wallet), timeout=10)
+            count = result.get('token_count') if isinstance(result, dict) else None
+            if (not isinstance(result, dict) or result.get('status') != 'success'
+                    or type(count) is not int or count < 0
+                    or type(result.get('has_token')) is not bool):
+                raise ValueError('unverified ownership result')
+        except Exception as exc:
+            raise TierError('DEN ownership verification is unavailable') from exc
+        tier = 'holder' if result['has_token'] and count > 0 else 'free'
+        await self.db.execute(
+            "UPDATE user_profiles SET tier=?, den_token_count=?, "
+            "den_token_verified_at=CURRENT_TIMESTAMP WHERE user_id=? "
+            "AND tier='holder' AND wallet_address=?", (tier, count, user_id, wallet))
+        current = await self.db.fetch_one('SELECT tier FROM user_profiles WHERE user_id=?', (user_id,))
+        return current['tier'] if current else 'free'
 
     async def get_tier_limits(self, user_id: str) -> dict:
         """Get quota limits for user's tier.
 
         For free tier, returns minimal limits (info only - access blocked at feature level).
-        Credits: 100 welcome (everyone) + 2000 DEN Sign Up Allowance per token.
+        Credits: optional welcome grant + 2000 DEN Sign Up Allowance per token.
         """
 
         tier = await self.get_user_tier(user_id)

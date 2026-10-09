@@ -76,6 +76,9 @@ def test_parity_holds_with_project_dir_set(monkeypatch, tmp_path):
 
 @pytest.fixture
 def _stub_heavy_startup(monkeypatch):
+    monkeypatch.setenv("JWT_SECRET_KEY", "root-path-test-secret" * 3)
+    monkeypatch.setenv("POLYROB_OWNER_USERNAME", "operator")
+    monkeypatch.setenv("POLYROB_OWNER_PASSWORD_HASH", "unused-startup-fixture")
     """No-op the heavy startup collaborators (container/config/core init and
     the late auth/task half) so we test only the pm() install."""
     import core.container

@@ -137,7 +137,10 @@ Tools are registered with the Controller and exposed to the LLM as callable func
 | Crypto / x402 (`core/wallet/`, `tools/x402/`) | A native agent wallet that pays for external resources over x402 — opt-in (`X402_CLIENT_ENABLED`) |
 | DeFi and on-chain (`tools/defi/`, `tools/launchpad/`, `tools/dapp_browser/`; the venues in the `markets` pack, `packs/markets/`) | Reading a chain, swapping, bridging, deploying a token, launching one, and driving a web dapp with the agent's own wallet — every verb off by default and separately armed; see [payments.md](payments.md) |
 | Durable apps (`tools/app_service/`) | Runs an app the agent built as a supervised container behind a public URL — opt-in (`AGENT_BUILDER_MODE=ship`); see [deployment-postures.md](deployment-postures.md) |
-| Code execution (`tools/code_exec/`) | Runs code in a subprocess or a hardened container; opt-in (`CODE_EXEC_ENABLED`), never loaded by default |
+| Code execution (`tools/code_exec/`) | Runs code in a subprocess or a hardened container; opt-in (`CODE_EXEC_ENABLED`), never loaded by default. `run_code(persist=True)` keeps a per-session Python kernel; `run_code(tools=True)` lets a script call an allowlist of agent tools over a per-run RPC that re-enters the Controller, so every gate still applies (`CODE_EXEC_TOOL_CALLS`). `CODE_EXEC_NETWORK=proxy` puts the session sandbox behind one allowlist proxy |
+| Shell (`tools/shell/`) | A persistent `shell` and background `process` jobs (poll, wait, log, kill, stdin through `process_write`/`process_submit`/`process_close`, PTY, notify on exit or on a pattern). In the session sandbox from `AGENT_COMPUTE_POSTURE=1`; on the host only for the owner's own terminal turn at posture 3. Executors: docker or Podman, `ssh`, and the sandbox packs (`modal`, `daytona`, `vercel_sandbox`, `singularity`). Every line passes the command guard (`core/security/command_guard.py`) |
+| Email (`tools/email_tool.py`, `tools/email_mailbox.py`, `tools/email_providers/`) | The agent's own mailbox: `email_list`, `email_read`, `email_save_attachment`, `email_reply`, `email_forward`, `email_folders`, `email_mark`, `email_move`, `email_delete` (to Trash) and `email_send`, over SMTP/IMAP or AgentMail. Every send verb rides one gated rail that tiers every recipient |
+| X (the `x` pack, `packs/x/`) | Posts, replies and DMs on the agent's own account; `twitter_dm` sends over X Chat and falls back to a plaintext DM for a cold first contact. See [x-twitter.md](x-twitter.md) |
 
 ---
 
@@ -161,7 +164,7 @@ An optional episodic activity log (`EPISODIC_MEMORY_ENABLED`) records a short su
 ## Surfaces
 
 Every surface implements one **Surface contract** for receiving input and sending
-output, so the same agent core powers all of them. Seven chat surfaces, plus two
+output, so the same agent core powers all of them. Eight chat surfaces, plus two
 programmatic ones:
 
 | Surface | Start it with | Notes |
@@ -173,7 +176,7 @@ programmatic ones:
 | Discord | `polyrob discord` | |
 | Slack | `polyrob slack` | |
 | Signal | `polyrob signal` | |
-| X | `polyrob x` | Direct messages |
+| X | — | DMs are read and sent by the agent's `twitter_get_dms` / `twitter_dm` tools over X Chat. The old `polyrob x` poller reads a DM endpoint X no longer delivers to and is obsolete. See [x-twitter.md](x-twitter.md) |
 | Feishu / Lark | `polyrob gateway` | Long connection (the `feishu` extra) or a signed webhook; text, files, buttons. See [feishu-dingtalk.md](feishu-dingtalk.md) |
 | DingTalk | `polyrob gateway` | Stream Mode, text. See [feishu-dingtalk.md](feishu-dingtalk.md) |
 | Web console | `polyrob dashboard` | Socket.IO browser interface. See [console.md](console.md) |
@@ -229,6 +232,17 @@ The agent manages its own scheduled runs with the `cronjob` tool: schedule,
 list, show, edit and cancel. An edit patches the job in place rather than
 re-writing it, and a job you scheduled can only be edited on your own turn —
 see [cli.md](cli.md#polyrob-cron--scheduled-runs).
+
+**Who wrote it.** Every cron job and goal carries an `authored_by` stamp. Every
+owner path (`polyrob cron schedule`, `/cron add`, the console, `/groups service`)
+stamps `owner`; the agent's own tools stamp `agent`, and so does an owner turn that
+had already read outside text (a web page, mail, a room). Standing owner authority —
+the toolset as written, an X post or room moderation without a per-run tap, a write
+verb — reads only a positive `owner` stamp. `/adopt <id>` shows you an
+agent-authored job or goal in full (task, schedule, tools, target, pinned skills)
+and makes it yours on one confirm; a pinned skill edited after that turns it back
+into the agent's until you adopt it again. Rows from before the stamp existed are
+stamped once with `python -m cron.stamp_authorship` (run it with `--dry-run` first).
 
 ---
 

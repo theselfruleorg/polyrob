@@ -80,7 +80,7 @@
    "github_create_issue",
    "aave_supply"
   ],
-  "universe_size": 385
+  "universe_size": 396
  },
  "actions": {
   "": {
@@ -138,7 +138,10 @@
    },
    "effect": {
     "classify_effect(None)": null,
-    "classify_effect(mcp, read_only)": null,
+    "classify_effect(mcp, read_only)": [
+     "network",
+     "tool"
+    ],
     "classify_effect(owner)": [
      "network",
      "tool"
@@ -180,14 +183,20 @@
     "autonomous_gating_lanes(env)": "reported"
    },
    "correspondent": {
-    "is_high_impact(name)": false,
-    "is_high_impact_call(name, None)": false,
-    "is_high_impact_call(name, owner)": false,
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
     "reply_action": false
    },
    "effect": {
-    "classify_effect(None)": null,
-    "classify_effect(owner)": null,
+    "classify_effect(None)": [
+     "self",
+     "action"
+    ],
+    "classify_effect(owner)": [
+     "self",
+     "action"
+    ],
     "non_write_row_in": [],
     "pause_kind_for(owner)": null,
     "write_row": {}
@@ -198,7 +207,11 @@
     "live_twitter_enabled": false,
     "synthetic_mcp": false
    },
-   "listed_in": [],
+   "listed_in": [
+    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "effects.ACTION_EFFECTS",
+    "room_policy.ROOM_DENIED_ACTIONS"
+   ],
    "money": {
     "approval_queue._is_money_action(name)": false,
     "authority.money_action(name)": false,
@@ -209,8 +222,8 @@
    },
    "owner_tools": [],
    "room": {
-    "is_room_denied_call(name, None)": false,
-    "is_room_denied_call(name, owner)": false
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
    },
    "spend_exemption": {},
    "untrusted": {
@@ -348,7 +361,7 @@
     "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
-    "spend_lane.DEFI_SPEND_VERBS",
+    "spend_lane.ALWAYS_OWNER_APPROVED_VERBS",
     "spend_lane.DRY_RUN_VERBS"
    ],
    "money": {
@@ -379,9 +392,6 @@
     ],
     "tiered/dry_run_true": "dry run — the guard is consulted but nothing is broadcast",
     "tiered/empty": "dry run — the guard is consulted but nothing is broadcast",
-    "tiered/live_spend_small": "declared ceiling $5.0000 is within the $25.00 autonomous limit",
-    "tiered/live_spend_small_session_large": "declared ceiling $5.0000 is within the $25.00 autonomous limit",
-    "tiered/live_spend_small_session_small": "declared ceiling $5.0000 is within the $25.00 autonomous limit",
     "tiered/x402_amount_large": "dry run — the guard is consulted but nothing is broadcast",
     "tiered/x402_amount_small": "dry run — the guard is consulted but nothing is broadcast"
    },
@@ -902,96 +912,6 @@
     "room_policy._is_money_call(name, owner)": false
    },
    "owner_tools": [],
-   "room": {
-    "is_room_denied_call(name, None)": false,
-    "is_room_denied_call(name, owner)": false
-   },
-   "spend_exemption": {},
-   "untrusted": {
-    "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
-   }
-  },
-  "alchemy_check_token": {
-   "approval": {
-    "autonomous_gating_lanes(env)": "reported"
-   },
-   "correspondent": {
-    "is_high_impact(name)": false,
-    "is_high_impact_call(name, None)": false,
-    "is_high_impact_call(name, owner)": false,
-    "reply_action": false
-   },
-   "effect": {
-    "classify_effect(None)": null,
-    "classify_effect(owner)": null,
-    "non_write_row_in": [],
-    "pause_kind_for(owner)": null,
-    "write_row": {}
-   },
-   "emitted": {
-    "direct_controller_action": false,
-    "live_default_env": true,
-    "live_twitter_enabled": true,
-    "synthetic_mcp": false
-   },
-   "listed_in": [],
-   "money": {
-    "approval_queue._is_money_action(name)": false,
-    "authority.money_action(name)": false,
-    "authority.money_tool(owner)": false,
-    "metering_gate.MONEY_TOOLS∋owner": false,
-    "room_policy._is_money_call(name, None)": false,
-    "room_policy._is_money_call(name, owner)": false
-   },
-   "owner_tools": [
-    "alchemy"
-   ],
-   "room": {
-    "is_room_denied_call(name, None)": false,
-    "is_room_denied_call(name, owner)": false
-   },
-   "spend_exemption": {},
-   "untrusted": {
-    "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
-   }
-  },
-  "alchemy_test_connection": {
-   "approval": {
-    "autonomous_gating_lanes(env)": "reported"
-   },
-   "correspondent": {
-    "is_high_impact(name)": false,
-    "is_high_impact_call(name, None)": false,
-    "is_high_impact_call(name, owner)": false,
-    "reply_action": false
-   },
-   "effect": {
-    "classify_effect(None)": null,
-    "classify_effect(owner)": null,
-    "non_write_row_in": [],
-    "pause_kind_for(owner)": null,
-    "write_row": {}
-   },
-   "emitted": {
-    "direct_controller_action": false,
-    "live_default_env": true,
-    "live_twitter_enabled": true,
-    "synthetic_mcp": false
-   },
-   "listed_in": [],
-   "money": {
-    "approval_queue._is_money_action(name)": false,
-    "authority.money_action(name)": false,
-    "authority.money_tool(owner)": false,
-    "metering_gate.MONEY_TOOLS∋owner": false,
-    "room_policy._is_money_call(name, None)": false,
-    "room_policy._is_money_call(name, owner)": false
-   },
-   "owner_tools": [
-    "alchemy"
-   ],
    "room": {
     "is_room_denied_call(name, None)": false,
     "is_room_denied_call(name, owner)": false
@@ -3138,96 +3058,6 @@
     "is_untrusted_tool(name, owner)": false
    }
   },
-  "collabland_admin_refresh": {
-   "approval": {
-    "autonomous_gating_lanes(env)": "reported"
-   },
-   "correspondent": {
-    "is_high_impact(name)": false,
-    "is_high_impact_call(name, None)": false,
-    "is_high_impact_call(name, owner)": false,
-    "reply_action": false
-   },
-   "effect": {
-    "classify_effect(None)": null,
-    "classify_effect(owner)": null,
-    "non_write_row_in": [],
-    "pause_kind_for(owner)": null,
-    "write_row": {}
-   },
-   "emitted": {
-    "direct_controller_action": false,
-    "live_default_env": true,
-    "live_twitter_enabled": true,
-    "synthetic_mcp": false
-   },
-   "listed_in": [],
-   "money": {
-    "approval_queue._is_money_action(name)": false,
-    "authority.money_action(name)": false,
-    "authority.money_tool(owner)": false,
-    "metering_gate.MONEY_TOOLS∋owner": false,
-    "room_policy._is_money_call(name, None)": false,
-    "room_policy._is_money_call(name, owner)": false
-   },
-   "owner_tools": [
-    "collabland"
-   ],
-   "room": {
-    "is_room_denied_call(name, None)": false,
-    "is_room_denied_call(name, owner)": false
-   },
-   "spend_exemption": {},
-   "untrusted": {
-    "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
-   }
-  },
-  "collabland_check_token": {
-   "approval": {
-    "autonomous_gating_lanes(env)": "reported"
-   },
-   "correspondent": {
-    "is_high_impact(name)": false,
-    "is_high_impact_call(name, None)": false,
-    "is_high_impact_call(name, owner)": false,
-    "reply_action": false
-   },
-   "effect": {
-    "classify_effect(None)": null,
-    "classify_effect(owner)": null,
-    "non_write_row_in": [],
-    "pause_kind_for(owner)": null,
-    "write_row": {}
-   },
-   "emitted": {
-    "direct_controller_action": false,
-    "live_default_env": true,
-    "live_twitter_enabled": true,
-    "synthetic_mcp": false
-   },
-   "listed_in": [],
-   "money": {
-    "approval_queue._is_money_action(name)": false,
-    "authority.money_action(name)": false,
-    "authority.money_tool(owner)": false,
-    "metering_gate.MONEY_TOOLS∋owner": false,
-    "room_policy._is_money_call(name, None)": false,
-    "room_policy._is_money_call(name, owner)": false
-   },
-   "owner_tools": [
-    "collabland"
-   ],
-   "room": {
-    "is_room_denied_call(name, None)": false,
-    "is_room_denied_call(name, owner)": false
-   },
-   "spend_exemption": {},
-   "untrusted": {
-    "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
-   }
-  },
   "contact_history": {
    "approval": {
     "autonomous_gating_lanes(env)": "reported"
@@ -3951,7 +3781,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES"
+    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -4088,7 +3919,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES"
+    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -4392,9 +4224,9 @@
     "autonomous_gating_lanes(env)": "reported"
    },
    "correspondent": {
-    "is_high_impact(name)": false,
-    "is_high_impact_call(name, None)": false,
-    "is_high_impact_call(name, owner)": false,
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
     "reply_action": false
    },
    "effect": {
@@ -4411,6 +4243,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
+    "correspondent_gate._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -4754,9 +4587,9 @@
     "autonomous_gating_lanes(env)": "reported"
    },
    "correspondent": {
-    "is_high_impact(name)": false,
-    "is_high_impact_call(name, None)": false,
-    "is_high_impact_call(name, owner)": false,
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
     "reply_action": false
    },
    "effect": {
@@ -4772,7 +4605,10 @@
     "live_twitter_enabled": true,
     "synthetic_mcp": false
    },
-   "listed_in": [],
+   "listed_in": [
+    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "room_policy.ROOM_DENIED_ACTIONS"
+   ],
    "money": {
     "approval_queue._is_money_action(name)": false,
     "authority.money_action(name)": false,
@@ -4785,8 +4621,8 @@
     "defi_data"
    ],
    "room": {
-    "is_room_denied_call(name, None)": false,
-    "is_room_denied_call(name, owner)": false
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
    },
    "spend_exemption": {},
    "untrusted": {
@@ -4799,9 +4635,9 @@
     "autonomous_gating_lanes(env)": "reported"
    },
    "correspondent": {
-    "is_high_impact(name)": false,
-    "is_high_impact_call(name, None)": false,
-    "is_high_impact_call(name, owner)": false,
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
     "reply_action": false
    },
    "effect": {
@@ -4817,7 +4653,10 @@
     "live_twitter_enabled": true,
     "synthetic_mcp": false
    },
-   "listed_in": [],
+   "listed_in": [
+    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "room_policy.ROOM_DENIED_ACTIONS"
+   ],
    "money": {
     "approval_queue._is_money_action(name)": false,
     "authority.money_action(name)": false,
@@ -4830,8 +4669,8 @@
     "defi_data"
    ],
    "room": {
-    "is_room_denied_call(name, None)": false,
-    "is_room_denied_call(name, owner)": false
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
    },
    "spend_exemption": {},
    "untrusted": {
@@ -6021,7 +5860,7 @@
     "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
-    "spend_lane.DEFI_SPEND_VERBS",
+    "spend_lane.ALWAYS_OWNER_APPROVED_VERBS",
     "spend_lane.DRY_RUN_VERBS"
    ],
    "money": {
@@ -6052,9 +5891,6 @@
     ],
     "tiered/dry_run_true": "dry run — the guard is consulted but nothing is broadcast",
     "tiered/empty": "dry run — the guard is consulted but nothing is broadcast",
-    "tiered/live_spend_small": "declared ceiling $5.0000 is within the $25.00 autonomous limit",
-    "tiered/live_spend_small_session_large": "declared ceiling $5.0000 is within the $25.00 autonomous limit",
-    "tiered/live_spend_small_session_small": "declared ceiling $5.0000 is within the $25.00 autonomous limit",
     "tiered/x402_amount_large": "dry run — the guard is consulted but nothing is broadcast",
     "tiered/x402_amount_small": "dry run — the guard is consulted but nothing is broadcast"
    },
@@ -6169,7 +6005,7 @@
     "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
-    "spend_lane.DEFI_SPEND_VERBS",
+    "spend_lane.ALWAYS_OWNER_APPROVED_VERBS",
     "spend_lane.DRY_RUN_VERBS"
    ],
    "money": {
@@ -6200,9 +6036,6 @@
     ],
     "tiered/dry_run_true": "dry run — the guard is consulted but nothing is broadcast",
     "tiered/empty": "dry run — the guard is consulted but nothing is broadcast",
-    "tiered/live_spend_small": "declared ceiling $5.0000 is within the $25.00 autonomous limit",
-    "tiered/live_spend_small_session_large": "declared ceiling $5.0000 is within the $25.00 autonomous limit",
-    "tiered/live_spend_small_session_small": "declared ceiling $5.0000 is within the $25.00 autonomous limit",
     "tiered/x402_amount_large": "dry run — the guard is consulted but nothing is broadcast",
     "tiered/x402_amount_small": "dry run — the guard is consulted but nothing is broadcast"
    },
@@ -6385,7 +6218,8 @@
    "listed_in": [
     "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.ACTION_EFFECTS",
-    "room_policy.ROOM_DENIED_ACTIONS"
+    "room_policy.ROOM_DENIED_ACTIONS",
+    "untrusted_wrap.UNTRUSTED_TOOL_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -6402,8 +6236,8 @@
    },
    "spend_exemption": {},
    "untrusted": {
-    "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
+    "is_untrusted_tool(name, None)": true,
+    "is_untrusted_tool(name, owner)": true
    }
   },
   "done": {
@@ -6494,6 +6328,529 @@
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
     "is_untrusted_tool(name, owner)": false
+   }
+  },
+  "email_delete": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": [
+     "comms",
+     "action"
+    ],
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": "outbound_comms",
+    "write_row": {
+     "email": "comms"
+    }
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "effects.WRITE_ACTIONS",
+    "room_policy.ROOM_DENIED_ACTIONS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": false,
+    "authority.money_action(name)": false,
+    "authority.money_tool(owner)": false,
+    "metering_gate.MONEY_TOOLS∋owner": false,
+    "room_policy._is_money_call(name, None)": false,
+    "room_policy._is_money_call(name, owner)": false
+   },
+   "owner_tools": [
+    "email"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": true
+   }
+  },
+  "email_folders": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": null,
+    "non_write_row_in": [
+     "email"
+    ],
+    "pause_kind_for(owner)": null,
+    "write_row": {}
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "effects.NON_WRITE_ACTIONS",
+    "room_policy.ROOM_DENIED_ACTIONS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": false,
+    "authority.money_action(name)": false,
+    "authority.money_tool(owner)": false,
+    "metering_gate.MONEY_TOOLS∋owner": false,
+    "room_policy._is_money_call(name, None)": false,
+    "room_policy._is_money_call(name, owner)": false
+   },
+   "owner_tools": [
+    "email"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": true
+   }
+  },
+  "email_forward": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": [
+     "comms",
+     "action"
+    ],
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": "outbound_comms",
+    "write_row": {
+     "email": "comms"
+    }
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "effects.WRITE_ACTIONS",
+    "room_policy.ROOM_DENIED_ACTIONS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": false,
+    "authority.money_action(name)": false,
+    "authority.money_tool(owner)": false,
+    "metering_gate.MONEY_TOOLS∋owner": false,
+    "room_policy._is_money_call(name, None)": false,
+    "room_policy._is_money_call(name, owner)": false
+   },
+   "owner_tools": [
+    "email"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": true
+   }
+  },
+  "email_list": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": null,
+    "non_write_row_in": [
+     "email"
+    ],
+    "pause_kind_for(owner)": null,
+    "write_row": {}
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "effects.NON_WRITE_ACTIONS",
+    "room_policy.ROOM_DENIED_ACTIONS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": false,
+    "authority.money_action(name)": false,
+    "authority.money_tool(owner)": false,
+    "metering_gate.MONEY_TOOLS∋owner": false,
+    "room_policy._is_money_call(name, None)": false,
+    "room_policy._is_money_call(name, owner)": false
+   },
+   "owner_tools": [
+    "email"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": true
+   }
+  },
+  "email_mark": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": [
+     "comms",
+     "action"
+    ],
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": "outbound_comms",
+    "write_row": {
+     "email": "comms"
+    }
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "effects.WRITE_ACTIONS",
+    "room_policy.ROOM_DENIED_ACTIONS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": false,
+    "authority.money_action(name)": false,
+    "authority.money_tool(owner)": false,
+    "metering_gate.MONEY_TOOLS∋owner": false,
+    "room_policy._is_money_call(name, None)": false,
+    "room_policy._is_money_call(name, owner)": false
+   },
+   "owner_tools": [
+    "email"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": true
+   }
+  },
+  "email_move": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": [
+     "comms",
+     "action"
+    ],
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": "outbound_comms",
+    "write_row": {
+     "email": "comms"
+    }
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "effects.WRITE_ACTIONS",
+    "room_policy.ROOM_DENIED_ACTIONS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": false,
+    "authority.money_action(name)": false,
+    "authority.money_tool(owner)": false,
+    "metering_gate.MONEY_TOOLS∋owner": false,
+    "room_policy._is_money_call(name, None)": false,
+    "room_policy._is_money_call(name, owner)": false
+   },
+   "owner_tools": [
+    "email"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": true
+   }
+  },
+  "email_read": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": null,
+    "non_write_row_in": [
+     "email"
+    ],
+    "pause_kind_for(owner)": null,
+    "write_row": {}
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "effects.NON_WRITE_ACTIONS",
+    "room_policy.ROOM_DENIED_ACTIONS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": false,
+    "authority.money_action(name)": false,
+    "authority.money_tool(owner)": false,
+    "metering_gate.MONEY_TOOLS∋owner": false,
+    "room_policy._is_money_call(name, None)": false,
+    "room_policy._is_money_call(name, owner)": false
+   },
+   "owner_tools": [
+    "email"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": true
+   }
+  },
+  "email_read_machine_mail": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": null,
+    "non_write_row_in": [
+     "email"
+    ],
+    "pause_kind_for(owner)": null,
+    "write_row": {}
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "effects.NON_WRITE_ACTIONS",
+    "room_policy.ROOM_DENIED_ACTIONS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": false,
+    "authority.money_action(name)": false,
+    "authority.money_tool(owner)": false,
+    "metering_gate.MONEY_TOOLS∋owner": false,
+    "room_policy._is_money_call(name, None)": false,
+    "room_policy._is_money_call(name, owner)": false
+   },
+   "owner_tools": [
+    "email"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": true
+   }
+  },
+  "email_reply": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": [
+     "comms",
+     "action"
+    ],
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": "outbound_comms",
+    "write_row": {
+     "email": "comms"
+    }
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "effects.WRITE_ACTIONS",
+    "room_policy.ROOM_DENIED_ACTIONS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": false,
+    "authority.money_action(name)": false,
+    "authority.money_tool(owner)": false,
+    "metering_gate.MONEY_TOOLS∋owner": false,
+    "room_policy._is_money_call(name, None)": false,
+    "room_policy._is_money_call(name, owner)": false
+   },
+   "owner_tools": [
+    "email"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": true
+   }
+  },
+  "email_save_attachment": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": null,
+    "non_write_row_in": [
+     "email"
+    ],
+    "pause_kind_for(owner)": null,
+    "write_row": {}
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "effects.NON_WRITE_ACTIONS",
+    "room_policy.ROOM_DENIED_ACTIONS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": false,
+    "authority.money_action(name)": false,
+    "authority.money_tool(owner)": false,
+    "metering_gate.MONEY_TOOLS∋owner": false,
+    "room_policy._is_money_call(name, None)": false,
+    "room_policy._is_money_call(name, owner)": false
+   },
+   "owner_tools": [
+    "email"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": true
    }
   },
   "email_send": {
@@ -6770,7 +7127,7 @@
    "spend_exemption": {},
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
+    "is_untrusted_tool(name, owner)": true
    }
   },
   "filesystem_copy_file": {
@@ -6815,7 +7172,7 @@
    "spend_exemption": {},
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
+    "is_untrusted_tool(name, owner)": true
    }
   },
   "filesystem_create_directory": {
@@ -6860,7 +7217,7 @@
    "spend_exemption": {},
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
+    "is_untrusted_tool(name, owner)": true
    }
   },
   "filesystem_delete_file": {
@@ -6905,7 +7262,7 @@
    "spend_exemption": {},
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
+    "is_untrusted_tool(name, owner)": true
    }
   },
   "filesystem_extract_urls": {
@@ -6950,7 +7307,7 @@
    "spend_exemption": {},
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
+    "is_untrusted_tool(name, owner)": true
    }
   },
   "filesystem_jsonl_append": {
@@ -6995,7 +7352,7 @@
    "spend_exemption": {},
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
+    "is_untrusted_tool(name, owner)": true
    }
   },
   "filesystem_jsonl_remove": {
@@ -7040,7 +7397,7 @@
    "spend_exemption": {},
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
+    "is_untrusted_tool(name, owner)": true
    }
   },
   "filesystem_jsonl_validate": {
@@ -7085,7 +7442,7 @@
    "spend_exemption": {},
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
+    "is_untrusted_tool(name, owner)": true
    }
   },
   "filesystem_list_directory": {
@@ -7130,7 +7487,7 @@
    "spend_exemption": {},
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
+    "is_untrusted_tool(name, owner)": true
    }
   },
   "filesystem_read_file": {
@@ -7175,7 +7532,7 @@
    "spend_exemption": {},
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
+    "is_untrusted_tool(name, owner)": true
    }
   },
   "filesystem_write_file": {
@@ -7220,7 +7577,7 @@
    "spend_exemption": {},
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
+    "is_untrusted_tool(name, owner)": true
    }
   },
   "git": {
@@ -7314,7 +7671,7 @@
    "spend_exemption": {},
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
+    "is_untrusted_tool(name, owner)": true
    }
   },
   "git_branch": {
@@ -7363,7 +7720,7 @@
    "spend_exemption": {},
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
+    "is_untrusted_tool(name, owner)": true
    }
   },
   "git_checkout": {
@@ -7412,7 +7769,7 @@
    "spend_exemption": {},
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
+    "is_untrusted_tool(name, owner)": true
    }
   },
   "git_clone": {
@@ -7461,7 +7818,7 @@
    "spend_exemption": {},
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
+    "is_untrusted_tool(name, owner)": true
    }
   },
   "git_commit": {
@@ -7510,7 +7867,7 @@
    "spend_exemption": {},
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
+    "is_untrusted_tool(name, owner)": true
    }
   },
   "git_diff": {
@@ -7559,7 +7916,7 @@
    "spend_exemption": {},
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
+    "is_untrusted_tool(name, owner)": true
    }
   },
   "git_log": {
@@ -7608,7 +7965,7 @@
    "spend_exemption": {},
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
+    "is_untrusted_tool(name, owner)": true
    }
   },
   "git_pull": {
@@ -7657,7 +8014,7 @@
    "spend_exemption": {},
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
+    "is_untrusted_tool(name, owner)": true
    }
   },
   "git_push": {
@@ -7711,7 +8068,7 @@
    "spend_exemption": {},
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
+    "is_untrusted_tool(name, owner)": true
    }
   },
   "git_status": {
@@ -7760,7 +8117,7 @@
    "spend_exemption": {},
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
+    "is_untrusted_tool(name, owner)": true
    }
   },
   "github": {
@@ -7854,7 +8211,7 @@
    "spend_exemption": {},
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
+    "is_untrusted_tool(name, owner)": true
    }
   },
   "github_actions_runs": {
@@ -7903,7 +8260,7 @@
    "spend_exemption": {},
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
+    "is_untrusted_tool(name, owner)": true
    }
   },
   "github_create_issue": {
@@ -7918,7 +8275,10 @@
    },
    "effect": {
     "classify_effect(None)": null,
-    "classify_effect(mcp, read_only)": null,
+    "classify_effect(mcp, read_only)": [
+     "network",
+     "tool"
+    ],
     "classify_effect(owner)": [
      "network",
      "tool"
@@ -8005,7 +8365,7 @@
    "spend_exemption": {},
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
+    "is_untrusted_tool(name, owner)": true
    }
   },
   "github_issue_list": {
@@ -8054,7 +8414,7 @@
    "spend_exemption": {},
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
+    "is_untrusted_tool(name, owner)": true
    }
   },
   "github_merge_pr": {
@@ -8108,7 +8468,7 @@
    "spend_exemption": {},
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
+    "is_untrusted_tool(name, owner)": true
    }
   },
   "github_open_pr": {
@@ -8162,7 +8522,7 @@
    "spend_exemption": {},
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
+    "is_untrusted_tool(name, owner)": true
    }
   },
   "github_pr_comment": {
@@ -8215,7 +8575,7 @@
    "spend_exemption": {},
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
+    "is_untrusted_tool(name, owner)": true
    }
   },
   "github_pr_view": {
@@ -8264,7 +8624,7 @@
    "spend_exemption": {},
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
+    "is_untrusted_tool(name, owner)": true
    }
   },
   "goal": {
@@ -9195,7 +9555,7 @@
     "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
-    "spend_lane.ALWAYS_OWNER_APPROVED_VERBS"
+    "spend_lane._RISK_REDUCING_VERBS"
    ],
    "money": {
     "approval_queue._is_money_action(name)": true,
@@ -9212,7 +9572,28 @@
     "is_room_denied_call(name, None)": true,
     "is_room_denied_call(name, owner)": true
    },
-   "spend_exemption": {},
+   "spend_exemption": {
+    "default/dry_run_false": "cancel — retires a resting order; it moves no funds",
+    "default/dry_run_true": "cancel — retires a resting order; it moves no funds",
+    "default/empty": "cancel — retires a resting order; it moves no funds",
+    "default/live_spend_large": "cancel — retires a resting order; it moves no funds",
+    "default/live_spend_small": "cancel — retires a resting order; it moves no funds",
+    "default/live_spend_small_session_large": "cancel — retires a resting order; it moves no funds",
+    "default/live_spend_small_session_small": "cancel — retires a resting order; it moves no funds",
+    "default/live_spend_zero": "cancel — retires a resting order; it moves no funds",
+    "default/x402_amount_large": "cancel — retires a resting order; it moves no funds",
+    "default/x402_amount_small": "cancel — retires a resting order; it moves no funds",
+    "tiered/dry_run_false": "cancel — retires a resting order; it moves no funds",
+    "tiered/dry_run_true": "cancel — retires a resting order; it moves no funds",
+    "tiered/empty": "cancel — retires a resting order; it moves no funds",
+    "tiered/live_spend_large": "cancel — retires a resting order; it moves no funds",
+    "tiered/live_spend_small": "cancel — retires a resting order; it moves no funds",
+    "tiered/live_spend_small_session_large": "cancel — retires a resting order; it moves no funds",
+    "tiered/live_spend_small_session_small": "cancel — retires a resting order; it moves no funds",
+    "tiered/live_spend_zero": "cancel — retires a resting order; it moves no funds",
+    "tiered/x402_amount_large": "cancel — retires a resting order; it moves no funds",
+    "tiered/x402_amount_small": "cancel — retires a resting order; it moves no funds"
+   },
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
     "is_untrusted_tool(name, owner)": false
@@ -9250,7 +9631,7 @@
     "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
-    "spend_lane.ALWAYS_OWNER_APPROVED_VERBS"
+    "spend_lane._RISK_REDUCING_VERBS"
    ],
    "money": {
     "approval_queue._is_money_action(name)": true,
@@ -9267,7 +9648,28 @@
     "is_room_denied_call(name, None)": true,
     "is_room_denied_call(name, owner)": true
    },
-   "spend_exemption": {},
+   "spend_exemption": {
+    "default/dry_run_false": "cancel — retires a resting order; it moves no funds",
+    "default/dry_run_true": "cancel — retires a resting order; it moves no funds",
+    "default/empty": "cancel — retires a resting order; it moves no funds",
+    "default/live_spend_large": "cancel — retires a resting order; it moves no funds",
+    "default/live_spend_small": "cancel — retires a resting order; it moves no funds",
+    "default/live_spend_small_session_large": "cancel — retires a resting order; it moves no funds",
+    "default/live_spend_small_session_small": "cancel — retires a resting order; it moves no funds",
+    "default/live_spend_zero": "cancel — retires a resting order; it moves no funds",
+    "default/x402_amount_large": "cancel — retires a resting order; it moves no funds",
+    "default/x402_amount_small": "cancel — retires a resting order; it moves no funds",
+    "tiered/dry_run_false": "cancel — retires a resting order; it moves no funds",
+    "tiered/dry_run_true": "cancel — retires a resting order; it moves no funds",
+    "tiered/empty": "cancel — retires a resting order; it moves no funds",
+    "tiered/live_spend_large": "cancel — retires a resting order; it moves no funds",
+    "tiered/live_spend_small": "cancel — retires a resting order; it moves no funds",
+    "tiered/live_spend_small_session_large": "cancel — retires a resting order; it moves no funds",
+    "tiered/live_spend_small_session_small": "cancel — retires a resting order; it moves no funds",
+    "tiered/live_spend_zero": "cancel — retires a resting order; it moves no funds",
+    "tiered/x402_amount_large": "cancel — retires a resting order; it moves no funds",
+    "tiered/x402_amount_small": "cancel — retires a resting order; it moves no funds"
+   },
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
     "is_untrusted_tool(name, owner)": false
@@ -10455,7 +10857,7 @@
     "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
-    "spend_lane.ALWAYS_OWNER_APPROVED_VERBS"
+    "spend_lane._RISK_REDUCING_VERBS"
    ],
    "money": {
     "approval_queue._is_money_action(name)": true,
@@ -10472,7 +10874,28 @@
     "is_room_denied_call(name, None)": true,
     "is_room_denied_call(name, owner)": true
    },
-   "spend_exemption": {},
+   "spend_exemption": {
+    "default/dry_run_false": "revoke — it only reduces delegated authority; it moves no funds",
+    "default/dry_run_true": "revoke — it only reduces delegated authority; it moves no funds",
+    "default/empty": "revoke — it only reduces delegated authority; it moves no funds",
+    "default/live_spend_large": "revoke — it only reduces delegated authority; it moves no funds",
+    "default/live_spend_small": "revoke — it only reduces delegated authority; it moves no funds",
+    "default/live_spend_small_session_large": "revoke — it only reduces delegated authority; it moves no funds",
+    "default/live_spend_small_session_small": "revoke — it only reduces delegated authority; it moves no funds",
+    "default/live_spend_zero": "revoke — it only reduces delegated authority; it moves no funds",
+    "default/x402_amount_large": "revoke — it only reduces delegated authority; it moves no funds",
+    "default/x402_amount_small": "revoke — it only reduces delegated authority; it moves no funds",
+    "tiered/dry_run_false": "revoke — it only reduces delegated authority; it moves no funds",
+    "tiered/dry_run_true": "revoke — it only reduces delegated authority; it moves no funds",
+    "tiered/empty": "revoke — it only reduces delegated authority; it moves no funds",
+    "tiered/live_spend_large": "revoke — it only reduces delegated authority; it moves no funds",
+    "tiered/live_spend_small": "revoke — it only reduces delegated authority; it moves no funds",
+    "tiered/live_spend_small_session_large": "revoke — it only reduces delegated authority; it moves no funds",
+    "tiered/live_spend_small_session_small": "revoke — it only reduces delegated authority; it moves no funds",
+    "tiered/live_spend_zero": "revoke — it only reduces delegated authority; it moves no funds",
+    "tiered/x402_amount_large": "revoke — it only reduces delegated authority; it moves no funds",
+    "tiered/x402_amount_small": "revoke — it only reduces delegated authority; it moves no funds"
+   },
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
     "is_untrusted_tool(name, owner)": false
@@ -11582,7 +12005,10 @@
    },
    "effect": {
     "classify_effect(None)": null,
-    "classify_effect(mcp, read_only)": null,
+    "classify_effect(mcp, read_only)": [
+     "network",
+     "tool"
+    ],
     "classify_effect(owner)": [
      "network",
      "tool"
@@ -11631,7 +12057,10 @@
    },
    "effect": {
     "classify_effect(None)": null,
-    "classify_effect(mcp, read_only)": null,
+    "classify_effect(mcp, read_only)": [
+     "network",
+     "tool"
+    ],
     "classify_effect(owner)": [
      "network",
      "tool"
@@ -11680,7 +12109,10 @@
    },
    "effect": {
     "classify_effect(None)": null,
-    "classify_effect(mcp, read_only)": null,
+    "classify_effect(mcp, read_only)": [
+     "network",
+     "action"
+    ],
     "classify_effect(owner)": [
      "network",
      "action"
@@ -12138,7 +12570,10 @@
    },
    "effect": {
     "classify_effect(None)": null,
-    "classify_effect(mcp, read_only)": null,
+    "classify_effect(mcp, read_only)": [
+     "network",
+     "tool"
+    ],
     "classify_effect(owner)": [
      "network",
      "tool"
@@ -12187,7 +12622,10 @@
    },
    "effect": {
     "classify_effect(None)": null,
-    "classify_effect(mcp, read_only)": null,
+    "classify_effect(mcp, read_only)": [
+     "network",
+     "tool"
+    ],
     "classify_effect(owner)": [
      "network",
      "tool"
@@ -12236,7 +12674,10 @@
    },
    "effect": {
     "classify_effect(None)": null,
-    "classify_effect(mcp, read_only)": null,
+    "classify_effect(mcp, read_only)": [
+     "network",
+     "tool"
+    ],
     "classify_effect(owner)": [
      "network",
      "tool"
@@ -12285,7 +12726,10 @@
    },
    "effect": {
     "classify_effect(None)": null,
-    "classify_effect(mcp, read_only)": null,
+    "classify_effect(mcp, read_only)": [
+     "network",
+     "tool"
+    ],
     "classify_effect(owner)": [
      "network",
      "tool"
@@ -12596,7 +13040,8 @@
    "listed_in": [
     "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.ACTION_EFFECTS",
-    "room_policy.ROOM_DENIED_ACTIONS"
+    "room_policy.ROOM_DENIED_ACTIONS",
+    "untrusted_wrap.UNTRUSTED_TOOL_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -12613,8 +13058,8 @@
    },
    "spend_exemption": {},
    "untrusted": {
-    "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
+    "is_untrusted_tool(name, None)": true,
+    "is_untrusted_tool(name, owner)": true
    }
   },
   "perplexity": {
@@ -12965,7 +13410,9 @@
    },
    "listed_in": [
     "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.WRITE_ACTIONS"
+    "effects.WRITE_ACTIONS",
+    "payment_tools.PAYMENT_APPROVAL_TOOLS",
+    "spend_lane._RISK_REDUCING_VERBS"
    ],
    "money": {
     "approval_queue._is_money_action(name)": true,
@@ -12982,7 +13429,28 @@
     "is_room_denied_call(name, None)": true,
     "is_room_denied_call(name, owner)": true
    },
-   "spend_exemption": {},
+   "spend_exemption": {
+    "default/dry_run_false": "cancel — retires a resting order; it moves no funds",
+    "default/dry_run_true": "cancel — retires a resting order; it moves no funds",
+    "default/empty": "cancel — retires a resting order; it moves no funds",
+    "default/live_spend_large": "cancel — retires a resting order; it moves no funds",
+    "default/live_spend_small": "cancel — retires a resting order; it moves no funds",
+    "default/live_spend_small_session_large": "cancel — retires a resting order; it moves no funds",
+    "default/live_spend_small_session_small": "cancel — retires a resting order; it moves no funds",
+    "default/live_spend_zero": "cancel — retires a resting order; it moves no funds",
+    "default/x402_amount_large": "cancel — retires a resting order; it moves no funds",
+    "default/x402_amount_small": "cancel — retires a resting order; it moves no funds",
+    "tiered/dry_run_false": "cancel — retires a resting order; it moves no funds",
+    "tiered/dry_run_true": "cancel — retires a resting order; it moves no funds",
+    "tiered/empty": "cancel — retires a resting order; it moves no funds",
+    "tiered/live_spend_large": "cancel — retires a resting order; it moves no funds",
+    "tiered/live_spend_small": "cancel — retires a resting order; it moves no funds",
+    "tiered/live_spend_small_session_large": "cancel — retires a resting order; it moves no funds",
+    "tiered/live_spend_small_session_small": "cancel — retires a resting order; it moves no funds",
+    "tiered/live_spend_zero": "cancel — retires a resting order; it moves no funds",
+    "tiered/x402_amount_large": "cancel — retires a resting order; it moves no funds",
+    "tiered/x402_amount_small": "cancel — retires a resting order; it moves no funds"
+   },
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
     "is_untrusted_tool(name, owner)": false
@@ -13018,7 +13486,9 @@
    },
    "listed_in": [
     "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.WRITE_ACTIONS"
+    "effects.WRITE_ACTIONS",
+    "payment_tools.PAYMENT_APPROVAL_TOOLS",
+    "spend_lane._RISK_REDUCING_VERBS"
    ],
    "money": {
     "approval_queue._is_money_action(name)": true,
@@ -13035,7 +13505,28 @@
     "is_room_denied_call(name, None)": true,
     "is_room_denied_call(name, owner)": true
    },
-   "spend_exemption": {},
+   "spend_exemption": {
+    "default/dry_run_false": "cancel — retires a resting order; it moves no funds",
+    "default/dry_run_true": "cancel — retires a resting order; it moves no funds",
+    "default/empty": "cancel — retires a resting order; it moves no funds",
+    "default/live_spend_large": "cancel — retires a resting order; it moves no funds",
+    "default/live_spend_small": "cancel — retires a resting order; it moves no funds",
+    "default/live_spend_small_session_large": "cancel — retires a resting order; it moves no funds",
+    "default/live_spend_small_session_small": "cancel — retires a resting order; it moves no funds",
+    "default/live_spend_zero": "cancel — retires a resting order; it moves no funds",
+    "default/x402_amount_large": "cancel — retires a resting order; it moves no funds",
+    "default/x402_amount_small": "cancel — retires a resting order; it moves no funds",
+    "tiered/dry_run_false": "cancel — retires a resting order; it moves no funds",
+    "tiered/dry_run_true": "cancel — retires a resting order; it moves no funds",
+    "tiered/empty": "cancel — retires a resting order; it moves no funds",
+    "tiered/live_spend_large": "cancel — retires a resting order; it moves no funds",
+    "tiered/live_spend_small": "cancel — retires a resting order; it moves no funds",
+    "tiered/live_spend_small_session_large": "cancel — retires a resting order; it moves no funds",
+    "tiered/live_spend_small_session_small": "cancel — retires a resting order; it moves no funds",
+    "tiered/live_spend_zero": "cancel — retires a resting order; it moves no funds",
+    "tiered/x402_amount_large": "cancel — retires a resting order; it moves no funds",
+    "tiered/x402_amount_small": "cancel — retires a resting order; it moves no funds"
+   },
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
     "is_untrusted_tool(name, owner)": false
@@ -14906,6 +15397,59 @@
     "is_untrusted_tool(name, owner)": false
    }
   },
+  "process_close": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": [
+     "code",
+     "action"
+    ],
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": null,
+    "write_row": {
+     "process": "code"
+    }
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "effects.WRITE_ACTIONS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": false,
+    "authority.money_action(name)": false,
+    "authority.money_tool(owner)": false,
+    "metering_gate.MONEY_TOOLS∋owner": false,
+    "room_policy._is_money_call(name, None)": false,
+    "room_policy._is_money_call(name, owner)": false
+   },
+   "owner_tools": [
+    "process"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": false
+   }
+  },
   "process_kill": {
    "approval": {
     "autonomous_gating_lanes(env)": "reported"
@@ -15087,6 +15631,162 @@
    "listed_in": [
     "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.NON_WRITE_ACTIONS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": false,
+    "authority.money_action(name)": false,
+    "authority.money_tool(owner)": false,
+    "metering_gate.MONEY_TOOLS∋owner": false,
+    "room_policy._is_money_call(name, None)": false,
+    "room_policy._is_money_call(name, owner)": false
+   },
+   "owner_tools": [
+    "process"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": false
+   }
+  },
+  "process_submit": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": [
+     "code",
+     "action"
+    ],
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": null,
+    "write_row": {
+     "process": "code"
+    }
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "effects.WRITE_ACTIONS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": false,
+    "authority.money_action(name)": false,
+    "authority.money_tool(owner)": false,
+    "metering_gate.MONEY_TOOLS∋owner": false,
+    "room_policy._is_money_call(name, None)": false,
+    "room_policy._is_money_call(name, owner)": false
+   },
+   "owner_tools": [
+    "process"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": false
+   }
+  },
+  "process_wait": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": null,
+    "non_write_row_in": [
+     "process"
+    ],
+    "pause_kind_for(owner)": null,
+    "write_row": {}
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "effects.NON_WRITE_ACTIONS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": false,
+    "authority.money_action(name)": false,
+    "authority.money_tool(owner)": false,
+    "metering_gate.MONEY_TOOLS∋owner": false,
+    "room_policy._is_money_call(name, None)": false,
+    "room_policy._is_money_call(name, owner)": false
+   },
+   "owner_tools": [
+    "process"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": false
+   }
+  },
+  "process_write": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": [
+     "code",
+     "action"
+    ],
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": null,
+    "write_row": {
+     "process": "code"
+    }
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "effects.WRITE_ACTIONS"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -15471,6 +16171,59 @@
    },
    "listed_in": [
     "correspondent_gate._HIGH_IMPACT_NAMES"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": false,
+    "authority.money_action(name)": false,
+    "authority.money_tool(owner)": null,
+    "metering_gate.MONEY_TOOLS∋owner": null,
+    "room_policy._is_money_call(name, None)": false,
+    "room_policy._is_money_call(name, owner)": false
+   },
+   "owner_tools": [],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": false
+   }
+  },
+  "room_moderate": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": [
+     "comms",
+     "action"
+    ],
+    "classify_effect(owner)": [
+     "comms",
+     "action"
+    ],
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": "outbound_comms",
+    "write_row": {}
+   },
+   "emitted": {
+    "direct_controller_action": true,
+    "live_default_env": false,
+    "live_twitter_enabled": false,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "effects.ACTION_EFFECTS",
+    "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -16133,7 +16886,7 @@
   },
   "shell_run": {
    "approval": {
-    "autonomous_gating_lanes(env)": "reported"
+    "autonomous_gating_lanes(env)": "queued"
    },
    "correspondent": {
     "is_high_impact(name)": true,
@@ -16161,6 +16914,7 @@
    },
    "listed_in": [
     "approval.POSTURE2_APPROVAL_REQUIRED_TOOLS",
+    "approval._ALWAYS_GATED_VERBS",
     "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS"
    ],
@@ -16250,7 +17004,10 @@
    },
    "effect": {
     "classify_effect(None)": null,
-    "classify_effect(mcp, read_only)": null,
+    "classify_effect(mcp, read_only)": [
+     "network",
+     "tool"
+    ],
     "classify_effect(owner)": [
      "network",
      "tool"
@@ -16299,7 +17056,10 @@
    },
    "effect": {
     "classify_effect(None)": null,
-    "classify_effect(mcp, read_only)": null,
+    "classify_effect(mcp, read_only)": [
+     "network",
+     "tool"
+    ],
     "classify_effect(owner)": [
      "network",
      "tool"
@@ -16407,7 +17167,8 @@
    "listed_in": [
     "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.ACTION_EFFECTS",
-    "room_policy.ROOM_DENIED_ACTIONS"
+    "room_policy.ROOM_DENIED_ACTIONS",
+    "untrusted_wrap.UNTRUSTED_TOOL_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -16424,8 +17185,8 @@
    },
    "spend_exemption": {},
    "untrusted": {
-    "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
+    "is_untrusted_tool(name, None)": true,
+    "is_untrusted_tool(name, owner)": true
    }
   },
   "task": {
@@ -18756,7 +19517,7 @@
    },
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
+    "is_untrusted_tool(name, owner)": true
    }
   },
   "x402_pay_x402_probe": {
@@ -18805,7 +19566,7 @@
    "spend_exemption": {},
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
+    "is_untrusted_tool(name, owner)": true
    }
   },
   "x402_pay_x402_quote": {
@@ -18854,7 +19615,7 @@
    "spend_exemption": {},
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
+    "is_untrusted_tool(name, owner)": true
    }
   },
   "x402_pay_x402_sweep": {
@@ -18903,7 +19664,7 @@
    "spend_exemption": {},
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
+    "is_untrusted_tool(name, owner)": true
    }
   },
   "x402_pay_x402_wallet_status": {
@@ -18952,7 +19713,7 @@
    "spend_exemption": {},
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
+    "is_untrusted_tool(name, owner)": true
    }
   },
   "x_browser": {
@@ -19000,7 +19761,7 @@
   },
   "x_browser_x_dm": {
    "approval": {
-    "autonomous_gating_lanes(env)": "reported"
+    "autonomous_gating_lanes(env)": "queued"
    },
    "correspondent": {
     "is_high_impact(name)": true,
@@ -19025,7 +19786,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "approval.DEFAULT_APPROVAL_REQUIRED_TOOLS"
+    "approval.DEFAULT_APPROVAL_REQUIRED_TOOLS",
+    "approval._ALWAYS_GATED_VERBS"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -19099,7 +19861,7 @@
   },
   "x_browser_x_post": {
    "approval": {
-    "autonomous_gating_lanes(env)": "reported"
+    "autonomous_gating_lanes(env)": "queued"
    },
    "correspondent": {
     "is_high_impact(name)": true,
@@ -19127,6 +19889,7 @@
    },
    "listed_in": [
     "approval.DEFAULT_APPROVAL_REQUIRED_TOOLS",
+    "approval._ALWAYS_GATED_VERBS",
     "effects.WRITE_ACTIONS"
    ],
    "money": {
@@ -19200,7 +19963,7 @@
   },
   "x_browser_x_reply": {
    "approval": {
-    "autonomous_gating_lanes(env)": "reported"
+    "autonomous_gating_lanes(env)": "queued"
    },
    "correspondent": {
     "is_high_impact(name)": true,
@@ -19225,7 +19988,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "approval.DEFAULT_APPROVAL_REQUIRED_TOOLS"
+    "approval.DEFAULT_APPROVAL_REQUIRED_TOOLS",
+    "approval._ALWAYS_GATED_VERBS"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -19639,6 +20403,7 @@
     "self_env",
     "shell",
     "tool_manage",
+    "twitter",
     "worker_manage",
     "x402_invoice",
     "x402_pay",
@@ -20003,6 +20768,7 @@
     "self_env",
     "shell",
     "tool_manage",
+    "twitter",
     "worker_manage",
     "x402_invoice",
     "x402_pay",
@@ -20383,6 +21149,7 @@
     "self_env",
     "shell",
     "tool_manage",
+    "twitter",
     "worker_manage",
     "x402_invoice",
     "x402_pay",
@@ -20715,6 +21482,7 @@
     "self_env",
     "shell",
     "tool_manage",
+    "twitter",
     "worker_manage",
     "x402_invoice",
     "x402_pay",
@@ -21943,7 +22711,7 @@
     "tool_defaults.TOOLSETS['trading_research']": 0
    },
    "is_classified": true,
-   "is_untrusted_tool(None, tool)": false,
+   "is_untrusted_tool(None, tool)": true,
    "lacks_effect_ceiling": false,
    "medium_risk": false,
    "metering_gate.MONEY_TOOLS": false,
@@ -21953,7 +22721,7 @@
     "fs.write"
    ],
    "shared_identity_refusal(stranger)": false,
-   "untrusted_namespace": false
+   "untrusted_namespace": true
   },
   "git": {
    "DELEGATE_BLOCKED_TOOLS": true,
@@ -21983,7 +22751,7 @@
     "supervised:room_policy._forbidden_tool_ids()": 11
    },
    "is_classified": true,
-   "is_untrusted_tool(None, tool)": false,
+   "is_untrusted_tool(None, tool)": true,
    "lacks_effect_ceiling": false,
    "medium_risk": true,
    "metering_gate.MONEY_TOOLS": false,
@@ -21993,7 +22761,7 @@
     "fs.write"
    ],
    "shared_identity_refusal(stranger)": false,
-   "untrusted_namespace": false
+   "untrusted_namespace": true
   },
   "github": {
    "DELEGATE_BLOCKED_TOOLS": true,
@@ -22023,7 +22791,7 @@
     "supervised:room_policy._forbidden_tool_ids()": 12
    },
    "is_classified": true,
-   "is_untrusted_tool(None, tool)": false,
+   "is_untrusted_tool(None, tool)": true,
    "lacks_effect_ceiling": false,
    "medium_risk": true,
    "metering_gate.MONEY_TOOLS": false,
@@ -22032,7 +22800,7 @@
     "network.read"
    ],
    "shared_identity_refusal(stranger)": true,
-   "untrusted_namespace": false
+   "untrusted_namespace": true
   },
   "goal": {
    "DELEGATE_BLOCKED_TOOLS": false,
@@ -23024,7 +23792,7 @@
    "untrusted_namespace": false
   },
   "twitter": {
-   "DELEGATE_BLOCKED_TOOLS": false,
+   "DELEGATE_BLOCKED_TOOLS": true,
    "GATED_TOOL_REGISTRY": [
     "TWITTER_ENABLED",
     "disabled",
@@ -23034,6 +23802,7 @@
    "TOOL_GATE_FLAGS": null,
    "VALID_TOOL_IDS": true,
    "capabilities": [
+    "delegate_blocked",
     "high_impact",
     "shared_identity",
     "writes_comms",
@@ -23045,6 +23814,7 @@
    "in": {
     "autonomous:constants.autonomous_mode_tools()": 4,
     "autonomous:constants.effective_autonomous_tools()": 4,
+    "autonomous:delegation.get_blocked_child_tools()": 19,
     "autonomous:goal_tools.allowed_self_goal_tools()": 13,
     "autonomous:goal_tools.owner_turn_goal_tools()": 14,
     "autonomous:rigs.rig_tools('social')": 0,
@@ -23056,6 +23826,7 @@
     "autonomous:tool_defaults.server_default_tools()": 4,
     "autonomous_defi_armed:constants.autonomous_mode_tools()": 4,
     "autonomous_defi_armed:constants.effective_autonomous_tools()": 4,
+    "autonomous_defi_armed:delegation.get_blocked_child_tools()": 19,
     "autonomous_defi_armed:goal_tools.allowed_self_goal_tools()": 16,
     "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 16,
     "autonomous_defi_armed:rigs.rig_tools('social')": 0,
@@ -23071,6 +23842,7 @@
     "goal_tools._SELF_GOAL_ALLOWED_TOOLS": 11,
     "posture2:constants.autonomous_mode_tools()": 4,
     "posture2:constants.effective_autonomous_tools()": 4,
+    "posture2:delegation.get_blocked_child_tools()": 19,
     "posture2:goal_tools.allowed_self_goal_tools()": 11,
     "posture2:goal_tools.owner_turn_goal_tools()": 14,
     "posture2:rigs.rig_tools('social')": 0,
@@ -23081,6 +23853,7 @@
     "rigs.RIGS['social']": 0,
     "supervised:constants.autonomous_mode_tools()": 4,
     "supervised:constants.effective_autonomous_tools()": 4,
+    "supervised:delegation.get_blocked_child_tools()": 19,
     "supervised:goal_tools.allowed_self_goal_tools()": 11,
     "supervised:goal_tools.owner_turn_goal_tools()": 14,
     "supervised:rigs.rig_tools('social')": 0,
@@ -23231,16 +24004,16 @@
    "high_risk": false,
    "in": {
     "autonomous:bootstrap.cli_unavailable_tools(all)": 13,
-    "autonomous:delegation.get_blocked_child_tools()": 19,
+    "autonomous:delegation.get_blocked_child_tools()": 20,
     "autonomous:room_policy._forbidden_tool_ids()": 26,
     "autonomous_defi_armed:bootstrap.cli_unavailable_tools(all)": 13,
-    "autonomous_defi_armed:delegation.get_blocked_child_tools()": 19,
+    "autonomous_defi_armed:delegation.get_blocked_child_tools()": 20,
     "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 26,
     "posture2:bootstrap.cli_unavailable_tools(all)": 13,
-    "posture2:delegation.get_blocked_child_tools()": 19,
+    "posture2:delegation.get_blocked_child_tools()": 20,
     "posture2:room_policy._forbidden_tool_ids()": 26,
     "supervised:bootstrap.cli_unavailable_tools(all)": 13,
-    "supervised:delegation.get_blocked_child_tools()": 19,
+    "supervised:delegation.get_blocked_child_tools()": 20,
     "supervised:room_policy._forbidden_tool_ids()": 26
    },
    "is_classified": true,
@@ -23278,7 +24051,7 @@
    "in": {
     "autonomous:constants.autonomous_mode_tools()": 11,
     "autonomous:constants.effective_autonomous_tools()": 11,
-    "autonomous:delegation.get_blocked_child_tools()": 20,
+    "autonomous:delegation.get_blocked_child_tools()": 21,
     "autonomous:goal_tools.allowed_self_goal_tools()": 15,
     "autonomous:goal_tools.owner_turn_goal_tools()": 16,
     "autonomous:room_policy._forbidden_tool_ids()": 27,
@@ -23287,7 +24060,7 @@
     "autonomous:tool_defaults.server_default_tools()": 11,
     "autonomous_defi_armed:constants.autonomous_mode_tools()": 11,
     "autonomous_defi_armed:constants.effective_autonomous_tools()": 11,
-    "autonomous_defi_armed:delegation.get_blocked_child_tools()": 20,
+    "autonomous_defi_armed:delegation.get_blocked_child_tools()": 21,
     "autonomous_defi_armed:goal_tools.allowed_self_goal_tools()": 18,
     "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 18,
     "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 27,
@@ -23300,14 +24073,14 @@
     "goal_tools._SELF_GOAL_ALLOWED_TOOLS": 13,
     "posture2:constants.autonomous_mode_tools()": 11,
     "posture2:constants.effective_autonomous_tools()": 11,
-    "posture2:delegation.get_blocked_child_tools()": 20,
+    "posture2:delegation.get_blocked_child_tools()": 21,
     "posture2:goal_tools.allowed_self_goal_tools()": 13,
     "posture2:goal_tools.owner_turn_goal_tools()": 16,
     "posture2:room_policy._forbidden_tool_ids()": 27,
     "posture2:tool_availability.grantable_autonomous_tools()": 13,
     "supervised:constants.autonomous_mode_tools()": 11,
     "supervised:constants.effective_autonomous_tools()": 11,
-    "supervised:delegation.get_blocked_child_tools()": 20,
+    "supervised:delegation.get_blocked_child_tools()": 21,
     "supervised:goal_tools.allowed_self_goal_tools()": 13,
     "supervised:goal_tools.owner_turn_goal_tools()": 16,
     "supervised:room_policy._forbidden_tool_ids()": 27,
@@ -23348,19 +24121,19 @@
    "effects.ceiling": "money",
    "high_risk": true,
    "in": {
-    "autonomous:delegation.get_blocked_child_tools()": 21,
+    "autonomous:delegation.get_blocked_child_tools()": 22,
     "autonomous:room_policy._forbidden_tool_ids()": 28,
-    "autonomous_defi_armed:delegation.get_blocked_child_tools()": 21,
+    "autonomous_defi_armed:delegation.get_blocked_child_tools()": 22,
     "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 28,
     "bootstrap._CLI_OPTIONAL_TOOLS": 15,
     "bootstrap._CLI_REGISTERABLE_TOOLS": 24,
-    "posture2:delegation.get_blocked_child_tools()": 21,
+    "posture2:delegation.get_blocked_child_tools()": 22,
     "posture2:room_policy._forbidden_tool_ids()": 28,
-    "supervised:delegation.get_blocked_child_tools()": 21,
+    "supervised:delegation.get_blocked_child_tools()": 22,
     "supervised:room_policy._forbidden_tool_ids()": 28
    },
    "is_classified": true,
-   "is_untrusted_tool(None, tool)": false,
+   "is_untrusted_tool(None, tool)": true,
    "lacks_effect_ceiling": false,
    "medium_risk": false,
    "metering_gate.MONEY_TOOLS": true,
@@ -23370,7 +24143,7 @@
     "wallet.spend"
    ],
    "shared_identity_refusal(stranger)": false,
-   "untrusted_namespace": false
+   "untrusted_namespace": true
   },
   "x_browser": {
    "DELEGATE_BLOCKED_TOOLS": true,
@@ -23394,7 +24167,7 @@
    "in": {
     "autonomous:constants.autonomous_mode_tools()": 14,
     "autonomous:constants.effective_autonomous_tools()": 14,
-    "autonomous:delegation.get_blocked_child_tools()": 22,
+    "autonomous:delegation.get_blocked_child_tools()": 23,
     "autonomous:goal_tools.allowed_self_goal_tools()": 16,
     "autonomous:goal_tools.owner_turn_goal_tools()": 17,
     "autonomous:rigs.rig_tools('social')": 1,
@@ -23405,7 +24178,7 @@
     "autonomous:tool_defaults.server_default_tools()": 12,
     "autonomous_defi_armed:constants.autonomous_mode_tools()": 14,
     "autonomous_defi_armed:constants.effective_autonomous_tools()": 14,
-    "autonomous_defi_armed:delegation.get_blocked_child_tools()": 22,
+    "autonomous_defi_armed:delegation.get_blocked_child_tools()": 23,
     "autonomous_defi_armed:goal_tools.allowed_self_goal_tools()": 19,
     "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 19,
     "autonomous_defi_armed:rigs.rig_tools('social')": 1,
@@ -23419,7 +24192,7 @@
     "constants.AUTONOMOUS_MODE_TOOLS": 14,
     "posture2:constants.autonomous_mode_tools()": 14,
     "posture2:constants.effective_autonomous_tools()": 14,
-    "posture2:delegation.get_blocked_child_tools()": 22,
+    "posture2:delegation.get_blocked_child_tools()": 23,
     "posture2:goal_tools.owner_turn_goal_tools()": 17,
     "posture2:rigs.rig_tools('social')": 1,
     "posture2:room_policy._forbidden_tool_ids()": 29,
@@ -23428,7 +24201,7 @@
     "room_policy.ROOM_FORBIDDEN_TOOL_IDS": 12,
     "supervised:constants.autonomous_mode_tools()": 14,
     "supervised:constants.effective_autonomous_tools()": 14,
-    "supervised:delegation.get_blocked_child_tools()": 22,
+    "supervised:delegation.get_blocked_child_tools()": 23,
     "supervised:goal_tools.owner_turn_goal_tools()": 17,
     "supervised:rigs.rig_tools('social')": 1,
     "supervised:room_policy._forbidden_tool_ids()": 29,

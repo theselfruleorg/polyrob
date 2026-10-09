@@ -135,7 +135,7 @@ def describe(data_home: Optional[Path | str] = None) -> str:
     method = data.get("install_method") or "unknown"
     when = data.get("completed_at") or "?"
     version = data.get("version") or "?"
-    line = f"bootstrap: {method}, v{version}, {when}"
+    line = f"bootstrap: {method}, installed at v{version}, {when}"
     skipped = [s.get("name") for s in (data.get("stages") or [])
                if isinstance(s, dict) and s.get("status") == "skipped"]
     if skipped:

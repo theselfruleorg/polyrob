@@ -20,6 +20,10 @@ AUTONOMY_TICK = "autonomy_tick"
 #: disabled gate) is never mistaken for a silently-dead one.
 AUTONOMY_STARTED = "autonomy_started"
 CRON_RUN = "cron_run"
+#: 073 W1: one row per command the agent ran on the HOST (posture 3, the owner's
+#: terminal turn). attrs: cmd_sha256, exit_code, duration_ms, cwd, background —
+#: never the command text or its output.
+HOST_EXEC = "host_exec"
 #: Tell once (2026-09-21): the outcome of a cron job's OUT-OF-BAND delivery —
 #: `sent` / `deferred` / `suppressed` / `already_told` / `failed`. Separate from
 #: `cron_run`, which names how the RUN ended: a job can finish `done` and still

@@ -12,8 +12,18 @@ from typing import Optional
 import json
 import re
 import time
+from core.secret_scrub import scrub_secret_shapes
 
 logger = logging.getLogger("modules.memory.sqlite_memory_provider")
+
+
+def _scrub_json(value, fallback: str) -> str:
+    serialized = scrub_secret_shapes(json.dumps(value))
+    try:
+        json.loads(serialized)
+    except (ValueError, TypeError):
+        return fallback
+    return serialized
 
 
 class EpisodeStoreMixin:
@@ -86,7 +96,7 @@ class EpisodeStoreMixin:
         """
         items = list(artifacts or [])
         try:
-            serialized = json.dumps(items)
+            serialized = _scrub_json(items, "[]")
         except Exception:
             return "[]"
         # Re-serializes the whole (shrinking) list on every dropped element — O(n^2)
@@ -96,7 +106,7 @@ class EpisodeStoreMixin:
         while len(serialized) > cap and items:
             items = items[:-1]
             try:
-                serialized = json.dumps(items)
+                serialized = _scrub_json(items, "[]")
             except Exception:
                 return "[]"
         if len(serialized) > cap:
@@ -112,7 +122,7 @@ class EpisodeStoreMixin:
         preferable to shipping unparseable data.
         """
         try:
-            serialized = json.dumps(meta or {})
+            serialized = _scrub_json(meta or {}, "{}")
         except Exception:
             return "{}"
         if len(serialized) > cap:
@@ -136,8 +146,8 @@ class EpisodeStoreMixin:
                 "spend_usd=MAX(episodes.spend_usd, excluded.spend_usd), "
                 "steps=MAX(episodes.steps, excluded.steps), meta=excluded.meta",
                 (int(episode.ts), episode.started_ts, norm, session_id, episode.thread_key,
-                 episode.kind, (episode.task or "")[:1000], episode.outcome,
-                 (episode.summary or "")[:2000], artifacts, float(episode.spend_usd or 0),
+                 episode.kind, scrub_secret_shapes(episode.task)[:1000], episode.outcome,
+                 scrub_secret_shapes(episode.summary)[:2000], artifacts, float(episode.spend_usd or 0),
                  int(episode.steps or 0), episode.goal_id, meta, int(time.time())),
             )
         except Exception as e:

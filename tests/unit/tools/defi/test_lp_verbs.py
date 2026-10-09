@@ -89,14 +89,50 @@ async def test_dry_run_and_new_pool_intent():
     assert _Rail.last.built['data'].startswith('0xac9650d8')
 
 
+@pytest.mark.asyncio
+async def test_retry_key_survives_refreshed_lp_deadline(monkeypatch):
+    captured = []
+    t, _ = tool(captured)
+    monkeypatch.setattr(V.time, 'time', lambda: 1000)
+    await t.lp_add(add())
+    first_data = _Rail.last.built['data']
+    monkeypatch.setattr(V.time, 'time', lambda: 1005)
+    await t.lp_add(add())
+    assert first_data != _Rail.last.built['data']
+    assert len(captured) == 2
+    assert captured[0].idempotency_key == captured[1].idempotency_key
+    assert captured[0].idempotency_key
+
+
 
 @pytest.mark.asyncio
 async def test_missing_price_and_allowance_remedy(monkeypatch):
     t, _ = tool()
     assert 'initial_price' in (await t.lp_add(add(initial_price=None))).error
     monkeypatch.setattr(R, 'allowance', lambda *a: 0)
-    err = (await t.lp_add(add())).error
-    assert 'approve_token' in err and NPM in err
+    res = await t.lp_add(add())
+    assert 'approve_token' in res.error and NPM in res.error
+    # Our own measured shortfall: a precondition, never a refusal taint.
+    assert (res.metadata or {}).get('error_kind') == 'precondition'
+
+
+@pytest.mark.asyncio
+async def test_insufficient_balance_is_a_precondition_not_a_taint(monkeypatch):
+    t, _ = tool()
+    monkeypatch.setattr(R, 'view', lambda rpc, to, spec, args=None:
+        HOLDER if spec['name'] == 'ownerOf' else 18 if spec['name'] == 'decimals' else 1)
+    res = await t.lp_add(add())
+    assert 'insufficient balance' in res.error
+    assert (res.metadata or {}).get('error_kind') == 'precondition'
+
+
+@pytest.mark.asyncio
+async def test_an_unexpected_build_failure_still_taints(monkeypatch):
+    t, _ = tool()
+    monkeypatch.setattr(R, 'allowance', lambda *a: (_ for _ in ()).throw(ValueError('boom')))
+    res = await t.lp_add(add())
+    assert 'boom' in res.error
+    assert (res.metadata or {}).get('error_kind') is None
 
 
 @pytest.mark.asyncio
@@ -155,6 +191,7 @@ async def test_v4_caps_refuse_before_the_guard(monkeypatch):
     gate._sync_shared_ledger = lambda: True
     _v4_reads(monkeypatch, t)
     monkeypatch.delenv('LP_ETH_CAP', raising=False)
+    t._price = lambda *a: 1.0
     res = await t.lp_add(v4add(dry_run=False))
     assert 'LP_ETH_CAP is 0' in res.error and not captured and not gate.recorded
 
@@ -165,8 +202,9 @@ async def test_v4_missing_permit2_grant_names_the_remedy(monkeypatch):
     t, _ = tool()
     _v4_reads(monkeypatch, t)
     monkeypatch.setattr(V4, 'permit2_allowance', lambda *a: (0, 0))
-    err = (await t.lp_add(v4add())).error
-    assert "via='permit2'" in err
+    res = await t.lp_add(v4add())
+    assert "via='permit2'" in res.error
+    assert (res.metadata or {}).get('error_kind') == 'precondition'
 
 
 def test_increase_retains_range_and_checks_pair(monkeypatch):
@@ -249,3 +287,24 @@ async def test_landed_transfer_shortfall_books_cap_but_not_position(monkeypatch)
     assert gate.recorded[0]['amount_usd'] == 2
     assert gate.recorded[0]['asset'] is None
     assert gate.recorded[0]['positions'] == []
+
+
+def test_every_v3_plan_passes_the_guard_calldata_decode(monkeypatch):
+    """WAL-2: the guard decodes the signed v3 calldata. Every shape the verbs
+    build (new pool, native leg, increase, remove+burn, fee collection) must
+    pass it, bound to the wallet, and a foreign recipient must not."""
+    from core.wallet import liquidity_guard
+    plans = [V.prepare_add(add(), lambda *a: None, HOLDER, NPM),
+             V.prepare_add(add(token_a='native'), lambda *a: hex(10**30), HOLDER, NPM),
+             V.prepare_exit(LpRemoveParams(chain='base', token_id=42, burn=True), None, HOLDER, NPM, 'lp_remove'),
+             V.prepare_exit(LpRemoveParams(chain='base', token_id=42), None, HOLDER, NPM, 'lp_remove'),
+             V.prepare_exit(LpCollectParams(chain='base', token_id=42), None, HOLDER, NPM, 'lp_collect')]
+    monkeypatch.setattr(R, 'pool_address', lambda *a: POOL)
+    plans.append(V.prepare_add(add(token_id=42), lambda *a: None, HOLDER, NPM))
+    for plan in plans:
+        tx = dict(to=NPM, value=plan.value, data=plan.data)
+        liquidity_guard.structural(plan.intent, tx, holder=HOLDER)
+        if plan.intent.lp_position_effect == 'hold' and plan.intent.lp_outflows:
+            continue   # increaseLiquidity names no recipient; the position is already ours
+        with pytest.raises(ValueError):
+            liquidity_guard.structural(plan.intent, tx, holder='0x' + '6' * 40)

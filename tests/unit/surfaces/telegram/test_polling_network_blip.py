@@ -197,3 +197,26 @@ def test_a_real_fault_is_still_not_transient():
         pass
     _Unauthorized.__name__ = "TelegramUnauthorizedError"
     assert _is_transient_poll_error(_Unauthorized("bot token is invalid")) is False
+
+
+# --- recovery is SAID, not inferred from silence (added 2026-10-06) ---------- #
+# Live 01:03→01:12: Bad Gateway / timeouts escalated to "polling is down", then
+# the errors simply stopped. The only evidence of recovery was the absence of
+# lines, so every reader had to guess whether polling was back.
+
+
+def test_recovery_after_an_escalated_streak_logs_one_recovery_line(monkeypatch, caplog):
+    h = _harness_failing(ConnectionResetError(104, "reset"),
+                         times=_TRANSIENT_ESCALATE_AFTER + 1)
+    with caplog.at_level(logging.DEBUG):
+        _run(h, monkeypatch)
+    rec = [r for r in caplog.records if "recovered" in r.getMessage()]
+    assert len(rec) == 1 and rec[0].levelno == logging.WARNING
+    assert str(_TRANSIENT_ESCALATE_AFTER + 1) in rec[0].getMessage()
+
+
+def test_a_short_blip_logs_no_recovery_line(monkeypatch, caplog):
+    h = _harness_failing(ConnectionResetError(104, "reset"), times=1)
+    with caplog.at_level(logging.DEBUG):
+        _run(h, monkeypatch)
+    assert not [r for r in caplog.records if "recovered" in r.getMessage()]

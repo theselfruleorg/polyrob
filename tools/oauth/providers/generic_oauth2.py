@@ -6,6 +6,9 @@ unit-testable WITHOUT hitting any live endpoint; the default uses ``httpx``.
 """
 from __future__ import annotations
 
+import base64
+import hashlib
+import re
 import time
 from typing import Any, Awaitable, Callable, Dict, Optional
 from urllib.parse import urlencode
@@ -27,26 +30,38 @@ class GenericOAuth2Provider(OAuthProvider):
         self.redirect_uri = config.get("redirect_uri")
         self._http_post = http_post
 
-    def authorize_url(self, *, state: Optional[str] = None, redirect_uri: Optional[str] = None) -> str:
+    @staticmethod
+    def _verifier(value: str) -> str:
+        if not isinstance(value, str) or re.fullmatch(r'[A-Za-z0-9._~-]{43,128}', value) is None:
+            raise OAuthError('OAuth requires a valid PKCE verifier')
+        return value
+
+    def authorize_url(self, *, state: str, code_verifier: str, redirect_uri: Optional[str] = None) -> str:
+        if not isinstance(state, str) or not 32 <= len(state) <= 256:
+            raise OAuthError('OAuth requires an unguessable one-use state')
+        verifier = self._verifier(code_verifier)
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode('ascii')).digest()).rstrip(b'=').decode('ascii')
         params = {
             "response_type": "code",
             "client_id": self.client_id,
             "redirect_uri": redirect_uri or self.redirect_uri or "",
+            "state": state,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
         }
         if self.scopes:
             params["scope"] = " ".join(self.scopes)
-        if state:
-            params["state"] = state
         sep = "&" if "?" in self.auth_url else "?"
         return f"{self.auth_url}{sep}{urlencode(params)}"
 
-    async def exchange_code(self, code: str, *, redirect_uri: Optional[str] = None) -> OAuthToken:
+    async def exchange_code(self, code: str, *, code_verifier: str, redirect_uri: Optional[str] = None) -> OAuthToken:
         data = {
             "grant_type": "authorization_code",
             "code": code,
             "client_id": self.client_id,
             "client_secret": self.client_secret,
             "redirect_uri": redirect_uri or self.redirect_uri or "",
+            "code_verifier": self._verifier(code_verifier),
         }
         return self._token_from_response(await self._post_token(data))
 

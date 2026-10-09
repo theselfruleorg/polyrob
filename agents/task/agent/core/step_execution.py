@@ -36,6 +36,40 @@ _FAST_ESCALATE = os.getenv("EMPTY_ACTION_FAST_ESCALATE", "true").strip().lower()
 _EMPTY_ACTION_ESCALATE_AT = 2 if _FAST_ESCALATE else 3
 
 
+def _seat_of(orchestrator) -> Optional[str]:
+	"""``"terminal"`` when a foreground terminal of this process renders the session
+	(``bind_terminal_surface``), else None. Fail-closed to None — ``is True``, so a
+	mock or odd orchestrator never reads as a terminal."""
+	try:
+		from core.security.host_execution import HOST_SEAT
+		return HOST_SEAT if getattr(orchestrator, "_terminal_attached", False) is True else None
+	except Exception:
+		return None
+
+
+def _owner_turn_text(agent) -> Optional[str]:
+	"""AGT-4: what the owner actually typed for the current turn, or None.
+
+	The drain (``user_ingress._update_forged_turn_marker``) sets
+	``orchestrator._owner_turn_text`` on every batch (None for a forged one).
+	Before any batch has drained, the turn is the session's opening task. This is
+	TEXT, not authority: the owner/forged/tenant gates still decide who may act."""
+	orch = getattr(agent, "orchestrator", None)
+	if orch is not None and hasattr(orch, "_owner_turn_text"):
+		text = orch._owner_turn_text
+	else:
+		text = getattr(agent, "task", None)
+	return text if isinstance(text, str) and text.strip() else None
+
+
+def _orch_read_tainted(orchestrator) -> bool:
+	"""AGT-1: this turn has read third-party text — tool output, a forwarded
+	body, or a correspondent's message (the correspondent taint)."""
+	from core.security.read_taint import orchestrator_tainted
+	return (orchestrator_tainted(orchestrator)
+	        or getattr(orchestrator, "_correspondent_tainted", False) is True)
+
+
 class StepExecutionMixin:
 	"""Validate-and-intervene + execute-actions step phases for Agent."""
 
@@ -201,7 +235,15 @@ class StepExecutionMixin:
 			sensitive_data=self.sensitive_data or {},
 			metadata={"turn_kind": turn_kind,
 			          # 068 G2: the run's declared buy target (None = none).
-			          "money_target": getattr(self.orchestrator, "_money_target", None)},
+			          "money_target": getattr(self.orchestrator, "_money_target", None),
+			          # 073 W1: a foreground terminal of THIS process is the only
+			          # seat the host shell admits (core.security.host_execution).
+			          "seat": _seat_of(self.orchestrator),
+			          # AGT-4: the owner's own words for this turn (the drained
+			          # genuine batch, else the session's opening task).
+			          "owner_text": _owner_turn_text(self),
+			          # AGT-1: the turn has read third-party content.
+			          "untrusted_read": _orch_read_tainted(self.orchestrator)},
 		)
 		return execution_context
 
@@ -360,6 +402,13 @@ class StepExecutionMixin:
 
 			# CRITICAL FIX: Actually execute the actions through controller
 			execution_context = self._build_execution_context(browser_context)
+			# The run's LAST step: a done() here is final (no step is left to answer
+			# a turn-back such as the open-todo nudge).
+			try:
+				execution_context.metadata["last_step"] = bool(
+					step_info is not None and step_info.step_number >= step_info.max_steps - 1)
+			except Exception:
+				pass
 
 			# FIX (Jan 2026): Tool call rate limiting to prevent context overflow
 			# Limit parallel tool calls to prevent 60K+ token additions in a single step.

@@ -65,11 +65,10 @@ def test_validation_pending_marked_simulated(monkeypatch):
     # stays open (and honest, per-item) with EIP8004_ENABLED back off.
     monkeypatch.setenv("EIP8004_ENABLED", "true")
     monkeypatch.setenv("EIP8004_AGENT_ID", "42")
-    # B20: /validation/request now requires an authenticated caller — it WRITES
-    # to the pending queue, and anonymous access let anyone stuff it.
+    # Seeding the bounded local validation queue requires owner/admin access.
     app = FastAPI()
     app.include_router(router)
-    app.dependency_overrides[eip8004_endpoints.require_authenticated] = lambda: "u1"
+    app.dependency_overrides[eip8004_endpoints.require_owner_or_admin] = lambda: True
     c = TestClient(app, raise_server_exceptions=False)
 
     req = c.post(

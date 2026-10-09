@@ -12,7 +12,7 @@ def require_session_identity(claims):
     from webview import webgate
 
     try:
-        if not webgate.is_own_ops():
+        if not webgate.is_owner_console():
             return
         uid = claims.get("user_id")
         if isinstance(uid, str) and uid and uid == webgate.local_owner_id():

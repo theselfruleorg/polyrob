@@ -149,6 +149,14 @@ _USDC_ATOMIC_PER_USD = 1_000_000
 _MAX_AUTHORIZATION_SECONDS = 600
 
 
+def _max_authorization_seconds() -> int:
+    """The window limit in force: 600 s, or the signer's ``x402_max_window_sec``
+    when a signer is installed and set lower (one limit — a window the agent
+    accepted must never be refused by the signer)."""
+    from core.wallet.signer_envelope import clamp
+    return int(clamp(float(_MAX_AUTHORIZATION_SECONDS), "x402_max_window_sec"))
+
+
 class RealX402Client:
     """Production x402 client adapter wrapping the official x402 Python SDK.
 
@@ -633,6 +641,11 @@ class RealX402Client:
 
     async def quote(self, url: str, *, pinned_ip: Optional[str] = None,
                     network: Optional[str] = None) -> Optional[float]:
+        details = await self.quote_details(url, pinned_ip=pinned_ip, network=network)
+        return details.get("amount") if details else None
+
+    async def quote_details(self, url: str, *, pinned_ip: Optional[str] = None,
+                    network: Optional[str] = None) -> Optional[dict]:
         """Best-effort price probe: return the required USD amount or None.
 
         Sends a plain GET without an X-PAYMENT header. If the server
@@ -658,7 +671,7 @@ class RealX402Client:
                     # 068 B8: the SAME payable-entry choice the payer makes —
                     # with a configured network, the Base-USDC entry, not
                     # whichever entry the server listed first.
-                    return self._parse_402_amount(resp, configured=network)
+                    return self._parse_402_challenge(resp, configured=network)
                 return None
         except Exception as exc:  # noqa: BLE001
             logger.debug("quote: probe failed for %s: %s", url, exc)
@@ -675,6 +688,7 @@ class RealX402Client:
         max_amount_usd: float,
         pinned_ip: Optional[str] = None,
         idempotency_key: Optional[str] = None,
+        expected_pay_to: Optional[str] = None,
     ) -> X402Result:
         """Perform an auto-paying HTTP request via the x402 SDK.
 
@@ -810,6 +824,9 @@ class RealX402Client:
                               "submission_ref": None, "authorized_amount": None}
 
         def _abort_if_invalid_requirement(ctx):
+            extra = getattr(ctx.selected_requirements, "extra", None) or {}
+            if not isinstance(extra, dict) or extra.get("assetTransferMethod", "eip3009") != "eip3009":
+                return AbortResult(reason="x402: only EIP-3009 transfers are allowed; Permit2 is refused")
             selected = ctx.selected_requirements
             selected_network = getattr(selected, "network", None)
             if not self._networks_match(network, selected_network):
@@ -832,6 +849,17 @@ class RealX402Client:
                         f"to pay (fail-closed)"
                     )
                 )
+            # Consent names the recipient before this request starts. Neither
+            # the initial server response nor an SDK retry may replace it.
+            from core.wallet.addresses import same_address
+            from core.wallet.tokens import normalize_address
+            try:
+                approved_payee = normalize_address(expected_pay_to)
+                selected_payee = normalize_address(getattr(selected, "pay_to", None))
+            except (TypeError, ValueError, AttributeError):
+                return AbortResult(reason="x402: expected_pay_to must name the quoted recipient before payment")
+            if not same_address(approved_payee, selected_payee):
+                return AbortResult(reason="x402: SDK-selected recipient differs from approved expected_pay_to")
             # CR-L26: the server chooses how long the EIP-3009 authorization
             # we sign stays valid. Uncapped, a server can ask for years and
             # hold a transferable authorization indefinitely. The SDK treats a
@@ -840,12 +868,13 @@ class RealX402Client:
                 selected_timeout = int(getattr(selected, "max_timeout_seconds", 0) or 0)
             except (TypeError, ValueError):
                 selected_timeout = 0
-            if not 0 < selected_timeout <= _MAX_AUTHORIZATION_SECONDS:
+            max_window = _max_authorization_seconds()
+            if not 0 < selected_timeout <= max_window:
                 return AbortResult(
                     reason=(
                         f"x402: {url} asks for a {selected_timeout or 'default (3600)'} s "
                         f"authorization window; the limit is "
-                        f"{_MAX_AUTHORIZATION_SECONDS} s — refusing to pay (fail-closed)"
+                        f"{max_window} s — refusing to pay (fail-closed)"
                     )
                 )
             # C1 half 2 (2026-07-15): re-run the wallet PolicyGate against the
@@ -890,6 +919,26 @@ class RealX402Client:
                 payment_info["amount"] = float(req.get_amount()) / _USDC_ATOMIC_PER_USD
             except Exception:  # noqa: BLE001
                 pass
+            # Journal the authorization's PUBLIC terms so an expired, unsettled
+            # row resolves from chain state (core.wallet.x402_expiry) instead of
+            # freezing every money rail until the owner acts. A failed bind
+            # leaves the row operator-only (fail closed), never unjournaled.
+            ref = payment_info.get("submission_ref")
+            if ref:
+                try:
+                    inner = getattr(ctx.payment_payload, "payload", None) or {}
+                    auth = inner.get("authorization") or {}
+                    from core.wallet.submission_journal import bind_x402_authorization
+                    bind_x402_authorization(
+                        ref, authorizer=auth.get("from"), nonce=auth.get("nonce"),
+                        valid_before=auth.get("validBefore"),
+                        asset=getattr(req, "asset", None),
+                        network=getattr(req, "network", None))
+                except Exception as exc:  # noqa: BLE001
+                    logging.getLogger(__name__).warning(
+                        "x402: authorization terms not journaled for %s (%s); the row "
+                        "needs an operator release if it stays unresolved", ref,
+                        type(exc).__name__)
 
         x402_c.on_before_payment_creation(_abort_if_invalid_requirement)
         x402_c.on_after_payment_creation(_capture_payment_info)

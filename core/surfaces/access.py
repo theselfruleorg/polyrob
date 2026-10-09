@@ -304,6 +304,15 @@ def resolve_access_tier(
                 return AccessTier.DENIED
             return AccessTier.GROUP_MEMBER
 
+        # CHAT-6: a forgeable-address surface (email) names its sender by a
+        # header anyone can write. Unless the surface PROVED that address (the
+        # receiving MX's Authentication-Results), the sender is the lowest
+        # tier — never the owner, never a known correspondent. Fail-closed:
+        # an identity that does not say True is unauthenticated.
+        if (is_forgeable_surface(surface)
+                and getattr(identity, "sender_authenticated", None) is not True):
+            return AccessTier.DENIED
+
         if _is_owner_or_paired(
                 container, uid, src,
                 allow_local=surface in _LOCAL_OWNER_SURFACES,

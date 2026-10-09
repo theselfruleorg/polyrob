@@ -9,7 +9,7 @@ There are two tiers:
 
 | Tier | What it is | Loads by default |
 |---|---|---|
-| **first-party** | Reviewed and released with core, and shipped INSIDE the `polyrob` distribution: `discovery` (AnySite, Perplexity), `x` (X/Twitter) and `markets` (Polymarket, Hyperliquid). There is nothing separate to install. | Yes |
+| **first-party** | Reviewed and released with core, and shipped INSIDE the `polyrob` distribution: `discovery` (AnySite, Perplexity), `x` (X/Twitter), `markets` (Polymarket, Hyperliquid), and the execution backends `modal`, `daytona`, `vercel_sandbox` and `singularity`. There is nothing separate to install. | Yes |
 | **third-party** | Its own distribution. | Only when you name it in `POLYROB_PACKS` |
 
 ### A first-party pack's SDKs
@@ -21,6 +21,16 @@ The packs ship with polyrob; their SDKs are optional extras:
 | `x` | `pip install 'polyrob[twitter]'` | the `twitter` tool is withheld (`x_browser` needs the `browser` extra) |
 | `discovery` | `pip install 'polyrob[anysite]'` | the `anysite` tool installs it on first use where lazy installs are on, else it is withheld |
 | `markets` | `pip install 'polyrob[crypto]'` | the `polymarket` and `hyperliquid` trade tools are withheld; the `*_data` read tools work |
+| `modal` | `pip install 'polyrob[modal]'` | the backend's setup names the extra |
+| `daytona` | `pip install 'polyrob[daytona]'` | the backend's setup names the extra |
+| `vercel_sandbox` | `pip install 'polyrob[vercel-sandbox]'` | the backend's setup names the extra |
+| `singularity` | none (drives the `apptainer`/`singularity` CLI) | the backend refuses until the CLI is on `PATH` |
+
+The four sandbox packs add no tool. Each one contributes an **execution backend** for
+`shell` and `run_code`: select it with `SHELL_BACKEND=<pack id>` or
+`CODE_EXEC_BACKEND=<pack id>`. A name with no loaded backend is refused, never replaced
+by another backend. These backends are tested against fakes only; try one on a
+throwaway workload before you depend on it.
 
 A withheld tool is never offered to the agent, and every surface names the remedy:
 
@@ -107,11 +117,14 @@ polyrob pack install ./my-pack
 - Load it with `polyrob pack enable <id>`.
 
 ⚠️ **Custody rule.** A third-party pack runs inside the agent process and can
-read everything the agent can read. While this process holds wallet custody
-(a wallet is enabled and `WALLET_SIGNER` is not `remote`), POLYROB refuses to
-install or load a third-party code pack. The remedy is to move signing to
-`polyrob-signer` (`WALLET_SIGNER=remote`), or to run the pack on an instance
-without signing credentials. Third-party skills (markdown) and MCP servers are
+read everything the agent can read. POLYROB refuses to install or load one while
+wallet custody or remote signing is enabled: the same UID can reach the signer
+socket, and an installed pack can change shared Python dependencies. Installation
+as root is also refused. Use a separate unprivileged instance and Python environment
+without signing credentials or access to the signer socket. An environment that
+already contained untrusted packs must be rebuilt from trusted artifacts before
+it is used for signing; disabling a pack cannot undo installed Python hooks.
+Third-party skills (markdown) and MCP servers are
 not code packs and stay allowed.
 
 ## The kill list

@@ -119,6 +119,24 @@ async def test_submit_feedback_without_proof_is_unaffected(tmp_path, monkeypatch
         await db.close()
 
 
+@pytest.mark.asyncio
+async def test_signed_grant_cannot_be_reused_after_manager_restart(tmp_path, monkeypatch):
+    db = await _setup_db(tmp_path)
+    try:
+        manager = _mgr(monkeypatch, db)
+        auth = await manager.create_feedback_auth(client_address=_CLIENT)
+        await manager.submit_feedback(agent_id=42, score=75, feedback_auth=auth)
+        restarted = _mgr(monkeypatch, db)
+        with pytest.raises(ValueError, match="already used"):
+            await restarted.submit_feedback(agent_id=42, score=99, feedback_auth=auth)
+        fresh = await restarted.create_feedback_auth(client_address=_CLIENT)
+        assert fresh.nonce != auth.nonce
+        assert (await restarted.submit_feedback(
+            agent_id=42, score=90, feedback_auth=fresh))["success"]
+    finally:
+        await db.close()
+
+
 # ---------------------------------------------------------------------------
 # Follow-up hardening (Task 15 review, Finding 1): one-proof-one-feedback
 # replay guard — the SAME settled tx hash must not back unlimited feedback
@@ -184,6 +202,7 @@ async def test_different_settled_tx_is_still_accepted_after_a_replay_rejection(t
         # per-proof, not "one verified-purchase feedback ever".
         proof_y = ProofOfPayment(
             fromAddress="0xPAYER2", toAddress="0xTREASURY", chainId="8453", txHash="0xtxY")
+        auth = await mgr.create_feedback_auth(client_address=_CLIENT)
         result_y = await mgr.submit_feedback(
             agent_id=42, score=85, feedback_auth=auth, proof_of_payment=proof_y)
         assert result_y["verified_purchase"] is True

@@ -3,10 +3,13 @@
 import secrets
 import hashlib
 import logging
-from datetime import datetime, timedelta
+import json
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from core.exceptions import AuthError
+from core.security.api_keys import DEFAULT_SCOPES, DEFAULT_EXPIRY_DAYS, MAX_EXPIRY_DAYS
+from core.security.api_keys import scopes as validate_scopes, expiry_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +30,8 @@ class APIKeyManager:
         self.logger = logging.getLogger('auth.api_key_manager')
 
     async def generate_api_key(self, user_id: str, name: str = "Default",
-                               expires_days: Optional[int] = None) -> dict:
+                               expires_days: int = DEFAULT_EXPIRY_DAYS,
+                               scopes=DEFAULT_SCOPES) -> dict:
         """
         Generate new API key for user.
 
@@ -36,7 +40,7 @@ class APIKeyManager:
         Args:
             user_id: User ID
             name: Name for the API key
-            expires_days: Number of days until expiration (None = never expires)
+            expires_days: Number of days until expiration (1–365; default 90)
 
         Returns:
             Dict with api_key and metadata
@@ -50,6 +54,11 @@ class APIKeyManager:
             tier = await self.tier_manager.get_user_tier(user_id)
         except AuthError:
             raise ValueError("API keys require DEN token ownership")
+        if tier not in ('holder', 'admin', 'free_access', 'x402'):
+            raise ValueError("API keys require an eligible account tier")
+        if type(expires_days) is not int or not 1 <= expires_days <= MAX_EXPIRY_DAYS:
+            raise ValueError('API key expiry must be between 1 and 365 days')
+        granted_scopes = validate_scopes(scopes)
 
         # Generate secure key
         key = f"rob_{secrets.token_urlsafe(32)}"
@@ -59,17 +68,16 @@ class APIKeyManager:
         key_prefix = key[:12]  # rob_abc123...
 
         # Calculate expiry
-        expires_at = None
-        if expires_days:
-            expires_at = datetime.now() + timedelta(days=expires_days)
+        now = datetime.now(timezone.utc)
+        expires_at = now + timedelta(days=expires_days)
 
         # Store in database
         await self.db.execute("""
             INSERT INTO api_keys (
                 user_id, key_hash, key_prefix, name,
-                created_at, expires_at, is_active
-            ) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, ?, 1)
-        """, (user_id, key_hash, key_prefix, name, expires_at))
+                created_at, expires_at, is_active, scopes
+            ) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, ?, 1, ?)
+        """, (user_id, key_hash, key_prefix, name, expires_at.isoformat(), json.dumps(granted_scopes)))
 
         self.logger.info(f"Generated new API key for user {user_id}: {key_prefix}...")
 
@@ -79,7 +87,8 @@ class APIKeyManager:
             "name": name,
             "prefix": key_prefix,
             "expires_at": expires_at.isoformat() if expires_at else None,
-            "created_at": datetime.now().isoformat(),
+            "created_at": now.isoformat(),
+            "scopes": granted_scopes,
             "warning": "Store this key securely - it won't be shown again!"
         }
 
@@ -99,7 +108,7 @@ class APIKeyManager:
 
         # Look up in database
         result = await self.db.fetch_one("""
-            SELECT user_id, expires_at, is_active
+            SELECT user_id, expires_at, is_active, scopes
             FROM api_keys
             WHERE key_hash = ? AND is_active = 1
         """, (key_hash,))
@@ -108,11 +117,12 @@ class APIKeyManager:
             return None
 
         # Check if expired
-        if result['expires_at']:
-            expires_at = datetime.fromisoformat(result['expires_at'])
-            if expires_at < datetime.now():
-                self.logger.warning(f"API key expired: {key_hash[:8]}...")
+        try:
+            validate_scopes(result['scopes'])
+            if expiry_timestamp(result['expires_at']) <= datetime.now(timezone.utc).timestamp():
                 return None
+        except (ValueError, TypeError):
+            return None
 
         # Update last_used
         await self.db.execute("""
@@ -133,13 +143,23 @@ class APIKeyManager:
                 created_at,
                 last_used,
                 expires_at,
-                is_active
+                is_active,
+                scopes
             FROM api_keys
             WHERE user_id = ?
             ORDER BY created_at DESC
         """, (user_id,))
 
-        return [dict(row) for row in results]
+        keys = []
+        for row in results:
+            info = dict(row)
+            info['prefix'] = info.pop('key_prefix')
+            try:
+                info['scopes'] = validate_scopes(info['scopes'])
+            except (ValueError, TypeError):
+                info['scopes'] = []  # Legacy unscoped keys must be replaced.
+            keys.append(info)
+        return keys
 
     async def revoke_key(self, user_id: str, key_prefix: str) -> bool:
         """Revoke an API key."""

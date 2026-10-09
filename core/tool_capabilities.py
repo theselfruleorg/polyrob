@@ -127,7 +127,7 @@ _ROW_DEFAULTS: Dict[str, object] = {
 # gated everywhere but not yet registrable (see T12's _ASPIRATIONAL_IDS).
 TOOL_CAPABILITIES: Dict[str, FrozenSet[str]] = {
     # -- core / read-only -----------------------------------------------------
-    "filesystem": ToolRow(cli="static"),
+    "filesystem": ToolRow(untrusted_output=True, cli="static"),
     "task": ToolRow(cli="static"),   # the TODO tool, NOT delegation — never block
     # No tool-id capability, but its four verbs are gated BY NAME while
     # correspondent-tainted (correspondent_gate._HIGH_IMPACT_NAMES, M03) — the
@@ -212,10 +212,10 @@ TOOL_CAPABILITIES: Dict[str, FrozenSet[str]] = {
         cli="optional", cli_registrar="tools.self_env:register_self_env_tool",
         gate=ToolGate(flag="SELF_ENV_ENABLED")),
     "git": ToolRow({"high_impact", "delegate_blocked", "writes_public"},
-        cli="optional", cli_registrar="tools.git:register_git_tool",
+        untrusted_output=True, cli="optional", cli_registrar="tools.git:register_git_tool",
         gate=ToolGate(flag="GIT_TOOLS_ENABLED")),
     "github": ToolRow({"high_impact", "delegate_blocked", "shared_identity", "writes_public"},
-        cli="optional", cli_registrar="tools.github:register_github_tool",
+        untrusted_output=True, cli="optional", cli_registrar="tools.github:register_github_tool",
         gate=ToolGate(flag="GITHUB_TOOL_ENABLED")),
     # install path + dynamic exec
     "mcp": ToolRow({"high_impact", "delegate_blocked", "shared_identity", "writes_network"},
@@ -247,7 +247,7 @@ TOOL_CAPABILITIES: Dict[str, FrozenSet[str]] = {
     # -- money ---------------------------------------------------------------
     "x402_pay": ToolRow({"money", "high_impact", "delegate_blocked",
                            "writes_money", "writes_network"},
-        cli="optional", cli_registrar="tools.x402:register_x402_tool",
+        untrusted_output=True, cli="optional", cli_registrar="tools.x402:register_x402_tool",
         gate=ToolGate(tier="reserved",
                       label="money-SPEND",
                       remedy=("owner-only, explicitly enabled, never autonomous; "

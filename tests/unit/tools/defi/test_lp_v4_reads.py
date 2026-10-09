@@ -38,6 +38,18 @@ def test_a_weth_key_is_a_different_pool():
     assert lp_reads.pool_id(key) != PINNED_POOL_ID
 
 
+def test_pons_key_refuses_changed_factory_before_reading_its_record(monkeypatch):
+    from tools.launchpad import pons
+    def bad_pin(rpc):
+        raise pons.PonsError('code hash changed')
+    def unexpected(*args):
+        pytest.fail('unverified factory record was trusted')
+    monkeypatch.setattr(pons, 'verify_pins', bad_pin)
+    monkeypatch.setattr(pons, 'launched_token', unexpected)
+    with pytest.raises(V.LpReadError, match='code hash changed'):
+        V.pons_key_for(lambda *a: None, PNL)
+
+
 def _word(sqrt, tick, pfee=0, lfee=0):
     return sqrt | ((tick & 0xFFFFFF) << 160) | (pfee << 184) | (lfee << 208)
 

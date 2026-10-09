@@ -90,3 +90,33 @@ def test_get_event_log_honors_env_path_override(tmp_path, monkeypatch):
     monkeypatch.setenv("TELEMETRY_EVENT_LOG_PATH", p)
     log = get_event_log()
     assert log.db_path == p
+
+
+def test_aggregate_is_complete_and_tenant_time_scoped(tmp_path):
+    import sqlite3
+    log = _log(tmp_path)
+    with sqlite3.connect(log.db_path) as conn:
+        conn.executemany(
+            "INSERT INTO telemetry_events(ts,kind,user_id,attrs) VALUES (?,?,?,?)",
+            [(200, "wallet_spend", "u", '{"amount_usd":0.25}')] * 100005
+            + [(200, "wallet_spend", "other", '{"amount_usd":999}'),
+               (1, "wallet_spend", "u", '{"amount_usd":999}'),
+               (200, "cron_run", "u", '{}')])
+    totals = log.aggregate(kind="wallet_spend", user_id="u", since_ts=100)
+    assert totals == {"counts_by_kind": {"wallet_spend": 100005},
+                      "total_events": 100005, "wallet_spend_usd": 25001.25}
+
+
+@pytest.mark.parametrize("amount", [None, "5", -1, True, float("inf"), float("nan")])
+def test_aggregate_refuses_invalid_wallet_amount(tmp_path, amount):
+    log = _log(tmp_path)
+    log.record("wallet_spend", user_id="u", amount_usd=amount)
+    with pytest.raises(Exception):
+        log.aggregate(user_id="u")
+
+
+def test_aggregate_does_not_report_unreadable_as_empty(tmp_path):
+    log = _log(tmp_path)
+    log._ready = False
+    with pytest.raises(RuntimeError, match="unavailable"):
+        log.aggregate()

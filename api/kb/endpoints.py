@@ -150,7 +150,7 @@ def _resolve_and_guard(
     except Exception as exc:
         raise HTTPException(
             status_code=400,
-            detail=f"Could not resolve workspace for session '{session_id}': {exc}",
+            detail="Could not resolve the session workspace",
         )
 
     resolved = (workspace_root / path).resolve()
@@ -196,7 +196,7 @@ async def kb_ingest_path(
         )
     except Exception as exc:
         logger.warning("KB ingest failed for user=%s: %s", user_id, exc)
-        raise HTTPException(status_code=500, detail=f"KB ingest error: {exc}")
+        raise HTTPException(status_code=500, detail="Knowledge ingestion is unavailable")
 
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
@@ -234,7 +234,7 @@ async def kb_ingest_upload(
     except Exception as exc:
         raise HTTPException(
             status_code=400,
-            detail=f"Could not resolve workspace for session '{session_id}': {exc}",
+            detail="Could not resolve the session workspace",
         )
 
     upload_dir = Path(workspace_root) / ".kb_uploads"
@@ -274,7 +274,7 @@ async def kb_ingest_upload(
         raise
     except Exception as exc:
         logger.warning("KB upload ingest failed for user=%s: %s", user_id, exc)
-        raise HTTPException(status_code=500, detail=f"KB ingest error: {exc}")
+        raise HTTPException(status_code=500, detail="Knowledge ingestion is unavailable")
     finally:
         if tmp_file is not None:
             try:
@@ -314,6 +314,6 @@ async def kb_search_endpoint(
         )
     except Exception as exc:
         logger.warning("KB search failed for user=%s: %s", user_id, exc)
-        raise HTTPException(status_code=500, detail=f"KB search error: {exc}")
+        raise HTTPException(status_code=500, detail="Knowledge search is unavailable")
 
     return JSONResponse(content={"results": result or ""})

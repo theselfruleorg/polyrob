@@ -193,7 +193,7 @@ class AppServiceTool(BaseTool):
         source_rel = os.path.relpath(source_abs, base)
 
         orch = self._resolve_orchestrator(sid)
-        digest, reason = tested_tree_digest(orch, source_abs)
+        digest, reason = tested_tree_digest(orch, source_abs, session_id=sid)
         if reason:
             return ActionResult(error=reason)
 

@@ -140,9 +140,11 @@ def test_planner_stamps_blocked_goal_missing_artifact(tmp_path):
     b.create_objective(user_id="rob", title="Grow the substack")
     blocked = b.create(user_id="rob", title="Broken goal wholly unrelated")
     b.claim(blocked.id, "w", ttl_seconds=60)
-    b.record_failure(blocked.id, error="missing file: drafts/DESIGN.md")
+    b.record_failure(blocked.id, error="missing file: drafts/DESIGN.md",
+        claim_token=b.get(blocked.id).claim_token)
     b.claim(blocked.id, "w", ttl_seconds=60)
-    b.record_failure(blocked.id, error="missing file: drafts/DESIGN.md")  # trips breaker
+    b.record_failure(blocked.id, error="missing file: drafts/DESIGN.md",
+        claim_token=b.get(blocked.id).claim_token)  # trips breaker
     p = build_planner_prompt(b, "rob", tmp_path)
     assert "drafts/DESIGN.md [MISSING on disk]" in p
 
@@ -154,9 +156,11 @@ def test_planner_no_stamping_when_root_none(tmp_path):
     b.create_objective(user_id="rob", title="Grow the substack")
     blocked = b.create(user_id="rob", title="Broken goal wholly unrelated")
     b.claim(blocked.id, "w", ttl_seconds=60)
-    b.record_failure(blocked.id, error="missing file: drafts/DESIGN.md")
+    b.record_failure(blocked.id, error="missing file: drafts/DESIGN.md",
+        claim_token=b.get(blocked.id).claim_token)
     b.claim(blocked.id, "w", ttl_seconds=60)
-    b.record_failure(blocked.id, error="missing file: drafts/DESIGN.md")
+    b.record_failure(blocked.id, error="missing file: drafts/DESIGN.md",
+        claim_token=b.get(blocked.id).claim_token)
     p = build_planner_prompt(b, "rob", None)
     assert "drafts/DESIGN.md" in p
     assert "[MISSING on disk]" not in p

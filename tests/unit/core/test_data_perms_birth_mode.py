@@ -36,7 +36,7 @@ def test_birth_mode_keeps_group_read_and_never_widens_to_world(tmp_path):
     p.write_text("x")
     os.chmod(p, 0o646)  # a stray world-write bit
     apply_birth_mode(p)
-    assert _mode(p) == 0o664, "world write is stripped, nothing else widens"
+    assert _mode(p) == 0o660, "all access by other users is removed"
 
 
 def test_birth_mode_is_fail_open_on_a_missing_path(tmp_path):
@@ -67,3 +67,29 @@ def test_session_control_db_is_group_writable(tmp_path):
         pass
     assert _mode(sc.path) & stat.S_IWGRP
     assert not (_mode(sc.path) & stat.S_IWOTH)
+
+
+@pytest.mark.parametrize('link_kind', ['symlink', 'hardlink'])
+def test_birth_mode_never_changes_a_link_target(tmp_path, link_kind):
+    target = tmp_path / 'private'
+    target.write_text('secret')
+    target.chmod(0o600)
+    link = tmp_path / 'alias'
+    if link_kind == 'symlink':
+        link.symlink_to(target)
+    else:
+        os.link(target, link)
+    apply_birth_mode(link)
+    assert _mode(target) == 0o600
+
+
+def test_birth_mode_refuses_a_symlinked_parent(tmp_path):
+    target = tmp_path / 'private'
+    target.mkdir()
+    file = target / 'data'
+    file.write_text('secret')
+    file.chmod(0o600)
+    alias = tmp_path / 'alias'
+    alias.symlink_to(target, target_is_directory=True)
+    apply_birth_mode(alias / 'data')
+    assert _mode(file) == 0o600

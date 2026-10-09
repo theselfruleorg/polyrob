@@ -48,7 +48,9 @@ LEGACY_INSTANCE_ID = "rob"
 
 # Char caps that bound the frozen self-context so a runaway doc can't dominate
 # the prompt.
-SELF_CONTEXT_PER_DOC_MAX_CHARS = 8000
+# ⚠️ 2026-10-04: 8000 → 16000 with the owner-doc cap below (owner /dev 16:06Z "expand
+# rules size at least 2x"); a writer cap above this bound would only move the refusal.
+SELF_CONTEXT_PER_DOC_MAX_CHARS = 16000
 SELF_CONTEXT_TOTAL_MAX_CHARS = 60000
 
 # The evolving SELF doc (agent-writable, per-(instance,user)). Capped tighter
@@ -56,7 +58,8 @@ SELF_CONTEXT_TOTAL_MAX_CHARS = 60000
 # ERROR on write (forces consolidation), never a silent truncate.
 # ⚠️ 2026-10-02: was 2200; prod sat at 2149/2200 and refused the owner's
 # house-style rule ("we need to fix stupid small limits", /dev 18:50Z).
-SELF_DOC_MAX_CHARS = 6000
+# ⚠️ 2026-10-04: 6000 → 12000 (owner /dev 16:06Z, "at least 2x").
+SELF_DOC_MAX_CHARS = 12000
 
 # The bounded owner-facts doc (agent-maintained, per-(instance,user)) — durable
 # facts/preferences about the OWNER (a USER.md-equivalent). Terser than SELF so it
@@ -76,7 +79,10 @@ SELF_DOC_MAX_CHARS = 6000
 # owner-facts block vanishes from the prompt rather than truncating.
 # ⚠️ 2026-10-02: 4000 filled in under two weeks (prod 3928/4000) and refused the
 # owner's house-style rule — raised to the per-doc injection bound (8000).
-OWNER_DOC_MAX_CHARS = 8000
+# ⚠️ 2026-10-04: 8000 refused the owner's email rule (prod owner.md over cap at
+# 16:05Z); the owner asked for "rules size at least 2x" — 16000, with the per-doc
+# injection bound raised to match.
+OWNER_DOC_MAX_CHARS = 16000
 
 # Operator-authored self-context docs, read in this order (identity first).
 _SELF_CONTEXT_DOCS = ("identity.md", "operating.md")
@@ -87,6 +93,18 @@ _CONTRACT_DOC_NAME = "contract.md"
 _BLOCKED_PLACEHOLDER = "[BLOCKED: self-context failed the identity safety scan]"
 _OWNER_BLOCKED_PLACEHOLDER = "[BLOCKED: owner-facts doc failed the identity safety scan]"
 _CONTRACT_BLOCKED_PLACEHOLDER = "[BLOCKED: operating contract failed the identity safety scan]"
+#: Prefix of the note a load_* returns for an unreadable doc. Prompt-only: an
+#: export or a "loaded?" check must test for it (``is_unreadable_note``).
+UNREADABLE_PREFIX = "[⚠ self-context doc "
+
+
+def _unreadable_note(path: Path, exc: Exception) -> str:
+    return (f"{UNREADABLE_PREFIX}{path.name} is UNREADABLE "
+            f"({type(exc).__name__}) — its rules are NOT in your context.]")
+
+
+def is_unreadable_note(text: str) -> bool:
+    return UNREADABLE_PREFIX in (text or "")
 
 # The owner-authored operating-contract doc (agent-maintained via ContractWriter,
 # owner-review-gated), a prose set of operating rules/constraints injected on the
@@ -94,7 +112,8 @@ _CONTRACT_BLOCKED_PLACEHOLDER = "[BLOCKED: operating contract failed the identit
 # so it stays a focused set of rules; over-cap is an ERROR on write, never a silent
 # truncate. Rides the same identity seam + quarantine-then-promote flow as
 # OWNER_DOC_MAX_CHARS / SELF_DOC_MAX_CHARS.
-CONTRACT_DOC_MAX_CHARS = 4000
+# 2026-10-04: 4000 → 8000 (owner /dev 16:06Z, "rules size at least 2x").
+CONTRACT_DOC_MAX_CHARS = 8000
 
 
 _SAFE_TENANT_RE = re.compile(r"[A-Za-z0-9_-]+")
@@ -159,8 +178,11 @@ def load_self_doc(home_dir: Path | str, user_id: Optional[str],
         if not path.is_file():
             return ""
         text = path.read_text(encoding="utf-8").strip()
-    except Exception:
-        return ""
+    except Exception as exc:
+        # An unreadable doc is not an absent one: say so, to the operator and
+        # to the model, instead of silently dropping its rules.
+        logger.warning("self-context doc %s is UNREADABLE: %s", path, exc)
+        return _unreadable_note(path, exc)
     if not text:
         return ""
     try:
@@ -195,8 +217,11 @@ def load_owner_doc(home_dir: Path | str, user_id: Optional[str],
         if not path.is_file():
             return ""
         text = path.read_text(encoding="utf-8").strip()
-    except Exception:
-        return ""
+    except Exception as exc:
+        # An unreadable doc is not an absent one: say so, to the operator and
+        # to the model, instead of silently dropping its rules.
+        logger.warning("self-context doc %s is UNREADABLE: %s", path, exc)
+        return _unreadable_note(path, exc)
     if not text:
         return ""
     try:
@@ -235,8 +260,11 @@ def load_contract_doc(home_dir: Path | str, user_id: Optional[str],
         if not path.is_file():
             return ""
         text = path.read_text(encoding="utf-8").strip()
-    except Exception:
-        return ""
+    except Exception as exc:
+        # An unreadable doc is not an absent one: say so, to the operator and
+        # to the model, instead of silently dropping its rules.
+        logger.warning("self-context doc %s is UNREADABLE: %s", path, exc)
+        return _unreadable_note(path, exc)
     if not text:
         return ""
     try:
@@ -452,6 +480,26 @@ def resolve_owner_telegram_id(env: Optional[Mapping[str, str]] = None) -> Option
     if len(ids) == 1 and ids[0].isdigit():
         return ids[0]
     return None
+
+
+def implicit_owner_alias_warning(env: Optional[Mapping[str, str]] = None) -> Optional[str]:
+    """A loud startup warning when the Telegram owner alias is IMPLICIT (CHAT-25).
+
+    :func:`resolve_owner_telegram_id` reads a single-entry
+    ``ALLOWED_TELEGRAM_USER_IDS`` as the owner's chat. That id then holds the
+    owner's verbs, money included. When the operator listed someone else, that
+    person holds the wallet. None when ``POLYROB_OWNER_TELEGRAM_ID`` names the
+    owner explicitly, or when no alias is derived.
+    """
+    src = os.environ if env is None else env
+    if (src.get("POLYROB_OWNER_TELEGRAM_ID") or "").strip().isdigit():
+        return None
+    alias = resolve_owner_telegram_id(src)
+    if alias is None:
+        return None
+    return (f"Telegram id {alias} is the OWNER only because it is the single entry in "
+            "ALLOWED_TELEGRAM_USER_IDS — it holds every owner verb, money included. "
+            f"Set POLYROB_OWNER_TELEGRAM_ID={alias} to confirm it, or fix the allowlist")
 
 
 def resolve_owner_email(env: Optional[Mapping[str, str]] = None) -> Optional[str]:
@@ -704,8 +752,11 @@ def _read_doc(path: Path) -> str:
         if not path.is_file():
             return ""
         text = path.read_text(encoding="utf-8").strip()
-    except Exception:
-        return ""
+    except Exception as exc:
+        # An unreadable doc is not an absent one: say so, to the operator and
+        # to the model, instead of silently dropping its rules.
+        logger.warning("self-context doc %s is UNREADABLE: %s", path, exc)
+        return _unreadable_note(path, exc)
     if not text:
         return ""
     if len(text) > SELF_CONTEXT_PER_DOC_MAX_CHARS:
@@ -733,7 +784,8 @@ def load_self_context(home_dir: Path | str) -> str:
 
     Returns the concatenated, char-capped text (identity first, then operating),
     or ``""`` when no non-blank docs exist (the inert / byte-identical default).
-    Never raises — a read error degrades to no self-context.
+    Never raises — an unreadable doc renders as a one-line UNREADABLE note
+    (and a warning), never as silence.
     """
     base = Path(home_dir) / _SELF_CONTEXT_SUBDIR
     parts: list[str] = []
@@ -828,6 +880,7 @@ __all__ = [
     "owner_label",
     "UNPAIRED_OWNER_LABEL",
     "resolve_owner_telegram_id",
+    "implicit_owner_alias_warning",
     "resolve_owner_email",
     "resolve_agent_email",
     "agent_mail_state_path",

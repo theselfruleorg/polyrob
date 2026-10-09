@@ -16,27 +16,29 @@ async def inbound_receipts(database, user_id: str, days: int) -> Dict[str, Any]:
     # "<id>"%'` — a LIKE pattern treats `_`/`%` as wildcards, and real tenant
     # ids contain underscores (u_<hex>), so 'u_abc' would also match a
     # lookalike 'uXabc' row on this money query (G-14).
+    from modules.x402.income_chains import income_predicate
+    chain_filter, chain_args = income_predicate()
     settled = await database.fetch_one(
-        """SELECT COALESCE(SUM(amount_usd), 0) AS usd, COUNT(*) AS n
+        f"""SELECT COALESCE(SUM(amount_usd), 0) AS usd, COUNT(*) AS n
            FROM x402_payment_requests
            WHERE (user_id = ? OR json_extract(metadata, '$.tenant_id') = ?)
-             AND status IN ('completed', 'settled_no_tx')
+             AND {chain_filter} AND status = 'completed'
              AND created_at >= datetime('now', ?)""",
-        (user_id, user_id, f"-{int(days)} day"),
+        (user_id, user_id, *chain_args, f"-{int(days)} day"),
     )
     pending = await database.fetch_one(
-        """SELECT COALESCE(SUM(amount_usd), 0) AS usd, COUNT(*) AS n
+        f"""SELECT COALESCE(SUM(amount_usd), 0) AS usd, COUNT(*) AS n
            FROM x402_payment_requests
-           WHERE (user_id = ? OR json_extract(metadata, '$.tenant_id') = ?) AND status = 'pending'""",
-        (user_id, user_id),
+           WHERE (user_id = ? OR json_extract(metadata, '$.tenant_id') = ?) AND {chain_filter} AND status = 'pending'""",
+        (user_id, user_id, *chain_args),
     )
     # D11 (2026-09-21): money we TOOK and must give back is neither income nor
     # pending — it is its own line, or the ledger reads richer than it is.
     refund = await database.fetch_one(
-        """SELECT COALESCE(SUM(amount_usd), 0) AS usd, COUNT(*) AS n
+        f"""SELECT COALESCE(SUM(amount_usd), 0) AS usd, COUNT(*) AS n
            FROM x402_payment_requests
-           WHERE (user_id = ? OR json_extract(metadata, '$.tenant_id') = ?) AND status = 'refund_due'""",
-        (user_id, user_id),
+           WHERE (user_id = ? OR json_extract(metadata, '$.tenant_id') = ?) AND {chain_filter} AND status = 'refund_due'""",
+        (user_id, user_id, *chain_args),
     )
     return {
         "income_usd": round(float(settled.get("usd") or 0), 6) if settled else 0.0,

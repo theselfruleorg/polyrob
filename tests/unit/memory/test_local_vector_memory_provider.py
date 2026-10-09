@@ -291,3 +291,23 @@ async def test_before_id_pagination_narrows_result_set(db_path):
     ids2 = _ids(page2)
     assert ids2 and set(ids1).isdisjoint(ids2)
     assert all(i < min(ids1) for i in ids2)
+
+
+@requires_vec
+async def test_kb_secrets_are_scrubbed_before_embedding_and_storage(db_path):
+    seen = []
+    class RecordingEmbedder(FakeEmbedder):
+        def encode(self, text):
+            seen.append(text)
+            return super().encode(text)
+    p = LocalVectorMemoryProvider(db_path, embedding_model=RecordingEmbedder())
+    secret = 'sk-proj-' + 's' * 48
+    assert await p.kb_replace_source(user_id='u1', collection='docs', source_path='a',
+                                     source_hash='hash', chunks=['postgres ' + secret])
+    assert await p.kb_ingest_chunk(user_id='u1', collection='docs', source_path='b',
+                                   source_hash='hash2', chunk_idx=0, content='invoice ' + secret)
+    assert seen and all(secret not in text for text in seen)
+    from core.sqlite_util import wal_connect
+    with wal_connect(db_path) as conn:
+        rows = conn.execute('SELECT content FROM kb_chunks').fetchall()
+    assert len(rows) == 2 and secret not in repr([tuple(r) for r in rows])

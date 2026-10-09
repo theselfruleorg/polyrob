@@ -27,6 +27,7 @@ BASE = frozenset({
     "packaging", "pillow", "prompt_toolkit", "pyasn1", "pydantic",
     "pydantic-settings", "pyjwt", "python-dotenv", "pyyaml", "requests", "rich",
     "tiktoken",
+    "multidict",  # Already required by aiohttp; explicit security floor for every install.
 })
 
 

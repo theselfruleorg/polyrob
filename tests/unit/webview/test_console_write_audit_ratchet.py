@@ -45,6 +45,8 @@ _ALLOWLIST = {
     # cookie, not console/agent state) and the session-repair rail.
     "internal_emit", "receive_stream_chunk", "send_message_to_session",
     "owner_login_submit", "api_repair",
+    # Logout only revokes the caller's session in the durable token denylist.
+    "logout",
     # 043 A17: the cold-open front door. It creates NOTHING of its own — it
     # either hands the body to the api tier's ``create_session`` unchanged, or
     # answers a known owner verb through the SAME dispatcher the bound-chat

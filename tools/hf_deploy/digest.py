@@ -14,7 +14,6 @@ it refuses (returns
 the coding-finalization "did you edit without re-testing" check uses) rather
 than adding new session-timestamp state.
 """
-import hashlib
 import os
 
 from agents.task.runtime.edit_verify import TEST_ACTIONS as _TEST_ACTIONS
@@ -32,23 +31,11 @@ def compute_workspace_digest(root: str) -> str:
     because the snapshot refuses them, and an otherwise-empty directory
     contributes nothing — only FILES are hashed.
     """
-    root = os.path.abspath(root)
-    paths = {rel: full for rel, full in walk_shippable(root)}
-
-    h = hashlib.sha256()
-    for rel in sorted(paths):
-        h.update(rel.encode("utf-8", errors="replace"))
-        h.update(b"\x00")
-        try:
-            with open(paths[rel], "rb") as f:
-                h.update(f.read())
-        except OSError:
-            pass  # a file that vanished mid-walk contributes no bytes, not a crash
-        h.update(b"\x00")
-    return h.hexdigest()
+    from core.ship_tree import tree_digest
+    return tree_digest(root)
 
 
-def tested_tree_digest(orch, root: str):
+def tested_tree_digest(orch, root: str, session_id: str = None):
     """Return ``(digest, None)`` when the tree is safe to ship, else
     ``(None, reason)``.
 
@@ -58,7 +45,10 @@ def tested_tree_digest(orch, root: str):
     - the session ledger shows no SUCCESSFUL ``run_tests`` at all;
     - a code-edit action (``str_replace``/``apply_patch``/``create_file``/
       ``move_file``/``delete_file``) succeeded after the last green
-      ``run_tests`` (``edited_since_last_test``).
+      ``run_tests`` (``edited_since_last_test``);
+    - any shipped file differs from the tree that green run finished against
+      (``core.ship_tree.untested_changes`` — catches a shell, job or
+      ``run_code`` write the ledger cannot see).
 
     Only on all three checks passing is the CURRENT tree digest computed and
     returned as the "tested" digest — this call reuses the ledger walk rather
@@ -93,5 +83,17 @@ def tested_tree_digest(orch, root: str):
 
     if edited_since_last_test(orch):
         return None, "the workspace was edited after the last green run_tests — re-run tests before deploying"
+
+    # The ledger only sees the coding edit verbs; a shell/job/run_code write
+    # after the green run is caught here, by comparing the tree itself.
+    from core.ship_tree import untested_changes
+    try:
+        changed = untested_changes(session_id or getattr(orch, "session_id", None), root)
+    except Exception:
+        changed = None
+    if changed:
+        shown = ", ".join(changed[:3]) + (f" (+{len(changed) - 3} more)" if len(changed) > 3 else "")
+        return None, (f"{len(changed)} file(s) changed after the last green run_tests: {shown} "
+                      "— re-run tests before deploying")
 
     return compute_workspace_digest(root), None

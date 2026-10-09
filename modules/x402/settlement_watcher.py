@@ -156,9 +156,8 @@ class SettlementWatcher(SettlementScanMixin, SettlementNotifyMixin,
             expired = await invoicing.expire_stale_requests(db=self._db)
         except Exception:
             logger.warning("settlement watcher: expiry sweep failed", exc_info=True)
-        # H7: heal invoices stranded in 'settling' (a claim that never completed
-        # because the settling task was cancelled/crashed mid facilitator
-        # round-trip) — nothing else ever re-checks 'settling'.
+        # Compatibility sweep: unconfirmed submissions require reconciliation;
+        # elapsed time is never proof that a payer was not charged.
         settling_reverted = 0
         try:
             settling_reverted = await self._sweep_stale_settling()
@@ -175,12 +174,10 @@ class SettlementWatcher(SettlementScanMixin, SettlementNotifyMixin,
         notified = 0
         for inv in settled:
             try:
-                # Task 14: apply a subscription renewal's settlement BEFORE the
-                # wake claim-then-notify below — it has its OWN idempotency key
-                # (subscription_applied_settlements, keyed on request_id), so it
-                # is safe to attempt regardless of which watcher process (if
-                # any) wins the wake_delivered claim, and must never be skipped
-                # just because a concurrent process already claimed the wake.
+                if await self._skip_unvalued_settlement(inv):
+                    continue
+                # Renewal application has its own idempotency key and must
+                # precede the separate wake claim, including concurrent ticks.
                 if inv.get("subscription_id"):
                     if not subs_enabled:
                         # M6: a settled renewal invoice while SUBSCRIPTIONS_ENABLED

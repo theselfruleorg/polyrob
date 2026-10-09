@@ -169,18 +169,12 @@ def _wallet_leg(user_id: str, days: int) -> Dict[str, Any]:
         if log is None:
             return {"wallet_spend_usd": 0.0, "wallet_payments": 0,
                     "wallet_metering": "on"}
-        events = log.query(
+        totals = log.aggregate(
             kind="wallet_spend", user_id=user_id,
-            since_ts=time.time() - days * 86400, limit=1000,
+            since_ts=time.time() - days * 86400,
         )
-        total = 0.0
-        for ev in events or []:
-            attrs = ev.get("attrs") or {}
-            try:
-                total += float(attrs.get("amount_usd") or 0)
-            except (TypeError, ValueError):
-                continue
-        return {"wallet_spend_usd": round(total, 6), "wallet_payments": len(events or []),
+        return {"wallet_spend_usd": round(totals["wallet_spend_usd"], 6),
+                "wallet_payments": totals["counts_by_kind"].get("wallet_spend", 0),
                 "wallet_metering": "on"}
     except Exception:
         logger.warning("ledger: wallet_spend leg unavailable", exc_info=True)

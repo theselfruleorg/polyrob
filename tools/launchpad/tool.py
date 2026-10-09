@@ -182,8 +182,8 @@ class LaunchpadTool(WalletHolderMixin, BaseTool):
         if self._price_fn:
             return self._price_fn(chain, addr)
         # 071: the one read layer; a DISPUTED quote yields None.
-        from tools.defi.price_sources import indexer_price
-        return indexer_price(chain, addr)
+        from tools.defi.price_sources import spend_price
+        return spend_price(chain, addr)
 
     def _native_worth_text(self, wei: int) -> str:
         """USD worth of a native amount, computed here so the model never has to.
@@ -408,6 +408,7 @@ class LaunchpadTool(WalletHolderMixin, BaseTool):
             f"there is no second claim to make afterwards.\n")
         return await execute.guarded_send(
             self, execution_context=execution_context, verb="claim",
+            intent_data=params.model_dump_json(exclude={"dry_run", "max_spend_usd"}),
             chain=P.CHAIN, to=built["to"], calldata=built["calldata"],
             value_wei=0, max_spend_usd=params.max_spend_usd,
             dry_run=params.dry_run, header=header,
@@ -428,19 +429,20 @@ class LaunchpadTool(WalletHolderMixin, BaseTool):
         if err:
             return self._ar(error=err)
 
-        decimals = 18
+        from core.wallet.tokens import raw_amount
         try:
+            decimals = pons.token_decimals(
+                self._rpc, record["pairToken"] if side == "buy" else state.token)
+            raw_in = raw_amount(params.amount, decimals)
             if side == "buy":
-                raw_in = int(round(params.amount * 10 ** decimals))
                 out, legs = pons.quote_buy(state, raw_in)
                 body = (f"  spend:  {params.amount:g} quote ({raw_in} raw)\n"
                         f"  RECEIVE: {out} raw tokens\n")
             else:
-                raw_in = int(round(params.amount * 10 ** 18))
                 out, legs = pons.quote_sell(state, raw_in)
                 body = (f"  sell:   {params.amount:g} tokens ({raw_in} raw)\n"
                         f"  RECEIVE: {out} raw quote\n")
-        except pons.PonsError as exc:
+        except (pons.PonsError, ValueError) as exc:
             return self._ar(error=f"refused: {exc}")
 
         return self._ar(content=(
@@ -488,9 +490,10 @@ class LaunchpadTool(WalletHolderMixin, BaseTool):
                 "the Pons factory has launches DISABLED right now — nothing "
                 "was broadcast."))
 
-        quote_in = int(round(params.buy_amount * 10 ** terms.pair_decimals))
+        from core.wallet.tokens import raw_amount
         socials = (params.twitter, "", "", params.website, "")
         try:
+            quote_in = raw_amount(params.buy_amount, terms.pair_decimals)
             if quote_in > 0:
                 min_out = self._opening_min_out(terms, quote_in, params.slippage_bps)
                 built = pons.build_launch_and_buy(
@@ -506,7 +509,7 @@ class LaunchpadTool(WalletHolderMixin, BaseTool):
                     creator=creator, logo=params.logo,
                     description=params.description, socials=socials,
                     creator_tax_bps=params.creator_tax_bps)
-        except pons.PonsError as exc:
+        except (pons.PonsError, ValueError) as exc:
             return self._ar(error=f"refused: {exc}")
 
         header = (
@@ -532,6 +535,7 @@ class LaunchpadTool(WalletHolderMixin, BaseTool):
 
         return await execute.guarded_send(
             self, execution_context=execution_context, verb="launch",
+            intent_data=params.model_dump_json(exclude={"dry_run", "max_spend_usd"}),
             chain=P.CHAIN, to=built["to"], calldata=built["calldata"],
             value_wei=built["value_wei"], max_spend_usd=params.max_spend_usd,
             dry_run=params.dry_run, header=header, on_receipt=_on_receipt)
@@ -597,10 +601,11 @@ class LaunchpadTool(WalletHolderMixin, BaseTool):
         if _why:
             return self._ar(error=_why)
 
-        quote_in = int(round(params.amount * 10 ** 18))
+        from core.wallet.tokens import raw_amount
         try:
+            quote_in = raw_amount(params.amount, 18)
             expected, legs = pons.quote_buy(state, quote_in)
-        except pons.PonsError as exc:
+        except (pons.PonsError, ValueError) as exc:
             return self._ar(error=f"refused: {exc}")
         min_out = expected * (10_000 - params.slippage_bps) // 10_000
         if min_out <= 0:
@@ -619,6 +624,7 @@ class LaunchpadTool(WalletHolderMixin, BaseTool):
 
         return await execute.guarded_send(
             self, execution_context=execution_context, verb="buy",
+            intent_data=params.model_dump_json(exclude={"dry_run", "max_spend_usd"}),
             chain=P.CHAIN, to=built["to"], calldata=built["calldata"],
             value_wei=built["value_wei"], max_spend_usd=params.max_spend_usd,
             dry_run=params.dry_run, header=header,
@@ -646,10 +652,11 @@ class LaunchpadTool(WalletHolderMixin, BaseTool):
                 f"with defi_trade.swap, not here."))
 
         native = record["pairToken"].lower() == P.NATIVE_PAIR.lower()
-        tokens_in = int(round(params.amount * 10 ** 18))
+        from core.wallet.tokens import raw_amount
         try:
+            tokens_in = raw_amount(params.amount, pons.token_decimals(self._rpc, state.token))
             expected, legs = pons.quote_sell(state, tokens_in)
-        except pons.PonsError as exc:
+        except (pons.PonsError, ValueError) as exc:
             return self._ar(error=f"refused: {exc}")
         min_out = expected * (10_000 - params.slippage_bps) // 10_000
         if min_out <= 0:
@@ -668,6 +675,7 @@ class LaunchpadTool(WalletHolderMixin, BaseTool):
 
         return await execute.guarded_send(
             self, execution_context=execution_context, verb="sell",
+            intent_data=params.model_dump_json(exclude={"dry_run", "max_spend_usd"}),
             chain=P.CHAIN, to=built["to"], calldata=built["calldata"],
             value_wei=0, max_spend_usd=params.max_spend_usd,
             dry_run=params.dry_run, header=header,

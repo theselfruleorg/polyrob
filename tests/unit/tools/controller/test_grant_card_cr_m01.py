@@ -73,6 +73,16 @@ def test_extras_past_the_cap_carry_a_more_marker():
     assert "+4 more param(s)" in card
 
 
+@pytest.mark.parametrize("reply_lines", [True, False])
+@pytest.mark.parametrize("field", ["max_usd", "size_usd"])
+def test_venue_usd_amount_is_always_shown_on_each_seat(field, reply_lines):
+    params = {f"extra{i}": i for i in range(20)}
+    params[field] = 123.45
+    params["size"] = 10
+    card = render_grant_card("venue_order", params, "tap-1", reply_lines=reply_lines)
+    assert f"Amount: 123.45 ({field})" in card
+
+
 def test_truncated_value_names_how_much_is_hidden():
     card = render_grant_card("shell_run", {"command": "x" * 500}, "tap-4")
     assert "(+441 chars)" in card

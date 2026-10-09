@@ -11,7 +11,6 @@ from email import encoders
 from datetime import datetime
 import imaplib
 import email
-from email.header import decode_header
 import os
 import asyncio
 
@@ -21,6 +20,7 @@ from core.config import BotConfig
 from core.exceptions import ConfigurationError, APIError, AuthenticationError, ToolError
 from tools.base_tool import BaseTool, ToolStatus
 from tools.controller.types import ActionResult
+from tools.email_providers.mime import _decode, auto_headers, is_auto_generated
 
 
 # Memory of rejected SMTP logins. 057 WS-F moved it into the DURABLE core-tier
@@ -102,15 +102,64 @@ def smtp_credentials_rejected() -> bool:
     return rejected_within("smtp", SMTP_AUTH_BACKOFF_SEC)
 
 class EmailSendAction(BaseModel):
-    """Send an email. Only the owner's email or an owner-allowlisted address is
-    permitted as `to`; other targets are denied (mirrors the `message` action's
-    tier gate — see tools/controller/message_send.py)."""
+    """Send an email. EVERY recipient (to, cc and bcc) must pass the same tier
+    gate as the `message` action: the owner's email, an owner-allowlisted
+    address, or a capped first contact under an open/domains outbound policy
+    (see tools/controller/message_send.py). One denied address refuses the send."""
     model_config = ConfigDict(extra="forbid")
-    to: str = Field(..., description="Recipient email address.")
+    to: str = Field(..., description="Recipient email address. Several: separate with commas.")
     subject: str = Field(..., min_length=1)
-    body: str = Field(..., min_length=1)
+    body: str = Field(..., min_length=1, description="Plain-text body.")
+    cc: List[str] = Field(default_factory=list, description="Cc addresses.")
+    bcc: List[str] = Field(default_factory=list, description="Bcc addresses.")
+    html: Optional[str] = Field(default=None, description="Optional HTML version of the body.")
+    attachments: List[str] = Field(
+        default_factory=list,
+        description="Files to attach: paths inside this session's workspace.")
 
-class EmailTool(BaseTool):
+class EmailReadMachineMailAction(BaseModel):
+    """Read the agent's own machine-sent mail (activation links, verification codes)."""
+    model_config = ConfigDict(extra="forbid")
+    sender_contains: Optional[str] = Field(
+        None, description="Only mail whose From contains this text (e.g. 'magicians').")
+    limit: int = Field(10, ge=1, le=500, description="How many recent messages to scan.")
+
+
+# Machine senders only: a human's mail reaches the agent through the gated email
+# SURFACE (owner / allowlisted / correspondent tiers), never through this read.
+_MACHINE_SENDER_MARKERS = ("noreply", "no-reply", "no_reply", "donotreply", "do-not-reply",
+                           "notifications", "notification", "mailer")
+_READ_SCAN_CAP = 50
+_READ_BODY_CAP = 2000
+
+
+def _is_machine_sender(from_header: str) -> bool:
+    addr = from_header.rsplit("<", 1)[-1].rstrip(">").strip().lower()
+    local = addr.split("@", 1)[0]
+    return any(m in local for m in _MACHINE_SENDER_MARKERS)
+
+
+def split_addresses(value: Union[str, List[str], None]) -> List[str]:
+    """``"a@x, b@y"`` / ``["a@x"]`` / None -> a clean, de-duplicated address list."""
+    if not value:
+        return []
+    items = value if isinstance(value, list) else str(value).replace(";", ",").split(",")
+    out: List[str] = []
+    for item in items:
+        addr = str(item or "").strip()
+        if addr and addr.lower() not in {a.lower() for a in out}:
+            out.append(addr)
+    return out
+
+
+#: Tier order for a multi-recipient send: the MOST open recipient decides the
+#: pause/cap rules, so adding the owner on cc never loosens a stranger send.
+_TIER_RANK = {"owner": 0, "allowlisted": 1, "open": 2}
+
+from tools.email_mailbox import EmailMailboxMixin  # noqa: E402
+
+
+class EmailTool(EmailMailboxMixin, BaseTool):
     """Service for handling email communication."""
     
     # Default email server settings
@@ -339,6 +388,14 @@ class EmailTool(BaseTool):
                 self.imap_connection.logout()
                 self.imap_connection = None
 
+            # Close the mailbox verbs' own IMAP connection (tools/email_mailbox.py)
+            if self._mbox_conn is not None:
+                try:
+                    self._mbox_conn.logout()
+                except Exception:
+                    pass
+                self._mbox_conn = None
+
             # Close the managed-inbox HTTP client
             if self.agentmail is not None:
                 await self.agentmail.aclose()
@@ -414,7 +471,8 @@ class EmailTool(BaseTool):
         user, password = self.config.gmail_email, self.config.gmail_app_password
 
         def _open():
-            conn = imaplib.IMAP4_SSL(self.imap_server, timeout=IMAP_TIMEOUT_S)
+            conn = imaplib.IMAP4_SSL(self.imap_server, timeout=IMAP_TIMEOUT_S,
+                                   ssl_context=ssl.create_default_context())
             try:
                 conn.login(user, password)
             except BaseException:
@@ -455,6 +513,20 @@ class EmailTool(BaseTool):
         part.add_header('Content-Disposition', 'attachment', filename=filename)
         outer_msg.attach(part)
 
+    @staticmethod
+    def _attach_bytes(outer_msg: MIMEMultipart, part: Dict[str, Any]) -> None:
+        """Attach an in-memory ``{filename, mime, data}`` part (a forwarded file)."""
+        data = part.get("data")
+        if not data:
+            return
+        maintype, _, subtype = str(part.get("mime") or "application/octet-stream").partition("/")
+        mime = MIMEBase(maintype or "application", subtype or "octet-stream")
+        mime.set_payload(data)
+        encoders.encode_base64(mime)
+        mime.add_header('Content-Disposition', 'attachment',
+                        filename=str(part.get("filename") or "attachment"))
+        outer_msg.attach(mime)
+
     async def send_email(
         self,
         to_email: Union[str, List[str]],
@@ -489,6 +561,7 @@ class EmailTool(BaseTool):
         attachments: Optional[List[str]] = None,
         in_reply_to: Optional[str] = None,
         references: Optional[str] = None,
+        extra_files: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
         """Send an email, returning the minted RFC 5322 Message-ID (A3, 2026-07-13).
 
@@ -510,6 +583,8 @@ class EmailTool(BaseTool):
                 sends with whatever attachments succeeded (never loses the body).
             in_reply_to: Message-ID of the mail this replies to (sets In-Reply-To).
             references: References header value (defaults to in_reply_to when unset).
+            extra_files: in-memory parts ``{filename, mime, data}`` (a forward
+                carries the original mail's attachments this way).
 
         Returns:
             str: the Message-ID stamped on the sent mail
@@ -528,7 +603,7 @@ class EmailTool(BaseTool):
             return await self.agentmail.send(
                 to_email, subject, body, html=html, cc=cc, bcc=bcc,
                 attachments=attachments, in_reply_to=in_reply_to,
-                references=references)
+                references=references, extra_parts=extra_files)
 
         try:
             # Create message. With attachments the structure is
@@ -537,7 +612,7 @@ class EmailTool(BaseTool):
             # render the alternative part but ignore attachments. Without
             # attachments, keep the original flat multipart/alternative shape
             # byte-identical to preserve today's behaviour.
-            if attachments:
+            if attachments or extra_files:
                 msg = MIMEMultipart('mixed')
                 body_part = MIMEMultipart('alternative')
             else:
@@ -589,13 +664,15 @@ class EmailTool(BaseTool):
             if html:
                 body_part.attach(MIMEText(html, 'html'))
 
-            if attachments:
+            if attachments or extra_files:
                 msg.attach(body_part)
-                for path in attachments:
+                for path in attachments or []:
                     try:
                         self._attach_file(msg, path)
                     except Exception as e:
                         self.logger.warning(f"send_email: skipping unreadable attachment '{path}': {e}")
+                for part in extra_files or []:
+                    self._attach_bytes(msg, part)
 
             # Get all recipients
             all_recipients = []
@@ -643,22 +720,48 @@ class EmailTool(BaseTool):
             raise APIError(f"Failed to send email: {str(e)}")
 
     @BaseTool.action(
-        "Send an email with YOUR subject line to one address, from the agent's own "
-        "mailbox. For a file attachment or a threaded reply use message(surface='email'). "
-        "Allowed targets: the owner's email, an owner-allowlisted address, or (when "
-        "the owner set an open/domains outbound policy) a capped first contact; "
-        "anything else is refused, and only the owner can allow it (/allow email "
-        "<address>). An autonomous run obeys the same gate as `message`.",
+        "Send an email from the agent's own mailbox: your subject, a plain body, "
+        "optional html, cc/bcc and workspace-file attachments. To answer a mail you "
+        "received use email_reply (it keeps the thread); to pass one on use "
+        "email_forward. EVERY recipient must be allowed: the owner's email, an "
+        "owner-allowlisted address, or (when the owner set an open/domains outbound "
+        "policy) a capped first contact; anything else is refused, and only the "
+        "owner can allow it (/allow email <address>). An autonomous run obeys the "
+        "same gate as `message`.",
         param_model=EmailSendAction,
     )
     async def email_send(self, params: EmailSendAction, execution_context=None) -> ActionResult:
-        """Agent-callable send, gated the same way as the generic `message` action
-        (tools/controller/message_send.py): resolve owner/allowlisted/open/denied
-        tier, apply the open-tier daily-send cap, seed a correspondent binding
-        before sending, then send via SMTP directly (no MessageRouter hop needed
-        — this tool owns its own SMTP connection). On a first-contact open-tier
-        send, reports it (telemetry + owner notice) after the send succeeds."""
+        """Agent-callable send. All gating lives in :meth:`_gated_send`."""
+        return await self._gated_send(
+            execution_context, action="email_send",
+            to=split_addresses(params.to), cc=split_addresses(params.cc),
+            bcc=split_addresses(params.bcc), subject=params.subject, body=params.body,
+            html=params.html, attachments=list(params.attachments or []))
+
+    async def _gated_send(self, execution_context, *, action: str, to: List[str],
+                          subject: str, body: str, cc: Optional[List[str]] = None,
+                          bcc: Optional[List[str]] = None, html: Optional[str] = None,
+                          attachments: Optional[List[str]] = None,
+                          in_reply_to: Optional[str] = None,
+                          references: Optional[str] = None,
+                          extra_files: Optional[List[Dict[str, Any]]] = None) -> ActionResult:
+        """The ONE gated outbound rail for every email verb (send/reply/forward),
+        gated the same way as the generic `message` action
+        (tools/controller/message_send.py): the forged/autonomous gate, the
+        owner/allowlisted/open/denied tier of EVERY recipient, the owner pause,
+        the secret scrub, the owner-resend cooldown, the open-tier daily cap,
+        a correspondent seed before sending, then the send, the transcript record
+        and the thread anchor. On a first-contact open-tier send, reports it
+        (telemetry + owner notice) after the send succeeds.
+
+        ``extra_files`` are in-memory parts (``{filename, mime, data}``) that a
+        forward carries from the original mail; they never touch the disk."""
         import os as _os
+
+        cc, bcc = list(cc or []), list(bcc or [])
+        recipients = split_addresses(list(to) + cc + bcc)
+        if not recipients:
+            return ActionResult(error=f"{action}: no recipient", include_in_memory=True)
 
         # Review E3: the SAME forged/autonomous gate as the `message` action
         # (tools/controller/turn_origin.py) — this tool is the second outbound
@@ -670,7 +773,7 @@ class EmailTool(BaseTool):
         refusal = _autonomous_message_refusal(execution_context, None)
         if refusal is not None:
             return ActionResult(
-                error=(refusal.extracted_content or "").replace("message:", "email_send:", 1),
+                error=(refusal.extracted_content or "").replace("message:", f"{action}:", 1),
                 include_in_memory=True)
 
         from core.instance import resolve_owner_email
@@ -700,14 +803,19 @@ class EmailTool(BaseTool):
         home_dir = prefs_home_dir() if self.container is not None else None
         policy, domains = resolve_outbound_policy(user_id, "email", home_dir=home_dir)
 
-        tier = resolve_target_tier(surface="email", target=params.to, user_id=user_id,
-                                   allowlist=allowlist, owner_targets=owner_targets,
-                                   policy=policy, domains=domains)
-        if tier == "denied":
+        tiers = {addr: resolve_target_tier(surface="email", target=addr, user_id=user_id,
+                                           allowlist=allowlist, owner_targets=owner_targets,
+                                           policy=policy, domains=domains)
+                 for addr in recipients}
+        denied = [a for a, t in tiers.items() if t == "denied"]
+        if denied:
             return ActionResult(
                 error=("target not on owner allowlist; only the owner can allow "
-                       f"it: /allow email {params.to}"),
+                       "it: " + "; ".join(f"/allow email {a}" for a in denied)),
                 include_in_memory=True)
+        tier = max(tiers.values(), key=lambda t: _TIER_RANK.get(t, 2))
+        non_owner = [a for a, t in tiers.items() if t != "owner"]
+        open_targets = [a for a, t in tiers.items() if t == "open"]
 
         # D9 (2026-09-21 interface audit): the 031 owner pause, the SAME probe
         # `perform_message_send` applies. This escape-hatch send had none, so
@@ -718,9 +826,17 @@ class EmailTool(BaseTool):
         from tools.controller.message_send import message_pause_refusal
         pause_refusal = message_pause_refusal(execution_context, None, tier=tier)
         if pause_refusal is not None:
-            self.logger.info("email_send refused by owner pause: %s (%s)",
-                             params.to, pause_refusal)
+            self.logger.info("%s refused by owner pause: %s (%s)",
+                             action, ", ".join(recipients), pause_refusal)
             return ActionResult(error=pause_refusal, include_in_memory=True)
+
+        # Attachments are confined to the session workspace and screened BEFORE
+        # anything is recorded — an arbitrary path is an exfiltration rail.
+        session_id = getattr(execution_context, "session_id", None) or ""
+        files, err = self._screen_attachments(list(attachments or []), session_id, user_id)
+        if err:
+            return ActionResult(error=f"{action}: attachment rejected: {err}",
+                                include_in_memory=True)
 
         # D66: scrub secret SHAPES out of the body and subject before anything
         # else looks at them. `MessageRouter.publish` does this for every routed
@@ -732,10 +848,12 @@ class EmailTool(BaseTool):
         # spellings of the body make the hashes unmatchable, which does not
         # loosen the gate — it kills it while it still looks present.
         from core.secret_scrub import scrub_secret_shapes
-        body = scrub_secret_shapes(params.body or "")
-        subject = scrub_secret_shapes(params.subject or "")
-        if body != (params.body or "") or subject != (params.subject or ""):
-            self.logger.warning("email_send: redacted a secret shape before delivery")
+        raw_body, raw_subject, raw_html = body or "", subject or "", html or ""
+        body = scrub_secret_shapes(raw_body)
+        subject = scrub_secret_shapes(raw_subject)
+        html = scrub_secret_shapes(raw_html) or None
+        if body != raw_body or subject != raw_subject or (html or "") != raw_html:
+            self.logger.warning("%s: redacted a secret shape before delivery", action)
 
         # 2026-08-29: this escape-hatch send bypassed the same owner-resend
         # cooldown the generic `message` tool enforces (tools/controller/
@@ -744,37 +862,38 @@ class EmailTool(BaseTool):
         # same report twice within minutes. Mirror that gate here.
         try:
             from tools.controller.turn_origin import _autonomous_owner_resend_cooldown_refusal
-            cooldown_refusal = _autonomous_owner_resend_cooldown_refusal(
-                execution_context, None, container=self.container, user_id=user_id,
-                surface="email", target=params.to, owner_targets=owner_targets,
-                # The BODY alone — `store.record_outbound` below writes exactly
-                # this, and the gate compares content hashes. Passing
-                # subject+body made the hashes unmatchable, which does not
-                # loosen the gate, it kills it while it still looks present.
-                text=body)
-            if cooldown_refusal is not None:
-                return cooldown_refusal
+            for addr in recipients:
+                cooldown_refusal = _autonomous_owner_resend_cooldown_refusal(
+                    execution_context, None, container=self.container, user_id=user_id,
+                    surface="email", target=addr, owner_targets=owner_targets,
+                    # The BODY alone — `store.record_outbound` below writes exactly
+                    # this, and the gate compares content hashes. Passing
+                    # subject+body made the hashes unmatchable, which does not
+                    # loosen the gate, it kills it while it still looks present.
+                    text=body)
+                if cooldown_refusal is not None:
+                    return cooldown_refusal
         except Exception:
-            self.logger.debug("email_send owner cooldown check skipped (fail-open)", exc_info=True)
-
-        session_id = getattr(execution_context, "session_id", None) or ""
+            self.logger.debug("%s owner cooldown check skipped (fail-open)", action,
+                              exc_info=True)
 
         store = None
-        if tier != "owner" and self.container is not None:
+        if non_owner and self.container is not None:
             try:
                 store = self.container.get_service("conversation_store")
             except Exception:
                 store = None
 
         # T6: the open-tier (incl. a domains-match) daily send is capped
-        # tenant+surface-wide, checked BEFORE the seed rail.
-        if tier == "open" and store is not None:
+        # tenant+surface-wide, checked BEFORE the seed rail. Each open-tier
+        # recipient is one send against the cap.
+        if open_targets and store is not None:
             cap = resolve_outbound_daily_cap(user_id, home_dir=home_dir)
             try:
                 sent_today = store.outbound_count_surface_since(user_id, "email", 86400)
             except Exception:
                 sent_today = 0  # fail-open: a query fault must never block the send
-            if sent_today >= cap:
+            if sent_today + len(open_targets) > cap:
                 return ActionResult(
                     error=(f"outbound daily send cap ({cap}) reached for email; "
                            "owner can raise outbound.daily_send_cap"),
@@ -783,30 +902,37 @@ class EmailTool(BaseTool):
         # T6: first-contact MUST be detected before the send (see
         # tools/controller/message_send.py for why the seed state alone can't
         # tell new-vs-existing).
-        first_contact = False
-        if store is not None and tier != "owner":
-            try:
-                first_contact = store.get(user_id, "email", params.to) is None
-            except Exception:
-                first_contact = False
+        first_contacts: List[str] = []
+        if store is not None:
+            for addr in open_targets:
+                try:
+                    if store.get(user_id, "email", addr) is None:
+                        first_contacts.append(addr)
+                except Exception:
+                    pass
 
-        if tier != "owner" and self.container is not None:
-            try:
-                from core.surfaces.seed import maybe_seed_correspondent
-                seed_state = maybe_seed_correspondent(
-                    self.container, surface="email", address=params.to,
-                    session_id=session_id, user_id=user_id, provenance="owner")
-            except Exception as e:  # fail-soft: a seed fault must not block the send
-                self.logger.debug(f"email_send correspondent seed skipped: {e}")
-                seed_state = None
-            if seed_state == "refused":
-                return ActionResult(
-                    error=("correspondent per-day cap reached — reply binding "
-                           "refused; email not sent"),
-                    include_in_memory=True)
+        if self.container is not None:
+            for addr in non_owner:
+                try:
+                    from core.surfaces.seed import maybe_seed_correspondent
+                    seed_state = maybe_seed_correspondent(
+                        self.container, surface="email", address=addr,
+                        session_id=session_id, user_id=user_id, provenance="owner")
+                except Exception as e:  # fail-soft: a seed fault must not block the send
+                    self.logger.debug(f"{action} correspondent seed skipped: {e}")
+                    seed_state = None
+                if seed_state == "refused":
+                    return ActionResult(
+                        error=("correspondent per-day cap reached — reply binding "
+                               "refused; email not sent"),
+                        include_in_memory=True)
 
         try:
-            message_id = await self.send_email_ex(params.to, subject, body)
+            message_id = await self.send_email_ex(
+                to if len(to) != 1 else to[0], subject, body, html=html,
+                cc=cc or None, bcc=bcc or None, attachments=files or None,
+                in_reply_to=in_reply_to, references=references,
+                extra_files=extra_files or None)
         except Exception as e:
             return ActionResult(error=f"send failed: {e}", include_in_memory=True)
 
@@ -818,22 +944,23 @@ class EmailTool(BaseTool):
                     # D31: the minted Message-ID was DROPPED here, so the
                     # transcript could not be threaded and a reply's
                     # In-Reply-To had nothing to match.
-                    store.record_outbound(user_id, "email", params.to, body,
-                                          mid=(str(message_id) if message_id else None),
-                                          subject=subject, session_id=session_id)
+                    for addr in recipients:
+                        store.record_outbound(user_id, "email", addr, body,
+                                              mid=(str(message_id) if message_id else None),
+                                              subject=subject, session_id=session_id)
             except Exception as e:
-                self.logger.warning("email_send conversation record skipped for %s: "
+                self.logger.warning("%s conversation record skipped for %s: "
                                     "%s — this outbound is missing from the "
-                                    "transcript", params.to, e, exc_info=True)
-            if message_id and tier != "owner":
-                self._seed_thread_anchor(params.to, str(message_id), user_id,
-                                         session_id)
+                                    "transcript", action, recipients, e, exc_info=True)
+            if message_id:
+                for addr in non_owner:
+                    self._seed_thread_anchor(addr, str(message_id), user_id, session_id)
 
         # T6: first-contact report — AFTER a successful send+record.
         # Only report for open-tier sends (allowlisted/supervised sends to known
         # correspondents are NOT "open contact" and should not fire this report).
-        if first_contact and tier == "open":
-            await notify_first_contact(self.container, user_id, session_id, "email", params.to)
+        for addr in first_contacts:
+            await notify_first_contact(self.container, user_id, session_id, "email", addr)
 
         # 057 WS-E: the per-rail proof rule rides WITH the receipt, from the ONE
         # table (core/rails/verification.py). Fail-open to "": an unavailable
@@ -843,11 +970,41 @@ class EmailTool(BaseTool):
             _proof = verification_line("email", message_id=message_id)
         except Exception:
             _proof = ""
+        attached = [os.path.basename(f) for f in files] + [
+            str(f.get("filename") or "attachment") for f in (extra_files or [])]
         return ActionResult(
-            extracted_content=(f"email[{tier}] -> {params.to} OK "
+            extracted_content=(f"email[{tier}] -> {', '.join(recipients)} OK "
                                f"(message-id {message_id})"
+                               + (f"; attached: {', '.join(attached)}" if attached else "")
                                + (f"\n{_proof}" if _proof else "")),
             include_in_memory=True)
+
+    def _screen_attachments(self, paths: List[str], session_id: str,
+                            user_id: str) -> "tuple[List[str], Optional[str]]":
+        """Workspace-confined, screened attachment paths — the SAME contract as
+        ``message(media_paths=…)`` (core/surfaces/attachments.py): inside the
+        session workspace, size cap, secret filename/content screen, injection
+        scan. Returns ``(real_paths, error)``."""
+        if not paths:
+            return [], None
+        from core.surfaces.attachments import (
+            message_media_max_mb, screen_attachment_path, validate_media_paths,
+        )
+        from tools.controller.message_send import _resolve_session_workspace
+        validated, err = validate_media_paths(
+            paths, _resolve_session_workspace(session_id, user_id))
+        if err:
+            return [], err
+        try:
+            from modules.memory.task.threat_scan import is_suspicious as _scanner
+        except ImportError:
+            _scanner = None
+        for real in validated:
+            reason = screen_attachment_path(real, max_mb=message_media_max_mb(),
+                                            scanner=_scanner)
+            if reason:
+                return [], f"{os.path.basename(real)}: {reason}"
+        return list(validated), None
 
     def _seed_thread_anchor(self, address: str, mid: str, user_id: str,
                             session_id: str) -> None:
@@ -869,6 +1026,50 @@ class EmailTool(BaseTool):
             self.logger.warning("email_send thread-anchor seed skipped for %s: %s "
                                 "— a reply may not route back", address, e,
                                 exc_info=True)
+
+    @BaseTool.action(
+        "Read your OWN machine-sent mail: account activation links and verification "
+        "codes from no-reply or auto-generated senders, so you can finish a sign-up yourself. Ordinary "
+        "correspondents' mail is not returned here (it reaches you through the normal email "
+        "channel; email_list/email_read reach any mail). "
+        "Read-only: nothing is marked read and nothing is answered.",
+        param_model=EmailReadMachineMailAction,
+    )
+    async def email_read_machine_mail(self, params: EmailReadMachineMailAction,
+                                      execution_context=None) -> ActionResult:
+        """Prod 2026-10-04: an authorized sign-up's activation mail was dropped by the
+        surface (auto-generated: never answered) and the agent had no way to read it.
+        Reads with the non-consuming `read_emails` (BODY.PEEK) and filters to machine
+        mail — a no-reply sender, or what the surface's `is_auto_generated` drops —
+        so the surface's UNSEEN queue and the human-mail gate are untouched."""
+        if not isinstance(params, EmailReadMachineMailAction):
+            from pydantic import TypeAdapter
+            params = TypeAdapter(EmailReadMachineMailAction).validate_python(params)
+        try:
+            mails = await self.read_emails(limit=min(params.limit, _READ_SCAN_CAP),
+                                           unread_only=False)
+        except Exception as e:
+            return ActionResult(error=f"Could not read the mailbox: {e}", include_in_memory=True)
+        needle = (params.sender_contains or "").lower()
+        rows = []
+        for m in reversed(mails or []):  # newest first
+            frm = str(m.get("from") or "")
+            # 0009: exactly what the surface refuses to answer (headers, ONE
+            # classifier) plus the no-reply sender names.
+            machine = _is_machine_sender(frm) or is_auto_generated(m)
+            if not machine or (needle and needle not in frm.lower()):
+                continue
+            body = (m.get("content") or m.get("html_content") or "")[:_READ_BODY_CAP]
+            rows.append(f"From: {frm}\nDate: {m.get('date', '')}\n"
+                        f"Subject: {m.get('subject', '')}\n\n{body}")
+        if not rows:
+            return ActionResult(
+                extracted_content="No machine-sent mail matched in the recent mailbox.",
+                include_in_memory=True)
+        return ActionResult(
+            extracted_content=f"📬 {len(rows)} machine-sent mail(s), newest first:\n\n"
+                              + "\n\n---\n\n".join(rows),
+            include_in_memory=True)
 
     async def read_emails(
         self,
@@ -947,18 +1148,14 @@ class EmailTool(BaseTool):
                         email_message = email.message_from_bytes(email_body)
                     
                         # Decode subject
-                        subject = decode_header(email_message["Subject"])[0]
-                        if isinstance(subject[0], bytes):
-                            subject = subject[0].decode(subject[1] or 'utf-8')
-                        else:
-                            subject = subject[0]
+                        # Every chunk, any charset (an 8-bit or unknown one used
+                        # to raise here and skip the whole mail).
+                        subject = _decode(email_message["Subject"])
                         
                         # Get sender
-                        from_header = decode_header(email_message["From"])[0]
-                        if isinstance(from_header[0], bytes):
-                            from_addr = from_header[0].decode(from_header[1] or 'utf-8')
-                        else:
-                            from_addr = from_header[0]
+                        # Every chunk: the first alone drops the address of an
+                        # encoded display name (`=?utf-8?q?Name?= <a@b>`).
+                        from_addr = _decode(email_message["From"])
                         
                         # Get date
                         date_str = email_message["Date"]
@@ -967,14 +1164,24 @@ class EmailTool(BaseTool):
                         content = ""
                         html_content = ""
                     
+                        def _text(part) -> str:
+                            # The part's OWN charset: a bare .decode() raised on a
+                            # latin-1/cp1252 body and the whole mail was skipped.
+                            payload = part.get_payload(decode=True) or b""
+                            try:
+                                return payload.decode(part.get_content_charset() or "utf-8",
+                                                      errors="replace")
+                            except LookupError:  # an unknown charset name
+                                return payload.decode("utf-8", errors="replace")
+
                         if email_message.is_multipart():
                             for part in email_message.walk():
                                 if part.get_content_type() == "text/plain":
-                                    content = part.get_payload(decode=True).decode()
+                                    content = _text(part)
                                 elif part.get_content_type() == "text/html":
-                                    html_content = part.get_payload(decode=True).decode()
+                                    html_content = _text(part)
                         else:
-                            content = email_message.get_payload(decode=True).decode()
+                            content = _text(email_message)
                         
                         emails.append({
                             'id': num.decode(),
@@ -982,7 +1189,10 @@ class EmailTool(BaseTool):
                             'from': from_addr,
                             'date': date_str,
                             'content': content,
-                            'html_content': html_content
+                            'html_content': html_content,
+                            # OS5 markers: `email_read_machine_mail` selects with
+                            # the surface's own `is_auto_generated` (0009).
+                            'headers': auto_headers(email_message),
                         })
                     
                     except Exception as e:
@@ -1029,6 +1239,8 @@ class EmailTool(BaseTool):
                 'html_content': full.get('html') or '',
                 'attachments': normalize_agentmail_attachments(
                     full.get('attachments')),
+                'headers': (full.get('headers')
+                            if isinstance(full.get('headers'), dict) else {}),
             })
         return emails
 
@@ -1104,4 +1316,4 @@ class EmailTool(BaseTool):
     async def ensure_initialized(self) -> None:
         """Ensure service is initialized."""
         if not self._initialized:
-            await self.initialize() 
+            await self.initialize()

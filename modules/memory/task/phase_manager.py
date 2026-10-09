@@ -27,6 +27,10 @@ from .hierarchical_memory import HierarchicalMemory, PhaseMemory, Step
 
 logger = logging.getLogger(__name__)
 
+# An in-session phase hint (boilerplate counts), never a cross-session fact:
+# drain_promoted_findings skips findings that start with it.
+STRATEGIC_CLUE_PREFIX = "[STRATEGIC CLUE FROM "
+
 
 class PhaseTransition:
     """Represents a single phase transition for tracking."""
@@ -480,7 +484,7 @@ class PhaseManager:
 
         # OPTIMIZATION: Add strategic clue to new phase (Task 3 - Nov 14, 2025)
         if strategic_clue:
-            clue_finding = f"[STRATEGIC CLUE FROM {old_phase.upper()}] {strategic_clue}"
+            clue_finding = f"{STRATEGIC_CLUE_PREFIX}{old_phase.upper()}] {strategic_clue}"
 
             # Embed clue
             clue_embedding = None

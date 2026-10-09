@@ -689,13 +689,15 @@ def fulfill(ask_id, answer, user):
     said, not only that it may go on.
     """
     tenant = _owner_tenant(user)
-    ok, unblocked = _goal_board().decide_ask(
+    from agents.task.goals.rail_answers import decision_note
+    board = _goal_board()
+    ok, unblocked = board.decide_ask(
         ask_id, user_id=tenant, approved=True, answer=" ".join(answer).strip())
     if not ok:
         click.echo(click.style(f"no open ask '{ask_id}' for tenant {tenant}", fg="yellow"))
         raise SystemExit(1)
     click.echo(click.style(
-        f"ask {ask_id} fulfilled — {unblocked} goal(s) unblocked", fg="green"))
+        f"ask {ask_id} fulfilled — {decision_note(board, ask_id, unblocked) or 'saved'}", fg="green"))
 
 
 @owner.command("missed")

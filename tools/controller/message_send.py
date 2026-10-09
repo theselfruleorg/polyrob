@@ -21,6 +21,10 @@ from core.surfaces.outbound_target import (
     wrong_surface_target_reason,
 )
 from core.surfaces.room_keys import is_room_target
+from tools.controller.message_delete import (  # noqa: F401  (0008 re-export)
+    perform_message_delete,
+    perform_message_posts,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +156,40 @@ def message_pause_refusal(execution_context, controller, *, tier: str) -> Option
             f"`/resume {_PAUSE_SCOPE_HINT[kind]}` (or `/resume`) when you want it back.")
 
 
+def resolve_owner_alias(router, surface, target, owner_targets):
+    """``owner``/``me``/the bot's own handle -> the real owner address on
+    ``surface`` (unchanged when no owner address is bound there)."""
+    if isinstance(target, str) and (
+        target.strip().lower() in _OWNER_ALIASES
+        or _matches_own_bot_username(router, surface, target)
+    ):
+        resolved = (owner_targets or {}).get(surface)
+        if resolved:
+            return resolved
+    return target
+
+
+async def perform_message_action(*, action="send", text="", media_paths=None,
+                                 post=None, last=None, **kw) -> dict:
+    """The `message` action's one entry: ``delete``/``posts`` (0008) go to
+    ``message_delete``; everything else is a send."""
+    act = (action or "send").strip().lower()
+    if act in ("delete", "posts"):
+        common = dict(router=kw.get("router"), surface=kw.get("surface"),
+                      target=kw.get("target"), owner_targets=kw.get("owner_targets"),
+                      execution_context=kw.get("execution_context"),
+                      controller=kw.get("controller"))
+        if act == "posts":
+            return await perform_message_posts(last=last, **common)
+        return await perform_message_delete(
+            message_id=kw.get("message_id"), post=post, last=last, **common)
+    if not (text or "").strip() and not media_paths:
+        return {"success": False, "tier": None, "surface": kw.get("surface"),
+                "target": kw.get("target"), "error": "nothing to send: text is empty"}
+    return await perform_message_send(action=action, text=text,
+                                      media_paths=media_paths, **kw)
+
+
 async def perform_message_send(*, router, allowlist, owner_targets, user_id,
                                surface, target, text, action="send", reply_to=None,
                                message_id=None, media_paths=None, session_id=None,
@@ -159,13 +197,7 @@ async def perform_message_send(*, router, allowlist, owner_targets, user_id,
                                controller=None) -> dict:
     from core.surfaces.outbound_policy import resolve_outbound_daily_cap, resolve_outbound_policy
 
-    if isinstance(target, str) and (
-        target.strip().lower() in _OWNER_ALIASES
-        or _matches_own_bot_username(router, surface, target)
-    ):
-        resolved = (owner_targets or {}).get(surface)
-        if resolved:
-            target = resolved
+    target = resolve_owner_alias(router, surface, target, owner_targets)
 
     # AFTER owner-alias resolution (so 'owner' never becomes '@owner'):
     # compute the API-shaped form of an agent-typed telegram target — t.me
@@ -220,7 +252,8 @@ async def perform_message_send(*, router, allowlist, owner_targets, user_id,
         return {"success": False, "tier": tier, "surface": surface, "target": target,
                 "error": pause_refusal}
     if action not in ("send", "reply"):
-        # edit/delete/react are capability-gated and deferred to P2; fail cleanly.
+        # edit/react are not built; delete/posts never reach here (0008 —
+        # perform_message_action routes them to message_delete).
         return {"success": False, "tier": tier, "surface": surface, "target": target,
                 "error": f"action '{action}' not supported yet on {surface}"}
     if router is None:
@@ -373,8 +406,17 @@ async def perform_message_send(*, router, allowlist, owner_targets, user_id,
             note = (f"surface {surface} does not support media; sent text only "
                     "— media not delivered")
 
+    receipt = None
     try:
-        ok = await router.send_message(chat_id=send_target, text=text, surface_id=surface, media=media)
+        # 0008: the receipt carries the surface's message ids + the post-ledger
+        # row. Looked up on the CLASS so a Mock/duck router keeps the bool shim.
+        if callable(getattr(type(router), "send_message_receipt", None)):
+            receipt = await router.send_message_receipt(
+                send_target, text, surface_id=surface, media=media)
+            ok = receipt.status != "failed"
+        else:
+            ok = await router.send_message(chat_id=send_target, text=text,
+                                           surface_id=surface, media=media)
     except Exception as e:  # fail-open: never crash the loop on a send fault
         logger.error("message send failed: %s", e, exc_info=True)
         return {"success": False, "tier": tier, "surface": surface, "target": target, "error": str(e)}
@@ -465,6 +507,16 @@ async def perform_message_send(*, router, allowlist, owner_targets, user_id,
             logger.debug("verification line skipped: %s", e)
     if send_target != target:
         result["sent_as"] = send_target  # e.g. 't.me/x' delivered as '@x'
+    if ok and receipt is not None:
+        if receipt.message_ids:
+            result["message_ids"] = list(receipt.message_ids)
+            result["message_id"] = receipt.message_ids[-1]
+        if receipt.post is not None:
+            result["post"] = receipt.post
+        if receipt.status == "queued":
+            q = (f"queued for the process that hosts {surface}; no message_id until it "
+                 "is delivered, so it cannot be deleted by post row")
+            note = f"{note}; {q}" if note else q
     # Overnight 2026-07-19 finding: an attachment-blind result ("... OK") made
     # the agent retry the same send ~12x and declare BLOCKED — the result must
     # ACKNOWLEDGE what rode the message so success is legible.

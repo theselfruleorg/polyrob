@@ -1,9 +1,10 @@
-"""CR-M11 (2026-09-23): a swap writes open-position deltas only when its
-receipt SUCCEEDED, sized from the receipt's own Transfer logs — never from the
-quoted output, and never for a reverted or unconfirmed swap."""
+"""Confirmed swaps use preview balance changes; hostile events cannot size positions.
+The preview remains an estimate and cannot be presented as a measured final fill.
+"""
 import types
 
 import pytest
+from unittest.mock import AsyncMock
 
 from core.wallet.broadcast.evm import Receipt
 from core.wallet.simulation import _TOPIC_TRANSFER
@@ -12,6 +13,12 @@ from tools.defi.trade_tool import SwapParams
 
 MEME = "0x" + "9" * 40
 HOLDER = t4._Signer.address
+
+
+@pytest.fixture(autouse=True)
+def _clean_buy_screen(monkeypatch):
+    # These cases exercise receipt accounting after a successful safety screen.
+    monkeypatch.setattr("tools.defi.buy_screen.evm_buy_refusal", AsyncMock(return_value=None))
 
 
 def _word(addr):
@@ -50,9 +57,13 @@ def _env(monkeypatch):
     t4._Rail.last = None
 
 
-async def _swap(status, logs):
+async def _swap(status, logs, *, out_raw=3 * 10**17):
     tool, gate = t4._tool(quote=t4._quote())
     tool._rail_factory = _rail(status, logs)
+    from dataclasses import replace
+    original_guard = tool._guard_fn
+    tool._guard_fn = lambda *a, **kw: replace(original_guard(*a, **kw),
+        simulated_token_deltas={t4.USDC: -1_000_000, MEME: out_raw})
     res = await tool.swap(SwapParams(token_in=t4.USDC, token_out=MEME,
                                      amount_in=1.0, max_spend_usd=2.0,
                                      dry_run=False))
@@ -77,21 +88,22 @@ async def test_an_unconfirmed_swap_writes_no_position():
 
 
 @pytest.mark.asyncio
-async def test_a_succeeded_swap_is_sized_from_the_receipt_not_the_quote():
-    rec = await _swap("success", LANDED)
+async def test_a_confirmed_swap_ignores_inflated_receipt_events():
+    forged = LANDED + [_transfer(MEME, "0x" + "a" * 40, HOLDER, 10**30)]
+    rec = await _swap("success", forged)
     legs = {p.address.lower(): p for p in rec["positions"]}
     assert MEME in legs
-    # The quote said 0.0005; the receipt delivered 0.3.
     assert legs[MEME].qty == pytest.approx(0.3)
+    assert legs[MEME].qty_source == "simulation"
 
 
 @pytest.mark.asyncio
 async def test_a_succeeded_swap_with_no_arrival_writes_no_position():
-    rec = await _swap("success", LANDED[:1])
+    rec = await _swap("success", LANDED, out_raw=0)
     assert not rec["positions"]
 
 
 @pytest.mark.asyncio
-async def test_an_unreadable_receipt_writes_no_position():
+async def test_missing_event_logs_do_not_erase_the_labeled_preview():
     rec = await _swap("success", None)
-    assert not rec["positions"]
+    assert rec["positions"] and all(p.qty_source == "simulation" for p in rec["positions"])

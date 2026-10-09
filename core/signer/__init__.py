@@ -13,7 +13,9 @@ shape it does not know is refused; there is no ``sign_message``,
   this package runs.
 * ``shadow`` — the agent still signs locally, AND asks the signer for a verdict
   on the same request. A disagreement is logged (``signer_shadow.jsonl``) and
-  shown in the custody status section. It never blocks a send.
+  shown in the custody status section. The signer itself never blocks a send,
+  but its caps are the envelope: the agent's gate clamps to them
+  (``core.wallet.signer_envelope``).
 * ``remote`` — the agent holds no key. ``AgentWallet`` is a
   :class:`core.signer.remote.RemoteWallet`; every signature comes from the
   signer over ``/run/polyrob-signer/signer.sock``.

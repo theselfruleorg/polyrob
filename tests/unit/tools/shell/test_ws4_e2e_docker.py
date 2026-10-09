@@ -23,6 +23,7 @@ _needs_docker = pytest.mark.skipif(shutil.which("docker") is None, reason="docke
 
 @pytest.fixture(autouse=True)
 def _env(monkeypatch, tmp_path):
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("AGENT_COMPUTE_POSTURE", "1")
     monkeypatch.setenv("CODE_EXEC_BACKEND", "docker")
     monkeypatch.setenv("CODE_EXEC_DOCKER_PERSISTENT", "true")

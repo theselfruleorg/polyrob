@@ -57,6 +57,7 @@ def test_argv_has_expected_ssh_flags(monkeypatch):
     monkeypatch.setenv("CODE_EXEC_SSH_USER", "deploy")
     monkeypatch.setenv("CODE_EXEC_SSH_PORT", "2222")
     monkeypatch.setenv("CODE_EXEC_SSH_KEY", "/tmp/id_ed25519")
+    monkeypatch.delenv("CODE_EXEC_SSH_KNOWN_HOSTS", raising=False)
     b = SshBackend()
     argv = b._build_ssh_argv(ExecutionRequest(language="python", code="print(1)"))
 
@@ -399,3 +400,39 @@ async def test_key_path_never_logged(monkeypatch, caplog):
     for record in caplog.records:
         assert "/super/secret/path/id_ed25519" not in record.getMessage()
         assert "id_ed25519" not in record.getMessage()
+
+
+# --------------------------------------------------------------------------
+# EXEC-6: a pinned known_hosts replaces trust-on-first-use
+# --------------------------------------------------------------------------
+
+def test_known_hosts_flag_pins_the_host_key(monkeypatch, tmp_path):
+    kh = tmp_path / "known_hosts"
+    kh.write_text("example.com ssh-ed25519 AAAA\n")
+    monkeypatch.setenv("CODE_EXEC_SSH_HOST", "example.com")
+    monkeypatch.setenv("CODE_EXEC_SSH_KNOWN_HOSTS", str(kh))
+    argv = SshBackend().ssh_argv("true")
+    assert "StrictHostKeyChecking=yes" in argv
+    assert f"UserKnownHostsFile={kh}" in argv
+    assert "StrictHostKeyChecking=accept-new" not in argv
+    # the options come before `--` and the target
+    assert argv.index("StrictHostKeyChecking=yes") < argv.index("--")
+
+
+def test_known_hosts_unset_keeps_accept_new(monkeypatch):
+    monkeypatch.setenv("CODE_EXEC_SSH_HOST", "example.com")
+    monkeypatch.delenv("CODE_EXEC_SSH_KNOWN_HOSTS", raising=False)
+    argv = SshBackend().ssh_argv("true")
+    assert "StrictHostKeyChecking=accept-new" in argv
+    assert not any(a.startswith("UserKnownHostsFile=") for a in argv)
+
+
+@pytest.mark.asyncio
+async def test_known_hosts_missing_file_is_refused(monkeypatch, tmp_path):
+    monkeypatch.setenv("CODE_EXEC_SSH_HOST", "example.com")
+    monkeypatch.setenv("CODE_EXEC_SSH_KNOWN_HOSTS", str(tmp_path / "absent"))
+    b = SshBackend(ssh_runner=_FakeSsh())
+    with pytest.raises(ExecutionBackendError, match="CODE_EXEC_SSH_KNOWN_HOSTS"):
+        b.ssh_argv("true")
+    with pytest.raises(ExecutionBackendError, match="CODE_EXEC_SSH_KNOWN_HOSTS"):
+        await b.setup()

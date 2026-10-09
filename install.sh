@@ -286,6 +286,34 @@ a managed copy into ${POLYROB_HOME_DIR}/src."
   stage repository ok "local tree ${SRC_DIR}"
 fi
 
+# >>> root-trust >>>
+# As root the shim goes into /usr/local/bin and runs for every user, so the
+# code it executes must be root's: refuse a source or venv tree (or any of its
+# ancestors) that another user owns or can write (OPS-15).
+untrusted_root_path() {   # prints the first untrusted ancestor of $1, if any
+  "${PYTHON_BIN}" -I -c '
+import os, stat, sys
+p = os.path.abspath(sys.argv[1])
+while not os.path.lexists(p):
+    p = os.path.dirname(p)
+while True:
+    st = os.lstat(p)
+    if st.st_uid != 0 or (st.st_mode & 0o022 and not stat.S_ISLNK(st.st_mode)):
+        print(p); break
+    if p == os.path.dirname(p):
+        break
+    p = os.path.dirname(p)
+' "$1"
+}
+# <<< root-trust <<<
+if [[ "$(id -u)" == "0" && "$(uname -s)" == "Linux" ]]; then
+  for _tree in "${SRC_DIR}" "${VENV_DIR}"; do
+    _bad="$(untrusted_root_path "${_tree}")"
+    [[ -z "${_bad}" ]] || die "refusing a root install from ${_tree}: ${_bad} is not root-owned or is group/world-writable.
+Install as the user who owns the tree, or copy it to a root-owned directory first."
+  done
+fi
+
 # ---------------------------------------------------------------------------
 # 3. Virtualenv + install
 # ---------------------------------------------------------------------------
@@ -430,7 +458,7 @@ cat > "${SHIM}" <<SHIM_EOF
 # an inherited value cannot make this import a different checkout.
 unset PYTHONPATH
 unset PYTHONHOME
-exec "${VPY}" -m cli.polyrob "\$@"
+exec "${VPY}" -I -m cli.polyrob "\$@"
 SHIM_EOF
 chmod +x "${SHIM}"
 success "Installed the polyrob command → ${SHIM}"

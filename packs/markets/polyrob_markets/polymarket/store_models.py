@@ -7,7 +7,7 @@ name here. (067 P0.11 moved them to ``modules/database``; 067 P4 moved the handl
 and these models into the markets pack together.)
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import Any, Dict, List, Optional
 
 
@@ -58,17 +58,9 @@ class TradingLimits:
         """Create from dictionary."""
         if not data:
             return cls()
-        return cls(
-            max_order_size_usd=data.get("max_order_size_usd", 1000),
-            max_total_exposure_usd=data.get("max_total_exposure_usd", 5000),
-            max_position_per_market_usd=data.get("max_position_per_market_usd", 2000),
-            min_liquidity_required=data.get("min_liquidity_required", 10000),
-            max_spread_tolerance=data.get("max_spread_tolerance", 0.05),
-            require_confirmation_above_usd=data.get("require_confirmation_above_usd", 500),
-            enable_autonomous_trading=data.get("enable_autonomous_trading", False),
-            allowed_categories=data.get("allowed_categories", ["*"]),
-            blocked_markets=data.get("blocked_markets", []),
-        )
+        # Defaults come from the dataclass fields above (one place per limit).
+        d = cls()
+        return cls(**{f.name: data.get(f.name, getattr(d, f.name)) for f in fields(cls)})
 
 
 @dataclass
@@ -79,9 +71,9 @@ class ApiCredentials:
     These are created via the CLOB API using the private key,
     and stored encrypted for reuse.
     """
-    api_key: str
-    api_secret: str  # Same as passphrase in some contexts
-    api_passphrase: str
+    api_key: str = field(repr=False)
+    api_secret: str = field(repr=False)  # Same as passphrase in some contexts
+    api_passphrase: str = field(repr=False)
     created_at: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:

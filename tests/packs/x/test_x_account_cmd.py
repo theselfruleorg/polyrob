@@ -149,11 +149,12 @@ def test_import_session_from_cookie_values(monkeypatch):
     store = _RecStore()
     monkeypatch.setattr(mod, "_store", lambda: store)
     monkeypatch.setattr(mod, "_user_id", lambda: "rob")
-    res = CliRunner().invoke(mod.x_account, ["import-session", "--auth-token", "x" * 40,
-                                             "--ct0", "y" * 32])
+    res = CliRunner().invoke(mod.x_account, ["import-session", "--cookies"],
+                             input="x" * 40 + "\n" + "y" * 32 + "\n")
     assert res.exit_code == 0, res.output
     _, kw = store.saved
     names = {c["name"]: c for c in kw["storage_state"]["cookies"]}
+    assert "x" * 40 not in res.output and "y" * 32 not in res.output
     assert names["auth_token"]["value"] == "x" * 40
     assert names["ct0"]["value"] == "y" * 32
     assert names["auth_token"]["domain"] == ".x.com"
@@ -261,3 +262,35 @@ def test_oauth_status_shows_relogin_needed():
                                  "relogin_remedy": "/x login"})
     text = "\n".join(lines)
     assert "re-login needed" in text and "09-26 04:01Z" in text and "/x login" in text
+
+
+def test_cookie_cli_does_not_offer_secret_argv_options():
+    from polyrob_x.commands.x_account import x_account
+    names = {p.name for p in x_account.commands["import-session"].params}
+    assert "auth_token" not in names and "ct0" not in names
+    assert "cookies" in names
+
+
+def test_plain_session_export_does_not_follow_link(tmp_path):
+    import json
+    import stat
+    from polyrob_x.commands.x_account import _write_plain_state
+    victim = tmp_path / "victim"
+    victim.write_text("keep")
+    output = tmp_path / "session.json"
+    output.symlink_to(victim)
+    _write_plain_state(str(output), {"cookies": []})
+    assert victim.read_text() == "keep"
+    assert not output.is_symlink()
+    assert json.loads(output.read_text()) == {"cookies": []}
+    assert stat.S_IMODE(output.stat().st_mode) == 0o600
+
+
+def test_plain_session_export_replaces_public_mode(tmp_path):
+    import stat
+    from polyrob_x.commands.x_account import _write_plain_state
+    output = tmp_path / "session.json"
+    output.write_text("old")
+    output.chmod(0o644)
+    _write_plain_state(str(output), {"cookies": []})
+    assert stat.S_IMODE(output.stat().st_mode) == 0o600

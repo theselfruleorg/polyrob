@@ -167,3 +167,23 @@ def test_the_gated_trading_skills_stay_out_of_a_session_catalog_without_their_to
         ids = {m.skill_id for m in sm.get_catalog_skills(tool_ids=tools, max_skills=500)}
         assert ids & {"polymarket-trading", "hyperliquid-trading"} == shown, (tools, ids)
     assert sm.may_load_skill("polymarket-trading", tool_ids=[]) is False
+
+
+def test_a_polymarket_cancel_needs_no_owner_tap_but_an_order_still_does():
+    """Natural-work sweep 2026-10-08: the owner's "cancel my Polymarket orders"
+    must not wait on a second tap — a cancel moves no funds and Polymarket has
+    no stop orders. A Hyperliquid cancel and revoke_agent skip the hook as well
+    (a TRIGGER-order cancel asks inside the verb). Placing an order, approving a
+    venue agent and changing leverage still ask the owner."""
+    from core.config_policy.spend_lane import ALWAYS_OWNER_APPROVED_VERBS, spend_exemption
+    from core.config_policy.payment_tools import PAYMENT_APPROVAL_TOOLS
+    for verb in ("polymarket_cancel_order", "polymarket_cancel_all_orders",
+                 "hyperliquid_cancel_order", "hyperliquid_cancel_all_orders",
+                 "hyperliquid_revoke_agent"):
+        assert spend_exemption(verb, {"order_id": "0x1"}), verb
+        assert verb not in ALWAYS_OWNER_APPROVED_VERBS
+        assert verb in PAYMENT_APPROVAL_TOOLS        # still a money verb on the hook
+    for verb in ("polymarket_place_market_order", "polymarket_place_limit_order",
+                 "hyperliquid_place_market_order", "hyperliquid_approve_agent",
+                 "hyperliquid_update_leverage"):
+        assert spend_exemption(verb, {}) is None, verb

@@ -31,6 +31,10 @@ EXTRA_FOR_MODULE: dict[str, str] = {
     "aiogram": "telegram",
     "tweepy": "twitter",
     "faster_whisper": "voice",
+    # 073 W7: the cloud sandbox packs (SHELL_BACKEND=modal|daytona|vercel_sandbox).
+    "modal": "modal",
+    "daytona": "daytona",
+    "vercel": "vercel-sandbox",
     # 058: the lean base. Each of these left [project].dependencies for the
     # extra that owns it; core/lazy_deps.py installs it on first use locally.
     "google": "gemini",            # google.generativeai (+ google.api_core, google.ai)
@@ -65,6 +69,10 @@ MODULES_FOR_EXTRA: dict[str, tuple[str, ...]] = {
     "media": ("numpy", "imageio", "qrcode"),
     "solana": ("solders", "solana"),
     "hf": ("huggingface_hub",),
+    # 073 W7: the cloud sandbox packs (SHELL_BACKEND=<name>).
+    "modal": ("modal",),
+    "daytona": ("daytona",),
+    "vercel-sandbox": ("vercel",),
     # anysite is a console SCRIPT, not an import — the discovery pack's
     # polyrob_discovery/anysite/client.py::binary_path
 }

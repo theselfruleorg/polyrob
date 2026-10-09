@@ -1,8 +1,20 @@
 [
   {
+    "id": "daytona",
+    "dist": "polyrob",
+    "version": "1.3.0",
+    "sha256": "",
+    "tier": "first-party",
+    "summary": "Daytona sandboxes as an execution and shell backend, with stop and resume",
+    "capabilities": [],
+    "requires_core": "==1.3.*",
+    "homepage": "https://github.com/theselfruleorg/polyrob/tree/main/packs/daytona",
+    "entry_point": "polyrob_daytona:pack"
+  },
+  {
     "id": "discovery",
     "dist": "polyrob",
-    "version": "1.2.0",
+    "version": "1.3.0",
     "sha256": "",
     "tier": "first-party",
     "summary": "Structured web data (AnySite) and web search (Perplexity)",
@@ -11,14 +23,14 @@
       "high_impact",
       "tools"
     ],
-    "requires_core": "==1.2.*",
+    "requires_core": "==1.3.*",
     "homepage": "https://github.com/theselfruleorg/polyrob/tree/main/packs/discovery",
     "entry_point": "polyrob_discovery:pack"
   },
   {
     "id": "markets",
     "dist": "polyrob",
-    "version": "1.2.0",
+    "version": "1.3.0",
     "sha256": "",
     "tier": "first-party",
     "summary": "Prediction markets and perps: Polymarket and Hyperliquid (read tools, gated trade tools, API routes)",
@@ -27,14 +39,50 @@
       "money",
       "tools"
     ],
-    "requires_core": "==1.2.*",
+    "requires_core": "==1.3.*",
     "homepage": "https://github.com/theselfruleorg/polyrob/tree/main/packs/markets",
     "entry_point": "polyrob_markets:pack"
   },
   {
+    "id": "modal",
+    "dist": "polyrob",
+    "version": "1.3.0",
+    "sha256": "",
+    "tier": "first-party",
+    "summary": "Modal sandboxes (gVisor) as an execution and shell backend",
+    "capabilities": [],
+    "requires_core": "==1.3.*",
+    "homepage": "https://github.com/theselfruleorg/polyrob/tree/main/packs/modal",
+    "entry_point": "polyrob_modal:pack"
+  },
+  {
+    "id": "singularity",
+    "dist": "polyrob",
+    "version": "1.3.0",
+    "sha256": "",
+    "tier": "first-party",
+    "summary": "Apptainer / Singularity instances as an execution and shell backend (CLI, no SDK)",
+    "capabilities": [],
+    "requires_core": "==1.3.*",
+    "homepage": "https://github.com/theselfruleorg/polyrob/tree/main/packs/singularity",
+    "entry_point": "polyrob_singularity:pack"
+  },
+  {
+    "id": "vercel_sandbox",
+    "dist": "polyrob",
+    "version": "1.3.0",
+    "sha256": "",
+    "tier": "first-party",
+    "summary": "Vercel Sandbox microVMs as an execution and shell backend",
+    "capabilities": [],
+    "requires_core": "==1.3.*",
+    "homepage": "https://github.com/theselfruleorg/polyrob/tree/main/packs/vercel_sandbox",
+    "entry_point": "polyrob_vercel_sandbox:pack"
+  },
+  {
     "id": "x",
     "dist": "polyrob",
-    "version": "1.2.0",
+    "version": "1.3.0",
     "sha256": "",
     "tier": "first-party",
     "summary": "X (Twitter): the API tool, the browser rail, the DM surface, cron post delivery",
@@ -45,7 +93,7 @@
       "surface",
       "tools"
     ],
-    "requires_core": "==1.2.*",
+    "requires_core": "==1.3.*",
     "homepage": "https://github.com/theselfruleorg/polyrob/tree/main/packs/x",
     "entry_point": "polyrob_x:pack"
   }

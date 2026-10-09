@@ -4,6 +4,7 @@ The OAuth callback X redirects the owner's browser to is the ONE public pack
 path: reachable with no session, a GET only, exact. Every other pack console
 route stays behind the owner's session.
 """
+from core.security.session_tokens import SESSION_AUDIENCE
 import importlib
 
 import pytest
@@ -67,9 +68,9 @@ def test_the_callback_is_public_and_the_status_route_is_owner_only(srv):
 def test_a_non_owner_token_is_refused(srv):
     import datetime
     import jwt
-    token = jwt.encode({"sub": "t", "user_id": "tenant-9", "role": "user", "tier": "free",
+    token = jwt.encode({"aud": SESSION_AUDIENCE, **{"sub": "t", "user_id": "tenant-9", "role": "user", "tier": "free",
                         "jti": "j", "exp": datetime.datetime.utcnow()
-                        + datetime.timedelta(hours=1)}, "test-secret", algorithm="HS256")
+                        + datetime.timedelta(hours=1)}}, "test-secret", algorithm="HS256")
     r = TestClient(srv._fastapi).get(STATUS, headers={"Authorization": f"Bearer {token}"})
     assert r.status_code in (401, 403)
 

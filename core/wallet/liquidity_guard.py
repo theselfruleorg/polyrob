@@ -172,7 +172,93 @@ def legs(items):
     return {(token.lower() if token else None): amount for token, amount in items}
 
 
-def structural(intent, tx):
+def _tup(*types):
+    return {"type": "tuple", "components": [{"type": t} for t in types]}
+
+
+#: Every v3 NonfungiblePositionManager call a liquidity verb builds, and nothing
+#: else. The SIGNED calldata is judged, not the declaration: a collect that pays
+#: someone else, a decrease with no on-chain floor, or a position transfer riding
+#: under an LP intent is refused before the simulation (which a contract can tell
+#: apart from the real block).
+_V3_CALLS = {
+    "mint": [_tup("address", "address", "uint24", "int24", "int24", "uint256", "uint256",
+                  "uint256", "uint256", "address", "uint256")],
+    "increaseLiquidity": [_tup("uint256", "uint256", "uint256", "uint256", "uint256", "uint256")],
+    "decreaseLiquidity": [_tup("uint256", "uint128", "uint256", "uint256", "uint256")],
+    "collect": [_tup("uint256", "address", "uint128", "uint128")],
+    "burn": [{"type": "uint256"}],
+    "refundETH": [],
+    "createAndInitializePoolIfNecessary": [{"type": "address"}, {"type": "address"},
+                                           {"type": "uint24"}, {"type": "uint160"}],
+}
+_V3_DEPOSIT_CALLS = {"mint", "increaseLiquidity", "refundETH", "createAndInitializePoolIfNecessary"}
+_V3_EXIT_CALLS = {"decreaseLiquidity", "collect", "burn"}
+
+
+def decode_v3_calls(tx):
+    """``[(name, args), ...]`` for a v3 position-manager transaction — one call
+    or one flat ``multicall(bytes[])``. Raises ValueError on any other shape."""
+    data = str(tx.get("data") or tx.get("input") or "").lower()
+    if not data.startswith("0x") or len(data) < 10:
+        raise ValueError("a v3 liquidity transaction must carry position-manager calldata")
+    by_selector = {abi.selector(abi.signature_of(n, i)): n for n, i in _V3_CALLS.items()}
+    if data[:10] == abi.selector("multicall(bytes[])"):
+        (inner,) = abi.decode([{"type": "bytes[]"}], "0x" + data[10:])
+        calls = ["0x" + _raw(c).hex() for c in inner]
+    else:
+        calls = [data]
+    out = []
+    for call in calls:
+        name = by_selector.get(call[:10])
+        if name is None:
+            raise ValueError(f"v3 liquidity calldata calls {call[:10]}, which no liquidity verb builds")
+        out.append((name, abi.decode(_V3_CALLS[name], "0x" + call[10:]) if _V3_CALLS[name] else ()))
+    if not out:
+        raise ValueError("a v3 liquidity multicall must carry at least one call")
+    return out
+
+
+def _structural_v3_calldata(intent, tx, holder):
+    """Bind the signed v3 calldata to the declared position, the wallet and the
+    declared direction (WAL-2): a fee collection pays the wallet and nobody else."""
+    calls = decode_v3_calls(tx)
+    names = [n for n, _ in calls]
+    deposit = bool(intent.lp_outflows)
+    allowed = _V3_DEPOSIT_CALLS if deposit else _V3_EXIT_CALLS
+    if set(names) - allowed:
+        raise ValueError(f"a liquidity {'deposit' if deposit else 'withdrawal'} may not call "
+                         f"{sorted(set(names) - allowed)}")
+    token_id = intent.lp_position[1]
+    me = str(holder or "").lower()
+    for name, args in calls:
+        p = args[0] if args else None
+        if name in ("increaseLiquidity", "decreaseLiquidity", "collect", "burn"):
+            if (int(p) if name == "burn" else int(p[0])) != token_id:
+                raise ValueError(f"{name} names position {p if name == 'burn' else p[0]}, "
+                                 f"not the declared {token_id}")
+        if name == "mint" and me and str(p[9]).lower() != me:
+            raise ValueError("mint must mint the position to the wallet itself")
+        if name == "collect" and me and str(p[1]).lower() != me:
+            raise ValueError(f"collect pays {p[1]}, not the wallet — refused")
+        if name == "decreaseLiquidity" and (int(p[1]) <= 0 or int(p[2]) + int(p[3]) <= 0):
+            raise ValueError("decreaseLiquidity must remove liquidity with a positive on-chain minimum")
+    if deposit:
+        if names.count("mint") + names.count("increaseLiquidity") != 1:
+            raise ValueError("a deposit makes exactly one mint or increaseLiquidity call")
+        if ("mint" in names) != (intent.lp_position_effect == "mint"):
+            raise ValueError("the deposit call does not match the declared position effect")
+        return
+    if names.count("collect") != 1:
+        raise ValueError("a withdrawal must collect exactly once, to the wallet")
+    if ("burn" in names) != (intent.lp_position_effect == "burn"):
+        raise ValueError("burn in the calldata does not match the declared position effect")
+    if not any(n > 0 for _, n in intent.lp_inflows):
+        raise ValueError("a withdrawal must declare a positive minimum receipt; "
+                         "a minimum of nothing asserts nothing")
+
+
+def structural(intent, tx, holder=None):
     if any((intent.is_deploy, intent.is_claim, intent.is_registration,
             intent.is_allowance_op, intent.is_nft_op)):
         raise ValueError("liquidity cannot be combined with another intent shape")
@@ -220,6 +306,7 @@ def structural(intent, tx):
         if len(topic) != 66 or not topic.startswith("0x"):
             raise ValueError("required event topic must be bytes32")
         bytes.fromhex(topic[2:])
+    _structural_v3_calldata(intent, tx, holder)
 
 
 def assert_deltas(intent, deltas, dust):

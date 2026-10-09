@@ -13,6 +13,16 @@ from typing import Any, Dict, List, Optional, Tuple
 PLANNER_TOOLS = ["goal", "task"]
 PLANNER_MAX_STEPS = 8
 
+
+def planner_memory_fields(user_id: str) -> dict:
+    """Planning may read shared recall but must quarantine its own findings."""
+    from modules.memory.scope import clamp_regime, default_regime, scopes_enabled
+    if not scopes_enabled():
+        return {}
+    import hashlib
+    label = "planner:" + hashlib.sha256(str(user_id).encode()).hexdigest()[:24]
+    return {"memory_scope": label, "memory_regime": clamp_regime(default_regime(), "scoped")}
+
 #: Floor for the derived ready-goal ceiling. Below this the planner cannot keep a
 #: board of any size supplied, however few objectives are active.
 PLANNER_READY_FLOOR = 5

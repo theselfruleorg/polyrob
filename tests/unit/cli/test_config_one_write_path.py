@@ -31,7 +31,8 @@ def _proj(tmp_path, monkeypatch, name):
 
 
 def _env(d: Path) -> str:
-    p = d / ".polyrob" / ".env"
+    from core.paths import polyrob_home
+    p = polyrob_home() / ".env"
     return p.read_text() if p.exists() else ""
 
 
@@ -50,7 +51,7 @@ def _via_repl(tmp_path, key, value):
 
 def _via_service(key, value):
     from core.config_service import set_value
-    res = set_value(key, value, scope="project", surface="local")
+    res = set_value(key, value, scope="global", surface="local")
     return res.ok, res.message
 
 

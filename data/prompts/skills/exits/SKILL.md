@@ -6,7 +6,7 @@ metadata:
   polyrob-priority: '2'
   polyrob-auto-activate: 'true'
   polyrob-triggers: '{"action_names":[],"keywords":["stop loss","stop-loss","take profit","take-profit","trailing stop","trade exit plan","sell the position","exit the position"],"task_patterns":["(set|plan|define|add).*(stop.?loss|take.?profit|trailing stop)"],"tool_ids":["defi_trade","defi_data","cronjob"]}'
-  polyrob-version: '4'
+  polyrob-version: '5'
 ---
 # Exits — decide the way out before the way in
 
@@ -62,6 +62,14 @@ says `unknown` (basis unknown, or no price), the barrier cannot fire on that
 figure: say so, and use the time limit or the exit quote instead. The
 high-water mark only counts prices a `positions` read saw with high
 confidence, so read `positions` on every scheduled check.
+
+LOW, disputed or unknown prices cannot fire a price barrier. `positions`
+withholds stop/target percentages and distance from the high on those grades.
+Obtain an executable sell quote from a separate venue or source and verify that
+its minimum proceeds breach the declared barrier before selling for that reason.
+A quote from the same disputed or thin pool is not independent confirmation.
+If independent confirmation is unavailable, report the uncertainty; the explicit
+time limit and an owner's direct sell instruction remain separate reasons to exit.
 
 ## The procedure
 

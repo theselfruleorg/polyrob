@@ -134,6 +134,10 @@ async def test_polymarket_place_limit_order_dry_runs_by_default(monkeypatch):
     monkeypatch.setattr(tool, "ensure_initialized", lambda: _coro())
     monkeypatch.setattr(tool, "_get_user_credentials", lambda: _make_creds())
 
+    async def _price(*a, **k):
+        return {"success": True, "price": 0.5}
+    monkeypatch.setattr(tool, "get_current_price", _price)
+
     def _forbid(*a, **k):
         raise AssertionError("must not reach the authenticated client in dry-run")
     monkeypatch.setattr(tool, "_get_authenticated_client", _forbid)

@@ -66,12 +66,14 @@ def current() -> Optional[LiveAutonomy]:
     return _CURRENT
 
 
-async def autonomy_switch(on: bool, *, is_global: bool = False) -> str:
-    """The body of REPL ``/autonomy on|off``. Returns the lines to show."""
+async def autonomy_switch(on: bool, *, is_global: bool = True) -> str:
+    """The body of REPL ``/autonomy on|off``. Returns the lines to show.
+
+    The value persists in the home .env — the only env file the CLI loads
+    (``./.polyrob/.env`` is never read); ``is_global`` is kept for callers."""
     from core.config_service import set_value
     res = set_value("AUTONOMY_ENABLED", "true" if on else "false",
-                    scope="global" if is_global else "project",
-                    surface="local", live=True)
+                    scope="global", surface="local", live=True)
     if not res.ok:
         return f"error: {res.message}"
     lines = [res.message]

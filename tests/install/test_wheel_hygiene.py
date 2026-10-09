@@ -68,3 +68,14 @@ def test_built_wheel_contains_no_generated_dependency_or_bytecode_files(tmp_path
         or name.endswith((".pyc", ".pyo"))
     ]
     assert not leaked, f"generated development files shipped in wheel: {leaked[:20]}"
+
+
+def test_package_data_excludes_private_console_docs_and_dev_rig():
+    """Security review 2026-10-07 (wheel hygiene): the non-recursive ``*.md`` /
+    ``*.json`` package-data glob carried ``webview/README.md`` and the
+    ``webview/dev`` rig's test results into wheels built from the private tree."""
+    config = _package_config()
+    find = config["packages"]["find"]
+    for package in ("webview.dev", "webview.dev.test-results"):
+        assert any(fnmatchcase(package, p) for p in find["exclude"]), package
+    assert "README.md" in config["exclude-package-data"]["webview"]

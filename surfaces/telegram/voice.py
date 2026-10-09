@@ -2,18 +2,29 @@
 download its bytes, then hand them to the surface-agnostic Transcriber. The transcriber
 itself lives in modules/transcription — only the extraction + download is Telegram's job.
 """
+import asyncio
 import logging
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
+VOICE_TIMEOUT_SECONDS = 90
 
 
 def extract_voice_file_id(update: dict) -> Optional[str]:
-    """Return the file_id of a voice/audio attachment on the update, or None."""
+    """Return the file_id of a voice/audio attachment on the update, or None.
+
+    CHAT-4: None too when the note's DECLARED duration or size is over the
+    bound — nothing that large is downloaded or transcribed."""
     msg = update.get("message") or update.get("edited_message") or {}
     for field in ("voice", "audio"):
         media = msg.get(field)
         if isinstance(media, dict) and media.get("file_id"):
+            from core.surfaces.media_access import declared_voice_too_large
+            if declared_voice_too_large(media.get("duration"), media.get("file_size")):
+                logger.info("telegram: a %ss / %s-byte voice note is over the "
+                            "transcription bound; not downloaded",
+                            media.get("duration"), media.get("file_size"))
+                return None
             return str(media["file_id"])
     return None
 
@@ -52,11 +63,12 @@ async def transcribe_telegram_voice(bot: Any, update: dict, transcriber: Any) ->
     file_id = extract_voice_file_id(update)
     if not file_id:
         return None
-    audio = await download_file_bytes(bot, file_id)
-    if not audio:
-        return None
     try:
-        text = await transcriber.transcribe(audio, mime="audio/ogg")
+        async with asyncio.timeout(VOICE_TIMEOUT_SECONDS):
+            audio = await download_file_bytes(bot, file_id)
+            if not audio:
+                return None
+            text = await transcriber.transcribe(audio, mime="audio/ogg")
     except Exception as e:  # transcriber is fail-open, but belt-and-suspenders
         logger.debug("telegram voice transcription failed: %s", e)
         return None

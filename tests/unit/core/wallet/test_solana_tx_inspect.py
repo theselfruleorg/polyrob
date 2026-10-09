@@ -32,12 +32,15 @@ OWNER = "HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk"
 MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 
 
-def _tx(program_ids):
-    """A signed v0 transaction whose top-level instructions call *program_ids*."""
+def _tx(program_ids, named=()):
+    """A signed v0 transaction whose top-level instructions call *program_ids*
+    (each also naming the accounts in *named*)."""
     kp = Keypair()
     payer = kp.pubkey()
     ixs = [Instruction(Pubkey.from_string(p), b"\x00",
-                       [AccountMeta(payer, True, True)]) for p in program_ids]
+                       [AccountMeta(payer, True, True)]
+                       + [AccountMeta(Pubkey.from_string(a), False, True) for a in named])
+           for p in program_ids]
     msg = MessageV0.try_compile(payer, ixs, [], Hash.default())
     return bytes(VersionedTransaction(msg, [kp]))
 
@@ -51,6 +54,35 @@ def test_the_two_token_programs_derive_different_accounts():
     t22 = sti.derive_ata(OWNER, MINT, TOKEN2022)
     assert classic and t22
     assert classic != t22
+
+
+def test_airdropped_accounts_do_not_disable_simulation(monkeypatch):
+    from types import SimpleNamespace
+    addresses = [OWNER] + [str(Pubkey.new_unique()) for _ in range(201)]
+    monkeypatch.setattr(sti, "inspect_transaction", lambda *a, **k: SimpleNamespace(
+        ok=True, instructions=[], num_signatures=1))
+    monkeypatch.setattr(sti, "owned_token_accounts", lambda *a, **k: addresses[1:])
+    monkeypatch.setattr(sti, "sim_max_addresses", lambda: 5)
+    reads, simulations = [], []
+
+    def rpc(method, params):
+        if method == "getMultipleAccounts":
+            reads.append(params[0])
+            assert len(params[0]) <= 100
+            return {"value": [None] * len(params[0])}
+        assert method == "simulateTransaction"
+        chunk = params[1]["accounts"]["addresses"]
+        simulations.extend(chunk)
+        return {"value": {"err": None, "accounts": [None] * len(chunk)}}
+
+    observed = {}
+    def parsed(sim, **kwargs):
+        observed.update(kwargs)
+        return SimpleNamespace(ok=True)
+    monkeypatch.setattr(sti, "parse_deltas", parsed)
+    assert sti.simulate(b"transaction", owner=OWNER, rpc=rpc).ok
+    assert [len(chunk) for chunk in reads] == [100, 100, 2]
+    assert simulations == addresses == observed["ours"]
 
 
 def test_a_token_2022_mint_resolves_to_its_own_associated_account():
@@ -192,7 +224,7 @@ def test_simulate_refuses_before_touching_the_rpc_when_the_tx_is_unvetted():
 def test_simulate_parses_deltas_from_a_clean_transaction():
     ata = sti.derive_ata(OWNER, MINT, CLASSIC)
     raw = _tx([sti.COMPUTE_BUDGET_PROGRAM_ID,
-               "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4"])
+               "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4"], named=[ata])
 
     def _acct(amount):
         return {"data": {"parsed": {"info": {
@@ -215,3 +247,59 @@ def test_simulate_parses_deltas_from_a_clean_transaction():
     deltas = sti.simulate(raw, owner=OWNER, mints=[MINT], rpc=_rpc)
     assert deltas.ok is True
     assert deltas.token_deltas == {MINT: -1_000_000}
+
+
+@pytest.mark.parametrize("program", [CLASSIC, TOKEN2022])
+@pytest.mark.parametrize("tag", [3, 7, 8, 12, 14, 15])
+def test_top_level_token_outflow_from_existing_account_refused(program, tag):
+    ix = sti.DecodedIx(program=program, data=bytes([tag]) + bytes(9), accounts=(OWNER, MINT, OWNER))
+    assert sti.instruction_refusal([ix], owner=OWNER)
+
+
+
+def test_the_outflow_names_match_the_spl_token_tags():
+    # 7 is MintTo and 8 is Burn (a Burn mislabeled as tag 7 left the real Burn unchecked).
+    assert sti._TOK_OUTFLOW_TAGS[8] == "Burn" and sti._TOK_OUTFLOW_TAGS[7] == "MintTo"
+    assert sti._TOK_OUTFLOW_TAGS[15] == "BurnChecked" and sti._TOK_OUTFLOW_TAGS[12] == "TransferChecked"
+
+
+@pytest.mark.parametrize("data,name", [(bytes([26, 1]) + bytes(17), "TransferCheckedWithFee"),
+                                       (bytes([34, 0]), "CpiGuardExtension"),
+                                       (bytes([27, 0]), "ConfidentialTransferExtension")])
+def test_token_2022_extension_transfers_and_policies_on_existing_accounts_refuse(data, name):
+    ix = sti.DecodedIx(program=TOKEN2022, data=data, accounts=(OWNER, MINT, OWNER))
+    why = sti.instruction_refusal([ix], owner=OWNER)
+    assert why and name in why
+
+
+def test_a_token_2022_extension_on_the_classic_program_is_not_misread():
+    ix = sti.DecodedIx(program=CLASSIC, data=bytes([26, 1]), accounts=(OWNER, MINT, OWNER))
+    assert sti.instruction_refusal([ix], owner=OWNER) is None
+
+
+
+def test_spam_token_accounts_the_transaction_does_not_name_cost_no_simulations(monkeypatch):
+    """Anyone can create token accounts for the wallet. An account a transaction does not
+    name cannot change, so it is not observed — the simulation count stays bounded by the
+    transaction, not by the spam (each extra RPC call is one more rate-limit refusal)."""
+    ata = sti.derive_ata(OWNER, MINT, CLASSIC)
+    spam = [str(Pubkey.new_unique()) for _ in range(60)]
+    raw = _tx(["JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4"], named=[ata])
+    monkeypatch.setattr(sti, "sim_max_addresses", lambda: 5)
+    sims = []
+
+    def _rpc(method, params):
+        if method == "getAccountInfo":
+            return {"value": {"owner": CLASSIC}}
+        if method == "getTokenAccountsByOwner":
+            return {"value": [{"pubkey": a} for a in [ata] + spam]}
+        if method == "getMultipleAccounts":
+            return {"value": [None] * len(params[0])}
+        if method == "simulateTransaction":
+            sims.append(params[1]["accounts"]["addresses"])
+            return {"value": {"err": None, "accounts": [None] * len(sims[-1])}}
+        raise AssertionError(method)
+
+    sti.simulate(raw, owner=OWNER, mints=[MINT], rpc=_rpc)
+    observed = [a for chunk in sims for a in chunk]
+    assert len(sims) == 1 and ata in observed and not set(spam) & set(observed)

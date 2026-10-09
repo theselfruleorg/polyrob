@@ -1,5 +1,6 @@
 """Anthropic Claude API Client."""
 
+from modules.llm.billing_guard import inference_sdk
 import json
 import logging
 import asyncio
@@ -187,7 +188,6 @@ class AnthropicClient(LLMClient):
             # Validate configuration
             self._validate_llm_config()
             
-            # Initialize client with API key
             await self._setup_client()
 
             # Validate connection (skipped for fast startup; clients validate
@@ -715,10 +715,10 @@ class AnthropicClient(LLMClient):
 
             if use_streaming:
                 self.logger.debug(f"Using streaming for _generate (max_tokens={max_tokens_value})")
-                async with self._client.messages.stream(**api_params) as stream:
+                async with inference_sdk(self).messages.stream(**api_params) as stream:
                     self.last_response = await stream.get_final_message()
             else:
-                self.last_response = await self._client.messages.create(**api_params)
+                self.last_response = await inference_sdk(self).messages.create(**api_params)
             
             # Mark as successful
             success = True
@@ -812,7 +812,7 @@ class AnthropicClient(LLMClient):
         """Validate connection to Anthropic."""
         try:
             # Simple test completion
-            response = await self._client.messages.create(
+            response = await inference_sdk(self).messages.create(
                 model=self.model_type,
                 max_tokens=10,
                 messages=[{"role": "user", "content": "Test connection"}]
@@ -843,7 +843,7 @@ class AnthropicClient(LLMClient):
 
     async def _make_validation_request(self) -> Any:
         """Make minimal test request to Anthropic."""
-        return await self._client.messages.create(
+        return await inference_sdk(self).messages.create(
             model=self.model_type,
             messages=[{"role": "user", "content": "test"}],
             max_tokens=1

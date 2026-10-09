@@ -4,11 +4,13 @@ import os
 from typing import Mapping, Optional
 
 _FALSEY = ("none", "off", "false", "0", "no", "")
+_EXPLICIT_TRUE = frozenset(("true", "yes", "on", "1"))
 
 
-def parse_bool(value, default: bool) -> bool:
+def parse_bool(value, default: bool, *, strict: bool = False) -> bool:
     """Value-based falsey-set parser (for already-fetched values, e.g. pydantic validators).
 
+    strict=True allows only explicit true/yes/on/1; other supplied values are false.
     None -> default; otherwise True unless the value is in _FALSEY ('' counts as falsey).
     Note this differs from ``bool_env``'s blank-env semantics: here an explicit ``""``
     value is treated as falsey (False), whereas ``bool_env`` treats a blank/unset env
@@ -16,10 +18,12 @@ def parse_bool(value, default: bool) -> bool:
     """
     if value is None:
         return default
+    if strict:
+        return str(value).strip().lower() in _EXPLICIT_TRUE
     return str(value).strip().lower() not in _FALSEY
 
 
-def bool_env(name: str, default: bool) -> bool:
+def bool_env(name: str, default: bool, *, strict: bool = False) -> bool:
     """Read a boolean env var with POLYROB's canonical falsey-set semantics.
 
     Returns ``default`` when unset/blank; otherwise True unless the value is in
@@ -30,7 +34,7 @@ def bool_env(name: str, default: bool) -> bool:
     raw = os.getenv(name)
     if raw is None or raw.strip() == "":
         return default
-    return parse_bool(raw, default)
+    return parse_bool(raw, default, strict=strict)
 
 
 def float_env(name: str, default: float) -> float:
@@ -95,3 +99,21 @@ def float_from(env: Optional[Mapping], name: str, default: float) -> float:
     src = os.environ if env is None else env
     val = parse_opt_float(src.get(name))
     return default if val is None else val
+
+
+_PRODUCTION_NAMES = frozenset(("production", "prod"))
+
+
+def is_production_env(resolved: Optional[str] = None) -> bool:
+    """True when ANY deployment-environment name says production.
+
+    The repo has four names for one fact: ``ENVIRONMENT`` (what prod's
+    ``/etc/polyrob/polyrob.env`` sets), ``POLYROB_ENV``, ``CONFIG_ENV``/``ENV``
+    (``core.bootstrap.load_env``'s ``resolved``), and the ``PRODUCTION`` bool.
+    A boot refusal keyed on only one of them silently passes on the others.
+    """
+    names = [resolved, os.getenv("ENVIRONMENT"), os.getenv("POLYROB_ENV"),
+             os.getenv("CONFIG_ENV"), os.getenv("ENV")]
+    if any(str(n or "").strip().lower() in _PRODUCTION_NAMES for n in names):
+        return True
+    return bool_env("PRODUCTION", False)

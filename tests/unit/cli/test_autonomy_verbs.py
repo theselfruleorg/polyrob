@@ -30,6 +30,7 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
     monkeypatch.chdir(proj)
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "data_home"))
+    monkeypatch.setenv("POLYROB_HOME", str(home / ".polyrob"))
     # the group callback's ensure_env_loaded is memoized process-wide; short-
     # circuit it so no test depends on which test triggered the first load_env.
     monkeypatch.setattr("cli.commands._bootstrap._env_loaded", True)
@@ -80,7 +81,7 @@ def test_on_writes_autonomy_enabled_and_prints_restart_note(isolated):
     runner, autonomy = _runner()
     res = runner.invoke(autonomy, ["on"])
     assert res.exit_code == 0, res.output
-    env = (proj / ".polyrob" / ".env").read_text()
+    env = (_home / ".polyrob" / ".env").read_text()
     assert "AUTONOMY_ENABLED=true" in env
     assert "restart" in res.output  # env flags configure the NEXT process
 
@@ -91,7 +92,7 @@ def test_on_with_mode_writes_both_flags_and_echoes_clamp(isolated, monkeypatch):
     runner, autonomy = _runner()
     res = runner.invoke(autonomy, ["on", "--mode", "autonomous"])
     assert res.exit_code == 0, res.output
-    env = (proj / ".polyrob" / ".env").read_text()
+    env = (_home / ".polyrob" / ".env").read_text()
     assert "AUTONOMY_ENABLED=true" in env
     assert "AUTONOMY_MODE=autonomous" in env
     # the 026 P1.6 clamp echo from the ONE note builder (post_write_notes)
@@ -104,7 +105,7 @@ def test_on_rejects_invalid_mode_before_writing_anything(isolated):
     res = runner.invoke(autonomy, ["on", "--mode", "autonmous"])
     assert res.exit_code != 0
     assert "supervised" in res.output  # names the valid set (flag_enums SSOT)
-    assert not (proj / ".polyrob" / ".env").exists(), \
+    assert not (_home / ".polyrob" / ".env").exists(), \
         "an invalid --mode must not half-apply the intent"
 
 
@@ -113,8 +114,26 @@ def test_off_writes_false_and_names_the_live_kill_switch(isolated):
     runner, autonomy = _runner()
     res = runner.invoke(autonomy, ["off"])
     assert res.exit_code == 0, res.output
-    assert "AUTONOMY_ENABLED=false" in (proj / ".polyrob" / ".env").read_text()
+    assert "AUTONOMY_ENABLED=false" in (_home / ".polyrob" / ".env").read_text()
     assert "pause" in res.output  # off ≠ now; the live pause is the switch
+
+
+def test_on_writes_the_file_the_cli_loads_never_the_project_one(isolated):
+    """Regression: `autonomy on` without --global used to write ./.polyrob/.env,
+    which the CLI never loads — the switch had no effect. The write and the
+    CLI env loader (core.paths.env_file_candidates) now resolve one file."""
+    from core.env_file import read_env_file
+    from core.paths import env_file_candidates
+    _home, proj = isolated
+    runner, autonomy = _runner()
+    res = runner.invoke(autonomy, ["on"])
+    assert res.exit_code == 0, res.output
+    assert not (proj / ".polyrob" / ".env").exists()
+    loaded = env_file_candidates(local_mode=True)[0].path
+    assert read_env_file(loaded).get("AUTONOMY_ENABLED") == "true"
+    res = runner.invoke(autonomy, ["off", "--global"])  # old flag still accepted
+    assert res.exit_code == 0, res.output
+    assert read_env_file(loaded).get("AUTONOMY_ENABLED") == "false"
 
 
 def test_on_never_touches_money_or_compute_flags(isolated):
@@ -122,7 +141,7 @@ def test_on_never_touches_money_or_compute_flags(isolated):
     runner, autonomy = _runner()
     res = runner.invoke(autonomy, ["on", "--mode", "autonomous"])
     assert res.exit_code == 0, res.output
-    env = (proj / ".polyrob" / ".env").read_text()
+    env = (_home / ".polyrob" / ".env").read_text()
     for forbidden in ("AGENT_COMPUTE_POSTURE", "PAYMENT_APPROVAL_MODE",
                       "WALLET_DAILY_CAP_USD"):
         assert forbidden not in env

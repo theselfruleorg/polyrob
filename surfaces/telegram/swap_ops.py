@@ -31,7 +31,7 @@ from surfaces.telegram.send_ops import (
 logger = logging.getLogger(__name__)
 
 USAGE = ("Usage: /swap <amount> <native|token-address> to <token-address> on <chain> "
-         "[slippage <bps>] [max <usd>] [go]\n"
+         "[slippage <bps>] [min_raw <units>] [max <usd>] [go]\n"
          "e.g. /swap 0.1 native to 0x8335…2913 on base           — quote only\n"
          "     /swap 0.1 native to 0x8335…2913 on base go        — swap\n"
          "     /swap 50 EPjF…t1v to native on solana slippage 50 — quote\n\n"
@@ -54,6 +54,7 @@ def parse(args: List[str]) -> Tuple[Optional[dict], Optional[str]]:
     chain = out = None
     slippage = None
     max_usd = None
+    minimum_output_raw = None
     rest: List[str] = []
     i = 0
     while i < len(words):
@@ -70,6 +71,13 @@ def parse(args: List[str]) -> Tuple[Optional[dict], Optional[str]]:
                 return None, f"`slippage` is basis points (100 = 1%), got {nxt!r}."
             if not (1 <= slippage <= 1000):
                 return None, "`slippage` must be 1-1000 basis points."
+        elif w == "min_raw" and nxt:
+            try:
+                minimum_output_raw = int(nxt)
+            except ValueError:
+                return None, "`min_raw` needs a positive integer."
+            if not 0 < minimum_output_raw < 2**256:
+                return None, "`min_raw` exceeds the raw-token range."
         elif w == "max" and nxt:
             try:
                 max_usd = float(nxt.lstrip("$").replace(",", ""))
@@ -110,7 +118,8 @@ def parse(args: List[str]) -> Tuple[Optional[dict], Optional[str]]:
     if token_in.lower() == out.lower():
         return None, "You would sell and buy the same token."
     return {"amount": amount, "token_in": token_in, "token_out": out, "chain": chain,
-            "slippage_bps": slippage, "max_usd": max_usd, "go": go}, None
+            "slippage_bps": slippage, "max_usd": max_usd, "go": go,
+            "minimum_output_raw": minimum_output_raw}, None
 
 
 _VALUE_RE = re.compile(r"(?:simulated value|valued):\s*\$([0-9][0-9,]*\.?[0-9]*)")
@@ -140,23 +149,27 @@ async def _run(tool, order: dict, ctx, *, dry_run: bool, max_spend_usd: float):
         tout = _WSOL if order["token_out"].lower() == "native" else order["token_out"]
         params = SolanaSwapParams(token_in=tin, token_out=tout, amount_in=order["amount"],
                                   max_spend_usd=max_spend_usd,
-                                  slippage_bps=order["slippage_bps"], dry_run=dry_run)
+                                  slippage_bps=order["slippage_bps"], dry_run=dry_run,
+                        minimum_output_raw=order.get("minimum_output_raw"))
         return await tool.solana_swap(params, ctx)
     from tools.defi.trade_tool import SwapParams
     params = SwapParams(chain=order["chain"], token_in=order["token_in"],
                         token_out=order["token_out"], amount_in=order["amount"],
                         max_spend_usd=max_spend_usd,
-                        slippage_bps=order["slippage_bps"], dry_run=dry_run)
+                        slippage_bps=order["slippage_bps"], dry_run=dry_run,
+                        minimum_output_raw=order.get("minimum_output_raw"))
     return await tool.swap(params, ctx)
 
 
-def _confirm_args(args: List[str], order: dict, bound: float) -> List[str]:
+def _confirm_args(args: List[str], order: dict, bound: float, floor: int) -> List[str]:
     words = [w for w in args if w.lower() not in _GO]
+    if order.get("minimum_output_raw") is None:
+        words += ["min_raw", str(floor)]
     return words if order.get("max_usd") is not None else words + ["max", f"{bound:.2f}"]
 
 
 async def swap_reply(user_id: Optional[str], args: List[str], *, tool: Any = None) -> str:
-    """``/swap <amount> <in> to <out> on <chain> [slippage <bps>] [max <usd>] [go]``."""
+    """``/swap <amount> <in> to <out> on <chain> [slippage <bps>] [min_raw <units>] [max <usd>] [go]``."""
     if not user_id:
         return "Only the owner can swap from the wallet."
     if not args:
@@ -198,13 +211,19 @@ async def swap_reply(user_id: Optional[str], args: List[str], *, tool: Any = Non
         return (_owner_words(_render(quote)) + "\n" + caps
                 + "\n❌ The quote carried no USD value, so I cannot bound the swap. "
                   "Nothing was swapped.")
+    inflow_valued = (getattr(quote, "metadata", None) or {}).get("valuation_basis") == "inflow"
     bound = (min(cap, order["max_usd"]) if order.get("max_usd") is not None
-             else min(cap, round(usd * _PRICE_ROOM + 0.01, 2)))
+             else cap if inflow_valued else min(cap, round(usd * _PRICE_ROOM + 0.01, 2)))
     if not order["go"]:
-        return (_owner_words(_render(quote)) + "\n" + caps
-                + f"  bound: the swap may be worth at most ${bound:,.2f} "
-                  f"(the quote + 5% for the price to move)\n"
-                + f"\nTo swap it: /swap {' '.join(_confirm_args(args, order, bound))} go")
+        floor = (getattr(quote, "metadata", None) or {}).get("min_out_raw")
+        if not isinstance(floor, int) or floor <= 0:
+            return _render(quote) + "\nCannot confirm: the quote has no verifiable minimum output."
+        bound_text = (f"  proceeds estimate: the minimum output is binding; a better return is allowed. "
+                      f"The absolute USD cap remains ${bound:,.2f}.\n" if inflow_valued else
+                      f"  bound: the swap may be worth at most ${bound:,.2f} "
+                      f"(the quote + 5% for the price to move)\n")
+        return (_owner_words(_render(quote)) + "\n" + caps + bound_text
+                + f"\nTo swap it: /swap {' '.join(_confirm_args(args, order, bound, floor))} go")
     if usd > bound:
         return (f"❌ The price moved: the swap now simulates at ${usd:,.2f}, above the "
                 f"${bound:,.2f} you confirmed. Nothing was swapped.\n" + caps)

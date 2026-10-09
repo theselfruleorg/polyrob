@@ -19,6 +19,7 @@ class _ContainerStandIn:
 
 
 def test_email_target_resolves_with_a_container(monkeypatch):
+    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda: "u1")
     monkeypatch.setenv("POLYROB_OWNER_EMAIL", "own@example.com")
     from core.surfaces.owner_address import owner_address
     assert owner_address(_ContainerStandIn(), "email", "u1") == "own@example.com"
@@ -34,6 +35,7 @@ def test_email_target_none_when_unset(monkeypatch):
 def test_email_target_resolves_with_container_none(monkeypatch):
     """The pre-existing ``container=None`` call shape (e.g. the CLI) stays
     green — this fix must not regress the already-working path."""
+    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda: "u1")
     monkeypatch.setenv("POLYROB_OWNER_EMAIL", "cli@example.com")
     from core.surfaces.owner_address import owner_address
     assert owner_address(None, "email", "u1") == "cli@example.com"

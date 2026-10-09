@@ -40,6 +40,10 @@ def _autonomous_lane_refusal(max_amount_usd) -> Optional[str]:
     ``spend_lane._x402_exemption``). If that hook is not guaranteed for this
     verb, refuse the above-ceiling payment here instead of paying it silently."""
     try:
+        import os
+        from core.wallet.config import _load_per_venue_caps
+        if _load_per_venue_caps(os.environ).get("x402") is None:
+            return "payment refused: autonomous x402 payments require an explicit WALLET_VENUE_DAILY_CAP_X402_USD"
         from core.config_policy import PAYMENT_APPROVAL_TOOLS
         from core.config_policy.spend_lane import x402_autonomous_ceiling_usd
         ceiling = x402_autonomous_ceiling_usd()

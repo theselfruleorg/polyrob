@@ -449,7 +449,8 @@ async def test_approving_the_ask_flips_the_blocked_goal_back_to_ready(
     which is what makes the durable grant redeemable at all."""
     from agents.task.goals.board import STATUS_READY
     goal = board.create(user_id="u1", title="bridge to robinhood", status=STATUS_READY)
-    board.record_failure(goal.id, error="agent declared BLOCKED: needs owner approval")
+    board.record_failure(goal.id, error="agent declared BLOCKED: needs owner approval",
+        claim_token=board.get(goal.id).claim_token)
     board.update_status(goal.id, "blocked")
     monkeypatch.setattr("agents.task.goals.autonomy_marker.goal_for_session",
                         lambda sid: goal.id)
@@ -645,7 +646,8 @@ async def test_no_self_wake_when_a_goal_is_being_re_armed(board):
     from tools.controller.approval_queue import decide_tool_approval, tap_display_id
     from agents.task.goals.board import STATUS_READY
     goal = board.create(user_id="u1", title="bridge", status=STATUS_READY)
-    board.record_failure(goal.id, error="blocked on approval")
+    board.record_failure(goal.id, error="blocked on approval",
+        claim_token=board.get(goal.id).claim_token)
     board.update_status(goal.id, "blocked")
     ask = board.create_ask(user_id="u1", what="Approve defi_trade_bridge?",
                            why="x", blocks_goal_ids=[goal.id], force=True,
@@ -806,8 +808,10 @@ def test_decide_tool_approval_carries_the_owner_answer(board):
     the owner's words on the ask and on the unblocked goal's stamp."""
     from tools.controller.approval_queue import decide_tool_approval
     g = board.create(user_id="rob", title="Post the launch thread")
-    board.claim(g.id, "w", ttl_seconds=60); board.record_failure(g.id, error="which key?")
-    board.claim(g.id, "w", ttl_seconds=60); board.record_failure(g.id, error="which key?")
+    board.claim(g.id, "w", ttl_seconds=60); board.record_failure(g.id, error="which key?",
+        claim_token=board.get(g.id).claim_token)
+    board.claim(g.id, "w", ttl_seconds=60); board.record_failure(g.id, error="which key?",
+        claim_token=board.get(g.id).claim_token)
     a = board.create_ask(user_id="rob", what="Which key?", blocks_goal_ids=[g.id])
     ok, msg = decide_tool_approval(board, a.id, user_id="rob", approved=True,
                                    answer=" the sandbox key ")

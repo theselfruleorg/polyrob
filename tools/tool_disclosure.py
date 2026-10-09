@@ -39,6 +39,28 @@ _ASK_OWNER = "message the owner / file an ops ask"
 BROWSER_BEARING_TOOLS = frozenset({"browser", "x_browser", "dapp_browser"})
 
 
+def disclosure_ceiling(controller):
+    """Autonomous self-service loading obeys the same ceiling as self-created work."""
+    sid = getattr(controller, 'session_id', None)
+    if not isinstance(sid, str) or not sid:
+        return None
+    try:
+        from agents.task.session_class import is_autonomous_session
+        if not is_autonomous_session(sid):
+            return None
+        # An OWNER-authored cron job carries the owner's standing authority
+        # (CHAT-5): it loads what its task needs, like the owner's own chat.
+        # Money tools stay explicit-grant-only (checked before the ceiling).
+        from agents.task.goals.autonomy_marker import owner_job_task_for_session
+        if owner_job_task_for_session(sid):
+            return None
+        from tools.goal_tools import allowed_self_goal_tools
+        from tools.descriptors import get_tool_display_name
+        return frozenset(get_tool_display_name(tool) for tool in allowed_self_goal_tools())
+    except Exception:
+        return frozenset()
+
+
 @dataclass(frozen=True)
 class ToolStatus:
     """Resolved status for one display tool id."""
@@ -118,6 +140,7 @@ def resolve_tool_status(
     container,
     loaded_ids: Set[str],
     is_leaf: bool = False,
+    allowed_ids: Optional[Set[str]] = None,
 ) -> ToolStatus:
     """Resolve the honest status of one tool id for this session.
 
@@ -194,6 +217,10 @@ def resolve_tool_status(
             "toolset' and asked to grant defi_trade, when `/bridge` was "
             "deployed and working the whole time).")
 
+    if allowed_ids is not None and display not in allowed_ids:
+        return ToolStatus(display, 'gated', 'autonomous-ceiling',
+                          'not in this autonomous run\'s self-service tool ceiling; the owner must grant it explicitly')
+
     if is_leaf:
         from tools.controller.delegation import get_blocked_child_tools
         if display in get_blocked_child_tools():
@@ -235,6 +262,7 @@ def render_tool_catalog(
     container,
     loaded_ids: Iterable[str],
     is_leaf: bool = False,
+    allowed_ids: Optional[Set[str]] = None,
 ) -> str:
     """Render the compact ``<tool-catalog>`` block — one line per display tool.
 
@@ -271,7 +299,7 @@ def render_tool_catalog(
             continue
         seen.add(display)
         st = resolve_tool_status(
-            display, container=container, loaded_ids=loaded, is_leaf=is_leaf)
+            display, container=container, loaded_ids=loaded, is_leaf=is_leaf, allowed_ids=allowed_ids)
         desc = _one_liner(TOOL_DESCRIPTORS[name].description)
         lines.append(f"- {display}: {desc} {_status_suffix(st)}")
     lines.append("</tool-catalog>")
@@ -299,7 +327,7 @@ async def perform_load_tool(controller, tool_id: str, execution_context=None):
         display,
         container=getattr(controller, "container", None),
         loaded_ids=set(controller.list_tools()),
-        is_leaf=is_leaf)
+        is_leaf=is_leaf, allowed_ids=disclosure_ceiling(controller))
 
     if st.status == "loaded":
         return ActionResult(

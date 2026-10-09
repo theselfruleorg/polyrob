@@ -11,8 +11,8 @@ This middleware is registered UNCONDITIONALLY. It validates against the
 ``api_keys`` table (the same hashed lookup), sets the canonical auth state, and
 otherwise gets out of the way: no key, an unknown key, or an already
 authenticated request all fall straight through to the existing gates. It never
-REFUSES anything — refusal stays the job of the downstream auth middlewares, so
-mounting this cannot make a previously-working request fail.
+accepts an invalid key. Valid keys are also checked against the HTTP method's
+read/write scope before any downstream route or payment work.
 """
 
 import hashlib
@@ -22,7 +22,8 @@ from typing import Any, Callable, Dict, Optional
 
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import Response
+from starlette.responses import Response, JSONResponse
+from core.security.api_keys import expiry_timestamp, scopes, required_scope
 
 from utils.bounded_collections import BoundedDict
 
@@ -63,13 +64,18 @@ async def validate_api_key_cached(cache: Dict[str, Dict[str, Any]],
     now = _now()
     cached = cache.get(cache_key)
     if (cached and cached.get("_expires_at", 0) > now
+            and cached.get('api_key_expires_at', 0) > time.time()
             and cached.get("_epoch") == _revocation_epoch):
         return cached
     info = await validate_api_key(api_key)
     if info is None:
         cache.pop(cache_key, None)
         return None
-    info = dict(info, _expires_at=now + _CACHE_TTL_SEC,
+    remaining = info.get('api_key_expires_at', 0) - time.time()
+    if remaining <= 0:
+        cache.pop(cache_key, None)
+        return None
+    info = dict(info, _expires_at=now + min(_CACHE_TTL_SEC, remaining),
                 _epoch=_revocation_epoch)
     cache[cache_key] = info
     return info
@@ -118,11 +124,14 @@ async def validate_api_key(api_key: str) -> Optional[Dict[str, Any]]:
             SELECT user_id, scopes, is_active, expires_at
             FROM api_keys
             WHERE key_hash = ? AND is_active = 1
-              AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
             """,
             (key_hash,),
         )
         if not row:
+            return None
+        expires = expiry_timestamp(row['expires_at'])
+        granted = scopes(row['scopes'])
+        if expires <= time.time():
             return None
         try:
             await db.execute(
@@ -136,6 +145,8 @@ async def validate_api_key(api_key: str) -> Optional[Dict[str, Any]]:
             "tier": "free",
             "role": "user",
             "auth_method": "api_key",
+            "permissions": granted,
+            "api_key_expires_at": expires,
         }
     except Exception as e:
         logger.warning("api key validation unavailable: %s", e)
@@ -160,6 +171,8 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
         info = await validate_api_key_cached(self._cache, api_key)
 
         if info is not None:
+            if required_scope(request.method) not in info.get('permissions', []):
+                return JSONResponse(status_code=403, content={'error': 'API key scope does not allow this request'})
             from api.auth_state import set_auth_state
 
             set_auth_state(

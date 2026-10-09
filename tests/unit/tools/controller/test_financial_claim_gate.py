@@ -64,6 +64,13 @@ def test_direction_and_amounts():
     assert c.direction == RECEIVE and c.usd_amounts == (2.5,)
 
 
+@pytest.mark.asyncio
+async def test_unproved_payment_claim_cannot_be_written_to_chain(monkeypatch):
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr(gate, "read_settled_records", AsyncMock(return_value=RecordsRead()))
+    assert await gate.check_outbound("agent_nft_journal", {"text": "I paid $5 to the endpoint."}, "u")
+
+
 # --------------------------------------------------------------------------
 # verification
 # --------------------------------------------------------------------------

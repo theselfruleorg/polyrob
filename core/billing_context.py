@@ -17,7 +17,7 @@ to ``prepaid`` is a separate change.
 Tier-0: stdlib + ``core.env``.
 """
 from contextvars import ContextVar, Token
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 
 from core.env import int_env
 
@@ -26,6 +26,44 @@ DEFAULT_PREPAID_TOKEN_BUDGET = 200_000
 #: None = not a prepaid request; 0 = prepaid at the configured budget;
 #: > 0 = prepaid at that explicit budget.
 _PREPAID: ContextVar[Optional[int]] = ContextVar("prepaid_request_budget", default=None)
+_BILLED: ContextVar[object] = ContextVar("billed_compute_request", default=False)
+
+
+def mark_billed(reserve: Optional[Callable[[str, str], Awaitable[str]]] = None) -> Token:
+    """Mark credit-paid compute; child tasks inherit the billing restriction."""
+    return _BILLED.set(reserve if reserve is not None else True)
+
+
+def reset_billed(token: Token) -> None:
+    _BILLED.reset(token)
+
+
+def is_billed() -> bool:
+    return bool(_BILLED.get()) or is_prepaid()
+
+
+async def reserve_billed_call(model: str, provider: str) -> Optional[str]:
+    """The authenticated entry point injects the credit ledger's reservation.
+
+    A billed marker without a ledger is a restriction, never spending authority.
+    Prepaid requests use their separately enforced token budget.
+    """
+    if not is_billed() or is_prepaid():
+        return None
+    reserve = _BILLED.get()
+    if not callable(reserve):
+        raise ValueError("Credit reservation unavailable; no model request was sent")
+    return await reserve(model, provider)
+
+
+def billed_tool_refusal(tool_id: Optional[str]) -> Optional[str]:
+    """Billed tenants may use the standard session profile, not operator rails."""
+    if not is_billed() or tool_id in (None, "", "default", "controller"):
+        return None
+    from core.config_policy.profiles import profile
+    if tool_id not in profile("default:session"):
+        return "Billed requests cannot use tools outside the standard session profile"
+    return None
 
 
 def prepaid_token_budget() -> int:

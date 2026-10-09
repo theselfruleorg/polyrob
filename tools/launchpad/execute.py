@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import uuid
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
@@ -30,6 +29,7 @@ logger = logging.getLogger(__name__)
 async def guarded_send(tool, *, execution_context, verb: str, chain: str,
                        to: str, calldata: str, value_wei: int,
                        max_spend_usd: float, dry_run: bool, header: str,
+                       intent_data: Optional[str] = None,
                        spend_token: Optional[str] = None,
                        spend_max_raw: int = 0,
                        receive_token: Optional[str] = None,
@@ -55,7 +55,6 @@ async def guarded_send(tool, *, execution_context, verb: str, chain: str,
         return tool._ar(error="agent wallet not enabled (AGENT_WALLET_ENABLED)")
     signer = wallet.operational_signer()
     gate = wallet.policy
-    idem = f"launchpad_{verb}:{chain}:{to}:{uuid.uuid4().hex[:8]}"
 
     rail = (tool._rail_factory or EvmRail)(chain=chain, signer=signer)
     acct_state = None
@@ -74,6 +73,10 @@ async def guarded_send(tool, *, execution_context, verb: str, chain: str,
     except Exception as exc:
         return tool._ar(error=f"could not build the transaction: {exc}")
 
+    from tools.defi.call_verb import intent_idempotency_key
+    idem = intent_idempotency_key(
+        f"launchpad_{verb}", chain=chain, to=to, data=intent_data or calldata,
+        value_wei=value_wei, tx=tx, execution_context=execution_context)
     intent = tx_guard.TxIntent(
         chain=chain,
         token=spend_token,
@@ -144,8 +147,9 @@ async def guarded_send(tool, *, execution_context, verb: str, chain: str,
         try:
             tx_hash = await asyncio.to_thread(rail.sign_and_send, tx)
         except Exception as exc:
-            from core.wallet.broadcast.evm import broadcast_failure_text
-            return tool._ar(error=broadcast_failure_text(exc))
+            from core.wallet.broadcast.evm import broadcast_error_kind, broadcast_failure_text
+            return tool._ar(error=broadcast_failure_text(exc),
+                error_kind=broadcast_error_kind(exc))
 
         used, limit = tx_notify.caps_from_gate(gate)
         tool._notify_tx(execution_context, tx_notify.TxNotice(

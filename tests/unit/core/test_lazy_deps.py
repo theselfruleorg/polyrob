@@ -131,16 +131,20 @@ def test_install_is_constrained_by_the_lock(monkeypatch, local_on, legacy, missi
 
     def fake(cmd, **kw):
         seen["cmd"] = list(cmd)
+        seen["requirements"] = Path(cmd[cmd.index("-r") + 1]).read_text()
         monkeypatch.setattr(ld, "_dist_present", lambda name: True)  # the install "landed"
         return _ok(cmd)
 
     monkeypatch.setattr(ld, "_run_installer", fake)
     ensure("provider.gemini", prompt=False)
     cmd = seen["cmd"]
-    assert cmd[:4] == [sys.executable, "-m", "pip", "install"], "sys.executable -m pip, never bare pip"
+    assert cmd[:5] == [sys.executable, "-I", "-m", "pip", "install"], "sys.executable -m pip, never bare pip"
     assert "--constraint" in cmd
     assert cmd[cmd.index("--constraint") + 1].endswith("requirements.lock")
-    assert "google-generativeai>=0.8.0" in cmd
+    assert "google-generativeai==" in seen["requirements"]
+    assert "--hash=sha256:" in seen["requirements"]
+    assert {"--require-hashes", "--no-deps", "--only-binary=:all:"} <= set(cmd)
+    assert not Path(cmd[cmd.index("-r") + 1]).exists()
 
 
 def test_missing_lock_still_constrains_to_installed_versions(monkeypatch, local_on, legacy, missing):
@@ -170,6 +174,14 @@ def test_already_satisfied_is_a_no_op(monkeypatch, local_on):
     monkeypatch.setattr(ld, "_run_installer", lambda cmd, **kw: pytest.fail("shelled out"))
     ensure("provider.gemini", prompt=False)
     assert is_available("provider.gemini") is True
+
+
+def test_missing_release_closure_never_falls_back_to_unverified_pip(monkeypatch, local_on, legacy, missing):
+    import core.lazy_closures as closures
+    monkeypatch.setattr(closures, "read_closure", lambda feature: None)
+    monkeypatch.setattr(ld, "_run_installer", lambda cmd: pytest.fail("unverified install"))
+    with pytest.raises(FeatureUnavailable, match="no valid release closure"):
+        ensure("provider.gemini", prompt=False)
 
 
 def test_a_failed_install_refuses_with_the_remedy_and_pip_output(monkeypatch, local_on, legacy, missing):

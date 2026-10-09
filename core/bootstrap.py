@@ -169,11 +169,9 @@ def load_env(env: Optional[str] = None, config_dir: str = "config",
     Server layer order (later overrides earlier): root .env >
     config/.env.{resolved} > config/.env.{resolved}.local.
 
-    Local mode additionally loads ./.polyrob/.env then ~/.polyrob/.env FIRST, all
-    with override=False so an explicit process env var always wins and project beats
-    home. Precedence (high->low): process env > ./.polyrob/.env > ~/.polyrob/.env >
-    legacy ~/.rob/.env (read-only transition fallback) > root .env >
-    config/.env.{env} > config/.env.{env}.local.
+    Local mode reads the owner home .env, then legacy ~/.rob/.env, with
+    override=False so explicit process variables win. Project-local files
+    cannot configure the CLI merely because the owner enters a directory.
 
     Environment resolution priority: CONFIG_ENV > env parameter > ENV var > 'development'
     Returns the resolved environment name.
@@ -205,10 +203,7 @@ def load_env(env: Optional[str] = None, config_dir: str = "config",
         # keeps it, so the helper's order IS the precedence order (and an explicit
         # process env var always wins).
         for cand in env_file_candidates(resolved, local_mode=True, config_dir=config_dir):
-            # The project rung probes ``./.polyrob/.env`` in the cwd; run as
-            # the service user inside root's 0700 clone (prod 2026-09-20) the
-            # stat itself raised PermissionError. A candidate this process
-            # cannot even stat is somebody else's file — skip it, keep loading.
+            # An inaccessible home candidate cannot configure this process.
             try:
                 present = cand.path.exists()
             except OSError:
@@ -654,7 +649,7 @@ def _resolve_cli_data_home():
     from core.runtime_paths import resolve_data_home
 
     # The data-home VALUE has ONE rule — core.runtime_paths.resolve_data_home
-    # (POLYROB_DATA_DIR wins, else cwd/.polyrob). POLYROB_PROJECT_DIR never moves
+    # (POLYROB_DATA_DIR wins, else <polyrob_home>/data — never cwd/.polyrob). POLYROB_PROJECT_DIR never moves
     # the data home; it only picks the WORKSPACE placement below. That splits the
     # two concerns the old binary switch conflated — "data outside the code tree?"
     # (POLYROB_DATA_DIR) vs "sessions share one workspace?" (POLYROB_PROJECT_DIR).
@@ -747,7 +742,7 @@ async def build_cli_container(
     from pathlib import Path
     from agents.task.path import get_path_manager, set_path_manager
     # Isolation switch: POLYROB_DATA_DIR set (headless/server) → data home OUTSIDE the
-    # code tree + workspace under it; unset (local dev) → cwd/.polyrob + workspace==cwd.
+    # code tree + workspace under it; unset (local dev) → <polyrob_home>/data + workspace==cwd.
     rob_dir, _ws_is_project_root, _project_root = _resolve_cli_data_home()
 
     # Auto-gitignore .polyrob/ on first CLI use (not only on `rob init`) so a bare

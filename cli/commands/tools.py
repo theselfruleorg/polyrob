@@ -220,7 +220,7 @@ def _toggle(tool_id: str, on: bool, is_global: bool, confirm: bool) -> None:
 
 @tools.command("enable")
 @click.argument("tool_id")
-@click.option("--global", "--home", "is_global", is_flag=True, default=True,
+@click.option("--global", "--home", "is_global", is_flag=True, default=True, flag_value=True,
               help="Write to ~/.polyrob/.env (the default).")
 @click.option("--confirm", is_flag=True, default=False,
               help="Pass through to `config set` for flags that require it.")
@@ -231,7 +231,7 @@ def tools_enable(tool_id: str, is_global: bool, confirm: bool):
 
 @tools.command("disable")
 @click.argument("tool_id")
-@click.option("--global", "--home", "is_global", is_flag=True, default=True,
+@click.option("--global", "--home", "is_global", is_flag=True, default=True, flag_value=True,
               help="Write to ~/.polyrob/.env (the default).")
 @click.option("--confirm", is_flag=True, default=False,
               help="Pass through to `config set` for flags that require it.")

@@ -12,12 +12,13 @@ delegate_blocked; ``x_post`` is owner-approval-gated and ``x_signup_start`` is
 always-gated (owner-queued even under autonomous mode).
 """
 import logging
+import asyncio
 from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from core.config import BotConfig
-from core.rate_limit import SlidingWindowLimiter
+from polyrob_x.write_budget import reserve_write
 from tools.base_tool import BaseTool
 from tools.controller.types import ActionResult
 
@@ -127,13 +128,14 @@ def _proof(rail: str, **facts) -> str:
 def _leaf_or_forged(execution_context) -> bool:
     """True for a delegated/leaf/forged turn — never let one drive X."""
     if execution_context is None:
-        return False
+        return True
     if getattr(execution_context, "is_sub_agent", False):
         return True
-    if getattr(execution_context, "role", "orchestrator") == "leaf":
+    if getattr(execution_context, "role", "leaf") != "orchestrator":
         return True
     md = getattr(execution_context, "metadata", None) or {}
-    return md.get("turn_kind") in ("self_wake", "delegation_result")
+    from core.security.forged_turns import FORGED_TURN_KINDS
+    return md.get("turn_kind") in FORGED_TURN_KINDS
 
 
 class XBrowserTool(BaseTool):
@@ -144,10 +146,6 @@ class XBrowserTool(BaseTool):
     def __init__(self, name: str, config: BotConfig, container: Optional[Any] = None):
         super().__init__(name=name, config=config, container=container)
         self._session_store = None
-        from core.env import int_env
-        self._post_limiter = SlidingWindowLimiter(
-            max_calls=int_env("TWITTER_WRITE_MAX_PER_HOUR", 15),
-            window_seconds=self._WRITE_WINDOW_SEC)
 
     async def _initialize(self) -> None:
         # Nothing to validate at init — a missing session is reported per-verb
@@ -228,7 +226,7 @@ class XBrowserTool(BaseTool):
                       "(owner login) "
                       "or `x_signup_start` to create the agent's account first.",
                 include_in_memory=True)
-        if not self._post_limiter.check(user_id):
+        if not await asyncio.to_thread(reserve_write):
             return ActionResult(
                 error="hourly X post cap reached (TWITTER_WRITE_MAX_PER_HOUR).",
                 include_in_memory=True)
@@ -270,7 +268,7 @@ class XBrowserTool(BaseTool):
                       "(owner login) first; until then public replies have no "
                       "working rail (the API tier returns 403).",
                 include_in_memory=True)
-        if not self._post_limiter.check(user_id):
+        if not await asyncio.to_thread(reserve_write):
             return ActionResult(
                 error="hourly X post cap reached (TWITTER_WRITE_MAX_PER_HOUR).",
                 include_in_memory=True)
@@ -346,7 +344,7 @@ class XBrowserTool(BaseTool):
                 error="no X session — run `polyrob x-account capture-session` "
                       "on a machine with a visible browser.",
                 include_in_memory=True)
-        if not self._post_limiter.check((user_id, "dm")):
+        if not await asyncio.to_thread(reserve_write, is_dm=True):
             return ActionResult(
                 error="hourly X browser write cap reached "
                       "(TWITTER_WRITE_MAX_PER_HOUR).",

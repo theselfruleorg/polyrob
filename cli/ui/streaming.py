@@ -196,11 +196,12 @@ class ResponseBox:
         from rich.console import Group
         from rich.markdown import Markdown
         from rich.padding import Padding
+        from cli.ui.literal import literal_text
 
         speaker = Text()
         speaker.append(f"{ICONS.speaker} ", style=style("speaker_dot"))
-        speaker.append(self._title, style=style("speaker_name"))
-        body = Padding(Markdown("".join(self._chunks)), (0, 0, 0, 2))
+        speaker.append(literal_text(self._title), style=style("speaker_name"))
+        body = Padding(Markdown(literal_text("".join(self._chunks))), (0, 0, 0, 2))
         return Group(Text(""), speaker, body)
 
 

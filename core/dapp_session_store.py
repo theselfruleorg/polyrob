@@ -17,20 +17,18 @@ Registered in ``core/db_manifest.py`` so backup/rollback snapshot it.
 ⚠️ **This store never resumes a wallet — it only REPORTS one.** The row is read
 by ``dapp_status`` for display; nothing rebuilds a spending ``WalletBridge`` from
 it. The browser binding a spend needs is gone after a restart, so a persisted
-envelope is physically incapable of spending — which is the whole point. And the
-write is a REPLACE, not a merge: a reconnect on the same session id overwrites
-the row wholesale, exactly as it replaces the in-memory bridge, so a stale
-envelope can never keep spending under a new one's budget.
+envelope is physically incapable of spending — which is the whole point. A reconnect
+revokes the old bridge and carries forward the session's durable spent total;
+rearming cannot reset the budget. The replacement row records that carried
+accounting before the new bridge can sign.
 
 Layering: core-tier, imports only stdlib + ``core.sqlite_util`` /
 ``core.runtime_paths``. The envelope arrives and leaves as a plain JSON-able
 dict — ``core`` may not import ``tools`` (``tests/test_layering_ratchet.py``), so
 the tool owns the Envelope↔dict serialization and this store owns only the bytes.
 
-Failure-mode: init/writes fail-open + LOUD (a broken store must never break an
-owner's ``dapp_connect`` or a page's spend — the in-memory bridge is authoritative
-either way; a lost row only costs the after-restart report). Reads fail-open to
-None.
+Store failures propagate. A budget reservation must reach this store before
+broadcast; unavailable or corrupt accounting refuses new signing.
 """
 from __future__ import annotations
 
@@ -70,7 +68,7 @@ class DappSessionRow:
 
 
 class DappSessionStore:
-    """Durable dapp-session store. Init/writes fail-open + LOUD; reads fail-open."""
+    """Durable accounting; unavailable reads and writes raise."""
 
     def __init__(self, db_path: str):
         self.db_path = db_path
@@ -85,36 +83,25 @@ class DappSessionStore:
 
     def save(self, session_id: str, user_id: str, envelope: Dict[str, Any], *,
              revoked: bool = False) -> None:
-        """Write (REPLACE, never merge) the envelope snapshot for ``session_id``.
-
-        ``created_at`` is preserved on an update so the age of the arming is
-        honest; the envelope and ``revoked`` are overwritten wholesale, which is
-        what makes a reconnect on the same session drop the previous budget's
-        spend history instead of carrying it forward. Fail-open + LOUD."""
+        """Persist an envelope; invalid or unavailable storage raises."""
         if not self._ready or not session_id:
-            return
-        try:
-            blob = json.dumps(envelope or {}, default=str)
-        except Exception:
-            blob = "{}"
+            raise OSError("dapp session store is unavailable")
+        blob = json.dumps(envelope, allow_nan=False)
         now = time.time()
-        try:
-            self._exec(
-                "INSERT INTO dapp_sessions "
-                "(session_id, user_id, envelope, revoked, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT(session_id) DO UPDATE SET "
-                "user_id=excluded.user_id, envelope=excluded.envelope, "
-                "revoked=excluded.revoked, updated_at=excluded.updated_at",
-                (str(session_id), str(user_id or ""), blob,
-                 1 if revoked else 0, now, now))
-        except Exception as e:
-            logger.error(f"dapp_session_store save failed (session={session_id}): {e}")
+        self._exec(
+            "INSERT INTO dapp_sessions "
+            "(session_id, user_id, envelope, revoked, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(session_id) DO UPDATE SET "
+            "user_id=excluded.user_id, envelope=excluded.envelope, "
+            "revoked=excluded.revoked, updated_at=excluded.updated_at",
+            (str(session_id), str(user_id or ""), blob,
+             1 if revoked else 0, now, now))
 
     def mark_revoked(self, session_id: str) -> None:
-        """Flip a row to revoked without a full snapshot. Fail-open + LOUD."""
+        """Flip a row to revoked; unavailable storage raises."""
         if not self._ready or not session_id:
-            return
+            raise OSError("dapp session store is unavailable")
         self._exec(
             "UPDATE dapp_sessions SET revoked=1, updated_at=? WHERE session_id=?",
             (time.time(), str(session_id)))
@@ -125,8 +112,10 @@ class DappSessionStore:
             ) -> Optional[DappSessionRow]:
         """The persisted row for ``session_id``, or None. When ``user_id`` is
         given and non-empty the read is tenant-scoped (defense in depth — a
-        session belongs to one tenant by construction). Fail-open to None."""
-        if not self._ready or not session_id:
+        session belongs to one tenant by construction). Unreadable stores raise."""
+        if not self._ready:
+            raise OSError("dapp session store is unavailable")
+        if not session_id:
             return None
         sql = ("SELECT session_id, user_id, envelope, revoked, created_at, "
                "updated_at FROM dapp_sessions WHERE session_id=?")
@@ -137,14 +126,13 @@ class DappSessionStore:
         try:
             row = execute_retry(self.db_path, sql, params, fetch="one")
         except Exception as e:
-            logger.error(f"dapp_session_store get failed (session={session_id}): {e}")
-            return None
+            raise OSError("dapp session read is unavailable") from e
         return self._to_row(row)
 
     def list_for_tenant(self, user_id: str) -> List[DappSessionRow]:
-        """Every persisted session for ``user_id``, newest first. Fail-open to []."""
+        """Every persisted session for ``user_id``, newest first; errors raise."""
         if not self._ready:
-            return []
+            raise OSError("dapp session store is unavailable")
         try:
             rows = execute_retry(
                 self.db_path,
@@ -153,8 +141,7 @@ class DappSessionStore:
                 "ORDER BY updated_at DESC",
                 (str(user_id or ""),), fetch="all") or []
         except Exception as e:
-            logger.error(f"dapp_session_store list failed: {e}")
-            return []
+            raise OSError("dapp session list is unavailable") from e
         out = []
         for r in rows:
             parsed = self._to_row(r)
@@ -168,7 +155,7 @@ class DappSessionStore:
         try:
             execute_retry(self.db_path, sql, params)
         except Exception as e:
-            logger.error(f"dapp_session_store write failed: {e}")
+            raise OSError("dapp session write is unavailable") from e
 
     def _to_row(self, row) -> Optional[DappSessionRow]:
         if not row:
@@ -177,9 +164,9 @@ class DappSessionStore:
         try:
             env = json.loads(env_raw) if env_raw else {}
             if not isinstance(env, dict):
-                env = {}
-        except Exception:
-            env = {}
+                raise ValueError("envelope must be an object")
+        except Exception as exc:
+            raise OSError("dapp session accounting is corrupt") from exc
         if isinstance(row, dict):
             return DappSessionRow(
                 session_id=row["session_id"], user_id=row["user_id"],

@@ -128,14 +128,20 @@ async def test_a_refusal_fires_the_persist_hook():
 
 
 @pytest.mark.asyncio
-async def test_a_broken_persist_hook_never_breaks_a_spend():
+async def test_a_broken_persist_hook_refuses_before_signing(monkeypatch):
+    from unittest.mock import Mock
+    send = Mock()
+    monkeypatch.setattr(_Rail, "sign_and_send", send)
     def _boom(_b):
         raise RuntimeError("store down")
 
     bridge = _bridge(persist_fn=_boom)
     out = await _ask(bridge, "eth_sendTransaction",
                      [{"to": POOL, "data": "0x12345678", "from": HOLDER}])
-    assert out.get("result")           # the spend still succeeded
+    assert out.get("error")
+    assert bridge.envelope.revoked
+    assert not bridge.envelope.sent
+    send.assert_not_called()
 
 
 # --- envelope_snapshot round-trips through the store ------------------------- #

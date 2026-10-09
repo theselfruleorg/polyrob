@@ -84,7 +84,8 @@ async def test_the_sweeper_asks_the_signer_in_remote_mode(signer_home, monkeypat
     from modules.payments.treasury_sweeper import TreasurySweeper
     calls = []
     gen = SimpleNamespace(remote=True, sweep=lambda **kw: calls.append(kw) or "0x" + "ab" * 32)
-    db = SimpleNamespace(execute=AsyncMock(return_value=SimpleNamespace(rowcount=1)))
+    db = SimpleNamespace(execute=AsyncMock(return_value=SimpleNamespace(rowcount=1)),
+                         fetch_all=AsyncMock(return_value=[{'id': 1}]))
     sweeper = TreasurySweeper(db, gen, SimpleNamespace(
         treasury_address="0x" + "2" * 40, ethereum_rpc_url="https://example.invalid"))
     deposit = dict(id=1, user_id="u", chain="ethereum", user_address="0x" + "1" * 40,

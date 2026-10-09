@@ -1,6 +1,7 @@
 """E4 (A6 gap 1) — Socket.IO join_session must not stream a tenant's feed to
 another tenant. connect() must resolve + store the caller's identity so
 join_session can check it."""
+from core.security.session_tokens import SESSION_AUDIENCE
 import importlib
 import asyncio
 
@@ -101,29 +102,30 @@ async def test_same_tenant_join_allowed_in_multitenant(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_single_user_join_still_allowed(monkeypatch):
-    """Posture 0 must not regress — no auth at all, exactly like today."""
+    """An authenticated local owner can open a session."""
     server = _reload_server(monkeypatch, multitenant=False)
     fake_sio = _FakeSio()
     monkeypatch.setattr(server, "_sio", fake_sio)
     monkeypatch.setattr(server, "check_rate_limit", lambda ip: True)
 
+    server._socket_user["sid-local"] = server.webgate.local_owner_id()
     await server.join_session("sid-local", {"session_id": "any-session"})
 
-    expected_room = server.pm().clean_session_id("any-session")
+    expected_room = "session:" + server.pm().clean_session_id("any-session")
     assert ("sid-local", expected_room) in fake_sio.entered_rooms
 
 
-def test_connect_resolves_local_owner_in_single_user(monkeypatch):
+def test_connect_refuses_anonymous_local_client(monkeypatch):
     server = _reload_server(monkeypatch, multitenant=False)
-    asyncio.run(server.connect("sid1", {}, auth=None))
-    assert server._socket_user["sid1"] == server.webgate.local_owner_id()
+    assert asyncio.run(server.connect("sid1", {}, auth=None)) is False
+    assert "sid1" not in server._socket_user
 
 
 def test_connect_decodes_jwt_in_multitenant(monkeypatch):
     server = _reload_server(monkeypatch, multitenant=True)
     monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
     import jwt as pyjwt
-    token = pyjwt.encode({"user_id": "tenant-a", "exp": time.time() + 60, "jti": "tenant-session"}, "test-secret", algorithm="HS256")
+    token = pyjwt.encode({"aud": SESSION_AUDIENCE, **{"user_id": "tenant-a", "exp": time.time() + 60, "jti": "tenant-session"}}, "test-secret", algorithm="HS256")
     asyncio.run(server.connect("sid2", {}, auth={"token": token}))
     assert server._socket_user["sid2"] == "tenant-a"
 
@@ -171,7 +173,7 @@ async def test_own_ops_cookie_authenticated_owner_join_allowed(monkeypatch):
     monkeypatch.setattr(type(server.pm()), "get_session_user", lambda self, sid: "owner-1")
 
     import jwt as pyjwt
-    token = pyjwt.encode({"user_id": "owner-1", "exp": time.time() + 60, "jti": "owner-session"}, "test-secret", algorithm="HS256")
+    token = pyjwt.encode({"aud": SESSION_AUDIENCE, **{"user_id": "owner-1", "exp": time.time() + 60, "jti": "owner-session"}}, "test-secret", algorithm="HS256")
     environ = {"HTTP_COOKIE": f"auth_token={token}; other=ignored"}
 
     await server.connect("sid-owner", environ, auth=None)
@@ -179,7 +181,7 @@ async def test_own_ops_cookie_authenticated_owner_join_allowed(monkeypatch):
 
     await server.join_session("sid-owner", {"session_id": "some-session"})
 
-    expected_room = server.pm().clean_session_id("some-session")
+    expected_room = "session:" + server.pm().clean_session_id("some-session")
     assert ("sid-owner", expected_room) in fake_sio.entered_rooms
 
 

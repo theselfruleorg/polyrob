@@ -1,5 +1,8 @@
 """X DM polling: pure dm_event → InboundMessage + the since-id cursor loop.
 
+OBSOLETE (2026-10-04): ``/2/dm_events`` no longer receives new DMs (X moved them
+to encrypted X Chat). See ``polyrob_x.x_chat_client``.
+
 X's pay-per-use tier has no DM webhook (Account Activity is enterprise), so
 inbound is polling ``GET /2/dm_events``. The endpoint has NO ``since_id``
 param — it returns events newest-first with ``pagination_token`` — so the

@@ -97,6 +97,30 @@ def derive_key(seed: str, venue: str, scheme: str) -> bytes:
     raise ValueError(f"unknown derivation scheme '{scheme}' (expected one of {SCHEMES})")
 
 
+def _refuse_unmoved_project_wallet(env, data_dir) -> None:
+    """Fail closed when the scheme record sits in a project ``cwd/.polyrob`` home.
+
+    The local data home moved from ``cwd/.polyrob`` to ``<polyrob_home>/data``
+    (DATA-4). A bip44 wallet whose ``meta.json`` stayed in the project home would
+    otherwise resolve as ``legacy`` here and silently change addresses."""
+    if data_dir is not None or (env.get("POLYROB_DATA_DIR") or "").strip():
+        return
+    legacy = Path.cwd() / ".polyrob"
+    try:
+        found = (legacy / "wallet" / "meta.json").is_file()
+    except Exception:
+        found = False
+    if not found:
+        return
+    from core.runtime_paths import resolve_data_home
+    home = resolve_data_home()
+    if legacy.resolve() != home:
+        raise ValueError(
+            f"the wallet derivation record is in the project data home {legacy}, which polyrob "
+            f"no longer reads; set POLYROB_DATA_DIR={legacy} or move its files into {home} "
+            f"before using the wallet")
+
+
 def resolve_scheme(env: Optional[Mapping[str, str]] = None,
                    data_dir: Optional[Path] = None) -> str:
     import os
@@ -122,6 +146,7 @@ def resolve_scheme(env: Optional[Mapping[str, str]] = None,
     except Exception:
         present = False
     if not present:
+        _refuse_unmoved_project_wallet(env, data_dir)
         return "legacy"
     try:
         recorded = (json.loads(meta.read_text()).get("derivation") or "").strip().lower()

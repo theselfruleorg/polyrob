@@ -83,7 +83,7 @@ class TreasurySweeper:
             try:
                 await self._sweep_all_deposits()
             except Exception as e:
-                self.logger.error(f"Error in sweep loop: {e}", exc_info=True)
+                self.logger.error(f"Error in sweep loop: {type(e).__name__}")
 
             # Sleep until next sweep
             await asyncio.sleep(self.sweep_interval)
@@ -122,13 +122,12 @@ class TreasurySweeper:
                     await self._sweep_deposit(deposit)
                 except Exception as e:
                     self.logger.error(
-                        f"Error sweeping deposit {deposit['id']}: {e}",
-                        exc_info=True
+                        f"Error sweeping deposit {deposit['id']}: {type(e).__name__}"
                     )
                     continue
 
         except Exception as e:
-            self.logger.error(f"Error in _sweep_all_deposits: {e}", exc_info=True)
+            self.logger.error(f"Error in _sweep_all_deposits: {type(e).__name__}")
 
     async def _sweep_deposit(self, deposit: Dict):
         """Sweep a single deposit to treasury.
@@ -149,6 +148,22 @@ class TreasurySweeper:
             from core.wallet import submission_journal
             if submission_journal.unresolved():
                 raise RuntimeError('Unaccounted submission; reconcile before sweeping')
+
+            # A whole-address transfer can cover several credit records. Pin
+            # their identities BEFORE broadcast so a later deposit is never
+            # booked against a transfer that preceded it.
+            rows = await self.db.fetch_all("""
+                SELECT id FROM crypto_payments
+                WHERE user_id = ? AND chain = ? AND token_symbol = ?
+                  AND swept_at IS NULL AND status = 'confirmed'
+                ORDER BY id LIMIT 1001
+            """, (deposit['user_id'], chain_name, deposit['token_symbol']))
+            ids = tuple(int(row['id']) for row in rows)
+            if deposit['id'] not in ids:
+                return  # Already covered by an earlier sweep in this batch.
+            if len(ids) > 1000:
+                raise RuntimeError('Too many pending deposits; reconcile before sweeping')
+            deposit = dict(deposit, sweep_deposit_ids=ids)
 
             if getattr(self.wallet_gen, 'remote', False):
                 # 066 §5.5: the deposit seed lives in polyrob-signer, which
@@ -189,19 +204,21 @@ class TreasurySweeper:
                 submission_journal.mark_booked(tx_hash)
 
         except Exception as e:
-            self.logger.error(f"Error sweeping deposit {deposit['id']}: {e}", exc_info=True)
+            self.logger.error(f"Error sweeping deposit {deposit['id']}: {type(e).__name__}")
 
     async def _record_sweep(self, deposit: Dict, tx_hash: str, chain_name: str) -> None:
-        """Book one sweep against its deposit row (exactly one row, or raise)."""
+        """Book the exact pre-broadcast deposit group in one atomic UPDATE."""
+        ids = deposit['sweep_deposit_ids']
+        placeholders = ','.join('?' for _ in ids)
         cursor = await self.db.execute("""
             UPDATE crypto_payments
             SET swept_at = datetime('now'),
                 sweep_tx_hash = ?
-            WHERE id = ?
-        """, (tx_hash, deposit['id']))
+            WHERE swept_at IS NULL AND id IN (""" + placeholders + ")",
+            (tx_hash, *ids))
 
-        if cursor.rowcount != 1:
-            raise RuntimeError('Sweep bookkeeping did not update exactly one deposit')
+        if cursor.rowcount != len(ids):
+            raise RuntimeError('Sweep bookkeeping did not update the complete deposit group')
 
         self.logger.info(
             f"✅ Swept deposit {deposit['id']}: "
@@ -262,7 +279,7 @@ class TreasurySweeper:
             return await asyncio.to_thread(self._submit_sweep, w3, account, tx, deposit)
 
         except Exception as e:
-            self.logger.error(f"Error sweeping ETH: {e}")
+            self.logger.error(f"Error sweeping ETH: {type(e).__name__}")
             return None
 
     async def _sweep_token(
@@ -334,7 +351,7 @@ class TreasurySweeper:
             return await asyncio.to_thread(self._submit_sweep, w3, account, tx, deposit)
 
         except Exception as e:
-            self.logger.error(f"Error sweeping {token_symbol}: {e}")
+            self.logger.error(f"Error sweeping {token_symbol}: {type(e).__name__}")
             return None
 
     def _submit_sweep(self, w3, account, tx, deposit):

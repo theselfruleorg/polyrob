@@ -8,7 +8,10 @@ import os
 
 from surfaces._launch import LaunchContext, Launched
 
-_REQUIRED = ("WHATSAPP_ACCESS_TOKEN", "WHATSAPP_PHONE_NUMBER_ID", "WHATSAPP_VERIFY_TOKEN")
+#: CHAT-22: the webhook secret is REQUIRED — without it every inbound POST is
+#: refused (fail-closed but silent), so the surface would look online and hear nothing.
+_REQUIRED = ("WHATSAPP_ACCESS_TOKEN", "WHATSAPP_PHONE_NUMBER_ID", "WHATSAPP_VERIFY_TOKEN",
+             "WHATSAPP_WEBHOOK_SECRET")
 
 
 async def launch(ctx: LaunchContext):

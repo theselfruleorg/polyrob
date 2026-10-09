@@ -164,8 +164,10 @@ def test_every_owned_account_is_observed_across_several_simulations(monkeypatch)
     one used to be invisible (truncated); now it is seen."""
     monkeypatch.delenv("DEFI_SOLANA_SIM_MAX_ACCOUNTS", raising=False)
     kp = Keypair()
-    raw, owner = _tx([(JUP, b"\x00", [(str(kp.pubkey()), True, True)])], kp)
     mine = [str(Pubkey.new_unique()) for _ in range(9)]
+    # The route names every one of them (an account a transaction does not name cannot change).
+    raw, owner = _tx([(JUP, b"\x00", [(str(kp.pubkey()), True, True)]
+                       + [(a, False, True) for a in mine])], kp)
     last = mine[-1]
     sims = []
 

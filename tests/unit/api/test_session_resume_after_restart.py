@@ -11,6 +11,13 @@ import api.task_http_api as thp
 from api.models import UserMessage as UserMessageRequest
 
 
+@pytest.fixture(autouse=True)
+def _paid_operator(monkeypatch):
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr("api.payment_verification.verify_payment_for_request",
+                        AsyncMock(return_value=("admin_bypass", {})))
+
+
 class _FakeState:
     def __init__(self, user_id):
         self.user_id = user_id
@@ -41,7 +48,7 @@ class _Orchestrator:
 class _FakeAgent:
     def __init__(self, *, status="suspended", orchestrator=None):
         self._session = {
-            "id": "s1", "user_id": "owner", "status": status,
+            "id": "sess1", "user_id": "owner", "status": status,
             "task": "t", "created_at": "2026-07-07T00:00:00", "config": {}, "metadata": {},
         }
         self._orch = orchestrator
@@ -76,7 +83,7 @@ async def test_suspended_session_delivers_message_in_fresh_process(monkeypatch):
     monkeypatch.setattr(thp, "guard_remote", lambda agent, sid: None)
     agent = _FakeAgent(status="suspended", orchestrator=None)
     req = _FakeRequest("owner")
-    await thp.send_user_message("s1", UserMessageRequest(text="continue please"), req, agent=agent)
+    await thp.send_user_message("sess1", UserMessageRequest(text="continue please"), req, agent=agent)
     assert agent.delivered and agent.delivered[0][2] == "continue please"  # message delivered
     assert len(agent.run_calls) == 1 and agent.run_calls[0][0] == "owner"   # then run once
 
@@ -88,7 +95,7 @@ async def test_completed_session_delivers_message_in_fresh_process(monkeypatch):
     monkeypatch.setattr(thp, "guard_remote", lambda agent, sid: None)
     agent = _FakeAgent(status="completed", orchestrator=None)
     req = _FakeRequest("owner")
-    await thp.send_user_message("s1", UserMessageRequest(text="one more thing"), req, agent=agent)
+    await thp.send_user_message("sess1", UserMessageRequest(text="one more thing"), req, agent=agent)
     assert agent.delivered and agent.delivered[0][2] == "one more thing"
     assert len(agent.run_calls) == 1
 
@@ -102,7 +109,7 @@ async def test_resident_session_uses_step6_not_ensure_deliver(monkeypatch):
     orch = _Orchestrator()
     agent = _FakeAgent(status="suspended", orchestrator=orch)
     req = _FakeRequest("owner")
-    await thp.send_user_message("s1", UserMessageRequest(text="mid-run guidance"), req, agent=agent)
+    await thp.send_user_message("sess1", UserMessageRequest(text="mid-run guidance"), req, agent=agent)
     assert not agent.delivered                       # STEP 6 handled it, not ensure_deliver
     assert orch.submitted and orch.submitted[0][0] == "mid-run guidance"
     assert len(agent.run_calls) == 1

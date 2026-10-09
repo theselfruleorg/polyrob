@@ -107,10 +107,10 @@ def _hl_order():
                                         "t": {"limit": {"tif": "Gtc"}}}], "grouping": "na"}
 
 
-def test_hyperliquid_order_actions_sign_and_recover_to_the_hl_key(make_rig):
+def test_hyperliquid_cancellations_sign_and_recover_to_the_hl_key(make_rig):
     signing = pytest.importorskip("hyperliquid.utils.signing")
     rig = make_rig(hyperliquid_orders=True)
-    action, nonce = _hl_order(), 1_700_000_000_000
+    action, nonce = {"type": "cancel", "cancels": [{"a": 0, "o": 1}]}, 1_700_000_000_000
     sig = _ok(rig.call("venue.sign", {"venue": "hyperliquid", "action": action,
                                       "nonce": nonce, "is_mainnet": True}))["signature"]
     who = signing.recover_agent_or_user_from_l1_action(action, sig, None, nonce, None, True)
@@ -118,6 +118,11 @@ def test_hyperliquid_order_actions_sign_and_recover_to_the_hl_key(make_rig):
 
 
 @pytest.mark.parametrize("action", [
+    _hl_order(),
+    {"type": "modify", "oid": 1, "order": _hl_order()["orders"][0]},
+    {"type": "batchModify", "modifies": []},
+    {"type": "updateLeverage", "asset": 0, "isCross": True, "leverage": 100},
+    {"type": "updateIsolatedMargin", "asset": 0, "isBuy": True, "ntli": 1000000000},
     {"type": "withdraw3", "destination": "0x" + "1" * 40, "amount": "100"},
     {"type": "usdSend", "destination": "0x" + "1" * 40, "amount": "100"},
     {"type": "approveAgent", "agentAddress": "0x" + "1" * 40},
@@ -152,7 +157,8 @@ def test_the_hl_sdk_hook_routes_a_remote_account_to_the_signer(make_rig):
     assert remote_signing.install()
     account = RemoteAccount(LoopbackClient(rig.service),
                             rig.service.wallet.signer_for("hyperliquid").address, "hyperliquid")
-    sig = ex.sign_l1_action(account, _hl_order(), None, 5, None, True)
+    sig = ex.sign_l1_action(account, {"type": "cancel", "cancels": [{"a": 0, "o": 1}]},
+                            None, 5, None, True)
     assert set(sig) == {"r", "s", "v"}
     # A user-signed action (a withdrawal) reaches sign_message and refuses.
     from core.wallet.agent_wallet import WalletSigningUnavailable
@@ -296,3 +302,16 @@ def test_signer_toml_is_strict(mutate, match):
     mutate(data)
     with pytest.raises(SignerConfigError, match=match):
         parse_signer_config(data)
+
+
+def test_eip8004_refuses_a_domain_that_is_not_a_pinned_reputation_registry(rig):
+    from core.wallet import erc8004
+    typed = _feedback(int(time.time()) + 86400)
+    typed["domain"]["verifyingContract"] = "0x" + "9" * 40          # some other contract
+    _refused(rig.call("eip8004.feedback_auth", {"typed": typed}), protocol.UNKNOWN_SHAPE)
+    typed["domain"]["verifyingContract"] = erc8004.registry_for("base").reputation
+    typed["domain"]["chainId"] = 1                                  # the pinned address, wrong chain row
+    typed["domain"]["verifyingContract"] = erc8004.registry_for("base-sepolia").reputation
+    _refused(rig.call("eip8004.feedback_auth", {"typed": typed}), protocol.UNKNOWN_SHAPE)
+    typed["domain"]["chainId"] = 84532
+    assert _ok(rig.call("eip8004.feedback_auth", {"typed": typed}))["signature"]

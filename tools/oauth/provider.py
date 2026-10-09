@@ -49,11 +49,11 @@ class OAuthProvider(ABC):
     leeway_sec: float = 60.0
 
     @abstractmethod
-    def authorize_url(self, *, state: Optional[str] = None, redirect_uri: Optional[str] = None) -> str:
+    def authorize_url(self, *, state: str, code_verifier: str, redirect_uri: Optional[str] = None) -> str:
         """Build the user-facing authorization URL."""
 
     @abstractmethod
-    async def exchange_code(self, code: str, *, redirect_uri: Optional[str] = None) -> OAuthToken:
+    async def exchange_code(self, code: str, *, code_verifier: str, redirect_uri: Optional[str] = None) -> OAuthToken:
         """Exchange an authorization code for a token set."""
 
     @abstractmethod

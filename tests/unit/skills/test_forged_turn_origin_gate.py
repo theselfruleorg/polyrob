@@ -144,7 +144,7 @@ async def test_genuine_turn_create_auto_activates_when_review_off(monkeypatch, t
 
 
 @pytest.mark.asyncio
-async def test_genuine_owner_turn_can_promote(monkeypatch, tmp_path):
+async def test_genuine_owner_turn_cannot_self_promote(monkeypatch, tmp_path):
     # T3-02: promote is owner-only. A genuine turn whose uid is the BOUND OWNER
     # principal can promote.
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
@@ -156,8 +156,8 @@ async def test_genuine_owner_turn_can_promote(monkeypatch, tmp_path):
     ctx = _ctx(turn_kind=None, role="orchestrator", is_sub=False)  # user_id="u1"
     params = action.param_model(action="promote", skill_id="draft-skill")
     res = await action.function(params, execution_context=ctx)
-    assert res.error is None, res.error
-    assert (tmp_path / "user_u1" / "draft-skill" / "SKILL.md").exists()
+    assert res.error and "owner" in res.error.lower()
+    assert not (tmp_path / "user_u1" / "draft-skill" / "SKILL.md").exists()
 
 
 @pytest.mark.asyncio

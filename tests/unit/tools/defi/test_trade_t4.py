@@ -259,6 +259,7 @@ async def test_swap_refuses_when_no_route_exists():
     res = await tool.swap(SwapParams(token_in=USDC, token_out=WETH,
                                      amount_in=1.0, max_spend_usd=2.0))
     assert res.error and "no route" in res.error
+    assert (res.metadata or {}).get("error_kind") == "precondition"
     assert "univ3" in res.error, "the refusal must name who was asked (029 R6)"
 
 
@@ -280,6 +281,8 @@ async def test_swap_refuses_without_a_sufficient_allowance(monkeypatch):
     res = await tool.swap(SwapParams(token_in=USDC, token_out=WETH,
                                      amount_in=1.0, max_spend_usd=2.0))
     assert res.error and "insufficient allowance" in res.error
+    # a precondition, tagged where it was built — the run's notice still posts
+    assert (res.metadata or {}).get("error_kind") == "precondition"
     assert "approve_token" in res.error
 
 
@@ -298,7 +301,7 @@ async def test_swap_bounds_slippage_into_amount_out_minimum(monkeypatch):
     the swap must revert rather than accept a worse price."""
     import tools.defi.providers.univ3 as u
     monkeypatch.setattr(u, "read_allowance", lambda *a, **k: 10 ** 30)
-    out = 1_000_000_000_000_000_000
+    out = 500_000_000_000_000
     tool, _ = _tool(quote=_quote(amount_out=out))
     await tool.swap(SwapParams(token_in=USDC, token_out=WETH, amount_in=1.0,
                                max_spend_usd=2.0, slippage_bps=100, dry_run=True))
@@ -390,6 +393,27 @@ def test_route_check_reads_unavailable_when_a_price_is_missing():
     verdict, note = tool._route_sanity("base", route, ident, ident)
     assert verdict == "UNAVAILABLE"
     assert "UNAVAILABLE" in note and "AGREES" not in note
+
+
+def test_route_quote_cannot_hide_a_near_zero_executable_floor():
+    from dataclasses import replace
+    tool, _ = _tool(quote=_quote())
+    quote, _ = tool._route("base", USDC, WETH, 1_000_000,
+                          holder=_Signer.address, slippage_bps=100)
+    quote = replace(quote, amount_out_min_raw=1)
+    from core.wallet.tokens import get_token_identity
+    verdict, note = tool._route_sanity("base", quote,
+        get_token_identity("base", USDC), get_token_identity("base", WETH))
+    assert verdict == "DISAGREES", note
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), -1, True])
+def test_nonfinite_or_invalid_route_price_never_agrees(bad):
+    tool, _ = _tool()
+    tool._price_fn = lambda *args: bad
+    ident = type("I", (), {"decimals": 18, "symbol": "X"})()
+    verdict, note = tool._route_sanity("base", _quote(), ident, ident)
+    assert verdict == "UNAVAILABLE", note
 
 
 @pytest.mark.asyncio
@@ -516,6 +540,7 @@ async def test_swap_refuses_a_stale_quote(monkeypatch):
     res = await tool.swap(SwapParams(token_in=USDC, token_out=WETH,
                                      amount_in=1.0, max_spend_usd=2.0))
     assert res.error and "stale" in res.error.lower()
+    assert (res.metadata or {}).get("error_kind") == "precondition"
 
 
 # --- guard: allowance ops legitimately move zero tokens ---------------------
@@ -623,3 +648,14 @@ async def test_a_widened_tolerance_still_refuses_a_grossly_wrong_route(monkeypat
                                      amount_in=1.0, max_spend_usd=2.0,
                                      dry_run=False))
     assert res.error and "DISAGREES" in res.error
+
+
+@pytest.mark.asyncio
+async def test_confirmed_minimum_cannot_be_lowered_by_a_new_route(monkeypatch):
+    import tools.defi.providers.univ3 as u
+    monkeypatch.setattr(u, "read_allowance", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("Must refuse before checking an allowance")))
+    tool, _ = _tool(quote=_quote())
+    result = await tool.swap(SwapParams(token_in=USDC, token_out=WETH, amount_in=1,
+        max_spend_usd=2, minimum_output_raw=10**18, dry_run=True))
+    assert "confirmed quote" in result.error

@@ -16,7 +16,7 @@ from modules.x402.x402_integration import (
 
 @pytest.mark.parametrize("status,expected", [
     (200, False), (201, False), (302, False), (402, False), (404, False),
-    (499, False), (500, True), (502, True), (503, True), (504, True),
+    (429, True), (499, False), (500, True), (502, True), (503, True), (504, True),
 ])
 def test_should_refund_on_status(status, expected):
     assert should_refund_on_status(status) is expected

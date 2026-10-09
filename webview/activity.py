@@ -650,10 +650,9 @@ def _require_activity_access(request: Request) -> None:
     """The global stream is inherently cross-tenant, so:
 
     - flag off → 404 (feature not there);
-    - local → open (loopback operator IS the owner);
-    - own_ops → the auth middleware already required the single owner's
+    - local/own_ops → the auth middleware already required the single owner's
       cookie for any non-public path, which /activity is — nothing extra;
-    - multitenant → admin tier / is_admin / the instance owner ONLY. A plain
+    - multitenant → administrative role / the instance owner ONLY. A plain
       authenticated tenant gets **404**: this page shows everyone's activity, so
       for a tenant it is not a page they may not USE, it is a page that is not
       part of their console at all. 403 said "it exists, you are not allowed" —
@@ -664,18 +663,15 @@ def _require_activity_access(request: Request) -> None:
     """
     if not webgate.activity_enabled():
         raise HTTPException(status_code=404, detail="Activity stream disabled")
-    if not webgate.requires_owner_login():
-        return
     if webgate.is_multitenant():
         state = getattr(request, "state", None)
         user_id = getattr(state, "user_id", None)
-        tier = getattr(state, "tier", None)
         # ⚠️ The ROLE through the one predicate, not the cached boolean alone —
         # see webgate.request_is_admin. A request whose identity was populated
         # outside this process's auth middleware carries a role and no flag,
         # and reading only the flag denied a real admin with a 404.
         is_admin = webgate.request_is_admin(request)
-        if is_admin or tier == "admin" or (user_id and user_id == webgate.local_owner_id()):
+        if is_admin or (user_id and user_id == webgate.local_owner_id()):
             return
         raise HTTPException(status_code=404, detail="Activity stream disabled")
     return  # own_ops: single-owner model (H2b)

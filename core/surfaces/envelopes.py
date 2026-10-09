@@ -37,6 +37,11 @@ class Identity:
     # or an inbound that never reached the tier model): every reader falls back
     # to owner-or-member rather than inventing a privilege.
     chat_role: Optional[str] = None
+    # CHAT-6: on a FORGEABLE surface (email) the surface says whether the
+    # sender address is proven (the receiving MX's Authentication-Results).
+    # Anything but True keeps such a sender at DENIED in resolve_access_tier.
+    # Ignored on every non-forgeable surface.
+    sender_authenticated: Optional[bool] = None
 
 
 @dataclass
@@ -166,3 +171,7 @@ class SendResult:
     #: ``""`` = every word landed and only a best-effort extra failed (the
     #: message counts as delivered); otherwise the retry sends only this text.
     remaining_text: Optional[str] = None
+    #: 0008 — EVERY id the send produced (each text chunk, each media item), in
+    #: order; ``surface_message_id`` stays the last one. What the post ledger
+    #: records so the agent can later delete the whole post.
+    surface_message_ids: list = field(default_factory=list)

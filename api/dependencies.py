@@ -141,6 +141,27 @@ def get_trusted_client_ip(
     return peer
 
 
+def rate_key_for_ip(ip: Optional[str]) -> Optional[str]:
+    """The rate-limit KEY for a client address (API-11).
+
+    One IPv6 host commonly holds a whole /64, so keying on the full address
+    gave one client 2**64 fresh budgets. IPv6 is aggregated to its /64;
+    IPv4 (and an IPv4-mapped IPv6 address) keys on the address itself.
+    """
+    if not ip:
+        return ip
+    import ipaddress
+    try:
+        addr = ipaddress.ip_address(str(ip).strip())
+    except ValueError:
+        return ip
+    if isinstance(addr, ipaddress.IPv6Address):
+        if addr.ipv4_mapped is not None:
+            return str(addr.ipv4_mapped)
+        return str(ipaddress.ip_network(f"{addr}/64", strict=False))
+    return str(addr)
+
+
 # ---------------------------------------------------------------------------
 # Auth policies
 # ---------------------------------------------------------------------------
@@ -209,7 +230,7 @@ async def get_user_permissive(request: Request) -> str:
 
     # Path 3 — authenticated via API key
     if getattr(request.state, "authenticated", False):
-        return getattr(request.state, "user_id", "authenticated_api_user")
+        return getattr(request.state, "user_id", None) or "authenticated_api_user"
 
     raise HTTPException(
         status_code=401,
@@ -277,6 +298,10 @@ async def resolve_orchestrator(session_id: str, agent) -> Optional[object]:
     Raises:
         HTTPException 409: if the session is owned by another worker (REMOTE).
     """
-    cleaned_id = pm().clean_session_id(session_id)
+    from agents.task.path import require_canonical_session_id
+    try:
+        cleaned_id = require_canonical_session_id(session_id, path_manager=pm())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid or noncanonical session ID") from exc
     guard_remote(agent, cleaned_id)
     return agent.get_orchestrator(cleaned_id)

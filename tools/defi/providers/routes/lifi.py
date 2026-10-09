@@ -70,11 +70,8 @@ class LifiRouteProvider:
         return bool(row.aggregator_spender)
 
     def _http_get(self, url: str) -> dict:
-        req = urllib.request.Request(
-            url, headers={"accept": "application/json",
-                          "user-agent": "polyrob-defi/1.0"})
-        with urllib.request.urlopen(req, timeout=TIMEOUT_SEC) as resp:
-            return json.loads(resp.read())
+        from tools.defi.providers._http import get_json
+        return get_json(url, timeout=TIMEOUT_SEC)
 
     def quote(self, chain: str, token_in: str, token_out: str,
               amount_in_raw: int, *, holder: str,
@@ -167,11 +164,29 @@ class LifiRouteProvider:
                          "— REFUSED", value_raw)
             return None
 
+        # WAL-7: the minimum that BINDS is the one inside the calldata, not the
+        # JSON beside it. For a known facet, read it from the bytes (and refuse a
+        # receiver that is not us); `best_route` then holds it to our floor. An
+        # unknown facet keeps the JSON value and the guard's measured floor.
+        from core.wallet import lifi_calldata
+        amount_out_min = _int(estimate.get("toAmountMin"))
+        try:
+            decoded = lifi_calldata.decode(calldata)
+        except ValueError as exc:
+            logger.error("lifi: %s — REFUSED", exc)
+            return None
+        if decoded is not None:
+            if decoded.receiver != holder.lower():
+                logger.error("lifi: calldata pays %s, not the holder — REFUSED",
+                             decoded.receiver)
+                return None
+            amount_out_min = decoded.min_amount
+
         tool = body.get("tool") or "unknown"
         return RouteQuote(
             chain=chain, token_in=token_in, token_out=token_out,
             amount_in_raw=amount_in_raw, amount_out_raw=amount_out,
-            amount_out_min_raw=_int(estimate.get("toAmountMin")),
+            amount_out_min_raw=amount_out_min,
             spender=spender, to=to, calldata=calldata,
             # Zero for an ERC-20 swap (asserted above); the native amount for a
             # native-in swap, which `best_route` holds to `amount_in_raw`.

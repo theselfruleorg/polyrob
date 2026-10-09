@@ -38,11 +38,9 @@ from core.env import bool_env
 
 logger = logging.getLogger(__name__)
 
-#: The collection the auto-ingest writes into. `default` on purpose: it is what
-#: `/kb` lists first and what `KB_PREFETCH_COLLECTION` searches, so an
-#: auto-ingested document is recallable rather than parked in a side collection
-#: nothing reads.
-AUTO_COLLECTION = "default"
+#: Generated artifacts are retained for explicit inspection but never enter the
+#: default recall pool merely because the model wrote a document.
+AUTO_COLLECTION = "artifacts_unreviewed"
 
 #: Text documents only. The ingest path skips binaries anyway; naming the set
 #: keeps a 200 MB video out of the ingest call entirely. Imported from the
@@ -143,7 +141,7 @@ async def ingest_artifact(user_id: str, path: str, *, session_id: str = "",
         return None
     try:
         from tools.knowledge_ingest import kb_ingest
-        result = await kb_ingest(path, collection=AUTO_COLLECTION,
+        result = await kb_ingest(path, collection="default" if force else AUTO_COLLECTION,
                                  recursive=False, user_id=str(user_id),
                                  session_id=str(session_id or ""))
     except Exception as exc:

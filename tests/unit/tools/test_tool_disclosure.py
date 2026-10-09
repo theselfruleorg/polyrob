@@ -174,6 +174,35 @@ class FakeExecutionContext:
         self.role = role
 
 
+def test_autonomous_load_cannot_escape_nonmoney_ceiling(monkeypatch):
+    from agents.task import session_class
+    from tools import goal_tools
+    monkeypatch.setattr(session_class, 'is_autonomous_session', lambda sid: True)
+    monkeypatch.setattr(goal_tools, 'allowed_self_goal_tools', lambda: frozenset({'web_fetch'}))
+    controller = FakeController(services={'coding', 'web_fetch'})
+    controller.session_id = 'autonomous-run'
+    result = asyncio.run(perform_load_tool(controller, 'coding'))
+    assert 'autonomous-ceiling' in result.extracted_content
+    assert not controller.load_calls
+    result = asyncio.run(perform_load_tool(controller, 'web_fetch'))
+    assert controller.load_calls == [['web_fetch']]
+
+
+def test_autonomous_ceiling_preserves_explicit_existing_grants():
+    status = resolve_tool_status('coding', container=FakeContainer({'coding'}),
+                                 loaded_ids={'coding'}, allowed_ids={'web_fetch'})
+    assert status.status == 'loaded'
+
+
+def test_autonomous_ceiling_probe_error_refuses_disclosure(monkeypatch):
+    from agents.task import session_class
+    from tools.tool_disclosure import disclosure_ceiling
+    monkeypatch.setattr(session_class, 'is_autonomous_session', lambda sid: (_ for _ in ()).throw(OSError()))
+    controller = FakeController()
+    controller.session_id = 'run'
+    assert disclosure_ceiling(controller) == frozenset()
+
+
 def test_perform_load_tool_loads_available_tool():
     c = FakeController(services={"web_fetch"})
     res = asyncio.run(perform_load_tool(c, "web_fetch"))
@@ -349,3 +378,36 @@ def test_non_browser_tools_ignore_the_rail(monkeypatch):
     st = resolve_tool_status(
         "web_fetch", container=FakeContainer({"web_fetch"}), loaded_ids={"web_fetch"})
     assert st.status == "loaded"
+
+
+def test_owner_authored_cron_job_loads_beyond_the_self_goal_ceiling(monkeypatch):
+    """Natural work: an OWNER-authored cron job loads a non-money tool its task
+    needs (e.g. git) — the ceiling bounds agent-authored work only. Money stays
+    explicit-grant-only, and an agent-authored job keeps the ceiling (AGT-14)."""
+    from agents.task import session_class
+    from agents.task.goals import autonomy_marker as am
+    from tools import goal_tools
+    monkeypatch.setattr(session_class, 'is_autonomous_session', lambda sid: True)
+    monkeypatch.setattr(goal_tools, 'allowed_self_goal_tools', lambda: frozenset({'web_fetch'}))
+    am.mark_autonomous('owner-job-run', cron_job_id='job-owner')
+    am.note_owner_job('job-owner', 'Daily: run the release check')
+    am.mark_autonomous('agent-job-run', cron_job_id='job-agent')
+    try:
+        owner = FakeController(services={'coding', 'hyperliquid'})
+        owner.session_id = 'owner-job-run'
+        assert not asyncio.run(perform_load_tool(owner, 'coding')).error
+        assert owner.load_calls == [['coding']]
+        res = asyncio.run(perform_load_tool(owner, 'hyperliquid'))
+        assert 'gated:money' in res.extracted_content
+        assert owner.load_calls == [['coding']]
+
+        agent = FakeController(services={'coding'})
+        agent.session_id = 'agent-job-run'
+        res = asyncio.run(perform_load_tool(agent, 'coding'))
+        assert 'autonomous-ceiling' in res.extracted_content
+        assert not agent.load_calls
+    finally:
+        for sid in ('owner-job-run', 'agent-job-run'):
+            am._SESSIONS.pop(sid, None)
+            am._CRON_JOBS.pop(sid, None)
+        am._OWNER_JOBS.pop('job-owner', None)

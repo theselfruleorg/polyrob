@@ -145,7 +145,7 @@ def prune_pending(*, now: Optional[float] = None, path: Optional[Path] = None,
 
 
 def begin_login(owner_user_id: str, redirect_uri: str, *, now: Optional[float] = None,
-                path: Optional[Path] = None) -> str:
+                path: Optional[Path] = None, expected_account_id: str | None = None) -> str:
     """Mint a single-use login for ``owner_user_id``; return X's authorize URL.
 
     Raises :class:`LoginFlowError` (the remedy) when the app's client id is not
@@ -155,6 +155,11 @@ def begin_login(owner_user_id: str, redirect_uri: str, *, now: Optional[float] =
     if not owner:
         raise LoginFlowError("an X login must be bound to the owner who asked for it")
     now = time.time() if now is None else now
+    try:
+        expected = x_oauth2.expected_account(
+            x_oauth2.XOAuth2Store(path) if path is not None else None, expected_account_id)
+    except RuntimeError as exc:
+        raise LoginFlowError(str(exc)) from exc
     verifier, challenge = x_oauth2.pkce_pair()
     state = secrets.token_urlsafe(32)
     try:
@@ -166,6 +171,7 @@ def begin_login(owner_user_id: str, redirect_uri: str, *, now: Optional[float] =
                              "instance env.") from exc
     prune_pending(now=now, path=path, keep=MAX_PENDING - 1)
     record = {"owner_user_id": owner, "verifier": verifier, "redirect_uri": redirect_uri,
+              "expected_account_id": expected,
               "created_at": now, "expires_at": now + PENDING_TTL_SEC}
     _file_store(path)[_key(state)] = _enc().encrypt_dict(record)
     logger.info("x login: a login link was minted for the owner (valid %ds)",
@@ -242,6 +248,7 @@ def complete_login(state: str, code: str, *, expected_owner: Optional[str] = Non
         store = x_oauth2.XOAuth2Store(path) if path is not None else None
         rec = x_oauth2.exchange_code(code, redirect_uri=str(record.get("redirect_uri") or ""),
                                      code_verifier=str(record.get("verifier") or ""),
+                                     expected_account_id=str(record.get("expected_account_id") or ""),
                                      store=store, transport=transport)
     except Exception as exc:  # noqa: BLE001 — the token endpoint's reason, never a secret
         logger.warning("x login: the code exchange failed: %s", exc)

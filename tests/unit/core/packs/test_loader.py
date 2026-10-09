@@ -123,18 +123,19 @@ def test_a_third_party_pack_is_refused_under_custody(scratch, tmp_path, monkeypa
     assert rec.status == state.REFUSED and "wallet custody" in rec.reason
 
 
-def test_custody_rule_allows_a_remote_signer_without_secrets(monkeypatch):
+def test_custody_rule_refuses_remote_signer_even_without_local_secrets(monkeypatch):
     from core.packs import loader
     import core.security.custody_env as ce
     import core.security.host_execution as he
+    monkeypatch.setenv("WALLET_SIGNER", "local")
     monkeypatch.setattr(he, "wallet_custody_enabled", lambda: False)
     assert loader.custody_refusal() is None
-    monkeypatch.setattr(he, "wallet_custody_enabled", lambda: True)
     monkeypatch.setenv("WALLET_SIGNER", "remote")
     monkeypatch.setattr(ce, "holds_custody_secret", lambda: False)
-    assert loader.custody_refusal() is None
+    assert "remote signing" in loader.custody_refusal()
+    monkeypatch.setattr(he, "wallet_custody_enabled", lambda: True)
     monkeypatch.setattr(ce, "holds_custody_secret", lambda: True)
-    assert "WALLET_SIGNER" in loader.custody_refusal()
+    assert "wallet custody" in loader.custody_refusal()
 
 
 def _install(scratch, monkeypatch, packs):

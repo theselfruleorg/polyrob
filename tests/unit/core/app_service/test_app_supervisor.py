@@ -5,6 +5,8 @@ import types
 
 import pytest
 
+from core.ship_tree import tree_digest
+
 from core.app_service.egress import EgressApplier
 from core.app_service.nginx import NginxApplier
 from core.app_service.registry import AppServiceRegistry
@@ -80,7 +82,7 @@ def rig(tmp_path):
     (proj / ".env").write_text("SECRET=1\n")
     reg.upsert_request("rob-status", "owner-1", source_dir=str(proj), cmd=["python", "server.py"],
                        container_port=8765, health_path="/api/status.json", egress="none",
-                       egress_allow=[], env={"LOG_LEVEL": "info"}, workspace_digest="d" * 64)
+                       egress_allow=[], env={"LOG_LEVEL": "info"}, workspace_digest=tree_digest(str(proj)))
     reg.mark_approved("rob-status", "owner-1")
     docker, sys_r, events = FakeDocker(), FakeSys(), FakeEvents()
     state = {"healthy": True, "allow": _allow}
@@ -111,6 +113,9 @@ def requeue(rig, **over):
               health_path="/api/status.json", egress="none", egress_allow=[],
               env={"LOG_LEVEL": "info"}, workspace_digest="e" * 64)
     kw.update(over)
+    # ship == tested: a "new version" is a real tree change carrying its real digest.
+    (rig.proj / "VERSION").write_text(kw["workspace_digest"])
+    kw["workspace_digest"] = tree_digest(str(rig.proj))
     rig.reg.upsert_request("rob-status", "owner-1", **kw)
     if rig.reg.get("rob-status", "owner-1")["status"] == "pending":
         rig.reg.mark_approved("rob-status", "owner-1")
@@ -128,7 +133,7 @@ def test_deploy_happy_path(rig):
     assert "-p" in run and run[run.index("-p") + 1] == "127.0.0.1:18000:8765"
     assert "--cap-drop" in run and "--read-only" in run and "no-new-privileges" in run
     mount = run[run.index("-v") + 1]
-    assert mount.endswith("/snapshots/dddddddddddd:/app:ro")
+    assert mount.endswith(f"/snapshots/{tree_digest(str(rig.proj))[:12]}:/app:ro")
     assert run[run.index("--network") + 1] == "polyrob-app-owner-1-rob-status"
     assert run[-3:] == ["polyrob-dev:test", "python", "server.py"]
     envs = [run[i + 1] for i, a in enumerate(run) if a == "-e"]
@@ -360,7 +365,31 @@ def test_a_live_app_is_never_silently_reconfigured(rig):
     new = rig.reg.upsert_request("rob-status", "owner-1", source_dir=str(rig.proj),
                                  cmd=["python", "server.py"], container_port=8765,
                                  health_path="/api/status.json", egress="open", egress_allow=[],
-                                 env={"LOG_LEVEL": "info"}, workspace_digest="a" * 64)
+                                 env={"LOG_LEVEL": "info"},
+                                 workspace_digest=tree_digest(str(rig.proj)))
     assert new["status"] == "pending" and new["approval_change"] == ["egress"]
     assert rig.reg.mark_approved("rob-status", "owner-1")
     assert asyncio.run(rig.sup.tick())["deployed"] == 1
+
+
+def test_a_symlink_swapped_source_dir_is_refused(rig, tmp_path):
+    """IO-A1: the approved directory string must still resolve to itself."""
+    other = rig.tmp / "data" / "project" / "other-tenant"
+    other.mkdir(parents=True)
+    (other / "server.py").write_text("print('hi')\n")
+    moved = rig.tmp / "data" / "project" / "moved"
+    os.rename(rig.proj, moved)
+    os.symlink(str(other), str(rig.proj))
+    asyncio.run(rig.sup.tick())
+    row = rig.reg.get("rob-status", "owner-1")
+    assert row["status"] == "failed" and "no longer resolves" in row["last_failure_error"]
+    assert rig.docker.argv_of(["run", "-d"]) == []
+
+
+def test_a_tree_edited_after_the_tested_digest_is_not_published(rig):
+    """IO-A1: the supervisor recomputes the digest over its own snapshot."""
+    (rig.proj / "server.py").write_text("import os; os.system('curl evil')\n")
+    asyncio.run(rig.sup.tick())
+    row = rig.reg.get("rob-status", "owner-1")
+    assert row["status"] == "failed" and "tested workspace digest" in row["last_failure_error"]
+    assert rig.docker.argv_of(["run", "-d"]) == []

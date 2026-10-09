@@ -244,7 +244,8 @@ def test_merge_payload_preserves_other_keys(board):
 def _complete(board, goal_id: str) -> None:
     """Take one goal through the real ready -> running -> done lifecycle."""
     assert board.claim(goal_id, "test-worker", ttl_seconds=60) is not None, goal_id
-    board.record_success(goal_id, session_id="s", result="ok")
+    board.record_success(goal_id, session_id="s", result="ok",
+        claim_token=board.get(goal_id).claim_token)
 
 
 def _two_leg_stream(sid: str = "demo-stream", *, goal_budget: int = 4) -> dict:

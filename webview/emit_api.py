@@ -4,7 +4,10 @@ singletons lazily at call time.
 
 The preview serve-token mint that used to sit beside it was deleted (043 A30) —
 it had no caller. See the note at the foot of this module."""
+
+from webview.session_access import http_session_id
 import logging
+import hmac
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
@@ -29,18 +32,29 @@ async def internal_emit(request: Request) -> Response:
     if client_host not in ("127.0.0.1", "::1", "localhost"):
         logger.warning(f"Internal emit rejected from non-localhost: {client_host}")
         raise HTTPException(403, "Forbidden: localhost only")
+    from core.security.internal_events import emit_token
+    token = emit_token()
+    if not token or not hmac.compare_digest(
+            request.headers.get("x-polyrob-internal-token", ""), token):
+        raise HTTPException(403, "Internal event authentication required")
     try:
         body = await request.json()
     except Exception as e:
         logger.error(f"Internal emit: invalid JSON body: {e}")
         raise HTTPException(400, "Invalid JSON body")
+    if not isinstance(body, dict):
+        raise HTTPException(400, "Invalid event envelope")
     session_id = body.get("session_id")
     event = body.get("event")
-    if not session_id or not event:
+    if not isinstance(session_id, str) or not session_id or not isinstance(event, dict) or not event:
         raise HTTPException(400, "Missing session_id or event")
-    # Clients join the room named by the BARE clean id (join_session →
-    # enter_room(sid, clean_id)); a "session:" prefix here would be a dead room.
-    room = _srv.pm().clean_session_id(session_id)
+    from core.security.internal_events import internal_emit_allowed
+    if not internal_emit_allowed(event.get("type")):
+        # WEB-10: never a person's line (user_message*, command_reply) and
+        # never an unknown type — those reach the view via the feed watcher.
+        raise HTTPException(403, "Event type not allowed on the internal emit")
+    from webview.session_access import session_room
+    room = session_room(http_session_id(session_id, _srv.pm()))
     _srv._enrich_llm_event_with_cost(event)
     await _srv._sio.emit("feed_update", event, room=room)
     logger.debug(f"Internal emit: sent event to room {room}, _seq={event.get('_seq')}")

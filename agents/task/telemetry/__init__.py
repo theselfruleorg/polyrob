@@ -14,6 +14,8 @@ if not logger.handlers:
     handler = logging.StreamHandler()
     formatter = logging.Formatter('%(asctime)s %(levelname)-8s [%(name)s] %(message)s')
     handler.setFormatter(formatter)
+    from core.security_logging_filter import SecretScrubbingFilter
+    handler.addFilter(SecretScrubbingFilter())
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
 
@@ -55,4 +57,4 @@ __all__ = [
     "SessionCompletionTelemetryEvent",
     "ProviderFailureEvent",
     "ProviderFallbackSuccessEvent"
-] 
+]

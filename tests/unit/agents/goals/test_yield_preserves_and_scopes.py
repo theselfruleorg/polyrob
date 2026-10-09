@@ -48,7 +48,7 @@ class _Board:
     def __init__(self):
         self.failures = []
 
-    def record_failure(self, gid, error=None, session_id=None):
+    def record_failure(self, gid, error=None, session_id=None, claim_token=None):
         self.failures.append((gid, error))
         return Goal(id=gid, user_id="rob", title="t", status="ready")
 

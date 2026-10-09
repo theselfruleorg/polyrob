@@ -48,7 +48,7 @@ def _ctx_bridge(turn_kind_probe, captured, frozen_kind=None):
     return B.WalletBridge(
         envelope=env, wallet=_Wallet(_Gate()), execution_context=ctx,
         rail_factory=_Rail, guard_fn=_guard, price_fn=lambda c, a: 1.0,
-        rpc_fn=lambda *a: "0x", armed_origin="https://app.example",
+        rpc_fn=lambda *a: "0x6000", armed_origin="https://app.example",
         turn_kind_probe=turn_kind_probe)
 
 
@@ -153,7 +153,7 @@ def _owner_armed_bridge(monkeypatch, captured, *, halted=False, extra_meta=None)
     bridge = B.WalletBridge(
         envelope=env, wallet=_Wallet(gate), execution_context=ctx,
         rail_factory=_Rail, guard_fn=_real_guard, price_fn=lambda c, a: 2000.0,
-        rpc_fn=lambda *a: "0x", armed_origin="https://app.example",
+        rpc_fn=lambda *a: "0x6000", armed_origin="https://app.example",
         turn_kind_probe=lambda: None)
     return bridge, ctx
 

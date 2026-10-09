@@ -38,6 +38,7 @@ def test_configured_owner_ambiguous_multi_id_is_none(monkeypatch):
 
 def test_owner_telegram_falls_back_for_nonnumeric_tenant(monkeypatch):
     """The headline bug: a goal/cron run as user_id='rob' must still resolve the owner."""
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
     monkeypatch.delenv("POLYROB_OWNER_TELEGRAM_ID", raising=False)
     monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "28436760")
     assert _owner_telegram(_Agent(), _Job("rob")) == "28436760"
@@ -60,6 +61,7 @@ def test_owner_alias_roundtrip_prod_config(monkeypatch):
     have its OUT-OF-BAND cron/goal/self-wake delivery resolve back to the owner's tg
     chat via the SAME core SSOT. Mirrors prod: explicit POLYROB_OWNER_TELEGRAM_ID.
     """
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
     monkeypatch.delenv("ALLOWED_TELEGRAM_USER_IDS", raising=False)
     monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "28436760")
     # No user_directory row maps 'rob' -> a tg chat (the alias skips resolve_internal,

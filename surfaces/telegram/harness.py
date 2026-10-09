@@ -197,6 +197,7 @@ _USAGE = {
     "/send": "<amount> <native|token-address> to <address> on <chain> [max <usd>] [go]",
     "/swap": "<amount> <native|token> to <token> on <chain> [slippage <bps>] [max <usd>] [go]",
     "/cards": "[<id> ok|no|re|1-6]",
+    "/adopt": "[<id>]",
     "/nft": "[send <id> <to> [go]]|list|info <contract> <id>|transfer <contract> <id> <to> [go]|"
             "revoke <contract> <operator> [go]",
     "/dapp": "list|revoke <id>",
@@ -452,6 +453,7 @@ _ROOM_REFUSED_COMMANDS = frozenset({
     "/swap",      # the owner's wallet swap — never from a room
     "/writeoff", "/unquarantine",  # W1: a holding's lifecycle, owner seat
     "/cards",     # a card confirm runs a money line — never from a room
+    "/adopt",     # makes standing work owner-authored — never from a room
     "/check",     # 071: an owner read; in a room the agent answers via wallet_holdings
 })
 
@@ -2208,7 +2210,8 @@ async def _handle_owner_admin(task_agent: Any, result: InboundResult, cmd: str) 
                                          answer=answer or None)
         if not ok:
             return f"No open ask '{args[0]}' — see /asks."
-        return (f"✅ Ask fulfilled — {unblocked} goal(s) unblocked."
+        from agents.task.goals.rail_answers import decision_note
+        return (f"✅ Ask fulfilled — {decision_note(board, args[0], unblocked) or 'saved.'}"
                 + (f"\nYour answer was passed to the run: {answer[:200]}"
                    if answer else ""))
 
@@ -2737,9 +2740,8 @@ def _is_owner_groups_line(update: dict) -> bool:
 
 def _tg_user_id(update: dict) -> Optional[str]:
     """Raw Telegram numeric sender id (str) from an update, or None."""
-    frm = (_tg_message(update).get("from") or {})
-    uid = frm.get("id")
-    return str(uid) if uid is not None else None
+    from surfaces.telegram.triggers import sender_user_id
+    return sender_user_id(_tg_message(update))
 
 
 def _tg_chat_id(update: dict) -> Optional[str]:
@@ -2839,6 +2841,14 @@ class TelegramHarness:
             # a text message must not trigger a model/import load.
             if not extract_voice_file_id(update):
                 return None
+            from surfaces.telegram.inbound import build_inbound_message
+            from core.surfaces.media_access import paid_media_allowed
+            inbound = build_inbound_message(
+                update, self.user_directory,
+                bot_username=getattr(self, "bot_username", None),
+                bot_id=getattr(self, "bot_id", None))
+            if inbound is None or not paid_media_allowed(self.container, inbound):
+                return None
             from core.surfaces.transcription import get_transcriber
             transcriber = get_transcriber(self.container)
             return await transcribe_telegram_voice(self.bot, update, transcriber)
@@ -2890,6 +2900,12 @@ class TelegramHarness:
         from surfaces.telegram.room_moderator import install_room_moderator
         install_room_moderator(self.container, self.surface)
         log_transcription_readiness(self.container)
+        # CHAT-25: say LOUDLY when the owner alias is only implied by a
+        # single-entry allowlist (a pure env read; it cannot raise).
+        from core.instance import implicit_owner_alias_warning
+        alias_warning = implicit_owner_alias_warning()
+        if alias_warning:
+            logger.warning("telegram: %s", alias_warning)
         # 044 T8: an explicit TELEGRAM_BOT_USERNAME seeds mention detection before
         # (or in place of, if it never succeeds) getMe(); getMe still wins when it
         # succeeds, since it's also the only source of bot_id.
@@ -3026,6 +3042,11 @@ class TelegramHarness:
             try:
                 updates = await self.bot.get_updates(offset=offset, timeout=self.poll_timeout,
                                                      allowed_updates=list(_ALLOWED_UPDATES))
+                if transient_streak >= _TRANSIENT_ESCALATE_AFTER:
+                    # Say it: after "polling is down" the only other evidence of
+                    # recovery is the absence of lines.
+                    logger.warning("telegram get_updates recovered after %s failures in a row",
+                                   transient_streak)
                 transient_streak = 0
             except asyncio.CancelledError:
                 break
@@ -3074,13 +3095,16 @@ class TelegramHarness:
                     record_poll_error("telegram", e)
                     await asyncio.sleep(1)
                 continue
+            batch = []
             for u in updates:
                 # aiogram returns Update models; tests inject raw dicts.
                 data = u.model_dump(by_alias=True, exclude_none=True) if hasattr(u, "model_dump") else u
                 uid = data.get("update_id")
                 if uid is not None:
                     offset = uid + 1
-                await self.handle_update(data)
+                batch.append(data)
+            from surfaces.telegram.poll_batch import dispatch_batch
+            await dispatch_batch(batch, self.handle_update)
 
     def _make_progress_reporter(self, chat_id):
         """An EditingProgressReporter bound to this chat over the aiogram Bot, or a

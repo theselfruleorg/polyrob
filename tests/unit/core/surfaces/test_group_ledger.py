@@ -75,3 +75,21 @@ def test_retention_is_wall_clock(tmp_path):
     lg.prune("telegram", "-1")
     assert lg.count("telegram", "-1") == 0
     assert lg.tail("telegram", "-1") == []
+
+
+# --- a moderated line is MARKED, not re-served as fresh (2026-10-06) ---------- #
+# The den job deleted msg 3593 at 01:00; the 02:01 run read the same row, tried to
+# delete it again ("message to delete not found") and re-warned its sender.
+
+def test_mark_deleted_flags_the_row_and_keeps_the_sender(tmp_path):
+    import time as _t
+    from core.surfaces.group_ledger import GroupLedger, LedgerRow
+    lg = GroupLedger(str(tmp_path / "s.db"))
+    lg.append(LedgerRow(surface="telegram", chat_id="-1", thread_id=None, message_id="3593",
+                        ts=_t.time(), sender_id="876", sender_name="@p", sender_is_bot=False,
+                        role_at_write="member", kind="text", text="paid promo pitch",
+                        reply_to_message_id=None, mentions_bot=False))
+    assert lg.mark_deleted("telegram", "-1", ["3593"]) == 1
+    (row,) = lg.tail("telegram", "-1")
+    assert row.kind == "deleted" and row.sender_id == "876"
+    assert "paid promo" not in row.text

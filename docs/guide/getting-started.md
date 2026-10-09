@@ -109,6 +109,9 @@ pip install -e ".[dev,all]"
 | `telegram` | Telegram surface | +5 MB |
 | `twitter` | X / Twitter integration | +5 MB |
 | `voice` | Voice transcription (faster-whisper) | +50 MB |
+| `feishu` | Feishu / Lark long connection (`lark-oapi`) | — |
+| `hf` | Hugging Face Hub client, for publishing to a Space | — |
+| `modal` / `daytona` / `vercel-sandbox` | The SDK of that cloud sandbox pack, an optional backend for `run_code` and the shell | — |
 | `dev` | Tests, linting, build tooling | +30 MB |
 | `all` | Everything above | ~700 MB |
 
@@ -290,23 +293,31 @@ it again: [configuration.md §6](configuration.md#6-the-autonomy-dial).
 ├── .env                    # keys and flags
 ├── cli.json                # default provider/model from `model set-default`
 ├── providers.yaml          # your own endpoints (optional)
-└── profiles/               # named profiles, each a full home
+├── profiles/               # named profiles, each a full home
+└── data/                   # the runtime data home (the default root)
+    ├── memory.db           # cross-session memory
+    ├── goals.db            # the goal board
+    ├── cron.db             # scheduled runs
+    ├── conversations.db    # per-correspondent conversation log (third parties)
+    ├── owner_thread.db     # your ONE conversation with the agent, every session and rail
+    ├── telemetry_events.db # events, costs, wallet spend
+    └── sessions/
+        └── session-abc123/
+            ├── screenshots/
+            ├── feed/
+            └── logs/
 
-./.polyrob/                 # this project's runtime data (the default root)
-├── .env                    # project overrides
-├── memory.db               # cross-session memory
-├── goals.db                # the goal board
-├── cron.db                 # scheduled runs
-├── conversations.db        # per-correspondent conversation log (third parties)
-├── owner_thread.db         # your ONE conversation with the agent, every session and rail
-├── telemetry_events.db     # events, costs, wallet spend
-└── sessions/
-    └── session-abc123/
-        ├── workspace/      # files the agent creates
-        ├── screenshots/
-        ├── feed/
-        └── logs/
+./                          # the directory you run polyrob in is the workspace
+└── .polyrob/               # small per-project files only (auto-gitignored)
 ```
+
+The agent works in the directory you start it from: files it creates land there.
+The project's own `.polyrob/` keeps only small per-project files — the agent's todo
+list, the workspace lock and an optional profile pin. It is never a data home and
+never a config layer: a cloned or downloaded directory cannot supply goals, cron
+jobs, an owner doc, skills or keys. A `.polyrob/` data home left by an older version
+is not read, moved or deleted; POLYROB names it in a warning, and
+`POLYROB_DATA_DIR=<that path>` keeps using it.
 
 Those five are examples: `core/db_manifest.py::SIDECAR_DB_NAMES` is the
 authoritative list and names **37** sidecar stores (surfaces, dedup cursors,
@@ -352,12 +363,12 @@ bash ~/.polyrob/src/install.sh --uninstall   # also removes the venv and the sou
 `polyrob uninstall` will not delete the virtualenv it is running from, and it will
 not remove a pip or pipx install — it prints the exact command for those instead.
 
-⚠️ There are **two** homes and `--purge` names both before it deletes anything:
-`~/.polyrob` (per user — keys, settings and the **agent wallet seed**) and
-`./.polyrob` (per project — memory, goals, identity). Memory is per-project by
-design, so other directories keep their own and this verb never sees them.
-Export the mnemonic (`polyrob wallet export`) before `--purge` if that wallet
-ever held funds.
+⚠️ `--purge` names everything before it deletes anything: `~/.polyrob` (per user —
+keys, settings and the **agent wallet seed**) and the data home (memory, goals,
+identity — `~/.polyrob/data` unless `POLYROB_DATA_DIR` moves it). A legacy
+per-project `.polyrob/` data home from an older version is not on that list;
+delete it yourself. Export the mnemonic (`polyrob wallet export`) before `--purge`
+if that wallet ever held funds.
 
 ---
 

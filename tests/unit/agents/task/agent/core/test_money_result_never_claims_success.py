@@ -52,7 +52,8 @@ def test_money_result_with_real_content_is_untouched():
     content, had_error = _pair_one("x402_fetch", "x402_pay",
                                    extracted_content="[paid $0.2500 to 0xR, tx 0xabc]")
     assert had_error is False
-    assert content == "[paid $0.2500 to 0xR, tx 0xabc]"
+    assert "[paid $0.2500 to 0xR, tx 0xabc]" in content
+    assert content.startswith('<untrusted_tool_result source="x402_fetch">')
 
 
 def test_money_error_still_reports_the_error():

@@ -114,7 +114,8 @@ def test_a_goal_blocking_approval_writes_NO_wake(board):
     """The carve-out: an ask that re-arms a goal writes no wake (in ANY process) —
     the dispatcher redeems the grant; a forged wake turn cannot spend."""
     goal = board.create(user_id="u1", title="bridge", status=STATUS_READY)
-    board.record_failure(goal.id, error="blocked on approval")
+    board.record_failure(goal.id, error="blocked on approval",
+        claim_token=board.get(goal.id).claim_token)
     board.update_status(goal.id, "blocked")
     ask = _tool_ask(board, session_id="sG", tool="defi_trade_bridge",
                     blocks=[goal.id])

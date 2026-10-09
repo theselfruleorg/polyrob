@@ -177,7 +177,7 @@ def test_goal_pause_and_resume(env):
 def test_goal_retry_clears_failures(env):
     goal_id = _seed_goal(env, status="blocked")
     board = _board(env)
-    board.record_failure(goal_id, error="boom")
+    board.record_failure(goal_id, error="boom", claim_token=board.get(goal_id).claim_token)
     out = owner_ops.goal_reply("u1", env, ["retry", goal_id[:8]])
     assert "failures cleared" in out
     refreshed = _board(env).get(goal_id)

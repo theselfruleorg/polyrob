@@ -92,6 +92,7 @@ def _tool(wallet=None, *, deltas=None, **kw):
                                     native_delta=1_000_000)
     defaults = dict(
         wallet=wallet or _Wallet(),
+        price_fn=lambda c, a: 100.0 if a == WSOL else None,
         solana_decimals_fn=lambda m: 6,
         solana_quote_fn=lambda ti, to, amt, **k: _quote(ti=ti, to=to, amt=amt),
         solana_build_fn=lambda *a, **k: b"\x01",
@@ -129,7 +130,7 @@ async def test_within_declared_ceiling_passes_dry(monkeypatch):
     tool = _tool()
     res = await tool.solana_swap(_params(dry_run=True))
     assert res.error is None
-    assert "valued: $1.00" in (res.extracted_content or "")
+    assert "valued: $1.01" in (res.extracted_content or "")
 
 
 # -- PolicyGate -------------------------------------------------------------
@@ -153,8 +154,52 @@ async def test_the_gate_sees_the_valued_amount(monkeypatch):
     assert wallet.policy.checked
     venue, amount_usd, idem = wallet.policy.checked[0]
     assert venue == "defi"
-    assert amount_usd == 1.5
+    assert amount_usd == 1.51
     assert idem.startswith("defi_solana_swap:")
+
+
+@pytest.mark.asyncio
+async def test_missing_sol_price_refuses_even_when_principal_is_usdc():
+    wallet = _Wallet()
+    res = await _tool(wallet, price_fn=lambda c, a: None).solana_swap(_params())
+    assert res.error and 'including fees' in res.error
+    assert not wallet.policy.checked
+
+
+@pytest.mark.asyncio
+async def test_unknown_broadcast_does_not_claim_nothing_was_sent(monkeypatch):
+    from core.wallet.broadcast.evm import BroadcastOutcomeUnknown
+    monkeypatch.setenv('DEFI_SOLANA_RPC', 'https://rpc.invalid')
+    tool = _tool()
+    def send(*args):
+        raise BroadcastOutcomeUnknown('lost acknowledgement; reconcile before retrying')
+    monkeypatch.setattr(tool, '_solana_send', send)
+    result = await tool.solana_swap(_params(dry_run=False))
+    assert 'outcome unknown' in result.error
+    assert 'do not send again' in result.error
+    assert 'nothing was sent' not in result.error
+
+
+@pytest.mark.asyncio
+async def test_dust_swaps_exhaust_a_real_daily_cap(monkeypatch):
+    from core.money.ledger import SpendLedger
+    from core.wallet.solana_simulation import SolanaDeltas
+    monkeypatch.setattr('core.money.ledger._hooks.submission_journal',
+                        lambda: types.SimpleNamespace(unresolved=lambda: []))
+    wallet = _Wallet()
+    wallet.policy = SpendLedger(1, daily_cap_usd=.02)
+    for n in range(3):
+        deltas = SolanaDeltas(ok=True, fee_lamports=5_000,
+                             token_deltas={USDC: -(n + 1)}, native_delta=1_000_000)
+        res = await _tool(wallet, deltas=deltas).solana_swap(
+            _params(amount_in=(n + 1) / 1_000_000, dry_run=True))
+        if n < 2:
+            assert res.error is None, res.error
+            assert 'valued: $0.01' in res.extracted_content
+            wallet.policy.record(venue='defi', action='solana_swap', amount_usd=.01,
+                                 counterparty=None, idempotency_key=str(n), result_ref=str(n))
+        else:
+            assert 'daily spend cap' in (res.error or res.extracted_content)
 
 
 # -- kill switch + turn origin ---------------------------------------------
@@ -265,7 +310,7 @@ async def test_monitor_exit_sell_to_usdc_is_allowed(monkeypatch):
     deltas = SolanaDeltas(ok=True, fee_lamports=5_000, token_deltas={MEME: -5_000_000,
                                                  USDC: 4_000_000})
     tool = _tool(deltas=deltas,
-                 price_fn=lambda c, a: None,
+                 price_fn=lambda c, a: 100.0 if a == WSOL else None,
                  fallback_price_fn=lambda c, a: None,
                  solana_held_fn=lambda owner, mint: 10_000_000)
     res = await tool.solana_swap(
@@ -273,7 +318,7 @@ async def test_monitor_exit_sell_to_usdc_is_allowed(monkeypatch):
                 max_spend_usd=5.0, dry_run=True),
         execution_context=_monitor_ctx())
     assert res.error is None, res.error
-    assert "valued: $4.00" in (res.extracted_content or "")
+    assert "valued: $4.01" in (res.extracted_content or "")
 
 
 @pytest.mark.asyncio
@@ -284,6 +329,8 @@ async def test_monitor_exit_requires_a_measured_inflow(monkeypatch):
     deltas = SolanaDeltas(ok=True, fee_lamports=5_000, token_deltas={MEME: -5_000_000})
     tool = _tool(deltas=deltas,
                  price_fn=lambda c, a: 1.0,
+                 solana_quote_fn=lambda ti, to, amt, **kw: _quote(
+                     ti=ti, to=to, amt=amt, out=amt, floor=amt * 99 // 100),
                  solana_held_fn=lambda owner, mint: 10_000_000)
     res = await tool.solana_swap(
         _params(token_in=MEME, token_out=USDC, amount_in=5.0,
@@ -357,7 +404,7 @@ async def test_broadcast_records_the_spend(monkeypatch):
     rec = wallet.policy.recorded[0]
     assert rec["venue"] == "defi"
     assert rec["action"] == "solana_swap"
-    assert rec["amount_usd"] == 1.0
+    assert rec["amount_usd"] == 1.01
     assert rec["result_ref"] == "sig123"
 
 
@@ -464,12 +511,12 @@ async def test_cr_l06_native_excess_is_charged_to_the_caps():
     tool = _tool(wallet, deltas=deltas, price_fn=lambda c, a: 100.0)
     res = await tool.solana_swap(_params(token_out=MEME, max_spend_usd=5.0, dry_run=True))
     assert res.error is None, res.error
-    # $1.00 of USDC + 0.009 SOL * $100 = $1.90
-    assert wallet.policy.checked[0][1] == 1.9
+    # USDC principal plus all measured SOL cost, including its fee, rounded upward.
+    assert wallet.policy.checked[0][1] == 1.91
 
 
 @pytest.mark.asyncio
-async def test_cr_l06_retained_rent_is_not_charged():
+async def test_retained_rent_and_fee_consume_budget():
     from core.wallet.solana_simulation import SolanaDeltas
     wallet = _Wallet()
     deltas = SolanaDeltas(ok=True, fee_lamports=5_000, retained_rent_lamports=2_039_280,
@@ -478,7 +525,7 @@ async def test_cr_l06_retained_rent_is_not_charged():
     tool = _tool(wallet, deltas=deltas, price_fn=lambda c, a: 100.0)
     res = await tool.solana_swap(_params(token_out=MEME, dry_run=True))
     assert res.error is None, res.error
-    assert wallet.policy.checked[0][1] == 1.0
+    assert wallet.policy.checked[0][1] == 1.21
 
 
 @pytest.mark.asyncio
@@ -544,3 +591,44 @@ async def test_cr_l10_a_sell_into_the_pinned_quote_asset_is_not_screened():
     tool = _tool(solana_screen_fn=boom)
     res = await tool.solana_swap(_params(dry_run=True))      # USDC -> wSOL
     assert res.error is None, res.error
+
+
+@pytest.mark.asyncio
+async def test_swap_decimals_and_exit_balance_reads_run_off_loop():
+    import threading
+    loop_thread = threading.get_ident()
+    seen = []
+    def decimals(mint):
+        seen.append(('decimals', threading.get_ident()))
+        return 9
+    def balance(owner, mint):
+        seen.append(('balance', threading.get_ident()))
+        return 10 ** 10
+    tool = _tool(solana_decimals_fn=decimals, solana_held_fn=balance)
+    def gate(ctx, *, exit_shaped_fn):
+        assert exit_shaped_fn()
+        return 'stopped after balance read', False, False
+    tool._solana_turn_gate = gate
+    res = await tool.solana_swap(_params(token_in=WSOL, token_out=USDC))
+    assert res.error == 'stopped after balance read'
+    assert {name for name, _ in seen} == {'decimals', 'balance'}
+    assert all(thread != loop_thread for _, thread in seen)
+
+
+@pytest.mark.asyncio
+async def test_swap_refuses_inexact_raw_amount_before_quote():
+    tool = _tool()
+    res = await tool.solana_swap(_params(amount_in=0.0000001))
+    assert 'decimals exactly' in res.error
+
+
+@pytest.mark.asyncio
+async def test_a_swap_declared_at_exactly_its_value_passes_and_the_fee_hits_the_caps():
+    """Regression (EVM parity, cbf59c857): the declared max asserts the swap's
+    value; the network fee and retained rent are charged to the caps only. A $1
+    swap declared at $1.00 refused on its own 5,000-lamport fee."""
+    wallet = _Wallet()
+    tool = _tool(wallet)
+    res = await tool.solana_swap(_params(amount_in=1.0, max_spend_usd=1.0, dry_run=True))
+    assert res.error is None, res.error
+    assert wallet.policy.checked[0][1] == 1.01

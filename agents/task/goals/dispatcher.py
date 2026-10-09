@@ -254,6 +254,18 @@ def _payload_is_money(payload) -> bool:
         return False
 
 
+def _owner_authored_goal(payload) -> bool:
+    """True only for a goal the OWNER wrote: an explicit ``authored_by: owner``
+    stamp (a genuine owner turn or an owner seat) or an owner-seat grant. An
+    agent-authored, stream-seeded or unstamped (legacy) goal is not."""
+    if not isinstance(payload, dict):
+        return False
+    from core.config_policy.rigs import AUTHORED_BY_KEY, OWNER_AUTHOR
+    if payload.get("owner_granted"):
+        return True
+    return str(payload.get(AUTHORED_BY_KEY) or "").strip().lower() == OWNER_AUTHOR
+
+
 def _payload_preempts(payload) -> bool:
     """Mirror of ``cron.jobs.job_preempts`` over the raw stored payload (057 WS-C
     B7): explicit ``payload.preempts`` wins, else the money class."""
@@ -716,7 +728,7 @@ class GoalDispatcher:
                 # yield can cancel goal runs only and leave the planner alone.
                 self._goal_tasks[claimed.id] = t
                 t.add_done_callback(
-                    lambda _t, _gid=claimed.id: self._forget_goal_task(_gid))
+                    lambda _t, _gid=claimed.id: self._forget_goal_task(_gid, task=_t))
                 dispatched += 1
             # Fire-and-forget: the ticker doesn't block on goal completion (goals may
             # run minutes). The runs self-report via record_success/failure + self-wake.
@@ -772,7 +784,9 @@ class GoalDispatcher:
         except Exception:
             logger.debug("deferral telemetry failed", exc_info=True)
 
-    async def _heartbeat_claim(self, goal_id: str, worker: str, ttl: int) -> None:
+    async def _heartbeat_claim(self, goal_id: str, worker: str, ttl: int, *,
+                               claim_token: Optional[str] = None,
+                               run_task: Optional[asyncio.Task] = None) -> None:
         """Keep a long-running goal's claim alive (F8).
 
         Goals run fire-and-forget for up to many minutes, but the claim TTL
@@ -785,7 +799,12 @@ class GoalDispatcher:
             while True:
                 await asyncio.sleep(interval)
                 try:
-                    self.board.heartbeat(goal_id, worker, ttl_seconds=ttl)
+                    if not self.board.heartbeat(goal_id, worker, ttl_seconds=ttl,
+                                                claim_token=claim_token):
+                        logger.warning("goal %s lost its claim; stopping the old run", goal_id)
+                        if run_task is not None:
+                            run_task.cancel()
+                        return
                 except Exception as e:  # never let heartbeat kill the run
                     logger.warning("goal %s heartbeat failed: %s", goal_id, e)
         except asyncio.CancelledError:
@@ -824,8 +843,10 @@ class GoalDispatcher:
         except Exception:
             return None
 
-    def _forget_goal_task(self, goal_id: str) -> None:
-        """Drop a finished run's bookkeeping (057 WS-C A2). Never raises."""
+    def _forget_goal_task(self, goal_id: str, *, task: Optional[asyncio.Task] = None) -> None:
+        """Drop bookkeeping only if the finished task still owns this entry."""
+        if task is not None and self._goal_tasks.get(goal_id) is not task:
+            return
         self._goal_tasks.pop(goal_id, None)
         self._ws_holders.discard(goal_id)
 
@@ -1038,9 +1059,11 @@ class GoalDispatcher:
         # outcome from "done" back to "failed" — see the guard at the bottom.
         recorded_success = False
         from agents.task.constants import AutonomyConfig
-        worker = self._worker
+        worker = goal.claim_lock or self._worker
         ttl = AutonomyConfig.goal_claim_ttl_sec()
-        hb_task = asyncio.create_task(self._heartbeat_claim(goal.id, worker, ttl))
+        hb_task = asyncio.create_task(self._heartbeat_claim(
+            goal.id, worker, ttl, claim_token=goal.claim_token,
+            run_task=asyncio.current_task()))
         # C6: on a SHARED project-root workspace (local/CLI), hold the in-process
         # busy gate for the RUN's full duration — not just the dispatch decision.
         # dispatch_once acquires the gate only to CLAIM, then releases it before this
@@ -1096,6 +1119,16 @@ class GoalDispatcher:
             self._ws_holders.discard(goal.id)
             raise
         try:
+            # An ADOPTED goal whose pinned skills changed after the owner saw
+            # them runs as the agent's again (in memory; ``/adopt`` lists it).
+            try:
+                from agents.task.agent.skill_pins import adoption_lapsed, lapse_payload
+                if adoption_lapsed(goal.payload, goal.user_id):
+                    logger.warning("goal %s: a pinned skill changed after /adopt — this "
+                                   "run is agent-authored", goal.id)
+                    goal.payload = lapse_payload(goal.payload or {})
+            except Exception:
+                logger.warning("goal %s: adopted-skill check failed", goal.id, exc_info=True)
             payload = goal.payload or {}
             from core.runtime_config import (resolve_default_provider,
                                               resolve_live_provider)
@@ -1116,11 +1149,14 @@ class GoalDispatcher:
                 # before its own circuit breaker tripped. Skip honestly instead —
                 # same "nothing can serve" signal `dispatch_blocked_by_providers`
                 # already treats as a $0 skip, just scoped to this one goal.
+                hb_task.cancel()
                 _g = self.board.record_failure(
                     goal.id,
                     error=f"{LLM_EXHAUSTED_MARKER}: no live provider for this goal "
                           f"(pinned={payload.get('provider') or '(none)'!r}, "
-                          f"default={default_provider!r}, both credit-dead)")
+                          f"default={default_provider!r}, both credit-dead)", claim_token=goal.claim_token)
+                if getattr(_g, "claim_token", None) != goal.claim_token:
+                    return
                 await self._maybe_escalate_blocked(_g, block_kind_hint="provider_outage")
                 return
             # Autonomous runs have no interactive config to pick a model, so fill the
@@ -1172,7 +1208,8 @@ class GoalDispatcher:
             try:
                 _target = normalize_target(payload.get(PAYLOAD_KEY))
             except ValueError as exc:
-                self.board.record_failure(goal.id, error=f"invalid {PAYLOAD_KEY}: {exc}")
+                hb_task.cancel()
+                self.board.record_failure(goal.id, error=f"invalid {PAYLOAD_KEY}: {exc}", claim_token=goal.claim_token)
                 return
             if _target:
                 # W0: an owner-authored goal's target is trust for this run.
@@ -1215,9 +1252,10 @@ class GoalDispatcher:
                     _skip = _skip or "no_change"
                     logger.info("goal %s: room %s:%s — $0 skip (%s)",
                                 goal.id, _src.surface_id, _src.chat_id, _skip)
+                    hb_task.cancel()
                     self.board.record_success(
                         goal.id, result=f"skipped: {_skip} — no service work for "
-                                        f"{_src.surface_id}:{_src.chat_id} this run")
+                                        f"{_src.surface_id}:{_src.chat_id} this run", claim_token=goal.claim_token)
                     _goal_ev(goal, "skipped", _skip)
                     return
                 # Pre-generate the session id so the `finally` below can still
@@ -1237,7 +1275,10 @@ class GoalDispatcher:
             from agents.task.runtime.metering_gate import unmetered_money_gate
             _gate_err = unmetered_money_gate(self.task_agent, request.get("tools"))
             if _gate_err is not None:
-                _g = self.board.record_failure(goal.id, error=_gate_err)
+                hb_task.cancel()
+                _g = self.board.record_failure(goal.id, error=_gate_err, claim_token=goal.claim_token)
+                if getattr(_g, "claim_token", None) != goal.claim_token:
+                    return
                 await self._maybe_escalate_blocked(_g)
                 return
             # Route through the shared helper: create_session → run_session → RunOutcome.
@@ -1265,6 +1306,22 @@ class GoalDispatcher:
                     _pre_sid = None
             if _pre_sid:
                 self._goal_sessions[goal.id] = _pre_sid
+            # An OWNER-authored goal carries the owner's standing authority, the
+            # same as an owner-authored cron job (CHAT-5): the run is recorded so
+            # X posts and self-service tool loading treat it as the owner's.
+            # Positive stamp only — an agent-authored or unstamped goal is not.
+            try:
+                from agents.task.goals.autonomy_marker import (
+                    forget_owner_goal, note_owner_goal,
+                )
+                if _owner_authored_goal(payload):
+                    note_owner_goal(goal.id, "\n".join(
+                        t for t in (goal.title, goal.body) if t))
+                else:
+                    forget_owner_goal(goal.id)
+            except Exception:
+                logger.warning("goal %s: could not record provenance", goal.id,
+                               exc_info=True)
             try:
                 run = await asyncio.wait_for(
                     _run_task_to_outcome(
@@ -1305,7 +1362,10 @@ class GoalDispatcher:
                 return
             session_id = run.session_id
             if session_id is None:
-                _g = self.board.record_failure(goal.id, error="create_session returned no id")
+                hb_task.cancel()
+                _g = self.board.record_failure(goal.id, error="create_session returned no id", claim_token=goal.claim_token)
+                if getattr(_g, "claim_token", None) != goal.claim_token:
+                    return
                 await self._maybe_escalate_blocked(_g)
                 return
             # (artefact attribution moved into the wait_for's `finally` above —
@@ -1338,8 +1398,11 @@ class GoalDispatcher:
                 elif _is_llm_provider_exhausted(run.status):
                     error = f"{LLM_EXHAUSTED_MARKER}: {str(run.status)[:400]}"
                     block_kind_hint = "provider_outage"
+                hb_task.cancel()
                 _g = self.board.record_failure(
-                    goal.id, error=error, session_id=session_id)
+                    goal.id, error=error, session_id=session_id, claim_token=goal.claim_token)
+                if getattr(_g, "claim_token", None) != goal.claim_token:
+                    return
                 # T2.1 Task-3 review fix (finding #1, CRITICAL): this path never
                 # goes through _fail_run, so it must pass the SAME classification
                 # as a hint into _maybe_escalate_blocked (the single block_kind
@@ -1371,6 +1434,7 @@ class GoalDispatcher:
             # failure exit, never a success. Checked BEFORE record_success so the
             # goal routes through the breaker/escalation rail with its stated need.
             if run.blocked:
+                hb_task.cancel()
                 await self._fail_blocked_declared(
                     goal, session_id, outcome, run.blocked_need,
                     agent_reported=bool(run.user_messages),
@@ -1411,6 +1475,7 @@ class GoalDispatcher:
                     if _failed:
                         detail = "; acceptance checks failed: " + "; ".join(
                             f"{c.get('type')}: {c.get('detail')}" for c in _failed)
+                    hb_task.cancel()
                     await self._fail_run(
                         goal, session_id,
                         error=("run ended without completing (no done() — likely ran "
@@ -1423,6 +1488,7 @@ class GoalDispatcher:
             # is not a judgment call — nothing executed successfully, so the claim
             # has no basis. Deterministic, needs no goal semantics.
             if run.all_actions_errored:
+                hb_task.cancel()
                 await self._fail_run(
                     goal, session_id,
                     error=("done() after every action errored — nothing executed "
@@ -1437,6 +1503,7 @@ class GoalDispatcher:
             if check_results:
                 _failed = failed_checks(check_results)
                 if _failed:
+                    hb_task.cancel()
                     await self._fail_run(
                         goal, session_id,
                         error=("acceptance checks failed: " + "; ".join(
@@ -1463,6 +1530,7 @@ class GoalDispatcher:
                 verdict, reason = await _cj.judge_run_outcome(
                     self.task_agent, session_id, goal, run)
                 if verdict == _cj.VERDICT_UNMET:
+                    hb_task.cancel()
                     await self._fail_run(
                         goal, session_id,
                         error=(f"completion judge: {reason} "
@@ -1488,7 +1556,12 @@ class GoalDispatcher:
                       "every declared acceptance check passed)")
             if gap_note:
                 result_record = f"{result_record}\n\n{gap_note.strip()}"
-            self.board.record_success(goal.id, session_id=session_id, result=result_record[:4000])
+            hb_task.cancel()
+            accepted = self.board.record_success(
+                goal.id, session_id=session_id, result=result_record[:4000],
+                claim_token=goal.claim_token)
+            if accepted is False:
+                return
             # Stale-completion skip: an owner may have cancelled/paused the goal
             # mid-run (T2 guards keep that status through record_success — see
             # test_intervention_guards.py). Re-read the row; if it isn't 'done'
@@ -1576,7 +1649,10 @@ class GoalDispatcher:
                      steps=int(getattr(run, "steps", 0) or 0),
                      duration_sec=self._elapsed(goal.id))
             try:
-                _g = self.board.record_failure(goal.id, error=error_text, session_id=session_id)
+                hb_task.cancel()
+                _g = self.board.record_failure(goal.id, error=error_text, session_id=session_id, claim_token=goal.claim_token)
+                if getattr(_g, "claim_token", None) != goal.claim_token:
+                    return
                 # T2.1 Task-3 review fix (finding #1, CRITICAL): this path also
                 # never goes through _fail_run — same hint mechanism, same
                 # rationale as the refusal-status site above.
@@ -1605,8 +1681,10 @@ class GoalDispatcher:
             if _shared_ws:
                 from core.interactive_gate import mark_idle
                 mark_idle()
-            self._ws_holders.discard(goal.id)
-            self._goal_started.pop(goal.id, None)
+            current = self._goal_tasks.get(goal.id)
+            if current is None or current is asyncio.current_task():
+                self._ws_holders.discard(goal.id)
+                self._goal_started.pop(goal.id, None)
 
     async def _evaluate_acceptance(self, checks: list, goal: Goal,
                                    session_id: Optional[str], run) -> list:
@@ -1690,7 +1768,9 @@ class GoalDispatcher:
         classified failed must not be recorded steps=0/spend=0. Optional with safe
         zero defaults so a call site without an envelope still works.
         """
-        _g = self.board.record_failure(goal.id, error=error, session_id=session_id)
+        _g = self.board.record_failure(goal.id, error=error, session_id=session_id, claim_token=goal.claim_token)
+        if getattr(_g, "claim_token", None) != goal.claim_token:
+            return  # a late failure must not block or publish for a newer claim
         if block and getattr(_g, "status", None) == STATUS_READY:
             try:
                 if self.board.block_from_ready(goal.id, error=error):
@@ -1856,6 +1936,7 @@ class GoalDispatcher:
                     what=f"Unblock goal: {goal.title}",
                     why=(goal.last_failure_error or "repeated failures"),
                     blocks_goal_ids=[goal.id],
+                    extra_payload={"auto_unblock": True},
                 )
         except Exception:
             logger.debug("blocked-goal ask creation skipped", exc_info=True)
@@ -2129,6 +2210,8 @@ class GoalDispatcher:
                 "max_steps": PLANNER_MAX_STEPS,
                 "temperature": 0.0,
             }
+            from agents.task.goals.planner import planner_memory_fields
+            request.update(planner_memory_fields(user_id))
             session_id, final = await _run_task_as_session(
                 self.task_agent, user_id=user_id, request=request, autonomous=True,
                 creator="goal")

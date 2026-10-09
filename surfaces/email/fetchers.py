@@ -24,6 +24,7 @@ from surfaces.email.dedup import MessageDedup
 # re-derived — and imported DOWNWARD, which is what the layering ratchet allows
 # (`surfaces` may read `tools`; `tools` may not read `surfaces`).
 from tools.email_providers.agentmail import normalize_agentmail_attachments
+from tools.email_providers.mime import sender_address, sender_authenticated
 
 logger = logging.getLogger(__name__)
 
@@ -113,8 +114,12 @@ class ImapFetcher:
                 # message is marked, and it now runs only on success.
                 _, data = await _off_loop(
                     tool, lambda n=num: conn.fetch(n, "(BODY.PEEK[])"))
-                em = _email.message_from_bytes(data[0][1])
-                out.append((num, normalize_email_message(em)))
+                # CHAT-7: MIME + HTML parsing of mail anyone can send runs OFF
+                # the event loop (it can be large; it must never stall the bot).
+                raw = data[0][1]
+                msg = await asyncio.to_thread(
+                    lambda b=raw: normalize_email_message(_email.message_from_bytes(b)))
+                out.append((num, msg))
             except Exception as e:
                 logger.warning("email fetch %s failed: %s", num, e, exc_info=True)
         return out
@@ -247,9 +252,16 @@ class AgentMailFetcher:
                           if thread_id else None)
                 if minted:
                     in_reply_to = minted
+            hdrs = full.get("headers") if isinstance(full.get("headers"), dict) else {}
+            auth = next((str(v) for k, v in hdrs.items()
+                         if str(k).lower() == "authentication-results"), None)
             out.append((mid, {
                 "message_id": str(mid),
                 "from": sender,
+                # CHAT-6: the managed inbox is the receiving MX; its
+                # Authentication-Results (when passed) is the only proof of From.
+                "sender_authenticated": sender_authenticated(
+                    auth, sender_address(sender)),
                 "subject": str(full.get("subject") or ""),
                 "body": str(full.get("extracted_text") or full.get("text") or ""),
                 "in_reply_to": in_reply_to,

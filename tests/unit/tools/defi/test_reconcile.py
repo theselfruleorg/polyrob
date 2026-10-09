@@ -404,3 +404,91 @@ async def test_a_long_run_log_tail_does_not_disable_the_gate(tmp_path, monkeypat
     res = await tool.reconcile(ReconcileParams(chain="base", ledger_path=str(led)))
     assert res.error is None, res.error
     assert _rows("rail_precondition_failed") == []
+
+
+# --------------------------------------------------------------------------
+# 2026-10-03: the gate timed out on every call. The treasury holds 80+ tokens
+# (mostly airdropped dust) and the chain side priced each one with its own
+# per-source call; GeckoTerminal answered 429 to each, slept 2 s and retried,
+# so the read passed the 60 s action budget and every buyback cycle STOPPED at
+# step 1. Reconcile now takes the holdings loop's batched prefetch.
+# --------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_reconcile_prices_the_chain_side_from_one_batch_prefetch(tmp_path, monkeypatch):
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
+    ledger = tmp_path / "project" / "kb-root-position-ledger.md"
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text(LEDGER)
+    dust = [f"0x{i:040x}" for i in range(1, 41)]
+    held = {BASECAT: 28925134, BOTS: 442232099224, **{a: 5 for a in dust}}
+
+    from tools.defi import price_sources
+    prefetch_calls, per_row, ask_primary = [], [], {}
+    sentinel = object()
+
+    def _prefetch(chain, addresses):
+        prefetch_calls.append(sorted(addresses))
+        return sentinel
+
+    def _quote_prefetched(chain, address, pre, *, must_ask_primary=False):
+        assert pre is sentinel
+        per_row.append(address)
+        ask_primary[address] = must_ask_primary
+        return type("P", (), {"price_usd": 1.0, "confidence": "high", "failed": ()})()
+
+    def _no_unbatched_quote(chain, address, **kw):
+        raise AssertionError(f"unbatched per-token quote for {address}")
+
+    monkeypatch.setattr(price_sources, "prefetch", _prefetch)
+    monkeypatch.setattr(price_sources, "quote_prefetched", _quote_prefetched)
+    monkeypatch.setattr(price_sources, "quote", _no_unbatched_quote)
+
+    tool = DefiDataTool(
+        holder="0xHOLDER",
+        index_fn=lambda holder, chain: dict(held),
+        identity_fn=lambda chain, addr: type("I", (), {"symbol": "TOK", "decimals": 6})(),
+    )
+    out = _text(await tool.reconcile(ReconcileParams(chain="base", ledger_path=str(ledger))))
+
+    assert "authoritative" in out
+    assert len(prefetch_calls) == 1
+    assert prefetch_calls[0] == sorted(held)
+    assert sorted(per_row) == sorted(held)
+    # A ledger position is one we hold on purpose: its primary source is always
+    # asked; airdropped dust may be answered from the batch alone.
+    assert ask_primary[BASECAT] is True and ask_primary[BOTS] is True
+    assert not any(ask_primary[a] for a in dust)
+
+
+@pytest.mark.asyncio
+async def test_reconcile_values_holdings_concurrently_and_keeps_their_order(tmp_path, monkeypatch):
+    """116 holdings x (3 identity eth_calls + a price quote) ran one after another:
+    93 s measured on prod after the batch fix, past the 60 s action budget. The
+    per-row reads are independent, so they run on a small pool; the report is
+    unchanged and still in address order."""
+    import time as _time
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
+    ledger = tmp_path / "project" / "kb-root-position-ledger.md"
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text(LEDGER)
+    held = {f"0x{i:040x}": 5 for i in range(1, 25)}
+
+    def _slow_price(chain, addr):
+        _time.sleep(0.2)
+        return type("P", (), {"price_usd": 1e-9, "confidence": "high", "failed": ()})()
+
+    tool = DefiDataTool(
+        holder="0xHOLDER",
+        index_fn=lambda holder, chain: dict(held),
+        identity_fn=lambda chain, addr: type("I", (), {"symbol": "TOK", "decimals": 6})(),
+        price_fn=_slow_price,
+    )
+    t0 = _time.monotonic()
+    res = await tool.reconcile(ReconcileParams(chain="base", ledger_path=str(ledger)))
+    elapsed = _time.monotonic() - t0
+    assert elapsed < 2.4, f"24 rows x 0.2 s ran serially ({elapsed:.1f}s)"
+    out = _text(res)
+    dust_lines = [ln for ln in out.splitlines() if "dust/airdrop" in ln]
+    addrs = [a for a in held if any(a in ln for ln in dust_lines)]
+    assert addrs == sorted(held)

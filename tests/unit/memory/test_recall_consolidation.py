@@ -100,7 +100,7 @@ def test_consolidation_writes_one_note_and_deletes_nothing(provider):
     notes = _notes(provider)
     assert len(notes) == 1
     assert notes[0]["created_by"] == "curator"
-    assert notes[0]["status"] == "active"
+    assert notes[0]["status"] == "pending"
     assert notes[0]["source"].startswith(SOURCE_PREFIX)
     assert notes[0]["title"].startswith("learned 3×:")
     assert notes[0]["content"] == min(POST_A, POST_B, POST_C, key=len)
@@ -213,7 +213,29 @@ def test_the_note_sweep_does_not_archive_what_the_recall_sweep_writes(provider):
     out = provider.consolidate_notes(stale_before_ts=int(time.time()))
 
     assert out["archived_stale"] == []
-    assert _notes(provider)[0]["status"] == "active"
+    assert _notes(provider)[0]["status"] == "pending"
+
+
+def test_scoped_recall_cannot_be_consolidated_into_shared_notes(provider):
+    from core.sqlite_util import execute_retry
+    _seed(provider, [POST_A, POST_B, POST_C])
+    execute_retry(provider.db_path,
+                  "INSERT INTO mem_provenance (mem_rowid,user_id,ts,scope) "
+                  "SELECT rowid,user_id,0,'goal:quarantine' FROM memories")
+    result = provider.consolidate_recall(user_id="rob")
+    assert result["rows"] == 0
+    assert _notes(provider) == []
+
+
+def test_changed_consolidation_loses_prior_active_status(provider):
+    from core.sqlite_util import execute_retry
+    _seed(provider, [POST_A, POST_B, POST_C])
+    provider.consolidate_recall(user_id="rob")
+    execute_retry(provider.db_path, "UPDATE curated_memory SET status='active'")
+    _seed(provider, ["x_browser_x_post 280 chars max"])
+    result = provider.consolidate_recall(user_id="rob")
+    assert result["updated"] == 1
+    assert _notes(provider)[0]["status"] == "pending"
 
 
 def test_an_archived_consolidation_note_is_updated_not_duplicated(provider):

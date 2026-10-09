@@ -16,7 +16,7 @@ from typing import Optional, Union
 ENV_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 #: Characters that would end the ``KEY=value`` line early and let a value
 #: smuggle a SECOND line — a flag the caller was never allowed to write (M12).
-_LINE_BREAKERS = ("\r", "\n", "\0")
+_LINE_BREAKERS = ("\r", "\n", "\0", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029")
 
 
 def env_write_error(key: str, value: str) -> str:
@@ -32,7 +32,7 @@ def env_write_error(key: str, value: str) -> str:
         return f"invalid env key {key!r}: expected [A-Z][A-Z0-9_]*"
     v = "" if value is None else str(value)
     if any(c in v for c in _LINE_BREAKERS):
-        return f"invalid value for {k}: a value must not contain CR, LF or NUL"
+        return f"invalid value for {k}: a value must not contain line separators or NUL"
     return ""
 
 

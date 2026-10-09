@@ -103,8 +103,11 @@ def test_forged_turn_cannot_patch_active(tmp_path):
               created_by=PROVENANCE_AGENT, pending=False)
     res = w.patch(user_id="alice", old_string="active body",
                   new_string="hijacked", created_by=PROVENANCE_BACKGROUND)
-    assert not res.ok
-    assert "active body here" in load_self_doc(tmp_path, user_id="alice")
+    # 2026-10-04: a forged author's patch of an ACTIVE doc lands a PENDING revision
+    # (owner promotes it); the active doc is still never touched.
+    assert res.ok and res.pending, res.errors
+    active = load_self_doc(tmp_path, user_id="alice")
+    assert "active body here" in active and "hijacked" not in active
 
 
 def test_promote_moves_pending_to_active(tmp_path):

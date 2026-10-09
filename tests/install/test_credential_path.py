@@ -56,14 +56,17 @@ class TestConfigSetSecretScope:
         )
         assert "FOO_API_KEY" not in project_text
 
-    def test_secret_key_project_scope_opt_in(self, tmp_path, monkeypatch):
+    def test_secret_key_project_scope_is_refused(self, tmp_path, monkeypatch):
+        """./.polyrob/.env is never loaded (a cloned directory could supply it),
+        so --project is refused instead of writing a key the CLI never sees."""
         result, global_text, project_text = self._run_set(
             tmp_path,
             monkeypatch,
             ["set", "FOO_API_KEY", "abcdefghijklmnopqrstuvwx", "--project"],
         )
-        assert result.exit_code == 0, result.output
-        assert "FOO_API_KEY" in project_text
+        assert result.exit_code != 0
+        assert "does not load the project env file" in result.output
+        assert "FOO_API_KEY" not in project_text
         assert "FOO_API_KEY" not in global_text
 
 

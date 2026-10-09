@@ -17,8 +17,9 @@ rather than refused.
 from __future__ import annotations
 
 import time
+import math
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, ROUND_CEILING
 from typing import Optional
 
 #: Verdicts from `tools/defi/pool_screen.py` that are NOT a usable price.
@@ -48,6 +49,7 @@ class PriceQuote:
     verdict: str
     source: str
     ts: float
+    confidence: str = "unknown"
 
 
 def quote_max_age_sec() -> int:
@@ -69,18 +71,25 @@ def size_amount_raw(usd: float, asset, quote: Optional[PriceQuote], *,
     over a pool the screen did not call WASH or UNSCREENABLE, deeper than the
     asset's own liquidity floor, and the result must clear ``min_amount_raw``.
     """
-    if usd is None or float(usd) <= 0:
+    if usd is None or isinstance(usd, bool) or not math.isfinite(float(usd)) or float(usd) <= 0:
         raise QuoteRefused(f"a price of {usd!r} is not an amount anyone can pay")
     symbol = getattr(asset, "symbol", "") or getattr(asset, "asset_id", "?")
     decimals = int(getattr(asset, "decimals", 0))
+    if not 0 <= decimals <= 36:
+        raise QuoteRefused("asset decimals are outside the supported range")
 
     if is_stable(asset):
-        raw = int((Decimal(str(usd)) * (10 ** decimals)).to_integral_value())
+        raw = int((Decimal(str(usd)) * (10 ** decimals)).to_integral_value(rounding=ROUND_CEILING))
     else:
         if quote is None:
             raise QuoteRefused(
                 f"no price available for {symbol} — refusing to size a fee "
                 f"against a token I cannot value")
+        if quote.asset_id != asset.asset_id or quote.confidence != "high":
+            raise QuoteRefused("a matching spend-grade independent quote is required")
+        if not all(math.isfinite(float(value)) for value in
+                   (quote.ts, quote.usd_per_token, quote.liquidity_usd)):
+            raise QuoteRefused("a quote must contain finite price, liquidity and time")
         age_cap = quote_max_age_sec() if max_age_sec is None else int(max_age_sec)
         if (now or time.time()) - float(quote.ts) > age_cap:
             raise QuoteRefused(
@@ -90,6 +99,9 @@ def size_amount_raw(usd: float, asset, quote: Optional[PriceQuote], *,
                 f"the {symbol} pool screens as {quote.verdict} — that is not a "
                 f"price I may charge against")
         floor_usd = float(getattr(asset, "liquidity_floor_usd", 0) or 0)
+        if (not math.isfinite(floor_usd) or floor_usd <= 0
+                or int(getattr(asset, "min_amount_raw", 0) or 0) <= 0):
+            raise QuoteRefused("a non-stable payment asset requires positive token and liquidity floors")
         if float(quote.liquidity_usd) < floor_usd:
             raise QuoteRefused(
                 f"{symbol} liquidity ${float(quote.liquidity_usd):,.0f} is below "
@@ -98,7 +110,7 @@ def size_amount_raw(usd: float, asset, quote: Optional[PriceQuote], *,
             raise QuoteRefused(
                 f"{symbol} priced at {quote.usd_per_token} is not a price")
         tokens = Decimal(str(usd)) / Decimal(str(quote.usd_per_token))
-        raw = int((tokens * (10 ** decimals)).to_integral_value())
+        raw = int((tokens * (10 ** decimals)).to_integral_value(rounding=ROUND_CEILING))
 
     if raw <= 0:
         raise QuoteRefused(

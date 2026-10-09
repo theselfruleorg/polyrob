@@ -22,19 +22,6 @@ logger = logging.getLogger(__name__)
 #: Control characters that would break a rendered line in two.
 _CTRL = re.compile(r"[\r\n\t\x00-\x1f\x7f]+")
 
-#: EVERY fence a room turn's content can arrive inside — this module's own two,
-#: plus the two the delivery rail wraps around them
-#: (``core.security.untrusted_wrap`` and ``MessageOrigin.CORRESPONDENT``'s
-#: envelope). ONE set, because a fence that is defanged in one neutralizer and
-#: not the other is a breakout: fix round 1 found `neutralize_name` letting a
-#: 64-char ``first_name`` close `</group-context>` and open a forged
-#: `<addressed>` line, and the member rail dropping the
-#: `</correspondent-message>` defang that ``hitl_ingress.inject_correspondent_
-#: message`` applies on the correspondent rail.
-_FENCES = ("group-context", "addressed", "correspondent-message",
-           "untrusted_tool_result", "owner-thread")
-_FENCE = re.compile(r"<\s*/?\s*(?:%s)\b[^>]*>" % "|".join(_FENCES), re.IGNORECASE)
-
 #: Per-line and per-block caps for the rendered context (fix round 1). The
 #: ``unanswered_only`` filter is NOT a bound on its own — one long message, or a
 #: room that outruns the marking, would otherwise put an unbounded block in
@@ -45,13 +32,35 @@ CONTEXT_BLOCK_MAX_CHARS = 6000
 
 def _defang(text: str) -> str:
     """Neutralize every emitted fence inside untrusted content."""
-    return _FENCE.sub("[filtered]", str(text or ""))
+    from core.context_fences import defang_control_fences
+    return defang_control_fences(text)
 
 
 #: 061: the public name of the ONE fence neutralizer. The owner thread renders
 #: rail bodies (a cron quoting a stranger's DM) inside ``<owner-thread>``, so it
 #: must defang the same fence set — imported, never re-derived.
 defang = _defang
+
+
+def context_rows(container: Any, surface: str, chat_id: str, rows: List[Any]) -> List[Any]:
+    """Filter room history against CURRENT roles before any model sees it.
+
+    Keep the audit log intact. A later block also removes earlier messages
+    from future model context; role lookup errors fail closed to blocked.
+    """
+    from core.surfaces.group_admin import room_role
+    roles, out = {}, []
+    for row in rows:
+        if getattr(row, "role_at_write", "") == "blocked":
+            continue
+        sender = str(getattr(row, "sender_id", "") or "")
+        if sender and getattr(row, "role_at_write", "") != "agent":
+            if sender not in roles:
+                roles[sender] = room_role(container, surface, chat_id, sender)
+            if roles[sender] == "blocked":
+                continue
+        out.append(row)
+    return out
 
 
 def neutralize_name(name: str) -> str:
@@ -265,6 +274,7 @@ def build_room_turn(container: Any, inbound: Any, *, role: str, chat_name: str,
         if ledger is not None:
             rows = ledger.tail(surface_id, chat_id, thread_id=src.thread_id,
                                limit=context_lines, unanswered_only=True)
+            rows = context_rows(container, surface_id, chat_id, rows)
     except Exception as e:
         logger.warning("room ledger read failed for %s:%s (%s) — answering without "
                        "context", surface_id, chat_id, e)

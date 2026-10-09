@@ -2,17 +2,20 @@
 Workspace context tracking for agent context enrichment.
 
 This module provides lightweight tracking of workspace changes
-to enable agents to understand file uploads and modifications.
+to enable agents to see workspace changes. A snapshot diff cannot tell WHO
+wrote a file; only files recorded by notify_upload are called uploads.
 """
 
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 from dataclasses import dataclass, field
 from datetime import datetime
+import re
 import time
 import threading
 import os
 
+from core.doc_kind import is_doc_path, parse_front_matter
 from agents.task.path import pm
 from agents.task.agent.session import SessionManager
 
@@ -35,41 +38,91 @@ class FileInfo:
         return self.size / 1024 / 1024
 
 
+def _is_noise(rel_path: str) -> bool:
+    """Lock / dot / temp files are never worth a harness note (prod: 35 of 52
+    notices listed only ``workspace.turn.lock``)."""
+    parts = Path(rel_path).parts
+    if any(p.startswith('.') for p in parts):
+        return True
+    name = parts[-1] if parts else rel_path
+    return name.endswith(('.lock', '.tmp', '.swp', '.part', '~'))
+
+
+_WRITER_RE = re.compile(r"[^A-Za-z0-9 ._-]")
+
+
+def _declared_writer(file_path: Path) -> Optional[str]:
+    """The ``authored_by:`` a markdown file declares in its front-matter (the
+    maintenance loop and operators stamp their drops), or None. Read from the
+    first 2 KB only; the value is sanitised and capped — it is file content."""
+    if not is_doc_path(str(file_path)):
+        return None
+    try:
+        with open(file_path, 'r', encoding='utf-8', errors='replace') as fh:
+            head = fh.read(2048)
+    except OSError:
+        return None
+    writer = parse_front_matter(head)[0].get('authored_by', '')
+    writer = _WRITER_RE.sub('', writer).strip()[:40]
+    return writer or None
+
+
+def _size_str(file: FileInfo) -> str:
+    return f"{file.size_kb:.1f} KB" if file.size_kb < 1024 else f"{file.size_mb:.1f} MB"
+
+
 @dataclass
 class WorkspaceChanges:
     """Represents changes to workspace since last check."""
     added: List[FileInfo] = field(default_factory=list)
     modified: List[FileInfo] = field(default_factory=list)
     deleted: List[str] = field(default_factory=list)
+    # Relative paths (or bare names, for a legacy notify) recorded by the console
+    # upload endpoint via notify_upload — the ONLY files we may call "uploaded".
+    uploaded: Set[str] = field(default_factory=set)
+    # Relative path -> the writer the file itself declares (``authored_by:``).
+    declared_by: Dict[str, str] = field(default_factory=dict)
 
     def has_changes(self) -> bool:
         return bool(self.added or self.modified or self.deleted)
 
     def format_for_agent(self, max_files: int = 5) -> str:
-        """Format changes as agent-readable context."""
+        """Format changes as a harness note.
+
+        The writer of a file is NOT known from a snapshot diff: on a shared
+        workspace the agent's own writes, scheduled runs and operators all show
+        up here. Only a file recorded by notify_upload is called an upload.
+        Paths are workspace-relative so the agent can open them.
+        """
         if not self.has_changes():
             return ""
 
-        lines = ["[WORKSPACE CHANGES DETECTED]"]
+        lines = ["[HARNESS NOTE — workspace changes; the writer is unknown unless a line names it]"]
 
-        # Show added files (most important)
         for file in self.added[:max_files]:
             age = int(file.age_seconds)
-            size_str = f"{file.size_kb:.1f} KB" if file.size_kb < 1024 else f"{file.size_mb:.1f} MB"
             time_str = f"{age}s ago" if age < 60 else f"{age//60}m ago"
-            lines.append(f"✨ New: {file.name} ({size_str}, uploaded {time_str})")
+            if file.path in self.uploaded:
+                lines.append(f"New: {file.path} ({_size_str(file)}, uploaded by the owner via the console {time_str})")
+            elif file.path in self.declared_by:
+                lines.append(
+                    f"New: {file.path} ({_size_str(file)}, appeared {time_str}) — the file declares "
+                    f"authored_by: {self.declared_by[file.path]} (NOT the owner)"
+                )
+            else:
+                lines.append(
+                    f"New: {file.path} ({_size_str(file)}, appeared {time_str}) — writer not recorded "
+                    f"(may be your own write, a scheduled run, or an operator; NOT necessarily the owner)"
+                )
 
         if len(self.added) > max_files:
             lines.append(f"   ... and {len(self.added) - max_files} more files")
 
-        # Show modified files
         for file in self.modified[:max_files]:
-            size_str = f"{file.size_kb:.1f} KB" if file.size_kb < 1024 else f"{file.size_mb:.1f} MB"
-            lines.append(f"📝 Modified: {file.name} (now {size_str})")
+            lines.append(f"Modified: {file.path} (now {_size_str(file)}) — writer not recorded")
 
-        # Show deleted files
-        for file_name in self.deleted[:max_files]:
-            lines.append(f"🗑️  Removed: {file_name}")
+        for path in self.deleted[:max_files]:
+            lines.append(f"Removed: {path}")
 
         return "\n".join(lines)
 
@@ -93,15 +146,19 @@ class WorkspaceContext:
         self._recent_uploads: Dict[str, List[FileInfo]] = {}
         self._upload_ttl = 300  # 5 minutes
 
-    def notify_upload(self, session_id: str, user_id: str, filename: str, size: int):
-        """Notify of a file upload (called from upload API)."""
+    def notify_upload(self, session_id: str, user_id: str, filename: str, size: int,
+                      path: Optional[str] = None):
+        """Notify of a file upload (called from upload API).
+
+        ``path`` is the workspace-relative path; without it the bare filename is
+        recorded (matches a file at the workspace root only)."""
         with self._lock:
             if session_id not in self._recent_uploads:
                 self._recent_uploads[session_id] = []
 
             file_info = FileInfo(
                 name=filename,
-                path=filename,
+                path=path or filename,
                 size=size,
                 mtime=time.time(),
                 age_seconds=0
@@ -161,6 +218,8 @@ class WorkspaceContext:
             for file_path in workspace_dir.rglob('*'):
                 if file_path.is_file():
                     rel_path = str(file_path.relative_to(workspace_dir))
+                    if _is_noise(rel_path):
+                        continue
                     stat = file_path.stat()
                     current_files[rel_path] = FileInfo(
                         name=file_path.name,
@@ -175,28 +234,30 @@ class WorkspaceContext:
             previous_files = cache.get('files_snapshot', {})
 
             # Calculate changes
-            changes = WorkspaceChanges()
+            changes = WorkspaceChanges(
+                uploaded={f.path for f in self.get_recent_uploads(session_id)},
+            )
 
             if since_last_check and previous_files:
                 # Added files
                 for path, file_info in current_files.items():
                     if path not in previous_files:
                         changes.added.append(file_info)
+                        writer = _declared_writer(workspace_dir / path)
+                        if writer:
+                            changes.declared_by[path] = writer
                     elif file_info.mtime > previous_files[path].mtime:
                         changes.modified.append(file_info)
 
                 # Deleted files
                 for path in previous_files:
                     if path not in current_files:
-                        changes.deleted.append(previous_files[path].name)
+                        changes.deleted.append(path)
             else:
                 # First check - all files are "existing" (not new)
                 # Only show files uploaded in last 5 minutes as "new"
-                recent_uploads = self.get_recent_uploads(session_id)
-                recent_names = {f.name for f in recent_uploads}
-
                 for file_info in current_files.values():
-                    if file_info.name in recent_names:
+                    if file_info.path in changes.uploaded:
                         changes.added.append(file_info)
 
             # Update cache

@@ -10,6 +10,7 @@ import importlib
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.unit.webview.owner_session import owner_headers
 
 
 def _reload_server(monkeypatch, multitenant: bool):
@@ -33,19 +34,19 @@ def single_user(monkeypatch):
     return _reload_server(monkeypatch, multitenant=False)
 
 
-def test_admin_404_in_single_user(single_user):
-    client = TestClient(single_user._fastapi)
+def test_admin_404_in_single_user(single_user, monkeypatch):
+    client = TestClient(single_user._fastapi, headers=owner_headers(monkeypatch))
     assert client.get("/admin").status_code == 404
 
 
-def test_signin_404_in_single_user(single_user):
-    client = TestClient(single_user._fastapi)
+def test_signin_404_in_single_user(single_user, monkeypatch):
+    client = TestClient(single_user._fastapi, headers=owner_headers(monkeypatch))
     assert client.get("/signin").status_code == 404
 
 
 def test_profile_logout_admin_routes_not_registered(single_user):
     paths = _route_paths(single_user)
-    for gated in ("/signin", "/logout", "/profile", "/admin",
+    for gated in ("/signin", "/profile", "/admin",
                   "/admin/users", "/admin/activity"):
         assert gated not in paths, f"{gated} should NOT be registered in single-user"
 
@@ -68,14 +69,14 @@ def test_index_reachable_without_auth_single_user(single_user):
     assert client.get("/").status_code == 200
 
 
-def test_session_page_reachable_without_auth_single_user(single_user):
+def test_session_page_requires_auth_single_user(single_user):
     # 043 §9: the legacy session.html view is deleted; /session/{id} now 301s to
     # the one bound-session page /c/{id}. The redirect is reachable without auth
     # in single-user (the path stays public).
     client = TestClient(single_user._fastapi)
     resp = client.get("/session/abc123", follow_redirects=False)
-    assert resp.status_code == 301
-    assert resp.headers["location"] == "/c/abc123"
+    assert resp.status_code == 302
+    assert resp.headers["location"].startswith("/owner-login")
 
 
 # --------------------------------------------------------------------------- #

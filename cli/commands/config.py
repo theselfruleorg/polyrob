@@ -1,7 +1,10 @@
 """`polyrob config` — show / set / path / check for file-first config (R7, P1 T8).
 
-Project (./.polyrob/.env) overrides global (~/.polyrob/.env). Secret values are
-redacted in `show`. No DB, no TOML — plain dotenv files (env-flags) plus a
+One env file configures the CLI: the home ``~/.polyrob/.env`` (the active
+profile's ``.env`` when a profile is selected). A per-directory
+``./.polyrob/.env`` is NOT loaded — a cloned directory could supply it — so
+``--project`` writes are refused with the path of the file that IS read.
+Secret values are redacted in `show`. No DB, no TOML — plain dotenv files (env-flags) plus a
 per-user ``preferences.toml`` (typed prefs — see ``core.prefs``).
 
 VALUE is optional: omit it and ``config set`` prompts (hidden for a
@@ -92,7 +95,14 @@ def _env_path(is_global: bool) -> Path:
     inside a profile wants); only the option's name and help text were wrong.
     Every write confirmation already prints the resolved path.
     """
-    return (polyrob_home() if is_global else Path.cwd() / ".polyrob") / ".env"
+    from core.config_service import _env_path as _service_env_path
+    return _service_env_path("global" if is_global else "project")
+
+
+def _refuse_project_scope(key: str = "") -> None:
+    """``--project`` names a file the CLI never loads — refuse, never write it."""
+    from core.config_service import project_scope_refusal
+    raise click.ClickException(project_scope_refusal(key))
 
 
 def _write_env_flag(key: str, value: str, is_global: bool) -> Path:
@@ -135,7 +145,7 @@ def _default_home_dir() -> str:
 
     Resolved through ``cli/_admin_home.py::admin_data_dir`` (the 031 rule):
     ``POLYROB_DATA_DIR`` wins; on a box with a deployed instance the daemon's home
-    is adopted; a purely local box resolves ``cwd/.polyrob`` as before. Until
+    is adopted; a purely local box resolves ``<polyrob_home>/data``. Until
     2026-09-18 this read ``resolve_runtime_paths(local=True)`` directly, so every
     ``polyrob config set`` preference on prod landed in a home the service never
     read. Overridable via the hidden ``--home`` option (test/ops only).
@@ -146,7 +156,7 @@ def _default_home_dir() -> str:
 
 @click.group("config")
 def config():
-    """Show or edit POLYROB configuration (file-first: ~/.polyrob + ./.polyrob)."""
+    """Show or edit POLYROB configuration (file-first: ~/.polyrob/.env)."""
     from cli.commands._bootstrap import ensure_env_loaded
     ensure_env_loaded()
 
@@ -185,11 +195,11 @@ def _prompt_for_value(key: str) -> str:
 @config.command("set")
 @click.argument("key")
 @click.argument("value", required=False)
-@click.option("--global", "--home", "is_global", is_flag=True, default=False,
-              help="Write to the ACTIVE home's .env ($POLYROB_HOME) — that is ~/.polyrob/.env normally, and the active PROFILE's .env when a profile is selected. `--home` is an alias. (Default for flags: ./.polyrob/.env; secrets already default to the home file.)")
+@click.option("--global", "--home", "is_global", is_flag=True, default=True, flag_value=True,
+              help="Write to the ACTIVE home's .env ($POLYROB_HOME) — that is ~/.polyrob/.env normally, and the active PROFILE's .env when a profile is selected. `--home` is an alias. (Default for flags and secrets: the active home.)")
 @click.option("--project", "project_scope", is_flag=True, default=False,
-              help="Write a secret to the per-directory ./.polyrob/.env instead "
-                   "of the global file")
+              help="Refused: ./.polyrob/.env is not loaded (a cloned directory "
+                   "could supply it). Kept so old scripts get a clear message.")
 @click.option("--user", "user_id", default=None,
               help="Tenant user id — required to set a per-user preference "
                    "(dotted key, e.g. style.verbosity)")
@@ -206,21 +216,16 @@ def set_cmd(key, value, is_global, project_scope, user_id, confirm, force, home_
     keeps credentials out of shell history. See the module docstring for the
     full routing decision tree.
     """
+    if project_scope:
+        _refuse_project_scope(key)
+    is_global = True
     if value is None:
         value = _prompt_for_value(key)
 
-    # 1. Secret-shaped KEY -> env file. 027 WP4: credentials default to the
-    #    GLOBAL ~/.polyrob/.env — a project-scope key silently vanishes the
-    #    moment the user cd's away (the classic "polyrob stopped seeing my
-    #    key"). --project opts back into the per-directory file.
+    # 1. Secret-shaped KEY -> the home env file (the only one the CLI loads).
     if _is_secret_key(key):
-        secret_global = not project_scope
-        path = _write_env_flag(key, value, secret_global)
+        path = _write_env_flag(key, value, True)
         click.echo(f"Set {key} in {path}")
-        if secret_global and not is_global:
-            click.echo(click.style(
-                "credentials write to the global ~/.polyrob/.env by default; "
-                "pass --project for a per-directory key", dim=True))
         return
 
     # 2. Dotted KEY that is a known per-user preference -> preferences.toml.
@@ -265,10 +270,10 @@ def set_cmd(key, value, is_global, project_scope, user_id, confirm, force, home_
 
 
 @config.command("edit")
-@click.option("--global", "--home", "is_global", is_flag=True, default=True,
+@click.option("--global", "--home", "is_global", is_flag=True, default=True, flag_value=True,
               help="Edit ~/.polyrob/.env (the default).")
 @click.option("--project", "project_scope", is_flag=True, default=False,
-              help="Edit ./.polyrob/.env instead.")
+              help="Refused: ./.polyrob/.env is not loaded.")
 def edit_cmd(is_global, project_scope):
     """Open the env file in $EDITOR, then validate it before you leave.
 
@@ -278,7 +283,9 @@ def edit_cmd(is_global, project_scope):
     at runtime (an unknown key is simply never read), so the edit ends with
     the same check `config check` runs.
     """
-    path = _env_path(is_global and not project_scope)
+    if project_scope:
+        _refuse_project_scope()
+    path = _env_path(True)
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists():
         path.write_text("# POLYROB configuration — one KEY=value per line\n",
@@ -305,28 +312,28 @@ def edit_cmd(is_global, project_scope):
 
 @config.command("unset")
 @click.argument("key")
-@click.option("--global", "--home", "is_global", is_flag=True, default=False,
-              help="Remove from the ACTIVE home's .env ($POLYROB_HOME) — ~/.polyrob/.env normally, the active PROFILE's .env when a profile is selected. `--home` is an alias. (Default: ./.polyrob/.env.)")
+@click.option("--global", "--home", "is_global", is_flag=True, default=True, flag_value=True,
+              help="Remove from the ACTIVE home's .env ($POLYROB_HOME) — ~/.polyrob/.env normally, the active PROFILE's .env when a profile is selected. `--home` is an alias. (Default: the active home.)")
 def unset_cmd(key, is_global):
     """Remove KEY from the env file — the counterpart of `config set`.
 
     This is how a stale or malformed credential/flag is cleared without
     hand-editing the file (`polyrob doctor --full` names this verb on a
-    "present but unusable" line). Scoping mirrors `set`: project file by
-    default, ~/.polyrob/.env with --global.
+    "present but unusable" line). It edits the home .env — the one file the
+    CLI loads (the same file `set` writes).
     """
     from core.env_file import remove_env_var
 
-    path = _env_path(is_global)
+    path = _env_path(True)
     if remove_env_var(path, key):
         click.echo(f"Removed {key} from {path}")
         return
-    other = _env_path(not is_global)
-    if key.strip() in _read_env_file(other):
-        remedy = (f"polyrob config unset {key} --global" if not is_global
-                  else f"polyrob config unset {key}")
+    legacy = _env_path(False)
+    if key.strip() in _read_env_file(legacy):
         raise click.ClickException(
-            f"{key} is not set in {path} — it is set in {other}; run `{remedy}`"
+            f"{key} is not set in {path}. It is set in {legacy}, but polyrob "
+            f"does not load that file, so it has no effect — delete the line by "
+            f"hand if you want it gone."
         )
     raise click.ClickException(f"{key} is not set in {path}")
 
@@ -451,15 +458,18 @@ def migrate_cmd(take_all):
 @click.option("--home", "home_dir_opt", default=None, hidden=True,
               help="Override the preferences data home (test/ops only)")
 def show_cmd(user_id, home_dir_opt):
-    """Show effective config (project overrides global); secrets redacted."""
+    """Show the active home config with secrets and endpoint credentials redacted."""
+    from core.flags import is_secret_flag
+    from core.security.redaction import redact_config_urls
     merged: dict = {}
     merged.update(_read_env_file(polyrob_home() / ".env"))
-    merged.update(_read_env_file(Path.cwd() / ".polyrob" / ".env"))  # project wins
     if not merged:
         click.echo("(no config set — run `polyrob init` or `polyrob config set KEY VALUE`)")
     else:
         for key in sorted(merged):
-            value = _redact(merged[key]) if _is_secret(key) else merged[key]
+            value = (_redact(merged[key]) if _is_secret(key) else
+                     "(set, masked)" if is_secret_flag(key) else
+                     redact_config_urls(merged[key]))
             click.echo(f"{key}={value}")
 
     # T10 (exposure parity with the Telegram `/config` listing and the webview
@@ -483,8 +493,7 @@ def show_cmd(user_id, home_dir_opt):
 #: unit file instead), and the CLI only keeps them as the LOWEST layers for
 #: back-compat. CLI keys belong in ~/.polyrob/.env — `polyrob config migrate`.
 _TIER_NOTES = {
-    "project": "managed by `polyrob config set`",
-    "home": "managed by `polyrob config set --global`",
+    "home": "managed by `polyrob config set`",
     "legacy-home": "legacy home (read-only transition fallback)",
     "root": "legacy server-mode tier (lowest precedence)",
     "config-env": ("legacy server-mode tier (non-systemd server deploys only); "
@@ -728,9 +737,7 @@ def check_cmd(user_id, home_dir_opt):
     names. Exits 0 whether or not findings are reported (diagnostic, not
     fatal).
     """
-    global_env = polyrob_home() / ".env"
-    project_env = Path.cwd() / ".polyrob" / ".env"
-    findings = list(check_env_files([global_env, project_env]))
+    findings = list(check_env_files([_env_path(True)]))
 
     if user_id:
         home_dir = home_dir_opt or _default_home_dir()

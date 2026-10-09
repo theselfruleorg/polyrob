@@ -190,6 +190,46 @@ class SlidingWindowLimiter:
         return [k for k, ts in self._calls.items() if ts]
 
 
+class PersistentWindowLimiter:
+    """Atomically consume several related budgets across processes and restarts.
+
+    A global bucket alongside per-client buckets bounds retained history and
+    prevents identity churn from evicting a live restriction. Storage errors
+    propagate so the caller can refuse admission.
+    """
+    def __init__(self, db_path, *, window_seconds=300, time_fn=None):
+        import math
+        if not math.isfinite(window_seconds) or window_seconds <= 0:
+            raise ValueError('Rate window must be finite and positive')
+        self.db_path = str(db_path)
+        self.window = window_seconds
+        self.time_fn = time_fn or time.time
+
+    def check_many(self, limits, *, units=1):
+        from core.sqlite_util import init_schema, wal_connect
+        if not limits or len(limits) > 16 or any(type(n) is not int or n <= 0 for n in limits.values()):
+            raise ValueError('Rate budgets must be bounded positive integers')
+        if type(units) is not int or not 1 <= units <= 1000:
+            raise ValueError('Rate reservation units must be between 1 and 1000')
+        init_schema(self.db_path, 'CREATE TABLE IF NOT EXISTS rate_events (bucket TEXT, ts REAL); '
+                    'CREATE INDEX IF NOT EXISTS rate_bucket_ts ON rate_events(bucket, ts);', mkdir=True)
+        now = self.time_fn()
+        db = wal_connect(self.db_path)
+        try:
+            with db:
+                db.execute('BEGIN IMMEDIATE')
+                db.execute('DELETE FROM rate_events WHERE ts <= ?', (now - self.window,))
+                for key, limit in limits.items():
+                    count = db.execute('SELECT count(*) FROM rate_events WHERE bucket=?', (key,)).fetchone()[0]
+                    if count + units > limit:
+                        return False
+                db.executemany('INSERT INTO rate_events VALUES (?, ?)',
+                               [(key, now) for key in limits for _ in range(units)])
+            return True
+        finally:
+            db.close()
+
+
 class TokenBucket:
     """Per-key token bucket: ``burst`` capacity refilled at ``rate_per_sec``.
     In-memory pacing only — durability is the caller's concern (e.g. the outbound

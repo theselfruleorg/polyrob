@@ -30,6 +30,7 @@ _LAZY_NAMES = (
     "ClobClient",
     "ApiCreds",
     "OrderArgs",
+    "OpenOrderParams",
     "BalanceAllowanceParams",
     "AssetType",
     "CLOB_AVAILABLE",
@@ -50,6 +51,7 @@ def _ensure_loaded() -> None:
         from py_clob_client_v2.clob_types import (  # type: ignore
             ApiCreds,
             OrderArgs,
+            OpenOrderParams,
             BalanceAllowanceParams,
             AssetType,
         )
@@ -57,6 +59,7 @@ def _ensure_loaded() -> None:
         g["ClobClient"] = ClobClient
         g["ApiCreds"] = ApiCreds
         g["OrderArgs"] = OrderArgs
+        g["OpenOrderParams"] = OpenOrderParams
         g["BalanceAllowanceParams"] = BalanceAllowanceParams
         g["AssetType"] = AssetType
         g["CLOB_AVAILABLE"] = True
@@ -68,7 +71,7 @@ def _ensure_loaded() -> None:
         except Exception:  # pragma: no cover - metadata absent
             g["CLOB_VERSION"] = None
     except Exception as _exc:  # ImportError or any transitive failure
-        for _name in ("ClobClient", "ApiCreds", "OrderArgs", "BalanceAllowanceParams", "AssetType"):
+        for _name in ("ClobClient", "ApiCreds", "OrderArgs", "OpenOrderParams", "BalanceAllowanceParams", "AssetType"):
             g[_name] = None
         g["CLOB_AVAILABLE"] = False
         g["CLOB_IMPORT_ERROR"] = f"{type(_exc).__name__}: {_exc}"

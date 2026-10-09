@@ -85,7 +85,8 @@ def test_record_success_closes_the_goals_ask(board):
                      why="repeated failures", blocks_goal_ids=[g.id])
     board.claim(g.id, "w1", ttl_seconds=60)
 
-    board.record_success(g.id, session_id="s1", result="shipped")
+    board.record_success(g.id, session_id="s1", result="shipped",
+        claim_token=board.get(g.id).claim_token)
 
     assert board.asks(user_id="rob", status=ASK_OPEN) == [], \
         "a goal that succeeded must not leave the owner an open question about it"

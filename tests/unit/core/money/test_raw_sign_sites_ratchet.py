@@ -123,6 +123,8 @@ ALLOWED = {
         "Hyperliquid SDK account; every order verb runs trade_turn_refusal + evaluate_live_trade"),
     ("packs/markets/polyrob_markets/hyperliquid/service.py", "HyperliquidTool.approve_agent", "from_key"): (
         "master-key agent approval after trade_turn_refusal"),
+    ("packs/markets/polyrob_markets/hyperliquid/service.py", "HyperliquidTool.revoke_agent", "from_key"): (
+        "owner turn, master-address match; replace only the recorded agent slot before clearing credentials"),
 }
 
 

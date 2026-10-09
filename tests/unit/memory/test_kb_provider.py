@@ -160,6 +160,19 @@ async def test_kb_source_hash_missing(provider):
     assert h is None
 
 
+async def test_kb_remove_treats_wildcards_as_literal_names(provider):
+    for user, collection, path in [("u1", "docs", "a_b%"), ("u1", "docs", "axb-other"),
+                                    ("u2", "docs", "a_b%"), ("u1", "doc%", "axb-other")]:
+        await provider.kb_ingest_chunk(user_id=user, collection=collection, source_path=path,
+                                       source_hash="hash", chunk_idx=0, content="postgres",
+                                       mime="text/plain", created_at="2024-01-01")
+    assert await provider.kb_remove(user_id="u1", collection="docs", source="a_b%") == 1
+    assert provider.kb_source_hash(user_id="u1", collection="docs", source_path="axb-other") == "hash"
+    assert provider.kb_source_hash(user_id="u2", collection="docs", source_path="a_b%") == "hash"
+    assert await provider.kb_remove(user_id="u1", collection="doc%") == 1
+    assert provider.kb_source_hash(user_id="u1", collection="docs", source_path="axb-other") == "hash"
+
+
 async def test_kb_remove_scoped(provider):
     """kb_remove(source=...) removes only that source's chunks, leaves others."""
     for i in range(3):

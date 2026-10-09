@@ -2,6 +2,7 @@
 list (a read — nothing is fetched or sent). See ``surfaces/_probe.py``."""
 import asyncio
 import imaplib
+import ssl
 
 from surfaces._probe import ProbeResult, http_json, missing
 
@@ -28,7 +29,7 @@ async def probe(env) -> ProbeResult:
     host = (env.get("GMAIL_IMAP_SERVER") or "imap.gmail.com").strip()
 
     def _login():
-        conn = imaplib.IMAP4_SSL(host, timeout=10)
+        conn = imaplib.IMAP4_SSL(host, timeout=10, ssl_context=ssl.create_default_context())
         try:
             conn.login(env["GMAIL_EMAIL"].strip(), env["GMAIL_APP_PASSWORD"].strip())
         finally:

@@ -415,10 +415,11 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
                 money_target=request.get('money_target'),
             )
 
-        # SECURITY (C4): a client may supply a custom session_id (CLI/API/A2A). If
-        # that id already belongs to a DIFFERENT user, refuse — otherwise we would
-        # build a fresh orchestrator over theirs (register_orchestrator overwrite =
-        # DoS) and stomp their task/model/tools metadata.
+        from agents.task.billed_request import credit_billing_required, validate_billed_request
+        credit_billed = await credit_billing_required(self.container, user_id)
+        validate_billed_request(session_request, required=credit_billed)
+
+        # A caller-supplied ID must not replace another tenant's session.
         self._assert_session_owner(session_id, user_id)
 
         # Generate session ID if needed
@@ -507,7 +508,7 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
         # the 044 C1 `effective_tools`/`public_session` keys: task_agent_support.
         self.session_manager.update_session_metadata(actual_id, build_session_metadata(
             session_request, effective_tool_ids=effective_tool_ids,
-            public_session=orchestrator._public_session))
+            public_session=orchestrator._public_session, credit_billed=credit_billed))
 
         # Save task to dedicated file for webview (uses SessionManager helper)
         try:
@@ -557,8 +558,6 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
         4. Create agent
         5. Execute session
 
-        All complexity is handled internally by the orchestrator.
-
         Args:
             user_id: User ID
             session_id: Session to run (or latest if None)
@@ -576,19 +575,20 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
                 return "No active session found"
             session_id = sessions[-1]
 
-        # CONCURRENCY PROTECTION (DUAL-LOCK PATTERN):
-        # ==========================================
-        # PRIMARY DEFENSE: Execution lock (prevents concurrent execution)
-        # SECONDARY DEFENSE: Status transition check (validates state machine integrity)
-        #
-        # Get or create lock for this session
+        # Serialize runs for this session; the status transition below also
+        # guards against invalid resumes. Child tasks inherit its principal.
         if session_id not in self._session_execution_locks:
             self._session_execution_locks[session_id] = asyncio.Lock()
 
         # Acquire lock - only one execution at a time per session
         # This is the PRIMARY protection against race conditions
         async with self._session_execution_locks[session_id]:
-            return await self._run_session_impl(user_id, session_id)
+            from agents.task.billed_request import session_compute
+            info = self.session_manager.get_session_info(session_id)
+            if not info or info.get('user_id') != user_id:
+                return "Session not found or unauthorized"
+            async with session_compute(info, user_id, getattr(self, '_container', None)):
+                return await self._run_session_impl(user_id, session_id)
 
     async def _run_session_impl(
         self,

@@ -48,6 +48,18 @@ class AgentUriTooLarge(ValueError):
     """The encoded registration file exceeds what may go on-chain."""
 
 
+def instance_agent_uri() -> str:
+    """The instance's own registration document, checked before encoding."""
+    from modules.eip8004.registration import build_registration_file
+    from core.secret_scrub import scrub_secret_shapes
+    base_url = os.environ.get("A2A_BASE_URL")
+    document = build_registration_file(base_url or "http://localhost:9000").model_dump(exclude_none=True)
+    text = json.dumps(document, ensure_ascii=False)
+    if scrub_secret_shapes(text) != text:
+        raise ValueError("Registration document contains credential material")
+    return build_agent_uri(document, base_url=base_url)
+
+
 def _is_public(base_url: Optional[str]) -> bool:
     """The ONE public-host rule (``modules.eip8004.registration``)."""
     from modules.eip8004.registration import is_public_base_url
@@ -128,7 +140,7 @@ def build_registration_intent(*, chain: str, max_spend_usd: float,
 
 def check_not_already_registered(*, existing_agent_id: Optional[int],
                                  chain: str) -> Optional[str]:
-    """A refusal string when this wallet already holds an identity, else None.
+    """A refusal when this wallet already holds its self-minted identity.
 
     ⚠️ Read from the CHAIN, never from a local flag: a fresh data dir would lose
     the flag and re-register, minting a second token. The chain is the only
@@ -138,18 +150,11 @@ def check_not_already_registered(*, existing_agent_id: Optional[int],
         # agentId 0 is a REAL id (the registries mint from 0; 4663's first identity is 0) —
         # `not 0` read it as "unregistered" and would mint a second identity (testnet-run F4).
         return None
-    # CR-L15: holding an agent token is not proof of having MINTED it — a
-    # token can be transferred in, and that is somebody else's identity. The
-    # refusal stands either way (never mint a second one), but it must not
-    # tell the agent the held token is its own.
     return (
-        f"this wallet already holds an ERC-8004 agent token on {chain} "
+        f"this wallet already holds its self-minted ERC-8004 identity on {chain} "
         f"(agentId {existing_agent_id}). `register()` is not idempotent — "
-        f"calling it again mints a SECOND token and splits the identity, "
-        f"leaving two agentIds and no way to say which is authoritative. If "
-        f"this wallet minted it, change the registration file with "
-        f"`set_agent_uri`. A token TRANSFERRED in is somebody else's identity, "
-        f"not ours — the owner decides what to do with it.")
+        f"calling it again mints a SECOND token and splits the identity. "
+        f"Change the registration file with `set_agent_uri` instead.")
 
 
 #: How long a broadcast registration stays "in flight" for the double-mint
@@ -244,17 +249,10 @@ def read_agent_id(rpc, *, chain: str, holder: str, from_block: Optional[int] = N
     read RAISES, because "I could not look" must never be mistaken for "not
     registered" — that mistake mints a second identity.
 
-    testnet-run F3 (2026-09-29): the reference Identity Registries are NOT
-    ERC721Enumerable — ``supportsInterface(0x780e9d63)`` is false on 4663 and
-    46630, and their implementation is the one on Base/Ethereum — so
-    ``tokenOfOwnerByIndex`` REVERTS and this read raised for every registered
-    wallet. The enumerable path is kept for a registry that says it supports it;
-    otherwise the id comes from the registry's ``Transfer(_, holder, id)`` logs
-    (from *from_block*, default the row's measured ``identity_logs_from``), each
-    candidate confirmed live with ``ownerOf``. When the live ids do not account
-    for ``balanceOf`` exactly, this RAISES (never guesses an id). With several
-    identities held, the lowest id is returned (the enumerable path's index 0
-    order is not defined either; any id refuses a second register()).
+    The registry's Transfer logs must account for every held token. Only an
+    identity MINTED to this holder is its registration; unsolicited transfers
+    are holdings, never authority and never a reason to block registration.
+    Multiple self-minted live identities are ambiguous and refuse.
     """
     registry = erc8004.resolve_identity_registry(chain)
     from core.wallet.abi import decode
@@ -267,21 +265,12 @@ def read_agent_id(rpc, *, chain: str, holder: str, from_block: Optional[int] = N
     held = int(decode([{"type": "uint256"}], raw)[0])
     if held == 0:
         return None
-    if _supports_enumeration(rpc, registry):
-        data = encode_call("tokenOfOwnerByIndex",
-                           [{"type": "address"}, _U256], [holder, 0])
-        raw = rpc("eth_call", [{"to": registry, "data": data}, "latest"])
-        if not isinstance(raw, str) or not raw.startswith("0x") or raw == "0x":
-            # It holds a token but enumeration is unavailable. Still registered —
-            # say so without inventing an id.
-            return -1
-        return int(decode([_U256], raw)[0])
     return _agent_id_from_logs(rpc, chain=chain, registry=registry, holder=holder, held=held,
                                from_block=from_block, step=step)
 
 
 def _agent_id_from_logs(rpc, *, chain: str, registry: str, holder: str, held: int,
-                        from_block: Optional[int], step: int) -> int:
+                        from_block: Optional[int], step: int) -> Optional[int]:
     from core.wallet.abi import decode
     from core.wallet.simulation import _TOPIC_TRANSFER
     start = erc8004.identity_logs_from(chain) if from_block is None else int(from_block)
@@ -289,6 +278,7 @@ def _agent_id_from_logs(rpc, *, chain: str, registry: str, holder: str, held: in
     head = int(head_raw, 16) if isinstance(head_raw, str) else int(head_raw)
     to_word = "0x" + str(holder).lower().removeprefix("0x").rjust(64, "0")
     candidates = set()
+    minted = set()
     while start <= head:
         end = min(start + int(step) - 1, head)
         rows = rpc("eth_getLogs", [{"address": registry, "topics": [_TOPIC_TRANSFER, None, to_word],
@@ -300,7 +290,10 @@ def _agent_id_from_logs(rpc, *, chain: str, registry: str, holder: str, held: in
             topics = [str(t).lower() for t in (row.get("topics") or ())]
             if (len(topics) == 4 and topics[0] == _TOPIC_TRANSFER and topics[2] == to_word
                     and str(row.get("address") or "").lower() == registry.lower()):
-                candidates.add(int(topics[3], 16))
+                candidate = int(topics[3], 16)
+                candidates.add(candidate)
+                if topics[1] == "0x" + "0" * 64:
+                    minted.add(candidate)
         start = end + 1
     live = []
     for agent_id in sorted(candidates):
@@ -316,4 +309,7 @@ def _agent_id_from_logs(rpc, *, chain: str, registry: str, holder: str, held: in
             f"this wallet holds {held} ERC-8004 agent token(s) on {chain} but the registry's "
             f"Transfer logs from block {erc8004.identity_logs_from(chain) if from_block is None else from_block} "
             f"name {live or 'none'} — refusing to guess the agentId")
-    return live[0]
+    own = sorted(minted.intersection(live))
+    if len(own) > 1:
+        raise RuntimeError("multiple self-minted ERC-8004 identities; owner must resolve the ambiguity")
+    return own[0] if own else None

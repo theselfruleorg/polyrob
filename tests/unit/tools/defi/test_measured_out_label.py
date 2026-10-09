@@ -1,16 +1,7 @@
-"""The settled swap notice reports what the RECEIPT paid, not only the quote.
+"""Formatting for an independently measured fill supplied by a caller.
 
-Live 2026-09-22 (intel, the DELTA full exit): the per-leg CONFIRMED notice said
-`quoted ≥0.00096881 WETH · not independently measured` while the rail four minutes
-later reported the measured 0.00098357 WETH — a WEAKER honesty claim than the same
-run could already support. `tx_notify.render_settled` was already correct (it prints
-`measured X` when given one and the caveat when not); nothing was passing `measured`.
-
-`_swap_sizes_from_receipt` already sums the token_out `Transfer` logs to the holder
-for the positions classifier, so the number was in hand and being dropped. These tests
-pin the label helper: the quantity comes from the receipt, the unit from the quote so
-the two lines compare directly, and anything unmeasurable yields None so the notice
-keeps its honest caveat rather than inventing a measurement.
+Transfer logs are token-authored and cannot supply such a measurement. A preview
+or unmeasured receipt must retain the renderer's explicit caveat.
 """
 import pytest
 

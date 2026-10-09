@@ -23,14 +23,14 @@ def test_marked_session_is_autonomous():
     assert is_autonomous_session("sc-goal-1") is True
 
 
-def test_probe_error_fails_open_to_interactive(monkeypatch):
+def test_probe_error_fails_closed_to_autonomous(monkeypatch):
     import agents.task.goals.autonomy_marker as marker
 
     def _boom(_sid):
         raise RuntimeError("registry gone")
 
     monkeypatch.setattr(marker, "is_autonomous", _boom)
-    assert is_autonomous_session("sc-goal-1") is False
+    assert is_autonomous_session("sc-goal-1") is True
 
 
 def test_disclosure_is_off_by_default():

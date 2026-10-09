@@ -67,7 +67,18 @@ def markdown_to_html(text: str) -> str:
     body = _BULLET_RE.sub(r"\1• ", body)
     # Stash the whole anchor: a URL is not prose, so no emphasis rule may touch it
     # (".../_foo_" would otherwise become an italic tag inside the href).
-    body = _LINK_RE.sub(lambda m: _stash(f'<a href="{_attr(m.group(2))}">{m.group(1)}</a>'), body)
+    def link(m):
+        from urllib.parse import urlsplit
+        try:
+            url = urlsplit(_html.unescape(m.group(2)))
+            allowed = ((url.scheme.lower() in {'http', 'https'} and bool(url.netloc))
+                       or (url.scheme.lower() == 'mailto' and '@' in url.path))
+        except ValueError:
+            allowed = False
+        if not allowed:
+            return m.group(1)  # no tg:// user mentions or application deep links
+        return _stash(f'<a href="{_attr(m.group(2))}">{m.group(1)}</a>')
+    body = _LINK_RE.sub(link, body)
     body = _BOLD_RE.sub(r"<b>\1</b>", body)
     body = _BOLD_US_RE.sub(r"<b>\1</b>", body)
     body = _STRIKE_RE.sub(r"<s>\1</s>", body)

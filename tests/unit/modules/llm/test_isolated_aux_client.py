@@ -57,3 +57,16 @@ async def test_isolated_client_returns_none_without_api_key(monkeypatch):
 
     result = await mgr._create_isolated_client("openrouter", "gemini-2.5-flash")
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_failed_model_isolation_cannot_mutate_a_shared_client(monkeypatch):
+    from unittest.mock import AsyncMock
+    mgr = LLMManager(name="llm", config=BotConfig())
+    mgr._initialized = True
+    main = _FakeClient(model_type="original")
+    monkeypatch.setattr(mgr, "get_client", AsyncMock(return_value=main))
+    monkeypatch.setattr(mgr, "_create_isolated_client", AsyncMock(return_value=None))
+    with pytest.raises(ValueError, match="shared client unchanged"):
+        await mgr.get_chat_model("openrouter", "different")
+    assert main.model_type == "original"

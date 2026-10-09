@@ -16,6 +16,11 @@ import mimetypes
 from pathlib import Path
 from typing import Iterable
 
+_EXTERNAL_CREDENTIAL_PATHS = (
+    ".docker/config.json", ".kube/config", ".config/gh/hosts.yml",
+    ".config/solana/id.json", "UTC--*",
+)
+
 # ---------------------------------------------------------------------------
 # Secret detection
 # ---------------------------------------------------------------------------
@@ -24,6 +29,7 @@ from typing import Iterable
 # Entries that contain a path separator are matched against the path's
 # components (see _matches_path_glob below).
 SECRET_NAME_GLOBS: tuple[str, ...] = (
+    *_EXTERNAL_CREDENTIAL_PATHS,
     ".env*",
     "*.env",
     "*.pem",
@@ -47,6 +53,7 @@ SECRET_NAME_GLOBS: tuple[str, ...] = (
     "dapp_sessions.db",
     "session_registry.db",
     "token_denylist.db",
+    "refusal_taint.db*",
     # M1 (2026-09-14): concrete credential files POLYROB itself writes. None of
     # them matched a glob above — `.mcp_encryption_key` ends in `_key`, not
     # `.key`, and the three JSON stores have ordinary names. They were caught
@@ -91,6 +98,8 @@ SECRET_NAME_GLOBS: tuple[str, ...] = (
 # Python ``secrets.py``) and the ``data/`` dir rule (a legit project data dir),
 # so ordinary project files stay editable. See is_credential_file().
 CREDENTIAL_NAME_GLOBS: tuple[str, ...] = (
+    "refusal_taint.db*",
+    *_EXTERNAL_CREDENTIAL_PATHS,
     ".env*",
     "*.env",   # WS-7: catch `polyrob.env`, `prod.env` etc — the prod env file's
                # basename does NOT start with `.env`, so `.env*` alone missed it,

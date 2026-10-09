@@ -122,3 +122,21 @@ async def test_empty_tenant_refused():
     # must never widen into the platform-wide spend aggregate.
     with pytest.raises(ValueError, match="authenticated tenant"):
         await build_ledger("", days=7, db=None)
+
+
+def test_wallet_ledger_includes_more_than_1000_events(tmp_path, monkeypatch):
+    import sqlite3
+    import time
+    from core import event_log
+    from modules.credits.unified_ledger import _wallet_leg
+    log = event_log.TelemetryEventLog(str(tmp_path / "events.db"))
+    with sqlite3.connect(log.db_path) as conn:
+        conn.executemany(
+            "INSERT INTO telemetry_events(ts,kind,user_id,attrs) VALUES (?,?,?,?)",
+            [(time.time(), "wallet_spend", "u", '{"amount_usd":0.25}')] * 1001)
+    monkeypatch.setattr(event_log, "open_event_log", lambda: log)
+    monkeypatch.setattr(event_log, "event_log_enabled", lambda: True)
+    assert _wallet_leg("u", 7) == {"wallet_spend_usd": 250.25,
+                                  "wallet_payments": 1001, "wallet_metering": "on"}
+    log.record("wallet_spend", user_id="u", amount_usd="unreadable")
+    assert _wallet_leg("u", 7)["wallet_metering"] == "error"

@@ -42,11 +42,22 @@ Set at least one provider key (`OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `OPENA
 
 ### 3. Start with Docker Compose
 
+Create the host data directory before starting. The container runs as UID/GID
+1000 and needs that identity to own the bind mount:
+
+```bash
+sudo install -d -m 0700 -o 1000 -g 1000 .polyrob
+```
+
+For an existing data directory, preserve its contents and arrange ownership for
+UID 1000 before upgrading. Application code and browser binaries stay root-owned
+inside the image.
+
 ```bash
 docker compose up
 ```
 
-This builds the image (if not cached), installs the `server`, `browser`, `memory-vector`, `docs` and `media` extras, runs `python -m playwright install --with-deps chromium`, and starts the FastAPI server. Docker sets `UVICORN_PORT=8000` and maps 8000:8000; `curl http://localhost:8000/docs` works.
+This builds the image (if not cached), installs the `server`, `browser`, `memory-vector`, `docs` and `media` extras, runs `python -m playwright install --with-deps chromium`, and starts the FastAPI server. The app runs as UID 1000. Docker sets `UVICORN_PORT=8000` and publishes `127.0.0.1:8000:8000`; `curl http://localhost:8000/health` checks readiness; `/docs` requires authentication.
 
 For detached (background) mode:
 
@@ -96,7 +107,7 @@ the extra to add. `LAZY_DEPS_MODE=off` seals it.
 
 The `docker-compose.yml` file:
 
-- Maps port `8000:8000`
+- Publishes port `127.0.0.1:8000:8000`; configure a TLS reverse proxy for remote access
 - Loads env vars via `env_file`, pointed at `config/.env.example` out of the box (repoint it at `config/.env.development` once you've added real secrets — see step 2)
 - Mounts `./.polyrob` into the container at `/app/.polyrob` for persistent memory and session data
 
@@ -108,7 +119,7 @@ Instance data (memory, sessions, skills, cron jobs) survives container restarts 
 
 | Host path | Container path | Contents |
 |-----------|---------------|---------|
-| `./.polyrob/` | `/app/.polyrob/` | Memory DB, sessions, skills, cron jobs (the server-side data home; set via `POLYROB_DATA_DIR` in `config/.env.example`) |
+| `./.polyrob/` | `/app/.polyrob/` | Memory DB, sessions, skills, cron jobs (the server-side data home: the image sets `POLYROB_DATA_DIR=/app/.polyrob`, so a plain `docker run` with no env file uses it too) |
 
 To back up your instance data, copy the `.polyrob/` directory.
 
@@ -163,13 +174,20 @@ unit per process you need:
 
 Give every unit the same `EnvironmentFile` (for example `/etc/polyrob/polyrob.env`)
 and the same `POLYROB_DATA_DIR`, so they agree about the owner, the data home and
-the flags. The console is the one exception: it takes an extra file of its own
+the flags. Run the agent units as a non-root user (the shipped units use
+`User=polyrob-agent`); the production deploy script refuses to deploy onto a unit
+that would run the agent as root. Give the agent a `HOME` of its own, outside the
+shared data home (the shipped units set `HOME=/var/lib/polyrob-agent`, mode
+`0700`): any identity that can write the shared data tree could otherwise plant
+`~/.polyrob` or tool state that the agent then reads as its own. If the signer
+runs, install it into a venv of its own, never the agent's shared one, which a
+third-party pack can install into. The console is the one exception: it takes an extra file of its own
 (`/etc/polyrob/webview.env`, `chmod 600`, outside the code tree) for posture, owner
 credentials and read-only settings, as the shipped console unit does.
 
-> ⚠️ **The console REFUSES to start as an anonymous server.** At the default `local`
-> posture there is no login at all — every anonymous request is treated as the owner,
-> with the whole control plane behind it. `webview/posture_guard.py` therefore looks
+> ⚠️ **The console REFUSES to start as a `local` console on a server.** The default
+> `local` posture still requires the owner login, but it trusts the loopback bind and
+> the Host header, which a reverse proxy makes meaningless. `webview/posture_guard.py` therefore looks
 > for the signals the posture resolver cannot see (`--proxy-headers` or
 > `--forwarded-allow-ips` on the argv, a `POLYROB_DATA_DIR` outside your home,
 > `WEBVIEW_PUBLIC_URL`) and aborts the boot with `REFUSING TO START`. A served
@@ -185,7 +203,7 @@ credentials and read-only settings, as the shipped console unit does.
 >
 > The escape hatch `WEBVIEW_ALLOW_LOCAL_POSTURE=1` exists for an operator who fronts
 > the console with their own auth layer; it is honoured with a loud warning, never
-> silently. Full walkthrough, including the argon2 one-liner:
+> silently, and it never turns the owner login off. Full walkthrough, including the argon2 one-liner:
 > [deployment-postures.md](deployment-postures.md).
 >
 > ⚠️ Never pass `--forwarded-allow-ips=*`. Name the proxy's address (`127.0.0.1` for
@@ -223,7 +241,9 @@ What `install` sets up, and why each part matters:
   carries `--no-sandbox`;
 - an **egress chain** keyed on the browser's UID (`polyrob-browser-egress.service`):
   the browser cannot open connections to loopback services (the console, its
-  own CDP port), RFC1918, link-local or the cloud metadata service. The agent's
+  own CDP port), `0.0.0.0`, any address of this host except its public web ports
+  (`POLYROB_BROWSER_SELF_PORTS`, default `80 443`), RFC1918, CGNAT, link-local,
+  the cloud metadata service or the other special-use ranges. The agent's
   Playwright route guard is the second line; this is the first;
 - Chromium for the Playwright version in the agent's venv, under
   `/opt/polyrob-browser`. `polyrob browser update` re-installs it for the
@@ -283,8 +303,8 @@ reporting "no X session stored". On a deployed box every `polyrob x-account` ver
 refuses when `MCP_ENCRYPTION_KEY` or `POLYROB_OWNER_USER_ID` is missing, and prints
 this recipe.
 
-No desktop install? `import-session --auth-token <v> --ct0 <v>` takes the two
-login cookies straight from a signed-in browser (DevTools → Application →
+No desktop install? `import-session --cookies` prompts without echo for the two
+login cookies copied from a signed-in browser (DevTools → Application →
 Cookies → x.com). Either way `polyrob x-account status` shows the stored
 handle and the agent's `x_login_check` verifies it live.
 

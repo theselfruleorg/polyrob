@@ -84,9 +84,9 @@ def test_session_list_keyless_lists_on_disk_session(tmp_path):
     cwd.mkdir()
     home.mkdir()
     # Seed a session where the CLI container's PathManager roots the session
-    # tree (POLYROB_DATA_DIR unset -> cwd/.polyrob/sessions), NEW flat layout
-    # <user>/<session>/metadata.json.
-    sess_dir = cwd / ".polyrob" / "sessions" / "local" / "sess_keyless_a1"
+    # tree (POLYROB_DATA_DIR unset -> ~/.polyrob/data/sessions; never the cwd,
+    # DATA-4), NEW flat layout <user>/<session>/metadata.json.
+    sess_dir = home / ".polyrob" / "data" / "sessions" / "local" / "sess_keyless_a1"
     sess_dir.mkdir(parents=True)
     (sess_dir / "metadata.json").write_text(json.dumps({
         "id": "sess_keyless_a1",

@@ -226,17 +226,16 @@ class CronScheduler:
 
     async def _run_due(self, now: datetime, *, preempting_only: bool = False) -> TickResult:
         result = TickResult()
-        from cron.jobs import job_preempts
         # Reclaim crash-orphaned 'running' jobs here — we hold the TickLock, so any
         # 'running' row is genuinely stale (a live run always writes a terminal status
         # after itself). This replaces the unsafe reclaim-in-__init__.
         self.store.reclaim_stale_running()
-        for job in self.store.due(now):
-            if preempting_only and not job_preempts(job):
-                continue  # 057 WS-C (A3): it waits for the next tick
+        for candidate in self.store.due(now):
             # Atomic claim: only run if WE flipped it scheduled->running. Guards against
             # ever double-running a job (defense-in-depth alongside the TickLock).
-            if not self.store.claim_for_run(job.id):
+            job = self.store.claim_for_run(candidate.id, now=now,
+                                            preempting_only=preempting_only)
+            if job is None:
                 continue
             success = await self._run_one(job)
             if self._pause_cancelled and not success:
@@ -342,6 +341,22 @@ class CronScheduler:
             logger.debug("owner-ask probe failed for job %s", job.id, exc_info=True)
             return None
 
+    def _answered_during_run(self, job: CronJob, started: datetime) -> bool:
+        """An approved answer to this job's ask landed after the run started
+        (``agents/task/goals/rail_answers.py``). Fail-open (False)."""
+        try:
+            from agents.task.goals.board import GoalBoard
+            from agents.task.goals.rail_answers import answered_during_run
+            from core.runtime_paths import goals_db_path
+            goals_db = goals_db_path(os.path.dirname(os.path.abspath(self.store.db_path)))
+            if not os.path.exists(goals_db):
+                return False
+            return answered_during_run(GoalBoard(goals_db), job.user_id, job.id,
+                                       started.timestamp())
+        except Exception:
+            logger.debug("answered-during-run probe failed for %s", job.id, exc_info=True)
+            return False
+
     @staticmethod
     def _terminal_ev(job: CronJob, outcome: str, reason: Optional[str] = None,
                      **extra) -> None:
@@ -367,12 +382,12 @@ class CronScheduler:
                 # the next tick redeems the decision.
                 self.store.update_after_run(
                     job.id, last_run_at=now, next_run_at=job.next_run_at,
-                    status="scheduled",
+                    status="scheduled", expected=job,
                 )
                 return
             self.store.update_after_run(
                 job.id, last_run_at=now, next_run_at=None,
-                status="done" if success else "failed",
+                status="done" if success else "failed", expected=job,
             )
             return
         # recurring: reschedule from the schedule spec
@@ -381,4 +396,9 @@ class CronScheduler:
         except ScheduleError:
             nxt = None
         status = "scheduled" if nxt else "done"
-        self.store.update_after_run(job.id, last_run_at=now, next_run_at=nxt, status=status)
+        if nxt and self._answered_during_run(job, now):
+            # 2026-10-07: the owner answered this job's ask while the run was
+            # still going; run again now instead of at the next slot.
+            nxt = now
+        self.store.update_after_run(job.id, last_run_at=now, next_run_at=nxt,
+                                    status=status, expected=job)

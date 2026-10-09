@@ -25,6 +25,8 @@ under the session OWNER's id (``pm().get_session_user``), else the caller's.
 """
 from __future__ import annotations
 
+from webview.session_access import http_session_id
+
 import logging
 import os
 from collections import deque
@@ -117,7 +119,7 @@ async def api_workspace_tree(request: Request, session_id: str, path: str = "",
     from utils.auth_utils import get_authenticated_user_id
 
     paths = pm()
-    clean_id = paths.clean_session_id(session_id)
+    clean_id = http_session_id(session_id, paths)
     owner = paths.get_session_user(clean_id)
     user_id = owner if owner else get_authenticated_user_id(request)
     try:

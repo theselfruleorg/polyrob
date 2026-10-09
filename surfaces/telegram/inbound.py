@@ -136,7 +136,13 @@ def build_inbound_message(update: dict, user_directory: Any,
     forwarded = is_forwarded(msg)
     if forwarded:
         text = wrap_forwarded_text(text)
-    tg_id = str(from_user.get("id")) if from_user.get("id") is not None else str(chat_id)
+    from surfaces.telegram.triggers import sender_user_id
+    tg_id = sender_user_id(msg)
+    if tg_id is None:
+        if not (update.get("channel_post") or update.get("edited_channel_post")):
+            return None
+        tg_id = str(chat_id)
+        from_user = {}  # a channel has no authenticated human principal
 
     # Owner alias: an authenticated Telegram owner operates as the instance OWNER
     # principal (the instance id) so their chat shares autonomy's tenant (goals/memory/SELF)

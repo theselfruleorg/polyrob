@@ -34,7 +34,22 @@ from core.flags_catalog import CATALOG
 # unsigned (token-only) Feishu webhook, which is now refused by default.
 # 2026-10-03: 772 -> 773 — VALUELESS_CHAIN_MONEY (C13), the owner's opt-in to a core run on the
 # Robinhood Chain testnet (native at $0, fee bounded in wei); off by default.
-CEILING = 773  # 2026-09-29 impl handoff E (collection revealer): +2 — CRON_WRITE_JOBS_ENABLED
+# 2026-10-05: 773 -> 776 — 073 W1–W3 host shell: SHELL_BACKEND (where the shell runs),
+# SHELL_APPROVAL_MODE (per-command vs every-call owner wait), SHELL_MAX_OUTPUT_CHARS.
+# 2026-10-06: 776 -> 786 — 073 rest (terminal parity): SHELL_ALLOW, SHELL_DENY,
+# SHELL_HOST_SUDO, SHELL_HOST_FORWARD_AGENT, SHELL_HOST_INIT_FILES, CODE_EXEC_DOCKER_BINARY,
+# CODE_EXEC_DOCKER_REUSE_ACROSS_RESTART, CODE_EXEC_TOOL_CALLS, CODE_EXEC_EGRESS_ALLOW/_PORTS.
+# 2026-10-06: 786 -> 794 — the 073 sandbox packs' own knobs had no rows (test_flags_reverse
+# red): DAYTONA_SANDBOX_IMAGE/_PERSIST, MODAL_SANDBOX_IMAGE/_SNAPSHOT/_TIMEOUT_SEC,
+# SINGULARITY_BINARY/_IMAGE, VERCEL_SANDBOX_TIMEOUT_SEC.
+# 2026-10-08: 794 -> 796 — the security-review fixes read two env vars with no rows
+# (test_flags_reverse red): TWITTER_DM_MAX_PER_HOUR (the durable X DM budget) and
+# WEBGATE_JWT_SECRET (fallback secret for the loopback fast-push token).
+# 2026-10-08: 796 -> 797 — OWNER_WALLET_ADDRESSES: the owner's own receive
+# addresses, so an owner-turn transfer to them needs no second tap.
+# 2026-10-08: 797 -> 798 — CODE_EXEC_SSH_KNOWN_HOSTS: a pinned known_hosts for the
+# ssh backend (StrictHostKeyChecking=yes instead of trust on first use).
+CEILING = 798  # 2026-09-29 impl handoff E (collection revealer): +2 — CRON_WRITE_JOBS_ENABLED
                # (the one scheduled write verb, off by default), the reveal gas cap.
                # 771: 2026-09-29 core handoff W12 / 080 D42a: +2 — the two account gas-refill
                # rows (retired again by 069 v4, above).

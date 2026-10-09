@@ -189,7 +189,7 @@ def test_verb_is_registered_on_the_tool_and_classified():
     member = inspect.getattr_static(DefiTradeTool, "solana_transfer")
     assert callable(member)
     from core.verb_policy import ids_where
-    assert "defi_trade_solana_transfer" in ids_where(lane="defi")
+    assert "defi_trade_solana_transfer" in ids_where(lane="owner_always")
     assert "defi_trade_solana_transfer" in ids_where(simulatable=True)
 
 
@@ -212,7 +212,7 @@ async def test_native_dry_run_shows_verdict_and_lane_and_sends_nothing(monkeypat
     assert res.error is None, out
     assert "guard:" in out and "lane:  autonomous" in out
     assert "DRY RUN" in out and "nothing was broadcast" in out
-    assert f"simulated value: ${(500_000_000 + FEE) / 1e9 * SOL_PX:.4f}" in out
+    assert "simulated value: $75.0100" in out
     assert sent == [] and wallet.policy.recorded == []
     # The bytes simulated ARE a System transfer of exactly the amount to TO.
     tx = VersionedTransaction.from_bytes(tool._seen["raw_tx"])
@@ -236,7 +236,7 @@ async def test_native_live_send_records_and_confirms(monkeypatch):
     (rec,) = wallet.policy.recorded
     assert rec["action"] == "solana_transfer" and rec["chain"] == "solana"
     assert rec["counterparty"] == TO and rec["result_ref"] == "SIG111"
-    assert rec["amount_usd"] == pytest.approx(75.0, abs=0.01)
+    assert rec["amount_usd"] == 75.01
 
 
 @pytest.mark.asyncio
@@ -435,7 +435,7 @@ async def test_spl_dry_run_charges_the_recipient_account_rent(monkeypatch):
     assert "DRY RUN" in out
     assert "creates the recipient's token account" in out
     # $20 of token + (fee + rent) SOL at $150.
-    expected = 20.0 + (FEE + ATA_RENT) / 1e9 * SOL_PX
+    expected = 20.31  # Round principal plus fee and rent upward to a cent.
     assert f"simulated value: ${expected:.4f}" in out
     tx = VersionedTransaction.from_bytes(tool._seen["raw_tx"])
     keys = [str(k) for k in tx.message.account_keys]
@@ -581,7 +581,7 @@ async def test_usdc_values_at_one_dollar(monkeypatch):
     tool._price_fn = lambda c, a: SOL_PX if a == WSOL else None
     out = _text(await tool.solana_transfer(_params(token=USDC, amount=10.0)))
     assert "DRY RUN" in out, out
-    assert f"simulated value: ${10.0 + FEE / 1e9 * SOL_PX:.4f}" in out
+    assert "simulated value: $10.0100" in out
 
 
 # ==========================================================================
@@ -679,3 +679,19 @@ async def test_real_simulation_refuses_a_short_debit(monkeypatch):
     tool = _real_sim_tool(monkeypatch, _SimRpc(sent=9_999_999), sent)
     out = _text(await tool.solana_transfer(_spl(dry_run=False)))
     assert "NOT SENT" in out and sent == []
+
+
+@pytest.mark.asyncio
+async def test_transfer_native_and_token_price_reads_run_off_loop(monkeypatch):
+    import threading
+    loop_thread = threading.get_ident()
+    seen = []
+    tool = _tool(monkeypatch, deltas=_spl_deltas(5_000_000))
+    def price(chain, mint):
+        seen.append((mint, threading.get_ident()))
+        return _price(chain, mint)
+    tool._price_fn = price
+    res = await tool.solana_transfer(_params(token=MINT, amount=5))
+    assert not res.error, _text(res)
+    assert {mint for mint, _ in seen} == {WSOL, MINT}
+    assert all(thread != loop_thread for _, thread in seen)

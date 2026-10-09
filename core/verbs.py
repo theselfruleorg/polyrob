@@ -438,7 +438,7 @@ def _rebuild() -> None:
 
 #: 067 P5a: modules still IN core that contribute verbs on import. P5b deletes
 #: the row when the wallet pack registers the money verbs instead.
-_IN_CORE_PROVIDERS: tuple[str, ...] = ("core.money_verbs",)
+_IN_CORE_PROVIDERS: tuple[str, ...] = ("core.money_verbs", "core.standing_verbs")
 
 
 def _load_in_core_providers() -> None:

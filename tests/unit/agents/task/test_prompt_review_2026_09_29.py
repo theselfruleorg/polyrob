@@ -164,3 +164,20 @@ def test_identity_and_memory_wording():
 def test_web_access_points_at_the_remedy():
     text = _text(tool_ids=["web_fetch"])
     assert "the tool-availability note lists" in text
+
+
+@pytest.mark.parametrize("stamp", ["_correspondent_session", "_correspondent_tainted"])
+def test_data10_resumed_correspondent_session_without_a_chat_key_is_not_the_owner(stamp):
+    """DATA-10: a resumed correspondent session binds no _chat_session_key, so no
+    surface profile resolves — and an unbound session read as the owner's DM."""
+    from agents.task.agent.core.construction import AgentConstructionMixin
+    orch = SimpleNamespace(_chat_session_key=None, container=None, **{stamp: True})
+    agent = SimpleNamespace(orchestrator=orch, logger=None)
+    prof = AgentConstructionMixin._resolve_surface_profile(agent)
+    assert prof and prof["correspondent"] is True
+    text = _text(surface=prof)
+    assert "with a correspondent, NOT your owner" in text
+    assert "propose_action" not in text
+    owner = SimpleNamespace(_chat_session_key=None, container=None)
+    assert AgentConstructionMixin._resolve_surface_profile(
+        SimpleNamespace(orchestrator=owner, logger=None)) is None

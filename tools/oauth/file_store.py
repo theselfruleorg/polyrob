@@ -209,10 +209,16 @@ class FileTokenStore(MutableMapping):
         group-writable (the shared-data convention), else `0600`. A chown the
         process is not allowed to make is skipped, never fatal.
         """
+        # lstat, never stat: a symlink planted at the target must not lend its
+        # (possibly world-readable) mode or group to the credential file, and
+        # the mode is clamped so it never reaches other users.
         try:
-            st = os.stat(self._path)
-            mode, gid = stat.S_IMODE(st.st_mode), st.st_gid
+            st = os.lstat(self._path)
         except FileNotFoundError:
+            st = None
+        if st is not None and stat.S_ISREG(st.st_mode):
+            mode, gid = stat.S_IMODE(st.st_mode) & 0o660, st.st_gid
+        else:
             dst = os.stat(self._path.parent)
             gid = dst.st_gid
             mode = 0o660 if (dst.st_mode & stat.S_IWGRP) else 0o600

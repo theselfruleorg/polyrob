@@ -50,3 +50,16 @@ async def test_hook_denies_on_timeout():
 async def test_ungated_action_passes():
     hook = make_approval_hook(InteractiveCLIApprover(input_fn=lambda p: "n"), ["git_push"])
     assert await hook("git_status", {}, None) is None
+
+
+
+def test_shell_prompt_shows_the_whole_command():
+    """073 W2: the owner approves THIS command line; a long harmless prefix must not
+    hide the tail (the generic digest cuts every value at 60 chars)."""
+    prov = InteractiveCLIApprover(input_fn=lambda prompt: "d")
+    command = "echo " + "a" * 80 + " && rm -rf ~/work/project"
+    prompt = prov._prompt("shell_run", {"command": command, "workdir": "src"})
+    assert "rm -rf ~/work/project" in prompt and "workdir=src" in prompt
+    assert "more chars not shown" in prov._prompt("shell_run", {"command": "echo x; " * 1000})
+    # Other actions keep the short digest.
+    assert "a" * 61 not in prov._prompt("git_push", {"remote": "a" * 80})

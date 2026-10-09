@@ -36,8 +36,6 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Dict, Optional, Tuple
 
-from eth_utils import is_hex_address, to_checksum_address
-
 from core import sqlite_util
 from core.wallet import onchain
 
@@ -148,6 +146,9 @@ def normalize_address(addr: str) -> str:
     Whitespace INSIDE the string is still a refusal — that is a corrupted
     address, not a formatting artefact.
     """
+    # Lazy: eth_utils is the [crypto] extra, and the tool tier imports this
+    # module's text cleaners on a base install.
+    from eth_utils import is_hex_address, to_checksum_address
     candidate = addr.strip() if isinstance(addr, str) else addr
     if not isinstance(candidate, str) or not is_hex_address(candidate):
         raise ValueError(f"not a 20-byte hex address: {addr!r}")
@@ -196,14 +197,37 @@ MAX_SYMBOL_CHARS = 32
 MAX_NAME_CHARS = 64
 
 
-def _bounded_decimals(value) -> Optional[int]:
+def bounded_decimals(value) -> Optional[int]:
     if value is None or isinstance(value, bool):
         return None
     try:
         n = int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     return n if 0 <= n <= MAX_DECIMALS else None
+
+
+def raw_amount(value, decimals) -> int:
+    """Exact nonnegative whole units to uint256; never round an authorized amount."""
+    from decimal import Decimal, InvalidOperation, localcontext
+    dec = bounded_decimals(decimals)
+    if dec is None or isinstance(value, bool):
+        raise ValueError("amount requires valid token decimals and a numeric value")
+    try:
+        with localcontext() as ctx:
+            ctx.prec = 120
+            amount = Decimal(str(value))
+            if not amount.is_finite() or not 0 <= amount < 2**256:
+                raise ValueError("amount must be finite, nonnegative and fit uint256")
+            scaled = amount * 10**dec
+            if scaled >= 2**256 or scaled != scaled.to_integral_value():
+                raise ValueError("amount must fit uint256 and the token decimals exactly")
+            return int(scaled)
+    except (InvalidOperation, OverflowError) as exc:
+        raise ValueError("invalid token amount") from exc
+
+
+_bounded_decimals = bounded_decimals  # compatibility for existing metadata readers
 
 
 def _clean_text(text: Optional[str], limit: int) -> Optional[str]:
@@ -222,6 +246,13 @@ def _clean_text(text: Optional[str], limit: int) -> Optional[str]:
             out.append(ch)
     cleaned = " ".join("".join(out).split())[:limit].strip()
     return cleaned or None
+
+
+def clean_provider_text(text, limit: int = 400) -> str:
+    """Bounded inline provider data, with prompt control fences neutralized."""
+    from core.context_fences import defang_control_fences
+    return _clean_text(defang_control_fences(str(text or "")[:4096]),
+                       min(max(limit, 1), 4096)) or ""
 
 
 def clean_symbol(text: Optional[str]) -> Optional[str]:

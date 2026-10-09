@@ -26,6 +26,7 @@ Only the three methods the adapter contract needs are overridden, so the
 existing ``OpenRouterAdapter`` drives this unchanged.
 """
 from __future__ import annotations
+from modules.llm.billing_guard import inference_sdk
 
 import json
 from typing import Any, Dict, List, Optional, Tuple
@@ -258,7 +259,7 @@ class ResponsesCompatClient(OpenAICompatClient):
         # explicitly so this path stamps a real prefix instead of nothing.
         from modules.llm.prefix_stamp import stamp_client
         stamp_client(self, params, system=instructions)
-        response = await self._client.responses.create(**params)
+        response = await inference_sdk(self).responses.create(**params)
         self.last_response = response
         content, tool_calls = from_responses_output(response)
         return content, tool_calls, _usage_from(response)

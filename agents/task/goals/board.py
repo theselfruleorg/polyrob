@@ -110,6 +110,20 @@ def title_similarity(a: str, b: str) -> float:
     return len(ta & tb) / len(ta | tb)
 
 
+#: Payload flag on the dispatcher's automatic "Unblock goal: …" ask, so an
+#: agent-filed ask about the same goal can replace it (see ``create_ask``).
+ASK_AUTO_UNBLOCK = "auto_unblock"
+
+
+def _ask_goal_keys(blocks: List[str], payload: Optional[Dict[str, Any]]) -> set:
+    """The goal ids an ask is about: what it blocks, plus the goal rail it came from."""
+    keys = {str(b) for b in (blocks or []) if b}
+    rail = str((payload or {}).get("rail_id") or "")
+    if rail.startswith("goal:") and len(rail) > 5:
+        keys.add(rail[5:])
+    return keys
+
+
 @dataclass
 class Goal:
     id: str
@@ -121,6 +135,7 @@ class Goal:
     priority: int = 5
     parent_id: Optional[str] = None
     claim_lock: Optional[str] = None
+    claim_token: Optional[str] = None
     claim_expires: Optional[float] = None
     consecutive_failures: int = 0
     max_retries: int = 2
@@ -170,6 +185,7 @@ class GoalBoard:
                     priority INTEGER NOT NULL DEFAULT 5,
                     parent_id TEXT,
                     claim_lock TEXT,
+                    claim_token TEXT,
                     claim_expires REAL,
                     consecutive_failures INTEGER NOT NULL DEFAULT 0,
                     max_retries INTEGER NOT NULL DEFAULT 2,
@@ -202,10 +218,13 @@ class GoalBoard:
                 CREATE INDEX IF NOT EXISTS idx_goal_edges_dep ON goal_edges(depends_on_id);
                 """
             )
-            # Idempotent migration: add kind column if it doesn't exist
+            # Serialize migrations so concurrent first opens cannot add twice.
+            conn.execute("BEGIN IMMEDIATE")
             cols = {r[1] for r in conn.execute("PRAGMA table_info(goals)").fetchall()}
             if "kind" not in cols:
                 conn.execute("ALTER TABLE goals ADD COLUMN kind TEXT NOT NULL DEFAULT 'goal'")
+            if "claim_token" not in cols:
+                conn.execute("ALTER TABLE goals ADD COLUMN claim_token TEXT")
             conn.commit()
         finally:
             conn.close()
@@ -352,34 +371,39 @@ class GoalBoard:
         The WHERE clause is the lock: only a row that is still ``ready`` with no live
         claim flips, so concurrent dispatchers/workers can race and exactly one wins
         (rowcount==1). Returns the claimed Goal, or None if another worker took it.
+        Each execution gets a new token, including retries by the same worker.
         """
         now = self._now()
         expires = now + max(1, int(ttl_seconds))
-        rc = execute_retry(
+        token = uuid.uuid4().hex
+        row = execute_retry(
             self.db_path,
             """UPDATE goals
-                  SET status='running', claim_lock=?, claim_expires=?,
+                  SET status='running', claim_lock=?, claim_token=?, claim_expires=?,
                       started_at=COALESCE(started_at,?), last_heartbeat_at=?
-                WHERE id=? AND status='ready' AND claim_lock IS NULL""",
-            (worker, expires, now, now, goal_id),
+                WHERE id=? AND status='ready' AND claim_lock IS NULL RETURNING *""",
+            (worker, token, expires, now, now, goal_id), fetch="one",
         )
-        if rc != 1:
+        if row is None:
             return None
         self._event(goal_id, "claimed", {"worker": worker})
-        return self.get(goal_id)
+        return Goal.from_row(row)
 
-    def heartbeat(self, goal_id: str, worker: str, *, ttl_seconds: int) -> bool:
+    def heartbeat(self, goal_id: str, worker: str, *, ttl_seconds: int,
+                  claim_token: Optional[str] = None) -> bool:
         now = self._now()
         rc = execute_retry(
             self.db_path,
             """UPDATE goals SET last_heartbeat_at=?, claim_expires=?
-                WHERE id=? AND claim_lock=? AND status='running'""",
-            (now, now + max(1, int(ttl_seconds)), goal_id, worker),
+                WHERE id=? AND claim_lock=? AND claim_token IS ? AND status='running'""",
+            (now, now + max(1, int(ttl_seconds)), goal_id, worker, claim_token),
         )
         return rc == 1
 
     def record_success(self, goal_id: str, *, session_id: Optional[str] = None,
-                       result: Optional[str] = None) -> None:
+                       result: Optional[str] = None,
+                       claim_token: Optional[str] = None) -> bool:
+        """Complete only this claim; an absent token matches only legacy claims."""
         now = self._now()
         rc = execute_retry(
             self.db_path,
@@ -387,84 +411,56 @@ class GoalBoard:
                   SET status='done', result=?, session_id=COALESCE(?,session_id),
                       consecutive_failures=0, claim_lock=NULL, claim_expires=NULL,
                       completed_at=?
-                WHERE id=? AND status='running'""",
-            (result, session_id, now, goal_id),
+                WHERE id=? AND status='running' AND claim_token IS ?""",
+            (result, session_id, now, goal_id, claim_token),
         )
         if rc != 1:
             # Owner intervened (cancel/pause) while the run was in flight — their
             # decision wins. Keep the status; archive the late result as an event.
             self._event(goal_id, "stale_completion",
                         {"result": (result or "")[:500], "session_id": session_id})
-            return
+            return False
         self._event(goal_id, "succeeded", {"session_id": session_id})
         self._sweep_dependents_on_completion(goal_id)
         self._release_asks(goal_id, "goal_done")
+        return True
 
     def record_failure(self, goal_id: str, *, error: str,
-                       session_id: Optional[str] = None) -> Goal:
-        """Increment the failure counter; trip the circuit breaker at max_retries.
+                       session_id: Optional[str] = None,
+                       claim_token: Optional[str] = None) -> Goal:
+        """Record this claim's failure and breaker transition atomically.
 
-        On the breaker trip the goal goes to ``blocked`` (a human/curator must
-        intervene) and a ``gave_up`` event is logged. Below the threshold it returns
-        to ``ready`` for another attempt. consecutive_failures resets only on success.
+        The token identifies an execution, even if the same worker reclaims the
+        goal. Keep it on terminal rows to attribute later outcome processing.
+        An omitted token matches only an unfenced legacy claim.
         """
-        # Increment the counter ATOMICALLY in SQL first (a read-modify-write in Python
-        # could lose a concurrent failure and under-count the breaker), then read back
-        # the authoritative value to decide stay-ready vs trip-to-blocked.
         now = self._now()
-        rc = execute_retry(
+        row = execute_retry(
             self.db_path,
-            "UPDATE goals SET consecutive_failures = consecutive_failures + 1 WHERE id=? AND status='running'",
-            (goal_id,),
+            """UPDATE goals SET consecutive_failures=consecutive_failures+1,
+                   status=CASE WHEN consecutive_failures+1>=max_retries
+                               THEN 'blocked' ELSE 'ready' END,
+                   completed_at=CASE WHEN consecutive_failures+1>=max_retries
+                                     THEN ? ELSE completed_at END,
+                   last_failure_error=?, session_id=COALESCE(?,session_id),
+                   claim_lock=NULL, claim_expires=NULL
+                 WHERE id=? AND status='running' AND claim_token IS ? RETURNING *""",
+            (now, error[:2000], session_id, goal_id, claim_token), fetch="one",
         )
-        if rc != 1:
+        if row is None:
             g = self.get(goal_id)
             if g is None:
                 raise KeyError(goal_id)
             self._event(goal_id, "stale_completion", {"error": error[:500]})
             return g
-        g = self.get(goal_id)
-        if g is None:
-            raise KeyError(goal_id)
-        fails = g.consecutive_failures  # already incremented above
-        # Guard these branch UPDATEs with the same 'AND status=running' CAS as the
-        # increment above: between the increment and this branch, another actor
-        # (owner cancel/pause) could have moved the row off 'running'. Without the
-        # guard the branch would silently resurrect a cancelled/blocked-by-owner
-        # goal back to 'ready' (or stomp its status to 'blocked'). If the guarded
-        # UPDATE hits 0 rows, the failure counter increment above still landed
-        # (harmless — max_retries accounting on a dead row is inert) but the status
-        # transition is skipped and logged as a stale_completion instead.
-        if fails >= g.max_retries:
-            rc2 = execute_retry(
-                self.db_path,
-                """UPDATE goals SET status='blocked', consecutive_failures=?,
-                      last_failure_error=?, session_id=COALESCE(?,session_id),
-                      claim_lock=NULL, claim_expires=NULL, completed_at=?
-                    WHERE id=? AND status='running'""",
-                (fails, error[:2000], session_id, now, goal_id),
-            )
-            if rc2 == 1:
-                self._event(goal_id, "gave_up", {"failures": fails, "error": error[:500]})
-                self._cascade_dep_failed(goal_id)
-            else:
-                self._event(goal_id, "stale_completion", {"error": error[:500]})
-        else:
-            rc2 = execute_retry(
-                self.db_path,
-                """UPDATE goals SET status='ready', consecutive_failures=?,
-                      last_failure_error=?, session_id=COALESCE(?,session_id),
-                      claim_lock=NULL, claim_expires=NULL
-                    WHERE id=? AND status='running'""",
-                (fails, error[:2000], session_id, goal_id),
-            )
-            if rc2 == 1:
-                self._event(goal_id, "failed", {"failures": fails, "error": error[:500]})
-            else:
-                self._event(goal_id, "stale_completion", {"error": error[:500]})
-        # §5.2: keep the compact attempt ledger current (fail-open).
+        g = Goal.from_row(row)
+        tripped = g.status == STATUS_BLOCKED
+        self._event(goal_id, "gave_up" if tripped else "failed",
+                    {"failures": g.consecutive_failures, "error": error[:500]})
+        if tripped:
+            self._cascade_dep_failed(goal_id)
         self._append_attempt(goal_id, error=error, session_id=session_id)
-        return self.get(goal_id)
+        return g
 
     def block_from_ready(self, goal_id: str, *, error: str) -> bool:
         """Flip a 'ready' goal straight to 'blocked' (agent-declared BLOCKED, §3.1).
@@ -1716,17 +1712,9 @@ class GoalBoard:
         """
         # 036 §3.1: a RAIL (``payload.recurrence``) is standing work too — it is
         # bounded by its own ``max_live`` + schedule, never a lifetime tally.
-        if (objective.payload or {}).get("stream_id") or \
-                (objective.payload or {}).get("recurrence"):
-            return 0
-        own = (objective.payload or {}).get("goal_budget")
-        if own is not None:
-            try:
-                return max(0, int(own))
-            except (TypeError, ValueError):
-                pass
-        from core.env import int_env
-        return int_env("OBJECTIVE_GOAL_BUDGET", 25)
+        # The rule lives once in core (the status snapshot reads it too).
+        from core.goal_vocab import objective_goal_budget
+        return objective_goal_budget(objective.payload or {})
 
     def _check_objective_budget(self, user_id: str, parent_id: Optional[str]) -> None:
         """Refuse a new child once an objective has spent its budget.
@@ -1829,6 +1817,32 @@ class GoalBoard:
         from agents.task.constants import AutonomyConfig
         threshold = AutonomyConfig.goal_dedup_threshold()
         blocks = list(blocks_goal_ids or [])
+        if not force:
+            # One open ask per blocked goal (intel 10-04: the agent's own ask plus the
+            # automatic "Unblock goal" ask reached the owner as two questions for one
+            # block, 3x in a day). Titles differ, so the title dedup below misses it.
+            new_keys = _ask_goal_keys(blocks, extra_payload)
+            if new_keys:
+                new_is_auto = bool((extra_payload or {}).get(ASK_AUTO_UNBLOCK))
+                for a in self.asks(user_id=user_id, status=ASK_OPEN):
+                    ap = dict(a.payload or {})
+                    if ap.get("kind") or not (new_keys & _ask_goal_keys(
+                            ap.get("blocks_goal_ids") or [], ap)):
+                        continue
+                    if ap.get(ASK_AUTO_UNBLOCK) and not new_is_auto:
+                        # The agent's ask carries the real question (and options):
+                        # it replaces the generic one and keeps holding the goal.
+                        self._obsolete_ask(a.id, user_id=user_id,
+                                           reason="superseded_by_agent_ask", payload=ap)
+                        blocks = sorted(set(blocks) | set(ap.get("blocks_goal_ids") or []))
+                        break
+                    ap["blocks_goal_ids"] = sorted(
+                        set(ap.get("blocks_goal_ids") or []) | set(blocks))
+                    execute_retry(self.db_path, "UPDATE goals SET payload=? WHERE id=?",
+                                  (json.dumps(ap), a.id))
+                    self._event(a.id, "ask_refreshed", {"what": what[:200],
+                                                        "dedup": "same_goal"})
+                    return self.get(a.id)
         if not force and threshold > 0:
             for a in self.asks(user_id=user_id, status=ASK_OPEN):
                 if title_similarity(what, a.title) >= threshold:
@@ -1977,6 +1991,11 @@ class GoalBoard:
         if rc != 1:
             return (False, 0)
         self._event(ask_id, "ask_fulfilled" if approved else "ask_rejected", {})
+        if approved and str(payload.get("rail_id") or "").startswith("cron:"):
+            # 2026-10-07: an ask a CRON run raised has no goal to flip; pull the
+            # job to the next tick so the answer is acted on now (rail_answers).
+            from agents.task.goals.rail_answers import rearm_cron_rail
+            rearm_cron_rail(self, self.get(ask_id))
         unblocked = 0
         if approved:
             for gid in (ask.payload or {}).get("blocks_goal_ids", []) if ask else []:

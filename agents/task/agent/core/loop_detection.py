@@ -156,6 +156,14 @@ TAKE A DIFFERENT ACTION IMMEDIATELY. Reading the same files again will result in
             action_hash = hashlib.md5(json.dumps(action_dump, sort_keys=True).encode()).hexdigest()
             # ---------------------------------------------------------------
 
+            # The NAMES too: `_has_active_browser_usage` needs them, and the hashes
+            # above cannot answer "was that a browser action?".
+            names = getattr(self, '_recent_action_names', None)
+            if names is not None:
+                for dumped in action_dump:
+                    if isinstance(dumped, dict):
+                        names.extend(str(k) for k in dumped.keys())
+
             # Check for repeated actions with improved detection
             if self._previous_actions and action_hash == self._previous_actions[-1]:
                 self._action_repetition_counter += 1

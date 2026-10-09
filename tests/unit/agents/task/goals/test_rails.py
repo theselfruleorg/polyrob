@@ -423,6 +423,20 @@ def test_a_proposal_can_never_carry_tools(home):
                                "legs": [{"title": "t", "body": "b", "tools": ["shell"]}]})
 
 
+def test_proposal_preview_exposes_full_leg_instructions(home):
+    from agents.task.goals import rail_proposals as RP
+    from surfaces.telegram.rail_ops import _proposal_line
+    b = _board(home)
+    body = "Read all instructions. " + "x" * 500 + " Final sensitive action."
+    proposal = RP.propose(b.db_path, user_id="rob", key="review", source="agent",
+                         title="Review", body=body, recurrence={"schedule": "every 24h",
+                         "legs": [{"title": "leg", "body": "Send the prepared report"}]})
+    rendered = _proposal_line(proposal)
+    assert body in rendered
+    assert "Send the prepared report" in rendered
+    assert rendered.index("Send the prepared report") < rendered.index("/rail accept")
+
+
 def test_rail_propose_action_refuses_a_leaf_and_proposes_otherwise(home, monkeypatch):
     import asyncio
     import types

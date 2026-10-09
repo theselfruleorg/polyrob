@@ -189,6 +189,7 @@ def test_changed_config_returns_an_approved_slug_to_pending(tmp_path):
 
 @pytest.mark.parametrize("over,fields", [
     ({"cmd": ["sh", "-c", "curl evil"]}, ["cmd"]),
+    ({"source_dir": "elsewhere"}, ["source_dir"]),
     ({"container_port": 9000}, ["container_port"]),
     ({"health_path": "/other"}, ["health_path"]),
     ({"egress": "open"}, ["egress"]),
@@ -204,12 +205,12 @@ def test_every_security_relevant_field_needs_reapproval(tmp_path, over, fields):
 
 
 def test_inert_changes_stay_unattended(tmp_path):
-    """A code bump (digest), an env VALUE edit, a moved source dir and a reordered
+    """A code bump (digest), an env VALUE edit and a reordered
     allow-list are not a new capability — they redeploy on the approved address."""
     r = AppServiceRegistry(str(tmp_path / "a.db"))
     _req(r, egress="allowlist", egress_allow=["a.example.com", "b.example.com"])
     r.mark_approved("st", "u1")
-    row = _req(r, workspace_digest="d9" * 12, env={"PORT": "9999"}, source_dir="elsewhere",
+    row = _req(r, workspace_digest="d9" * 12, env={"PORT": "9999"},
                egress="allowlist", egress_allow=["B.example.com", "a.example.com"])
     assert row["status"] == STATUS_APPROVED and row["approval_change"] == []
 

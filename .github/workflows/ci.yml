@@ -3,12 +3,15 @@ on:
   pull_request:
   push:
     branches: [main]
+# Least privilege: no job writes to the repository.
+permissions:
+  contents: read
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with: { python-version: "3.11" }
       # The suite imports the full package (browser/server/etc.) at collection
       # time and uses pytest-asyncio, so install the documented dev setup
@@ -29,8 +32,8 @@ jobs:
     # installs EXACTLY what `pip install polyrob` gives a new user. 058 T0.1.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with: { python-version: "3.11" }
       - run: pip install -e .
       - name: the default agent path imports with no extras
@@ -73,11 +76,10 @@ jobs:
           from core.packs.loader import load_packs, register_policies
           register_policies()
           eps = {e.name: e.dist.metadata["Name"] for e in entry_points(group="polyrob.packs")}
-          assert eps == {"discovery": "polyrob", "markets": "polyrob", "x": "polyrob"}, eps
+          assert eps == {p: "polyrob" for p in ("daytona", "discovery", "markets", "modal", "singularity", "vercel_sandbox", "x")}, eps
           NEEDS_EXTRA = {
-              "core.security.pinned_transport",  # httpx (a crypto/solana extra dep)
               "core.signer.remote", "core.wallet.agent_wallet", "core.wallet.erc6551",
-              "core.wallet.factory", "core.wallet.signer", "core.wallet.tokens",
+              "core.wallet.factory", "core.wallet.signer",
           }
           bad, stale = {}, set(NEEDS_EXTRA)
           for m in pkgutil.walk_packages(core.__path__, "core."):
@@ -95,7 +97,7 @@ jobs:
           recs = {r.id: r for r in state.records()}
           assert set(recs) == set(eps) and all(r.status == state.LOADED for r in recs.values()), \
               [r.line() for r in recs.values()]
-          assert all(r.needs for r in recs.values()), [r.line() for r in recs.values()]
+          assert all(recs[p].needs for p in ("discovery", "markets", "x")), [r.line() for r in recs.values()]
           assert "polyrob[twitter]" in recs["x"].line(), recs["x"].line()
           print("bare install OK:", state.summary_line())
           PY
@@ -107,8 +109,8 @@ jobs:
     # the project itself --no-deps (pip's hash mode cannot hash a directory).
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with: { python-version: "3.11" }
       - run: pip install --require-hashes --prefer-binary -r requirements.txt
       - run: pip install --no-deps --no-build-isolation -e .
@@ -120,14 +122,17 @@ jobs:
   secrets:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with: { fetch-depth: 0 }
       # Run the gitleaks CLI directly instead of gitleaks-action@v2: the action
       # requires a paid GITLEAKS_LICENSE secret for organization-owned repos and
       # hard-fails without it. The CLI is MIT and license-free.
       - name: Run gitleaks (full history)
         run: |
-          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz | tar -xz gitleaks
+          # OPS-19: checksum-verified (the release's own checksums.txt value for this file).
+          curl -sSfL -o gitleaks.tgz https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz
+          echo "9991e0b2903da4c8f6122b5c3186448b927a5da4deef1fe45271c3793f4ee29c  gitleaks.tgz" | sha256sum -c -
+          tar -xzf gitleaks.tgz gitleaks
           ./gitleaks git --no-banner --redact --config .gitleaks.toml \
             --report-format json --report-path /tmp/gitleaks.json . || {
             jq 'map({RuleID, File, StartLine, Commit})' /tmp/gitleaks.json

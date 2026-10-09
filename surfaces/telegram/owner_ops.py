@@ -231,7 +231,7 @@ def cron_reply(user_id: str, data_dir: str, args: List[str]) -> str:
         job_id, err = resolve_prefix(rest[0], [j.id for j in jobs])
         if err:
             return f"{err} — see /cron."
-        if svc.cancel(job_id, user_id=user_id):
+        if svc.cancel(job_id, user_id=user_id, via="telegram"):
             return f"✅ Cancelled {_code(job_id[:8])}."
         return f"Could not cancel {_code(job_id[:8])} — see /cron."
 
@@ -625,6 +625,8 @@ _CAP_NOTE = (
     "Tighten the daily cap the same way: /config set budget.wallet_daily_usd "
     "<usd> — that one can only ever LOWER what the operator set, so no chat "
     "message can widen the maximum daily loss.\n"
+    "When the wallet signer is installed, its hard caps bound both: a raise "
+    "from chat stops at the signer's cap, which only root changes on the box.\n"
     "Change how much runs without asking you: /wallet autonomous <usd>."
 )
 
@@ -795,7 +797,33 @@ def _cap_lines(user_id: Optional[str], cfg: Any) -> List[str]:
     if daily_value is None:
         out.append("⚠️ The per-tx cap is a catastrophic-loss ceiling, not a "
                    "budget, and the daily cap is unlimited.")
+    if not stale:
+        out.extend(_signer_bound_lines(user_id))
     return out
+
+
+def _signer_bound_lines(user_id: Optional[str]) -> List[str]:
+    """Where a setting sits above the signer's hard cap, name the cap that
+    binds and where to raise it (the signer is the envelope). Fail-open: no
+    signer, or no answer, is no line."""
+    try:
+        from core.runtime_paths import prefs_home_dir
+        from core.wallet.config import configured_caps_now
+        from core.wallet.signer_envelope import (UNANSWERED_TEXT, bound_legs, bound_text,
+                                                 reported_caps, signer_unanswered)
+        if signer_unanswered():
+            # The zero clamp of a silent signer is not a cap to raise in
+            # signer.toml: say the signer is down instead.
+            return ["⚠️ " + UNANSWERED_TEXT[0].upper() + UNANSWERED_TEXT[1:]]
+        caps = reported_caps()
+        if caps is None:
+            return []
+        legs = bound_legs(caps, configured_caps_now(user_id=user_id,
+                                                    home_dir=prefs_home_dir()))
+    except Exception:
+        logger.debug("signer bound check failed", exc_info=True)
+        return []
+    return ["Bound by the signer — " + bound_text(b) for b in legs]
 
 
 #: Venues that hold a same-chain float at their DERIVED address. hyperliquid

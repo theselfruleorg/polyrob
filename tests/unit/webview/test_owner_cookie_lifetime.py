@@ -13,6 +13,7 @@ This module proves: (1) the minted cookie's ``exp`` is ≤24h; (2) ``/logout``'s
 then rejects that token; (3) both minters agree on the lifetime and neither still
 ships the old 7-day cookie. W12 (2FA) is deliberately out of scope.
 """
+from core.security.session_tokens import SESSION_AUDIENCE
 import os
 import pathlib
 import time
@@ -48,7 +49,7 @@ def _isolated_denylist(monkeypatch, tmp_path):
 
 
 def _decode(token: str) -> dict:
-    return pyjwt.decode(token, os.environ["JWT_SECRET_KEY"], algorithms=["HS256"])
+    return pyjwt.decode(token, os.environ["JWT_SECRET_KEY"], algorithms=["HS256"], audience=SESSION_AUDIENCE)
 
 
 # --- lifetime ------------------------------------------------------------------
@@ -129,7 +130,7 @@ def test_revoke_cookie_token_is_a_noop_on_junk():
     revoke_cookie_token("")
     revoke_cookie_token("not-a-jwt")
     # a token signed with a different secret decodes to nothing revocable
-    other = pyjwt.encode({"jti": "ghost"}, "some-other-secret", algorithm="HS256")
+    other = pyjwt.encode({"aud": SESSION_AUDIENCE, **{"jti": "ghost"}}, "some-other-secret", algorithm="HS256")
     revoke_cookie_token(other)
     assert get_token_denylist().is_revoked("ghost") is False
 
@@ -176,14 +177,14 @@ async def _ok(_request):
 
 def _mint_api_token(secret: str, *, jti: str, ttl_seconds: int = 3600) -> str:
     return pyjwt.encode(
-        {
+        {"aud": SESSION_AUDIENCE, **{
             "sub": "0xabc",
             "user_id": "u",
             "role": "owner",
             "tier": "admin",
             "jti": jti,
             "exp": datetime.utcnow() + timedelta(seconds=ttl_seconds),
-        },
+        }},
         secret,
         algorithm="HS256",
     )

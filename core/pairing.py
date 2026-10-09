@@ -24,6 +24,8 @@ from typing import List, Mapping, Optional, Tuple
 from core.env import bool_from
 from core.sqlite_util import execute_retry, wal_connect
 
+PAIRING_CODE_TTL_SEC = 15 * 60
+
 
 def pairing_required(env: Optional[Mapping[str, str]] = None) -> bool:
     # Repo-SSOT falsey-set semantics (core.env) — was a private opt-in truth set.
@@ -64,22 +66,22 @@ class PairingStore:
         """Issue (or return the existing pending) pairing code for ``user_id``.
 
         Returns None if the user is already paired (no code needed) or anonymous.
-        Stable: a pending user gets the same code on repeat requests.
+        Stable for 15 minutes; expired codes are replaced on the next request.
         """
         if not user_id:
             return None
         row = execute_retry(
-            self.db_path, "SELECT code, paired FROM paired_users WHERE user_id=?",
+            self.db_path, "SELECT code, paired, created_at FROM paired_users WHERE user_id=?",
             (user_id,), fetch="one")
         if row and row["paired"]:
             return None
-        if row and row["code"]:
+        if row and row["code"] and (row["created_at"] or 0) > time.time() - PAIRING_CODE_TTL_SEC:
             return row["code"]
         code = secrets.token_hex(8)  # 16 hex chars (64-bit entropy)
         execute_retry(
             self.db_path,
             "INSERT INTO paired_users (user_id, code, paired, created_at) VALUES (?,?,0,?) "
-            "ON CONFLICT(user_id) DO UPDATE SET code=excluded.code",
+            "ON CONFLICT(user_id) DO UPDATE SET code=excluded.code, created_at=excluded.created_at",
             (user_id, code, time.time()))
         return code
 
@@ -88,13 +90,11 @@ class PairingStore:
         if not code:
             return None
         row = execute_retry(
-            self.db_path, "SELECT user_id FROM paired_users WHERE code=?",
-            (code,), fetch="one")
-        if not row:
-            return None
-        uid = row["user_id"]
-        execute_retry(self.db_path, "UPDATE paired_users SET paired=1 WHERE code=?", (code,))
-        return uid
+            self.db_path,
+            "UPDATE paired_users SET paired=1, code=NULL "
+            "WHERE code=? AND paired=0 AND created_at>? RETURNING user_id",
+            (code, time.time() - PAIRING_CODE_TTL_SEC), fetch="one")
+        return row["user_id"] if row else None
 
     def revoke(self, user_id: str) -> None:
         if user_id:
@@ -103,8 +103,8 @@ class PairingStore:
     def list_pending(self) -> List[Tuple[str, str]]:
         rows = execute_retry(
             self.db_path,
-            "SELECT user_id, code FROM paired_users WHERE paired=0 ORDER BY created_at",
-            fetch="all") or []
+            "SELECT user_id, code FROM paired_users WHERE paired=0 AND created_at>? ORDER BY created_at",
+            (time.time() - PAIRING_CODE_TTL_SEC,), fetch="all") or []
         return [(r["user_id"], r["code"]) for r in rows]
 
 
@@ -159,8 +159,7 @@ def guard_inbound(
     when ``surface_id`` is unknown — local-owner is forced OFF so a forgeable
     telegram/email sender cannot bypass the pairing gate.
 
-    Fully fail-OPEN: any error (no container/config, store I/O) → None (allow), so a
-    pairing-store fault can never lock out the instance. Reads ``POLYROB_LOCAL`` directly
+    Store errors deny access while pairing is enabled. Reads ``POLYROB_LOCAL`` directly
     to avoid a core→agents import (core boundary).
     """
     if not pairing_required():
@@ -180,7 +179,7 @@ def guard_inbound(
                                    local=local, required=True)
         return None if decision.allowed else decision
     except Exception:
-        return None  # fail-open: never lock out on a guard fault
+        return AccessDecision(False, "pairing store unavailable")
 
 
 __all__ = [

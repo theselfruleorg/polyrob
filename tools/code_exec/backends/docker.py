@@ -51,7 +51,7 @@ from typing import Awaitable, Callable, List, Optional, Tuple
 from tools.code_exec.backend import ExecutionBackend, ExecutionBackendError
 from tools.code_exec.backends._proc import run_group
 from tools.code_exec.env_policy import SECRET_PAT, build_child_env
-from tools.code_exec.limits import dev_exec_max_timeout_sec, exec_timeout_cap
+from tools.code_exec.limits import exec_timeout_cap, max_output_bytes, max_timeout_sec
 from tools.code_exec.result import ExecutionRequest, ExecutionResult
 
 logger = logging.getLogger(__name__)
@@ -133,6 +133,11 @@ def _rmtree_install_dir(path: str) -> None:
 #: Label applied to every persistent container this backend creates — the marker
 #: ``reap_orphans`` filters ``docker ps`` on.
 _SANDBOX_LABEL = "polyrob.sandbox=1"
+#: 073 W8: CODE_EXEC_NETWORK=proxy — the allowlist egress sidecar.
+_PROXY_POLICY = "proxy"
+_EGRESS_LABEL = "polyrob.egress=1"
+_EGRESS_HOST = "polyrob-egress"
+_EGRESS_PORT = 3128
 
 #: Exit codes that mean "the in-container `timeout --signal=KILL <n>` wrapper
 #: fired" (see ``_run_persistent``). GNU coreutils `timeout` exits 124 when it
@@ -157,6 +162,50 @@ _TIMEOUT_EXIT_CODES = frozenset({124, 137})
 DockerRunner = Callable[..., Awaitable[Tuple[int, str, str]]]
 
 
+def docker_binary() -> str:
+    """The container CLI every docker-backend call shells out to (073 W6):
+    ``CODE_EXEC_DOCKER_BINARY`` (default ``docker``; e.g. ``podman``). Read per
+    call. A value that begins with ``-`` is refused (it would read as an option)."""
+    raw = (os.getenv("CODE_EXEC_DOCKER_BINARY") or "").strip()
+    if not raw:
+        return "docker"
+    if raw.startswith("-"):
+        raise ExecutionBackendError(
+            f"CODE_EXEC_DOCKER_BINARY value {raw!r} begins with '-'; set a binary name or path.")
+    return raw
+
+
+def docker_binary_is_daemonless() -> bool:
+    """True for Podman: no daemon socket to probe (``sandbox_guard``)."""
+    try:
+        return os.path.basename(docker_binary()).startswith("podman")
+    except ExecutionBackendError:
+        return False
+
+
+def docker_reuse_across_restart_enabled() -> bool:
+    """``CODE_EXEC_DOCKER_REUSE_ACROSS_RESTART`` (default OFF, 073 W6): a persistent
+    session container is labelled with its config hash and RE-ATTACHED by a later
+    process for the same session instead of re-created. Still one container per
+    session — never shared across sessions (073 §7)."""
+    from core.env import bool_env
+    return bool_env("CODE_EXEC_DOCKER_REUSE_ACROSS_RESTART", False)
+
+
+def _tool_rpc_on() -> bool:
+    """073 W9's per-setup RPC bind makes a container non-re-attachable."""
+    try:
+        from tools.code_exec.tool_rpc import tool_rpc_enabled
+        return bool(tool_rpc_enabled())
+    except Exception:
+        return False
+
+
+#: Labels of a re-attachable persistent container (only while the flag is on).
+_REUSE_LABEL = "polyrob.reuse=1"
+_CONFIG_LABEL_KEY = "polyrob.config"
+
+
 class _DockerExecTimeout(Exception):
     """Raised by ``_default_docker_runner`` when a docker CLI call exceeds its
     timeout. Only the DEFAULT runner ever raises this — an injected fake runner
@@ -174,7 +223,7 @@ async def _default_docker_runner(
     via ``run_in_executor``, see ``test_thread_loop_subprocess.py``). ``args``
     excludes the leading ``"docker"`` token (the fake runners in tests mirror this).
     """
-    argv = ["docker"] + list(args)
+    argv = [docker_binary()] + list(args)
     stdin_bytes = input.encode() if input is not None else None
 
     code, out_text, err_text, timed_out = await run_group(
@@ -252,14 +301,10 @@ class DockerBackend(ExecutionBackend):
         # 014 B3: explicit CODE_EXEC_MAX_TIMEOUT_SEC always wins. Unset: dev mode
         # follows the ONE foreground ceiling shell_run uses
         # (tools/code_exec/limits.py::dev_exec_max_timeout_sec — SHELL_MAX_TIMEOUT_SEC,
-        # default 300, so an install fits) — pre-014 the backend re-clamp silently cut
+        # default 600, so an install fits) — pre-014 the backend re-clamp silently cut
         # shell foreground commands to 30s; the confined default stays 30.
-        _raw_max = os.getenv("CODE_EXEC_MAX_TIMEOUT_SEC")
-        if _raw_max is not None and _raw_max.strip():
-            self.max_timeout = float(_raw_max)
-        else:
-            self.max_timeout = dev_exec_max_timeout_sec() if dev_mode else 30.0
-        self.max_output = int(os.getenv("CODE_EXEC_MAX_OUTPUT_BYTES", "100000"))
+        self.max_timeout = max_timeout_sec(dev_mode)
+        self.max_output = max_output_bytes()
         # Container user precedence: explicit operator override (verbatim, even if root)
         # > non-root host uid:gid (keeps the mounted workspace writable) > forced-unprivileged
         # when the HOST process itself is root (prod systemd runs User=root — never let that
@@ -307,16 +352,26 @@ class DockerBackend(ExecutionBackend):
         # rides on ExecutionRequest.dev_mode. Callers construct dev backends only for
         # sessions that passed compute_posture_allows(ctx, 1).
         self._dev_mode = bool(dev_mode)
+        # 073 W9 (code calls tools): the host dir bound at /polyrob_rpc in the
+        # PERSISTENT container (set at setup() only when CODE_EXEC_TOOL_CALLS is on).
+        self._tool_rpc_host_dir: Optional[str] = None
+        # 073 W8 (CODE_EXEC_NETWORK=proxy): the internal network + proxy sidecar
+        # this PERSISTENT container sits behind (created at setup(), removed at
+        # teardown()).
+        self._egress_network: Optional[str] = None
+        self._egress_sidecar: Optional[str] = None
 
     # -- lifecycle ------------------------------------------------------------
 
     async def setup(self) -> None:
         if self._session_id is None:
             # EPHEMERAL (P0, unchanged): fail fast with a clear error if the CLI is missing.
-            if shutil.which("docker") is None:
+            binary = docker_binary()
+            if shutil.which(binary) is None:
                 raise ExecutionBackendError(
-                    "docker backend selected but the 'docker' CLI was not found on PATH. "
-                    "Install Docker or set CODE_EXEC_BACKEND to another backend."
+                    f"docker backend selected but the '{binary}' CLI was not found on PATH. "
+                    "Install Docker (or Podman with CODE_EXEC_DOCKER_BINARY=podman) or set "
+                    "CODE_EXEC_BACKEND to another backend."
                 )
             return
         # PERSISTENT (P1-B, opt-in): start ONE long-lived container for this session.
@@ -330,20 +385,41 @@ class DockerBackend(ExecutionBackend):
             if self._workspace_needs_chmod:
                 self._ensure_workspace_writable(workdir)
             network = self._resolve_setup_network()
+            egress_flags: List[str] = []
+            if network == _PROXY_POLICY:
+                network, egress_flags = await self._egress_setup()
             container_name = f"polyrob-sbx-{uuid.uuid4().hex}"
             install_host = self._ensure_install_dir(workdir) if self._dev_mode else None
             # H02: verify every bind source right before the argv (raises).
             self._check_bind_source(workdir, "workspace")
             if install_host is not None:
                 self._check_bind_source(install_host, "install dir")
+            reuse_labels: List[str] = []
+            if docker_reuse_across_restart_enabled() and not _tool_rpc_on() and not egress_flags:
+                # 073 W6: re-attach to this session's running container from a
+                # previous process when it was built with the SAME config (image,
+                # mounts, network, caps, user) — never a container of another session.
+                config = self._config_hash(self._hardening_flags(
+                    network=network, workdir_host=workdir, install_host=install_host
+                ) + self._publish_flags() + [self.image, "sleep", "infinity"])
+                found = await self._find_reusable(config)
+                if found:
+                    self._workdir = workdir
+                    self._container = found
+                    logger.info("docker backend: re-attached session %s to container %s",
+                                self._session_id, found[:12])
+                    return
+                reuse_labels = ["--label", _REUSE_LABEL,
+                                "--label", f"{_CONFIG_LABEL_KEY}={config}"]
             argv = [
                 "run", "-d",
                 "--label", _SANDBOX_LABEL,
                 "--label", f"polyrob.session={self._session_id}",
+            ] + reuse_labels + [
                 "--name", container_name,
             ] + self._hardening_flags(
                 network=network, workdir_host=workdir, install_host=install_host
-            ) + self._publish_flags() + [
+            ) + (egress_flags or self._publish_flags()) + self._tool_rpc_setup_flags() + [
                 self.image, "sleep", "infinity",
             ]
             try:
@@ -353,11 +429,41 @@ class DockerBackend(ExecutionBackend):
                     f"docker run -d (persistent sandbox) timed out: {e}"
                 ) from e
             if code != 0:
+                await self._egress_teardown()
                 raise ExecutionBackendError(
                     f"docker run -d (persistent sandbox) failed (exit {code}): {err or out}"
                 )
             self._workdir = workdir
             self._container = container_name
+
+    def _config_hash(self, body: List[str]) -> str:
+        """PURE: a short hash of everything a re-attached container must share
+        with a fresh one (the ``docker run -d`` body: hardening flags, mounts,
+        network, publish flags, image, command) plus the user and the binary."""
+        import hashlib
+        import json
+        blob = json.dumps([docker_binary(), self.user, self._dev_mode, body])
+        return hashlib.sha256(blob.encode()).hexdigest()[:16]
+
+    async def _find_reusable(self, config: str) -> Optional[str]:
+        """The id of a RUNNING container of this session with this config, or
+        None. Any error -> None (create a new one)."""
+        try:
+            code, out, _err = await self._docker([
+                "ps", "-q",
+                "--filter", f"label={_SANDBOX_LABEL}",
+                "--filter", f"label=polyrob.session={self._session_id}",
+                "--filter", f"label={_REUSE_LABEL}",
+                "--filter", f"label={_CONFIG_LABEL_KEY}={config}",
+                "--filter", "status=running",
+            ], timeout=self.max_timeout)
+        except Exception:
+            logger.debug("docker backend: reuse probe failed", exc_info=True)
+            return None
+        if code != 0:
+            return None
+        ids = [c for c in (out or "").split() if c.strip()]
+        return ids[0] if ids else None
 
     async def teardown(self) -> None:
         if self._session_id is None:
@@ -366,6 +472,9 @@ class DockerBackend(ExecutionBackend):
             return  # idempotent — never set up, or already torn down
         cname = self._container
         self._container = None  # mark torn down even if the rm call below errors
+        if self._tool_rpc_host_dir:  # 073 W9: the persistent tool-RPC socket dir
+            shutil.rmtree(self._tool_rpc_host_dir, ignore_errors=True)
+            self._tool_rpc_host_dir = None
         try:
             code, _out, err = await self._docker(["rm", "-f", cname], timeout=self.max_timeout)
             if code != 0 and "no such container" not in (err or "").lower():
@@ -374,10 +483,72 @@ class DockerBackend(ExecutionBackend):
             logger.warning("docker backend: teardown 'rm -f %s' timed out", cname)
         except Exception:
             logger.warning("docker backend: teardown 'rm -f %s' raised", cname, exc_info=True)
+        await self._egress_teardown()
+
+    # -- 073 W8: the egress allowlist proxy ------------------------------------
+
+    async def _egress_setup(self):
+        """Create an ``--internal`` network (no route out) and ONE proxy sidecar on
+        it + the default bridge; return ``(network, extra docker-run flags)`` for the
+        session container. The sidecar runs ``tools/code_exec/egress_proxy.py`` with
+        the image's own python3, read-only, all caps dropped, as nobody. Any failure
+        tears down what was made and raises — never a silent open network."""
+        from tools.code_exec.egress_proxy import parse_allowlist, parse_ports
+        tag = uuid.uuid4().hex[:12]
+        net = f"polyrob-egress-{tag}"
+        side = f"polyrob-egp-{tag}"
+        script = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                              "egress_proxy.py")
+        allow = ",".join(parse_allowlist(os.getenv("CODE_EXEC_EGRESS_ALLOW")))
+        ports = ",".join(str(p) for p in sorted(parse_ports(os.getenv("CODE_EXEC_EGRESS_PORTS"))))
+        session_label = f"polyrob.session={self._session_id}"
+        steps = [
+            ["network", "create", "--internal", "--label", _SANDBOX_LABEL,
+             "--label", _EGRESS_LABEL, "--label", session_label, net],
+            ["run", "-d", "--name", side, "--label", _SANDBOX_LABEL, "--label", session_label,
+             "--network", "bridge", "--read-only", "--cap-drop", "ALL",
+             "--security-opt", "no-new-privileges", "--user", "65534:65534",
+             "--pids-limit", "64", "--memory", "128m",
+             "--mount", f"type=bind,src={script},dst=/polyrob_egress_proxy.py,readonly",
+             self.image, "python3", "-I", "/polyrob_egress_proxy.py",
+             str(_EGRESS_PORT), allow, ports],
+            ["network", "connect", "--alias", _EGRESS_HOST, net, side],
+        ]
+        self._egress_network = net
+        for argv in steps:
+            if argv[0] == "run":
+                self._egress_sidecar = side
+            try:
+                code, out, err = await self._docker(argv, timeout=self.max_timeout)
+            except Exception as e:
+                code, out, err = 1, "", str(e)
+            if code != 0:
+                await self._egress_teardown()
+                raise ExecutionBackendError(
+                    f"CODE_EXEC_NETWORK=proxy: could not set up the egress proxy "
+                    f"({' '.join(argv[:2])} exited {code}: {err or out}). The sandbox was "
+                    "NOT started with an open network instead.")
+        url = f"http://{_EGRESS_HOST}:{_EGRESS_PORT}"
+        flags: List[str] = []
+        for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+            flags += ["-e", f"{k}={url}"]
+        flags += ["-e", "NO_PROXY=localhost,127.0.0.1", "-e", "no_proxy=localhost,127.0.0.1"]
+        return net, flags
+
+    async def _egress_teardown(self) -> None:
+        side, net = self._egress_sidecar, self._egress_network
+        self._egress_sidecar = self._egress_network = None
+        for argv in ([["rm", "-f", side]] if side else []) + ([["network", "rm", net]] if net else []):
+            try:
+                await self._docker(argv, timeout=self.max_timeout)
+            except Exception:
+                logger.warning("docker backend: egress teardown %s failed", argv[:2], exc_info=True)
 
     @property
     def capabilities(self):
         default_net = (os.getenv("CODE_EXEC_NETWORK", "none") or "none").lower()
+        if default_net == _PROXY_POLICY and self._session_id is None:
+            default_net = "none"
         return {
             "network": default_net not in ("none", ""),
             "isolation": "container",
@@ -432,6 +603,8 @@ class DockerBackend(ExecutionBackend):
         """
         if self._dev_mode and os.getenv("CODE_EXEC_NETWORK") is None:
             return "bridge"
+        if (os.getenv("CODE_EXEC_NETWORK") or "").strip().lower() == _PROXY_POLICY:
+            return _PROXY_POLICY  # setup() builds the internal network + sidecar
         return self._resolve_network(ExecutionRequest(language="bash", code="true"))
 
     def _resolve_network(self, request: ExecutionRequest) -> str:
@@ -441,6 +614,12 @@ class DockerBackend(ExecutionBackend):
             return "none"
         if policy == "host":
             return "host"
+        if policy == _PROXY_POLICY:
+            # 073 W8: the proxy is a PERSISTENT-sandbox feature (one sidecar per
+            # session). A one-shot run gets no network rather than an open one.
+            logger.info("CODE_EXEC_NETWORK=proxy: ephemeral run has no network "
+                        "(the allowlist proxy serves persistent session sandboxes)")
+            return "none"
         if policy in ("egress", "bridge"):
             # 'bridge' (the docker network name) aliases 'egress' — an operator who
             # sets it means outbound-allowed, and silently degrading to no-network
@@ -499,6 +678,10 @@ class DockerBackend(ExecutionBackend):
         if request.dev_mode:
             merged.update(self._DEV_ENV_DEFAULTS)
         merged.update(request.env or {})
+        # The agent-child marker goes in last: a polyrob CLI inside the sandbox
+        # image refuses its owner-only verbs (core.security.agent_child).
+        from core.security.agent_child import agent_child_env_flags
+        merged.update(agent_child_env_flags())
         flags: List[str] = []
         for k, v in merged.items():
             if SECRET_PAT.search(k):
@@ -687,6 +870,36 @@ class DockerBackend(ExecutionBackend):
             logger.warning("dev-mode: could not prepare install dir %s", path, exc_info=True)
         return path
 
+    # -- 073 W9: code calls tools (tools/code_exec/tool_rpc.py) ------------------
+    # The script reaches the agent's per-run Unix socket through ONE extra
+    # read-only bind at /polyrob_rpc (a socket on a read-only mount still accepts
+    # connect()). Ephemeral: the per-run dir from ExecutionRequest.tool_rpc_dir.
+    # Persistent: mounts are fixed at `docker run -d`, so ONE dir is bound at
+    # setup when CODE_EXEC_TOOL_CALLS is on, and each run puts its socket in it.
+    # Nothing else in the hardening list changes.
+
+    @staticmethod
+    def _tool_rpc_bind_flags(host_dir: Optional[str]) -> List[str]:
+        if not host_dir:
+            return []
+        from tools.code_exec.tool_rpc import CONTAINER_RPC_DIR
+        if "," in host_dir:
+            raise ValueError(f"tool RPC dir must not contain a comma: {host_dir!r}")
+        return ["--mount", f"type=bind,src={host_dir},dst={CONTAINER_RPC_DIR},readonly"]
+
+    def _tool_rpc_setup_flags(self) -> List[str]:
+        from tools.code_exec.tool_rpc import make_socket_dir, tool_rpc_enabled
+        if not tool_rpc_enabled():
+            return []
+        host_dir = make_socket_dir(owner=self.user)
+        self._check_bind_source(host_dir, "tool RPC dir")
+        self._tool_rpc_host_dir = host_dir
+        return self._tool_rpc_bind_flags(host_dir)
+
+    @property
+    def tool_rpc_host_dir(self) -> Optional[str]:
+        return self._tool_rpc_host_dir
+
     @staticmethod
     def _check_bind_source(path: str, what: str) -> None:
         """Refuse a bind-mount source that the sandbox could have swapped (H02).
@@ -770,7 +983,7 @@ class DockerBackend(ExecutionBackend):
         the pre-fix P0 shape.
         """
         lang = (request.language or "").lower()
-        argv = ["docker", "run", "--rm"]
+        argv = [docker_binary(), "run", "--rm"]
         if container_name:
             argv += ["--name", container_name, "--label", _SANDBOX_LABEL,
                      "--label", "polyrob.ephemeral=1"]
@@ -781,6 +994,7 @@ class DockerBackend(ExecutionBackend):
             # pre-creates + verifies it before invoking).
             install_host=self._install_dir_path(workdir) if request.dev_mode else None,
         )
+        argv += self._tool_rpc_bind_flags(getattr(request, "tool_rpc_dir", None))
         if request.stdin is not None:
             argv.append("-i")  # keep stdin open
         argv += self._container_env_flags(request)
@@ -830,6 +1044,8 @@ class DockerBackend(ExecutionBackend):
             self._check_bind_source(workdir, "workspace")
             if install_dir is not None:
                 self._check_bind_source(install_dir, "install dir")
+            if getattr(request, "tool_rpc_dir", None):  # 073 W9
+                self._check_bind_source(request.tool_rpc_dir, "tool RPC dir")
         except ExecutionBackendError as e:
             if created_tmp:
                 shutil.rmtree(workdir, ignore_errors=True)
@@ -843,6 +1059,7 @@ class DockerBackend(ExecutionBackend):
             request, workdir, container_name=container_name, timeout_sec=timeout,
         )
         env = build_child_env({})  # env for the docker CLI process itself (PATH/HOME only)
+        binary = docker_binary()
         stdin_bytes = (request.stdin or "").encode() if request.stdin else None
         # Host-side wait is a BACKSTOP only (a hung docker CLI client) — deliberately
         # looser than the in-container `timeout` so the container self-terminates first.
@@ -886,7 +1103,7 @@ class DockerBackend(ExecutionBackend):
                     # Stopping the CLI does not stop the container on the daemon.
                     try:
                         subprocess.run(
-                            ["docker", "rm", "-f", container_name],
+                            [binary, "rm", "-f", container_name],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                             timeout=10, env=env,
                         )
@@ -1057,8 +1274,14 @@ class DockerBackend(ExecutionBackend):
         if not cids:
             return 0
 
+        # 073 W6: while re-attach is on, a re-attachable container outlives its
+        # process ON PURPOSE; the cold-start age sweep leaves it to the
+        # ownership-keyed reap_unowned.
+        reuse = docker_reuse_across_restart_enabled()
+        fmt = ("{{.State.StartedAt}}\t{{index .Config.Labels \"polyrob.reuse\"}}" if reuse
+               else "{{.State.StartedAt}}")
         try:
-            icode, iout, ierr = await runner(["inspect", "-f", "{{.State.StartedAt}}", *cids])
+            icode, iout, ierr = await runner(["inspect", "-f", fmt, *cids])
         except Exception:
             logger.warning("reap_orphans: 'docker inspect' raised", exc_info=True)
             return 0
@@ -1071,6 +1294,9 @@ class DockerBackend(ExecutionBackend):
         removed = 0
         for i, cid in enumerate(cids):
             raw_ts = started_lines[i] if i < len(started_lines) else ""
+            raw_ts, _, reuse_label = raw_ts.partition("\t")
+            if reuse and reuse_label.strip() == "1":
+                continue
             age = _age_from_docker_timestamp(raw_ts, now)
             if age is None:
                 logger.warning(
@@ -1088,6 +1314,12 @@ class DockerBackend(ExecutionBackend):
                 removed += 1
             else:
                 logger.warning("reap_orphans: 'rm -f %s' exited %s: %s", cid, rcode, rerr)
+        # 073 W8: an egress network whose containers are gone (prune only removes
+        # networks with no attached container, so a live session is never touched).
+        try:
+            await runner(["network", "prune", "-f", "--filter", f"label={_EGRESS_LABEL}"])
+        except Exception:
+            logger.debug("reap_orphans: egress network prune failed", exc_info=True)
         return removed
 
     @staticmethod

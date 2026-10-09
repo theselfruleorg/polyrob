@@ -117,3 +117,21 @@ def generate_user_id_from_wallet(wallet_address: str) -> str:
     normalized = wallet_address.lower()
     hash_bytes = hashlib.sha256(normalized.encode()).hexdigest()
     return f"usr_{hash_bytes[:12]}"
+
+
+def wallet_user_id(wallet_address: str) -> str:
+    """The 64-bit wallet tenant id (usr_ + 16 hex) for a NEW wallet account.
+
+    The same derivation as the SIWE ``IdentityMapper`` / ``UserProfiles`` ids,
+    so a wallet that signs in and a wallet that pays land on ONE tenant. The
+    48-bit ``generate_user_id_from_wallet`` id stays readable for accounts that
+    already hold it: a wallet's existing ``user_profiles`` row always wins
+    (``modules.x402.x402_integration.resolve_payer_user_id``).
+    """
+    normalized = wallet_address.lower().strip()
+    return f"usr_{hashlib.sha256(normalized.encode()).hexdigest()[:16]}"
+
+
+def wallet_user_id_candidates(wallet_address: str) -> tuple:
+    """Every id a wallet may own: the 64-bit id first, then the legacy 48-bit id."""
+    return (wallet_user_id(wallet_address), generate_user_id_from_wallet(wallet_address))

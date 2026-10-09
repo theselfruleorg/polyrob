@@ -32,6 +32,9 @@ class ValidationManager:
         "tee": "Validation via TEE (Trusted Execution Environment) attestation",
         "judge": "Validation via trusted third-party judges",
     }
+    MAX_REQUESTS = 1000
+    MAX_REQUEST_BYTES = 65536
+    MAX_RESPONSES_PER_REQUEST = 100
     
     def __init__(self):
         """Initialize the validation manager."""
@@ -56,10 +59,20 @@ class ValidationManager:
         """
         if not self.config.agent_id:
             raise ValueError("Agent ID not configured (EIP8004_AGENT_ID)")
+        if len(validator_address) != 42 or not validator_address.startswith("0x"):
+            raise ValueError("Validator address must be a 20-byte EVM address")
+        try:
+            bytes.fromhex(validator_address[2:])
+        except ValueError:
+            raise ValueError("Invalid validator address") from None
         
         # Serialize request data
         request_json = json.dumps(request_data, sort_keys=True)
+        if len(request_json.encode()) > self.MAX_REQUEST_BYTES:
+            raise ValueError("Validation request exceeds the 64 KiB limit")
         request_hash = "0x" + hashlib.sha256(request_json.encode()).hexdigest()
+        if request_hash not in self._requests and len(self._requests) >= self.MAX_REQUESTS:
+            raise ValueError("Validation request capacity reached")
         
         # Create request model
         request = ValidationRequestModel(
@@ -115,11 +128,17 @@ class ValidationManager:
         # Validate response
         if not 0 <= response <= 100:
             raise ValueError("Response must be 0-100")
+        if len(self._responses.get(request_hash, ())) >= self.MAX_RESPONSES_PER_REQUEST:
+            raise ValueError("Validation response capacity reached for this request")
         
         # Build response URI from data if provided
         if response_data and not response_uri:
             response_json = json.dumps(response_data, sort_keys=True)
             response_uri = f"data:application/json,{response_json}"
+        if response_uri and len(response_uri.encode()) > self.MAX_REQUEST_BYTES:
+            raise ValueError("Validation response exceeds the 64 KiB limit")
+        if tag and len(tag.encode()) > 32:
+            raise ValueError("Validation tag exceeds 32 bytes")
         
         response_hash = None
         if response_uri:
@@ -274,4 +293,3 @@ class ValidationManager:
     def get_supported_validators(self) -> Dict[str, str]:
         """Get list of supported validator types and their descriptions."""
         return self.VALIDATOR_TYPES.copy()
-

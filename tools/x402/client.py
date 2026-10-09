@@ -36,6 +36,7 @@ class X402PaymentClient(Protocol):
         self, *, url: str, method: str, body: Optional[str], signer: Signer,
         network: str, max_amount_usd: float, pinned_ip: Optional[str] = None,
         idempotency_key: Optional[str] = None,
+        expected_pay_to: Optional[str] = None,
     ) -> X402Result: ...
 
 

@@ -99,13 +99,9 @@ def _rpc(chain: str, method: str, params: list, timeout: float = 15.0):
     url = rpc_url_for_chain(chain) or _RPC_URLS.get(chain)
     if not url:
         raise ValueError(f"no RPC configured for chain {chain!r}")
-    req = urllib.request.Request(
-        url,
-        data=json.dumps({"jsonrpc": "2.0", "id": 1, "method": method,
-                         "params": params}).encode(),
-        # The public endpoint 403s a default urllib agent.
-        headers={"content-type": "application/json", "user-agent": "polyrob/defi"})
-    return json.loads(urllib.request.urlopen(req, timeout=timeout).read())
+    from tools.defi.providers._http import request_json
+    return request_json("POST", url, timeout=timeout, payload={
+        "jsonrpc": "2.0", "id": 1, "method": method, "params": params})
 
 
 def _addr(a: str) -> str:

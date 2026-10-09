@@ -3,6 +3,8 @@ import math
 
 import jwt
 
+SESSION_AUDIENCE = "polyrob-session"
+
 
 def decode_session_token(token, secret, *, verify_exp=True):
     """Require bounded, revocable credentials; callers still check the denylist.
@@ -13,7 +15,9 @@ def decode_session_token(token, secret, *, verify_exp=True):
     try:
         claims = jwt.decode(
             token, secret, algorithms=["HS256"],
-            options={"require": ["exp", "jti"], "verify_exp": verify_exp},
+            audience=SESSION_AUDIENCE,
+            options={"require": ["exp", "jti", "aud"], "verify_exp": verify_exp,
+                     "strict_aud": True},
         )
     except (ValueError, OverflowError, TypeError) as exc:
         raise jwt.InvalidTokenError("invalid session claims") from exc

@@ -60,11 +60,11 @@ async def test_sweep_requires_content(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_a_rule_put_in_effect_reports_what_it_overrides(tmp_path):
+async def test_model_rule_stays_pending_until_owner_review(tmp_path):
 	_cron(tmp_path, "Every day publish a public report of the bugs we fix.")
 	a = _controller(tmp_path)
 	res = await a.function(a.param_model(action="update",
 	                                     content="- Never publish public reports about bugs we fix."),
 	                       execution_context=_ctx())
-	assert "IN EFFECT NOW" in res.extracted_content
-	assert "cron dailyx01" in res.extracted_content
+	assert "NOT YET IN EFFECT" in res.extracted_content
+	assert "cron dailyx01" not in res.extracted_content

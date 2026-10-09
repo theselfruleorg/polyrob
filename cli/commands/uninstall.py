@@ -14,13 +14,14 @@ leaves a machine in a state nobody can describe.
 ``--purge`` deletes, and only after printing every path and taking a typed
 confirmation.
 
-⚠️ There are TWO homes and they are not the same thing. The **config** home
-(``~/.polyrob``) is per-user and holds the keys and the wallet seed. The
-**data** home is ``cwd/.polyrob`` BY DESIGN — a per-PROJECT memory
-(``core.runtime_paths.resolve_runtime_paths``). So ``--purge`` run from a
-random directory would once have deleted that project's memory while calling
-it "your data", and left the keys untouched. It now names both, deletes both,
-and says plainly that OTHER projects keep their own memory.
+⚠️ There are TWO homes and they are not always the same directory. The
+**config** home (``~/.polyrob``) holds the keys and the wallet seed. The
+**data** home (memory, goals, identity) is ``core.runtime_paths.
+resolve_data_home``: ``POLYROB_DATA_DIR`` when set, else ``~/.polyrob/data`` —
+INSIDE the config home. ``--purge`` names and deletes both; a data home inside
+the config home goes with it. A ``cwd/.polyrob`` from an older version is no
+longer loaded (a cloned directory could supply it) and this verb never deletes
+it — the output says so.
 """
 from __future__ import annotations
 
@@ -140,16 +141,18 @@ def uninstall_cmd(purge: bool, assume_yes: bool):
 
     # 5. the two homes
     targets = [("config (keys, settings, the wallet seed)", config_home)]
-    if data_home != config_home:
-        targets.append(("data for THIS project (memory, goals, identity)", data_home))
+    data_inside_config = _is_within(data_home, config_home)
+    if not data_inside_config:
+        targets.append(("data (memory, goals, identity)", data_home))
+    legacy_project = Path.cwd() / ".polyrob"
 
     if not purge:
         click.echo("\nYour data is KEPT:")
         for label, path in targets:
             click.echo(f"  {path}   — {label}")
-        if data_home != config_home:
-            click.echo("  Memory is per-project: other directories keep their own "
-                       "`.polyrob` and this verb never sees them.")
+        if data_inside_config:
+            click.echo(f"  (the data home {data_home} is inside the config home)")
+        _note_legacy_project(legacy_project, targets)
         click.echo("  Delete with `polyrob uninstall --purge` once you have read them.")
         return
 
@@ -163,9 +166,9 @@ def uninstall_cmd(purge: bool, assume_yes: bool):
     click.echo("  The config home holds the agent wallet seed. Funds in that wallet")
     click.echo("  become unreachable unless you exported the mnemonic first")
     click.echo("  (`polyrob wallet export`).")
-    if data_home != config_home:
-        click.echo("  Memory in OTHER project directories is NOT touched — run this")
-        click.echo("  from each one, or delete those `.polyrob` directories yourself.")
+    if data_inside_config:
+        click.echo(f"  (the data home {data_home} is inside the config home)")
+    _note_legacy_project(legacy_project, targets)
     if not present:
         click.echo("  Nothing to delete.")
         return
@@ -180,6 +183,26 @@ def uninstall_cmd(purge: bool, assume_yes: bool):
             click.echo(f"Deleted {path}")
         except OSError as exc:
             click.echo(f"Could not delete {path}: {exc}", err=True)
+
+
+def _is_within(path: Path, parent: Path) -> bool:
+    try:
+        path.resolve().relative_to(parent.resolve())
+        return True
+    except (ValueError, OSError):
+        return False
+
+
+def _note_legacy_project(legacy: Path, targets) -> None:
+    """Name a pre-change ``cwd/.polyrob`` this verb does not touch."""
+    try:
+        if not legacy.is_dir() or any(_is_within(legacy, p) for _, p in targets):
+            return
+    except OSError:
+        return
+    click.echo(f"  {legacy} is a project folder from an older version. polyrob no "
+               "longer loads it and this verb does not delete it — remove it "
+               "yourself if you do not need it.")
 
 
 __all__ = ["uninstall_cmd", "remove_path_blocks", "find_shim"]

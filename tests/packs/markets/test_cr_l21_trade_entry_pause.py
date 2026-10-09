@@ -50,5 +50,5 @@ async def test_hyperliquid_buy_is_refused_under_the_trading_pause(trading_paused
 
     tool.ensure_initialized = _noop
     res = await tool.place_market_order(PlaceMarketOrderParams(
-        coin="ETH", is_buy=True, size=0.01))
+        coin="ETH", is_buy=True, size=0.01, max_usd=10))
     assert res["success"] is False and "trading" in res["error"]

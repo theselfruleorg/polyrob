@@ -94,7 +94,7 @@ def test_done_children_do_not_make_a_stream_look_saturated(board):
         g = board.create(user_id="u1", title=f"finished work {i}",
                          parent_id=finished.id, force=True)
         assert board.claim(g.id, "w", ttl_seconds=60) is not None
-        board.record_success(g.id, session_id="s", result="ok")
+        board.record_success(g.id, session_id="s", result="ok", claim_token=board.get(g.id).claim_token)
     busy = board.create_objective(user_id="u1", title="busy stream", force=True)
     board.create(user_id="u1", title="in flight work", parent_id=busy.id, force=True)
 

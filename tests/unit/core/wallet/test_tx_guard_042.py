@@ -146,12 +146,10 @@ def test_a_zero_value_deploy_is_still_PRICED_by_its_fee():
 
 
 def test_a_sub_cent_deploy_rounds_like_every_other_verb():
-    """Not a special case: `authorize` rounds every amount to cents (a
-    $1.9903-vs-$1.99 refusal is a quote artifact, not a policy). An L2 deploy
-    genuinely costs fractions of a cent, and it is recorded as such."""
+    """Even a sub-cent deployment consumes a positive budget reservation."""
     d = _authorize(_deploy_intent(), _deploy_deltas(), tx=_deploy_tx(), price=1.0)
     assert d.allowed is True, d.reason
-    assert d.amount_usd == 0.0
+    assert d.amount_usd == 0.01
 
 
 def test_an_unpriceable_fee_refuses_rather_than_booking_zero():
@@ -315,8 +313,8 @@ def test_the_UNPRICEABLE_token_is_valued_by_its_MEASURED_native_receipt():
         halted_fn=lambda: False, entry_paused_fn=lambda: False,
         forged_fn=lambda ctx, tool: False)
     assert d.allowed is True, d.reason
-    # 0.002 native at $2500 = $5.00
-    assert d.amount_usd == pytest.approx(5.0, abs=0.01)
+    # $5 receipt valuation plus the conservative gas reserve, rounded up.
+    assert d.amount_usd == pytest.approx(5.68, abs=0.001)
 
 
 def test_an_unpriceable_NATIVE_asset_still_refuses():

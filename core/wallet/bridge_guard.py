@@ -332,6 +332,74 @@ def conflicting_open_bridge(*, dest_chain_id: int, recipient: str,
     return None
 
 
+#: How long a recorded bridge can still claim an inbound transfer as its own.
+_ARRIVAL_CLAIM_WINDOW_SEC = 48 * 3600
+#: An unmeasured bridge claims an amount in [floor, floor * this]. The floor is
+#: the quote's guaranteed minimum, a few percent under the expected output, so
+#: the band covers a normal fill without reaching a stranger's unrelated payment.
+_OPEN_BRIDGE_BAND = 1.10
+
+
+def own_bridge_arrival(*, dest_chain_id: int, recipient: str,
+                       currency: Optional[str], amount_raw: int,
+                       db_path: Optional[str] = None,
+                       now: Optional[float] = None) -> Optional[str]:
+    """The id of OUR recorded bridge that this inbound transfer is the arrival
+    of, or None.
+
+    The settlement watcher asks this about a transfer that matches no invoice:
+    a bridge's destination leg is sent by the provider's solver, an address that
+    is neither ours nor a swap router, so without this every bridge home was
+    reported to the owner as an unmatched payment (prod 2026-10-04 14:57).
+
+    Exact evidence only: same destination chain, recipient and asset, and either
+    the EXACT balance rise phase 2 measured (arrived) or, for a bridge not yet
+    measured (pending/in_flight), an amount inside a tight band above its
+    floor. Read-only; a missing store — or an unreadable one — confirms
+    nothing, so the caller falls back to notifying the owner.
+    """
+    import os
+
+    from core.sqlite_util import execute_retry
+    path = db_path or bridges_db_path()
+    if not os.path.isfile(path):
+        return None
+    since = (now if now is not None else time.time()) - _ARRIVAL_CLAIM_WINDOW_SEC
+    try:
+        rows = execute_retry(path, (
+            "SELECT id, recipient, currency_out, min_out_raw, state, "
+            "balance_before, balance_after FROM bridges "
+            "WHERE dest_chain_id=? AND state IN (?,?,?) AND created_at>=? "
+            "ORDER BY created_at DESC"),
+            (int(dest_chain_id), STATE_ARRIVED, STATE_PENDING, STATE_IN_FLIGHT,
+             since), fetch="all") or []
+    except Exception:
+        logger.warning("bridge store unreadable for arrival correlation",
+                       exc_info=True)
+        return None
+    want_asset = str(currency or _NATIVE_EVM).lower()
+    amount = int(amount_raw)
+    for r in rows:
+        row = dict(r) if not isinstance(r, dict) else r
+        if not _same(row.get("recipient"), recipient):
+            continue
+        if str(row.get("currency_out") or _NATIVE_EVM).lower() != want_asset:
+            continue
+        try:
+            if row.get("state") == STATE_ARRIVED:
+                before, after = row.get("balance_before"), row.get("balance_after")
+                if before is not None and after is not None \
+                        and int(after) - int(before) == amount:
+                    return row["id"]
+            else:
+                floor = int(row.get("min_out_raw") or 0)
+                if floor > 0 and floor <= amount <= int(floor * _OPEN_BRIDGE_BAND):
+                    return row["id"]
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def mark_escalated(bid: str, *, at: Optional[float] = None,
                    db_path: Optional[str] = None) -> None:
     """Stamp that the owner has been told. Fail-open."""

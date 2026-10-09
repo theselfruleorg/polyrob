@@ -22,8 +22,13 @@ PEM_RE = re.compile(
 )
 
 #: ``Bearer <token>`` — run before the kv rule (the kv value would stop at the
-#: space and leave the token). 8+ token chars.
-BEARER_RE = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._\-]{8,}")
+#: space and leave the token). 8+ token chars. ``Basic <base64>`` needs a
+#: base64-shaped token (a digit, ``+``, ``/`` or an inner capital): plain prose
+#: such as "basic features" is not a credential and must survive the scrub.
+BEARER_RE = re.compile(
+    r"\b(?i:Bearer)\s+[A-Za-z0-9._+/=\-]{8,}"
+    r"|\b(?i:Basic)\s+[A-Za-z0-9+/](?=[A-Za-z0-9+/]*[0-9+/A-Z])[A-Za-z0-9+/]{7,}={0,2}"
+)
 
 #: ``key = value`` / ``key: value`` where the key NAME signals a credential.
 #: (?<![A-Za-z0-9]) + prefix-capture instead of a leading \b so that
@@ -37,13 +42,30 @@ KV_RE = re.compile(
     # 2026-09-21 revalidation: the wallet-shaped keys were never claimed, so
     # `private_key=0x…`, `WALLET_PRIVATE_KEY=…`, `mnemonic=…` survived every
     # scrubber verbatim while `secret=…` was caught.
-    r"private[_-]?key|privatekey|mnemonic|seed[_-]?phrase|passphrase|keystore))"
-    r"(\s*[=:]\s*)"
+    r"private[_-]?key|privatekey|mnemonic|seed|seed[_-]?phrase|passphrase|keystore|"
+    # SUP-8: env names whose credential word is a two-part key name
+    # (`MCP_ENCRYPTION_KEY`, `JWT_SECRET_KEY`, `AWS_SECRET_ACCESS_KEY`,
+    # `TWITTER_CHAT_PRIVATE_KEYS_B64`) and connection-string DSNs.
+    r"encryption[_-]?key|secret[_-]?key|secret[_-]?access[_-]?key|"
+    r"private[_-]?keys|signing[_-]?key|master[_-]?key|session[_-]?key|dsn)"
+    # An encoding suffix on any of the names above (`…_B64`, `…_HEX`).
+    r"(?:[_-](?:b64|base64|hex|pem|json))?)"
+    r"(['\"]?\s*[=:]\s*)"
     r"(['\"]?)([^\s'\"]{6,})\3"
 )
 
 #: Provider-style opaque keys: ``sk-``/``pk-``/``rk-`` (OpenAI/Anthropic/Stripe).
 PROVIDER_KEY_RE = re.compile(r"\b(?:sk|pk|rk)-[A-Za-z0-9_-]{16,}")
+GITHUB_PAT_RE = re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}")
+URL_USERINFO_RE = re.compile(r"(?i)(https?://)[^\s/@]+@")
+#: SUP-8: ``user:password@`` in ANY scheme (``postgres://``, ``redis://``,
+#: ``amqp://``, ``mongodb+srv://`` …). Only the password is redacted; a bare
+#: ``ssh://git@host`` user (no colon) is not a credential and is left alone.
+URL_PASSWORD_RE = re.compile(r"(?i)\b([a-z][a-z0-9+.\-]{1,20}://[^\s/@:]+:)[^\s/@]+@")
+#: SUP-8: Stripe-style live/test secret and restricted keys (``sk_live_…``).
+#: ``pk_`` is a publishable key and is left alone.
+STRIPE_KEY_RE = re.compile(r"\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{8,}")
+COOKIE_RE = re.compile(r"(?im)\b(?:set-cookie|cookie)\s*:\s*[^\r\n]+")
 
 #: POLYROB API keys (``rob_…``).
 POLYROB_KEY_RE = re.compile(r"\brob_[A-Za-z0-9]{16,}")
@@ -248,6 +270,11 @@ def apply_ssot_shapes(text: str, redacted: str = REDACTED) -> str:
     """
     out = PEM_RE.sub(redacted, text)
     out = BEARER_RE.sub(redacted, out)
+    out = GITHUB_PAT_RE.sub(redacted, out)
+    out = URL_USERINFO_RE.sub(lambda m: m.group(1) + redacted + "@", out)
+    out = URL_PASSWORD_RE.sub(lambda m: m.group(1) + redacted + "@", out)
+    out = STRIPE_KEY_RE.sub(redacted, out)
+    out = COOKIE_RE.sub(redacted, out)
     out = TELEGRAM_BOT_TOKEN_RE.sub(redacted, out)
     out = GOOGLE_API_KEY_RE.sub(redacted, out)
     out = EVM_KEY_CONTEXT_RE.sub(lambda m: f"{m.group(1)}{redacted}", out)
@@ -261,6 +288,8 @@ def apply_ssot_shapes(text: str, redacted: str = REDACTED) -> str:
     out = AWS_RE.sub(redacted, out)
     out = JWT_RE.sub(redacted, out)
     out = SOLANA_SECRET_RE.sub(lambda m: _solana_secret_replacement(m, redacted), out)
+    from core.security.secret_material import scrub_wallet_material
+    out = scrub_wallet_material(out, redacted)
     # LAST: the opaque-token rule is the loosest of the battery, so every
     # named-shape rule gets first refusal on a match.
     out = OPAQUE_TOKEN_RE.sub(redacted, out)

@@ -20,6 +20,7 @@ import pytest
 from bs4 import BeautifulSoup
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from tests.unit.webview.owner_session import authenticate_render_app
 
 from core.recap import RecapEntry
 
@@ -47,6 +48,7 @@ def chat_open(monkeypatch):
 def client(pages_new, chat_open):
     app = FastAPI()
     app.include_router(pages_new.router)
+    authenticate_render_app(app)
     return TestClient(app)
 
 
@@ -400,7 +402,7 @@ def test_the_visitor_rule_is_the_posture_rule_not_a_stub(monkeypatch):
         pass
 
     monkeypatch.setenv("POLYROB_POSTURE", "local")
-    assert mod._public_visitor(Req()) is False
+    assert mod._public_visitor(Req()) is True
 
     monkeypatch.setenv("POLYROB_POSTURE", "own_ops")
     monkeypatch.setattr("utils.auth_utils.is_authenticated", lambda r: False)
