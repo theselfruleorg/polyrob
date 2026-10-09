@@ -114,8 +114,8 @@ def _block_with_kind(board, *, max_retries=1, block_kind=None):
     optionally stamp a block_kind directly (mirrors what the real producers
     would have written)."""
     g = board.create(user_id="u1", title="t", max_retries=max_retries)
-    board.claim(g.id, "w1", ttl_seconds=900)
-    board.record_failure(g.id, error="boom")
+    g = board.claim(g.id, "w1", ttl_seconds=900)
+    board.record_failure(g.id, error="boom", claim_token=board.get(g.id).claim_token)
     assert board.get(g.id).status == STATUS_BLOCKED
     if block_kind is not None:
         board.stamp_block_kind(g.id, block_kind)
@@ -129,7 +129,7 @@ def _block_with_kind(board, *, max_retries=1, block_kind=None):
 @pytest.mark.asyncio
 async def test_fail_run_stamps_provider_outage_when_exhausted(board, dispatcher):
     g = board.create(user_id="u1", title="flaky", max_retries=1)
-    board.claim(g.id, "w1", ttl_seconds=900)
+    g = board.claim(g.id, "w1", ttl_seconds=900)
     await dispatcher._fail_run(
         g, None, error="llm_provider_exhausted: ALL LLM PROVIDERS EXHAUSTED")
     got = board.get(g.id)
@@ -142,7 +142,7 @@ async def test_fail_run_stamps_provider_outage_when_exhausted(board, dispatcher)
 @pytest.mark.asyncio
 async def test_fail_run_does_not_stamp_provider_outage_for_ordinary_failure(board, dispatcher):
     g = board.create(user_id="u1", title="flaky", max_retries=1)
-    board.claim(g.id, "w1", ttl_seconds=900)
+    g = board.claim(g.id, "w1", ttl_seconds=900)
     await dispatcher._fail_run(g, None, error="acceptance checks failed: no output produced")
     got = board.get(g.id)
     assert got.status == STATUS_BLOCKED
@@ -154,7 +154,7 @@ async def test_fail_run_does_not_stamp_provider_outage_for_ordinary_failure(boar
 @pytest.mark.asyncio
 async def test_fail_run_does_not_stamp_when_row_stays_ready(board, dispatcher):
     g = board.create(user_id="u1", title="retry me", max_retries=3)
-    board.claim(g.id, "w1", ttl_seconds=900)
+    g = board.claim(g.id, "w1", ttl_seconds=900)
     await dispatcher._fail_run(
         g, None, error="llm_provider_exhausted: ALL LLM PROVIDERS EXHAUSTED")
     got = board.get(g.id)
@@ -168,7 +168,7 @@ async def test_fail_run_block_declared_path_also_stamps_provider_outage(board, d
     OTHER route _fail_run drives a row to 'blocked' through — must classify
     the failure the same way as the breaker-trip route."""
     g = board.create(user_id="u1", title="declared blocked", max_retries=5)
-    board.claim(g.id, "w1", ttl_seconds=900)
+    g = board.claim(g.id, "w1", ttl_seconds=900)
     await dispatcher._fail_run(
         g, None,
         error="agent declared BLOCKED: llm_provider_exhausted: All LLM providers failed",
@@ -253,8 +253,9 @@ async def test_maybe_escalate_blocked_hint_stamped_before_needs_input_fallback(b
     lands, and the needs_input fallback that runs right after it is a refused
     no-op (only_if_absent), not a second event."""
     g = board.create(user_id="u1", title="t", max_retries=1)
-    board.claim(g.id, "w1", ttl_seconds=900)
-    board.record_failure(g.id, error="boom")  # trips breaker, unstamped
+    g = board.claim(g.id, "w1", ttl_seconds=900)
+    board.record_failure(g.id, error="boom",
+        claim_token=board.get(g.id).claim_token)  # trips breaker, unstamped
     got = board.get(g.id)
     assert got.payload.get("block_kind") is None
 
@@ -273,8 +274,9 @@ async def test_maybe_escalate_blocked_hint_stamped_before_needs_input_fallback(b
 @pytest.mark.asyncio
 async def test_maybe_escalate_blocked_stamps_needs_input_when_absent(board, dispatcher):
     g = board.create(user_id="u1", title="t", max_retries=1)
-    board.claim(g.id, "w1", ttl_seconds=900)
-    board.record_failure(g.id, error="ordinary failure")  # trips breaker, no kind stamped
+    g = board.claim(g.id, "w1", ttl_seconds=900)
+    board.record_failure(g.id, error="ordinary failure",
+        claim_token=board.get(g.id).claim_token)  # trips breaker, no kind stamped
     got = board.get(g.id)
     assert got.status == STATUS_BLOCKED
     assert got.payload.get("block_kind") is None
@@ -306,7 +308,7 @@ async def test_maybe_escalate_blocked_never_overwrites_provider_outage(board, di
     _fail_run's own internal call to _maybe_escalate_blocked, which must not
     then clobber it with needs_input."""
     g = board.create(user_id="u1", title="flaky", max_retries=1)
-    board.claim(g.id, "w1", ttl_seconds=900)
+    g = board.claim(g.id, "w1", ttl_seconds=900)
     await dispatcher._fail_run(
         g, None, error="llm_provider_exhausted: ALL LLM PROVIDERS EXHAUSTED")
     got = board.get(g.id)
@@ -493,8 +495,8 @@ def test_provider_outage_requeue_cap_stops_after_16_and_falls_to_legacy_rail(clo
         assert got.payload.get("provider_requeues") == i + 1
         # re-trip the breaker so the row is blocked+provider_outage again for
         # the next iteration (block_kind persists across a payload merge-write).
-        board.claim(g.id, "w1", ttl_seconds=900)
-        board.record_failure(g.id, error="boom")
+        g = board.claim(g.id, "w1", ttl_seconds=900)
+        board.record_failure(g.id, error="boom", claim_token=board.get(g.id).claim_token)
         got2 = board.get(g.id)
         assert got2.status == STATUS_BLOCKED
         assert got2.payload.get("block_kind") == "provider_outage"
@@ -618,8 +620,8 @@ def test_provider_exhausted_event_gated_on_cas_success(clocked_board):
         clock.advance(31 * 60)
         n = board.age_out_blocked(max_age_days=14, provider_retry_min=30)
         assert n == 1
-        board.claim(g.id, "w1", ttl_seconds=900)
-        board.record_failure(g.id, error="boom")
+        g = board.claim(g.id, "w1", ttl_seconds=900)
+        board.record_failure(g.id, error="boom", claim_token=board.get(g.id).claim_token)
 
     # 17th tick: before age_out_blocked tries to stamp exhausted, cancel the goal
     # This simulates the row being moved off 'blocked' between the SELECT and UPDATE
@@ -647,7 +649,7 @@ def test_provider_exhausted_event_gated_on_cas_success(clocked_board):
 async def test_unblock_clears_stale_needs_input_so_provider_outage_self_heal_engages(
         board, dispatcher):
     g = board.create(user_id="u1", title="flaky", max_retries=1)
-    board.claim(g.id, "w1", ttl_seconds=900)
+    g = board.claim(g.id, "w1", ttl_seconds=900)
     await dispatcher._fail_run(g, None, error="ordinary failure, nothing to do with providers")
     got = board.get(g.id)
     assert got.status == STATUS_BLOCKED
@@ -658,9 +660,9 @@ async def test_unblock_clears_stale_needs_input_so_provider_outage_self_heal_eng
     assert reset.status == STATUS_READY
     assert "block_kind" not in reset.payload
 
-    board.claim(g.id, "w1", ttl_seconds=900)
+    g = board.claim(g.id, "w1", ttl_seconds=900)
     await dispatcher._fail_run(
-        reset, None, error="llm_provider_exhausted: ALL LLM PROVIDERS EXHAUSTED")
+        g, None, error="llm_provider_exhausted: ALL LLM PROVIDERS EXHAUSTED")
     reblocked = board.get(g.id)
     assert reblocked.status == STATUS_BLOCKED
     # A stale needs_input surviving the unblock would have refused this
@@ -681,8 +683,8 @@ def test_unblock_preserves_provider_requeues_ledger_across_the_episode(clocked_b
 
     # re-trip the breaker (block_kind + the requeue ledger persist across the
     # payload merge-write, same as the requeue-cap truth-table test above)
-    board.claim(g.id, "w1", ttl_seconds=900)
-    board.record_failure(g.id, error="boom")
+    g = board.claim(g.id, "w1", ttl_seconds=900)
+    board.record_failure(g.id, error="boom", claim_token=board.get(g.id).claim_token)
     tripped = board.get(g.id)
     assert tripped.status == STATUS_BLOCKED
     assert tripped.payload.get("block_kind") == "provider_outage"

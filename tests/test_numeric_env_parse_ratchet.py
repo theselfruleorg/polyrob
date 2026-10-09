@@ -13,7 +13,8 @@ import re
 
 # 65 (2026-07-18, narrow pattern) → 93 (2026-08-09): the widened pattern newly
 # counts the `environ.get`/`env.get` shapes it used to miss. Shrink-only, as ever.
-_BASELINE = 93
+# 93 → 78 (2026-10-06): x402 invoice caps + code-exec limits moved to resolvers.
+_BASELINE = 78
 _SKIP = {"tests", ".git", "node_modules", ".venv", "venv", "__pycache__",
          "deployment", "docs", "scripts",
          # generated build artifacts (a stale wheel tree double-counts every

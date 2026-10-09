@@ -39,7 +39,7 @@ def _fake_web3_module(eth_balance_wei: int):
     """
 
     class _FakeBalanceOfCall:
-        def call(self):
+        def call(self, **kwargs):
             return 0  # no stablecoin balance; keep this test ETH-only
 
     class _FakeFunctions:
@@ -51,7 +51,14 @@ def _fake_web3_module(eth_balance_wei: int):
             self.functions = _FakeFunctions()
 
     class _FakeEth:
-        def get_balance(self, address):
+        chain_id = 1
+
+        def get_block(self, tag):
+            assert tag == "finalized"
+            return {"number": 100}
+
+        def get_balance(self, address, block_identifier):
+            assert block_identifier == 100
             return eth_balance_wei
 
         def contract(self, address, abi):
@@ -155,6 +162,17 @@ class _FakeBalanceManager:
             raise RuntimeError("simulated ledger failure")
         self.add_calls.append((user_id, amount, reason))
         return True
+
+
+@pytest.mark.asyncio
+async def test_testnet_deposit_never_buys_production_credits():
+    db, balances = _FakeDB(), _FakeBalanceManager()
+    monitor = DepositMonitor(db, balances, types.SimpleNamespace())
+    await monitor._process_deposit("u1", {
+        "chain": "sepolia", "amount": "1000000000000000000",
+        "amount_usd": 3000.0, "token_symbol": "ETH", "tx_hash": "0xtest",
+    })
+    assert balances.add_calls == []
 
 
 class _TxFakeDB:
@@ -285,7 +303,7 @@ async def test_process_deposit_notifies_via_callback_and_persists_row():
     monitor = DepositMonitor(db, balance_mgr, _Config(), notify_callback=_notify)
 
     await monitor._process_deposit("user_1", {
-        "chain": "sepolia",
+        "chain": "ethereum",
         "token_symbol": "USDC",
         "amount": "10.0",
         "amount_usd": 10.0,
@@ -313,7 +331,7 @@ async def test_process_deposit_without_callback_still_persists_row():
     monitor = DepositMonitor(db, balance_mgr, _Config())  # no notify_callback
 
     await monitor._process_deposit("user_2", {
-        "chain": "sepolia", "token_symbol": "USDC", "amount": "5.0", "amount_usd": 5.0,
+        "chain": "ethereum", "token_symbol": "USDC", "amount": "5.0", "amount_usd": 5.0,
     })
 
     assert len(balance_mgr.add_calls) == 1
@@ -395,6 +413,15 @@ async def test_check_chain_deposits_eth_amount_field_is_price_independent(monkey
 
 
 @pytest.mark.asyncio
+async def test_wrong_chain_cannot_create_deposit_readings(monkeypatch):
+    monkeypatch.setitem(sys.modules, "web3", _fake_web3_module(2 * 10**18))
+    monitor = DepositMonitor(_FakeDB(), _FakeBalanceManager(), _Config())
+    readings = await monitor._check_chain_deposits("0xabc", "ethereum", {
+        "rpc_url": "http://fake-rpc.invalid", "chain_id": 11155111})
+    assert readings == []
+
+
+@pytest.mark.asyncio
 async def test_wildly_high_oracle_price_is_rejected_no_credit(monkeypatch):
     """MEDIUM (C8 money-safety review): a schema hiccup or an
     ETH_PRICE_USD_OVERRIDE typo (extra digit) must not translate into a
@@ -440,7 +467,7 @@ async def test_failed_add_credits_leaves_deposit_reprocessable():
     monitor = DepositMonitor(db, failing_balance_mgr, _Config())
 
     deposit = {
-        "chain": "sepolia", "token_symbol": "USDC", "amount": "20.0", "amount_usd": 20.0,
+        "chain": "ethereum", "token_symbol": "USDC", "amount": "20.0", "amount_usd": 20.0,
     }
 
     # Tick 1: add_credits fails.
@@ -477,7 +504,7 @@ async def test_credit_and_dedup_record_are_atomic_across_a_crash():
     monitor = DepositMonitor(db, balance_mgr, _Config())
 
     deposit = {
-        "chain": "sepolia", "token_symbol": "USDC", "amount": "20.0", "amount_usd": 20.0,
+        "chain": "ethereum", "token_symbol": "USDC", "amount": "20.0", "amount_usd": 20.0,
     }
 
     # Tick 1: add_credits' writes succeed, but the crypto_payments INSERT
@@ -527,7 +554,7 @@ async def test_process_deposit_requires_amount_no_price_derived_fallback():
     monitor = DepositMonitor(db, balance_mgr, _Config())
 
     deposit_missing_amount = {
-        "chain": "sepolia", "token_symbol": "USDC", "amount_usd": 10.0,
+        "chain": "ethereum", "token_symbol": "USDC", "amount_usd": 10.0,
     }
 
     await monitor._process_deposit("user_no_amount", deposit_missing_amount)

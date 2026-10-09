@@ -231,6 +231,9 @@ def build_entry(*, prior: Sequence[Dict[str, Any]], account: str, chain_id: int,
                 text: str, owner: str, refs: Sequence[str] = (),
                 positions_after: Optional[dict] = None, ts: Optional[str] = None) -> Dict[str, Any]:
     from core.wallet.account_journal import JOURNAL_KINDS
+    from core.secret_scrub import scrub_secret_shapes
+    if scrub_secret_shapes(str(text)) != str(text):
+        raise ValueError("Journal text contains credential material")
     if kind not in JOURNAL_KINDS:
         raise ValueError(f"unknown journal kind {kind!r}")
     return {

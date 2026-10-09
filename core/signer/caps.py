@@ -29,6 +29,7 @@ Layout::
     socket_group = "polyrob-signer-clients"
     state_dir = "/var/lib/polyrob-signer"
     client_uids = [998]         # the agent UID(s); root (0) is always the owner
+    peer_check = "warn"         # uid | warn | main_process (core/signer/peer.py)
 
     [identity]                  # the addresses of record (wallet continuity)
     network = "mainnet"
@@ -60,7 +61,7 @@ logger = logging.getLogger(__name__)
 _TABLES = {
     "caps": {"per_tx_usd", "daily_usd", "x402_per_payment_usd"},
     "policy": {"chains", "approval_ttl_sec", "x402_max_window_sec", "hyperliquid_orders"},
-    "server": {"socket", "socket_group", "state_dir", "client_uids"},
+    "server": {"socket", "socket_group", "state_dir", "client_uids", "peer_check"},
     "identity": {"network", "operational_venue", "treasury", "x402", "polymarket",
                  "hyperliquid", "solana"},
     "sweep": {"destination", "tokens"},
@@ -90,6 +91,7 @@ class SignerConfig:
     state_dir: str
     client_uids: Tuple[int, ...]
     socket_group: Optional[str] = None
+    peer_check: str = "warn"
     approval_ttl_sec: int = 3600
     x402_max_window_sec: int = 600
     hyperliquid_orders: bool = False
@@ -104,6 +106,7 @@ class SignerConfig:
         """What ``ping`` reports: the caps, never the env (RPC URLs carry keys)."""
         return {"per_tx_usd": self.per_tx_usd, "daily_usd": self.daily_usd,
                 "x402_per_payment_usd": self.x402_per_payment_usd,
+                "x402_max_window_sec": self.x402_max_window_sec,
                 "chains": list(self.chains), "network": self.network,
                 "operational_venue": self.operational_venue,
                 "hyperliquid_orders": self.hyperliquid_orders,
@@ -165,6 +168,11 @@ def parse_signer_config(data: dict) -> SignerConfig:
                                             and u > 0 for u in uids):
         raise SignerConfigError("[server] client_uids must be a list of positive UIDs "
                                 "(root is always the owner, never a client)")
+    from core.signer.peer import DEFAULT_PEER_CHECK, PEER_CHECK_MODES
+    peer_check = server.get("peer_check", DEFAULT_PEER_CHECK)
+    if peer_check not in PEER_CHECK_MODES:
+        raise SignerConfigError("[server] peer_check must be one of "
+                                + ", ".join(PEER_CHECK_MODES))
     expected = {}
     for venue in ("treasury", "x402", "polymarket", "hyperliquid", "solana"):
         if venue in identity:
@@ -202,6 +210,7 @@ def parse_signer_config(data: dict) -> SignerConfig:
         socket_group=(str(server["socket_group"]) if server.get("socket_group") else None),
         state_dir=str(server.get("state_dir") or "/var/lib/polyrob-signer"),
         client_uids=tuple(uids),
+        peer_check=peer_check,
         approval_ttl_sec=_int(policy, "approval_ttl_sec", 3600, "policy"),
         x402_max_window_sec=_int(policy, "x402_max_window_sec", 600, "policy"),
         hyperliquid_orders=hl,
@@ -247,7 +256,8 @@ def render_signer_toml(cfg: SignerConfig) -> str:
              "", "[server]",
              f"socket = {_toml_str(cfg.socket)}",
              f"state_dir = {_toml_str(cfg.state_dir)}",
-             "client_uids = [" + ", ".join(str(u) for u in cfg.client_uids) + "]"]
+             "client_uids = [" + ", ".join(str(u) for u in cfg.client_uids) + "]",
+             f"peer_check = {_toml_str(cfg.peer_check)}"]
     if cfg.socket_group:
         lines.append(f"socket_group = {_toml_str(cfg.socket_group)}")
     lines += ["", "[identity]", f"network = {_toml_str(cfg.network)}",

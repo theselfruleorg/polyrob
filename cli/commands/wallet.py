@@ -419,7 +419,14 @@ def _set_cap_pref(kind: str, usd: float, *, yes: bool) -> None:
         f"no restart.", fg="green"))
     click.echo(f"Effective {label} now: {shown}")
     if effective is not None and abs(float(effective) - float(usd)) > 1e-9:
-        if kind == "daily":
+        from core.wallet.signer_envelope import UNANSWERED_TEXT, signer_unanswered
+        bound = _signer_bound(kind, tenant, home_dir)
+        if signer_unanswered():
+            click.echo(click.style("  ⚠ " + UNANSWERED_TEXT, fg="yellow"))
+        elif bound is not None:
+            from core.wallet.signer_envelope import bound_text
+            click.echo(click.style("  ⚠ " + bound_text(bound), fg="yellow"))
+        elif kind == "daily":
             click.echo(click.style(
                 "  ⚠ the preference did NOT take the value you asked for: the "
                 "daily cap is min-merged with the operator env value, so it can "
@@ -432,34 +439,23 @@ def _set_cap_pref(kind: str, usd: float, *, yes: bool) -> None:
                 "it stopped below what you asked for. Raise the daily cap first.",
                 fg="yellow"))
     click.echo(_POLICY_GATE_CAVEAT)
-    _warn_signer_cap_drift(kind, effective)
 
 
-def _warn_signer_cap_drift(kind: str, effective) -> None:
-    """068 G7b: a cap raised above the signer's hard cap clears the gate and is
-    refused by `polyrob-signer` (logged in shadow; refused after a cut-over).
-    Say so at the moment the owner raises it. Silent in local mode; a signer
-    that does not answer is said to be unknown, never "fine"."""
-    from core.signer import MODE_LOCAL, signer_mode
-    try:
-        if signer_mode() == MODE_LOCAL:
-            return
-    except Exception:
-        return
-    try:
-        from core.signer.client import SignerClient
-        caps = SignerClient(timeout=3.0).call("ping").get("caps") or {}
-    except Exception as exc:  # noqa: BLE001
-        click.echo(f"  (the signer did not answer ({type(exc).__name__}) — its hard cap "
-                   f"could not be compared; `polyrob doctor` re-checks)")
-        return
-    from core.wallet.signer_cap_drift import CapDrift, _num, drift_remedy, drift_text
+def _signer_bound(kind: str, tenant, home_dir):
+    """The signer's hard cap is the envelope (core.wallet.signer_envelope): when
+    it is what stopped the raise, return that leg so the owner is told where to
+    raise it. None in local mode or when the signer has never answered (its
+    zero clamp is not a cap to raise in signer.toml)."""
+    from core.wallet.config import configured_caps_now
+    from core.wallet.signer_envelope import bound_legs, reported_caps
+    caps = reported_caps()
+    if caps is None:
+        return None
     leg = "daily" if kind == "daily" else "per_tx"
-    d = CapDrift(leg, _num(caps.get("daily_usd" if leg == "daily" else "per_tx_usd")),
-                 _num(effective))
-    if d.drifted:
-        click.echo(click.style("  ⚠ " + drift_text(d), fg="yellow"))
-        click.echo("    " + drift_remedy(d))
+    for b in bound_legs(caps, configured_caps_now(user_id=tenant, home_dir=home_dir)):
+        if b.leg == leg:
+            return b
+    return None
 
 
 def run_wallet_init_flow(*, mnemonic, raw_seed, home, assume_yes, data_dir=None):
@@ -560,6 +556,9 @@ def run_wallet_init_flow(*, mnemonic, raw_seed, home, assume_yes, data_dir=None)
         daily = _cap_float(os.environ, "WALLET_DAILY_CAP_USD", DEFAULT_DAILY_CAP_USD)
     except ValueError as e:
         raise click.ClickException(f"wallet caps misconfigured: {e}")
+    # Show what the gate enforces (owner prefs + the signer envelope).
+    from core.wallet.config import shown_caps
+    max_tx, daily = shown_caps(os.environ, max_tx, daily)
     if daily is not None:
         click.echo(f"Spend caps: ${max_tx:.2f}/tx ceiling · ${daily:.2f}/day budget.")
     else:

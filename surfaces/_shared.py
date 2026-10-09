@@ -49,17 +49,23 @@ async def route_and_act(container: Any, task_agent: Any, inbound: Any,
     from surfaces._actor import InboundResult, act_on_inbound
 
     decision = await route_inbound(container, inbound)
+    from core.surfaces.command_reply import admit_inbound_reply, reply_text
+
+    async def safe_deliver(reply):
+        if admit_inbound_reply(inbound, decision, reply):
+            await deliver(reply_text(reply))
+        else:
+            logger.info('Private or rate-limited inbound reply suppressed on %s', inbound.identity.source.surface_id)
     # Only a message WITH files carries a downloader: a text-only turn calls
     # the executor exactly as before.
     extra = {"fetch_media": fetch_media} if fetch_media is not None else {}
     reply = await act_on_inbound(
         task_agent, InboundResult(inbound=inbound, decision=decision),
-        deliver=deliver, spawn=spawn, **extra)
+        deliver=safe_deliver, spawn=spawn, **extra)
     if reply:
         # A command may answer with a CommandReply (a room reply, an action
         # card): a text surface delivers its words, which keep every token.
-        from core.surfaces.command_reply import reply_text
-        await deliver(reply_text(reply))
+        await safe_deliver(reply)
 
 
 async def _hook(fn, *args) -> None:

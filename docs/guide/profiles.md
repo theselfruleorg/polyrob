@@ -6,7 +6,7 @@ Profiles are how you run several bots on one machine, hand an identity to
 someone else, or keep your personal bot out of the framework's defaults.
 
 ```
-~/.polyrob/                        # base home (legacy mode config)
+~/.polyrob/                        # base home (default-mode config; data/ below it)
 ├── active_profile                 # sticky selection (one line)
 └── profiles/
     └── rob/                       # a profile == a full POLYROB home
@@ -20,10 +20,16 @@ someone else, or keep your personal bot out of the framework's defaults.
 
 ## The two modes
 
-**Legacy/project mode** (no profile selected): exactly what POLYROB always did.
-Config comes from `~/.polyrob`, data lives in `./.polyrob` under the folder you
-launched from, and the persona is the neutral framework agent. Nothing changes
-for existing installs.
+**Default mode** (no profile selected): config comes from `~/.polyrob`, data
+lives in `~/.polyrob/data` (or `POLYROB_DATA_DIR`), the workspace is the folder
+you launched from, and the persona is the neutral framework agent.
+
+Releases before 1.3 kept the data in `./.polyrob` under the launch folder. That
+folder is no longer read: a cloned directory could ship its own `owner.md`,
+goals and cron jobs, and the agent ran on them as if you wrote them. The CLI
+leaves such a folder untouched and names it in a warning. To keep using it, set
+`POLYROB_DATA_DIR` to it, or move it into a profile with `polyrob profile adopt`
+(below).
 
 **Profile mode** (a profile selected): config home = the profile dir, data home
 = `<profile>/data`, and the workspace stays in the folder you launched from.
@@ -43,7 +49,7 @@ Strongest first:
 1. `polyrob -P <name> …` — the CLI flag. Overrides everything, including an
    exported `POLYROB_HOME`.
 2. `POLYROB_PROFILE=<name>` env var. Same strength as the flag. Present but
-   empty means "no profile" (an escape hatch back to legacy mode).
+   empty means "no profile" (an escape hatch back to the default mode).
 3. A project pin: a `./.polyrob/profile` file (one line, the profile name),
    found by walking from your current folder up to the git root. A folder can
    *point at* a profile; it never copies one.
@@ -87,7 +93,8 @@ own daemon — one process per profile, no multiplexing.
 
 ## Moving an existing folder-bot into a profile
 
-Your existing `./.polyrob` folder data is never moved. To formalize it:
+This is also the way forward for a `./.polyrob` data folder from an older
+release. The folder data is never moved. To formalize it:
 
 ```bash
 cd ~/my-bot-folder
@@ -97,7 +104,7 @@ polyrob profile adopt mybot --include-data   # also copy memory/goals/cron DBs
 
 `adopt` copies identity docs, characters, and the identity-shaped env keys
 (`POLYROB_INSTANCE_ID`, `POLYROB_PERSONA`, …) into the new profile and writes
-the `./.polyrob/profile` pin. The legacy folder keeps working as the backup.
+the `./.polyrob/profile` pin. The old folder stays in place as a backup.
 
 ## Sharing an identity
 
@@ -110,18 +117,32 @@ polyrob profile export rob -o rob.tar.gz
 polyrob profile import rob.tar.gz --name rob2
 ```
 
-Credentials never enter an export: `.env`, `auth.json`, and wallet material are
-excluded, and every text file in the archive is scrubbed for secret-shaped
-strings. Re-add keys on the importing machine (`polyrob init --profile rob2`).
+Exports are private backups, created with owner-only permissions at a new destination.
+Named credential files (`.env`, `auth.json`, wallet stores) and links are excluded.
+Text files up to 5 MiB pass the shared secret scrubber, including known wallet seeds.
+Binary databases and larger files may still contain sensitive data; exports are not
+public sharing bundles. Re-add keys after import (`polyrob init --profile rob2`).
 
 **Install/update** — the shareable distribution format. A distribution is a git
 repo (or local dir) with a `polyrob.profile.yaml` manifest:
 
 ```bash
-polyrob profile install https://github.com/you/scout-profile#v1.2
-polyrob profile update scout          # re-fetch, replace owned files
+polyrob profile install https://github.com/you/scout-profile#<full-commit-hash> --sha256 <reviewed-digest>
+polyrob profile update scout --sha256 <reviewed-digest>
+polyrob profile update scout --ref <new-full-commit-hash>   # move to a new commit; review again
 polyrob profile info scout            # manifest, source, required env keys
 ```
+
+Without `--sha256`, installation and updates stop before changing the profile and
+print a review, then the snapshot digest and file inventory. The review shows what
+can execute code or change agent authority: each MCP server's command (it runs on
+this host), the cron and goal prompts, `config.yaml`, the soul, the threat-scanned
+skills, executable files, and the env keys the manifest asks you to set. An update
+also lists the files that changed since the installed version. A git distribution
+stays on its pinned commit; `update --ref` moves it to a new one.
+Remote sources require a full commit hash; local sources also require digest approval.
+Changed content invalidates approval. Links, special files and oversized distributions
+are refused.
 
 The ownership contract: the distribution owns `characters/`, `skills/`,
 `cron/`, `mcp.json`, and a shipped `soul.md` — those are replaced on update.
@@ -141,7 +162,7 @@ sudo cp <emitted unit> /etc/systemd/system/ && sudo systemctl enable --now polyr
 
 The unit sets `POLYROB_PROFILE` and `POLYROB_PROFILES_ROOT` explicitly — the
 strong env tier that the CLI resolves at process start; without them a spawned
-daemon runs in legacy mode and writes into the default home. Two rules:
+daemon runs in the default mode and writes into the default home. Two rules:
 
 - The unit's `POLYROB_PROFILES_ROOT` must name the registry the profile
   actually lives in (the CLI default is `~/.polyrob/profiles`). Create server

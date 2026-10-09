@@ -73,9 +73,9 @@ class ApplyPatchParams(BaseModel):
 
 
 class GrepParams(BaseModel):
-    pattern: str = Field(..., description="Regex to search for")
+    pattern: str = Field(..., description="Regex matched against file CONTENTS (lines), never against file names")
     path: Optional[str] = Field(None, description="Subdir (relative to workspace) to search; defaults to the whole workspace")
-    glob: Optional[str] = Field(None, description="Filename glob filter, e.g. '*.py'")
+    glob: Optional[str] = Field(None, description="Filename glob filter on the base name, e.g. '*.py'; to find a file BY NAME use pattern '^', glob 'name.md', output_mode 'files'")
     output_mode: str = Field("content", description="'content' (path:line:text) or 'files' (matching paths only)")
 
 
@@ -407,7 +407,7 @@ class CodingTool(BaseTool):
             if not os.path.isfile(target):
                 return self._err(f"file not found: {params.file_path}")
             try:
-                src = read_text(target)
+                src = read_text(target, root=root)
             except NotTextError as e:
                 return self._err(str(e))
             content = src.content
@@ -449,7 +449,7 @@ class CodingTool(BaseTool):
             if not os.path.isfile(target):
                 return self._err(f"file not found: {params.file_path}")
             try:
-                src = read_text(target)
+                src = read_text(target, root=root)
             except NotTextError as e:
                 return self._err(str(e))
             try:
@@ -469,7 +469,9 @@ class CodingTool(BaseTool):
             return self._err(f"apply_patch failed: {e}")
 
     @BaseTool.action(
-        "Search files for a regex (gitignore-aware); output_mode 'content' or 'files'",
+        "Search file CONTENTS for a regex (gitignore-aware); output_mode 'content' or 'files'. "
+        "It does not match file names: to find a file by name, set glob (e.g. glob='report.md', pattern='^', output_mode='files'). "
+        "'(no matches)' means no line matched, not that a file is absent",
         param_model=GrepParams,
     )
     async def grep(self, params: GrepParams, execution_context=None):
@@ -493,7 +495,7 @@ class CodingTool(BaseTool):
             hits = await asyncio.to_thread(
                 search_files,
                 search_root, params.pattern, glob=params.glob, output_mode=params.output_mode,
-                allow=allow, refused=refused,
+                allow=allow, refused=refused, confine_root=root,
             )
             note = (f"\n[{len(refused)} file(s) not searched: the read policy refuses them]"
                     if refused else "")
@@ -517,7 +519,9 @@ class CodingTool(BaseTool):
     )
     async def run_tests(self, params: RunTestsParams, execution_context=None):
         from tools.code_exec.sandbox_guard import code_exec_execution_blocked_reason
-        blocked = code_exec_execution_blocked_reason()
+        from tools.code_exec.sandbox_guard import local_host_exec_refusal
+        blocked = (code_exec_execution_blocked_reason()
+                   or local_host_exec_refusal(execution_context))
         if blocked:
             return self._err(blocked)
         try:
@@ -525,6 +529,10 @@ class CodingTool(BaseTool):
 
             root = self._resolve_root(execution_context)
             command = params.command or "pytest -q"
+            from core.security.command_guard import classify
+            verdict = classify(command)
+            if verdict.is_floor:
+                return self._err(f"refused by command guard: {verdict.reason}")
             # WS-1: an entitled session runs importable-mode (PYTHONPATH=/install)
             # so packages installed via run_code(packages=[...]) are visible here.
             try:
@@ -558,6 +566,13 @@ class CodingTool(BaseTool):
                                  f"[partial output: {log_rel}]")
             if result.exit_code not in (0, None):
                 return self._err(f"tests failed (exit {result.exit_code})\n{content}")
+            # ship == tested by content: the deploy gates compare against this.
+            try:
+                from core.ship_tree import record_tested_tree
+                record_tested_tree(getattr(execution_context, "session_id", None)
+                                   or getattr(self, "session_id", None), root)
+            except Exception:
+                pass  # no record = the gate keeps its ledger rule
             return self._ok(content)
         except Exception as e:
             getattr(self, "logger", logging.getLogger(__name__)).error(f"run_tests failed: {e}")
@@ -606,9 +621,13 @@ class CodingTool(BaseTool):
             await self._snapshot_before_edit(src, root, execution_context)
             if os.path.exists(dest):
                 await self._snapshot_before_edit(dest, root, execution_context)
-            os.makedirs(os.path.dirname(dest) or root, exist_ok=True)
-            import shutil as _shutil
-            _shutil.move(src, dest)
+            # IO-C1: rename through pinned parent descriptors (no follow after the
+            # check above); a non-overwrite move never replaces a racing dest.
+            from core.security.workspace_io import move as _safe_move
+            try:
+                _safe_move(src, dest, root, overwrite=params.overwrite)
+            except FileExistsError:
+                return self._err(f"destination exists: {params.dest_path} (set overwrite=true)")
             return self._ok(f"Moved {params.src_path} -> {params.dest_path}.")
         except CodingError as e:
             return self._err(str(e))
@@ -626,7 +645,9 @@ class CodingTool(BaseTool):
             if os.path.isdir(target):
                 return self._err(f"refusing to delete a directory: {params.file_path}")
             await self._snapshot_before_edit(target, root, execution_context)
-            os.remove(target)
+            # IO-C1: unlink the entry at the pinned parent (never a swapped path).
+            from core.security.workspace_io import unlink as _safe_unlink
+            _safe_unlink(target, root)
             return self._ok(f"Deleted {params.file_path}.")
         except CodingError as e:
             return self._err(str(e))

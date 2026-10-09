@@ -312,7 +312,7 @@ a.entry:hover{ border-left-color:var(--running) }
 @media (min-width:768px){ .thread{ padding:var(--s6) var(--s5) } }
 
 .turn{ margin-bottom:var(--s5) }
-.turn-you .bubble{
+.turn-person .bubble{
   background:var(--surface-1); border:1px solid var(--rule); border-left:3px solid var(--accent);
   padding:var(--s3) var(--s4); font-size:var(--t-small); line-height:var(--line-height-relaxed);
   margin-left:auto; max-width:min(640px,86%); width:fit-content; white-space:pre-wrap;
@@ -589,3 +589,5 @@ a.entry:hover{ border-left-color:var(--running) }
 [hidden] { display:none !important }
 
 .console-shell[data-show-avatar="false"] .face { display:none }
+
+.person-label{ color:var(--ink-3); font-size:var(--t-small); margin-bottom:var(--s1); overflow-wrap:anywhere }

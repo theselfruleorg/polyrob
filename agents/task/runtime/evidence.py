@@ -42,6 +42,8 @@ OUTPUT_ACTION_ALLOWLIST = frozenset({
     "x402_invoice_x402_request",
     "message",
     "email_send",
+    "email_reply",
+    "email_forward",
 }) | action_names("coding", "apply_patch", "str_replace", "create_file") \
    | action_names("code_execution", "run_code")
 

@@ -12,6 +12,8 @@ the durable ledger is repaired and reloaded; telemetry must not reset money caps
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import asyncio
 from contextlib import asynccontextmanager, contextmanager
@@ -22,6 +24,42 @@ from pathlib import Path
 from typing import List, Optional
 
 logger = logging.getLogger(__name__)
+
+#: Domain separation for the ledger seal key (derived from the master seed).
+_SEAL_KEY_INFO = b"polyrob/wallet-audit-seal/v1"
+_SEAL_VERSION = 1
+_ZERO_CHAIN = b"\x00" * 32
+_AUTO = object()
+
+
+def _derive_seal_key() -> Optional[bytes]:
+    """The ledger seal key, or None when this process holds no master seed.
+
+    The key is derived from ``AGENT_WALLET_MASTER_SEED`` — a secret that lives
+    in a root-owned env file and is popped from ``os.environ`` at wallet load,
+    so a same-UID child (shell, MCP server, lazy build) never sees it and
+    cannot forge a seal. A seedless process (the web/email units, the agent
+    under ``WALLET_SIGNER=remote``) neither verifies nor seals; under remote
+    the signer's own ledger is the authoritative one.
+    """
+    try:
+        from core.security.custody_env import custody_secret
+        seed = custody_secret("AGENT_WALLET_MASTER_SEED")
+    except Exception:
+        return None
+    seed = (seed or "").strip()
+    if len(seed) < 32:
+        return None
+    return hmac.new(seed.encode("utf-8"), _SEAL_KEY_INFO, hashlib.sha256).digest()
+
+
+def _chain_step(chain: bytes, line: str) -> bytes:
+    return hashlib.sha256(chain + line.encode("utf-8")).digest()
+
+
+def _seal_mac(key: bytes, count: int, chain: bytes) -> str:
+    msg = b"seal|%d|" % count + chain
+    return hmac.new(key, msg, hashlib.sha256).hexdigest()
 
 
 class JsonlAuditSink(list):
@@ -39,9 +77,19 @@ class JsonlAuditSink(list):
     subsequent spending until storage is repaired and reloaded.
     """
 
-    def __init__(self, path: str, *, lock_timeout: Optional[float] = None):
+    def __init__(self, path: str, *, lock_timeout: Optional[float] = None,
+                 seal_key=_AUTO):
         super().__init__()
         self._path = path
+        #: WAL-9: rows are chain-hashed and the chain head is MAC'd into
+        #: ``<path>.seal`` with a key derived from the master seed. A seed-holding
+        #: process verifies the sealed prefix at load (an edited row = unhealthy,
+        #: spending refused) and seals every row it appends. Rows past the seal
+        #: (a seedless writer, a crash between append and seal) are re-sealed.
+        self._seal_key = _derive_seal_key() if seal_key is _AUTO else seal_key
+        self._seal_path = path + ".seal"
+        self._chain = _ZERO_CHAIN
+        self._chain_n = 0
         #: 068 R3-4: when set, every lock this sink takes (the construction-time
         #: load included) gives up after this many seconds instead of waiting
         #: forever — an operator path must not hang behind a stalled spender.
@@ -254,6 +302,7 @@ class JsonlAuditSink(list):
                     line = line.strip()
                     if not line:
                         continue
+                    self._extend_chain(line)
                     try:
                         list.append(self, json.loads(line))  # base append: no re-write
                         added += 1
@@ -282,30 +331,93 @@ class JsonlAuditSink(list):
             return None
 
     def _write_hwm(self) -> None:
+        self._atomic_write(self._hwm_path, str(self._hwm), "high-water")
+
+    def _atomic_write(self, target: str, text: str, what: str) -> None:
         temporary = None
         try:
             with tempfile.NamedTemporaryFile(
-                mode="w", encoding="utf-8", dir=os.path.dirname(self._hwm_path) or ".",
-                prefix=".audit-hwm-", delete=False,
+                mode="w", encoding="utf-8", dir=os.path.dirname(target) or ".",
+                prefix=".audit-%s-" % what, delete=False,
             ) as fh:
                 temporary = fh.name
-                fh.write(str(self._hwm))
+                fh.write(text)
                 fh.flush()
                 os.fsync(fh.fileno())
-            os.replace(temporary, self._hwm_path)
-            directory = os.open(os.path.dirname(self._hwm_path) or ".", os.O_RDONLY)
+            os.replace(temporary, target)
+            directory = os.open(os.path.dirname(target) or ".", os.O_RDONLY)
             try:
                 os.fsync(directory)
             finally:
                 os.close(directory)
         except OSError as e:
             self.healthy = False
-            logger.warning("wallet audit high-water write failed (%s): %s", self._hwm_path, e)
+            logger.warning("wallet audit %s write failed (%s): %s", what, target, e)
         finally:
             if temporary and os.path.exists(temporary):
                 os.unlink(temporary)
 
+    # -- WAL-9 seal ---------------------------------------------------------
+    def _extend_chain(self, line: str) -> None:
+        self._chain = _chain_step(self._chain, line)
+        self._chain_n += 1
+
+    def _read_seal(self):
+        """``(count, mac)`` from the sidecar, ``None`` when absent; unhealthy on damage."""
+        try:
+            with open(self._seal_path, "r", encoding="utf-8") as fh:
+                raw = json.load(fh)
+            count, mac = int(raw["n"]), str(raw["mac"])
+            if count < 0 or int(raw.get("v", 0)) != _SEAL_VERSION:
+                raise ValueError("bad seal")
+            return count, mac
+        except FileNotFoundError:
+            return None
+        except (OSError, ValueError, KeyError, TypeError, UnicodeError):
+            return False
+
+    def _write_seal(self) -> None:
+        if not self._seal_key or not self.healthy:
+            return
+        payload = {"v": _SEAL_VERSION, "n": self._chain_n,
+                   "mac": _seal_mac(self._seal_key, self._chain_n, self._chain)}
+        self._atomic_write(self._seal_path, json.dumps(payload), "seal")
+
+    def _verify_seal(self, chain_at: dict) -> None:
+        """Check the sealed prefix; re-seal the tail. Runs under the write lock."""
+        if not self._seal_key:
+            return
+        seal = self._read_seal()
+        if seal is False:
+            self.healthy = False
+            logger.error("wallet audit seal %s is unreadable — the ledger cannot be "
+                         "verified; spending is refused until the owner restores it.",
+                         self._seal_path)
+            return
+        if seal is None:
+            if self._chain_n:
+                logger.warning(
+                    "wallet audit ledger %s has %d unsealed rows — sealing them now. "
+                    "Expected ONCE (the first start with ledger sealing); if it repeats, "
+                    "something removed %s.", self._path, self._chain_n, self._seal_path)
+            self._write_seal()
+            return
+        count, mac = seal
+        head = chain_at.get(count)
+        if head is None or not hmac.compare_digest(
+                _seal_mac(self._seal_key, count, head), mac):
+            self.healthy = False
+            logger.error(
+                "wallet audit ledger %s FAILED its seal (sealed rows: %d, present: %d) — "
+                "a sealed row was edited, removed or reordered. The rolling-24h cap and "
+                "the replay guard rebuild from this file, so spending is refused until "
+                "the owner restores the ledger.", self._path, count, self._chain_n)
+            return
+        if self._chain_n > count:
+            self._write_seal()
+
     def _load(self) -> None:
+        chain_at = {0: _ZERO_CHAIN}
         if os.path.exists(self._path):
             try:
                 with open(self._path, "r", encoding="utf-8") as fh:
@@ -315,6 +427,8 @@ class JsonlAuditSink(list):
                         line = line.strip()
                         if not line:
                             continue
+                        self._extend_chain(line)
+                        chain_at[self._chain_n] = self._chain
                         try:
                             list.append(self, json.loads(line))  # base append: no re-write
                         except json.JSONDecodeError:
@@ -342,6 +456,7 @@ class JsonlAuditSink(list):
             )
         # Never let the mark regress (keep the evidence across further restarts).
         self._hwm = max(persisted or 0, loaded)
+        self._verify_seal(chain_at)
 
     def append(self, entry: dict) -> None:  # type: ignore[override]
         with self._write_lock():
@@ -353,10 +468,12 @@ class JsonlAuditSink(list):
     def _append_locked(self, entry: dict) -> None:
         list.append(self, entry)
         try:
+            line = json.dumps(entry)
             with open(self._path, "a", encoding="utf-8") as fh:
-                fh.write(json.dumps(entry) + "\n")
+                fh.write(line + "\n")
                 fh.flush()
                 os.fsync(fh.fileno())
+            self._extend_chain(line)
             # Consume our own write so `refresh()` never re-reads it as another
             # process's entry (which would double-count it against the cap).
             self._offset = os.path.getsize(self._path)
@@ -365,6 +482,7 @@ class JsonlAuditSink(list):
             logger.warning("wallet audit sink write failed (%s): %s", self._path, e)
         self._hwm = max(self._hwm, len(self))
         self._write_hwm()
+        self._write_seal()
 
 
 def _wallet_data_dir(data_dir: Optional[str] = None, *, for_meta: bool = False) -> str:

@@ -33,6 +33,14 @@ def _challenge(token=TOKEN):
     return {"challenge": "ch-123", "token": token, "type": "url_verification"}
 
 
+@pytest.mark.parametrize("malformed", ["é", "\ud800"])
+def test_unicode_credentials_are_refused_without_exceptions(tmp_path, malformed):
+    signed_hook = _Recorder(tmp_path, encrypt_key=KEY, verification_token=TOKEN)
+    assert not signed_hook.verify_signature({"x-lark-signature": malformed}, b"{}")
+    token_hook = _Recorder(tmp_path, verification_token=TOKEN, allow_unsigned=True)
+    assert token_hook.decode_payload(_challenge(token=malformed), {}) is None
+
+
 def _signed(body: bytes, key=KEY, ts=None):
     ts = str(int(time.time())) if ts is None else str(ts)
     return {"X-Lark-Request-Timestamp": ts, "X-Lark-Request-Nonce": "n1",
@@ -334,3 +342,17 @@ def test_the_probe_names_the_missing_encrypt_key():
                              "FEISHU_TRANSPORT": "webhook",
                              "FEISHU_VERIFICATION_TOKEN": TOKEN}))
     assert "FEISHU_ENCRYPT_KEY" in res.render()
+
+
+def test_token_only_event_outside_the_dedup_window_is_refused(tmp_path):
+    """CHAT-22: token-only mode has no signed timestamp — an event older than
+    the message-id dedup (or with no create_time) would replay as a new turn."""
+    hook = _Recorder(tmp_path, verification_token=TOKEN, allow_unsigned=True)
+    stale = _event()
+    stale["header"]["create_time"] = str(int((time.time() - 2 * 24 * 3600) * 1000))
+    assert hook.decode_payload(stale, {}) is None
+    assert hook.decode_payload(_event(), {}) is None          # no create_time at all
+    fresh = _event()
+    fresh["header"]["create_time"] = str(int(time.time() * 1000))
+    assert hook.decode_payload(fresh, {}) is not None
+    assert hook.decode_payload(_challenge(), {}) is not None  # the handshake still works

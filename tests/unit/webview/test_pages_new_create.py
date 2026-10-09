@@ -14,6 +14,7 @@ import pytest
 
 
 def _client(monkeypatch, tmp_path, user_id="u1"):
+    monkeypatch.setenv("POLYROB_POSTURE", "local")
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
@@ -30,6 +31,19 @@ def _telemetry(monkeypatch, tmp_path):
     monkeypatch.setenv("TELEMETRY_EVENT_LOG_PATH",
                        str(tmp_path / "telemetry_events.db"))
     monkeypatch.delenv("TELEMETRY_EVENT_LOG_ENABLED", raising=False)
+
+
+@pytest.mark.parametrize("endpoint", ["goals", "cron"])
+def test_tenant_cannot_create_owner_authored_work(monkeypatch, tmp_path, endpoint):
+    client = _client(monkeypatch, tmp_path)
+    monkeypatch.setenv("POLYROB_POSTURE", "multitenant")
+    response = client.post(f"/api/webgate/{endpoint}", json={
+        "title": "tenant grant", "task": "tenant grant", "schedule": "every 1h",
+        "tools": ["defi_trade"],
+    })
+    assert response.status_code == 403
+    assert not (tmp_path / "goals.db").exists()
+    assert not (tmp_path / "cron.db").exists()
 
 
 # --- goal create ------------------------------------------------------------ #

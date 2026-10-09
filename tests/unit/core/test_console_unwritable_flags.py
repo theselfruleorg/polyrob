@@ -121,7 +121,17 @@ def test_local_surface_still_writes_them(monkeypatch):
 
 @pytest.mark.parametrize("key", ["GOALS_ENABLED", "CURATOR_INTERVAL_HOURS",
                                  "WEBVIEW_FEED_DEFAULT_LIMIT",
-                                 "LLM_MAX_OUTPUT_TOKENS", "CHAT_PATH_LINKS"])
+                                 "LLM_MAX_OUTPUT_TOKENS", "CHAT_PATH_LINKS",
+                                 # caught by a WEB-4 trust word by accident
+                                 "EMAIL_IMAP_POLL_SEC", "WAKE_CHANGE_GATE",
+                                 "REQUIRE_SCHEMA_KEYS", "OUTBOUND_QUEUE_ENABLED",
+                                 # natural-work sweep 2026-10-08
+                                 "LLM_OUTAGE_NOTICE", "BILLING_FAILOVER_ENABLED",
+                                 "TX_NOTIFY_SENT_HOLD_SEC", "POLYROB_SUPPORT_URL",
+                                 "POLYROB_BRAND_URL", "POLYROB_ORG_URL",
+                                 "POLYROB_TERMS_URL", "POLYROB_PRIVACY_URL",
+                                 "THINK_SCRUBBER_ENABLED", "STREAM_BRAIN_SCRUB",
+                                 "ANTHROPIC_DEFERRED_TOOLS", "STABLE_AUTONOMOUS_TOOLSET"])
 def test_ordinary_flags_stay_console_writable(key):
     """Over-blocking has a cost too — the console's config page is a real owner
     seat. An ordinary operational knob must stay writable."""
@@ -135,3 +145,15 @@ def test_preferences_are_not_env_flags(key):
     review). The env-flag denylist must not swallow them — `budget.wallet_daily_usd`
     reads money-shaped but is a pref key, not an env flag."""
     assert not is_console_unwritable(key), key
+
+
+@pytest.mark.parametrize("key", ["GMAIL_IMAP_SERVER", "EXTERNAL_WRITE_PAUSE_GATE",
+                                 "OUTBOUND_DOMAINS", "MEMORY_REQUIRE_USER_ID",
+                                 # neighbours of the 2026-10-08 exemptions
+                                 "WEB_FETCH_ALLOW_PRIVATE_URLS", "HISTORY_SECRET_SCRUB",
+                                 "POLYROB_TOOL_DENYLIST", "X402_FACILITATOR_URL",
+                                 "WALLET_DAILY_CAP_USD", "AUTONOMOUS_RIG_DEFAULT"])
+def test_operational_exemption_leaves_trust_neighbours_refused(key):
+    """The four exempt knobs share a word with these trust flags; the
+    exemption is by exact name, so the trust flags stay file-only (WEB-4)."""
+    assert is_console_unwritable(key), key

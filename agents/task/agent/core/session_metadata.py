@@ -54,51 +54,15 @@ class SessionMetadataMixin:
             self.logger.debug(f"Could not update session metadata: {e}")
 
     def _set_version_and_source(self) -> None:
-        """Set version and source attributes with graceful error handling."""
-        # Use safe_operation from utils
-        from agents.task.utils import safe_operation
+        """Set version/source from the ONE runtime version SSOT (core.version).
 
-        def get_version_info():
-            # Use modern packaging instead of deprecated pkg_resources
-            try:
-                from importlib.metadata import version as get_version, PackageNotFoundError
-            except ImportError:
-                # Fallback for Python < 3.8
-                from importlib_metadata import version as get_version, PackageNotFoundError
-
-            try:
-                version = get_version('browser-use')
-                source = 'pip'
-            except PackageNotFoundError:
-                try:
-                    # Try to get rob package version if browser-use is not available
-                    version = get_version('rob')
-                    source = 'rob'
-                except PackageNotFoundError:
-                    # Try git version (only if we're in a git repository)
-                    try:
-                        import subprocess
-                        import os
-                        # Check if we're in a git repository first
-                        if os.path.exists('.git') or subprocess.run(['git', 'rev-parse', '--git-dir'],
-                            capture_output=True, stderr=subprocess.DEVNULL).returncode == 0:
-                            version = subprocess.check_output(['git', 'describe', '--tags'],
-                                stderr=subprocess.DEVNULL).decode('utf-8').strip()
-                            source = 'git'
-                        else:
-                            version = 'development'
-                            source = 'local'
-                    except Exception:
-                        version = 'development'
-                        source = 'local'
-            return version, source
-
-        version_info = safe_operation(
-            get_version_info,
-            self.logger,
-            "Failed to determine version information",
-            default_value=('unknown', 'unknown')
-        )
-
-        self.version, self.source = version_info
+        ``source`` is ``deployed:<sha>`` when a deploy stamped the code, else
+        ``polyrob``. Never raises.
+        """
+        try:
+            from core.version import deployed_sha, get_version
+            sha = deployed_sha()
+            self.version, self.source = get_version(), (f"deployed:{sha}" if sha else "polyrob")
+        except Exception:
+            self.version, self.source = 'unknown', 'unknown'
         self.logger.debug(f'Version: {self.version}, Source: {self.source}')

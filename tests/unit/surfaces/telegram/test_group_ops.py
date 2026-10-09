@@ -366,3 +366,43 @@ def test_admin_here_is_unchanged(env):
                      chat_role="admin", chat_id="-100")
     out = groups_reply(agent, result, _args("/groups mode here listen"))
     assert "Owner or room admin only" not in out
+
+
+def test_raw_id_from_another_surface_is_not_that_rooms_admin(env):
+    """CHAT-23: a WhatsApp number equal to a Telegram admin's numeric id is
+    not that admin — a cross-surface target reads as `member`."""
+    from core.surfaces.group_roles import GroupRoles
+    import os
+    GroupRoles(os.path.join(str(env), "surfaces.db")).grant(
+        "telegram", "-100", "4242", "admin", granted_by="owner")
+    agent = _Agent(str(env))
+    source = SessionSource(surface_id="whatsapp", chat_id="4242", chat_type="dm")
+    identity = Identity(user_id="u_wa", source=source, raw_user_id="4242")
+    text = "/groups mode telegram -100 off"
+    result = InboundResult(
+        inbound=InboundMessage(text=text, identity=identity),
+        decision=RouteDecision(kind=RouteKind.COMMAND, session_key="agent:main:whatsapp:dm:4242",
+                               session_id=None, command="/groups"))
+    out = groups_reply(agent, result, _args(text))
+    assert "Owner or room admin only" in out
+
+
+def test_a_room_admin_cannot_block_another_admin(env):
+    """CHAT-9: the grant overwrites the target's row, so an admin's `blocked`
+    on another admin demoted him. Only the owner may do that."""
+    from core.surfaces.group_roles import GroupRoles
+    import os
+    roles = GroupRoles(os.path.join(str(env), "surfaces.db"))
+    roles.grant("telegram", "-100", "111", "admin", granted_by="owner")
+    roles.grant("telegram", "-100", "555", "admin", granted_by="owner")
+    agent = _Agent(str(env))
+    text = "/groups role here 555 blocked"
+    result = _result(text, user_id="111", chat_role="admin", chat_id="-100")
+    out = groups_reply(agent, result, _args(text))
+    assert "Only the owner" in out
+    assert roles.role("telegram", "-100", "555", is_owner=False) == "admin"
+    # a plain member may still be blocked by an admin
+    text = "/groups role here 777 blocked"
+    out = groups_reply(agent, _result(text, user_id="111", chat_role="admin",
+                                      chat_id="-100"), _args(text))
+    assert "blocked" in out and "Only the owner" not in out

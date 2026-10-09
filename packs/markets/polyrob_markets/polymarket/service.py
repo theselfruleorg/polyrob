@@ -324,6 +324,11 @@ class PolymarketTool(UserCredentialCacheMixin, BaseTool):
         size_usd: float
     ) -> Optional[str]:
         """Check if order complies with trading limits."""
+        from polyrob_markets.risk_limits import validate_limits
+        try:
+            validate_limits(limits)
+        except (TypeError, ValueError):
+            return "Invalid trading limits; refusing to trade"
         if size_usd > limits.max_order_size_usd:
             return f"Order size ${size_usd:.2f} exceeds limit ${limits.max_order_size_usd}"
 
@@ -332,39 +337,16 @@ class PolymarketTool(UserCredentialCacheMixin, BaseTool):
 
         return None
 
-    async def _check_position_limit(self, limits: TradingLimits, params) -> Optional[str]:
-        """Enforce max_position_per_market_usd cumulatively (fail closed).
-
-        _check_trading_limits only bounds a SINGLE order against max_order_size_usd,
-        so N sequential sub-limit BUYs on the same market could exceed the per-market
-        cap the operator configured. Sum the current USD value of positions in the
-        target market and reject when existing + this order would exceed the cap.
-        Sell orders de-risk (Polymarket has no shorting) and are exempt. Fail CLOSED
-        if the position snapshot can't be fetched (don't open blind).
-        """
-        cap = getattr(limits, "max_position_per_market_usd", None)
-        if not cap:
-            return None
-        if str(getattr(params, "side", "")).lower() == "sell":
-            return None  # reducing exposure
-        market_id = getattr(params, "market_id", None)
-        if not market_id:
-            return None
-        res = await self.get_all_positions(GetPositionsParams(include_closed=False))
-        if not res.get("success"):
-            return "Cannot verify per-market position (position fetch failed); refusing to open"
-        existing = sum(
-            float(p.get("value", 0) or 0)
-            for p in res.get("positions", [])
-            if p.get("market_id") == market_id
-        )
-        projected = existing + float(getattr(params, "size_usd", 0) or 0)
-        if projected > cap:
-            return (
-                f"Per-market position cap ${cap:.2f} would be exceeded on {market_id} "
-                f"(existing ${existing:.2f} + ${float(getattr(params, 'size_usd', 0)):.2f})"
-            )
-        return None
+    async def _check_position_limit(self, limits: TradingLimits, params, notional=None) -> Optional[str]:
+        """Verify live market restrictions, positions and pending orders."""
+        from polyrob_markets.risk_limits import polymarket_limits, RiskLimitError
+        try:
+            return await polymarket_limits(
+                self, limits, params, params.size_usd if notional is None else notional)
+        except RiskLimitError as exc:
+            return f"{exc}; refusing to open"
+        except Exception:
+            return "Cannot verify trading limits from complete live data; refusing to open"
 
     # =========================================================================
     # CLOB CLIENT MANAGEMENT
@@ -385,13 +367,11 @@ class PolymarketTool(UserCredentialCacheMixin, BaseTool):
         if not self._user_id:
             return None
 
-        # Check cache first
-        if self._user_id in self._clob_clients:
-            return self._clob_clients[self._user_id]
-
         credentials = await self._get_user_credentials()
         if not credentials or credentials.demo_mode or not credentials.private_key:
             return None
+        if self._user_id in self._clob_clients:
+            return self._clob_clients[self._user_id]
 
         try:
             # Build client arguments with proxy wallet support
@@ -1080,7 +1060,7 @@ class PolymarketTool(UserCredentialCacheMixin, BaseTool):
                             "success": True,
                             "source": "clob",
                             "market": {
-                                "id": clob_data.get("condition_id", market_id),
+                                "condition_id": clob_data["condition_id"],
                                 "slug": "",
                                 "question": clob_data.get("question", ""),
                                 "description": clob_data.get("description", ""),
@@ -1298,26 +1278,37 @@ class PolymarketTool(UserCredentialCacheMixin, BaseTool):
                 return {"success": False, "error": "No wallet address configured for position lookup"}
 
             # Positions are public by address — query the Data API, no signing.
-            resp = await self._http_client.get(
-                f"{self.DATA_API_URL}/positions",
-                params={"user": address},
-            )
-            resp.raise_for_status()
-            positions_data = resp.json() or []
+            # Never enforce exposure from the API's default first page only.
+            positions_data = []
+            for offset in range(0, 10001, 500):
+                resp = await self._http_client.get(
+                    f"{self.DATA_API_URL}/positions",
+                    params={"user": address, "limit": 500, "offset": offset, "sizeThreshold": 0},
+                )
+                resp.raise_for_status()
+                page = resp.json()
+                if not isinstance(page, list):
+                    raise ValueError("Invalid positions response")
+                positions_data.extend(page)
+                if len(page) < 500:
+                    break
+            else:
+                return {"success": False, "error": "Position history exceeds verification bound"}
 
             # Format positions
             positions = []
             for pos in positions_data:
                 positions.append({
-                    "market_id": pos.get("market", ""),
+                    "market_id": pos.get("conditionId") or pos.get("market", ""),
                     "token_id": pos.get("asset", ""),
                     "outcome": pos.get("outcome", ""),
                     "size": float(pos.get("size", 0)),
                     "avg_price": float(pos.get("avgPrice", 0)),
                     "current_price": float(pos.get("curPrice", 0)),
                     "cost_basis": float(pos.get("size", 0)) * float(pos.get("avgPrice", 0)),
-                    "value": float(pos.get("size", 0)) * float(pos.get("curPrice", 0)),
-                    "unrealized_pnl": float(pos.get("pnl", 0)),
+                    "value": float(pos["size"]) * float(pos["curPrice"]),
+                    "unrealized_pnl": (float(pos["size"]) * (float(pos["curPrice"]) - float(pos["avgPrice"]))
+                                       if pos.get("avgPrice") is not None else None),
                     "realized_pnl": float(pos.get("realizedPnl", 0))
                 })
 
@@ -1450,6 +1441,25 @@ class PolymarketTool(UserCredentialCacheMixin, BaseTool):
     # TRADING ACTIONS (Require Authentication + Limits Check)
     # =========================================================================
     
+    async def _market_fee_info(self, token_id: str) -> Optional[Dict[str, Any]]:
+        """The CLOB market info that carries the market's fee (``fd`` / ``tbf`` / ``mbf``).
+
+        Best-effort: None when it cannot be read — the caller then charges the
+        documented default fee (polymarket/fees.py) instead of refusing the order.
+        """
+        try:
+            found = await self._http_client.get(f"{self.CLOB_API_URL}/markets-by-token/{token_id}")
+            condition_id = found.json().get("condition_id") if found.status_code == 200 else None
+            if not condition_id:
+                return None
+            info = await self._http_client.get(f"{self.CLOB_API_URL}/clob-markets/{condition_id}")
+            data = info.json() if info.status_code == 200 else None
+            return data if isinstance(data, dict) else None
+        except Exception as exc:
+            self.logger.info("polymarket: market fee unreadable for %s (%s); default fee charged",
+                             str(token_id)[:16], type(exc).__name__)
+            return None
+
     @BaseTool.action(
         'Place a limit order on Polymarket',
         param_model=PlaceLimitOrderParams
@@ -1500,14 +1510,35 @@ class PolymarketTool(UserCredentialCacheMixin, BaseTool):
                 "error": "Polymarket is disabled for your account"
             }
 
+        # Limit SELL shares by their live value, rather than a model's low price.
+        from polyrob_markets.order_safety import order_notional
+        price_res = await self.get_current_price(
+            GetPriceParams(token_id=params.token_id, market_id=params.market_id))
+        try:
+            if not price_res.get("success"):
+                raise ValueError("Cannot verify live order price")
+            mid = float(price_res.get("price"))
+            divisor = max(params.price, mid) if params.side.upper() == "SELL" else params.price
+            size_shares = params.size_usd / divisor
+            order_value_usd = order_notional(size_shares, params.price, mid)
+        except (ValueError, TypeError, ZeroDivisionError):
+            return {"success": False, "error": "Cannot value order within the live reference price band"}
+        # The market's fee leaves the wallet like the order itself, so the spend caps are
+        # charged notional + the worst fee (a documented default when it is unreadable).
+        from polyrob_markets.polymarket.fees import worst_fee_usd
+        fee_usd, fee_source = worst_fee_usd(
+            await self._market_fee_info(params.token_id), shares=size_shares,
+            price=params.price, reference=mid, notional_usd=order_value_usd)
+        charge_usd = order_value_usd + fee_usd
+
         # Check trading limits
         limits = credentials.trading_limits
-        limit_error = self._check_trading_limits(limits, params.size_usd)
+        limit_error = self._check_trading_limits(limits, order_value_usd)
         if limit_error:
             return {"success": False, "error": limit_error}
 
         # Additional confirmation check for large orders
-        if params.size_usd > limits.require_confirmation_above_usd:
+        if order_value_usd > limits.require_confirmation_above_usd:
             return {
                 "success": False,
                 "error": f"Orders above ${limits.require_confirmation_above_usd} require manual confirmation",
@@ -1531,14 +1562,14 @@ class PolymarketTool(UserCredentialCacheMixin, BaseTool):
         # The dry-run early-return exits the lock without recording (no spend); the CLOB
         # submit never re-enters policy.check/record, so there is no self-deadlock.
         async with policy.reserve():
-            decision = policy.check(venue="polymarket", amount_usd=params.size_usd, idempotency_key=None)
+            decision = policy.check(venue="polymarket", amount_usd=charge_usd, idempotency_key=None)
             if not decision.allowed:
                 return {"success": False, "error": f"Policy gate denied: {decision.reason}"}
 
             # T11 live kill-switch: only submit a real order when the master + venue switches
             # are on AND within the live cap; otherwise dry-run (validated, never submitted).
             from polyrob_markets.trade_gate import evaluate_live_trade
-            gate = evaluate_live_trade("polymarket", params.size_usd)
+            gate = evaluate_live_trade("polymarket", order_value_usd)
             if not gate.live:
                 return {
                     "success": False,
@@ -1553,7 +1584,7 @@ class PolymarketTool(UserCredentialCacheMixin, BaseTool):
             # LIVE-only: enforce the cumulative per-market position cap (sell-exempt; fail
             # closed). Placed after the dry-run gate so a dry-run never triggers a live
             # position fetch (and never fail-closes when there is nothing to submit).
-            position_error = await self._check_position_limit(limits, params)
+            position_error = await self._check_position_limit(limits, params, order_value_usd)
             if position_error:
                 return {"success": False, "error": position_error}
 
@@ -1564,9 +1595,6 @@ class PolymarketTool(UserCredentialCacheMixin, BaseTool):
                 return {"success": False, "error": error}
 
             try:
-                # Calculate size in shares from USD amount
-                size_shares = params.size_usd / params.price
-
                 # Build order arguments
                 from polyrob_markets.polymarket.clob_adapter import OrderArgs
                 order_args = OrderArgs(
@@ -1576,14 +1604,18 @@ class PolymarketTool(UserCredentialCacheMixin, BaseTool):
                     side=params.side.upper()
                 )
 
-                # Create and post order
-                from core.wallet.submission_journal import prepare_attempt
-                submission_ref = prepare_attempt("polymarket", self._user_id, params.size_usd)
-                result = client.create_and_post_order(order_args)
+                from polyrob_markets.order_submission import submit_order
+                result, submission_ref = await asyncio.to_thread(
+                    submit_order, "polymarket", client, self._user_id, charge_usd,
+                    order_args=order_args,
+                )
+                from polyrob_markets.order_safety import order_accepted, order_refusal
+                if not order_accepted("polymarket", result):
+                    return {"success": False, "error": order_refusal("polymarket", result, submission_ref)}
 
                 policy.record(
                     venue="polymarket", action="place_limit_order",
-                    amount_usd=params.size_usd, counterparty=params.market_id,
+                    amount_usd=charge_usd, counterparty=params.market_id,
                     idempotency_key=None, result_ref=str(result.get("orderID"))[:80],
                     chain="polygon", submission_ref=submission_ref,
                 )
@@ -1614,7 +1646,9 @@ class PolymarketTool(UserCredentialCacheMixin, BaseTool):
                         "side": params.side,
                         "price": params.price,
                         "size_usd": params.size_usd,
-                        "size_shares": size_shares
+                        "size_shares": size_shares,
+                        "fee_charged_usd": round(fee_usd, 6),
+                        "fee_source": fee_source,
                     }
                 }
 
@@ -1702,11 +1736,9 @@ class PolymarketTool(UserCredentialCacheMixin, BaseTool):
 
         try:
             # Get orders from CLOB API
-            orders_params = {}
-            if params.market_id:
-                orders_params["market"] = params.market_id
-
-            orders_data = client.get_open_orders(**orders_params)
+            from polyrob_markets.polymarket.clob_adapter import OpenOrderParams
+            orders_data = await asyncio.to_thread(
+                client.get_open_orders, OpenOrderParams(market=params.market_id))
 
             # Format orders
             orders = []
@@ -1714,13 +1746,13 @@ class PolymarketTool(UserCredentialCacheMixin, BaseTool):
                 orders.append({
                     "order_id": order.get("id", ""),
                     "market_id": order.get("market", ""),
-                    "token_id": order.get("asset", ""),
+                    "token_id": order["asset_id"],
                     "side": order.get("side", ""),
-                    "price": float(order.get("price", 0)),
-                    "size": float(order.get("size", 0)),
-                    "size_matched": float(order.get("sizeMatched", 0)),
+                    "price": float(order["price"]),
+                    "size": float(order["original_size"]),
+                    "size_matched": float(order["size_matched"]),
                     "status": order.get("status", ""),
-                    "created_at": order.get("createdAt")
+                    "created_at": order.get("created_at")
                 })
 
             return {
@@ -1774,13 +1806,13 @@ class PolymarketTool(UserCredentialCacheMixin, BaseTool):
                 orders.append({
                     "order_id": order.get("id", ""),
                     "market_id": order.get("market", ""),
-                    "token_id": order.get("asset", ""),
+                    "token_id": order["asset_id"],
                     "side": order.get("side", ""),
-                    "price": float(order.get("price", 0)),
-                    "size": float(order.get("size", 0)),
-                    "size_matched": float(order.get("sizeMatched", 0)),
+                    "price": float(order["price"]),
+                    "size": float(order["original_size"]),
+                    "size_matched": float(order["size_matched"]),
                     "status": order.get("status", ""),
-                    "created_at": order.get("createdAt")
+                    "created_at": order.get("created_at")
                 })
 
             return {

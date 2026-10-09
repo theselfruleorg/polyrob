@@ -46,8 +46,8 @@ Cost-basis math (weighted, USD):
   in place (:func:`_nullable_basis`).
 - each dispose books what it realized (average cost — the ONE cost method) into
   ``position_realized``, which outlives the deleted row;
-- ``qty_source`` records whether a size was measured from the receipt or is a
-  quote; ``high_water_usd`` is the highest price a ``positions`` read observed.
+- ``qty_source`` records simulation estimates, quotes and legacy event counts;
+  ``high_water_usd`` is the highest price a ``positions`` read observed.
 """
 from __future__ import annotations
 
@@ -132,11 +132,11 @@ _BOOK_COLUMNS = (("qty_source", "TEXT NOT NULL DEFAULT ''"),
                  ("high_water_usd", "REAL"),
                  ("high_water_ts", "REAL"))
 
-#: Where a row's size came from (071 W3). ``receipt`` = summed from the landed
-#: transaction's own Transfer logs (a measured chain delta); ``quote`` = the
+#: Where a row's size came from. ``receipt`` = legacy token-authored Transfer
+#: logs (unverified); ``simulation`` = preview balance delta, not final fill; ``quote`` = the
 #: quoted output, never measured; ``inherited`` = the balance an adopted
 #: account already held; ``""`` = a row written before the column existed.
-QTY_SOURCES = ("receipt", "quote", "inherited", "")
+QTY_SOURCES = ("receipt", "simulation", "quote", "inherited", "")
 
 #: A sell within this fraction of the held size is a full exit — the row is
 #: closed rather than left holding a dust remainder (a rounding overshoot must
@@ -163,7 +163,7 @@ class PositionDelta:
     #: 071 W3: the USD a DISPOSE received (``None`` = not known). Ignored on an
     #: acquire. Realized P&L = proceeds − the average-cost basis of the size sold.
     proceeds_usd: Optional[float] = None
-    #: 071 W3: ``receipt`` (measured) | ``quote`` (not measured) — see QTY_SOURCES.
+    #: Quantity provenance (legacy receipts are unverified); see QTY_SOURCES.
     qty_source: str = "quote"
 
 
@@ -254,8 +254,8 @@ def classify_swap(*, chain: str, token_in: str, token_out: str,
     071 W3: ``cost_usd`` is the USD value the rail recorded for the swap — the
     cost of what was bought AND the proceeds of what was sold (one swap, one
     valuation). ``None`` (or a non-positive figure) is an UNKNOWN value, never
-    $0. ``qty_source`` says whether the sizes were measured from the receipt
-    (``"receipt"``) or are the quote (``"quote"``, the default).
+    $0. ``qty_source`` identifies simulated balance deltas (``"simulation"``),
+    legacy unverified events (``"receipt"``), or quote estimates (the default).
     """
     value = (float(cost_usd) if cost_usd is not None and float(cost_usd) > 0
              else None)
@@ -507,10 +507,11 @@ def apply_delta(user_id: str, delta: PositionDelta, *,
             new_qty = cur_qty + delta.qty
             new_entry = (None if cur_entry is None or delta.cost_usd is None
                          else cur_entry + float(delta.cost_usd))
-            # A size summed from measured and quoted legs is only as good as
-            # its weakest leg.
-            if row and row["qty_source"] and row["qty_source"] != source:
-                source = "quote" if "quote" in (row["qty_source"], source) else source
+            # Adding a simulated trade cannot upgrade unverified legacy size.
+            if row:
+                quality = ("", "quote", "receipt", "simulation", "inherited")
+                sources = (row["qty_source"] or "", source)
+                source = min(sources, key=lambda s: quality.index(s) if s in quality else 0)
             # W0: a later buy never silently lifts a quarantine — the question
             # of which contract is real has not changed.
             execute_retry(

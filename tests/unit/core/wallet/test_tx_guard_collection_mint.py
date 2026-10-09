@@ -89,8 +89,8 @@ def _authorize(intent, deltas, *, tx=None, price=4000.0, entry_paused=False, hal
 def test_a_paid_mint_of_three_is_authorized_and_costs_value_plus_fee():
     d = _authorize(_intent(), _deltas(), price=100.0)
     assert d.allowed is True, d.reason
-    # value 0.126 ETH + worst fee 1.5e6 gas * 1e8 wei = 1.5e-4 ETH, at $100
-    assert d.amount_usd == pytest.approx((0.126 + 0.00015) * 100, abs=0.01)
+    # Value plus the signed gas limit, even when simulation consumed less.
+    assert d.amount_usd == pytest.approx((0.126 + 0.0003) * 100, abs=0.001)
 
 
 def test_the_value_counts_against_the_autonomous_ceiling():
@@ -98,7 +98,7 @@ def test_the_value_counts_against_the_autonomous_ceiling():
     # booked as a fee-only NFT op
     d = _authorize(_intent(), _deltas())
     assert d.allowed is False and d.lane == "owner_queue", d.reason
-    assert d.amount_usd == pytest.approx((0.126 + 0.00015) * 4000, abs=0.01)
+    assert d.amount_usd == pytest.approx((0.126 + 0.0003) * 4000, abs=0.001)
 
 
 def test_a_mint_of_one_is_authorized():

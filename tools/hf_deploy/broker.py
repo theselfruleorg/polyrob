@@ -112,23 +112,12 @@ def scan_workspace_for_secrets(workspace_dir: str, *, limit: int = 20) -> list:
     return offenders
 
 
-def default_http_get(url: str, timeout: float):
-    """Real (non-test) HTTP GET used when no ``http_get`` is injected —
-    returns an int status code. Best-effort: an unreachable host returns a
-    synthetic non-2xx code rather than raising, so ``health_check`` degrades
-    to "unhealthy" instead of throwing on a broker used without DI. Exported
-    so ``reconcile.py``'s boot sweep can reuse the same default getter."""
-    import urllib.error
-    import urllib.request
-
-    req = urllib.request.Request(url, method="GET")
+async def default_http_get(url: str, timeout: float):
+    """Reuse the pinned-address, bounded-redirect status probe for health reads."""
+    from core.security.http_probe import http_status
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return getattr(resp, "status", 200)
-    except urllib.error.HTTPError as e:
-        return e.code
-    except Exception as e:
-        logger.debug("hf_deploy default http_get failed for %s: %s", url, e)
+        return await http_status(url, timeout)
+    except Exception:
         return 599
 
 

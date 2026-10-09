@@ -19,7 +19,7 @@ def test_heartbeat_extends_claim_and_prevents_reclaim(tmp_path):
     assert b.claim(g.id, "w", ttl_seconds=100) is not None   # expires at 1100
 
     clk["t"] = 1090                                           # still claimed
-    assert b.heartbeat(g.id, "w", ttl_seconds=100) is True    # now expires at 1190
+    assert b.heartbeat(g.id, "w", ttl_seconds=100, claim_token=b.get(g.id).claim_token) is True    # now expires at 1190
 
     clk["t"] = 1150            # past ORIGINAL expiry (1100), before heartbeated (1190)
     assert b.reclaim_stale() == 0                             # heartbeat saved it

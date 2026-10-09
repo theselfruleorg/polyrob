@@ -144,8 +144,8 @@ def classify_effect(tool_id: Optional[str], action: str, *,
                     mcp_read_only: bool = False) -> Optional[EffectVerdict]:
     """The effect of *action* (owned by *tool_id*), or None when it writes nothing.
 
-    ``mcp_read_only`` is a server-declared MCP annotation (``readOnlyHint``). It
-    may only NARROW: nothing a third-party server declares can raise trust.
+    ``mcp_read_only`` is an untrusted server hint, retained for API compatibility.
+    It cannot disable effect accounting or the pause gate.
     """
     action = str(action or "")
     tid = _tid(tool_id)
@@ -156,8 +156,6 @@ def classify_effect(tool_id: Optional[str], action: str, *,
         return None
     top = ceiling(tid)
     if top is None:
-        return None
-    if tid == "mcp" and mcp_read_only:
         return None
     explicit = view(__name__, "WRITE_ACTIONS").get(tid, {}).get(action)
     if explicit:

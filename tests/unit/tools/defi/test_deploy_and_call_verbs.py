@@ -19,6 +19,18 @@ POOL = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
 USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 
 
+@pytest.mark.asyncio
+async def test_deploy_intent_reuses_nonce_scoped_replay_key():
+    captured = []
+    tool, _ = _tool(captured=captured)
+    params = DeployTokenParams(chain="base", name="R", symbol="R", supply=100,
+                               max_spend_usd=5, dry_run=True)
+    await tool.deploy_token(params)
+    await tool.deploy_token(params)
+    assert len(captured) == 2
+    assert captured[0].idempotency_key == captured[1].idempotency_key
+
+
 class _Gate:
     def __init__(self):
         self.recorded = []
@@ -369,3 +381,31 @@ async def test_the_create2_report_does_not_claim_a_NONCE_derived_address():
     assert "commits to the init code" in text
     assert text.count("address:") == 1
     assert "MATCHED byte for byte" not in text  # subsumed by the commitment
+
+
+@pytest.mark.asyncio
+async def test_deploy_turn_gate_runs_before_vanity_work(monkeypatch):
+    from tools.defi import deploy_verb
+    def unexpected(*args):
+        pytest.fail("a refused caller must never start vanity mining")
+    monkeypatch.setattr(deploy_verb, "_resolve_create2", unexpected)
+    tool, _ = _tool()
+    res = await tool.deploy_contract(DeployContractParams(
+        chain="base", bytecode="0x6080604052", max_spend_usd=5,
+        vanity="abcdef", dry_run=True), _Leaf())
+    assert "sub-agent" in res.error
+
+
+@pytest.mark.asyncio
+async def test_vanity_work_runs_off_the_event_loop(monkeypatch):
+    import threading
+    from tools.defi import deploy_verb
+    loop_thread = threading.get_ident()
+    def resolve(*args):
+        assert threading.get_ident() != loop_thread
+        return None, None
+    monkeypatch.setattr(deploy_verb, "_resolve_create2", resolve)
+    tool, _ = _tool()
+    res = await tool.deploy_contract(DeployContractParams(
+        chain="base", bytecode="0x6080604052", max_spend_usd=5, dry_run=True))
+    assert res.error is None, res.error

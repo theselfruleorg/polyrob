@@ -93,8 +93,8 @@ def pool_state(rpc, chain: str, pool: str) -> PoolState:
     slot0 = view(rpc, pool, A.POOL_SLOT0)
     sqrt_price_x96, tick = int(slot0[0]), int(slot0[1])
     liquidity = int(view(rpc, pool, A.POOL_LIQUIDITY))
-    dec0 = int(view(rpc, token0, A.ERC20_DECIMALS))
-    dec1 = int(view(rpc, token1, A.ERC20_DECIMALS))
+    dec0 = decimals(rpc, chain, token0)
+    dec1 = decimals(rpc, chain, token1)
     price0_in_1 = (sqrt_price_x96 / univ3_math.Q96) ** 2 * (10 ** dec0) / (10 ** dec1)
     return PoolState(
         pool=pool, token0=token0, token1=token1, fee=fee,
@@ -234,7 +234,11 @@ def allowance(rpc, chain: str, token: str, owner: str, spender: str) -> int:
 
 
 def decimals(rpc, chain: str, token: str) -> int:
-    return int(view(rpc, token, A.ERC20_DECIMALS))
+    from core.wallet.tokens import bounded_decimals
+    value = bounded_decimals(view(rpc, token, A.ERC20_DECIMALS))
+    if value is None:
+        raise LpReadError("token decimals are outside the supported range 0..36")
+    return value
 
 
 # ==========================================================================

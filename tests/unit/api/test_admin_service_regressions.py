@@ -21,6 +21,30 @@ def services(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("actor,target,target_role,allowed", [
+    ("admin", "peer", "admin", False), ("owner", "peer", "admin", True),
+    ("admin", "tenant", "user", True), ("owner", "owner", "user", False),
+    ("admin", "admin", "user", False), ("owner", "peer", "owner", False),
+])
+async def test_block_preserves_administrative_hierarchy(services, monkeypatch,
+                                                       actor, target, target_role, allowed):
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "owner")
+    db, _ = services
+    db.fetch_one.return_value = {"role": target_role, "wallet_address": None}
+    request = SimpleNamespace(state=SimpleNamespace(user_id=actor, role=actor),
+                              headers={}, client=None)
+    body = admin.BlockUserRequest(reason="access revoked")
+    if allowed:
+        assert (await admin.block_user(request, target, body))["success"]
+        db.execute.assert_awaited_once()
+    else:
+        with pytest.raises(HTTPException) as exc:
+            await admin.block_user(request, target, body)
+        assert exc.value.status_code == 403
+        db.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_verify_token_uses_registered_alchemy_service(services):
     db, registered = services
     db.fetch_one.return_value = {
@@ -43,7 +67,7 @@ async def test_verify_token_uses_registered_alchemy_service(services):
 async def test_charged_resolution_requires_an_actual_deduction(services, available):
     db, registered = services
     db.fetch_one.return_value = {
-        "id": 7, "user_id": "u1", "credits_owed": 50, "status": "pending",
+        "id": 7, "user_id": "u1", "credits_owed": 50, "status": "pending", "request_id": "legacy-call",
     }
     balance = SimpleNamespace(deduct_credits=AsyncMock(return_value=True))
     if available:

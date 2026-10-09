@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import uuid
 from typing import Optional, Sequence, Tuple
 
 logger = logging.getLogger(__name__)
@@ -208,8 +207,18 @@ async def perform_deploy_contract(tool, params, execution_context=None):
                 f"not word-aligned is a mis-encoding, not a short one."))
         code = code + args
 
-    value_wei = int(round(float(params.value or 0.0) * 10 ** 18))
-    plan, plan_err = _resolve_create2(tool, params, code)
+    turn_err = _refuse_non_owner_turn(execution_context, "deploy contract")
+    if turn_err:
+        return tool._ar(error=turn_err)
+    if not params.dry_run:
+        if paused := _refuse_paused(entry=True, execution_context=execution_context):
+            return tool._ar(error=paused + " RESULT: NOT SENT.")
+    from core.wallet.tokens import raw_amount
+    try:
+        value_wei = raw_amount(params.value or 0, 18)
+    except ValueError as exc:
+        return tool._ar(error=f"refused: {exc}")
+    plan, plan_err = await asyncio.to_thread(_resolve_create2, tool, params, code)
     if plan_err:
         return tool._ar(error=plan_err)
     if plan is not None and value_wei > 0:
@@ -266,7 +275,6 @@ async def _perform_deploy(tool, *, execution_context, verb: str, chain: str,
         return tool._ar(error="agent wallet not enabled (AGENT_WALLET_ENABLED)")
     signer = wallet.operational_signer()
     gate = wallet.policy
-    idem = f"defi_{verb}:{chain}:{uuid.uuid4().hex[:8]}"
 
     rail = (tool._rail_factory or EvmRail)(chain=chain, signer=signer)
     if create2 is not None:
@@ -290,6 +298,11 @@ async def _perform_deploy(tool, *, execution_context, verb: str, chain: str,
         except Exception as exc:
             return tool._ar(error=f"could not build the deployment: {exc}")
 
+    from tools.defi.call_verb import intent_idempotency_key
+    idem = intent_idempotency_key(
+        f"defi_{verb}", chain=chain, to=str(tx.get("to") or ""),
+        data=str(tx.get("data") or init_code), value_wei=value_wei,
+        tx=tx, execution_context=execution_context)
     intent = tx_guard.TxIntent(
         chain=chain, token=None,
         to=(deploy_guard.CREATE2_FACTORY if create2 is not None else None),
@@ -365,8 +378,9 @@ async def _perform_deploy(tool, *, execution_context, verb: str, chain: str,
         try:
             tx_hash = await asyncio.to_thread(rail.sign_and_send, tx)
         except Exception as exc:
-            from core.wallet.broadcast.evm import broadcast_failure_text
-            return tool._ar(error=broadcast_failure_text(exc, nothing="nothing was deployed"))
+            from core.wallet.broadcast.evm import broadcast_error_kind, broadcast_failure_text
+            return tool._ar(error=broadcast_failure_text(exc, nothing="nothing was deployed"),
+                error_kind=broadcast_error_kind(exc))
 
         _used, _limit = tx_notify.caps_from_gate(gate)
         tool._notify_tx(execution_context, tx_notify.TxNotice(

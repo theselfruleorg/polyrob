@@ -38,7 +38,7 @@ def resolve_cron_tools(payload: Optional[dict]) -> list:
     owner-grant contract) > ``payload.rig`` > ``AUTONOMOUS_RIG_DEFAULT`` >
     :func:`default_cron_tools`. Byte-identical while the env is unset, which is
     the shipped default (``full``)."""
-    from core.config_policy.rigs import is_agent_authored, resolve_rig_tools
+    from core.config_policy.rigs import is_owner_authored, resolve_rig_tools
     from tools.goal_tools import allowed_self_goal_tools
     # H05: a rig the AGENT wrote (cronjob_schedule stamps authored_by=agent)
     # is intersected with the self-goal ceiling; an owner-set rig is not.
@@ -47,7 +47,7 @@ def resolve_cron_tools(payload: Optional[dict]) -> list:
     # 036 §3.3: `payload.tools` is read VERBATIM here, which made it a grant
     # channel with no writer. The ONE predicate runs on an agent-authored row;
     # a refused id is dropped (the run still starts, narrower) and said.
-    if isinstance(payload, dict) and payload.get("tools") and is_agent_authored(payload):
+    if isinstance(payload, dict) and payload.get("tools") and not is_owner_authored(payload):
         from core.tool_grants import ACTOR_AGENT, split_grantable
         kept, refused, why = split_grantable(tools, actor=ACTOR_AGENT, ceiling=ceiling)
         if refused:
@@ -184,6 +184,23 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
     """
     async def runner(job: CronJob) -> bool:
         payload = dict(job.payload or {})
+        # An ADOPTED job whose pinned skills changed after the owner saw them
+        # runs as the agent's again (``/adopt`` lists it; the owner re-adopts).
+        try:
+            from agents.task.agent.skill_pins import adoption_lapsed, lapse_payload
+            if adoption_lapsed(payload, job.user_id):
+                logger.warning("cron job %s: a pinned skill changed after /adopt — this "
+                               "run is agent-authored; the owner re-adopts with /adopt",
+                               job.id)
+                payload = lapse_payload(payload)
+                job.payload = payload
+        except Exception:
+            logger.warning("cron job %s: adopted-skill check failed — run as agent-authored",
+                           job.id, exc_info=True)
+            if payload.get("adopted_skills_digest"):
+                payload = {**payload, "authored_by": "agent", "adoption_lapsed": True}
+                payload.pop("owner_granted", None)
+                job.payload = payload
         # W9 (090 R5, D45): a per-job pause window — e.g. the buyback held from
         # T-1 h to 24 h after the mint window. A $0 skip for every job kind.
         from cron.read_job import active_pause_window
@@ -431,6 +448,12 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
                 _task_text = f"{_answers}\n\n{job.task}"
         except Exception:
             logger.debug("cron %s: rail answers skipped (fail-open)", job.id, exc_info=True)
+        # 2026-10-06: owner rules written AFTER the job's text override it
+        # (the 10-05 PROMO run posted against "approve posts with me").
+        from cron.owner_rules_overlay import overlay_for_job
+        _overlay = overlay_for_job(job, data_dir)
+        if _overlay:
+            _task_text = f"{_overlay}\n\n{_task_text}"
         request = {
             "task": _task_text,
             "provider": provider,
@@ -503,6 +526,17 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
             # the done() ledger text, never a re-extracted message-history string.
             run = None
             try:
+                # CHAT-5: an OWNER-authored job's text is the standing authority
+                # its run carries (e.g. moderating the room it names). Positive
+                # stamp only: an unstamped (legacy) row is not the owner's.
+                try:
+                    from core.config_policy.rigs import is_owner_authored
+                    if is_owner_authored(payload):
+                        from agents.task.goals.autonomy_marker import note_owner_job
+                        note_owner_job(job.id, job.task)
+                except Exception:
+                    logger.warning("cron: could not record job %s provenance", job.id,
+                                   exc_info=True)
                 run = await _run_task_to_outcome(
                     task_agent, user_id=job.user_id, request=request, autonomous=True,
                     creator="cron", cron_job_id=job.id,

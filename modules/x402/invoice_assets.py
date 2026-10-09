@@ -152,28 +152,29 @@ async def match_pending_invoice(
     database = await _resolve_db(db)
     if database is None:
         return None
+    chain = (chain or "base").strip().lower()  # legacy callers observe Base only
     recipient = normalize_recipient(treasury, chain)
     placeholders = ",".join("?" for _ in kinds)
     row = await database.fetch_one(
         f"""SELECT * FROM x402_payment_requests
-            WHERE status = 'pending' AND recipient = ?
+            WHERE status = 'pending' AND recipient = ? AND chain = ?
               AND amount_raw = ?
               AND lower(COALESCE(asset_address, '')) = ?
               AND json_extract(metadata, '$.kind') IN ({placeholders})
             ORDER BY created_at ASC, rowid ASC LIMIT 1""",
-        (recipient, str(int(amount_raw)),
+        (recipient, chain, str(int(amount_raw)),
          (asset_address or "").strip().lower(), *kinds),
     )
     if row is None and decimals is not None:
         legacy_usd = round(int(amount_raw) / (10 ** int(decimals)), 6)
         row = await database.fetch_one(
             f"""SELECT * FROM x402_payment_requests
-                WHERE status = 'pending' AND recipient = ?
+                WHERE status = 'pending' AND recipient = ? AND chain = ?
                   AND amount_raw IS NULL AND asset_address IS NULL
                   AND amount_usd = ?
                   AND json_extract(metadata, '$.kind') IN ({placeholders})
                 ORDER BY created_at ASC, rowid ASC LIMIT 1""",
-            (recipient, legacy_usd, *kinds),
+            (recipient, chain, legacy_usd, *kinds),
         )
     if not row:
         return None

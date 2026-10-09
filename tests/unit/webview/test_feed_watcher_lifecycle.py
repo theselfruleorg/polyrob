@@ -13,7 +13,8 @@ def local_server(monkeypatch, tmp_path):
     monkeypatch.setattr(server.webgate, "requires_owner_login", lambda: False)
     monkeypatch.setattr(server, "pm", lambda: SimpleNamespace(
         clean_session_id=lambda sid: sid, get_session_user=lambda sid: "local",
-        get_feed_dir=lambda sid: tmp_path / "sessions" / sid / "feed"))
+        get_feed_dir=lambda sid: tmp_path / "sessions" / sid / "feed",
+        find_feed_dir=lambda sid, user_id=None: None))
 
     async def emit(*a, **k):
         return None
@@ -72,3 +73,29 @@ async def test_the_watcher_never_creates_a_session_tree(local_server, tmp_path):
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
+
+
+def test_the_read_only_lookup_creates_nothing_and_never_sleeps(tmp_path, monkeypatch):
+    """WEB-9: the REAL path manager's console lookup — `get_feed_dir` made
+    `_anonymous_/<id>/feed` after ~0.3 s of blocking sleeps."""
+    import time
+    from agents.task.path import PathManager
+    mgr = PathManager(data_root=str(tmp_path / "task"))
+    monkeypatch.setattr(time, "sleep", lambda s: (_ for _ in ()).throw(AssertionError("slept")))
+    before = sorted(p.relative_to(tmp_path) for p in tmp_path.rglob("*"))
+    assert mgr.find_feed_dir("attackerchosen123") is None
+    assert mgr.find_session_root("attackerchosen123", "local") is None
+    assert sorted(p.relative_to(tmp_path) for p in tmp_path.rglob("*")) == before
+    # a real session is found once the agent made it
+    (tmp_path / "task" / "local" / "realsess" / "feed").mkdir(parents=True)
+    assert mgr.find_feed_dir("realsess", "local") == (tmp_path / "task" / "local" / "realsess" / "feed").resolve()
+
+
+@pytest.mark.asyncio
+async def test_the_watcher_gives_up_on_an_id_that_never_appears(local_server, monkeypatch):
+    server = local_server
+    import webview.feed_routes as feed_routes
+    monkeypatch.setattr(feed_routes, "FEED_WAIT_POLLS", 2)
+    real_sleep = asyncio.sleep
+    monkeypatch.setattr(server.asyncio, "sleep", lambda s: real_sleep(0))
+    await asyncio.wait_for(server._feed_watcher("web9-never"), timeout=5)

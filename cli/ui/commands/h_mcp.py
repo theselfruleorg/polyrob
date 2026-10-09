@@ -3,7 +3,8 @@
 Read-only: list the configured MCP servers and their connection state. Prefers a
 live ``MCPServerManager`` (via the loaded MCP tool on the agent controller, or a
 container service) and falls back to the static config
-(``config/mcp_config.json`` + the file-first ``~/.polyrob``/``./.polyrob`` overlay)
+(``config/mcp_config.json`` + the file-first ``~/.polyrob/mcp.json`` overlay; a
+``./.polyrob/mcp.json`` is never loaded — a cloned directory could supply it)
 when no live manager is reachable. It never connects to or mutates anything.
 
 The main REPL session wires registration (this module only exports the handler).
@@ -112,7 +113,7 @@ def _load_static_config() -> Tuple[bool, Dict[str, Any]]:
     """Return ``(enabled, servers)`` from the static config, fail-open.
 
     ``servers`` maps server name -> its config dict. Merges the file-first local
-    overlay (``~/.polyrob/mcp.json`` + ``./.polyrob/mcp.json``, project wins) on
+    overlay (``~/.polyrob/mcp.json`` only — never a project file) on
     top of ``config/mcp_config.json``.
     """
     enabled = False

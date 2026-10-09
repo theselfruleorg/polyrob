@@ -307,7 +307,7 @@ class AppServiceRegistry:
             raise ValueError(f"{slug!r} is deploying right now; request again after it finishes")
         requested = approval_config(cmd=cmd, container_port=container_port,
                                     health_path=health_path, egress=egress,
-                                    egress_allow=allow, env=clean_env)
+                                    egress_allow=allow, env=clean_env, source_dir=source_dir)
         same_config = (existing.get("approved_fingerprint") == fingerprint(requested))
         approved = bool(existing.get("approved_at")) and same_config
         if not approved and existing["status"] == STATUS_LIVE:

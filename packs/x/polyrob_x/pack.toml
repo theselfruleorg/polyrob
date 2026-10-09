@@ -1,10 +1,10 @@
 # The data half of the X pack (067 P3b): read by core.packs.manifest WITHOUT
 # importing this package, registered in the loader's phase 1.
 id = "x"
-version = "1.2.1"
+version = "1.3.0"
 summary = "X (Twitter): the API tool, the browser rail, the DM surface, cron post delivery"
 pack_api = 1
-requires_core = "==1.2.*"
+requires_core = "==1.3.*"
 requires_packs = []
 tier = "first-party"
 # 067 (one install): the core extra that carries this pack's SDKs. The pack
@@ -31,7 +31,7 @@ public_paths = ["/oauth/callback"]
 [tools.twitter]
 # 067 (one install): without this module the tool is withheld and names the pack's extra.
 requires = ["tweepy"]
-capabilities = ["high_impact", "shared_identity", "writes_social", "writes_comms"]
+capabilities = ["high_impact", "delegate_blocked", "shared_identity", "writes_social", "writes_comms"]
 untrusted_output = true
 cli = "static"
 permissions = ["network.read", "network.write", "social.post"]
@@ -101,16 +101,16 @@ gate = { flag = "X_BROWSER_ENABLED", tier = "disabled", label = "X_BROWSER_ENABL
 effect = "none"
 [tools.x_browser.verbs.x_browser_x_post]
 effect = "social"
-approval = ["recommended"]
+approval = ["recommended", "always_queued"]
 # Registering an X account is an identity-creating act: owner-queued even
 # under autonomous mode.
 [tools.x_browser.verbs.x_browser_x_signup_start]
 effect = "social"
 approval = ["always_queued"]
 [tools.x_browser.verbs.x_browser_x_reply]
-approval = ["recommended"]
+approval = ["recommended", "always_queued"]
 [tools.x_browser.verbs.x_browser_x_dm]
-approval = ["recommended"]
+approval = ["recommended", "always_queued"]
 # Inherits the ceiling by design (INHERIT_BY_DESIGN).
 [tools.x_browser.verbs.x_browser_x_read_dms]
 

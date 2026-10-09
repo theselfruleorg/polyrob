@@ -175,3 +175,46 @@ async def test_router_does_not_record_a_dm(monkeypatch):
     await _router(rec).publish(OutboundMessage(
         session_key="agent:main:telegram:dm:555:u_abc", text="private", partial=False))
     assert rec.rows == []
+
+
+# --- the PROACTIVE half: `message(target=<room>)` from a cron/goal session ----
+# Prod 2026-10-06: the hourly den job posts its warnings with the `message` tool
+# (send_message_receipt, key `direct:…`), which never reached the ledger. The
+# 01:00 run warned @Pappicall_owner 1/2; the 02:01 run read the ledger, saw the
+# same 00:29 pitch and no warning, and warned 1/2 again.
+
+
+@pytest.mark.asyncio
+async def test_a_proactive_post_into_a_room_is_recorded(monkeypatch):
+    rec = _Recorder()
+    r = _router(rec)
+    monkeypatch.setattr(r, "_is_room", lambda s, c: True)
+    receipt = await r.send_message_receipt("-100123", "@spammer — Warning 1/2.")
+    assert receipt.status == "sent"
+    assert [(r_.sender_is_bot, r_.chat_id, r_.text) for r_ in rec.rows] == [
+        (True, "-100123", "@spammer — Warning 1/2.")]
+
+
+@pytest.mark.asyncio
+async def test_a_proactive_dm_is_not_recorded(monkeypatch):
+    rec = _Recorder()
+    r = _router(rec)
+    monkeypatch.setattr(r, "_is_room", lambda s, c: False)
+    await r.send_message_receipt("555", "private")
+    assert rec.rows == []
+
+
+@pytest.mark.asyncio
+async def test_a_failed_proactive_room_post_is_not_recorded(monkeypatch):
+    rec = _Recorder()
+    r = _router(rec)
+    monkeypatch.setattr(r, "_is_room", lambda s, c: True)
+
+    class _Fail:
+        capabilities = SimpleNamespace(media_out=False)
+
+        async def send(self, msg):
+            return SimpleNamespace(success=False, error="boom")
+    r._surfaces["telegram"] = _Fail()
+    await r.send_message_receipt("-100123", "never heard")
+    assert rec.rows == []

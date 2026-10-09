@@ -85,7 +85,9 @@ def _dispatcher(board):
 def test_resolve_tools_posture_1_default(monkeypatch):
     _posture(monkeypatch, "1")
     disp = _dispatcher(_Board())
-    tools = disp._resolve_tools(_Goal())
+    # An owner-stamped goal gets the posture default; an unstamped row is
+    # agent work (positive owner stamp, 2026-10-08) and keeps the agent ceiling.
+    tools = disp._resolve_tools(_Goal(payload={"authored_by": "owner"}))
     assert "code_execution" in tools and "shell" in tools
 
 
@@ -149,7 +151,7 @@ def test_resolve_tools_payload_rig_narrows_the_default(monkeypatch):
     monkeypatch.setenv("AGENT_COMPUTE_POSTURE", "0")
     monkeypatch.delenv("AUTONOMOUS_RIG_DEFAULT", raising=False)
     disp = _dispatcher(_Board())
-    tools = disp._resolve_tools(_Goal(payload={"rig": "ops"}))
+    tools = disp._resolve_tools(_Goal(payload={"rig": "ops", "authored_by": "owner"}))
     assert tools == ["filesystem", "task", "goal", "cronjob", "message"]
 
 

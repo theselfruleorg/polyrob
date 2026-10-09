@@ -24,6 +24,9 @@ class _PM:
     def get_feed_dir(self, sid):
         return self._feed_dir
 
+    def find_feed_dir(self, sid, user_id=None):
+        return self._feed_dir if self._feed_dir.is_dir() else None
+
 
 @pytest.mark.asyncio
 async def test_bad_parse_is_retried(tmp_path, monkeypatch):

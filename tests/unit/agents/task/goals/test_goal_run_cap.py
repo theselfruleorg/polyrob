@@ -17,7 +17,8 @@ async def test_goal_run_capped_by_max_run_seconds(tmp_path, monkeypatch):
     monkeypatch.setenv("GOALS_ENABLED", "true")
     board = GoalBoard(str(tmp_path / "goals.db"))
     g = board.create(user_id="u1", title="hangs", max_retries=5)
-    assert board.claim(g.id, "w", ttl_seconds=900) is not None
+    g = board.claim(g.id, "w", ttl_seconds=900)
+    assert g is not None
 
     async def _hang(*a, **k):
         await asyncio.sleep(100)

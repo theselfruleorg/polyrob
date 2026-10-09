@@ -26,6 +26,12 @@ only, so for a money action (``core.money.classify.money_action``) the ladder
 offers only o/d/n and treats a typed s/a as [o]nce: one keystroke must not cover
 every later call at any amount.
 
+⚠️ The shell is never widened by NAME either (073 W2). For ``shell_run`` the ladder
+is keyed by the COMMAND: [s]ession remembers this exact command line, [a]lways
+queues it for the ``shell.allow`` pref (owner review via ``/pending``), and [n]ever
+appends it to ``shell.deny`` — one keystroke must not approve or forbid every later
+shell command.
+
 Unrecognized input re-prompts once, then fails CLOSED (deny) — never guesses.
 
 The blocking input runs in a worker thread (``asyncio.to_thread``) so it yields the
@@ -92,6 +98,19 @@ def _parse_ladder(answer: Any) -> Optional[str]:
 MONEY_ONE_AT_A_TIME = "money actions are approved one at a time"
 
 
+_SHELL_ACTIONS = frozenset({"shell_run"})
+#: A shell command in the approval prompt is shown whole up to this size.
+_SHELL_PROMPT_MAX_CHARS = 4000
+
+
+def _shell_command(action_name: str, params: Optional[Dict[str, Any]]) -> Optional[str]:
+    """The command line for a shell action (the ladder's key), else None."""
+    if action_name not in _SHELL_ACTIONS:
+        return None
+    cmd = " ".join(str((params or {}).get("command") or "").split())
+    return cmd or None
+
+
 def _is_money(action_name: str) -> bool:
     """True when *action_name* can move money — the approval queue's own
     fail-CLOSED predicate (over ``core.money.classify.money_action``), so the
@@ -138,6 +157,22 @@ class InteractiveCLIApprover(ApprovalProvider):
                 f"\n[approval] Allow '{action_name}'? {self._digest(params)}\n"
                 f"  ({MONEY_ONE_AT_A_TIME})\n"
                 "  [o]nce / [d]eny / [n]ever: "
+            )
+        command = _shell_command(action_name, params)
+        if command is not None:
+            # 073 W2: the owner decides THIS command line, so show all of it — the
+            # 60-char digest would hide whatever follows a long harmless prefix.
+            raw = str((params or {}).get("command") or "")
+            if len(raw) > _SHELL_PROMPT_MAX_CHARS:
+                raw = (raw[:_SHELL_PROMPT_MAX_CHARS]
+                       + f"\n  ...[{len(raw) - _SHELL_PROMPT_MAX_CHARS} more chars not shown"
+                       " — deny if you have not seen enough]")
+            rest = {k: v for k, v in (params or {}).items() if k != "command"}
+            shown = "\n".join("    " + line for line in raw.splitlines() or [""])
+            return (
+                f"\n[approval] Allow '{action_name}'? {self._digest(rest)}\n"
+                f"  command:\n{shown}\n"
+                "  [o]nce / [s]ession / [a]lways-allow / [d]eny / [n]ever: "
             )
         return (
             f"\n[approval] Allow '{action_name}'? {self._digest(params)}\n"
@@ -208,6 +243,35 @@ class InteractiveCLIApprover(ApprovalProvider):
                 "(falling open to session-scoped only): %s", action_name, e,
             )
 
+    def _shell_list_update(self, key: str, command: str, *, propose: bool) -> None:
+        """Add ``command`` (as an exact glob) to the ``shell.allow``/``shell.deny`` pref.
+        Deny is a tightening -> written now; allow widens -> queued for /pending.
+        Never raises (the decision for THIS call is already made)."""
+        if not self._has_tenant_context():
+            print(f"[approval] shell: no tenant context — {key} not recorded")
+            return
+        try:
+            from core.prefs import load_preferences, propose_pref_change, write_preference
+            from core.security.command_guard import glob_for
+            entry = glob_for(command)
+            current = list(load_preferences(self._home_dir, self._user_id).get(key, []) or [])
+            if entry in current:
+                print(f"[approval] shell: already in {key}")
+                return
+            updated = current + [entry]
+            if propose:
+                ok, msg = propose_pref_change(self._user_id, key, updated, self._home_dir)
+                note = "queued for owner review (/pending)"
+            else:
+                ok, msg = write_preference(self._home_dir, self._user_id, key, updated)
+                note = "recorded"
+            if ok:
+                print(f"[approval] shell: `{command[:80]}` {note} in {key}")
+            else:
+                logger.warning("approval ladder: %s update failed: %s", key, msg)
+        except Exception as e:
+            logger.warning("approval ladder: %s bookkeeping failed: %s", key, e)
+
     def _handle_never(self, action_name: str) -> None:
         """[n]ever bookkeeping. Never raises — the deny decision for THIS call
         is already made independently of this method (fail-open on persistence,
@@ -245,9 +309,24 @@ class InteractiveCLIApprover(ApprovalProvider):
                 "(deny for this call still honored): %s", action_name, e,
             )
 
-    def _apply_decision(self, decision: str, action_name: str) -> bool:
+    def _apply_decision(self, decision: str, action_name: str,
+                        params: Optional[Dict[str, Any]] = None) -> bool:
         if decision == "once":
             return True
+        command = _shell_command(action_name, params)
+        if command is not None:
+            # 073 W2: the shell ladder is keyed by the command, never the name.
+            if decision == "session":
+                self._session_approved.add(f"shell_run\x00{command}")
+                return True
+            if decision == "always":
+                self._session_approved.add(f"shell_run\x00{command}")
+                self._shell_list_update("shell.allow", command, propose=True)
+                return True
+            if decision == "never":
+                self._shell_list_update("shell.deny", command, propose=False)
+                return False
+            return False
         if decision in ("session", "always") and _is_money(action_name):
             # Never widen money: an s/a typed anyway approves THIS call only.
             print(f"[approval] '{action_name}': {MONEY_ONE_AT_A_TIME} "
@@ -273,7 +352,11 @@ class InteractiveCLIApprover(ApprovalProvider):
         # [s]ession/[a]lways-allow short-circuit: no prompt, no disk I/O. A
         # money action never short-circuits (it is never added; this is the
         # second lock).
-        if action_name in self._session_approved and not _is_money(action_name):
+        command = _shell_command(action_name, params)
+        if command is not None:
+            if f"shell_run\x00{command}" in self._session_approved:
+                return True
+        elif action_name in self._session_approved and not _is_money(action_name):
             return True
 
         from core.approval_input import get_approval_input
@@ -283,7 +366,7 @@ class InteractiveCLIApprover(ApprovalProvider):
             decision = _parse_ladder(answer)
             if decision is None:
                 decision = _parse_ladder(await reader(self._reprompt(action_name)))
-            return self._apply_decision(decision or "deny", action_name)
+            return self._apply_decision(decision or "deny", action_name, params)
 
         # H8: only one interactive prompt may own stdin at a time. If a prompt is
         # already outstanding, deny (fail-closed) rather than spawn a competing reader.
@@ -323,7 +406,7 @@ class InteractiveCLIApprover(ApprovalProvider):
         # returned — i.e. after the point where wait_for could have cancelled
         # us — so _apply_decision's prefs bookkeeping never runs on a
         # cancelled/timed-out request.
-        return self._apply_decision(decision, action_name)
+        return self._apply_decision(decision, action_name, params)
 
 
 # Register under the APPROVAL_PROVIDER name 'interactive_cli'.

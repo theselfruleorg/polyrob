@@ -17,7 +17,40 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
+import pytest
+
 from cli.commands.config import config
+
+
+@pytest.fixture(autouse=True)
+def _home_env(tmp_path, monkeypatch):
+    """Every write lands in the home .env — the only env file the CLI loads
+    (``./.polyrob/.env`` is never read, so ``--project`` is refused)."""
+    monkeypatch.setenv("POLYROB_HOME", str(tmp_path / "home"))
+
+
+def test_project_scope_is_refused_and_writes_nothing(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    r = CliRunner().invoke(config, ["set", "GOAL_DAILY_QUOTA", "4", "--project"])
+    assert r.exit_code != 0
+    assert "does not load the project env file" in r.output
+    assert str(tmp_path / "home" / ".env") in r.output
+    assert not (tmp_path / ".polyrob" / ".env").exists()
+    assert not (tmp_path / "home" / ".env").exists()
+
+
+def test_set_then_read_through_the_cli_env_resolution(tmp_path, monkeypatch):
+    """Regression: `config set` writes the file the CLI loader reads."""
+    from core.env_file import read_env_file
+    from core.paths import env_file_candidates
+    monkeypatch.chdir(tmp_path)
+    r = CliRunner().invoke(config, ["set", "GOAL_DAILY_QUOTA", "4"])
+    assert r.exit_code == 0, r.output
+    loaded = env_file_candidates(local_mode=True)
+    assert read_env_file(loaded[0].path).get("GOAL_DAILY_QUOTA") == "4"
+    r = CliRunner().invoke(config, ["unset", "GOAL_DAILY_QUOTA"])
+    assert r.exit_code == 0, r.output
+    assert "GOAL_DAILY_QUOTA" not in read_env_file(loaded[0].path)
 
 
 def test_unknown_flag_rejected_without_force(tmp_path, monkeypatch):
@@ -30,7 +63,7 @@ def test_unknown_flag_written_with_force(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     r = CliRunner().invoke(config, ["set", "MY_CUSTOM_THING", "1", "--force"])
     assert r.exit_code == 0
-    assert "MY_CUSTOM_THING=1" in (tmp_path / ".polyrob" / ".env").read_text()
+    assert "MY_CUSTOM_THING=1" in (tmp_path / "home" / ".env").read_text()
 
 
 def test_known_flag_and_secret_still_write(tmp_path, monkeypatch):
@@ -59,9 +92,9 @@ def test_secret_key_writes_raw_without_force_even_if_unrecognized(tmp_path, monk
     # is_secret_key() flags it (contains "TOKEN") — the secret branch must win
     # BEFORE the unknown-key rejection, with no --force needed.
     monkeypatch.chdir(tmp_path)
-    r = CliRunner().invoke(config, ["set", "MY_CUSTOM_API_TOKEN", "shh-secret-value", "--project"])
+    r = CliRunner().invoke(config, ["set", "MY_CUSTOM_API_TOKEN", "shh-secret-value"])
     assert r.exit_code == 0, r.output
-    text = (tmp_path / ".polyrob" / ".env").read_text()
+    text = (tmp_path / "home" / ".env").read_text()
     assert "MY_CUSTOM_API_TOKEN=shh-secret-value" in text
 
 
@@ -71,9 +104,9 @@ def test_secret_key_skips_shape_check(tmp_path, monkeypatch):
     # The secret branch must be checked FIRST and never shape-validate — if it
     # fell through to the catalog branch instead, this value would be rejected.
     monkeypatch.chdir(tmp_path)
-    r = CliRunner().invoke(config, ["set", "LLM_MAX_OUTPUT_TOKENS", "not-a-number", "--project"])
+    r = CliRunner().invoke(config, ["set", "LLM_MAX_OUTPUT_TOKENS", "not-a-number"])
     assert r.exit_code == 0, r.output
-    assert "LLM_MAX_OUTPUT_TOKENS=not-a-number" in (tmp_path / ".polyrob" / ".env").read_text()
+    assert "LLM_MAX_OUTPUT_TOKENS=not-a-number" in (tmp_path / "home" / ".env").read_text()
 
 
 # ---------------------------------------------------------------------------
@@ -88,8 +121,8 @@ def test_shape_mismatch_rejected(tmp_path, monkeypatch):
     r = CliRunner().invoke(config, ["set", "GOAL_DAILY_QUOTA", "notanumber"])
     assert r.exit_code != 0
     assert "GOAL_DAILY_QUOTA" in r.output
-    assert not (tmp_path / ".polyrob" / ".env").exists() or \
-        "GOAL_DAILY_QUOTA=notanumber" not in (tmp_path / ".polyrob" / ".env").read_text()
+    assert not (tmp_path / "home" / ".env").exists() or \
+        "GOAL_DAILY_QUOTA=notanumber" not in (tmp_path / "home" / ".env").read_text()
 
 
 def test_bool_shape_mismatch_rejected(tmp_path, monkeypatch):
@@ -117,7 +150,7 @@ def test_force_writes_unrecognized_key_without_close_match(tmp_path, monkeypatch
     monkeypatch.chdir(tmp_path)
     r = CliRunner().invoke(config, ["set", "SOME_BRAND_NEW_PROVIDER_FLAG", "1", "--force"])
     assert r.exit_code == 0, r.output
-    assert "SOME_BRAND_NEW_PROVIDER_FLAG=1" in (tmp_path / ".polyrob" / ".env").read_text()
+    assert "SOME_BRAND_NEW_PROVIDER_FLAG=1" in (tmp_path / "home" / ".env").read_text()
 
 
 def test_unrecognized_key_without_close_match_rejected_without_force(tmp_path, monkeypatch):
@@ -127,7 +160,7 @@ def test_unrecognized_key_without_close_match_rejected_without_force(tmp_path, m
     r = CliRunner().invoke(config, ["set", "MY_CUSTOM_THING", "1"])
     assert r.exit_code != 0
     assert "--force" in r.output
-    env = tmp_path / ".polyrob" / ".env"
+    env = tmp_path / "home" / ".env"
     assert not env.exists() or "MY_CUSTOM_THING" not in env.read_text()
 
 
@@ -140,7 +173,7 @@ def test_semantic_near_miss_rejected_without_force_written_with_force(tmp_path, 
     assert r.exit_code != 0
     r = CliRunner().invoke(config, ["set", "MAX_DAILY_GOALS", "4", "--force"])
     assert r.exit_code == 0, r.output
-    assert "MAX_DAILY_GOALS=4" in (tmp_path / ".polyrob" / ".env").read_text()
+    assert "MAX_DAILY_GOALS=4" in (tmp_path / "home" / ".env").read_text()
 
 
 def test_allowlisted_legacy_key_writes_without_force(tmp_path, monkeypatch):
@@ -151,7 +184,7 @@ def test_allowlisted_legacy_key_writes_without_force(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     r = CliRunner().invoke(config, ["set", "DEFAULT_MODEL", "claude-opus-4-8"])
     assert r.exit_code == 0, r.output
-    assert "DEFAULT_MODEL=claude-opus-4-8" in (tmp_path / ".polyrob" / ".env").read_text()
+    assert "DEFAULT_MODEL=claude-opus-4-8" in (tmp_path / "home" / ".env").read_text()
 
 
 def test_allowlisted_legacy_provider_keys_write_without_force(tmp_path, monkeypatch):
@@ -212,8 +245,7 @@ def test_check_reports_env_typo_and_never_leaks_secret_value(tmp_path, monkeypat
     (home / ".polyrob").mkdir(parents=True)
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
     monkeypatch.chdir(tmp_path)
-    (tmp_path / ".polyrob").mkdir()
-    (tmp_path / ".polyrob" / ".env").write_text(
+    (tmp_path / "home" / ".env").write_text(
         "GOAL_DAILY_QOUTA=4\nOPENAI_API_KEY=sk-realsecretvalue123\n"
     )
     r = CliRunner().invoke(config, ["check"])

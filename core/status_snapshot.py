@@ -430,15 +430,9 @@ def _release_window() -> float:
 
 
 def _objective_budget(payload: Dict[str, Any]) -> int:
-    """Mirror of ``GoalBoard.objective_budget`` (a stream is uncapped; own
-    ``goal_budget`` wins; else OBJECTIVE_GOAL_BUDGET, default 25)."""
-    if payload.get("stream_id"):
-        return 0
-    own = str(payload.get("goal_budget") if payload.get("goal_budget") is not None else "").strip()
-    if own.lstrip("-").isdigit():
-        return max(0, int(own))
-    from core.env import int_env
-    return int_env("OBJECTIVE_GOAL_BUDGET", 25)
+    """``GoalBoard.objective_budget``'s rule — the ONE copy in core.goal_vocab."""
+    from core.goal_vocab import objective_goal_budget
+    return objective_goal_budget(payload)
 
 
 def _payload(row: Dict[str, Any]) -> Dict[str, Any]:
@@ -1720,6 +1714,15 @@ def _identity_section(instance_id: str, data_dir: Optional[str]) -> Section:
         # item because a permanent WARN for an optional step is the noise that
         # teaches an owner to skip the health block.
         sec.lines.append("erc-8004: not registered (optional)")
+
+    # The version of the code that RUNS (the install line below is history).
+    try:
+        from core.version import get_version, deployed_sha, running_version_line
+        sec.data["version"] = get_version()
+        sec.data["deployed_sha"] = deployed_sha()
+        sec.lines.append(f"running: {running_version_line()}")
+    except Exception as exc:
+        sec.lines.append(f"running: unreadable ({type(exc).__name__})")
 
     # 062: HOW this instance was installed. The record lives in the per-user
     # config home, not the (per-project) data home, so it reads the same from

@@ -160,28 +160,24 @@ def _signer_ping_line(sec: Section) -> str:
 
 
 def _cap_drift_health(sec: Section, caps) -> None:
-    """068 G7b: the gate allowing MORE than the signer will sign. An
-    unresolvable comparison is SAID (in data and a line), never a false drift."""
+    """The signer is the cap envelope (owner decision 2026-10-06): the gate
+    enforces ``min(configured, signer)``, so the two can no longer disagree.
+    Where an agent setting sits above the signer, say once which number binds
+    — a status LINE, not a health item: nothing is wrong, and a health item
+    was repeated in every digest as a "cap mismatch"."""
     try:
-        from core.wallet.signer_cap_drift import (cap_drift, drift_remedy, drift_text,
-                                                  gate_caps_now)
-        drifts = cap_drift(caps, gate_caps_now())
+        from core.wallet.config import configured_caps_now
+        from core.wallet.signer_envelope import bound_legs, bound_text
+        legs = bound_legs(caps, configured_caps_now())
     except Exception as exc:  # noqa: BLE001
-        sec.data["signer_cap_drift"] = f"unavailable ({type(exc).__name__})"
-        sec.lines.append(f"signer cap comparison: unavailable ({type(exc).__name__})")
+        sec.data["signer_bound_caps"] = f"unavailable ({type(exc).__name__})"
         return
-    sec.data["signer_cap_drift"] = [
-        {"leg": d.leg, "signer": d.signer,
-         # 068 B12: a disabled leg is "unlimited" (inf is not valid JSON).
-         "gate": ("unlimited" if d.gate is not None and d.gate == float("inf") else d.gate),
-         "drifted": d.drifted}
-        for d in drifts]
-    for d in drifts:
-        if d.drifted:
-            sec.health.append(HealthItem(
-                key=f"signer_cap_drift_{d.leg}",
-                severity=SEVERITY_CRIT if sec.data.get("signer_mode") == "remote" else SEVERITY_WARN,
-                text=drift_text(d), remedy=drift_remedy(d)))
+    sec.data["signer_bound_caps"] = [
+        {"leg": b.leg, "signer": b.signer,
+         "configured": "unlimited" if b.configured == float("inf") else b.configured}
+        for b in legs]
+    for b in legs:
+        sec.lines.append("bound by the signer — " + bound_text(b))
 
 
 def _shadow_line(sec: Section) -> str:

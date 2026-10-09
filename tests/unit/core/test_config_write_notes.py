@@ -1,8 +1,8 @@
 """026 P0.6/P1.5/P1.6 — post-write honesty notes on every flag writer.
 
-- P0.6: a global write silently shadowed by the project file (project beats
-  global), and a process-env value that differs from the effective file value,
-  now say so at write time (`unset` had the cross-scope hint; `set` had none).
+- P0.6: a write into the project file (never loaded since the 2026-10-07
+  security pass), and a process-env value that differs from the effective file
+  value, say so at write time.
 - P1.6: writing AUTONOMY_MODE=autonomous evaluates the single-owner clamp NOW
   and names the missing prerequisite (the runtime's one-time WARN is invisible
   at the console's default ERROR level).
@@ -36,23 +36,31 @@ def _write_project(key, value, tmp_path=None):
         f.write(f"{key}={value}\n")
 
 
-def test_global_write_warns_when_project_shadows():
+def test_project_file_never_shadows_a_global_write():
+    """Regression: ./.polyrob/.env is not loaded (core.paths.env_file_candidates),
+    so a global write must not be told it 'has no effect'."""
     _write_project("GOALS_ENABLED", "false")
     notes = post_write_notes("GOALS_ENABLED", "true", "global")
-    assert any("shadowed by" in n and "config unset GOALS_ENABLED" in n
-               for n in notes)
+    assert not any("shadowed" in n or "no effect" in n for n in notes)
 
 
-def test_no_shadow_note_when_values_agree():
-    _write_project("GOALS_ENABLED", "true")
-    notes = post_write_notes("GOALS_ENABLED", "true", "global")
-    assert not any("shadowed" in n for n in notes)
+def test_project_write_is_told_the_file_is_not_loaded():
+    notes = post_write_notes("GOALS_ENABLED", "true", "project")
+    assert any("is not loaded" in n and "--global" in n for n in notes)
+
+
+def _write_global(key, value):
+    import os, pathlib
+    home = pathlib.Path(os.environ["POLYROB_HOME"])
+    home.mkdir(parents=True, exist_ok=True)
+    with open(home / ".env", "a") as f:
+        f.write(f"{key}={value}\n")
 
 
 def test_process_env_divergence_notes(monkeypatch):
-    _write_project("GOALS_ENABLED", "true")
+    _write_global("GOALS_ENABLED", "true")
     monkeypatch.setenv("GOALS_ENABLED", "false")
-    notes = post_write_notes("GOALS_ENABLED", "true", "project")
+    notes = post_write_notes("GOALS_ENABLED", "true", "global")
     assert any("this process started with GOALS_ENABLED=false" in n
                for n in notes)
 
@@ -81,21 +89,24 @@ def test_local_surface_has_no_server_note(monkeypatch):
     assert not any("CLI runs only" in n for n in notes)
 
 
-def test_set_value_carries_notes_through():
-    _write_project("GOALS_ENABLED", "false")
-    result = set_value("GOALS_ENABLED", "true", scope="global")
-    assert result.ok is True
-    assert "shadowed by" in result.message
+def test_set_value_refuses_a_project_write():
+    """A write into a file that is never loaded is refused, not written."""
+    import pathlib
+    result = set_value("GOALS_ENABLED", "true", scope="project")
+    assert result.ok is False and result.outcome == "refused"
+    assert "does not load the project env file" in result.message
+    assert not (pathlib.Path.cwd() / ".polyrob" / ".env").exists()
 
 
-def test_cli_config_set_echoes_shadow_note(monkeypatch):
+def test_cli_config_set_project_is_refused_with_the_read_file(tmp_path):
     import click.testing
     from cli.commands.config import config
-    _write_project("GOALS_ENABLED", "false")
     runner = click.testing.CliRunner()
-    result = runner.invoke(config, ["set", "GOALS_ENABLED", "true", "--global"])
-    assert result.exit_code == 0, result.output
-    assert "shadowed by" in result.output
+    result = runner.invoke(config, ["set", "GOALS_ENABLED", "true", "--project"])
+    assert result.exit_code != 0
+    assert "does not load the project env file" in result.output
+    assert str(tmp_path / "home" / ".env") in result.output
+    assert not (tmp_path / ".polyrob" / ".env").exists()
 
 
 def test_repl_config_set_appends_clamp_note(tmp_path):

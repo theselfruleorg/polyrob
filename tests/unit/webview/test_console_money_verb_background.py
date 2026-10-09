@@ -91,7 +91,7 @@ def test_send_go_answers_started_and_delivers_the_result_later(rig):
     assert user_id == "rob" and "0xabc" in text
     assert kw.get("session_id") == "sess1"
     name, event, room = rig["sio"].emitted[0]
-    assert name == "feed_update" and room == "sess1"
+    assert name == "feed_update" and room == "session:sess1"
     assert event["type"] == "command_reply" and "0xabc" in event["data"]["text"]
 
 

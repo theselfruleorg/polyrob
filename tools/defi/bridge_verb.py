@@ -407,7 +407,7 @@ async def perform_bridge(tool, params, execution_context=None):
 
     provider = RelayBridgeProvider()
     try:
-        quote = provider.quote(
+        quote = await _asyncio.to_thread(provider.quote,
             origin_chain_id=origin_id, dest_chain_id=dest_id,
             origin_currency=NATIVE_SVM if svm_origin else NATIVE_EVM,
             dest_currency=dest_currency,
@@ -428,6 +428,16 @@ async def perform_bridge(tool, params, execution_context=None):
         return tool._ar(content=header + f"  guard: {verdict.reason}\n"
                                          f"  RESULT: NOT SENT.")
     header += "  phase 1: assertions passed\n"
+    from tools.defi.bridge_price import quote_refusal
+    economic_refusal = await _asyncio.to_thread(
+        quote_refusal, tool, quote, origin=params.from_chain.strip().lower(),
+        destination=dest_name)
+    if economic_refusal:
+        header += f"  independent value check: {economic_refusal}\n"
+        if not params.dry_run:
+            return tool._ar(content=header + "  RESULT: NOT SENT.")
+    else:
+        header += "  independent value check: arrival floor and impact within bounds\n"
 
     # Build + simulate the ORIGIN leg. Exactly one of `raw_tx`/`prepared` is set
     # from here on — the two families sign through different rails and there is
@@ -457,7 +467,7 @@ async def perform_bridge(tool, params, execution_context=None):
             return tool._ar(error=f"no Solana signer: {exc}")
         from core.wallet.solana_rail import SolanaRail
         try:
-            blockhash = SolanaRail(signer=None).recent_blockhash()
+            blockhash = await _asyncio.to_thread(SolanaRail(signer=None).recent_blockhash)
         except Exception as exc:
             return tool._ar(content=header + (
                 f"  guard: REFUSED — no recent blockhash ({exc}); a transaction "
@@ -485,8 +495,8 @@ async def perform_bridge(tool, params, execution_context=None):
         # The bridge calls Relay's deposit program, which the default allowlist
         # deliberately excludes (a SWAP calling it is an anomaly). Widened HERE,
         # per-call, from a PINNED constant — never from the quote we are vetting.
-        deltas = tool._solana_simulate(raw_tx=raw_tx, owner=sender, mints=(),
-                                       extra_allowed=RELAY_PROGRAM_IDS)
+        deltas = await _asyncio.to_thread(tool._solana_simulate, raw_tx=raw_tx,
+                                        owner=sender, mints=(), extra_allowed=RELAY_PROGRAM_IDS)
         if deltas is None or not deltas.ok:
             reason = getattr(deltas, "reason", "no result") if deltas else "no result"
             return tool._ar(content=header + (
@@ -498,6 +508,10 @@ async def perform_bridge(tool, params, execution_context=None):
                 f"  guard: REFUSED — this transaction changes AUTHORITY over "
                 f"your accounts ({list(deltas.authority_grants)}). A bridge "
                 f"grants nothing.\n  RESULT: NOT SENT."))
+        if any(delta < 0 for delta in (deltas.token_deltas or {}).values()):
+            return tool._ar(content=header + (
+                "  guard: REFUSED — undeclared token outflow in a native bridge.\n"
+                "  RESULT: NOT SENT."))
         outflow = -int(deltas.native_delta or 0)
         if outflow <= 0:
             return tool._ar(content=header + (
@@ -535,7 +549,7 @@ async def perform_bridge(tool, params, execution_context=None):
         # vetted). Relay's figure can only RAISE it. Unpriced refuses: no cap
         # can bound a number we do not have.
         from tools.defi.spl_deploy_verb import _price_sol
-        svm_usd = _price_sol(tool, outflow / 1_000_000_000)
+        svm_usd = await _asyncio.to_thread(_price_sol, tool, outflow / 1_000_000_000)
         if svm_usd is None:
             return tool._ar(content=header + (
                 "  guard: REFUSED — the SOL leaving could not be priced at the "
@@ -645,7 +659,7 @@ async def perform_bridge(tool, params, execution_context=None):
     # watch a number that cannot move and report a real delivery as `in_flight`
     # forever.
     measure = bridge_guard.arrival_reader(quote.currency_out)
-    balance_before = measure(recipient, dest_name)
+    balance_before = await _asyncio.to_thread(measure, recipient, dest_name)
     if balance_before is None:
         return tool._ar(content=header + (
             f"  guard: REFUSED — could not read {recipient} on {dest_name} "
@@ -722,19 +736,30 @@ async def perform_bridge(tool, params, execution_context=None):
         header += (f"  lane:  autonomous — ${amount_usd:,.2f} is within the "
                    f"${_ceiling:,.2f} ceiling\n")
 
-    bid = bridge_guard.record_pending(
-        user_id=str(getattr(execution_context, "user_id", "") or "owner"),
-        quote=quote, amount_usd=amount_usd, balance_before=balance_before)
-
     async with gate.reserve():
+        # Re-check after acquiring the same reservation used by every sender.
+        try:
+            if bridge_guard.conflicting_open_bridge(
+                    dest_chain_id=dest_id, recipient=recipient,
+                    currency_out=quote.currency_out) is not None:
+                return tool._ar(error="Another bridge into this balance is still pending; nothing was sent")
+        except Exception:
+            return tool._ar(error="Cannot verify pending bridges; nothing was sent")
+        bid = bridge_guard.record_pending(
+            user_id=str(getattr(execution_context, "user_id", "") or "owner"),
+            quote=quote, amount_usd=amount_usd, balance_before=balance_before)
         # M10 (security analysis 2026-09-23): the PolicyGate check INSIDE the
         # reserve, on BOTH origins. The SVM path used to record without ever
         # checking (no kill-switch, per-tx ceiling, daily cap, replay or
         # submission-journal check), and the EVM check in tx_guard ran outside
         # this lock, so two concurrent bridges could both clear a nearly
         # exhausted cap. check -> send -> record is now one critical section.
-        verdict = gate.check(venue="defi", amount_usd=float(amount_usd or 0.0),
-                             idempotency_key=idem)
+        from contextlib import nullcontext
+        from core.money.ledger import pause_probe
+        owner_direct = owner_direct_turn(execution_context, _is_forged_or_autonomous_turn, tool)
+        with pause_probe(lambda: False) if owner_direct else nullcontext():
+            verdict = gate.check(venue="defi", amount_usd=float(amount_usd or 0.0),
+                                 idempotency_key=idem)
         if not verdict.allowed:
             bridge_guard.settle(bid, state=bridge_guard.STATE_FAILED,
                                 detail=f"refused by PolicyGate: {verdict.reason}")
@@ -782,7 +807,8 @@ async def perform_bridge(tool, params, execution_context=None):
                 bridge_guard.settle(bid, state=(bridge_guard.STATE_IN_FLIGHT if _unknown
                                                 else bridge_guard.STATE_FAILED),
                                     detail=broadcast_failure_text(exc))
-                return tool._ar(error=broadcast_failure_text(exc))
+                return tool._ar(error=broadcast_failure_text(exc),
+                    error_kind=broadcast_error_kind(exc))
         # Checked above (M10) and recorded here, so every OTHER money verb
         # counts this spend against its caps.
         try:

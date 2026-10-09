@@ -76,7 +76,7 @@ def _validate(db, marker):
         typeof(holder) != 'text' OR length(holder) > 256 OR
         typeof(nonce) != 'text' OR length(nonce) > 256 OR
         typeof(created) NOT IN ('integer', 'real') OR created < 0 OR created > 1e100 OR
-        state NOT IN ('reserved', 'prepared', 'booked') OR state IS NULL LIMIT 1""").fetchone()
+        state NOT IN ('reserved', 'prepared', 'booked', 'rejected') OR state IS NULL LIMIT 1""").fetchone()
     if invalid:
         raise JournalUnavailable('invalid submission journal history')
     count = db.execute('SELECT count(*) FROM submissions').fetchone()[0]
@@ -99,7 +99,10 @@ def _validate(db, marker):
 
 #: 068 B5/B6: columns added after the first release. NULL on a legacy row —
 #: ``core.wallet.submission_release.booking_venue`` then derives the venue.
-_ADDED_COLUMNS = (("venue", "TEXT"), ("idempotency_key", "TEXT"))
+#: ``x402_auth``: the signed EIP-3009 authorization's public terms (authorizer,
+#: nonce, validBefore, asset, network) as JSON, so an expired x402 row can be
+#: resolved from ``authorizationState`` on chain (``core.wallet.x402_expiry``).
+_ADDED_COLUMNS = (("venue", "TEXT"), ("idempotency_key", "TEXT"), ("x402_auth", "TEXT"))
 
 
 def _migrate_columns(db):
@@ -168,7 +171,7 @@ def connection(path: Path, *, write=False):
                 db.execute('''CREATE TABLE submissions (
                     tx_hash TEXT PRIMARY KEY, chain TEXT NOT NULL, holder TEXT NOT NULL,
                     nonce TEXT NOT NULL, created REAL NOT NULL, state TEXT NOT NULL,
-                    venue TEXT, idempotency_key TEXT)''')
+                    venue TEXT, idempotency_key TEXT, x402_auth TEXT)''')
         identity, count = _validate(db, marker)
         if write:
             _migrate_columns(db)
@@ -223,7 +226,7 @@ def _write_public_summary(db, path: Path, identity, count) -> None:
     temporary = None
     try:
         rows = [{k: row[k] for k in _ROW_KEYS} for row in
-                db.execute("SELECT * FROM submissions WHERE state != 'booked'")]
+                db.execute("SELECT * FROM submissions WHERE state NOT IN ('booked', 'rejected')")]
         value = {'identity': identity, 'rows': count, 'journal': _journal_stat(path),
                  'unresolved': rows, 'written_at': time.time()}
         target = public_summary_path(path)

@@ -29,7 +29,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Optional, Set
+from typing import List, Optional, Set
 
 logger = logging.getLogger(__name__)
 
@@ -98,3 +98,49 @@ def is_own_trade_tx(tx_hash: Optional[str], data_dir: Optional[str] = None,
     if not tx_hash:
         return False
     return str(tx_hash).strip().lower() in own_trade_tx_refs(data_dir, path, account)
+
+
+#: Audit-ledger actions that pay money OUT to a counterparty.
+PAYMENT_ACTIONS = frozenset({"transfer", "solana_transfer"})
+
+
+def _payee_key(addr) -> str:
+    s = str(addr or "").strip()
+    return s.lower() if s[:2].lower() == "0x" else s
+
+
+def own_transfers_to(counterparty: Optional[str], data_dir: Optional[str] = None,
+                     path: Optional[str] = None) -> Optional[List[dict]]:
+    """Our own recorded outbound transfers to *counterparty*, oldest first.
+
+    Answers "did we pay X?" from the ledger (prod 2026-10-05: Rob found "no
+    record" of an 80 USDC payment it had made itself, then invented a cause).
+    Every outbound payment action counts (:data:`PAYMENT_ACTIONS`): a Solana
+    send is recorded as ``solana_transfer``, and reading ``transfer`` alone
+    answered "no record" for every Solana payee. An EVM (``0x``) address
+    matches case-insensitively; a base58 address is case-sensitive and matches
+    exactly. ``None`` means the ledger could not be read — UNKNOWN, never "we
+    paid nothing".
+    """
+    want = _payee_key(counterparty)
+    ledger = path or audit_path(data_dir)
+    if not want or not os.path.exists(ledger):
+        return None
+    out: List[dict] = []
+    try:
+        with open(ledger, "r", encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    entry = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if not isinstance(entry, dict) or entry.get("action") not in PAYMENT_ACTIONS:
+                    continue
+                if _payee_key(entry.get("counterparty")) != want:
+                    continue
+                out.append({k: entry.get(k) for k in
+                            ("ts", "amount_usd", "asset", "chain", "result_ref", "lane")})
+    except OSError as exc:
+        logger.warning("wallet trade index: could not read %s (%s)", ledger, exc)
+        return None
+    return out

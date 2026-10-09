@@ -114,3 +114,53 @@ def test_gate_refuses_a_test_entry_with_no_result(tmp_path):
     (tmp_path / "app.py").write_text("x")
     digest, reason = _gate(orch, tmp_path)
     assert digest is None and "run_tests" in reason
+
+
+# --- ship == tested by CONTENT (harness review G4) -----------------------
+# The ledger rule sees only the coding edit verbs. A shell `sed -i` (host shell,
+# a background job, a run_code cell) after a green run_tests used to ship an
+# untested tree. run_tests now records the tree it finished against.
+
+def _gate_sid(orch, root, sid="sess-g4"):
+    from tools.hf_deploy.digest import tested_tree_digest
+    return tested_tree_digest(orch, str(root), session_id=sid)
+
+
+def test_gate_refuses_a_shell_edit_after_green_test(tmp_path, green_orch):
+    import os
+    from core.ship_tree import record_tested_tree
+    (tmp_path / "app.py").write_text("v1")
+    record_tested_tree("sess-g4", str(tmp_path))
+    assert _gate_sid(green_orch, tmp_path)[1] is None
+    (tmp_path / "app.py").write_text("v2-from-sed")
+    st = os.stat(tmp_path / "app.py")
+    os.utime(tmp_path / "app.py", ns=(st.st_atime_ns, st.st_mtime_ns + 10**9))
+    digest, reason = _gate_sid(green_orch, tmp_path)
+    assert digest is None and "app.py" in reason and "re-run tests" in reason
+
+
+def test_gate_refuses_added_and_removed_files(tmp_path, green_orch):
+    from core.ship_tree import record_tested_tree
+    (tmp_path / "a.py").write_text("a")
+    record_tested_tree("sess-g4", str(tmp_path))
+    (tmp_path / "a.py").unlink()
+    (tmp_path / "b.py").write_text("b")
+    reason = _gate_sid(green_orch, tmp_path)[1]
+    assert "2 file(s)" in reason and "a.py" in reason and "b.py" in reason
+
+
+def test_gate_compares_a_subdir_ship_against_the_tested_root(tmp_path, green_orch):
+    from core.ship_tree import record_tested_tree
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "main.py").write_text("x")
+    (tmp_path / "notes.md").write_text("n")
+    record_tested_tree("sess-g4", str(tmp_path))
+    (tmp_path / "notes.md").write_text("changed outside the shipped dir")
+    assert _gate_sid(green_orch, tmp_path / "app")[1] is None
+    (tmp_path / "app" / "new.py").write_text("y")
+    assert "app/new.py" in _gate_sid(green_orch, tmp_path / "app")[1]
+
+
+def test_gate_keeps_ledger_rule_without_a_record(tmp_path, green_orch):
+    (tmp_path / "app.py").write_text("x")
+    assert _gate_sid(green_orch, tmp_path, sid="never-tested")[1] is None

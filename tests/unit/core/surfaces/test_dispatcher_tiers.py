@@ -34,7 +34,9 @@ class _Container:
 
 def _inbound(text, *, user, raw=None, surface="email", chat="c1", thread=None):
     src = SessionSource(surface_id=surface, chat_id=chat, chat_type="dm", thread_id=thread)
-    ident = Identity(user_id=user, source=src, raw_user_id=raw if raw is not None else user)
+    # sender_authenticated: the receiving MX proved the From address (CHAT-6).
+    ident = Identity(user_id=user, source=src, raw_user_id=raw if raw is not None else user,
+                     sender_authenticated=True)
     return InboundMessage(text=text, identity=ident)
 
 
@@ -215,3 +217,17 @@ async def test_email_inbound_never_revives(tmp_path, monkeypatch):
     await route_inbound(c, _inbound("hi", user="bob@x.test", surface="email", chat="c1"))
     assert dt.is_dead("email", "bob@x.test") is True
     assert dt.is_dead("email", "c1") is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surface", ["slack", "discord", "signal", "whatsapp", "x", "telegram"])
+@pytest.mark.parametrize("message", ["run tests", "/help"])
+async def test_local_network_requires_owner_even_with_tiers_off(tmp_path, monkeypatch, surface, message):
+    monkeypatch.setenv("POLYROB_LOCAL", "true")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u_owner")
+    monkeypatch.setenv("CORRESPONDENT_ACCESS_ENABLED", "false")
+    container = _Container(tmp_path)
+    denied = await route_inbound(container, _inbound(message, user="u_stranger", surface=surface))
+    assert denied.kind == RouteKind.DENIED
+    allowed = await route_inbound(container, _inbound(message, user="u_owner", surface=surface))
+    assert allowed.kind in {RouteKind.TASK_AGENT, RouteKind.COMMAND}

@@ -139,6 +139,18 @@ _OPERATOR_ENV_VARS = (
 
 
 @pytest.fixture(autouse=True)
+def _reset_signer_envelope_cache():
+    """The signer envelope caches the signer's caps per process (and keeps the
+    last good ones). A test that fakes a signer must not clamp the next test."""
+    yield
+    try:
+        from core.wallet.signer_envelope import reset_cache
+        reset_cache()
+    except Exception:
+        pass
+
+
+@pytest.fixture(autouse=True)
 def _restore_operator_env_vars():
     """Undo raw os.environ writes of the operator-file var set after each test.
 
@@ -245,6 +257,26 @@ def _isolate_path_manager():
         os.environ.pop("POLYROB_DATA_DIR", None)
         if reset_path_manager is not None:
             reset_path_manager()
+
+
+@pytest.fixture(autouse=True)
+def _local_data_home_follows_cwd(monkeypatch):
+    """Keep the suite out of the developer's real ``~/.polyrob/data``.
+
+    The product's local data home is ``<polyrob_home>/data`` (DATA-4: a cloned
+    directory must not supply ``cwd/.polyrob``). The suite isolates by
+    ``monkeypatch.chdir(tmp_path)``, so tests resolve the unconfigured local
+    home under the cwd instead. Tests of the real default import
+    ``core.runtime_paths._local_default_data_home`` at module load and patch it
+    back. Fail-open on import."""
+    try:
+        from pathlib import Path as _P
+        import core.runtime_paths as _rp
+        monkeypatch.setattr(_rp, "_local_default_data_home",
+                            lambda: (_P.cwd() / ".polyrob").resolve())
+    except Exception:
+        pass
+    yield
 
 
 @pytest.fixture(autouse=True)
@@ -779,6 +811,22 @@ def _isolate_autonomy_halt_probe(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_refusal_taint_store(tmp_path, monkeypatch):
+    """Never write run safety state into the developer's real data home."""
+    from core.security import refusal_taint, refusal_taint_store
+    monkeypatch.setattr(refusal_taint_store, 'path', lambda: tmp_path / 'refusal_taint.db')
+    refusal_taint.reset_for_tests()
+    yield
+    refusal_taint.reset_for_tests()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_owner_login_budget(tmp_path, monkeypatch):
+    from webview import login_limits
+    monkeypatch.setattr(login_limits, '_db_path', lambda: tmp_path / 'login_attempts.db')
+
+
+@pytest.fixture(autouse=True)
 def _reset_skill_usage_singleton():
     """Unbind the first-caller-wins skill-usage store singleton after every test.
 
@@ -828,3 +876,11 @@ def _lazy_overlay_sandbox(tmp_path_factory, monkeypatch):
             f"Remedy: {_ld.remedy(feature)}", "test_blocked")
 
     monkeypatch.setattr(_ld, "_trusted_install", _blocked)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_inbound_denial_budgets(monkeypatch):
+    from core.rate_limit import SlidingWindowLimiter
+    from core.surfaces import command_reply
+    monkeypatch.setattr(command_reply, '_DENIAL_SENDERS', SlidingWindowLimiter(max_calls=1, window_seconds=60, max_keys=4096))
+    monkeypatch.setattr(command_reply, '_DENIAL_TOTAL', SlidingWindowLimiter(max_calls=50, window_seconds=60, max_keys=1))

@@ -13,7 +13,14 @@ from datetime import datetime, timezone
 from pydantic import BaseModel, ConfigDict, Field
 import math
 import traceback
+import contextvars
+
 from tools.base_tool import BaseTool, ToolStatus
+
+#: Set ONLY by :func:`send_approved` while it sends an action the owner already
+#: approved (its grant was consumed by the caller): the approval gate passes it.
+_OWNER_APPROVED_ACTION: "contextvars.ContextVar[Optional[str]]" = contextvars.ContextVar(
+    "x_owner_approved_action", default=None)
 from core.exceptions import APIError, ConfigurationError, AuthenticationError, RateLimitError, ToolError, ServiceError
 from core.credential_verdicts import TWITTER_API_TTL_SEC
 import os
@@ -139,6 +146,7 @@ class TwitterDMAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
     recipient: str = Field(..., description="Recipient username or numeric user id.")
     text: str = Field(..., min_length=1, max_length=10000, description="Direct-message text.")
+    allow_plaintext: bool = Field(False, description="Explicitly include an unencrypted fallback in the owner's approval. Default refuses any encryption downgrade.")
 
 
 class TwitterMentionsAction(BaseModel):
@@ -165,10 +173,11 @@ class TwitterGetDMsAction(BaseModel):
     pagination_token: Optional[str] = Field(
         None, description="X next_token/previous_token from an earlier DM read.")
     rail: Literal["auto", "chat", "legacy"] = Field(
-        "auto", description="DM protocol. auto prefers encrypted X Chat when the "
-                            "OAuth2 user login is usable (else, or on a 401, the "
-                            "legacy /2/dm_events rail with the OAuth 1.0a keys); "
-                            "legacy uses /2/dm_events.")
+        "auto", description="DM protocol. auto/chat read encrypted X Chat, where X "
+                            "delivers DMs now. legacy (/2/dm_events) is OBSOLETE: X "
+                            "stopped delivering new DMs to it in 2026-09, so it shows "
+                            "only old history. auto uses legacy only when the OAuth2 "
+                            "login is dead, and marks the result obsolete.")
 
 
 class TwitterTimelineAction(BaseModel):
@@ -238,10 +247,6 @@ class TwitterTool(BaseTool):
         self.chat_client = None  # encrypted X Chat HTTP/XDK client
         self.api_v1 = None  # v1.1 tweepy.API for media upload (G1)
         self._initialized = False
-        # Per-class sliding-window rate-limit state (G1).
-        self._write_times: List[float] = []
-        self._dm_times: List[float] = []
-        
         # Get Twitter config
         twitter_config = config.get_twitter_config()
         self.api_key = twitter_config.get('api_key')
@@ -782,6 +787,10 @@ class TwitterTool(BaseTool):
             )
             
             if response and hasattr(response, 'data'):
+                # X sends data=None for an account with no tweets in range: that
+                # is an EMPTY timeline, not a failed read (None means failure).
+                if response.data is None:
+                    return []
                 return [
                     {
                         'id': str(tweet.id),
@@ -1116,237 +1125,32 @@ class TwitterTool(BaseTool):
             return None
 
     async def create_tweet(self, text: str, media_ids: Optional[List[str]] = None) -> Optional[Dict]:
-        """Alias for post() method to maintain compatibility.
-        
-        Args:
-            text: Tweet text content
-            media_ids: Optional list of media IDs to attach
-            
-        Returns:
-            Dictionary containing the created tweet data or None if failed
-        """
-        return await self.post(text=text, media_ids=media_ids)
+        """Legacy unguarded writes are retired; use the owner-approved action."""
+        raise RuntimeError("Use the guarded twitter_* action with owner approval")
 
     async def like(self, tweet_id: str) -> bool:
-        """Like a tweet.
-        
-        Args:
-            tweet_id: ID of the tweet to like
-            
-        Returns:
-            bool: True if successful, False otherwise
-            
-        Raises:
-            ValueError: If tweet_id is invalid
-            tweepy.errors.TweepyException: For Twitter API errors
-        """
-        try:
-            response = await self._make_request(
-                func=self.client.like,
-                endpoint_type='likes',
-                tweet_id=tweet_id
-            )
-            return bool(response and response.data and response.data.get('liked'))
-        except Exception as e:
-            self.logger.error(f"Error liking tweet {tweet_id}: {str(e)}")
-            return False
+        """Legacy unguarded writes are retired; use the owner-approved action."""
+        raise RuntimeError("Use the guarded twitter_* action with owner approval")
 
     async def unlike(self, tweet_id: str) -> bool:
-        """Unlike a tweet.
-        
-        Args:
-            tweet_id: ID of the tweet to unlike
-            
-        Returns:
-            bool: True if successful, False otherwise
-            
-        Raises:
-            ValueError: If tweet_id is invalid
-            tweepy.errors.TweepyException: For Twitter API errors
-        """
-        try:
-            if not tweet_id or not str(tweet_id).strip():
-                raise ValueError("Tweet ID cannot be empty")
-                
-            if not self.client:
-                raise RuntimeError("Twitter client not initialized")
-                
-            response = await self._make_request(
-                func=self.client.unlike,
-                tweet_id=tweet_id
-            )
-            
-            if response and hasattr(response, 'data') and response.data:
-                self.logger.info(f"Successfully unliked tweet {tweet_id}")
-                return True
-                
-            self.logger.warning(f"Failed to unlike tweet {tweet_id}")
-            return False
-            
-        except tweepy.errors.Forbidden as e:
-            self.logger.warning(f"Not allowed to unlike tweet {tweet_id}: {str(e)}")
-            return False
-        except tweepy.errors.NotFound:
-            self.logger.warning(f"Tweet not found: {tweet_id}")
-            return False
-        except tweepy.errors.TweepyException as e:
-            self.logger.error(f"Twitter API error unliking tweet: {str(e)}")
-            raise
-        except ValueError as e:
-            self.logger.error(str(e))
-            raise
-        except Exception as e:
-            self.logger.error(f"Unexpected error unliking tweet: {str(e)}", exc_info=True)
-            raise
+        """Legacy unguarded writes are retired; use the owner-approved action."""
+        raise RuntimeError("Use the guarded twitter_* action with owner approval")
 
     async def retweet(self, tweet_id: str) -> bool:
-        """Retweet a tweet.
-        
-        Args:
-            tweet_id: ID of the tweet to retweet
-            
-        Returns:
-            bool: True if successful, False otherwise
-            
-        Raises:
-            ValueError: If tweet_id is invalid
-            tweepy.errors.TweepyException: For Twitter API errors
-        """
-        try:
-            response = await self._make_request(
-                func=self.client.retweet,
-                endpoint_type='retweets',
-                tweet_id=tweet_id
-            )
-            return bool(response and response.data and response.data.get('retweeted'))
-        except Exception as e:
-            self.logger.error(f"Error retweeting tweet {tweet_id}: {str(e)}")
-            return False
+        """Legacy unguarded writes are retired; use the owner-approved action."""
+        raise RuntimeError("Use the guarded twitter_* action with owner approval")
 
     async def unretweet(self, tweet_id: str) -> bool:
-        """Remove a retweet.
-        
-        Args:
-            tweet_id: ID of the tweet to unretweet
-            
-        Returns:
-            bool: True if successful, False otherwise
-            
-        Raises:
-            ValueError: If tweet_id is invalid
-            tweepy.errors.TweepyException: For Twitter API errors
-        """
-        try:
-            if not tweet_id or not str(tweet_id).strip():
-                raise ValueError("Tweet ID cannot be empty")
-                
-            if not self.client:
-                raise RuntimeError("Twitter client not initialized")
-                
-            response = await self._make_request(
-                func=self.client.unretweet,
-                tweet_id=tweet_id
-            )
-            
-            if response and hasattr(response, 'data') and response.data:
-                self.logger.info(f"Successfully unretweeted tweet {tweet_id}")
-                return True
-                
-            self.logger.warning(f"Failed to unretweet tweet {tweet_id}")
-            return False
-            
-        except tweepy.errors.Forbidden as e:
-            self.logger.warning(f"Not allowed to unretweet tweet {tweet_id}: {str(e)}")
-            return False
-        except tweepy.errors.NotFound:
-            self.logger.warning(f"Tweet not found: {tweet_id}")
-            return False
-        except tweepy.errors.TweepyException as e:
-            self.logger.error(f"Twitter API error unretweeting tweet: {str(e)}")
-            raise
-        except ValueError as e:
-            self.logger.error(str(e))
-            raise
-        except Exception as e:
-            self.logger.error(f"Unexpected error unretweeting tweet: {str(e)}", exc_info=True)
-            raise
+        """Legacy unguarded writes are retired; use the owner-approved action."""
+        raise RuntimeError("Use the guarded twitter_* action with owner approval")
 
     async def reply(self, tweet_id: str, text: str) -> Optional[Dict]:
-        """Reply to a tweet.
-        
-        Args:
-            tweet_id: ID of the tweet to reply to
-            text: Reply text content
-            
-        Returns:
-            Dict: Created tweet data or None if failed
-            
-        Raises:
-            ValueError: If tweet_id or text is invalid
-            tweepy.errors.TweepyException: For Twitter API errors
-        """
-        try:
-            response = await self._make_request(
-                func=self.client.create_tweet,
-                endpoint_type='replies',
-                text=text,
-                in_reply_to_tweet_id=tweet_id
-            )
-            
-            if response and hasattr(response, 'data'):
-                return {
-                    'id': response.data['id'],
-                    'text': response.data['text']
-                }
-            return None
-        except Exception as e:
-            self.logger.error(f"Error replying to tweet {tweet_id}: {str(e)}")
-            return None
+        """Legacy unguarded writes are retired; use the owner-approved action."""
+        raise RuntimeError("Use the guarded twitter_* action with owner approval")
 
     async def quote_tweet(self, tweet_id: str, text: str) -> Optional[Dict]:
-        """Quote a tweet.
-        
-        Args:
-            tweet_id: ID of tweet to quote
-            text: Text content for the quote tweet
-            
-        Returns:
-            Dict containing the created tweet data or None if failed
-        """
-        try:
-            # Verify tweet exists first
-            tweet = await self.get_tweet(tweet_id)
-            if not tweet:
-                self.logger.warning(f"Could not find tweet {tweet_id} to quote")
-                return None
-                
-            # Create quote tweet
-            response = await self._make_request(
-                func=self.client.create_tweet,
-                endpoint_type='tweets',  # Add endpoint type
-                text=text,
-                quote_tweet_id=tweet_id
-            )
-            
-            if response and hasattr(response, 'data'):
-                tweet_data = response.data
-                self.logger.info(f"Successfully quoted tweet {tweet_id}")
-                return {
-                    'data': {
-                        'id': str(tweet_data.id),
-                        'text': tweet_data.text,
-                        'created_at': tweet_data.created_at.isoformat() if hasattr(tweet_data, 'created_at') else None,
-                        'conversation_id': getattr(tweet_data, 'conversation_id', None),
-                        'quoted_tweet_id': tweet_id
-                    }
-                }
-            
-            self.logger.warning(f"Failed to quote tweet {tweet_id}")
-            return None
-            
-        except Exception as e:
-            self.logger.error(f"Unexpected error quoting tweet: {str(e)}", exc_info=True)
-            return None
+        """Legacy unguarded writes are retired; use the owner-approved action."""
+        raise RuntimeError("Use the guarded twitter_* action with owner approval")
 
     async def get_tweets_batch(self, tweet_ids: List[str]) -> Dict[str, Dict]:
         """Get multiple tweets by their IDs.
@@ -1446,50 +1250,8 @@ class TwitterTool(BaseTool):
             return []
 
     async def post(self, text: str, media_ids: Optional[List[str]] = None) -> Optional[Dict]:
-        """Post a new tweet.
-        
-        Args:
-            text: Tweet text content
-            media_ids: Optional list of media IDs to attach
-            
-        Returns:
-            Dictionary containing the created tweet data or None if failed
-        """
-        try:
-            # Build kwargs for create_tweet
-            kwargs = {'text': text}
-            if media_ids and len(media_ids) > 0:
-                kwargs['media_ids'] = media_ids
-
-            response = await self._make_request(
-                func=self.client.create_tweet,
-                endpoint_type='tweets',
-                **kwargs
-            )
-            
-            if response and hasattr(response, 'data'):
-                tweet_data = response.data
-                if isinstance(tweet_data, dict):
-                    return {
-                        'data': {
-                            'id': str(tweet_data.get('id')),
-                            'text': tweet_data.get('text'),
-                            'created_at': tweet_data.get('created_at')
-                        }
-                    }
-                else:
-                    return {
-                        'data': {
-                            'id': str(tweet_data.id),
-                            'text': tweet_data.text,
-                            'created_at': tweet_data.created_at.isoformat() if hasattr(tweet_data, 'created_at') else None
-                        }
-                    }
-            return None
-            
-        except Exception as e:
-            self.logger.error(f"Error posting tweet: {str(e)}", exc_info=True)
-            return None
+        """Legacy unguarded writes are retired; use the owner-approved action."""
+        raise RuntimeError("Use the guarded twitter_* action with owner approval")
 
     async def get_user_profile(self) -> Optional[Dict]:
         """Get the authenticated user's profile.
@@ -1785,17 +1547,6 @@ class TwitterTool(BaseTool):
     def _require_approval(self) -> bool:
         return os.getenv("TWITTER_REQUIRE_APPROVAL", "true").strip().lower() not in _FALSEY
 
-    def _rate_available(self, *, is_dm: bool) -> bool:
-        now = time.time()
-        bucket = self._dm_times if is_dm else self._write_times
-        cutoff = now - 3600
-        bucket[:] = [t for t in bucket if t >= cutoff]
-        cap = self._dm_cap() if is_dm else self._write_cap()
-        return len(bucket) < cap
-
-    def _rate_record(self, *, is_dm: bool) -> None:
-        (self._dm_times if is_dm else self._write_times).append(time.time())
-
     #: New-content publishing actions — a repeat here is a duplicate POST, not
     #: engagement. twitter_reply/twitter_quote are deliberately excluded: a
     #: reply to a DIFFERENT tweet is not a repeat by construction.
@@ -1817,7 +1568,7 @@ class TwitterTool(BaseTool):
         2026-08-28 (observed in production): a recurring "track record"
         goal re-fired repeatedly — each run a FRESH session with its own fresh
         TwitterTool instance — and posted 30+ near-duplicate tweets over ~5
-        days. `_rate_available`'s in-memory bucket is per-instance, so it never
+        days. The hourly attempt budget and content cooldown have different windows; neither
         saw a sibling session's posts; it could not have caught this. This
         check reads the durable event log instead (same pattern §3.2's
         USER_DELIVERY dedup already uses for the owner-message equivalent).
@@ -1931,6 +1682,155 @@ class TwitterTool(BaseTool):
         return (f"Twitter write '{action_name}' blocked: autonomy is {dec.reason}. "
                 f"Resume with `/resume social` (or `/resume`) when you want it back.")
 
+    def _genuine_owner_turn(self, execution_context) -> bool:
+        """True for a turn the OWNER is driving: not a sub-agent/leaf, not an
+        autonomous/forged/room re-entry, not tainted by third-party text it
+        read, and the owner tenant. ``None`` context = owner-direct / CLI /
+        programmatic call (the same convention as :meth:`_pause_block`).
+        Fail-closed: any probe fault is NOT an owner turn."""
+        if execution_context is None:
+            return True
+        try:
+            from tools.controller.action_registration import _is_forged_or_autonomous_turn
+            if _is_forged_or_autonomous_turn(execution_context, self):
+                return False
+            meta = getattr(execution_context, "metadata", None) or {}
+            if isinstance(meta, dict) and meta.get("untrusted_read"):
+                return False
+            from core.config_policy import local_mode_enabled
+            from core.instance import is_owner_local_safe, resolve_owner_principal
+            return is_owner_local_safe(getattr(execution_context, "user_id", None),
+                                       owner_principal=resolve_owner_principal(),
+                                       local_enabled=local_mode_enabled())
+        except Exception:
+            self.logger.debug("twitter owner-turn probe failed (not an owner turn)",
+                              exc_info=True)
+            return False
+
+    def _owner_standing_run(self, execution_context) -> bool:
+        """True for the MAIN run of an OWNER-authored standing cron job (the
+        daily promo post, the buyback notice): its author is the owner, so its
+        post is the owner's decision. Not a sub-agent/leaf, not a room or
+        forged re-entry, not tainted by third-party text it read, the owner
+        tenant, and the job is recorded as owner-authored by the cron runner
+        (an agent-authored job is never recorded). Fail-closed."""
+        if execution_context is None:
+            return False
+        try:
+            if getattr(execution_context, "is_sub_agent", False) or \
+                    getattr(execution_context, "role", "leaf") == "leaf":
+                return False
+            meta = getattr(execution_context, "metadata", None) or {}
+            if not isinstance(meta, dict) or meta.get("untrusted_read"):
+                return False
+            from core.security.forged_turns import FORGED_TURN_KINDS
+            if meta.get("turn_kind") in FORGED_TURN_KINDS or meta.get("turn_kind") == "group":
+                return False
+            from agents.task.goals.autonomy_marker import owner_job_task_for_session
+            if not owner_job_task_for_session(getattr(execution_context, "session_id", None)):
+                return False
+            from core.config_policy import local_mode_enabled
+            from core.instance import is_owner_local_safe, resolve_owner_principal
+            return is_owner_local_safe(getattr(execution_context, "user_id", None),
+                                       owner_principal=resolve_owner_principal(),
+                                       local_enabled=local_mode_enabled())
+        except Exception:
+            self.logger.debug("twitter standing-job probe failed (not an owner job)",
+                              exc_info=True)
+            return False
+
+    @staticmethod
+    def _human_provider(provider) -> bool:
+        """A provider whose answer is a person's decision for THIS call (or the
+        operator's standing ``deny``, which is never automatic approval)."""
+        if getattr(provider, "decides_as_owner", False) is True:
+            return True
+        from tools.controller.approval import DenyByDefaultApprover
+        if isinstance(provider, DenyByDefaultApprover):
+            return True
+        try:
+            from tools.controller.approval_interactive import InteractiveCLIApprover
+            return isinstance(provider, InteractiveCLIApprover)
+        except Exception:
+            return False
+
+    async def _approval_gate(self, action_name: str, params, execution_context):
+        """AGT-7/SUP-6: who may write to X. Returns a refusal, or None.
+
+        - A genuine OWNER turn: asking the agent to post IS the owner's
+          decision. It is allowed; with ``TWITTER_REQUIRE_APPROVAL`` on and a
+          human provider configured, the owner is asked once more.
+        - Any other turn (autonomous, forged, room, tainted, non-owner) needs a
+          REAL owner approval whatever ``TWITTER_REQUIRE_APPROVAL`` or
+          ``APPROVAL_PROVIDER`` say: an automatic provider (``auto``,
+          ``auto_notify``) is replaced by the durable owner queue, which asks
+          the owner (Telegram /approve) and itself refuses what may not ask.
+        """
+        # A late owner approval being sent (``send_approved``): the owner's tap
+        # on THIS action is the approval; its one-shot grant is already consumed.
+        if _OWNER_APPROVED_ACTION.get() == action_name:
+            return None
+        # An owner-authored standing cron job (untainted) posts as the owner
+        # wrote it; an agent-authored, room, tainted or delegated run does not.
+        owner_turn = (self._genuine_owner_turn(execution_context)
+                      or self._owner_standing_run(execution_context))
+        if owner_turn and not self._require_approval():
+            return None
+        timeout = 0.0
+        try:
+            from tools.controller.approval import get_approval_provider_or_deny
+            try:
+                import tools.controller.approval_interactive  # noqa: F401  # registers interactive_cli
+            except Exception:
+                pass
+            provider = get_approval_provider_or_deny(os.getenv("APPROVAL_PROVIDER"))
+            provider_name = (os.getenv("APPROVAL_PROVIDER") or "auto").strip().lower()
+            if not self._human_provider(provider):
+                if owner_turn:
+                    return None   # the owner asked; no person to ask again
+                import tools.controller.approval_queue  # noqa: F401  # registers owner_queue
+                provider = get_approval_provider_or_deny(
+                    "owner_queue", user_id=getattr(execution_context, "user_id", None))
+                provider_name = "owner_queue"
+                if not self._human_provider(provider):
+                    return (f"Twitter write '{action_name}' blocked: it needs the owner's "
+                            "approval and no owner approval queue is available.")
+            from tools.controller.approval import approval_wait_timeout_sec
+            timeout = approval_wait_timeout_sec(provider_name)
+            # The controller cuts every `twitter` action at its tool timeout (60s
+            # default); a longer wait here is killed first and the run sees a bare
+            # timeout, not the "waiting for the owner's approval" result below
+            # (prod 2026-10-09 00:03, buyback 4def3260d811 retried the post).
+            from agents.task.constants import TimeoutConfig
+            budget = float(TimeoutConfig.get_tool_timeout("twitter"))
+            timeout = min(timeout, budget - min(10.0, budget / 4))
+            pdict = params.model_dump() if hasattr(params, "model_dump") else dict(params or {})
+            from tools.controller.approval_queue import OwnerQueueApprover
+            if isinstance(provider, OwnerQueueApprover):
+                # An autonomous run ASKS and WAITS for the tap here: a post's
+                # grant is keyed on its text, which the next run writes afresh,
+                # so "the next run redeems it" never happens for X (prod
+                # 2026-10-08 12:05, buyback 4def3260d811).
+                request = provider.request(action_name, pdict, execution_context,
+                                           wait_in_goal_run=True)
+            else:
+                request = provider.request(action_name, pdict, execution_context)
+            approved = await asyncio.wait_for(request, timeout=timeout)
+        except asyncio.TimeoutError:
+            self.logger.info("twitter approval for %s: no owner answer in %ss", action_name,
+                             timeout)
+            return (f"Twitter write '{action_name}' is waiting for the owner's approval: "
+                    f"the owner was asked (Telegram card / /pending) and did not answer "
+                    f"within {int(timeout)}s. Nothing was posted yet. If the owner approves "
+                    "later, exactly this post is sent once with this text (the job is "
+                    "not re-run). Tell the owner it is waiting; do not retry it.")
+        except Exception as e:  # provider error → fail-closed deny
+            self.logger.warning(f"twitter approval denied (error) for {action_name}: {e}")
+            approved = False
+        if approved is not True:
+            return f"Twitter write '{action_name}' blocked: approval denied."
+        return None
+
     async def _precheck_write(self, action_name: str, params, execution_context,
                               *, is_dm: bool = False):
         """Pause + rate-limit + approval gate. Returns an error ActionResult to
@@ -1941,46 +1841,19 @@ class TwitterTool(BaseTool):
         cooldown_block = await self._social_cooldown_block(action_name, execution_context)
         if cooldown_block:
             return self.create_action_result(error=cooldown_block, include_in_memory=True)
-        if not self._rate_available(is_dm=is_dm):
+        gate = await self._approval_gate(action_name, params, execution_context)
+        if gate:
+            return self.create_action_result(error=gate, include_in_memory=True)
+        from polyrob_x.write_budget import reserve_write
+        units = (len(params.texts) if action_name == "twitter_thread" else
+                 len(self._split_tweet_text(params.text)) if action_name == "twitter_post" else 1)
+        if not await asyncio.to_thread(reserve_write, is_dm=is_dm, units=units):
             cap = self._dm_cap() if is_dm else self._write_cap()
             kind = "DMs" if is_dm else "writes"
             return self.create_action_result(
                 error=f"Twitter rate limit reached: max {cap}/hour for {kind}. Try later.",
                 include_in_memory=True,
             )
-        if self._require_approval():
-            approved = False
-            try:
-                from tools.controller.approval import get_approval_provider_or_deny, AutoApprover
-                try:
-                    import tools.controller.approval_interactive  # noqa: F401  # register interactive_cli
-                except Exception:
-                    pass
-                # H9: fail-CLOSED on an unknown provider; and don't SILENTLY auto-approve —
-                # TWITTER_REQUIRE_APPROVAL with APPROVAL_PROVIDER unset resolves to AutoApprover
-                # (approves everything). Warn loudly so an operator relying on approval knows the
-                # write is proceeding with no human gate.
-                provider = get_approval_provider_or_deny(os.getenv("APPROVAL_PROVIDER"))
-                if isinstance(provider, AutoApprover):
-                    self.logger.warning(
-                        f"⚠️ Twitter write '{action_name}' auto-approved: TWITTER_REQUIRE_APPROVAL "
-                        f"is on but APPROVAL_PROVIDER is unset/auto (no human gate). Set "
-                        f"APPROVAL_PROVIDER=interactive_cli for a real prompt."
-                    )
-                timeout = float(os.getenv("APPROVAL_TIMEOUT_SEC", "30"))
-                pdict = params.model_dump() if hasattr(params, "model_dump") else dict(params or {})
-                approved = await asyncio.wait_for(
-                    provider.request(action_name, pdict, execution_context), timeout=timeout
-                )
-            except Exception as e:  # timeout / provider error → fail-closed deny
-                self.logger.warning(f"twitter approval denied (error) for {action_name}: {e}")
-                approved = False
-            if not approved:
-                return self.create_action_result(
-                    error=f"Twitter write '{action_name}' blocked: approval denied.",
-                    include_in_memory=True,
-                )
-        self._rate_record(is_dm=is_dm)
         return None
 
     # --- internal write helpers -----------------------------------------
@@ -2422,7 +2295,9 @@ class TwitterTool(BaseTool):
 
     # --- DM action -------------------------------------------------------
 
-    @BaseTool.action("Send a direct message to a user.", param_model=TwitterDMAction)
+    @BaseTool.action("Send an encrypted X Chat message. An unencrypted fallback "
+                     "requires allow_plaintext=true in the owner's approval.",
+                     param_model=TwitterDMAction)
     async def twitter_dm(self, params: TwitterDMAction, execution_context=None):
         notready = self._check_ready()
         if notready:
@@ -2435,9 +2310,40 @@ class TwitterTool(BaseTool):
             if not uid:
                 return self._err(f"Could not resolve recipient '{params.recipient}'")
             self._ensure_oauth2_fresh()
+            legacy_reason = ("X Chat is not configured (OAuth 2.0 login + "
+                             "TWITTER_CHAT_PASSPHRASE)")
+            chat = getattr(self, "chat_client", None)
+            if chat is not None and getattr(chat, "can_decrypt", False) is True:
+                from polyrob_x.x_chat_client import XChatAPIError
+                try:
+                    sent = await chat.send_message(uid, params.text)
+                    return self._ok(
+                        f"🐦 DM sent to {params.recipient} (encrypted X Chat, "
+                        f"conversation {sent['conversation_id']}, "
+                        f"message {sent['message_id']})")
+                except XChatAPIError as e:
+                    # A 4xx (or a local refusal: no keys, unverifiable key,
+                    # unreadable thread) delivered NOTHING, so the plaintext DM
+                    # is safe to try. A 5xx/timeout is ambiguous — the message
+                    # may have landed — and is never re-sent on another rail.
+                    if e.status and not e.rejected:
+                        raise
+                    legacy_reason = f"X Chat could not send: {e}"
+                    self.logger.info("twitter: encrypted send refused (%s)", type(e).__name__)
+            if not params.allow_plaintext:
+                return self._err("Encrypted X Chat could not deliver this message. "
+                                 "Nothing was sent on the plaintext endpoint. "
+                                 "A new owner-approved call with allow_plaintext=true "
+                                 "is required to use that endpoint.")
+            # Plaintext DM endpoint (/2/dm_conversations): X Chat refuses some
+            # sends (2026-10-04: cold first contact 400s) that this rail still
+            # delivers — the Sep 2026 cold opens all went out here.
             await self._dm_request("create_direct_message",
                                    participant_id=uid, text=params.text)
-            return self._ok(f"🐦 DM sent to {params.recipient}")
+            return self._ok(
+                f"🐦 DM sent to {params.recipient} on the plaintext DM endpoint "
+                f"({legacy_reason}). Replies arrive in X Chat: read them with "
+                "twitter_get_dms.")
         except Exception as e:
             return self._err(f"Error sending DM: {e}{self._unauthorized_hint(e)}")
 
@@ -2550,11 +2456,12 @@ class TwitterTool(BaseTool):
         return self._ok("🐦 X Chat read:\n" + json.dumps(
             payload, indent=2, cls=DateTimeEncoder))
 
-    @BaseTool.action("Read messages through the X API. auto prefers the encrypted "
-                     "X Chat API with OAuth2 user context; legacy selects "
-                     "/2/dm_events. X Chat plaintext additionally requires this "
-                     "account's Chat keys. Returns an explicit decryption/coverage "
-                     "status and pagination. DM reads are rate-limited — don't poll.",
+    @BaseTool.action("Read direct messages through encrypted X Chat (OAuth2 user "
+                     "context + this account's Chat keys). Without participant or "
+                     "conversation_id it lists conversations; with one it returns "
+                     "the decrypted messages, each marked verified true/false. "
+                     "rail=legacy (/2/dm_events) is obsolete. DM reads are "
+                     "rate-limited — don't poll.",
                      param_model=TwitterGetDMsAction)
     async def twitter_get_dms(self, params: TwitterGetDMsAction, execution_context=None):
         if not self._enabled:
@@ -2639,13 +2546,10 @@ class TwitterTool(BaseTool):
                 "events": items,
                 "next_token": meta.get("next_token"),
                 "previous_token": meta.get("previous_token"),
-                "coverage": (
-                    "This is only what the configured X API access tier returned. "
-                    "It is the legacy /2/dm_events rail, not encrypted X Chat. "
-                    "An empty list or a list containing only your own sent messages "
-                    "does not establish that the inbox/thread has no inbound replies. "
-                    "Use x_browser_x_read_dms with a captured browser session to "
-                    "verify the visible inbox when API coverage is incomplete."
+                "obsolete": (
+                    "X stopped delivering new DMs to /2/dm_events in 2026-09 (they "
+                    "go to encrypted X Chat). This list is old history only: it "
+                    "cannot show any recent inbound message. Read rail=chat."
                 ),
             }
             if chat_note:
@@ -2817,9 +2721,14 @@ class TwitterTool(BaseTool):
                 max_results=params.max_results
             )
             
+            if tweets is None:
+                return self.create_action_result(
+                    error=f"Could not read tweets for user ID {params.user_id}",
+                    include_in_memory=True
+                )
             if not tweets:
                 return self.create_action_result(
-                    error=f"No tweets found for user ID {params.user_id}", 
+                    extracted_content=f"🐦 User ID {params.user_id} has no tweets in range.",
                     include_in_memory=True
                 )
             
@@ -2870,3 +2779,46 @@ class TwitterTool(BaseTool):
                 "is_done": is_done,
                 "metadata": metadata
             }
+
+
+# --- a late owner approval: send exactly the approved action, once -------------
+
+_LATE_MODELS = {
+    "twitter_post": "TwitterPostAction", "twitter_reply": "TwitterReplyAction",
+    "twitter_quote": "TwitterQuoteAction", "twitter_thread": "TwitterThreadAction",
+    "twitter_dm": "TwitterDMAction",
+}
+
+
+async def send_approved(tool_name: str, params: dict, task_agent=None):
+    """``(ok, text)`` — run *tool_name* with the params the owner approved, after
+    the run that asked stopped waiting (``tools.controller.approval_queue.
+    run_approved_outbound`` consumed the one-shot grant first). The pause, the
+    cooldown and the hourly write budget still apply; only the approval gate is
+    passed, because this IS the owner's approval. The job that asked is never
+    re-run (prod 2026-10-08: that re-ran a buyback's swap to redeem one post)."""
+    model = globals()[_LATE_MODELS[tool_name]]
+    from cron.delivery import _config_and_container
+    config, container = _config_and_container(task_agent)
+    from polyrob_x.cron_delivery import _build_twitter_tool
+    tool = _build_twitter_tool(config, container)
+    token = _OWNER_APPROVED_ACTION.set(tool_name)
+    try:
+        res = await getattr(tool, tool_name)(model(**params), execution_context=None)
+    finally:
+        _OWNER_APPROVED_ACTION.reset(token)
+    err = getattr(res, "error", None)
+    if err:
+        return False, str(err)
+    return True, str(getattr(res, "extracted_content", "") or "sent")
+
+
+def _register_late_sender() -> None:
+    try:
+        from tools.controller.approval_queue import register_late_sender
+        register_late_sender(tuple(_LATE_MODELS), send_approved)
+    except Exception:
+        logging.getLogger(__name__).debug("late sender not registered", exc_info=True)
+
+
+_register_late_sender()

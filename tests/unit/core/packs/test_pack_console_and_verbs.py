@@ -84,6 +84,13 @@ def console(scratch, tmp_path, monkeypatch):
     _install(scratch, monkeypatch, ["cw"])
     pc.reset_for_tests()
     app = FastAPI()
+    @app.middleware("http")
+    async def fixture_owner(request, call_next):
+        if request.headers.get("x-test-owner") == "yes":
+            from api.auth_state import set_auth_state
+            set_auth_state(request.state, user_id="local", tier="admin", role="owner",
+                           authenticated=True, payment_method=None)
+        return await call_next(request)
     assert pc.mount_pack_console_routers(app) == 1
     yield pc, TestClient(app)
     pc.reset_for_tests()
@@ -102,8 +109,10 @@ def test_owner_posture_and_public_carve_out(console, monkeypatch):
     assert client.get("/api/packs/cw/cb").json() == {"public": True}
     assert client.get("/api/packs/cw/private").status_code == 403
     assert client.post("/api/packs/cw/form").status_code == 403
-    # The loopback owner (local posture) reaches every route.
+    # Local posture also needs an authenticated owner.
     monkeypatch.setenv("POLYROB_POSTURE", "local")
+    assert client.get("/api/packs/cw/private").status_code == 403
+    client.headers["x-test-owner"] = "yes"
     assert client.get("/api/packs/cw/private").json() == {"private": True}
 
 
@@ -111,6 +120,7 @@ def test_a_read_only_console_refuses_a_pack_mutation(console, monkeypatch):
     _pc, client = console
     monkeypatch.setenv("POLYROB_POSTURE", "local")
     monkeypatch.setenv("WEBVIEW_READ_ONLY", "true")
+    client.headers["x-test-owner"] = "yes"
     assert client.post("/api/packs/cw/form").status_code == 403
     assert client.get("/api/packs/cw/private").status_code == 200
 

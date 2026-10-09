@@ -73,7 +73,7 @@ const CARD_TOKEN = /\/card_[0-9a-f]{10}_(?:ok|no|re|[1-6])(?![\w])/g;
  *  answer to any other verb (`/thread` quotes the agent's own words) gets none,
  *  exactly the Telegram rule in core/surfaces/actions.py. */
 const CARD_VERBS = new Set(['/send', '/swap', '/bridge', '/pay', '/claim', '/launch',
-  '/deploy', '/nft', '/identity', '/writeoff', '/unquarantine', '/wallet']);
+  '/deploy', '/nft', '/identity', '/writeoff', '/unquarantine', '/wallet', '/adopt']);
 // ⚠️ `/cards` is deliberately absent: its answer lists each card's title, and a
 // choice card's title is the MODEL's question. The Inbox draws those buttons
 // from the store instead.
@@ -365,9 +365,10 @@ export class Transcript {
   seedFirstLine(text) {
     const line = String(text || '').trim();
     if (!line || !this.thread) return;
-    const key = `u:${line.replace(/\s+/g, ' ').slice(0, DURING_CUT)}`;
+    const key = `u:unknown:${line.replace(/\s+/g, ' ').slice(0, DURING_CUT)}`;
     if (this.userBubbles.has(key)) return;
-    const turn = el('div', 'turn turn-you');
+    const turn = el('div', 'turn turn-person');
+    turn.appendChild(el('div', 'person-label', 'Person (identity unavailable)'));
     const bubble = el('div', 'bubble', line);
     turn.appendChild(bubble);
     this.thread.appendChild(turn);
@@ -382,7 +383,10 @@ export class Transcript {
     // One message, one bubble: the key is the first 200 characters of the
     // whitespace-normalised text, and a repeat within a minute is the same
     // message arriving as both event types (or twice from the socket).
-    const key = `u:${text.replace(/…$/, '').replace(/\s+/g, ' ').slice(0, DURING_CUT)}`;
+    const sender = String(data.sender_user_id || '').slice(0, 128);
+    const surface = String(data.sender_surface || '').slice(0, 32);
+    const identity = sender ? JSON.stringify([surface, sender]) : 'unknown';
+    const key = `u:${identity}:${text.replace(/…$/, '').replace(/\s+/g, ' ').slice(0, DURING_CUT)}`;
     const at = eventMs(event, this.now());
     const prior = this.userBubbles.get(key);
     if (prior && prior.seed) {
@@ -411,7 +415,9 @@ export class Transcript {
     // person wrote reads "… before your message", never a live Stop or Steer.
     this._close(event, this.turn && this.turn.state === 'working' ? 'so_far'
       : (this.turn && this.turn.state));
-    const turn = el('div', 'turn turn-you');
+    const turn = el('div', 'turn turn-person');
+    turn.appendChild(el('div', 'person-label', sender
+      ? `Person: ${sender}${surface ? ' on ' + surface : ''}` : 'Person (identity unavailable)'));
     const bubble = el('div', 'bubble', text);
     turn.appendChild(bubble);
     this.thread.appendChild(turn);

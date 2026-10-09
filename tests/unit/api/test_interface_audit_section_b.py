@@ -26,7 +26,7 @@ def test_b1_refund_due_on_auth_refusal_after_settlement():
     assert should_refund_on_status(200) is False
     assert should_refund_on_status(400) is False
     assert should_refund_on_status(404) is False
-    assert should_refund_on_status(429) is False
+    assert should_refund_on_status(429) is True
 
 
 # ---------------------------------------------------------------------------

@@ -74,6 +74,20 @@ def test_a_third_party_row_must_pin_a_wheel_hash():
     index.validate_row({**row, "sha256": "a" * 64})
 
 
+@pytest.mark.parametrize("key,value", [
+    ("dist", "evil --index-url https://x"), ("dist", "-e"), ("dist", "a b"),
+    ("dist", "https://x/y.whl"), ("version", "1 --hash=sha256:00"), ("version", "1.0\n"),
+    ("version", ">=1"), ("version", "v1.0"), ("version", "latest"),
+])
+def test_dist_and_version_are_a_plain_name_and_a_pep440_version(key, value):
+    """dist/version are written into a pip requirements line; nothing else may pass."""
+    row = {"id": "t", "dist": "t-pack", "version": "1.2.3", "tier": "third-party",
+           "entry_point": "t:pack", "sha256": "a" * 64}
+    index.validate_row(row)
+    with pytest.raises(index.PackIndexError):
+        index.validate_row({**row, key: value})
+
+
 def test_the_kill_list_rows_are_validated():
     with pytest.raises(index.PackIndexError):
         index.validate_removed(_row(versions="not a spec"))
@@ -288,6 +302,9 @@ def test_git_install_shows_capabilities_and_requires_acceptance(cli, pip_calls, 
     assert fake_clone == {"url": "https://example.com/p.git", "sha": SHA}
     assert pip_calls and pip_calls[0][0] == "--no-deps"
     assert "requests>=2" in r.output and "NOT installed" in r.output
+    # Never an unpinned, unhashed install line for the declared dependencies.
+    assert "pip install 'requests>=2'" not in r.output
+    assert "--require-hashes" in r.output
 
 
 def test_git_install_is_refused_under_custody_before_the_clone(cli, fake_clone, monkeypatch):
@@ -295,6 +312,23 @@ def test_git_install_is_refused_under_custody_before_the_clone(cli, fake_clone, 
     monkeypatch.setattr(loader, "custody_refusal", lambda: "wallet custody: remedy")
     r = cli("install", f"git+https://example.com/p.git@{SHA}", "--accept-capabilities")
     assert r.exit_code != 0 and "wallet custody" in r.output
+    assert fake_clone == {}
+
+
+def test_root_pack_install_refuses_before_clone_or_build(cli, fake_clone, monkeypatch):
+    import os
+    monkeypatch.setattr(os, "geteuid", lambda: 0, raising=False)
+    r = cli("install", f"git+https://example.com/p.git@{SHA}", "--accept-capabilities")
+    assert r.exit_code != 0 and "as root is refused" in r.output
+    assert fake_clone == {}
+
+
+def test_remote_signer_pack_install_refuses_without_local_seed(cli, fake_clone, monkeypatch):
+    import core.security.host_execution as he
+    monkeypatch.setattr(he, "wallet_custody_enabled", lambda: False)
+    monkeypatch.setenv("WALLET_SIGNER", "remote")
+    r = cli("install", f"git+https://example.com/p.git@{SHA}", "--accept-capabilities")
+    assert r.exit_code != 0 and "remote signing" in r.output
     assert fake_clone == {}
 
 
@@ -359,5 +393,4 @@ def test_clone_audited_checks_out_exactly_the_pinned_commit(tmp_path):
     assert sha == first and (tmp_path / "c1" / "a.txt").read_text() == "one"
     with pytest.raises(InstallError):
         clone_audited(f"file://{repo}", tmp_path / "c2", sha="0" * 40)
-
 

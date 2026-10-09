@@ -54,14 +54,15 @@ def test_enable_and_disable_write_the_flags(echo_cli, tmp_path):
     assert "POLYROB_PACKS_DISABLED=echo" in env.replace('"', "").replace("'", "")
 
 
-def test_disable_reports_a_project_override(echo_cli, tmp_path, monkeypatch):
+def test_disable_ignores_a_project_env(echo_cli, tmp_path, monkeypatch):
+    # The CLI never loads ./.polyrob/.env (a cloned directory could supply it),
+    # so a value there shadows nothing and earns no "shadowed" note.
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".polyrob").mkdir()
     (tmp_path / ".polyrob/.env").write_text("POLYROB_PACKS_DISABLED=other\n")
     result = CliRunner().invoke(echo_cli, ["pack", "disable", "echo"])
     assert result.exit_code == 0, result.output
-    assert "shadowed" in result.output and "project beats global" in result.output
-    assert "polyrob config unset POLYROB_PACKS_DISABLED" in result.output
+    assert "shadowed" not in result.output
     assert "disable setting saved" in result.output
     assert "pack echo disabled" not in result.output
 
@@ -130,9 +131,11 @@ def test_packs_status_section_when_none_installed(scratch, monkeypatch):
     assert state.summary_line() == "packs: none installed"
 
 
-def _legacy_app(use_packs, monkeypatch, tier):
+def test_legacy_prefix_is_removed_in_1_3_0(use_packs, monkeypatch):
+    """1.2.0 served /api/{polymarket,hyperliquid} deprecated for one release; 1.3.0 removed it."""
     import logging
     from fastapi import APIRouter, FastAPI
+    from fastapi.testclient import TestClient
     import api.pack_routes as pr
     loader = use_packs("echo")
     loader.load_packs()
@@ -140,33 +143,9 @@ def _legacy_app(use_packs, monkeypatch, tier):
     router.get("/ping")(lambda: {"ok": True})
     rec = state.record("echo")
     rec.spec = rec.spec.__class__(**{**rec.spec.__dict__, "api_routers": (router,)})
-    monkeypatch.setattr(pr, "_first_party", lambda pid: tier == "first-party")
-    monkeypatch.setitem(pr.LEGACY_PREFIXES, "echo", "/api")
     app = FastAPI()
     pr.mount_pack_routers(app, logging.getLogger("t"))
-    return app
-
-
-def test_legacy_prefix_serves_a_first_party_router_deprecated(use_packs, monkeypatch):
-    """1.2.0 keeps /api/{polymarket,hyperliquid} for one release, marked deprecated."""
-    from fastapi.testclient import TestClient
-    import api.pack_routes as pr
-    client = TestClient(_legacy_app(use_packs, monkeypatch, "first-party"))
+    client = TestClient(app)
     assert client.get("/api/packs/echo/venue/ping").json() == {"ok": True}
-    old = client.get("/api/venue/ping")
-    assert old.json() == {"ok": True}
-    assert old.headers["Deprecation"] == "true"
-    assert old.headers["Link"] == '</api/packs/echo/venue/ping>; rel="successor-version"'
-    assert old.headers["X-Polyrob-Removed-In"] == pr.LEGACY_REMOVED_IN
-    assert "Deprecation" not in client.get("/api/packs/echo/venue/ping").headers
-
-
-def test_legacy_prefix_never_serves_a_third_party_router(use_packs, monkeypatch):
-    from fastapi.testclient import TestClient
-    client = TestClient(_legacy_app(use_packs, monkeypatch, "third-party"))
     assert client.get("/api/venue/ping").status_code == 404
-
-
-def test_only_markets_has_a_legacy_prefix():
-    import api.pack_routes as pr
-    assert pr.LEGACY_PREFIXES == {"markets": "/api"} and pr.LEGACY_REMOVED_IN == "1.3.0"
+    assert not hasattr(pr, "LEGACY_PREFIXES")

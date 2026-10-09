@@ -200,12 +200,10 @@ class SourceUnavailable(RuntimeError):
 def _get(url: str):
     """(status, json-or-None). Pooled client — never a fresh connection."""
     from tools.defi.providers import _http
-    resp = _http.client().get(url, timeout=TIMEOUT_SEC)
     try:
-        body = resp.json()
-    except Exception:
-        body = None
-    return resp.status_code, body
+        return 200, _http.get_json(url, timeout=TIMEOUT_SEC)
+    except _http.HttpStatusError as exc:
+        return exc.code, None
 
 
 def jupiter_token(mint: str) -> Optional[JupiterToken]:

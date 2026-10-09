@@ -426,3 +426,38 @@ async def test_merchant_cannot_discount_signed_authorization_from_spend_cap():
     assert result.error is None
     assert wallet.policy.audit_log[-1]['amount_usd'] == 0.75
     assert 'signed authorization ceiling' in result.extracted_content
+
+
+@pytest.mark.asyncio
+async def test_approved_recipient_is_forwarded_to_payment_client():
+    payee = "0x" + "a" * 40
+    class Client(_ResultClient):
+        async def fetch_with_payment(self, **kwargs):
+            assert kwargs["expected_pay_to"] == payee
+            return await super().fetch_with_payment(**kwargs)
+    client = Client(X402Result(body="free", paid=False, amount_usd=0,
+                               tx_hash=None, pay_to=None, status_code=200))
+    result = await _tool(client).x402_fetch(FetchParams(
+        url="http://paid", max_amount_usd=1, expected_pay_to=payee))
+    assert result.error is None
+    assert client.fetch_called
+
+
+def test_recipient_is_shown_in_full_even_with_many_other_fields():
+    from tools.controller.grant_card import render_grant_card
+    payee = "0x" + "a" * 40
+    params = {f"extra_{i}": "x" * 100 for i in range(20)}
+    params.update(expected_pay_to=payee, max_amount_usd=.05, url="https://merchant.test")
+    card = render_grant_card("x402_fetch", params, "ask1")
+    assert f"expected_pay_to: {payee}" in card
+    assert "0.05 (max_amount_usd)" in card
+
+
+@pytest.mark.asyncio
+async def test_wallet_status_shows_live_enforced_caps():
+    wallet = _wallet()
+    wallet.policy._cap_resolver = lambda: (2.0, 7.0)
+    out = await X402PayTool(wallet=wallet, client=None).x402_wallet_status(EmptyWalletParams())
+    assert 'max $2.00/tx' in out.extracted_content
+    assert '$7.00/day' in out.extracted_content
+    assert 'max $10.00/tx' not in out.extracted_content

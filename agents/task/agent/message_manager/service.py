@@ -128,6 +128,7 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		'_self_context_tokens',     # Token cost of the pinned self-context message
 		'_self_context_blocks',     # 060 WS-1: the unwelded self-context, one message per block
 		'_self_context_blocks_tokens',  # their summed token cost
+		'_owner_context_allowed',  # live disclosure guard, including resumed sessions
 		'_project_context_message', # C9: auto-loaded CLAUDE.md/AGENTS.md frozen foundation message
 		'_project_context_tokens',  # Token cost of the pinned project-context message
 		'_runtime_identity_message', # model/provider the agent actually runs (swap-refreshable)
@@ -381,6 +382,7 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		# the two self-context slots is set; see set_self_context_blocks().
 		self._self_context_blocks: Optional[tuple] = None
 		self._self_context_blocks_tokens: int = 0
+		self._owner_context_allowed = None
 
 		# C9: auto-loaded project context (CLAUDE.md/AGENTS.md/.cursorrules) is pinned
 		# as a frozen foundation message (set later), CLI-only, default-OFF on server.

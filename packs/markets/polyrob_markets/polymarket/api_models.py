@@ -6,16 +6,18 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field, field_validator
 import re
 
+from polyrob_markets.polymarket.store_models import TradingLimits as _Limits
+
 
 class TradingLimitsRequest(BaseModel):
     """Trading limits configuration."""
-    max_order_size_usd: int = Field(default=1000, ge=1, le=100000)
-    max_total_exposure_usd: int = Field(default=5000, ge=1, le=1000000)
-    max_position_per_market_usd: int = Field(default=2000, ge=1, le=100000)
-    min_liquidity_required: int = Field(default=10000, ge=0)
-    max_spread_tolerance: float = Field(default=0.05, ge=0, le=1)
-    require_confirmation_above_usd: int = Field(default=500, ge=0)
-    enable_autonomous_trading: bool = Field(default=False)
+    max_order_size_usd: int = Field(default=_Limits.max_order_size_usd, ge=1, le=100000)
+    max_total_exposure_usd: int = Field(default=_Limits.max_total_exposure_usd, ge=1, le=1000000)
+    max_position_per_market_usd: int = Field(default=_Limits.max_position_per_market_usd, ge=1, le=100000)
+    min_liquidity_required: int = Field(default=_Limits.min_liquidity_required, ge=0)
+    max_spread_tolerance: float = Field(default=_Limits.max_spread_tolerance, ge=0, le=1)
+    require_confirmation_above_usd: int = Field(default=_Limits.require_confirmation_above_usd, ge=0)
+    enable_autonomous_trading: bool = Field(default=_Limits.enable_autonomous_trading)
 
 
 class ConfigurePolymarketRequest(BaseModel):

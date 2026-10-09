@@ -286,7 +286,7 @@ async def chat_completions(
 
 
 @router.get("/v1/models")
-async def list_models():
+async def list_models(user_id: str = Depends(get_user_id)):
     """Spec-registry-derived model cards (UX assessment 2026-08-07, Q6).
 
     One card per initializable provider's effective default (honors

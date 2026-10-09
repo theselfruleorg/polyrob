@@ -19,8 +19,6 @@ from api.middleware import AuthenticationMiddleware
 DOCUMENTED_PUBLIC_PATHS = [
     "/",
     "/health",
-    "/docs",
-    "/openapi.json",
     "/api/auth/nonce",
     "/api/auth/verify",
     "/api/x402/pricing",
@@ -43,6 +41,11 @@ def test_documented_public_paths_are_public(path):
     "/api/payments/balance",
     "/a2a/rpc",
     "/v1/chat/completions",
+    "/docs",
+    "/redoc",
+    "/openapi.json",
+    "/v1/models",
+    "/api/health",
 ])
 def test_private_paths_are_not_public(path):
     assert not is_public_path(path)

@@ -14,6 +14,8 @@ import os
 import re
 from typing import Dict, Iterable, Optional
 
+from core.security.agent_child import mark_agent_child
+
 # Only these host env vars are ever passed through to a child. Secrets never are.
 SAFE_ALLOWLIST = {
     "PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "TZ", "TERM",
@@ -52,6 +54,11 @@ def build_child_env(
     Widening the INHERIT set is not widening the SECRET set: step 3 still runs
     over everything, so ``AGENT_WALLET_MASTER_SEED`` and every ``*_API_KEY``
     are dropped no matter which list named them.
+
+    Every result carries the agent-child marker
+    (:data:`core.security.agent_child.AGENT_CHILD_ENV`): the owner's admin CLI
+    refuses its owner-only verbs in any process this env starts, however the
+    agent's code reached it (a script, a conftest, ``os.system``, a copied binary).
     """
     names = set(SAFE_ALLOWLIST)
     names.update(extra_allowlist or ())
@@ -62,4 +69,5 @@ def build_child_env(
         if SECRET_PAT.search(k):
             continue  # never let a caller smuggle a secret-named var in
         env[k] = str(v)
-    return {k: v for k, v in env.items() if not SECRET_PAT.search(k)}
+    env = {k: v for k, v in env.items() if not SECRET_PAT.search(k)}
+    return dict(mark_agent_child(env))

@@ -28,11 +28,24 @@ def test_read_emails_peeks_and_does_not_consume_the_surface_queue():
 
 
 def test_only_mark_as_read_writes_the_seen_flag():
-    """``mark_as_read`` stays the ONE place a message is marked handled."""
+    """``mark_as_read`` stays the ONE place a message is marked handled.
+
+    Read from the file's AST, not ``inspect.getsource`` on the live class:
+    getsource slices the process-wide ``linecache`` by the code object's line
+    numbers, so a run in which ``tools/email_tool.py`` changed after import (a
+    parallel session on the shared tree) or the cache was refreshed by another
+    test sliced the wrong lines and named the wrong writers."""
+    import ast
+    from pathlib import Path
+
     import tools.email_tool as et
 
-    writers = [name for name, fn in vars(et.EmailTool).items()
-               if inspect.isfunction(fn) and "\\\\Seen" in inspect.getsource(fn)]
+    source = Path(et.__file__).read_text(encoding="utf-8")
+    cls = next(node for node in ast.parse(source).body
+               if isinstance(node, ast.ClassDef) and node.name == "EmailTool")
+    writers = [fn.name for fn in cls.body
+               if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))
+               and "\\\\Seen" in ast.get_source_segment(source, fn)]
     assert writers == ["mark_as_read"], writers
 
 

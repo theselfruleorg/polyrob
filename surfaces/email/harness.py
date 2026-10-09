@@ -12,15 +12,18 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import re
-from email.header import decode_header
-from email.message import Message
-from typing import Any, Optional
+from typing import Any
 
 from surfaces.email.dedup import MessageDedup
 from surfaces.email.fetchers import MailFetchError
 from surfaces.email.inbound import dedup_key, process_email
 from surfaces.email.surface import EmailSurface
+# The parser lives in the tool tier so the agent's mailbox verbs share it; the
+# names stay importable from here (tests and fetchers import them from harness).
+from tools.email_providers.mime import (  # noqa: F401
+    NO_BODY_NOTE, _attachments, _decode, _decode_part, _plain_body,
+    normalize_email_message, strip_html,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,143 +31,6 @@ logger = logging.getLogger(__name__)
 #: it and marks it handled. Bounded so a poison message cannot block the
 #: mailbox forever, and loud so it is never a silent drop (D4).
 _MAX_ROUTE_ATTEMPTS = 3
-
-
-def _decode(value: Optional[str]) -> str:
-    if not value:
-        return ""
-    try:
-        parts = []
-        for chunk, enc in decode_header(value):
-            if isinstance(chunk, bytes):
-                parts.append(chunk.decode(enc or "utf-8", errors="replace"))
-            else:
-                parts.append(chunk)
-        return "".join(parts)
-    except Exception:
-        return value
-
-
-#: What the turn text says when an email carried no body we could read. Named,
-#: never blank: an empty turn is indistinguishable from a message that said
-#: nothing, and the agent answers it as though the sender wrote nothing.
-NO_BODY_NOTE = "[this email had no readable text body]"
-
-_TAG_RE = re.compile(r"<[^>]+>")
-
-
-def strip_html(html: str) -> str:
-    """A text rendering of an HTML body: tags removed, entities unescaped.
-
-    Not a renderer — a legibility floor. D27: an HTML-only email (every
-    marketing client, and Outlook by default) produced an EMPTY turn, so the
-    agent replied to nothing.
-    """
-    import html as _html
-
-    text = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", html or "")
-    text = re.sub(r"(?i)<br\s*/?>", "\n", text)
-    text = re.sub(r"(?i)</p\s*>", "\n\n", text)
-    text = _TAG_RE.sub(" ", text)
-    text = _html.unescape(text)
-    text = re.sub(r"[ \t\r\f\v]+", " ", text)
-    return re.sub(r"\n\s*\n\s*\n+", "\n\n", text).strip()
-
-
-def _decode_part(part: Message) -> str:
-    payload = part.get_payload(decode=True)
-    if payload is None:
-        return ""
-    return payload.decode(part.get_content_charset() or "utf-8", errors="replace")
-
-
-def _plain_body(em: Message) -> str:
-    """The message's readable text: ``text/plain``, else ``text/html`` stripped,
-    else :data:`NO_BODY_NOTE` — never a silent empty string (D27)."""
-    try:
-        html = ""
-        if em.is_multipart():
-            for part in em.walk():
-                ctype = part.get_content_type()
-                if ctype == "text/plain":
-                    text = _decode_part(part)
-                    if text.strip():
-                        return text
-                elif ctype == "text/html" and not html:
-                    html = _decode_part(part)
-        else:
-            text = _decode_part(em) or (em.get_payload() or "")
-            if em.get_content_type() == "text/html":
-                html, text = text, ""
-            if text.strip():
-                return text
-        if html.strip():
-            stripped = strip_html(html)
-            if stripped:
-                return stripped
-        return NO_BODY_NOTE
-    except Exception as e:
-        logger.warning("email body extraction failed: %s", e, exc_info=True)
-        return NO_BODY_NOTE
-
-
-def _attachments(em: Message) -> list:
-    """Every attached part as ``{filename, mime, data}`` (2026-09-13 media rail).
-
-    ``_plain_body`` above returns at the FIRST ``text/plain`` part and everything
-    else was discarded — an owner emailing a PDF got an answer written as if the
-    mail were empty. Only parts with an explicit attachment disposition or a
-    filename are taken, so the body and its ``text/html`` twin never show up here.
-    """
-    out: list = []
-    try:
-        if not em.is_multipart():
-            return out
-        for part in em.walk():
-            if part.get_content_maintype() == "multipart":
-                continue
-            disposition = (part.get_content_disposition() or "").lower()
-            filename = part.get_filename()
-            if disposition != "attachment" and not filename:
-                continue
-            try:
-                payload = part.get_payload(decode=True)
-            except Exception as e:
-                # D64: a part whose transfer-encoding we cannot decode is still
-                # an attachment the sender sent. Keeping it with ``data=None``
-                # makes the rail NAME it and say it could not be read; dropping
-                # it made the agent answer as if it were never attached.
-                logger.warning("email attachment %r could not be decoded: %s",
-                               filename, e)
-                payload = None
-            out.append({
-                "filename": _decode(filename) if filename else None,
-                "mime": part.get_content_type(),
-                "data": payload or None,
-            })
-    except Exception as e:  # a malformed MIME tree must never lose the whole mail
-        logger.debug("email attachment extraction failed: %s", e)
-    return out
-
-
-#: Headers that mark a mail as machine-sent (OS5).
-_AUTO_HEADERS = ("Auto-Submitted", "Precedence", "X-Autoreply", "X-Autorespond")
-
-
-def normalize_email_message(em: Message) -> dict:
-    """Map a parsed email to the normalized dict ``process_email`` consumes. Pure."""
-    return {
-        "message_id": (em.get("Message-ID") or "").strip(),
-        "from": _decode(em.get("From")),
-        "subject": _decode(em.get("Subject")),
-        "body": _plain_body(em),
-        "in_reply_to": (em.get("In-Reply-To") or "").strip(),
-        "references": (em.get("References") or "").strip(),
-        "attachments": _attachments(em),
-        # OS5: the RFC 3834 / de-facto auto-reply markers, read by
-        # ``inbound.is_auto_generated`` so an auto-responder is never answered.
-        "headers": {k: str(em.get(k) or "") for k in _AUTO_HEADERS if em.get(k)},
-    }
 
 
 async def _media_bytes(media):

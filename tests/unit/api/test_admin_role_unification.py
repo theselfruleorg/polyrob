@@ -20,6 +20,7 @@ Fix:
     canonical is_admin_role() — fixed so it recognizes any role in ADMIN_ROLES
     (now including "owner"), not just the literal string 'admin'.
 """
+from core.security.session_tokens import SESSION_AUDIENCE
 import types
 
 import pytest
@@ -167,7 +168,7 @@ def test_fallback_middleware_grants_admin_for_owner_role_jwt(monkeypatch):
     )
 
     token = pyjwt.encode(
-        {"sub": "local-owner", "user_id": "local-owner", "tier": "admin", "role": "owner", "exp": time.time() + 60, "jti": "owner-session"},
+        {"aud": SESSION_AUDIENCE, **{"sub": "local-owner", "user_id": "local-owner", "tier": "admin", "role": "owner", "exp": time.time() + 60, "jti": "owner-session"}},
         "test-secret",
         algorithm="HS256",
     )

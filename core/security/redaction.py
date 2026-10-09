@@ -13,11 +13,25 @@ imports the fix instead of re-deriving it — or missing it.
 """
 from __future__ import annotations
 
+import re
 from urllib.parse import urlsplit
 
 #: Below this length a "secret" is more likely a placeholder than a credential,
 #: and scrubbing it would blank ordinary words out of a message.
 _MIN_SECRET_LEN = 8
+_ENDPOINT_URL = re.compile(r"[a-zA-Z][a-zA-Z0-9+.-]*://[^\s,;<>\"']+")
+
+
+def redact_config_urls(value):
+    """Mask endpoint credentials even under an innocuous config key.
+
+    Endpoints may embed credentials in userinfo, paths, query or fragments.
+    Handle lists and embedded URLs, while preserving typed non-string flags.
+    This is for DISPLAY only, never configuration consumption.
+    """
+    if not isinstance(value, str):
+        return value
+    return _ENDPOINT_URL.sub(lambda match: redact_url(match.group()), value)
 
 
 def redact_url(url: str) -> str:

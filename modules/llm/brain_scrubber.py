@@ -46,6 +46,67 @@ BRAIN_KEYS = frozenset(
 # and cli/ui/dialog all read this one (the four hand-copies had drifted by one key each).
 _MIN_BRAIN_KEYS = 2
 
+
+class StreamingBrainScrubber:
+    """Hold ambiguous JSON/fences until complete; never disclose a partial brain.
+
+    Plain prose still streams. An unfinished or oversized structured block stays
+    hidden until the next response resets the filter. Final replies use the
+    ordinary whole-message scrubber, so interrupted previews lose no final text.
+    """
+    MAX_PENDING = 65536
+
+    def __init__(self):
+        from modules.llm.think_scrubber import StreamingThinkScrubber
+        self._think = StreamingThinkScrubber(strict=True)
+        self._pending = ''
+        self._blocked = False
+
+    def feed(self, text: str) -> str:
+        if self._blocked:
+            return ''
+        if len(text) > 1024 * 1024:
+            self._blocked = True
+            self._pending = ''
+            return ''
+        data = self._pending + self._think.feed(text)
+        self._pending = ''
+        out = []
+        while data:
+            candidates = [(data.find(token), token) for token in ('{', '```', '~~~')]
+            found = [(index, token) for index, token in candidates if index >= 0]
+            if not found:
+                # A code fence itself can straddle deltas.
+                hold = 0
+                for char in ('`', '~'):
+                    for size in (1, 2):
+                        if data.endswith(char * size):
+                            hold = max(hold, size)
+                out.append(data[:-hold] if hold else data)
+                self._pending = data[-hold:] if hold else ''
+                break
+            index, token = min(found)
+            out.append(data[:index])
+            data = data[index:]
+            if token == '{':
+                try:
+                    _, end = json.JSONDecoder().raw_decode(data)
+                except ValueError:
+                    self._pending = data
+                    break
+            else:
+                end = data.find(token, len(token))
+                if end < 0:
+                    self._pending = data
+                    break
+                end += len(token)
+            out.append(scrub_brain_blocks(data[:end]))
+            data = data[end:]
+        if len(self._pending) > self.MAX_PENDING:
+            self._pending = ''
+            self._blocked = True
+        return ''.join(out)
+
 #: Kimi-K2 tool-call control tokens (NVIDIA NIM intermittently leaks these as text).
 _KIMI_CONTROL_TOKEN_RE = re.compile(
     r"<\|(?:tool_call_begin|tool_call_end|tool_call_argument_begin|tool_calls_section_end)\|>"

@@ -41,6 +41,7 @@ POLYROB doesn't just answer — it *works*, and it keeps working when you're not
 - **Self-wake** — re-enters idle sessions to continue or follow up, with depth and backoff guards so it never loops.
 - **Background review + curator** — a cheap aux model reviews what worked every few turns and can distill a new skill; unused skills are retired automatically and revived when relevant again.
 - **Parallel delegation** — `delegate_task` spawns least-privilege sub-agents for concurrent workstreams (no money/comms/code-exec, can't re-delegate), sync or detached in the background.
+- **Your standing work stays yours** — every cron job and goal records who wrote it. One you create carries your standing authority (its toolset as written, an X post without a per-run tap); one the agent wrote — or that a turn wrote after reading outside text — runs as the agent's. `/adopt` shows you what such a job will do and makes it yours.
 
 ## 🧬 It learns and gets better with use
 
@@ -58,13 +59,21 @@ Skills use the open [agentskills.io](https://agentskills.io) `SKILL.md` format �
 Claude Code, discovered straight from `~/.agents/skills/` (and `~/.claude/skills/`). Install from a local folder, a GitHub repo, or
 a `SKILL.md` URL: `polyrob skill install <spec>` threat-scans, quarantines, and waits for your
 explicit approval. See **[docs/guide/skills.md](docs/guide/skills.md)**.
+Built-in skills ship for the work the agent does most — web research, the coding
+workflow (review, triage, debugging), a live incident (impact first, roll back before
+you debug, the leaked-secret containment order), an adversarial consensus panel for a
+hard-to-reverse decision (blind independent answers, cross-critique, a named verdict),
+and the trading and wallet safety procedures.
 
 ## 🛠️ A real toolbox
 
 - **Web, two ways** — a lightweight `web_fetch` returns any URL as clean markdown with **no browser install needed**, or full **Playwright** automation (navigate/click/type/screenshot/DOM extract, anti-detection) when you need it.
 - **MCP client** — connect any Model Context Protocol server over **STDIO, SSE, HTTP, or Streamable HTTP**, with auto tool-discovery, per-server circuit breakers, encrypted secrets, and live resource subscriptions.
-- **Structured web data** — the AnySite tool pulls structured data from **200+ sites and platforms**; Perplexity-backed search; Twitter/X and Gmail tools.
-- **Code & files** — file/CSV/JSON handling, built-in coding tools (`str_replace` / `apply_patch` / `run_tests` / grep), git & GitHub tools, and opt-in sandboxed code execution.
+- **Structured web data** — the AnySite tool pulls structured data from **200+ sites and platforms**; Perplexity-backed search.
+- **Its own mailbox** — the agent lists, reads, replies in thread, forwards, files and deletes (to Trash) its own mail and saves attachments into its workspace (`email_*` verbs over IMAP/SMTP, or AgentMail without folders and flags). Reads never mark mail as seen, and every send verb tiers every recipient through one gated rail.
+- **Its own X account** — posts, replies and DMs; DMs go over X Chat, with a plaintext fallback for a cold first contact.
+- **Code & files** — file/CSV/JSON handling, built-in coding tools (`str_replace` / `apply_patch` / `run_tests` / grep), git & GitHub tools, and opt-in sandboxed code execution — including a persistent Python kernel (`run_code(persist=True)`) and scripts that call the agent's own tools under the same gates (`run_code(tools=True)`).
+- **A real terminal** — a persistent `shell` plus background `process` jobs (stdin, PTY, notify on exit or on a pattern). It runs in the session sandbox; at `AGENT_COMPUTE_POSTURE=3` your own turn at your own terminal runs on the host (never while the process holds wallet signing credentials). A command guard holds a floor nothing lifts and sends a dangerous command to you first. Remote backends: `ssh`, Podman, and optional Modal, Daytona, Vercel Sandbox and Singularity packs.
 - **Vision** — reasons over screenshots and images.
 
 ## 🔌 Use it from anywhere
@@ -76,7 +85,7 @@ One agent core, many front doors:
 - **REST API + SSE streaming**, plus a drop-in **OpenAI-compatible `/v1`** endpoint — point any OpenAI SDK at `localhost:9000/v1`.
 - **A2A protocol** — Google's Agent-to-Agent standard (Agent Card discovery, JSON-RPC, SSE) so other agents can discover and delegate to yours.
 - **MCP server** — expose polyrob to Claude Desktop, Cursor, or any MCP client as a read-only tool provider (`POST /mcp`, off by default) — it's an MCP client *and* server.
-- **Chat surfaces** — Telegram (live incremental streaming + voice-note transcription), email (IMAP/SMTP), WhatsApp, Discord, Slack, Signal, Feishu / Lark, DingTalk, and X (Twitter) DMs.
+- **Chat surfaces** — Telegram (live incremental streaming + voice-note transcription), email (IMAP/SMTP), WhatsApp, Discord, Slack, Signal, Feishu / Lark and DingTalk; X (Twitter) DMs through the agent's X tools.
 
 ## 🖥️ One console for the whole agent
 
@@ -261,7 +270,9 @@ and `polyrob update` (self-update with snapshot, guarded migration, verify and *
 | Web reading | `web_fetch` URL→markdown, no browser needed |
 | Browser automation | Playwright with anti-detection, vision over screenshots |
 | Files & data | text / JSON / CSV / markdown read + write |
-| Code | built-in coding tools + git/GitHub + opt-in sandboxed execution |
+| Code | built-in coding tools + git/GitHub + opt-in sandboxed execution (persistent kernel, tool-calling scripts) |
+| Shell | persistent `shell` + background `process` jobs; sandbox by default, host only for your own terminal turn at posture 3; command guard; ssh / Podman / sandbox-pack backends |
+| Mail & X | the agent's own mailbox (`email_*`) and X account (posts, replies, X Chat DMs) |
 | Planning | multi-step decomposition with automatic error recovery |
 
 **Intelligence & memory**
@@ -282,6 +293,7 @@ and `polyrob update` (self-update with snapshot, guarded migration, verify and *
 | Cron | natural-language schedules + out-of-band delivery (Telegram/email/X) |
 | Self-wake | re-enters idle sessions with depth/backoff guards |
 | Self-authored skills | background review → scan → quarantine → owner approval |
+| Authorship | every cron job and goal records owner or agent; `/adopt` makes an agent-written one yours |
 | Skill curator | retires unused skills, revives on reuse |
 | Delegation | least-privilege sub-agents, sync or detached background |
 
@@ -296,7 +308,7 @@ and `polyrob update` (self-update with snapshot, guarded migration, verify and *
 | A2A protocol | Agent Card discovery, JSON-RPC, SSE — agent-to-agent delegation |
 | MCP client | STDIO / SSE / HTTP / Streamable HTTP, live resource subscriptions |
 | MCP server | expose polyrob's read-only tools to Claude Desktop / Cursor (`POST /mcp`, off by default) |
-| Chat surfaces | Telegram, email, WhatsApp, Discord, Slack, Signal, X DMs — one agent core, many channels |
+| Chat surfaces | Telegram, email, WhatsApp, Discord, Slack, Signal, Feishu / Lark, DingTalk, plus X DMs through the X tools — one agent core, many channels |
 
 ---
 
@@ -305,7 +317,8 @@ and `polyrob update` (self-update with snapshot, guarded migration, verify and *
 Multi-provider LLM (**OpenAI · Anthropic · Google Gemini · DeepSeek · OpenRouter · NVIDIA NIM**) ·
 **Playwright** browser · **MCP** (STDIO/SSE/HTTP/Streamable) · **AnySite** (200+ sites) ·
 **Perplexity** search · **Twitter/X** · **Gmail / IMAP-SMTP** · **Telegram** · **WhatsApp** ·
-**Discord** · **Slack** · **Signal** ·
+**Discord** · **Slack** · **Signal** · **Feishu / Lark** · **DingTalk** ·
+**AgentMail** · **Podman** · optional **Modal** / **Daytona** / **Vercel Sandbox** / **Singularity** sandboxes ·
 voice transcription (**faster-whisper**) · **A2A** · OpenAI-compatible `/v1` · **agentskills.io**
 skills · **sqlite-vec** + **sentence-transformers** local RAG (the `[memory-vector]` extra).
 
@@ -325,6 +338,8 @@ checks around it. The core protections below are **on by default**:
 | **SSRF confinement** | `web_fetch` re-validates every redirect hop; blocks loopback/metadata/private targets | **On** |
 | **Self-modification review** | New skills / identity edits are quarantined and reviewed before taking effect | **On** |
 | **Code-exec containment** | Hardened Docker container by default on a server; the local subprocess backend is a convenience, not a sandbox, and a server refuses it; no inherited API keys | On when code-exec enabled |
+| **Shell command guard** | Every shell line (wrappers, substitutions and heredocs included) is classified: a floor no approval lifts, a dangerous class that waits for you, unattended runs refuse it; a write to the agent's own state databases needs you whatever the path | On when the shell tools are on |
+| **Read taint** | A turn that read outside text (a web page, mail, a room) cannot grant itself authority: its new goals and jobs are agent-authored, and its transfers wait for your tap | **On** |
 | **Run budget** | Cap a session's provider spend; the run halts honestly at the ceiling rather than claiming success | Opt-in (`RUN_BUDGET_USD`) |
 | **Four-tier access** | OWNER / CORRESPONDENT / GROUP MEMBER / DENIED routing for chat surfaces | Opt-in (`CORRESPONDENT_ACCESS_ENABLED`; on under `AUTONOMY_MODE=autonomous`) |
 | **Group chats (rooms)** | Allowlisted room + per-chat role; every room turn runs a read-only, audience-bounded toolset (never money/exec/delegation) in a session that carries no owner state | Opt-in (`GROUP_CHAT_ENABLED`; on under `AUTONOMY_MODE=autonomous`) |
@@ -350,8 +365,8 @@ POLYROB can act as an economic agent when you want it to. Read-only token and wa
 and off by default:
 
 - **x402 pay-per-request** — USDC micropayments on Base (opt-in Solana settlement) via the x402 protocol; the agent can both charge for its API and pay for external resources, and invoices settle facilitator-free by on-chain detection.
-- **Native agent wallet** — one seed derives per-venue EVM keys *and* a Solana address, with per-transaction and rolling 24h spend caps; testnet by default.
-- **On-chain token sight** — a read-only tool (14 verbs, NFTs included) for token identity, price, liquidity, a safety screen, pool discovery, and the agent's own portfolio across Base, Ethereum, Arbitrum, Polygon and Solana — plus `reconcile`, which diffs the agent's position ledger against actual chain balances. Address is the only identity (a ticker is never resolved for you), and unknown is never rendered as zero.
+- **Native agent wallet** — one seed derives per-venue EVM keys *and* a Solana address, with per-transaction and rolling 24h spend caps; testnet by default. The spend ledger is sealed with a seed-derived MAC, so an edited row fails closed. An optional separate signer process (`WALLET_SIGNER`) holds its own hard caps, and those caps are the outer envelope every other cap sits inside.
+- **On-chain token sight** — a read-only tool (over twenty verbs, NFTs and LP positions included) for token identity, price, liquidity, a safety screen, pool discovery, any wallet's holdings and recent activity, a token's deployer history, and the agent's own positions across Base, Ethereum, Arbitrum, Polygon and Solana — plus `reconcile`, which diffs the agent's position ledger against actual chain balances. Address is the only identity (a ticker is never resolved for you), and unknown is never rendered as zero.
 - **Guarded on-chain trading** — transfers, exact-amount approvals/revokes and swaps (local Uniswap V3 first, opt-in aggregator fallback) go through one choke point that *simulates* the transaction, measures its real asset and allowance deltas, and refuses unless they match a declared intent. `dry_run` by default, fail-closed gates, and a spend the agent starts above a configurable ceiling waits for an owner approval and is sent once approved; the owner's own `/send`, `/swap` and `/bridge` (typed, or built and confirmed with buttons) pass the ceiling but stay inside the per-transaction and daily caps. Solana swaps (Jupiter) run the same guard order with an authority-grant refusal in place of the allowance check.
 - **Venue trading** — Hyperliquid (perps) and Polymarket (prediction markets) tools, dry-run by default behind a master + per-venue live switch and per-venue caps.
 - **ERC-8004 trustless agents** — optional on-chain agent identity + portable reputation.
@@ -479,6 +494,7 @@ Architecture overview → **[docs/guide/architecture.md](docs/guide/architecture
 | [docs/guide/payments.md](docs/guide/payments.md) | Payments, wallet & crypto — the complete money reference |
 | [docs/guide/security-model.md](docs/guide/security-model.md) | Honest trust model — heuristic gates vs. the OS/container boundary |
 | [docs/guide/streams.md](docs/guide/streams.md) | Goals and standing work — the goal board, objectives, fair dispatch, cron |
+| [docs/guide/x-twitter.md](docs/guide/x-twitter.md) | The agent's X account — posts, X Chat DMs, sign-in |
 | [docs/comparison.md](docs/comparison.md) | Comparison with other frameworks |
 | [docs/examples.md](docs/examples.md) | Real-world usage examples |
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Environment-flag reference (SSOT) |

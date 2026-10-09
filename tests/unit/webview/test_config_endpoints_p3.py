@@ -54,7 +54,7 @@ def test_config_patch_pref_and_flag(monkeypatch, tmp_path):
     # flag write lands in the project env file, restart-effective
     r4 = c.patch("/api/webgate/config/GOALS_ENABLED", json={"value": "on"})
     assert r4.status_code == 200
-    assert "GOALS_ENABLED=on" in (tmp_path / ".polyrob" / ".env").read_text()
+    assert "GOALS_ENABLED=on" in (tmp_path / "home" / ".env").read_text()
 
 
 def test_flag_write_denied_off_owner_postures(monkeypatch, tmp_path):

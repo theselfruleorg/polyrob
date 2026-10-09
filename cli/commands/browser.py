@@ -31,6 +31,8 @@ import os
 import shutil
 import subprocess
 import sys
+import stat
+import tempfile
 from pathlib import Path
 
 import click
@@ -126,7 +128,7 @@ EnvironmentFile={env}
 # The Chromium SANDBOX IS ON for every browser this server launches (see the
 # AppArmor profile /etc/apparmor.d/polyrob-browser). No POLYROB custody
 # credential is ever present on this host.
-ExecStart={python} -m playwright run-server --host ${{BROWSER_SERVER_HOST}} --port ${{BROWSER_SERVER_PORT}} --path /${{BROWSER_SERVER_TOKEN}}
+ExecStart={python} -I -m playwright run-server --host ${{BROWSER_SERVER_HOST}} --port ${{BROWSER_SERVER_PORT}} --path /${{BROWSER_SERVER_TOKEN}}
 Restart=always
 RestartSec=3
 MemoryMax=2G
@@ -172,11 +174,17 @@ WantedBy=multi-user.target
 EGRESS_SCRIPT_TEMPLATE = """#!/usr/bin/env bash
 # POLYROB isolated browser egress (049). The browser UID renders untrusted
 # pages; it may not OPEN a connection to loopback services (the console, its
-# own CDP port), RFC1918, carrier-grade NAT, link-local or the cloud metadata
-# service. Replies on connections the agent opened (CDP on 127.0.0.1) are
-# established traffic and pass; DNS to the local resolver stub is allowed
-# explicitly. The Playwright route guard in the agent is the second line;
-# this chain is the first. Idempotent: the table is replaced on every run.
+# own CDP port), any address of this host, RFC1918, carrier-grade NAT,
+# link-local, the cloud metadata service, or the other special-use ranges.
+# Replies on connections the agent opened (CDP on 127.0.0.1) are established
+# traffic and pass; DNS to the local resolver stub is allowed explicitly. The
+# rule is keyed on the browser UID at connect time, so it holds for redirects,
+# DNS rebinding and subresources alike; the Playwright route guard in the
+# agent is the second line. Idempotent: the table is replaced on every run.
+#
+#   polyrob-browser-egress.sh              apply (replace the table)
+#   polyrob-browser-egress.sh --dry-run    print the ruleset (+ `nft -c` check as root), apply nothing
+#   polyrob-browser-egress.sh --rollback   delete the table (the browser UID is unrestricted again)
 #
 # The CDP port has no authentication of its own: any local UID that connects
 # to it drives the logged-in browser. So a loopback connection to the CDP port
@@ -186,7 +194,28 @@ EGRESS_SCRIPT_TEMPLATE = """#!/usr/bin/env bash
 # skipped (warned). The port rule is ALWAYS installed: when no client resolves
 # the allowed set is root and the browser UID only (fail closed) — a missing
 # or misnamed client identity must never reopen CDP to every local UID.
+#
+# This host's own public addresses stay reachable on the public web ports
+# only (POLYROB_BROWSER_SELF_PORTS, default "80 443"): the vhosts anyone on
+# the internet sees, such as an app the agent built. Every other local port
+# is dropped. Set it to "" to drop the host's own addresses entirely.
 set -euo pipefail
+MODE=apply
+case "${{1:-}}" in
+  "") ;;
+  --dry-run) MODE=dry ;;
+  --rollback) MODE=rollback ;;
+  *) echo "usage: $0 [--dry-run|--rollback]" >&2; exit 64 ;;
+esac
+if [[ "$MODE" == rollback ]]; then
+  if nft list table inet polyrob_browser >/dev/null 2>&1; then
+    echo "polyrob-browser-egress: deleting table inet polyrob_browser"
+    nft delete table inet polyrob_browser
+  else
+    echo "polyrob-browser-egress: no table inet polyrob_browser - nothing to roll back"
+  fi
+  exit 0
+fi
 USER_NAME="${{POLYROB_BROWSER_USER:-{user}}}"
 id -u "$USER_NAME" >/dev/null
 CDP_PORT="${{POLYROB_BROWSER_CDP_PORT:-{port}}}"
@@ -203,27 +232,55 @@ CDP_ALLOW="0, $(id -u "$USER_NAME")${{CDP_UIDS:+, $CDP_UIDS}}"
 CDP_RULES="    ip daddr 127.0.0.0/8 tcp dport $CDP_PORT meta skuid != {{ $CDP_ALLOW }} counter reject with tcp reset
     ip6 daddr ::1 tcp dport $CDP_PORT meta skuid != {{ $CDP_ALLOW }} counter reject with tcp reset
 "
-# Loopback resolvers (systemd-resolved's 127.0.0.53, a local unbound, …) must
-# stay reachable on 53 or the browser cannot resolve anything.
+# The configured resolvers (systemd-resolved's 127.0.0.53, a local unbound, a
+# private-network resolver, …) must stay reachable on 53 or the browser cannot
+# resolve anything. Port 53 only; the address stays closed otherwise.
 DNS_RULES=""
 while read -r _ ns _; do
-  case "$ns" in 127.*) DNS_RULES+="    ip daddr $ns udp dport 53 accept
+  case "$ns" in
+    *:*) [[ "$ns" =~ ^[0-9a-fA-F:]+$ ]] && DNS_RULES+="    ip6 daddr $ns udp dport 53 accept
+    ip6 daddr $ns tcp dport 53 accept
+";;
+    *) [[ "$ns" =~ ^[0-9.]+$ ]] && DNS_RULES+="    ip daddr $ns udp dport 53 accept
     ip daddr $ns tcp dport 53 accept
-";; esac
+";;
+  esac
 done < <(grep -E '^nameserver ' /etc/resolv.conf 2>/dev/null || true)
-nft -f - <<EOF
-table inet polyrob_browser
+SELF_PORTS="${{POLYROB_BROWSER_SELF_PORTS-80 443}}"
+SELF_RULES=""
+SELF_SET=""
+for _p in $SELF_PORTS; do
+  [[ "$_p" =~ ^[0-9]+$ ]] || {{ echo "polyrob-browser-egress: bad port in POLYROB_BROWSER_SELF_PORTS: $_p" >&2; exit 64; }}
+  SELF_SET+="${{SELF_SET:+, }}$_p"
+done
+if [[ -n "$SELF_SET" ]]; then
+  SELF_RULES="    ip daddr != 127.0.0.0/8 fib daddr type local tcp dport {{ $SELF_SET }} accept
+    ip6 daddr != ::1 fib daddr type local tcp dport {{ $SELF_SET }} accept
+"
+fi
+RULESET="table inet polyrob_browser
 delete table inet polyrob_browser
 table inet polyrob_browser {{
   chain output {{
     type filter hook output priority filter; policy accept;
-${{CDP_RULES}}    meta skuid != "$USER_NAME" accept
+${{CDP_RULES}}    meta skuid != \\"$USER_NAME\\" accept
     ct state established,related accept
-${{DNS_RULES}}    ip daddr {{ 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16 }} counter drop
-    ip6 daddr {{ ::1/128, fe80::/10, fc00::/7 }} counter drop
+${{DNS_RULES}}${{SELF_RULES}}    fib daddr type local counter drop
+    ip daddr {{ 0.0.0.0/8, 127.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 169.254.0.0/16, 172.16.0.0/12, 192.0.0.0/24, 192.168.0.0/16, 198.18.0.0/15, 224.0.0.0/4, 240.0.0.0/4 }} counter drop
+    ip6 daddr {{ ::/128, ::1/128, ::ffff:0:0/96, 64:ff9b::/96, fc00::/7, fe80::/10, fec0::/10, ff00::/8 }} counter drop
   }}
-}}
-EOF
+}}"
+if [[ "$MODE" == dry ]]; then
+  printf '%s\\n' "$RULESET"
+  if [[ "$(id -u)" == 0 ]] && command -v nft >/dev/null 2>&1; then
+    printf '%s\\n' "$RULESET" | nft -c -f - && echo "polyrob-browser-egress: nft check passed - nothing applied (dry run)"
+  else
+    echo "polyrob-browser-egress: dry run - nothing applied"
+  fi
+  exit 0
+fi
+printf '%s\\n' "$RULESET" | nft -f -
+echo "polyrob-browser-egress: table inet polyrob_browser applied (browser uid $(id -u "$USER_NAME"))"
 """
 
 APPARMOR_PROFILE_TEMPLATE = """# POLYROB isolated browser (049): lift Ubuntu 24.04's unprivileged-userns
@@ -412,7 +469,7 @@ def render(which: str):
 def _require_root():
     if os.geteuid() != 0:
         raise click.ClickException(
-            f"needs root — run: sudo {sys.executable} -m cli.polyrob browser install")
+            f"needs root — run: sudo {sys.executable} -I -m cli.polyrob browser install")
 
 
 def _write(path: Path, text: str, mode: int = 0o644) -> None:
@@ -423,12 +480,41 @@ def _write(path: Path, text: str, mode: int = 0o644) -> None:
     os.replace(tmp, path)
 
 
+def _check_install_parent(root: Path) -> None:
+    for parent in (root.parent, *root.parent.parents):
+        info = parent.lstat()
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != 0
+                or info.st_mode & 0o022):
+            raise click.ClickException("browser install parent must be a protected root-owned directory")
+    if root.is_symlink():
+        raise click.ClickException("browser install root must not be a symlink")
+
+
 def _install_chromium(root: Path, user: str, with_deps: bool) -> str:
-    """Install the pinned Playwright Chromium under *root* and point root/chrome at it."""
+    """Install into a fresh root-owned tree; never execute in a browser-owned tree."""
+    root = root.absolute()
+    _check_install_parent(root)
+    with tempfile.TemporaryDirectory(prefix=".polyrob-browser-", dir=root.parent) as temporary:
+        staging = Path(temporary) / "new"
+        staging.mkdir(mode=0o755)
+        revision = _download_chromium(staging, with_deps)
+        previous = Path(temporary) / "previous"
+        if root.exists():
+            os.replace(root, previous)
+        try:
+            os.replace(staging, root)
+        except BaseException:
+            if previous.exists():
+                os.replace(previous, root)
+            raise
+        return revision
+
+
+def _download_chromium(root: Path, with_deps: bool) -> str:
     env = {k: v for k, v in os.environ.items()
            if not any(s in k.upper() for s in ("SEED", "KEY", "TOKEN", "SECRET", "PASSWORD"))}
     env["PLAYWRIGHT_BROWSERS_PATH"] = str(root)
-    cmd = [sys.executable, "-m", "playwright", "install"] + (["--with-deps"] if with_deps else []) + ["chromium"]
+    cmd = [sys.executable, "-I", "-m", "playwright", "install"] + (["--with-deps"] if with_deps else []) + ["chromium"]
     res = subprocess.run(cmd, env=env, capture_output=True, text=True)
     if res.returncode != 0:
         raise click.ClickException(f"playwright install failed:\n{res.stderr[-2000:]}")
@@ -441,7 +527,7 @@ def _install_chromium(root: Path, user: str, with_deps: bool) -> str:
     if link.is_symlink() or link.exists():
         link.unlink()
     link.symlink_to(binary.relative_to(root))
-    _run(["chown", "-R", f"{user}:{user}", str(root)])
+    # The root installer retains ownership. The browser may only read/execute.
     return installed_chromium_revision(root)
 
 

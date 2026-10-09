@@ -45,7 +45,7 @@ async def test_a_dropped_event_signals_one_feed_gap(monkeypatch):
         assert await server._emit_feed_event({"type": "x"}, room) is False
     gaps = [e for e in emitted if e[0] == "feed_gap"]
     assert gaps == [("feed_gap", {"session_id": room,
-                                  "retry_after": server.RATE_LIMIT_WINDOW}, room)]
+                                  "retry_after": server.RATE_LIMIT_WINDOW}, "session:" + room)]
     allow["ok"] = True
     assert await server._emit_feed_event({"type": "x"}, room) is True
     allow["ok"] = False
@@ -66,7 +66,7 @@ async def test_emit_feed_event_allows_under_limit(monkeypatch):
     monkeypatch.setattr(server._sio, "emit", _fake_emit)
     ok = await server._emit_feed_event({"type": "x"}, "fresh-session-xyz")
     assert ok is True
-    assert emitted == [("feed_update", "fresh-session-xyz")]
+    assert emitted == [("feed_update", "session:fresh-session-xyz")]
 
 
 # ── H2c (E5-Minor): the event limiter's key space is bounded, so tracking one

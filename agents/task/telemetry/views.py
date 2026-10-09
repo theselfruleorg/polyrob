@@ -464,8 +464,11 @@ class UserMessageDuringExecutionEvent(BaseTelemetryEvent):
 	message_text: str  # Truncated for privacy
 	message_kind: str
 	queue_depth: int
-	execution_phase: str  # "running", "browser_action", "llm_call"
+	execution_phase: str  # "running", "browser_action", "llm_call", "drained"
 	name: str = 'user_message_during_execution'
+	# The workspace harness note injected with the drained batch (if any) —
+	# what the model was told about files, for review.
+	harness_note: Optional[str] = None
 
 	def get_session_id(self) -> Optional[str]:
 		"""Get the session ID for this event"""

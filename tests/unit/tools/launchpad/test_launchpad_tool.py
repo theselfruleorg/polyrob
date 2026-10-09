@@ -17,6 +17,17 @@ TOKEN = "0xD8c32C1585758Bd7505F9ceA9C977a4294873ab2"
 CURVE = "0x526fce0f274615695073fd3a09a54f2646DF1E00"
 
 
+@pytest.mark.asyncio
+async def test_launchpad_intent_reuses_nonce_scoped_replay_key(monkeypatch):
+    captured = []
+    tool, _ = _tool(monkeypatch, captured=captured)
+    params = LaunchParams(name="R", symbol="R", max_spend_usd=5, dry_run=True)
+    await tool.launchpad_launch(params)
+    await tool.launchpad_launch(params)
+    assert len(captured) == 2
+    assert captured[0].idempotency_key == captured[1].idempotency_key
+
+
 class _Gate:
     def __init__(self):
         self.recorded = []
@@ -66,7 +77,7 @@ class _Rail:
                        gas_used=300_000)
 
     def _rpc(self, method, params, **kw):
-        return {"logs": [{"topics": [P.TOPIC_TOKEN_LAUNCHED,
+        return {"logs": [{"address": P.FACTORY, "topics": [P.TOPIC_TOKEN_LAUNCHED,
                                      "0x" + "00" * 12 + "11" * 20,
                                      "0x" + "00" * 12 + "22" * 20,
                                      "0x" + "00" * 12 + "33" * 20],
@@ -98,6 +109,7 @@ def _tool(monkeypatch, *, captured=None, allow=True, state_over=None,
                         amount_usd=2.0, sim_gas_used=250_000)
 
     monkeypatch.setattr(pons, "verify_pins", lambda rpc: None)
+    monkeypatch.setattr(pons, "token_decimals", lambda rpc, token: 18)
     monkeypatch.setattr(pons, "read_terms", lambda rpc, **kw: terms)
     record = {"token": TOKEN, "curve": CURVE, "deployer": HOLDER,
               "pairToken": P.NATIVE_PAIR, "graduationThreshold": 42 * 10 ** 17,
@@ -357,6 +369,28 @@ async def test_quote_prices_a_buy_without_a_wallet(monkeypatch):
         token=TOKEN, side="buy", amount=0.012345678901234567))
     assert res.error is None, res.error
     assert "RECEIVE" in res.extracted_content
+
+
+@pytest.mark.asyncio
+async def test_sell_uses_actual_token_units(monkeypatch):
+    captured = []
+    tool, _ = _tool(monkeypatch, captured=captured, state_over={
+        "token_reserve": LIVE_STATE["token_reserve"] // 10**12,
+        "reserved_tokens": LIVE_STATE["reserved_tokens"] // 10**12})
+    monkeypatch.setattr(pons, "token_decimals", lambda rpc, token: 6)
+    res = await tool.launchpad_sell(TradeParams(
+        token=TOKEN, amount=1.234567, max_spend_usd=5, dry_run=True))
+    assert res.error is None, res.error
+    assert captured[0].amount_raw == 1234567
+
+
+@pytest.mark.asyncio
+async def test_quote_buy_uses_pair_units(monkeypatch):
+    tool, _ = _tool(monkeypatch, record_over={"pairToken": "0x" + "22" * 20})
+    monkeypatch.setattr(pons, "token_decimals", lambda rpc, token: 6)
+    res = await tool.launchpad_quote(QuoteParams(token=TOKEN, amount=1.234567))
+    assert res.error is None, res.error
+    assert "1234567 raw" in res.extracted_content
 
 
 @pytest.mark.asyncio

@@ -129,3 +129,33 @@ def test_the_banner_gates_the_new_verbs_on_their_presence():
     src = INSTALLER.read_text()
     assert "has_verb service" in src
     assert "has_verb uninstall" in src
+
+
+def _root_trust(path):
+    """Run install.sh's root-trust helper on *path*; return what it prints."""
+    src = INSTALLER.read_text()
+    block = src.split("# >>> root-trust >>>", 1)[1].split("# <<< root-trust <<<", 1)[0]
+    script = f'PYTHON_BIN=python3\n{block}\nuntrusted_root_path "$1"\n'
+    res = subprocess.run(["bash", "-c", script, "bash", str(path)],
+                         capture_output=True, text=True, timeout=30)
+    assert res.returncode == 0, res.stderr
+    return res.stdout.strip()
+
+
+def test_root_install_refuses_a_user_owned_tree(tmp_path):
+    """OPS-15: a root install writes a global shim; the tree it runs must be root's."""
+    if os.geteuid() == 0:
+        pytest.skip("the tmp tree is root-owned when the suite runs as root")
+    assert _root_trust(tmp_path / "src" / ".venv") != ""
+
+
+def test_root_install_accepts_a_root_owned_tree():
+    st = os.stat("/")
+    if st.st_uid != 0 or st.st_mode & 0o022:
+        pytest.skip("this host's / is not a root-owned, non-writable directory")
+    assert _root_trust("/") == ""
+
+
+def test_root_install_check_runs_before_the_venv_is_built():
+    src = INSTALLER.read_text()
+    assert src.index('untrusted_root_path "${_tree}"') < src.index("# 3. Virtualenv + install")

@@ -8,6 +8,7 @@ posture, so an authenticated tenant B was served the owner's data — a cross-te
 leak. This file also guards the Posture 0 / own_ops single-owner behavior stays
 unchanged (no regression).
 """
+from core.security.session_tokens import SESSION_AUDIENCE
 import importlib
 from unittest.mock import MagicMock, patch
 
@@ -32,7 +33,7 @@ def multitenant_pages_client(monkeypatch):
 def _auth_cookie(user_id: str) -> dict:
     import jwt as pyjwt
     token = pyjwt.encode(
-        {"sub": "0xabc", "user_id": user_id, "tier": "free", "role": "user", "exp": time.time() + 60, "jti": "page-session"},
+        {"aud": SESSION_AUDIENCE, **{"sub": "0xabc", "user_id": user_id, "tier": "free", "role": "user", "exp": time.time() + 60, "jti": "page-session"}},
         "test-secret", algorithm="HS256",
     )
     return {"auth_token": token}

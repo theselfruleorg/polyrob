@@ -39,10 +39,14 @@ def _tool(monkeypatch, saved):
     monkeypatch.setattr(tool, "_get_user_credentials", lambda: _async(_creds()))
     monkeypatch.setattr(tool, "_get_info_client", lambda: _async(object()))
     monkeypatch.setattr(svc, "HAS_SDK", True, raising=False)
+    monkeypatch.setattr(svc, "_SDK_LOADED", True)
+    def no_network(*args, **kw):
+        raise RuntimeError("offline test: no exchange configured")
+    monkeypatch.setattr(svc, "Exchange", no_network)
 
     class _DB:
-        async def save_credentials(self, **kw):
-            saved.update(kw)
+        async def update_agent_wallet(self, user_id, agent_wallet):
+            saved.update(user_id=user_id, agent_wallet=agent_wallet)
         async def audit_log(self, *a, **k):
             return None
     tool.db = _DB()
@@ -88,12 +92,32 @@ async def test_approve_agent_requires_master_key(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_revoke_agent_clears_local_wallet(monkeypatch):
-    saved = {}
+@pytest.mark.parametrize("result", [{"status": "ok"}, {"status": "err"}, None])
+async def test_revoke_replaces_the_old_approval_before_clearing_local_wallet(monkeypatch, result):
+    from polyrob_markets.hyperliquid.models import AgentWallet
+    saved, captured = {}, {}
     tool = _tool(monkeypatch, saved)
+    creds = _creds()
+    creds.agent_wallet = AgentWallet(address="0x"+'2'*40, private_key=AGENT_KEY, name="bot")
+    monkeypatch.setattr(tool, "_get_user_credentials", lambda: _async(creds))
+    class Exchange:
+        def __init__(self, master, **kw):
+            assert master.address == MASTER_ADDR
+        def approve_agent(self, name):
+            captured['name'] = name
+            assert not saved
+            if result is None:
+                raise TimeoutError('lost response')
+            return result, 'replacement-private-key'
+    monkeypatch.setattr(svc, 'Exchange', Exchange)
     res = await tool.revoke_agent(types.SimpleNamespace())
-    assert res["success"] is True
-    assert saved.get("agent_wallet") is None  # delegation cleared
+    assert captured['name'] == 'bot'
+    assert res['success'] is (result == {"status": "ok"})
+    if res['success']:
+        assert saved['agent_wallet'] is None
+    else:
+        assert not saved
+    assert AGENT_KEY not in str(res) and 'replacement-private-key' not in str(res)
 
 
 @pytest.mark.asyncio

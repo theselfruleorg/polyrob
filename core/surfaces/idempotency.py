@@ -73,6 +73,29 @@ class IdempotencyStore:
             logger.debug("IdempotencyStore.peek failed for %s: %s", key, e)
             return False
 
+    def claim_permanent(self, keys) -> bool:
+        """Atomically consume every key once, or none if any was consumed.
+
+        For signed authorizations: never expire claims and propagate store errors.
+        Use a separate store from windowed message deduplication.
+        """
+        keys = tuple(dict.fromkeys(str(key) for key in keys))
+        if not keys:
+            raise ValueError("at least one replay key is required")
+        conn = wal_connect(self.db_path)
+        try:
+            with conn:
+                conn.execute("BEGIN IMMEDIATE")
+                for key in keys:
+                    if conn.execute(f"SELECT 1 FROM {self.table} WHERE {self.key_col}=?",
+                                    (key,)).fetchone():
+                        return False
+                conn.executemany(f"INSERT INTO {self.table} ({self.key_col}, ts) VALUES (?, ?)",
+                                 [(key, _time.time()) for key in keys])
+            return True
+        finally:
+            conn.close()
+
 
 _ACCEPTED_SCHEMA = """
 CREATE TABLE IF NOT EXISTS accepted_events (

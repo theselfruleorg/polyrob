@@ -102,3 +102,10 @@ def test_extra_home_is_honoured(tmp_path):
     other.mkdir()
     assert agent_file_refusal(str(other / "x.json"), str(tmp_path), write=False,
                               extra_homes=[str(other)])
+
+
+@pytest.mark.parametrize("relative", [".husky/pre-commit", ".mcp.json", ".pre-commit-config.yaml",
+                                      "lefthook.yml", ".claude/settings.json", ".claude/settings.local.json"])
+def test_hook_manager_and_agent_settings_writes_refused(tmp_path, relative):
+    from core.path_safety import agent_file_refusal
+    assert agent_file_refusal(str(tmp_path / relative), str(tmp_path), write=True)

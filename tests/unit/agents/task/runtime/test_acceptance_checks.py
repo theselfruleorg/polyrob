@@ -180,11 +180,11 @@ def test_dispatcher_fails_run_on_failed_check(tmp_path):
         def __init__(self):
             self.failures, self.successes = [], []
 
-        def record_failure(self, gid, error=None, session_id=None):
+        def record_failure(self, gid, error=None, session_id=None, claim_token=None):
             self.failures.append((gid, error))
             return Goal(id=gid, user_id="u1", title="t", status=STATUS_READY)
 
-        def record_success(self, gid, session_id=None, result=None):
+        def record_success(self, gid, session_id=None, result=None, claim_token=None):
             self.successes.append(gid)
 
         def create_ask(self, **kw):

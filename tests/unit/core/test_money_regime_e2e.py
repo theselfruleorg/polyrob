@@ -64,9 +64,12 @@ def goal_turn():
         autonomy_marker._SESSIONS.pop(sid, None)
 
 
-def _owner_chat_turn():
+def _owner_chat_turn(*, tainted=False):
+    """A genuine owner chat turn. ``tainted`` = the turn has read third-party
+    content since the owner last spoke (core/security/read_taint.py)."""
+    meta = {"untrusted_read": True} if tainted else {}
     return types.SimpleNamespace(user_id=OWNER, role="orchestrator", is_sub_agent=False,
-                                 session_id="sess-owner-chat", metadata={})
+                                 session_id="sess-owner-chat", metadata=meta)
 
 
 def _leaf_turn():
@@ -172,8 +175,10 @@ class TestSelfAuthoredGoal:
 # --- owner-seat provenance ----------------------------------------------------
 
 class TestOwnerChatTurn:
-    def test_owner_asking_in_chat_sets_an_owner_goal(self, tmp_path):
-        """Supervised regime: the owner's own chat turn is an owner seat."""
+    def test_clean_owner_chat_authors_an_owner_money_goal(self, tmp_path):
+        """ONE authorship rule (tools/goal_tools.py::owner_authored_turn): a genuine
+        owner turn that has read no third-party content writes OWNER work — the
+        owner asking for a money goal in chat gets it."""
         tool = _goal_tool(tmp_path)
         res = _create(tool, _owner_chat_turn(), rig="money_rail")
         assert res.error is None, res.error
@@ -181,13 +186,21 @@ class TestOwnerChatTurn:
         assert goal.payload["authored_by"] == "owner"
         assert "defi_trade" in tools
 
-    def test_owner_turn_tools_reach_the_rig_ids_only(self, tmp_path):
+    def test_tainted_owner_chat_cannot_grant_an_owner_money_goal(self, tmp_path):
+        """After third-party text entered the turn, model-written arguments do not
+        acquire owner provenance: the money rig is refused, nothing is written."""
         tool = _goal_tool(tmp_path)
-        _create(tool, _owner_chat_turn(), tools=["defi_trade", "shell", "x402_pay"])
-        goal = tool._resolve_board().list_recent(user_id=OWNER, limit=1)[0]
-        assert "defi_trade" in goal.payload["tools"]
-        assert "shell" not in goal.payload["tools"]
-        assert "x402_pay" not in goal.payload["tools"]
+        res = _create(tool, _owner_chat_turn(tainted=True), rig="money_rail")
+        assert res.error and "NOT granted" in res.error
+        assert tool._resolve_board().list_recent(user_id=OWNER, limit=1) == []
+
+    def test_tainted_owner_chat_cannot_self_grant_tools(self, tmp_path):
+        tool = _goal_tool(tmp_path)
+        _create(tool, _owner_chat_turn(tainted=True),
+                tools=["defi_trade", "shell", "x402_pay"])
+        goal, tools = _dispatch_tools(tool)
+        assert goal.payload["authored_by"] == "agent"
+        assert not {"defi_trade", "shell", "x402_pay"} & set(tools)
 
     @pytest.mark.parametrize("ctx", [
         _leaf_turn(),
@@ -255,14 +268,20 @@ class TestCron:
         goal_turn.metadata["turn_kind"] = "group"
         assert _schedule(tool, goal_turn).error
 
-    def test_owner_chat_turn_schedules_an_owner_money_job(self, tmp_path):
+    def test_clean_owner_chat_schedules_an_owner_money_job(self, tmp_path):
+        from cron.runner import resolve_cron_tools
         tool = _cron_tool(tmp_path)
         res = _schedule(tool, _owner_chat_turn(), rig="money_rail")
         assert res.error is None, res.error
-        from cron.runner import resolve_cron_tools
         job = tool._resolve_service().list_jobs(user_id=OWNER)[0]
         assert job.payload["authored_by"] == "owner"
         assert "defi_trade" in resolve_cron_tools(job.payload)
+
+    def test_tainted_owner_chat_cannot_schedule_an_owner_money_job(self, tmp_path):
+        tool = _cron_tool(tmp_path)
+        res = _schedule(tool, _owner_chat_turn(tainted=True), rig="money_rail")
+        assert res.error and "NOT granted" in res.error
+        assert tool._resolve_service().list_jobs(user_id=OWNER) == []
 
 
 # --- the trade reaches the guard and passes within caps -----------------------
@@ -342,7 +361,9 @@ class TestDefaultRig:
         from cron.runner import resolve_cron_tools
         assert "defi_trade" not in resolve_cron_tools({"authored_by": "agent"})
         assert "defi_trade" in resolve_cron_tools({"authored_by": "owner"})
-        assert "defi_trade" in resolve_cron_tools({})  # an owner-seat row
+        # An unstamped row is agent work: every owner path stamps `owner`
+        # (positive owner stamp, 2026-10-08; legacy rows via cron.stamp_authorship).
+        assert "defi_trade" not in resolve_cron_tools({})
 
     def test_armed_env_money_rail_reaches_agent_work(self, monkeypatch):
         _armed(monkeypatch)

@@ -4,6 +4,7 @@ Hyperliquid Tool Service
 Provides trading capabilities for Hyperliquid perpetuals and spot markets.
 """
 
+import asyncio
 import contextvars
 import time
 import httpx
@@ -21,6 +22,15 @@ from polyrob_markets.hyperliquid.models import (
     MIN_ORDER_VALUE_USD,
 )
 from core.logging import get_component_logger
+
+#: The worst Hyperliquid fee an order can pay, as a fraction of its notional (the base-tier
+#: spot taker rate is 0.07%; perps are lower). The fee leaves the margin account like the
+#: order itself, so the spend caps are charged notional + this, never the notional alone.
+HL_WORST_FEE_RATE = 0.001
+
+
+def _with_fee(order_value_usd: float) -> float:
+    return float(order_value_usd) * (1.0 + HL_WORST_FEE_RATE)
 
 # Official SDK — imported LAZILY: hyperliquid.exchange drags eth_account (~100 ms)
 # into every process boot via tools/__init__. _has_sdk() performs the one real
@@ -84,6 +94,8 @@ class PlaceLimitOrderParams(BaseModel):
     is_buy: bool = Field(..., description="True for buy/long, False for sell/short")
     size: float = Field(..., gt=0, description="Order size in base asset")
     price: float = Field(..., gt=0, description="Limit price")
+    max_usd: float = Field(..., gt=0, allow_inf_nan=False,
+                          description="Owner-approved maximum USD notional, checked against live pricing")
     reduce_only: bool = Field(False, description="Reduce-only order")
     post_only: bool = Field(False, description="Post-only (maker) order")
     client_order_id: Optional[str] = Field(None, description="Custom order ID")
@@ -94,6 +106,8 @@ class PlaceMarketOrderParams(BaseModel):
     coin: str = Field(..., description="Coin symbol")
     is_buy: bool = Field(..., description="True for buy/long, False for sell/short")
     size: float = Field(..., gt=0, description="Order size in base asset")
+    max_usd: float = Field(..., gt=0, allow_inf_nan=False,
+                          description="Owner-approved maximum USD notional, including worst-case slippage")
     slippage: float = Field(0.05, ge=0, le=0.2, description="Max slippage (0.05 = 5%)")
     reduce_only: bool = Field(False, description="Reduce-only order")
 
@@ -369,6 +383,11 @@ class HyperliquidTool(UserCredentialCacheMixin, BaseTool):
     ) -> Tuple[bool, str]:
         """Validate order against trading limits"""
         limits = credentials.trading_limits
+        from polyrob_markets.risk_limits import validate_limits
+        try:
+            validate_limits(limits)
+        except (TypeError, ValueError):
+            return False, "Invalid trading limits; refusing to trade"
 
         # Check if trading is enabled
         if not credentials.can_trade():
@@ -392,73 +411,27 @@ class HyperliquidTool(UserCredentialCacheMixin, BaseTool):
         return True, "OK"
 
     async def _check_exposure(
-        self, credentials, new_value_usd: float, reduce_only: bool
+        self, credentials, new_value_usd: float, reduce_only: bool, coin: str = ""
     ) -> Tuple[bool, str]:
-        """Enforce max_total_exposure_usd (P1-6).
-
-        Reduce-only orders de-risk and are exempt. For opening orders, fetch the
-        live total notional and reject if existing + new would exceed the cap.
-        Fail CLOSED if the position snapshot is unavailable (don't open blind).
-        """
-        if reduce_only:
-            return True, "OK"
-        cap = getattr(credentials.trading_limits, "max_total_exposure_usd", None)
-        if not cap:
-            return True, "OK"
-        state = await self.get_account_state(EmptyParams())
-        if not state.get("success"):
-            return False, "Cannot verify total exposure (position fetch failed); refusing to open"
-        current = float(state.get("total_ntl_pos", 0.0))
-        if current + new_value_usd > cap:
-            return False, (
-                f"Total exposure cap ${cap:.2f} would be exceeded "
-                f"(current ${current:.2f} + ${new_value_usd:.2f})"
-            )
+        """Check exposure, liquidity, spread and live leverage under the reserve lock."""
+        from polyrob_markets.risk_limits import hyperliquid_limits, RiskLimitError
+        try:
+            await hyperliquid_limits(self, credentials, coin.upper(), new_value_usd, reduce_only)
+        except RiskLimitError as exc:
+            return False, f"{exc}; refusing to open"
+        except Exception:
+            return False, "Cannot verify trading limits from complete live data; refusing to open"
         return True, "OK"
 
-    async def _check_daily_loss(
-        self, credentials, reduce_only: bool
-    ) -> Tuple[bool, str]:
-        """Enforce max_daily_loss_usd (previously a settable no-op safety stop).
-
-        Reject NEW opening orders once the day's realized loss (from fills within
-        the current UTC day) plus current unrealized loss reaches the cap.
-        Reduce-only orders de-risk and are exempt. Fail CLOSED if the PnL snapshot
-        cannot be fetched (don't open blind), mirroring _check_exposure.
-        """
-        if reduce_only:
-            return True, "OK"
-        cap = getattr(credentials.trading_limits, "max_daily_loss_usd", None)
-        if not cap:
-            return True, "OK"
-        # Realized PnL from fills within the current UTC day.
-        fills_res = await self.get_fills(GetFillsParams(limit=500))
-        if not fills_res.get("success"):
-            return False, "Cannot verify daily loss (fills fetch failed); refusing to open"
-        import datetime as _dt
-        now = _dt.datetime.now(_dt.timezone.utc)
-        day_start_ms = int(_dt.datetime(
-            now.year, now.month, now.day, tzinfo=_dt.timezone.utc).timestamp() * 1000)
-        realized = 0.0
-        for f in fills_res.get("fills", []):
-            t = f.get("time")
-            pnl = f.get("closed_pnl")
-            if t is not None and pnl is not None and int(t) >= day_start_ms:
-                realized += float(pnl)
-        # Current unrealized PnL from open positions.
-        state = await self.get_account_state(EmptyParams())
-        if not state.get("success"):
-            return False, "Cannot verify daily loss (account fetch failed); refusing to open"
-        unrealized = sum(
-            float(p.get("unrealized_pnl", 0) or 0) for p in state.get("positions", [])
-        )
-        day_pnl = realized + unrealized
-        loss = -day_pnl  # positive == net loss
-        if loss >= cap:
-            return False, (
-                f"Daily-loss cap ${cap:.2f} reached (today's PnL ${day_pnl:.2f}); "
-                f"refusing to open new positions"
-            )
+    async def _check_daily_loss(self, credentials, reduce_only: bool) -> Tuple[bool, str]:
+        """Enforce the daily-loss stop from complete, finite fills and positions."""
+        from polyrob_markets.risk_limits import hyperliquid_daily_loss, RiskLimitError
+        try:
+            await hyperliquid_daily_loss(self, credentials, reduce_only)
+        except RiskLimitError as exc:
+            return False, f"{exc}; refusing to open"
+        except Exception:
+            return False, "Cannot verify daily loss; refusing to open"
         return True, "OK"
 
     # =========================================================================
@@ -768,14 +741,14 @@ class HyperliquidTool(UserCredentialCacheMixin, BaseTool):
 
             # Parse margin summary
             margin = data.get("marginSummary", {})
-            positions = data.get("assetPositions", [])
+            positions = data["assetPositions"]
 
             return {
                 "success": True,
                 "wallet_address": credentials.wallet_address,
                 "account_value": float(margin.get("accountValue", 0)),
                 "total_margin_used": float(margin.get("totalMarginUsed", 0)),
-                "total_ntl_pos": float(margin.get("totalNtlPos", 0)),
+                "total_ntl_pos": float(margin["totalNtlPos"]),
                 "total_raw_usd": float(margin.get("totalRawUsd", 0)),
                 "withdrawable": float(data.get("withdrawable", 0)),
                 "cross_margin_summary": data.get("crossMarginSummary"),
@@ -787,6 +760,7 @@ class HyperliquidTool(UserCredentialCacheMixin, BaseTool):
                         "entry_price": float(p.get("position", {}).get("entryPx", 0)),
                         "unrealized_pnl": float(p.get("position", {}).get("unrealizedPnl", 0)),
                         "leverage": p.get("position", {}).get("leverage"),
+                        "position_value": float(p["position"]["positionValue"]),
                         "liquidation_px": p.get("position", {}).get("liquidationPx"),
                         "margin_used": float(p.get("position", {}).get("marginUsed", 0)),
                     }
@@ -877,8 +851,8 @@ class HyperliquidTool(UserCredentialCacheMixin, BaseTool):
                         "order_id": o.get("oid"),
                         "coin": o.get("coin"),
                         "side": "buy" if o.get("side") == "B" else "sell",
-                        "size": float(o.get("sz", 0)),
-                        "price": float(o.get("limitPx", 0)),
+                        "size": float(o["sz"]),
+                        "price": float(o["limitPx"]),
                         "filled": float(o.get("origSz", 0)) - float(o.get("sz", 0)),
                         "order_type": o.get("orderType"),
                         "reduce_only": o.get("reduceOnly", False),
@@ -919,7 +893,7 @@ class HyperliquidTool(UserCredentialCacheMixin, BaseTool):
             fills = response.json()
 
             # Limit results
-            fills = fills[:params.limit]
+            fills = sorted(fills, key=lambda f: int(f["time"]), reverse=True)[:params.limit]
 
             return {
                 "success": True,
@@ -930,10 +904,10 @@ class HyperliquidTool(UserCredentialCacheMixin, BaseTool):
                         "price": float(f.get("px", 0)),
                         "size": float(f.get("sz", 0)),
                         "time": f.get("time"),
-                        "fee": float(f.get("fee", 0)),
+                        "fee": float(f["fee"]),
                         "fee_token": f.get("feeToken"),
                         "start_position": f.get("startPosition"),
-                        "closed_pnl": float(f.get("closedPnl", 0)) if f.get("closedPnl") else None,
+                        "closed_pnl": float(f["closedPnl"]),
                     }
                     for f in fills
                 ],
@@ -971,8 +945,17 @@ class HyperliquidTool(UserCredentialCacheMixin, BaseTool):
         if not credentials:
             return {"success": False, "error": "Credentials not configured"}
 
-        # Calculate order value
-        order_value_usd = params.size * params.price
+        # A model-chosen sell price must not understate the assets at risk.
+        from polyrob_markets.order_safety import order_notional
+        price_res = await self.get_current_price(GetPriceParams(coin=params.coin))
+        try:
+            if not price_res.get("success"):
+                raise ValueError("Cannot verify live order price")
+            order_value_usd = order_notional(params.size, params.price, price_res.get("mid_price"))
+        except (ValueError, TypeError):
+            return {"success": False, "error": "Cannot value order within the live reference price band"}
+        if order_value_usd > params.max_usd:
+            return {"success": False, "error": "Live order notional exceeds approved max_usd"}
 
         # Check trading limits
         can_trade, message = await self._check_trading_limits(
@@ -995,21 +978,6 @@ class HyperliquidTool(UserCredentialCacheMixin, BaseTool):
                 }
             }
 
-        # P1-6: enforce cumulative exposure cap (reduce-only exempt; fail closed).
-        ok_exp, exp_msg = await self._check_exposure(
-            credentials, order_value_usd, params.reduce_only
-        )
-        if not ok_exp:
-            return {"success": False, "error": exp_msg}
-
-        # Enforce the daily-loss stop (reduce-only exempt; fail closed).
-        ok_dl, dl_msg = await self._check_daily_loss(credentials, params.reduce_only)
-        if not ok_dl:
-            return {"success": False, "error": dl_msg}
-
-        # N2: route value-moving trades through the wallet PolicyGate (catastrophic
-        # ceiling + daily/venue caps + audit). idempotency_key=None: trades may
-        # legitimately repeat, so we don't replay-block — caps/ceiling/audit apply.
         from core.wallet.factory import get_policy_gate
         policy = get_policy_gate()
         # M4 (2026-07-15): hold the gate's reserve lock across check -> submit -> record
@@ -1019,7 +987,7 @@ class HyperliquidTool(UserCredentialCacheMixin, BaseTool):
         # lock without recording (no spend happened); evaluate_live_trade / the SDK submit
         # never re-enter policy.check/record, so there is no self-deadlock.
         async with policy.reserve():
-            decision = policy.check(venue="hyperliquid", amount_usd=order_value_usd, idempotency_key=None)
+            decision = policy.check(venue="hyperliquid", amount_usd=_with_fee(order_value_usd), idempotency_key=None)
             if not decision.allowed:
                 return {"success": False, "error": f"Policy gate denied: {decision.reason}"}
 
@@ -1032,6 +1000,14 @@ class HyperliquidTool(UserCredentialCacheMixin, BaseTool):
                         "order_details": {"coin": params.coin, "is_buy": params.is_buy,
                                           "size": params.size, "price": params.price}}
 
+            ok_exp, exp_msg = await self._check_exposure(
+                credentials, order_value_usd, params.reduce_only, params.coin)
+            if not ok_exp:
+                return {"success": False, "error": exp_msg}
+            ok_dl, dl_msg = await self._check_daily_loss(credentials, params.reduce_only)
+            if not ok_dl:
+                return {"success": False, "error": dl_msg}
+
             await self.rate_limit("place_limit_order")
 
             exchange, error = await self._get_exchange_client()
@@ -1042,10 +1018,9 @@ class HyperliquidTool(UserCredentialCacheMixin, BaseTool):
                 # Determine order type
                 order_type = {"limit": {"tif": "Alo" if params.post_only else "Gtc"}}
 
-                # Place order via SDK
-                from core.wallet.submission_journal import prepare_attempt
-                submission_ref = prepare_attempt("hyperliquid", self._user_id, order_value_usd)
-                result = exchange.order(
+                from polyrob_markets.order_submission import submit_order
+                result, submission_ref = await asyncio.to_thread(
+                    submit_order, "hyperliquid", exchange, self._user_id, _with_fee(order_value_usd),
                     name=params.coin.upper(),
                     is_buy=params.is_buy,
                     sz=params.size,
@@ -1055,9 +1030,13 @@ class HyperliquidTool(UserCredentialCacheMixin, BaseTool):
                     cloid=params.client_order_id,
                 )
 
+                from polyrob_markets.order_safety import order_accepted, order_refusal
+                if not order_accepted("hyperliquid", result):
+                    return {"success": False, "error": order_refusal("hyperliquid", result, submission_ref)}
+
                 policy.record(
                     venue="hyperliquid", action="place_limit_order",
-                    amount_usd=order_value_usd, counterparty=params.coin.upper(),
+                    amount_usd=_with_fee(order_value_usd), counterparty=params.coin.upper(),
                     idempotency_key=None, result_ref=str(result)[:80],
                     chain="hyperliquid", submission_ref=submission_ref,
                 )
@@ -1123,8 +1102,15 @@ class HyperliquidTool(UserCredentialCacheMixin, BaseTool):
                 "success": False,
                 "error": f"No live price for {params.coin.upper()}: {price_res.get('error')}",
             }
-        mid = float(price_res["mid_price"])
-        order_value_usd = params.size * mid
+        from polyrob_markets.order_safety import order_notional
+        try:
+            mid = float(price_res["mid_price"])
+            limit_px = mid * (1 + params.slippage) if params.is_buy else mid * (1 - params.slippage)
+            order_value_usd = order_notional(params.size, limit_px, mid)
+        except (KeyError, TypeError, ValueError):
+            return {"success": False, "error": "Cannot verify finite live order notional"}
+        if order_value_usd > params.max_usd:
+            return {"success": False, "error": "Live order notional exceeds approved max_usd"}
 
         # Check trading limits
         can_trade, message = await self._check_trading_limits(
@@ -1147,28 +1133,12 @@ class HyperliquidTool(UserCredentialCacheMixin, BaseTool):
                 },
             }
 
-        # Marketable IOC limit: cross the spread by `slippage`.
-        limit_px = mid * (1 + params.slippage) if params.is_buy else mid * (1 - params.slippage)
-
-        # P1-6: enforce cumulative exposure cap (reduce-only exempt; fail closed).
-        ok_exp, exp_msg = await self._check_exposure(
-            credentials, order_value_usd, params.reduce_only
-        )
-        if not ok_exp:
-            return {"success": False, "error": exp_msg}
-
-        # Enforce the daily-loss stop (reduce-only exempt; fail closed).
-        ok_dl, dl_msg = await self._check_daily_loss(credentials, params.reduce_only)
-        if not ok_dl:
-            return {"success": False, "error": dl_msg}
-
-        # N2: route value-moving trades through the wallet PolicyGate.
         from core.wallet.factory import get_policy_gate
         policy = get_policy_gate()
         # M4 (2026-07-15): serialize check -> submit -> record under the gate's reserve
         # lock (see place_limit_order for the rationale / no-deadlock note).
         async with policy.reserve():
-            decision = policy.check(venue="hyperliquid", amount_usd=order_value_usd, idempotency_key=None)
+            decision = policy.check(venue="hyperliquid", amount_usd=_with_fee(order_value_usd), idempotency_key=None)
             if not decision.allowed:
                 return {"success": False, "error": f"Policy gate denied: {decision.reason}"}
 
@@ -1181,6 +1151,14 @@ class HyperliquidTool(UserCredentialCacheMixin, BaseTool):
                         "order_details": {"coin": params.coin, "is_buy": params.is_buy,
                                           "size": params.size}}
 
+            ok_exp, exp_msg = await self._check_exposure(
+                credentials, order_value_usd, params.reduce_only, params.coin)
+            if not ok_exp:
+                return {"success": False, "error": exp_msg}
+            ok_dl, dl_msg = await self._check_daily_loss(credentials, params.reduce_only)
+            if not ok_dl:
+                return {"success": False, "error": dl_msg}
+
             await self.rate_limit("place_market_order")
 
             exchange, error = await self._get_exchange_client()
@@ -1189,9 +1167,9 @@ class HyperliquidTool(UserCredentialCacheMixin, BaseTool):
 
             try:
                 order_type = {"limit": {"tif": "Ioc"}}
-                from core.wallet.submission_journal import prepare_attempt
-                submission_ref = prepare_attempt("hyperliquid", self._user_id, order_value_usd)
-                result = exchange.order(
+                from polyrob_markets.order_submission import submit_order
+                result, submission_ref = await asyncio.to_thread(
+                    submit_order, "hyperliquid", exchange, self._user_id, _with_fee(order_value_usd),
                     name=params.coin.upper(),
                     is_buy=params.is_buy,
                     sz=params.size,
@@ -1200,9 +1178,13 @@ class HyperliquidTool(UserCredentialCacheMixin, BaseTool):
                     reduce_only=params.reduce_only,
                 )
 
+                from polyrob_markets.order_safety import order_accepted, order_refusal
+                if not order_accepted("hyperliquid", result):
+                    return {"success": False, "error": order_refusal("hyperliquid", result, submission_ref)}
+
                 policy.record(
                     venue="hyperliquid", action="place_market_order",
-                    amount_usd=order_value_usd, counterparty=params.coin.upper(),
+                    amount_usd=_with_fee(order_value_usd), counterparty=params.coin.upper(),
                     idempotency_key=None, result_ref=str(result)[:80],
                     chain="hyperliquid", submission_ref=submission_ref,
                 )
@@ -1241,6 +1223,76 @@ class HyperliquidTool(UserCredentialCacheMixin, BaseTool):
                 self.logger.error(f"place_market_order failed: {e}")
                 return {"success": False, "error": str(e)}
 
+    # A cancel is risk-reducing EXCEPT for a trigger order: a stop-loss or a
+    # take-profit IS the protection, so cancelling one can leave a position
+    # unprotected. Those keep the owner tap (asked here, inside the verb); every
+    # other cancel retires a resting order and runs without one.
+    async def _trigger_orders_in_scope(self, coin: Optional[str],
+                                       order_id: Optional[int] = None) -> Optional[List[Dict[str, Any]]]:
+        """The TRIGGER orders this cancel would remove, or None when the venue
+        cannot be read (the caller then treats the cancel as a trigger cancel)."""
+        try:
+            credentials = await self._get_user_credentials()
+            if not credentials:
+                return None
+            response = await self._http_client.post(
+                f"{credentials.api_url}/info",
+                json={"type": "frontendOpenOrders",
+                      "user": self._resolve_query_address(credentials)})
+            response.raise_for_status()
+            orders = response.json()
+            if not isinstance(orders, list):
+                return None
+        except Exception:
+            self.logger.debug("hyperliquid: open-order read for a cancel failed", exc_info=True)
+            return None
+        want_coin = coin.upper() if coin else None
+        hits = []
+        for o in orders:
+            if not isinstance(o, dict):
+                return None
+            if want_coin and str(o.get("coin") or "").upper() != want_coin:
+                continue
+            if order_id is not None and o.get("oid") != order_id:
+                continue
+            kind = str(o.get("orderType") or "")
+            if o.get("isTrigger") or o.get("isPositionTpsl") or \
+                    any(w in kind for w in ("Stop", "Take Profit", "Trigger")):
+                hits.append(o)
+        return hits
+
+    async def _trigger_cancel_refusal(self, action: str, scope: Dict[str, Any],
+                                      order_id: Optional[int],
+                                      execution_context) -> Optional[str]:
+        """None when the cancel may run; else why it did not. A direct/CLI call
+        (no execution context) is the owner acting and is never asked."""
+        if execution_context is None:
+            return None
+        triggers = await self._trigger_orders_in_scope(scope.get("coin"), order_id)
+        if triggers == []:
+            return None
+        summary = dict(scope)
+        summary["why"] = ("removes a stop-loss / take-profit order" if triggers
+                          else "the open orders could not be read, so it may remove a stop-loss")
+        try:
+            from tools.controller.approval import approval_wait_timeout_sec
+            from tools.controller.approval_queue import OwnerQueueApprover
+            approver = OwnerQueueApprover(user_id=getattr(execution_context, "user_id", None))
+            try:
+                ok = await asyncio.wait_for(
+                    approver.request(action, summary, execution_context, hash_params=scope),
+                    timeout=approval_wait_timeout_sec("owner_queue"))
+            except asyncio.TimeoutError:
+                ok = False
+        except Exception as exc:
+            self.logger.warning("hyperliquid: trigger-cancel approval failed", exc_info=True)
+            return f"approval could not be obtained ({exc}); failing closed — nothing was cancelled"
+        if ok:
+            return None
+        return ("this cancel would remove a stop-loss / take-profit order, so it needs the "
+                "owner's approval. The ask is waiting (it shows in /pending); once granted, "
+                "the same cancel runs. Nothing was cancelled.")
+
     @BaseTool.action(
         'Cancel an open order',
         param_model=CancelOrderParams
@@ -1265,6 +1317,13 @@ class HyperliquidTool(UserCredentialCacheMixin, BaseTool):
         gate = evaluate_live_mutation("hyperliquid", risk_reducing=True)
         if not gate.live:
             return {"success": False, "error": gate.reason}
+
+        trigger_refusal = await self._trigger_cancel_refusal(
+            "hyperliquid_cancel_order",
+            {"coin": params.coin.upper(), "order_id": params.order_id},
+            params.order_id, execution_context)
+        if trigger_refusal:
+            return {"success": False, "error": trigger_refusal, "owner_approval_pending": True}
 
         await self.rate_limit("cancel_order")
 
@@ -1322,6 +1381,13 @@ class HyperliquidTool(UserCredentialCacheMixin, BaseTool):
         gate = evaluate_live_mutation("hyperliquid", risk_reducing=True)
         if not gate.live:
             return {"success": False, "error": gate.reason}
+
+        trigger_refusal = await self._trigger_cancel_refusal(
+            "hyperliquid_cancel_all_orders",
+            {"coin": params.coin.upper() if params.coin else None}, None,
+            execution_context)
+        if trigger_refusal:
+            return {"success": False, "error": trigger_refusal, "owner_approval_pending": True}
 
         await self.rate_limit("cancel_all_orders")
 
@@ -1458,7 +1524,8 @@ class HyperliquidTool(UserCredentialCacheMixin, BaseTool):
             polyrob_wallet = get_agent_wallet()
         except Exception:
             polyrob_wallet = None
-        if polyrob_wallet is not None:
+        from core.surfaces.owner_address import is_owner_tenant
+        if polyrob_wallet is not None and is_owner_tenant(self._user_id):
             return {
                 "success": True,
                 "delegated": False,
@@ -1519,7 +1586,9 @@ class HyperliquidTool(UserCredentialCacheMixin, BaseTool):
             await self._get_info_client()
             exchange = Exchange(master, base_url=credentials.api_url, account_address=master.address)
             # SDK generates a fresh agent key and signs the approval with the master wallet.
-            result, agent_key = exchange.approve_agent(name)
+            result, agent_key = await asyncio.to_thread(exchange.approve_agent, name)
+            if not isinstance(result, dict) or result.get("status") != "ok":
+                return {"success": False, "error": "Venue rejected the agent approval; credentials unchanged"}
             agent_addr = Account.from_key(agent_key).address
         except Exception as e:
             self.logger.error(f"approve_agent failed: {e}")
@@ -1529,15 +1598,7 @@ class HyperliquidTool(UserCredentialCacheMixin, BaseTool):
         from polyrob_markets.hyperliquid.models import AgentWallet
         agent_wallet = AgentWallet(address=agent_addr, private_key=agent_key, name=name)
         if self.db:
-            await self.db.save_credentials(
-                user_id=self._user_id,
-                wallet_address=credentials.wallet_address,
-                private_key=credentials.private_key,
-                agent_wallet=agent_wallet,
-                testnet=credentials.testnet,
-                demo_mode=credentials.demo_mode,
-                trading_limits=credentials.trading_limits,
-            )
+            await self.db.update_agent_wallet(self._user_id, agent_wallet)
             try:
                 await self.db.audit_log(self._user_id, "approve_agent", tool_name="hyperliquid",
                                         details={"agent_address": agent_addr})
@@ -1553,12 +1614,16 @@ class HyperliquidTool(UserCredentialCacheMixin, BaseTool):
         }
 
     @BaseTool.action(
-        'Revoke the local Hyperliquid agent wallet (stop using it for signing)',
+        'Revoke the stored Hyperliquid agent key at the venue by replacing its approval',
         param_model=EmptyParams,
     )
     async def revoke_agent(self, params: EmptyParams, execution_context=None) -> Dict[str, Any]:
-        """Clear the stored agent wallet so trading falls back to the master key. NOTE: the
-        on-chain approval persists until it expires; rotate by approving a fresh agent."""
+        """Replace the same named approval, discard its fresh key, then clear local state.
+
+        Hyperliquid deregisters the previous key on a same-name approveAgent.
+        The unnamed slot is replaced with name=None. A failed/unknown response
+        preserves local metadata so the owner can reconcile or retry revocation.
+        """
         await self.ensure_initialized()
 
         # H11: forged/autonomous turns OR the owner kill-switch cannot alter the trading
@@ -1571,19 +1636,28 @@ class HyperliquidTool(UserCredentialCacheMixin, BaseTool):
         credentials = await self._get_user_credentials()
         if not credentials:
             return {"success": False, "error": "Credentials not configured"}
-        if self.db:
-            await self.db.save_credentials(
-                user_id=self._user_id,
-                wallet_address=credentials.wallet_address,
-                private_key=credentials.private_key,
-                agent_wallet=None,
-                testnet=credentials.testnet,
-                demo_mode=credentials.demo_mode,
-                trading_limits=credentials.trading_limits,
-            )
+        agent = credentials.agent_wallet
+        if agent is None:
+            return {"success": False, "error": "No stored agent key identifies the approval to revoke"}
+        if not self.db or not _has_sdk() or not credentials.private_key:
+            return {"success": False, "error": "Revocation requires the master key, SDK and credential store"}
+        from eth_account import Account
+        try:
+            master = Account.from_key(credentials.private_key)
+            if master.address.lower() != credentials.wallet_address.lower():
+                return {"success": False, "error": "Master key does not match the configured account"}
+            exchange = Exchange(master, base_url=credentials.api_url, account_address=master.address)
+            result, discarded_key = await asyncio.to_thread(exchange.approve_agent, agent.name or None)
+            del discarded_key
+        except Exception:
+            return {"success": False, "error": "Revocation outcome is unknown; stored agent metadata retained for reconciliation"}
+        if not isinstance(result, dict) or result.get("status") != "ok":
+            return {"success": False, "error": "Venue rejected revocation; stored agent metadata retained"}
+        await self.db.update_agent_wallet(self._user_id, None)
         self._credentials_cache.clear()
-        return {"success": True, "note": "Local agent wallet cleared; signing falls back to the master key. "
-                                         "The on-chain approval persists until it expires."}
+        return {"success": True, "revoked_address": agent.address,
+                "note": "Venue accepted replacement of the previous agent approval. "
+                        "The replacement key was discarded and local delegation was cleared."}
 
     # =========================================================================
     # Tool Discovery
@@ -1721,7 +1795,7 @@ class HyperliquidTool(UserCredentialCacheMixin, BaseTool):
             },
             {
                 "name": "revoke_agent",
-                "description": "Revoke the local agent wallet (fall back to the master key)",
+                "description": "Revoke the previous agent key by replacing its venue approval",
                 "inputSchema": EmptyParams.model_json_schema(),
                 "category": "account",
                 "requires_auth": True,

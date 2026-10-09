@@ -138,9 +138,11 @@ def pending_grant_card(payload: Dict[str, Any], display_id: str) -> str:
         return ""
     try:
         from tools.controller.grant_card import render_grant_card
+        context = payload.get("card_context")
         return render_grant_card(
             str(payload.get("tool_name") or ""), params, display_id,
-            reply_lines=False)
+            reply_lines=False,
+            context_lines=[str(x) for x in context] if isinstance(context, list) else None)
     except Exception:
         logger.debug("pending_grant_card: render failed", exc_info=True)
         return ""
@@ -593,7 +595,19 @@ def decide_tool_approval(board: Any, display_id: str, *, user_id: str,
             payload = getattr(row, "payload", None) or {}
             session_id = payload.get("session_id")
             tool_name = payload.get("tool_name") or "the gated action"
-            if payload.get("blocks_goal_ids"):
+            if payload.get("outbound_write"):
+                # A post / DM / mail an autonomous run asked for. No job re-run,
+                # no wake: if the run already stopped waiting, the drain sends
+                # exactly the approved params once (CAS on the grant); if it is
+                # still waiting, its own poll consumes the grant and sends.
+                if (getattr(board, "get", None) and _ask_poller_gone(board, real_id)):
+                    _enqueue_late_send(board, real_id, user_id,
+                                       session_id or "approved_outbound")
+                    verb = ("approved — it is sent once with the text you approved "
+                            "(the job is not re-run)")
+                else:
+                    verb = "approved — the waiting run sends it now"
+            elif payload.get("blocks_goal_ids"):
                 # ⚠️ DO NOT wake when a goal is being re-armed (carve-out, both
                 # rails).
                 #
@@ -670,6 +684,118 @@ def decide_tool_approval(board: Any, display_id: str, *, user_id: str,
         except Exception:
             logger.debug("resume-on-grant wake skipped (fail-open)", exc_info=True)
     return True, f"tool-approval request {display_id} {verb}"
+
+
+#: Pure outbound writes: a post, a reply, a DM, a mail. A late approval of one
+#: sends exactly the approved params ONCE (``run_approved_outbound``); it never
+#: re-arms the job or goal that asked, because re-running the job repeats every
+#: other step in it — a buyback's swap included (prod 2026-10-08).
+OUTBOUND_WRITE_TOOLS = frozenset({
+    "twitter_post", "twitter_reply", "twitter_quote", "twitter_thread", "twitter_dm",
+    "x_post", "x_reply", "x_dm", "email_send", "email_reply", "email_forward",
+})
+
+#: tool name -> ``async (tool_name, params, task_agent) -> (ok, text)``. A pack
+#: registers the sender for its own tools (the X pack: ``polyrob_x.twitter_tool``).
+_LATE_SENDERS: Dict[str, Any] = {}
+
+
+def register_late_sender(tool_names, sender) -> None:
+    for name in tool_names:
+        if name not in OUTBOUND_WRITE_TOOLS:
+            raise ValueError(f"{name!r} is not an outbound write")
+        _LATE_SENDERS[name] = sender
+
+
+def _poller_gone(board: Any, ask_id: str) -> None:
+    """Mark that no run is waiting on this ask any more. Fail-open. If the owner
+    already approved (a race with the timeout), queue the late send now."""
+    try:
+        from core.sqlite_util import execute_retry
+        execute_retry(board.db_path,
+                      "UPDATE goals SET payload=json_set(payload, '$.poller_gone', "
+                      "json('true')) WHERE id=?", (ask_id,))
+        row = board.get(ask_id)
+        p = (row.payload or {}) if row is not None else {}
+        if row is not None and p.get("decision") == "approved" and not p.get("grant_consumed"):
+            _enqueue_late_send(board, ask_id, row.user_id,
+                               p.get("session_id") or "approved_outbound")
+    except Exception:
+        logger.warning("owner_queue: could not mark ask %s as no longer waited on",
+                       ask_id, exc_info=True)
+
+
+def _ask_poller_gone(board: Any, ask_id: str) -> bool:
+    try:
+        row = board.get(ask_id)
+        return bool(row is not None and (row.payload or {}).get("poller_gone"))
+    except Exception:
+        return False
+
+
+def _enqueue_late_send(board: Any, ask_id: str, user_id: str, session_id: str) -> None:
+    """A durable row the agent process's wake drain turns into ONE send
+    (``core.approved_actions`` -> :func:`run_approved_outbound`)."""
+    _wake_queue_for_board(board).enqueue(
+        session_id, user_id, f"send the approved {ask_id}", kind="approved_outbound",
+        metadata={"kind": "approved_outbound", "ask_id": ask_id,
+                  "goals_db": getattr(board, "db_path", None)})
+
+
+async def run_approved_outbound(metadata: Dict[str, Any], user_id: str,
+                                task_agent: Any = None) -> bool:
+    """Send ONE late-approved outbound write with the params the owner approved.
+
+    One-shot by the grant CAS (``consume_ask_grant``): a waiting run that already
+    sent it, or a second drain, finds the grant consumed and sends nothing.
+    Returns True when the row is finished (sent, already sent, or not sendable —
+    the owner is told), False to retry later (no sender in this process yet)."""
+    from agents.task.goals.board import GoalBoard
+    ask_id = str(metadata.get("ask_id") or "")
+    db = metadata.get("goals_db")
+    board = GoalBoard(db) if db else GoalBoard(_goals_db_path(None))
+    row = board.get(ask_id)
+    if row is None or row.user_id != user_id:
+        return True
+    p = row.payload or {}
+    tool = str(p.get("tool_name") or "")
+    if (p.get("decision") != "approved" or not p.get("outbound_write")
+            or tool not in OUTBOUND_WRITE_TOOLS):
+        return True
+    sender = _LATE_SENDERS.get(tool)
+    if sender is None:
+        return False
+    params = p.get("exact_params")
+    if not isinstance(params, dict):
+        await _push_owner_notification(
+            getattr(task_agent, "container", None), user_id,
+            f"⚠️ Approved {tool} [{ask_id[:8]}], but its text was too long to store, so "
+            "it was not sent. Ask Rob to send it again.")
+        return True
+    if not board.consume_ask_grant(ask_id):
+        return True          # the waiting run (or another drain) sent it
+    try:
+        ok, text = await sender(tool, params, task_agent)
+    except Exception as exc:
+        logger.warning("owner_queue: late send of %s failed", tool, exc_info=True)
+        ok, text = False, f"{type(exc).__name__}: {exc}"
+    await _push_owner_notification(
+        getattr(task_agent, "container", None), user_id,
+        (f"✅ Approved {tool} sent (once, with the approved text): {text}" if ok
+         else f"⚠️ Approved {tool} was NOT sent: {text}. The approval is used up; ask "
+              "Rob to send it again."))
+    return True
+
+
+def _register_runner() -> None:
+    try:
+        from core.approved_actions import set_runner
+        set_runner("approved_outbound", run_approved_outbound)
+    except Exception:
+        logger.debug("approved_actions runner not registered", exc_info=True)
+
+
+_register_runner()
 
 
 def _cron_job_id(session_id: str) -> Optional[str]:
@@ -1017,7 +1143,8 @@ class OwnerQueueApprover(ApprovalProvider):
     # -- ApprovalProvider ---------------------------------------------------------
 
     async def request(self, action_name: str, params: Dict[str, Any], context: Any,
-                      *, hash_params: Optional[Dict[str, Any]] = None) -> bool:
+                      *, hash_params: Optional[Dict[str, Any]] = None,
+                      wait_in_goal_run: bool = False) -> bool:
         """Ask the owner. ``params`` is what he SEES; ``hash_params`` is what the
         grant is keyed on, when the two must differ.
 
@@ -1143,8 +1270,20 @@ class OwnerQueueApprover(ApprovalProvider):
             # first created. Without this, an approval raised again by a later
             # goal run re-arms whatever the FIRST run happened to stamp — which,
             # for every ask created before 039, is nothing at all.
-            board.add_ask_blocked_goals(ask.id, _blocked_goal_ids(session_id))
+            if action_name not in OUTBOUND_WRITE_TOOLS:
+                board.add_ask_blocked_goals(ask.id, _blocked_goal_ids(session_id))
+        _outbound = action_name in OUTBOUND_WRITE_TOOLS
+        context_lines: list = []
         if ask is None:
+            # Facts the params do not carry (grant_card.register_card_context),
+            # read once here and stored on the ask so every seat shows them.
+            try:
+                from tools.controller.grant_card import card_context_lines
+                context_lines = await asyncio.to_thread(card_context_lines, action_name, norm_params)
+            except Exception:
+                logger.debug("owner_queue: card context failed", exc_info=True)
+                context_lines = ["⚠️ Context for this approval could not be read — you "
+                                 "would approve without it."]
             summary = _params_summary(norm_params)
             ask = board.create_ask(
                 user_id=user_id,
@@ -1158,13 +1297,21 @@ class OwnerQueueApprover(ApprovalProvider):
                     # web Inbox) can show the SAME grant card the chat push
                     # carries — every money field, not a 160-char preview.
                     "params": _card_params(norm_params),
+                    "card_context": list(context_lines),
                     "request_hash": req_hash,
                     "session_id": session_id,
                     "grant_consumed": False,
                     # 2026-09-18: the cron twin of blocks_goal_ids — an approval
                     # re-arms THIS job to run on the next tick (see
                     # decide_tool_approval). None for every other origin.
-                    "cron_job_id": _cron_job_id(session_id),
+                    # ⚠️ NEVER for an outbound write (a post, a DM, a mail): the
+                    # re-run would repeat the WHOLE job — a buyback's swap
+                    # included — to redeem one post (prod 2026-10-08). A late
+                    # approval sends exactly the approved params instead.
+                    "cron_job_id": None if _outbound else _cron_job_id(session_id),
+                    **({"outbound_write": True,
+                        "origin_cron_job_id": _cron_job_id(session_id),
+                        "exact_params": _card_params(norm_params)} if _outbound else {}),
                 },
                 # 039: name the goal this ask blocks, so `decide_ask`'s EXISTING
                 # unblock hop re-arms it on approval. Without it the owner
@@ -1173,7 +1320,7 @@ class OwnerQueueApprover(ApprovalProvider):
                 # "owner intent does not stick" failure one layer down. Empty
                 # for an interactive turn and for a cron/planner run with no
                 # goal row; both are real answers, not failures.
-                blocks_goal_ids=_blocked_goal_ids(session_id),
+                blocks_goal_ids=[] if _outbound else _blocked_goal_ids(session_id),
                 force=True,  # exact-hash dedup above already did the real work
             )
         if created_new:
@@ -1191,7 +1338,7 @@ class OwnerQueueApprover(ApprovalProvider):
                 card = render_grant_card(
                     action_name, norm_params, tap_display_id(ask.id),
                     timeout_sec=approval_wait_timeout_sec("owner_queue"),
-                    grant_ttl_hours=_ttl)
+                    grant_ttl_hours=_ttl, context_lines=context_lines)
             except Exception:
                 # ONE token per verb (core.surfaces.tappable): the spaced
                 # `/approve tap-…` form gets no Telegram tap on its argument.
@@ -1201,7 +1348,10 @@ class OwnerQueueApprover(ApprovalProvider):
                         f"🚫 Reject:  /reject_{_one_tap}")
             await _push_owner_notification(self._resolve_container(), user_id, card)
 
-        if goal_turn:
+        if goal_turn and not wait_in_goal_run:
+            # ``wait_in_goal_run`` (the X post): the grant is keyed on text the
+            # NEXT run writes afresh, so a later run never redeems it — that
+            # caller waits for the tap inside this run (its own timeout bounds it).
             # Return rather than poll. A goal run that sits on a dispatcher slot
             # for the whole timeout starves every other goal, and the wait buys
             # nothing: the ask is durable and the grant outlives this run, so the
@@ -1209,6 +1359,8 @@ class OwnerQueueApprover(ApprovalProvider):
             logger.info(
                 "owner_queue: autonomous goal run asked for '%s' and released the "
                 "slot (ask %s); the next run redeems the grant", action_name, ask.id)
+            if action_name in OUTBOUND_WRITE_TOOLS:
+                _poller_gone(board, ask.id)
             return False
 
         self._active_polls += 1
@@ -1260,6 +1412,13 @@ class OwnerQueueApprover(ApprovalProvider):
                         "%s (hash=%s) — denying duplicate", action_name, req_hash)
                     return False
                 await asyncio.sleep(self._poll_interval)
+        except asyncio.CancelledError:
+            # The caller's timeout ended the wait (the X post: "waiting for the
+            # owner"). From now on a late approval is sent by the drain
+            # (`run_approved_outbound`), never by re-running the job.
+            if action_name in OUTBOUND_WRITE_TOOLS:
+                _poller_gone(board, ask.id)
+            raise
         finally:
             self._active_polls -= 1
 

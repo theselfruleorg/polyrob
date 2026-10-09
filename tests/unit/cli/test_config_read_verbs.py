@@ -151,7 +151,7 @@ def test_search_json(isolated):
 def test_explain_shows_full_provenance_chain(isolated, monkeypatch):
     _home, proj = isolated
     (proj / ".polyrob").mkdir(exist_ok=True)
-    (proj / ".polyrob" / ".env").write_text("GOAL_DAILY_QUOTA=7\n")
+    (_home / ".polyrob" / ".env").write_text("GOAL_DAILY_QUOTA=7\n")
     monkeypatch.setenv("GOAL_DAILY_QUOTA", "9")
     runner, config = _runner()
     res = runner.invoke(config, ["explain", "GOAL_DAILY_QUOTA"])

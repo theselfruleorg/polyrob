@@ -76,6 +76,28 @@ def pm() -> 'PathManager':
         return _INSTANCE
 
 
+def require_canonical_session_id(session_id: str, *, path_manager=None) -> str:
+    """External callers must use the created ID, never an internal agent alias."""
+    if not isinstance(session_id, str) or not session_id:
+        raise ValueError("Session ID must be a nonempty string")
+    clean = (path_manager or pm()).clean_session_id(session_id)
+    if clean != session_id:
+        raise ValueError("Use the canonical session ID returned when the session was created")
+    return clean
+
+
+#: Ids that name a console SEAT or a global stream, never a session. The
+#: console runs owner verbs under ``"money"``/``"inbox"`` and the activity hub
+#: is ``"activity"``; a tenant session with one of these names would share
+#: their delivery (WEB-1). Compared case-insensitively.
+RESERVED_SESSION_IDS = frozenset({"activity", "money", "inbox", "new", "work", "agent"})
+
+
+def is_reserved_session_id(session_id) -> bool:
+    """True when *session_id* is a console seat / global stream name."""
+    return str(session_id or "").strip().lower() in RESERVED_SESSION_IDS
+
+
 def set_path_manager(instance: 'PathManager') -> None:
     """Install a configured PathManager as the process-global pm() singleton.
 
@@ -254,22 +276,13 @@ class PathManager:
                     self.logger.debug(f"Cleaned session ID: {original_id} -> {session_id}")
                     break
         
-        # STRICT WHITELIST: Only allow alphanumeric, dash, and underscore
+        # Never strip punctuation, collapse separators or truncate identity.
+        # Those lossy transforms made distinct caller IDs share one session.
         import re
-        clean_id = re.sub(r'[^a-zA-Z0-9_\-]', '', session_id)
-        
-        # Additional cleanup: remove any double underscores that might result from cleaning
-        clean_id = re.sub(r'_{2,}', '_', clean_id)
-        clean_id = re.sub(r'-{2,}', '-', clean_id)
-        
-        # Remove leading/trailing separators
-        clean_id = clean_id.strip('_-')
-        
-        # Ensure it's not too long (prevent DoS via long IDs)
-        MAX_ID_LENGTH = 50  # Reduced from 128 for security
-        if len(clean_id) > MAX_ID_LENGTH:
-            clean_id = clean_id[:MAX_ID_LENGTH]
-        
+        if re.fullmatch(r'[a-zA-Z0-9_-]{1,50}', session_id) is None:
+            raise ValueError('Security violation: Session ID must contain 1-50 ASCII letters, digits, underscores or hyphens')
+        clean_id = session_id
+
         # Ensure the cleaned ID is still valid
         if not clean_id or len(clean_id) < 3:
             # Generate a safe fallback ID
@@ -964,6 +977,45 @@ class PathManager:
         history_dir = data_dir / "history"
         os.makedirs(history_dir, exist_ok=True)
         return history_dir
+
+    def find_session_root(self, session_id: str,
+                          user_id: Optional[str] = None) -> Optional[Path]:
+        """The EXISTING session root, or None. READ-ONLY (WEB-9).
+
+        Unlike :meth:`get_session_root` this never creates a directory, never
+        sleeps and never falls back to ``_anonymous_`` for an unknown id: a
+        console read of a session id the agent has not created must not
+        materialize a fake session tree or stall the event loop.
+        """
+        clean_id = self.clean_session_id(session_id)
+        candidates = []
+        if user_id:
+            candidates.append(user_id)
+        else:
+            found = self._discover_user_for_session(clean_id)
+            if found is None:
+                # Do not let a console probe pin a NEGATIVE cache entry: the
+                # agent (often another process) may create the session later.
+                with self._cache_lock:
+                    if self._user_session_cache.get(clean_id, 0) is None:
+                        self._user_session_cache.pop(clean_id, None)
+                from agents.task.constants import DEFAULT_USER_ID
+                candidates.append(DEFAULT_USER_ID)
+            else:
+                candidates.append(found)
+        for uid in candidates:
+            root = (self.data_root / self.clean_user_id(uid) / clean_id).resolve(strict=False)
+            if root.is_dir():
+                return root
+        return None
+
+    def find_feed_dir(self, session_id: str, user_id: Optional[str] = None) -> Optional[Path]:
+        """The EXISTING feed directory of a session, or None. READ-ONLY (WEB-9)."""
+        root = self.find_session_root(session_id, user_id)
+        if root is None:
+            return None
+        feed = root / "feed"
+        return feed if feed.is_dir() else None
 
     def get_feed_dir(self, session_id: str, user_id: Optional[str] = None) -> Path:
         """Return the feed directory for storing event feed files.

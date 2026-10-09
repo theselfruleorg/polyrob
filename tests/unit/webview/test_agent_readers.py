@@ -56,7 +56,7 @@ def test_the_capabilities_endpoint_scopes_to_the_tenant(monkeypatch):
     monkeypatch.setattr("webview.pages._effective_user_id", lambda request: "u1")
     seen = {}
     monkeypatch.setattr(mod, "_capabilities_body",
-                        lambda uid: seen.update(uid=uid) or {"tools": {"items": []}})
+                        lambda uid, owner=True: seen.update(uid=uid) or {"tools": {"items": []}})
     app = FastAPI()
     app.include_router(mod.api_router)
     resp = TestClient(app).get("/api/webgate/capabilities")

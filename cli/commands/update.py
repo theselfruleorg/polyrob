@@ -109,17 +109,21 @@ def _systemd_manual_steps(units: list) -> str:
     # fails. The update path is the on-box deployer from the maintenance clone
     # (it quiesces the family, snapshots the venv, migrates, restarts, verifies
     # and rolls back), or a fresh `pip install` for a wheel-shaped install.
+    # The interpreter that runs this command is the install's own venv; a bare
+    # `pip` resolves through PATH and can install into another environment.
+    import shlex
+    pip = f"{shlex.quote(sys.executable)} -m pip"
     if units:
         names = " ".join(units)
         return ("cd <maintenance clone> && git pull --ff-only && bash scripts/deploy_prod.sh   "
                 f"(stops/starts {names}, migrates, verifies, auto-rolls back) — or, for a "
-                f"wheel install: sudo systemctl stop {names} && pip install -U polyrob && "
+                f"wheel install: sudo systemctl stop {names} && {pip} install -U polyrob && "
                 f"{_MIGRATE} && sudo systemctl daemon-reload && sudo systemctl start {names}")
     # Couldn't detect the unit set — name both known shapes and say how to check.
     return ("check which units exist (polyrob.service = headless agent, "
             "polyrob-x402-api.service = api): systemctl list-unit-files 'polyrob*' — then "
             "cd <maintenance clone> && git pull --ff-only && bash scripts/deploy_prod.sh, or for a "
-            f"wheel install: stop them && pip install -U polyrob && {_MIGRATE} && "
+            f"wheel install: stop them && {pip} install -U polyrob && {_MIGRATE} && "
             "sudo systemctl daemon-reload && sudo systemctl start <that unit>")
 
 
@@ -294,7 +298,9 @@ def _do_rollback(snapshot_name: str, assume_yes: bool, as_json: bool,
         sys.exit(EXIT_UP_TO_DATE)
     try:
         with update_lock(uctx.snapshots_root):
-            restored = restore_snapshot(target.path)
+            restored = restore_snapshot(
+                target.path, data_home=uctx.data_home,
+                allowed_paths=[*uctx.config_paths, *uctx.dir_paths, *uctx.db_paths])
     except UpdateLockHeld as exc:
         _rollback_fail(as_json, f"Rollback failed: {exc}")
     except Exception as exc:  # torn snapshot / IO error

@@ -253,6 +253,12 @@ class WebhookSurface(ABC):
                     # while carrying the same message id.
                     if durable and key and self._idem.peek(key):
                         continue
+                    if voice_present(inbound.media):
+                        from core.surfaces.media_access import paid_media_allowed
+                        if not paid_media_allowed(container, inbound):
+                            if durable and key:
+                                self._idem.seen(key)
+                            continue
                     # Fix 2b: hydrate surface-specific media (e.g. WA media-id -> bytes) before transcription
                     if hasattr(self, "hydrate_media"):
                         try:
@@ -270,7 +276,9 @@ class WebhookSurface(ABC):
                         except Exception:
                             _vtext = None
                         if _vtext:
-                            inbound.text = _vtext
+                            # CHAT-4: marked as voice, so a transcript that
+                            # starts with "/" is never routed as a COMMAND.
+                            inbound.text = f"[voice message, auto-transcribed] {_vtext}"
                             for _m in inbound.media:
                                 if getattr(_m, "kind", None) in ("voice", "audio"):
                                     _m.transcript = _vtext
@@ -308,9 +316,12 @@ class WebhookSurface(ABC):
                     # LLM-outage notice paths return at their deliver-is-None
                     # guard — a webhook surface (WhatsApp) silently swallowed
                     # exactly the failures those notices were built to surface.
-                    async def _deliver(text: str, _inb=inbound) -> None:
+                    async def _deliver(text: str, _inb=inbound, _decision=result.decision) -> None:
                         try:
-                            await self._send_immediate(_inb, text)
+                            from core.surfaces.command_reply import admit_inbound_reply, reply_text
+                            if not admit_inbound_reply(_inb, _decision, text):
+                                return
+                            await self._send_immediate(_inb, reply_text(text))
                         except Exception:
                             logger.warning("%s deliver failed", self.surface_id,
                                            exc_info=True)
@@ -322,8 +333,7 @@ class WebhookSurface(ABC):
                         # 046 T2: a handler may return a `CommandReply` that
                         # names its destination. A surface with no room model
                         # still renders the TEXT rather than a dataclass repr.
-                        from core.surfaces.command_reply import reply_text
-                        await self._send_immediate(inbound, reply_text(reply))
+                        await _deliver(reply)
             except Exception as e:  # fail-open per message
                 logger.error("%s webhook: process failed: %s", self.surface_id, e, exc_info=True)
                 if durable:

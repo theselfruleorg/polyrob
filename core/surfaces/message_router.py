@@ -7,7 +7,7 @@ SessionChatRegistry. Fail-open: an unroutable key or a raising surface never
 crashes the agent loop.
 """
 import logging
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from typing import Optional
 
 from core.config_policy import dead_target_registry_enabled
@@ -18,7 +18,7 @@ from core.surfaces.room_keys import is_group_session_key
 from core.surfaces.session_chat_registry import (
     SessionChatRegistry, row_from_session_key,
 )
-from modules.llm.brain_scrubber import scrub_brain_blocks
+from modules.llm.brain_scrubber import scrub_brain_blocks, StreamingBrainScrubber
 
 # TYPE_CHECKING import avoids a circular-import risk; the store is pure.
 from typing import TYPE_CHECKING
@@ -28,11 +28,24 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class SendReceipt:
+    """0008: what one proactive send produced. ``status`` is the
+    ``send_message_ex`` vocabulary (``sent``/``queued``/``failed``);
+    ``message_ids`` are the surface's own ids (empty when queued — another
+    process delivers it, and only that process learns the id); ``post`` is the
+    post-ledger row, or None when no ledger is attached / no id came back."""
+    status: str
+    message_ids: list = field(default_factory=list)
+    post: Optional[int] = None
+
+
 class MessageRouter:
     def __init__(self, registry: SessionChatRegistry, *,
                  dead_targets: Optional["DeadTargetStore"] = None) -> None:
         self._registry = registry
         self._surfaces: dict[str, object] = {}
+        self._stream_scrubbers = {}
         self._queue = None
         # T1.5: dead-target gate for the DIRECT send path (the durable-queue path
         # is gated by OutboundDispatcher instead). None by default = no gating,
@@ -47,6 +60,53 @@ class MessageRouter:
         # agent's own line. None = no recording, byte-identical legacy. Injected
         # post-construction via attach_room_ledger, mirrors attach_room_caps.
         self._room_ledger = None
+        # 0008: the post ledger (core/surfaces/sent_posts.py). None = no
+        # recording, byte-identical legacy. Injected via attach_sent_posts.
+        self._sent_posts = None
+
+    def attach_sent_posts(self, store) -> None:
+        """Bind the post ledger: every DELIVERED proactive send and room reply
+        is recorded with the surface's message ids, so it can be deleted."""
+        self._sent_posts = store
+
+    @property
+    def sent_posts(self):
+        return self._sent_posts
+
+    @staticmethod
+    def _ids_of(result) -> list:
+        """Every surface id a SendResult carries (a legacy double: none)."""
+        ids = [str(i) for i in (getattr(result, "surface_message_ids", None) or [])]
+        if not ids and getattr(result, "surface_message_id", None):
+            ids = [str(result.surface_message_id)]
+        return ids
+
+    def _record_post(self, surface_id, chat_id, result, text: str) -> Optional[int]:
+        """Write a delivered send into the post ledger. Fail-open."""
+        if self._sent_posts is None:
+            return None
+        ids = self._ids_of(result)
+        try:
+            return self._sent_posts.record(str(surface_id), str(chat_id), ids, text or "")
+        except Exception:
+            logger.debug("post ledger record skipped", exc_info=True)
+            return None
+
+    async def delete_message(self, surface_id: str, chat_id, message_id):
+        """0008: delete ONE message on a locally hosted surface. Returns
+        ``(ok, reason)``; never raises. Policy (own post, owner turn, age) is the
+        caller's — this is only the transport."""
+        surface = self._surfaces.get(surface_id)
+        if surface is None:
+            return False, f"surface {surface_id} is not hosted in this process"
+        fn = getattr(surface, "delete_message", None)
+        if not callable(fn):
+            return False, f"surface {surface_id} cannot delete messages"
+        try:
+            res = await fn(chat_id, message_id)
+        except Exception as e:  # a surface should not raise; never let it escape
+            return False, str(e)
+        return bool(getattr(res, "ok", False)), str(getattr(res, "reason", "") or "")
 
     def attach_room_ledger(self, ledger) -> None:
         """Bind the room log so every delivered room reply is recorded.
@@ -202,6 +262,11 @@ class MessageRouter:
         surface = self._surfaces.get(surface_id)
         return getattr(surface, "bot_username", None) if surface is not None else None
 
+    def reset_stream(self, session_key: str) -> None:
+        for key in list(self._stream_scrubbers):
+            if key[0] == session_key:
+                del self._stream_scrubbers[key]
+
     async def publish(self, msg: OutboundMessage) -> bool:
         """Route one agent message to its bound surface.
 
@@ -212,10 +277,25 @@ class MessageRouter:
         this answer, so a suppressed `[SILENT]` or a capped post must not be
         recorded as an answer the room received.
         """
+        key = (msg.session_key, msg.stream_id or msg.session_key)
+        if not msg.partial:
+            self.reset_stream(msg.session_key)
+        # A secret can span arbitrary deltas. Public rooms receive only the
+        # complete, scrubbed reply; a preview can never be retracted reliably.
+        if msg.partial and is_group_session_key(msg.session_key):
+            return False
         try:
-            scrubbed = scrub_brain_blocks(msg.text)
-        except Exception:  # fail-open: never drop a reply over a scrub bug
-            scrubbed = msg.text
+            if msg.partial:
+                if key not in self._stream_scrubbers:
+                    if len(self._stream_scrubbers) >= 128:
+                        return False  # never evict an unfinished filter and leak its tail
+                    self._stream_scrubbers[key] = StreamingBrainScrubber()
+                scrubbed = self._stream_scrubbers[key].feed(msg.text)
+            else:
+                scrubbed = scrub_brain_blocks(msg.text)
+        except Exception:
+            logger.warning('outbound scrub failed; suppressing message')
+            return False
         # F3 parity with HITLManager.stream_output: a wholly-brain (or empty) chunk
         # scrubs to None/"" and must be DROPPED, not delivered as an empty bubble.
         if scrubbed is None or not scrubbed.strip():
@@ -348,6 +428,8 @@ class MessageRouter:
                 if ok:
                     self._record_room_reply(msg, surface_id, chat_id, scrubbed, idem)
                     self._record_effect("router_publish", surface_id, chat_id, scrubbed)
+                    if is_group_session_key(msg.session_key):
+                        self._record_post(surface_id, chat_id, result, scrubbed)
                 if self._dt is not None and dead_target_registry_enabled():
                     if not ok:
                         reason = classify_dead_error(surface_id, getattr(result, "error", None))
@@ -398,7 +480,17 @@ class MessageRouter:
                               surface_id: str = "telegram",
                               media: list | None = None,
                               subject: str | None = None) -> str:
-        """Proactive send. Returns ``"sent"`` | ``"queued"`` | ``"failed"``.
+        """Status-only shim over :meth:`send_message_receipt`."""
+        receipt = await self.send_message_receipt(
+            chat_id, text, surface_id, media=media, subject=subject)
+        return receipt.status
+
+    async def send_message_receipt(self, chat_id: str, text: str,
+                                   surface_id: str = "telegram",
+                                   media: list | None = None,
+                                   subject: str | None = None) -> SendReceipt:
+        """Proactive send. Returns a :class:`SendReceipt` whose ``status`` is
+        ``"sent"`` | ``"queued"`` | ``"failed"``.
 
         Back-compat shim for cron/delivery.py + the `message` tool. `media`
         defaults to None -> OutboundMessage(media=[]), keeping today's shape
@@ -468,18 +560,18 @@ class MessageRouter:
                             "send_message: surface %s not local — enqueued for "
                             "cross-process delivery", surface_id)
                         self._record_effect("router_send_message", surface_id, chat_id, text)
-                        return "queued"
+                        return SendReceipt("queued")
                     # D5: no live row stands behind the key (it dead-lettered),
                     # and there is no local surface to fall through to.
                     logger.warning(
                         "send_message: enqueue no-op for %s — the queued copy was "
                         "dead-lettered; delivery failed", idem)
             logger.warning("send_message: no surface %s registered — delivery failed", surface_id)
-            return "failed"
+            return SendReceipt("failed")
         if (self._dt is not None and dead_target_registry_enabled()
                 and self._dt.is_dead(surface_id, chat_id or "")):
             logger.info("send_message: dead-target SKIP surface=%s dest=%s", surface_id, chat_id)
-            return "failed"
+            return SendReceipt("failed")
         try:
             result = await surface.send(OutboundMessage(
                 session_key=f"direct:{surface_id}:{chat_id}", text=text,
@@ -487,7 +579,7 @@ class MessageRouter:
             ))
         except Exception as e:
             logger.error("send_message shim failed: %s", e, exc_info=True)
-            return "failed"
+            return SendReceipt("failed")
         if getattr(result, "success", True) is False:
             if self._dt is not None and dead_target_registry_enabled():
                 reason = classify_dead_error(surface_id, getattr(result, "error", None))
@@ -509,6 +601,28 @@ class MessageRouter:
                     # kicked from must mark it left exactly as a room reply does.
                     if reason in ROOM_DEATH_REASONS and self._is_room(surface_id, chat_id):
                         self._mark_room_left(surface_id, chat_id, reason)
-            return "failed"
+            return SendReceipt("failed")
         self._record_effect("router_send_message", surface_id, chat_id, text)
-        return "sent"
+        self._record_proactive_room_post(surface_id, chat_id, text, media)
+        return SendReceipt("sent", self._ids_of(result), self._record_post(surface_id, chat_id, result, text))
+
+    def _record_proactive_room_post(self, surface_id, chat_id, text, media) -> None:
+        """A DELIVERED `message(target=<room>)` post joins the room log too.
+
+        2026-10-06: the hourly den job warns members with the `message` tool
+        (this shim, key ``direct:…``), which `_record_room_reply` never sees —
+        so the next run found the offence and no warning, and warned again.
+        Fail-open, and only for an allowlisted room (a DM has no room log).
+        """
+        if self._room_ledger is None or not (text or "").strip():
+            return
+        try:
+            if not self._is_room(surface_id, chat_id):
+                return
+            from core.surfaces.ledger_ingest import record_outbound_to_ledger
+            import time as _t
+            record_outbound_to_ledger(
+                self._room_ledger, surface=surface_id, chat_id=str(chat_id),
+                thread_id=None, text=text, ts=_t.time(), media=bool(media))
+        except Exception as e:  # never let bookkeeping undo a delivery
+            logger.debug("proactive room post not recorded (fail-open): %s", e)

@@ -77,7 +77,7 @@ def _prompt_provider_keys(collected_keys: dict) -> None:
             hint += " — can't bootstrap alone; pair with another provider (e.g. OpenRouter)"
         entered = click.prompt(
             f"{profile.display_name} API key{hint} (blank to skip)",
-            default="", show_default=False)
+            default="", show_default=False, hide_input=True)
         if entered:
             collected_keys[profile.env_key] = entered
             # auth-add-style feedback: say NOW when a paste is malformed, not
@@ -202,19 +202,14 @@ def _ensure_user_skills_home() -> Path | None:
 
 def _write_env(env_path: Path, updates: dict) -> None:
     """Upsert KEY=VALUE lines into env_path, then lock it to 0600."""
-    lines = env_path.read_text().splitlines() if env_path.exists() else []
-    index = {ln.split("=", 1)[0]: i for i, ln in enumerate(lines) if "=" in ln}
+    from core.env_file import env_write_error, upsert_env_var
+    for key, value in updates.items():
+        if value and (error := env_write_error(key, str(value))):
+            raise ValueError(error)
     for key, value in updates.items():
         if not value:
             continue
-        line = f"{key}={value}"
-        if key in index:
-            lines[index[key]] = line
-        else:
-            lines.append(line)
-    env_path.parent.mkdir(parents=True, exist_ok=True)
-    env_path.write_text("\n".join(lines) + "\n")
-    env_path.chmod(0o600)
+        upsert_env_var(env_path, key, str(value))
 
 
 def _character_home(profile_name, home_env):
@@ -596,7 +591,10 @@ def init_cmd(
         except Exception as exc:
             click.echo(f"Warning: could not scaffold the character: {exc}", err=True)
 
-    sessions = Path.cwd() / ".polyrob" / "sessions"
+    # The session tree the CLI container uses (core.bootstrap._resolve_cli_data_home
+    # -> resolve_data_home): never cwd/.polyrob, which polyrob no longer loads.
+    from core.runtime_paths import resolve_data_home
+    sessions = resolve_data_home() / "sessions"
     sessions.mkdir(parents=True, exist_ok=True)
 
     # 062 — seed the self, then record the install. The marker is written LAST

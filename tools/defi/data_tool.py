@@ -18,9 +18,10 @@ from __future__ import annotations  # safe: @BaseTool.action uses explicit param
 
 import asyncio
 import logging
+from tools.defi.token_screen import quoted
 import time
 import types
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
@@ -450,6 +451,19 @@ def _valuation_priority(chain: str, addr: str, pinned: set) -> int:
     return 0 if addr.lower() in pinned else 1
 
 
+#: Parallel per-row valuations in ``reconcile`` (identity eth_calls + a quote).
+_RECONCILE_WORKERS = 8
+
+#: (chain, address) -> (raw_units, ChainHolding, monotonic stamp) for holdings
+#: last valued as dust or unsolicited. 2026-10-08 16:00Z: re-reading ~110
+#: airdrops on every call passed the 60 s action budget under slow DNS and
+#: stopped the buyback at its gate. An unrecorded buy changes the raw balance,
+#: so only an UNCHANGED balance reuses the verdict; booked/pinned rows and
+#: failed or priced reads are never memoised.
+_DUST_MEMO: Dict[Tuple[str, str], Tuple[int, Any, float]] = {}
+_DUST_MEMO_TTL_S = 6 * 3600
+
+
 def _pinned_addresses(chain: str) -> set:
     """Owner-pinned tokens and the instance's OWN launches on *chain*, lower-cased.
 
@@ -772,7 +786,7 @@ def _render_scan(rows, *, chain: str, kind: str, excluded: int, floor: float) ->
     lines = list(head)
     for pool, verdict in sorted(rows, key=lambda r: order.get(r[1].verdict, 99)):
         tag = "  [STOCK PAIR]" if verdict.stock_pair else ""
-        lines.append(f"  {verdict.verdict}{tag}  {pool.name}   token "
+        lines.append(f"  {verdict.verdict}{tag}  {quoted(pool.name, name=True)}   token "
                      f"{pool.base_token or 'UNKNOWN (the indexer named a base token this chain does not accept)'}")
         lines.append(f"      {_fmt_scan_numbers(pool)}")
         # Only the reasons that EXPLAIN the verdict; a bare restatement of a
@@ -2187,14 +2201,14 @@ class DefiDataTool(BaseTool):
             info = self._row_price(chain, addr, prefetch, ours=ours)
             if info.price_usd is None or info.confidence != "high":
                 sink.append(
-                    f"  {addr}  {_fmt_amount(amount)} {ident.symbol or '?'}  "
+                    f"  {addr}  {_fmt_amount(amount)} {quoted(ident.symbol) or '?'}  "
                     f"{_excluded_value_text(amount, info, ours=ours)}")
                 md_rows.append(_holding_md(addr, ident.symbol, ident.decimals, units,
                                            amount, info, None))
                 continue
             value = amount * info.price_usd
             total += value
-            valued.append((value, f"  {addr}  {_fmt_amount(amount)} {ident.symbol or '?'}  "
+            valued.append((value, f"  {addr}  {_fmt_amount(amount)} {quoted(ident.symbol) or '?'}  "
                                   f"= {_fmt_usd(value)}"))
             md_rows.append(_holding_md(addr, ident.symbol, ident.decimals, units,
                                        amount, info, value))
@@ -2468,14 +2482,57 @@ class DefiDataTool(BaseTool):
         duplicating the valuation would let the two drift."""
         from tools.defi import reconcile as rec
         holdings = []
-        for addr, units in sorted((raw or {}).items()):
+        # 2026-10-03: priced one token at a time, an 80-token treasury (mostly
+        # airdropped dust, each GeckoTerminal call a 429 + 2 s retry) passed the
+        # 60 s action budget on every call and the gate STOPPED every buyback.
+        # The holdings loop's batch prefetch prices the dust; a ledger, rail or
+        # pinned token is still asked of its primary source.
+        pinned = _pinned_addresses(chain)
+        booked = {str(getattr(r, "address", "")).lower()
+                  for r in list(rows or []) + list(rail or [])}
+
+        def _ours(addr):
+            return addr.lower() in booked or _valuation_priority(chain, addr, pinned) == 0
+
+        # Booked/pinned first, so the prefetch cap (PREFETCH_MAX) always covers them.
+        held = sorted((a for a, u in (raw or {}).items() if u),
+                      key=lambda a: (not _ours(a), a))
+        prefetch = self._prefetch_prices(chain, held) if held else None
+
+        memo_now = time.monotonic()
+
+        def _value(item):
+            addr, units = item
+            key = (chain, addr.lower())
+            if units and not _ours(addr):
+                hit = _DUST_MEMO.get(key)
+                if hit and hit[0] == units and memo_now - hit[2] < _DUST_MEMO_TTL_S:
+                    return hit[1]
+            holding = _value_fresh(addr, units)
+            if units and not _ours(addr) and _is_noise(holding):
+                _DUST_MEMO[key] = (units, holding, memo_now)
+            else:
+                _DUST_MEMO.pop(key, None)
+            return holding
+
+        def _is_noise(h):
+            dust = rec.DUST_VALUE_USD
+            if h.value_usd is not None:
+                return h.value_usd < dust
+            if h.price_state == "failed" or h.qty is None:
+                return False
+            if h.est_value_usd is not None:
+                return h.est_value_usd < dust
+            return h.price_state == "no_pool"
+
+        def _value_fresh(addr, units):
             ident = self._identity(chain, addr)
             qty = value = est = None
             state = None
             if units is not None and getattr(ident, "decimals", None) is not None:
                 qty = units / (10 ** ident.decimals)
             if units:
-                info = self._price_for(chain, addr)
+                info = self._row_price(chain, addr, prefetch, ours=_ours(addr))
                 usd = getattr(info, "price_usd", None)
                 if usd is not None:
                     state = "high" if getattr(info, "confidence", None) == "high" else "priced"
@@ -2485,12 +2542,20 @@ class DefiDataTool(BaseTool):
                             value = est
                 else:
                     state = "failed" if getattr(info, "failed", None) else "no_pool"
-            holdings.append(rec.ChainHolding(
+            return rec.ChainHolding(
                 address=addr, symbol=getattr(ident, "symbol", None), qty=qty,
                 raw_units=units, value_usd=value,
                 balance_known=units is not None,
                 name=getattr(ident, "name", None),
-                price_state=state, est_value_usd=est))
+                price_state=state, est_value_usd=est)
+
+        # Each row's identity reads and price quote are independent network
+        # reads; serially, 116 rows took 93 s on prod (2026-10-03). `map` keeps
+        # address order, so the report is identical to the serial one.
+        from concurrent.futures import ThreadPoolExecutor
+        items = sorted((raw or {}).items())
+        with ThreadPoolExecutor(max_workers=_RECONCILE_WORKERS) as pool:
+            holdings.extend(pool.map(_value, items))
 
         quote_addresses = [a for a in (
             row.usdc if row else None,
@@ -2657,9 +2722,9 @@ class DefiDataTool(BaseTool):
                 "UNKNOWN — the indexer named a base token this chain's address "
                 "rules do not accept, so it cannot be looked up from here")
             lines.append(
-                f"  {pool.name}\n"
+                f"  {quoted(pool.name, name=True)}\n"
                 f"    token: {token}\n"
-                f"    dex: {pool.dex}   created: {pool.created_at or 'unknown'}"
+                f"    dex: {quoted(pool.dex, name=True)}   created: {quoted(pool.created_at, name=True) or 'unknown'}"
                 f"   age: {_fmt_hours(getattr(pool, 'age_hours', None))}\n"
                 f"    liquidity: {_fmt_usd(pool.liquidity_usd)}   "
                 f"vol 24h: {_fmt_usd(pool.volume_h24_usd)}   "
@@ -2700,7 +2765,9 @@ class DefiDataTool(BaseTool):
         "newest first): receive / send / swap / failed rows with exact amounts, "
         "the counterparty when it is obvious, fees, and a per-token NET FLOW over "
         "the rows read (computed here — not a cost-basis PnL). Solana (base58) and "
-        "EVM (0x, needs chain). Public chain data — read-only.",
+        "EVM (0x, needs chain). For any address other than our own it also lists OUR "
+        "recorded payments to it (the audit ledger) — use it before calling a payment "
+        "unverified. Read-only.",
         param_model=_wallet_intel.WalletActivityParams)
     async def wallet_activity(self, params, execution_context=None):
         return await asyncio.to_thread(_wallet_intel.wallet_activity_sync, self, params,
@@ -2905,7 +2972,7 @@ class DefiDataTool(BaseTool):
                 decimals = h.decimals
             symbol = getattr(ident, "symbol", None)
             amount = h.raw / (10 ** decimals) if decimals is not None else None
-            label = f" {symbol}" if symbol else ""
+            label = f" {quoted(symbol)}" if symbol else ""
             t22 = (f"  [Token-2022{': ' + ', '.join(h.extensions) if h.extensions else ''}]"
                    if h.token_2022 else "")
             shown = (f"{_fmt_amount(amount)}{label}" if amount is not None
@@ -3050,7 +3117,7 @@ class DefiDataTool(BaseTool):
                 f"This IS an answer from a working read, not a failed one."))
         lines = [f"{address} on {params.chain} — {len(held)} NFT(s):"]
         for item in held[:50]:
-            name = item.get("name") or "(unnamed)"
+            name = quoted(item.get("name"), name=True) or "(unnamed)"
             std = item.get("standard") or "standard unknown"
             bal = f" x{item['balance']}" if item.get("balance") not in (None, "1") else ""
             lines.append(f"  {name} — {item['contract']} #{item.get('token_id')} "
@@ -3097,7 +3164,7 @@ class DefiDataTool(BaseTool):
         if facts.get("owner"):
             lines.append(f"  owner: {facts['owner']}")
         if facts.get("uri"):
-            lines.append(f"  metadata: {facts['uri']}")
+            lines.append(f"  metadata (provider text): {quoted(str(facts['uri'])[:2048], name=True)}")
         if facts.get("not_checked"):
             # ⚠️ A check that did not run is not a check that passed.
             lines.append("  NOT CHECKED: " + "; ".join(facts["not_checked"]))
@@ -3153,7 +3220,7 @@ class DefiDataTool(BaseTool):
         symbol lookup never blocks or breaks an LP render."""
         try:
             ident = self._identity(chain, address)
-            return getattr(ident, "symbol", None) or address
+            return quoted(getattr(ident, "symbol", None)) or address
         except Exception:
             return address
 

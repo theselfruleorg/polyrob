@@ -209,3 +209,15 @@ def test_callback_is_fail_open():
     cb = make_stream_callback(_Boom())
     # Should not raise.
     asyncio.run(cb("sid", "executor", "x", 0))
+
+
+def test_live_render_drops_split_terminal_clipboard_escape():
+    box = ResponseBox(console=None)
+    for piece in ("hello \x1b", "]52;c;", "c2VjcmV0", "\x07 world"):
+        box.append(piece)
+    output = StringIO()
+    console = Console(file=output, force_terminal=False)
+    console.print(box._renderable())
+    rendered = output.getvalue()
+    assert "hello" in rendered and "world" in rendered
+    assert "\x1b" not in rendered and "52;c;" not in rendered

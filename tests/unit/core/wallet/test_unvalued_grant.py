@@ -69,9 +69,18 @@ def _approve_deltas(*, spender=ROUTER, grant=HELD):
                   allowance_deltas={(COIN, spender): grant})
 
 
+def _revoke_tx_or(intent, tx):
+    """A revoke must be signed as exactly ``token.approve(spender, 0)`` (the guard asserts
+    the shape); every other fixture keeps its stub transaction."""
+    if intent is not None and intent.is_allowance_op and not intent.expected_allowance_grants:
+        return {"to": intent.token, "data": "0x095ea7b3" + "0" * 24
+                + str(intent.to).lower()[2:] + "0" * 64, "value": 0, "chainId": 8453}
+    return tx
+
+
 def _authorize(intent, deltas, *, gate=None, price=None, fallback=None):
     return tx_guard.authorize(
-        intent, {"to": COIN, "data": "0x095ea7b3", "value": 0, "chainId": 8453},
+        intent, _revoke_tx_or(intent, {"to": COIN, "data": "0x095ea7b3", "value": 0, "chainId": 8453}),
         holder=HOLDER,
         gate=gate or PolicyGate(max_per_tx_usd=500.0, daily_cap_usd=500.0),
         execution_context=None,

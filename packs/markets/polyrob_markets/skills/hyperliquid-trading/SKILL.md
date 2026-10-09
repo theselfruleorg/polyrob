@@ -65,9 +65,11 @@ while the session is correspondent-tainted. If unsure, stop and ask.
 - **Liquidation distance.** After entry, read `get_account_state()`: each position
   has `liquidation_px`. The distance from entry to `liquidation_px` must be at
   least 3x your stop distance and at least 25% at ≤3x. If it is not, reduce size.
-- **A stop is the owner's order.** There is no trigger (TP/SL) order verb here,
-  and a scheduled run cannot place the close (autonomous turns are refused,
-  reduce-only included). Agree the stop price with the owner at entry; when it
+- **A stop is the owner's order.** There is no trigger (TP/SL) order verb here:
+  no verb places a stop-loss or take-profit order. A stop the owner set on the
+  venue is protected — a `cancel_order`/`cancel_all_orders` that would remove it
+  waits for the owner's approval. A scheduled run cannot place the close
+  (autonomous turns are refused, reduce-only included). Agree the stop price with the owner at entry; when it
   is hit, the owner closes with `place_market_order(coin=…, is_buy=<opposite
   side>, size=…, reduce_only=True)`. `reduce_only=True` guarantees the close can
   never open or flip a position. A position the owner cannot watch should not be

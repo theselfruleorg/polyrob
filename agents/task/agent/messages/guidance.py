@@ -13,11 +13,19 @@ from modules.llm.messages import HumanMessage, MessageOrigin, SystemMessage
 # Forged (non-human) intake kinds → their true origin. Anything else — comment,
 # continuation, correction, approval — is a genuine human turn (origin USER).
 # A batch is only marked forged when EVERY drained message is forged: a real
-# user message must never be demoted by a co-drained wake turn.
+# user message must never be demoted by a co-drained wake turn. A peer agent's
+# A2A kinds stay USER-origin but carry an honest source label (_is_peer_kind).
 _FORGED_KIND_ORIGINS = {
 	"self_wake": MessageOrigin.SELF_WAKE,
 	"delegation_result": MessageOrigin.SYSTEM_NOTE,
 }
+
+
+def _is_peer_kind(kind: Any) -> bool:
+	"""A2A kinds (``a2a_initial`` / ``a2a_message``, stamped server-side in
+	api/a2a/task_handler.py): a peer agent speaking, framed with an honest source
+	label. Origin stays USER — the A2A caller is that session's principal."""
+	return str(kind or "").startswith("a2a_")
 
 
 def _elide_middle(text: str, keep_head: int, keep_tail: int) -> str:
@@ -108,6 +116,9 @@ class GuidanceMixin:
 					keep_head=config.USER_MESSAGE_TRUNCATE_LENGTH - config.USER_MESSAGE_KEEP_TAIL,
 					keep_tail=config.USER_MESSAGE_KEEP_TAIL,
 				)
+			if _is_peer_kind(kind):
+				# A peer agent's words are never the owner's, even in a mixed batch.
+				text = f"[from a peer agent via A2A — not the owner] {text}"
 			message_texts.append(text)
 
 		# P0-1: never silently drop queued messages beyond the per-step cap — the HITL
@@ -162,52 +173,33 @@ is pending productive work, do it. Otherwise call done() briefly. Do NOT re-answ
 previous user questions and do NOT send the user redundant status messages.{relay}
 """.strip()
 		elif is_continuation:
-			# High-signal marker: User sent new message during/after task work
-			user_request = "\n".join(message_texts)
-			
-			# Get task phase if available
-			task_phase = ctx.get('task_phase', 1)
-			prev_phase = task_phase - 1 if task_phase > 1 else 0
-			
-			# Build phase-aware continuation frame with memory override
-			if task_phase > 1:
-				# Multi-phase session - strong override required
-				frame = f"""{change_summary}🔄 NEW USER MESSAGE - PRIORITY INPUT (PHASE {task_phase}, received {received_at})
-
-⚠️ CRITICAL: NEW TASK PHASE STARTING ⚠️
-
-Your previous memory may show task completion. THAT WAS PHASE {prev_phase}.
-This is PHASE {task_phase} - a BRAND NEW task building on previous work.
-
-User's NEW request for Phase {task_phase}:
-{user_request}
-
-MANDATORY MEMORY UPDATE:
-First line MUST be: "Phase {task_phase}: {message_texts[0][:50] if message_texts else ''}... (NEW TASK)"
-Then reference: "Phase {prev_phase} complete: [brief summary]"
-
-INSTRUCTIONS:
-1. {'Check workspace changes above - NEW FILES UPLOADED' if change_summary else 'Read your memory field to see what you have already done'}
-2. {'If new files are relevant, READ THEM FIRST using filesystem_read_file()' if change_summary else 'Update memory as shown above (Phase {task_phase} at start)'}
-3. Set next_goal to: "Begin Phase {task_phase}: {message_texts[0][:40] if message_texts else ''}..."
-4. CRITICAL: Provide BOTH brain state JSON AND tool calls for the NEW work
-
-THIS IS NOT A STATUS CHECK - IT'S NEW WORK USING PREVIOUS PHASE AS INPUT.
-""".strip()
+			# High-signal marker: a new message arrived during/after task work.
+			# ONE frame for every surface (console, Telegram, REPL): the old
+			# console-only "PHASE N — BRAND NEW task" frame told the model its
+			# own memory was stale. A workspace change is a harness note above,
+			# never "the user uploaded" — a snapshot diff cannot name the writer.
+			peer = all(_is_peer_kind(k) for k in kinds)
+			if peer:
+				header = "🔄 NEW MESSAGE FROM A PEER AGENT (A2A) - PRIORITY INPUT"
+				sender = "A peer agent (A2A caller — NOT the owner) sent you a message:"
 			else:
-				# First continuation or phase tracking not available
-				frame = f"""{change_summary}🔄 NEW USER MESSAGE - PRIORITY INPUT (received {received_at})
+				header = "🔄 NEW USER MESSAGE - PRIORITY INPUT"
+				sender = "User sent you a new message:"
+			user_request = "\n".join(message_texts)
+			note_ref = ("See the harness note above if relevant." if change_summary
+			            else "This is a continuation of your session - your previous steps are in message history.")
+			frame = f"""{change_summary}{header} (received {received_at})
 
-User sent you a new message:
+{sender}
 {user_request}
 
 INSTRUCTIONS:
-1. {'⚠️ IMPORTANT: Check workspace changes above - user likely referring to NEW FILE' if change_summary else 'Read your memory field to see what you have already done'}
-2. {'Read the new file(s) if relevant to the request' if change_summary else 'Incorporate this NEW USER MESSAGE into your next action immediately'}
-3. Update your memory to reflect: "User requested: {message_texts[0][:40] if message_texts else ''}..."
+1. Read your memory field to see what you have already done
+2. Incorporate this NEW MESSAGE into your next action immediately
+3. Update your memory to reflect: "Requested: {message_texts[0][:40] if message_texts else ''}..."
 4. CRITICAL: Provide BOTH brain state JSON (text content) AND tool calls
 
-{'The user just uploaded new files - check them FIRST if they match the request.' if change_summary else 'This is a continuation of your session - your previous steps are in message history.'}
+{note_ref}
 """.strip()
 		else:
 			# Mid-task guidance (less aggressive)

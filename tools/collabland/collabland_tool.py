@@ -19,6 +19,7 @@ consume the token-gating endpoint:
 See https://dev.collab.land/docs/tutorials/token-gating-tutorial for details.
 """
 
+from core.security.redaction import fingerprint, redact_url
 import asyncio
 import logging
 import time
@@ -114,9 +115,9 @@ class CollabLandTool(BaseTool):
                 if len(parts) == 2:
                     self._client_id = parts[0]
                     self._client_secret = parts[1]
-                    self.logger.info(f"Parsed compound API key: client_id={self._client_id[:5]}***, secret={self._client_secret[:5]}***")
+                    self.logger.info(f"Parsed compound API key: client_id={fingerprint(self._client_id)}, secret={fingerprint(self._client_secret)}")
             except Exception as e:
-                self.logger.warning(f"Failed to parse compound API key: {e}")
+                self.logger.warning(f"Failed to parse compound API key: {type(e).__name__}")
         
         # Determine if service is properly configured
         self._enabled = bool(self._api_key)  # Only enable if we have an API key
@@ -127,12 +128,12 @@ class CollabLandTool(BaseTool):
             self._enabled = False
         else:
             self.logger.info(f"CollabLand service configured:")
-            self.logger.info(f"  - Base URL: {self.base_url}")
-            self.logger.info(f"  - API Key: {self._api_key[:5]}*** (length: {len(self._api_key)})")
+            self.logger.info(f"  - Base URL: {redact_url(self.base_url)}")
+            self.logger.info(f"  - API Key: {fingerprint(self._api_key)} (length: {len(self._api_key)})")
             if self._client_id:
-                self.logger.info(f"  - Client ID: {self._client_id}")
+                self.logger.info(f"  - Client ID: {fingerprint(self._client_id)}")
             if self._client_secret:
-                self.logger.info(f"  - Client Secret: {self._client_secret[:5]}***")
+                self.logger.info(f"  - Client Secret: {fingerprint(self._client_secret)}")
             self._enabled = True
             
         # Check contract address format if provided
@@ -175,7 +176,7 @@ class CollabLandTool(BaseTool):
         
         # Log headers for debugging (mask sensitive data)
         self.logger.debug(f"Setting up HTTP session with headers:")
-        self.logger.debug(f"  - X-API-Key: {self._api_key[:5]}*** (full length: {len(self._api_key)})")
+        self.logger.debug(f"  - X-API-Key: {fingerprint(self._api_key)} (full length: {len(self._api_key)})")
         self.logger.debug(f"  - Content-Type: application/json")
         self.logger.debug(f"  - Accept: application/json")
         
@@ -195,7 +196,7 @@ class CollabLandTool(BaseTool):
                     self.logger.warning(f"CollabLand API returned status {response.status}")
         except Exception as e:
             self._status = ToolStatus.DEGRADED
-            self.logger.error(f"Failed to connect to CollabLand API: {e}")
+            self.logger.error(f"Failed to connect to CollabLand API: {type(e).__name__}")
             # Don't disable the service, as it may recover later
 
     async def _cleanup(self) -> None:
@@ -230,7 +231,7 @@ class CollabLandTool(BaseTool):
             # Log the full request details for debugging
             self.logger.info(f"CollabLand API request: POST {self.base_url}/access-control/check-roles")
             self.logger.info(f"Request payload: {payload}")
-            self.logger.debug(f"Request headers: X-API-Key: {self._api_key[:5]}*** (full: {len(self._api_key)} chars)")
+            self.logger.debug(f"Request headers: X-API-Key: {fingerprint(self._api_key)} (full: {len(self._api_key)} chars)")
 
             # Make API call to CollabLand
             url = f"{self.base_url}/access-control/check-roles"
@@ -247,13 +248,13 @@ class CollabLandTool(BaseTool):
                 
                 # Get response body for detailed logging
                 response_body = await response.text()
-                self.logger.debug(f"CollabLand API response body: {response_body}")
+
                 
                 # Parse response
                 if response.status == 200:
                     try:
                         data = await response.json()
-                        self.logger.info(f"CollabLand API returned JSON response: {data}")
+
                         
                         # Extract relevant information
                         has_token = data.get("hasAccess", False)
@@ -271,57 +272,32 @@ class CollabLandTool(BaseTool):
                         
                         return has_token, token_id
                     except Exception as parse_error:
-                        self.logger.error(f"Error parsing JSON response: {parse_error}")
-                        self.logger.error(f"Raw response: {response_body}")
+                        self.logger.error(f"Error parsing JSON response: {type(parse_error).__name__}")
+
                         # Don't mask parsing errors - let them bubble up
-                        raise Exception(f"Failed to parse CollabLand API response: {parse_error}")
+                        raise APIError("Invalid CollabLand response") from None
                 else:
                     # Handle error responses - raise exceptions for authentication errors instead of returning False
                     error_text = await response.text()
-                    self.logger.error(f"CollabLand API error: {response.status} - {error_text}")
-                    
-                    # Parse error response to get detailed error message
-                    error_details = error_text
-                    try:
-                        import json
-                        error_json = json.loads(error_text)
-                        if isinstance(error_json, dict) and "error" in error_json:
-                            error_info = error_json["error"]
-                            if isinstance(error_info, dict):
-                                error_details = error_info.get("message", error_text)
-                    except (json.JSONDecodeError, ValueError, KeyError, TypeError):
-                        # If we can't parse the error JSON, use the raw text
-                        pass
+                    self.logger.error(f"CollabLand API error: {response.status}")
                     
                     # Raise specific exceptions for authentication errors to trigger Alchemy fallback
                     if response.status == 401 or response.status == 403:
                         self.logger.error("CollabLand API authentication error - check API key")
-                        raise Exception(f"CollabLand authentication error (HTTP {response.status}): {error_details}")
+                        raise Exception(f"CollabLand authentication error (HTTP {response.status})")
                     elif response.status == 429:
                         self.logger.warning("CollabLand API rate limited - consider implementing backoff")
-                        raise Exception(f"CollabLand rate limit error (HTTP {response.status}): {error_details}")
+                        raise Exception(f"CollabLand rate limit error (HTTP {response.status})")
                     else:
                         # For other errors, also raise exceptions to trigger fallback
-                        raise Exception(f"CollabLand API error (HTTP {response.status}): {error_details}")
+                        raise Exception(f"CollabLand API error (HTTP {response.status})")
                     
         except Exception as e:
             # Only catch and log unexpected exceptions, but re-raise them so they can trigger fallback
-            self.logger.error(f"Error checking token for {address}: {e}")
+            self.logger.error(f"Error checking token for {address}: {type(e).__name__}")
             # Log the full exception traceback for better debugging
-            import traceback
-            self.logger.error(f"Exception traceback: {traceback.format_exc()}")
             
-            # Check if this is an authentication error we should propagate
-            error_str = str(e).lower()
-            if any(keyword in error_str for keyword in ["authentication", "unauthorized", "invalid client", "forbidden", "api key"]):
-                # Re-raise authentication errors to trigger Alchemy fallback
-                raise e
-            elif "rate limit" in error_str or "429" in error_str:
-                # Re-raise rate limit errors to trigger Alchemy fallback
-                raise e
-            else:
-                # For other unexpected errors, also re-raise to trigger fallback
-                raise e
+            raise APIError("CollabLand verification unavailable") from None
 
     # ---------------------------------------------------------------------
     # Database helpers
@@ -350,16 +326,12 @@ class CollabLandTool(BaseTool):
                 if token_id:
                     await db.upsert("users", {"id": user_id, "token_id": token_id})
         except Exception as exc:
-            self.logger.error(f"Failed to update DB for user {user_id}: {exc}")
+            self.logger.error(f"Failed to update DB for user {user_id}: {type(exc).__name__}")
 
     # ---------------------------------------------------------------------
     # Public actions
     # ---------------------------------------------------------------------
 
-    @BaseTool.action(
-        "Check if the provided wallet address owns the required Collab.Land token(s)",
-        param_model=CheckTokenParams,
-    )
     async def collabland_check_token(self, params: CheckTokenParams):
         """Return a human-readable message and persist the result in DB."""
         await self.ensure_initialized()
@@ -421,21 +393,15 @@ class CollabLandTool(BaseTool):
             
             return result
         except Exception as e:
-            self.logger.error(f"Failed to check token for {address}: {e}")
+            self.logger.error(f"Failed to check token for {address}: {type(e).__name__}")
             # Get full exception details
-            import traceback
-            self.logger.error(f"Exception traceback: {traceback.format_exc()}")
             return {
                 "status": "error",
                 "has_token": False,
                 "token_id": None,
-                "message": f"Error checking token: {str(e)}"
+                "message": "Token verification unavailable"
             }
 
-    @BaseTool.action(
-        "Admin: batch refresh token status for all known users",
-        param_model=AdminRefreshParams,
-    )
     async def collabland_admin_refresh(self, params: AdminRefreshParams):
         """Iterate over all users stored in DB and refresh their token status."""
         await self.ensure_initialized()
@@ -465,6 +431,6 @@ class CollabLandTool(BaseTool):
                     await self._update_user_token_status(address, has_token)
                     updated += 1
             except Exception as exc:
-                self.logger.warning(f"Refresh failed for {address}: {exc}")
+                self.logger.warning(f"Refresh failed for {address}: {type(exc).__name__}")
 
         return f"Batch refresh completed – {updated}/{total} records updated." 

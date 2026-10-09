@@ -41,14 +41,13 @@ def test_process_env_value_lands_after_load_env(monkeypatch):
 
 
 def test_env_file_value_lands_after_load_env(monkeypatch):
-    proj = tmp = os.getcwd()
-    dotdir = os.path.join(tmp, ".polyrob")
+    dotdir = os.environ["POLYROB_HOME"]
     os.makedirs(dotdir, exist_ok=True)
     with open(os.path.join(dotdir, ".env"), "w") as f:
         f.write("AGENT_COMPUTE_POSTURE=1\nPAYMENT_APPROVAL_MODE=auto\n")
     bootstrap.load_env(local_mode=True)
     assert policy.compute_posture() == 1, (
-        f"file value must reach the frozen posture (project {proj})")
+        "owner home value must reach the frozen posture")
     assert policy.payment_approval_mode() == "auto"
 
 

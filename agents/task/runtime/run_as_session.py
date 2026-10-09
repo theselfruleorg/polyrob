@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import inspect
 import logging
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    from agents.task.runtime.run_outcome import RunOutcome
 
 logger = logging.getLogger(__name__)
 
@@ -151,6 +154,30 @@ def _inject_resume_note(orchestrator: Any, note: str) -> None:
         logger.debug("resume note injection skipped", exc_info=True)
 
 
+async def _run_session_to_outcome(task_agent: Any, session_id: str, *,
+                                 user_id: str, autonomous: bool) -> RunOutcome:
+    """Release autonomous shell resources on success, failure, or cancellation.
+
+    Fresh and resumed sessions share this execution envelope. Interactive chat
+    keeps its container between turns; autonomous work releases it on every exit.
+    """
+    from agents.task.runtime.run_outcome import build_run_outcome
+
+    try:
+        status = await task_agent.run_session(user_id, session_id)
+        return await build_run_outcome(task_agent, session_id, status)
+    finally:
+        if autonomous:
+            try:
+                get_orch = getattr(task_agent, "get_orchestrator", None)
+                orch = get_orch(session_id) if callable(get_orch) else None
+                release = getattr(orch, "release_shell_sandbox", None)
+                if callable(release):
+                    await release()
+            except Exception:
+                logger.debug("shell sandbox release failed (non-fatal)", exc_info=True)
+
+
 async def run_task_to_outcome(
     task_agent: Any,
     *,
@@ -194,7 +221,7 @@ async def run_task_to_outcome(
     done() text, BLOCKED declaration, user messages and provenance from the
     envelope — never by re-extracting strings from message history.
     """
-    from agents.task.runtime.run_outcome import RunOutcome, build_run_outcome
+    from agents.task.runtime.run_outcome import RunOutcome
 
     # 057 WS-C (B9): RESUME the goal's own session instead of minting a new one.
     # A yielded goal's history is on disk and the resume machine already exists
@@ -220,8 +247,8 @@ async def run_task_to_outcome(
                      attrs={"goal_id": goal_id, "outcome": "resumed"})
             except Exception:
                 logger.debug("resume telemetry skipped", exc_info=True)
-            status = await task_agent.run_session(user_id, resumed)
-            return await build_run_outcome(task_agent, resumed, status)
+            return await _run_session_to_outcome(
+                task_agent, resumed, user_id=user_id, autonomous=autonomous)
         # Not resumable (evicted beyond recovery, wrong tenant, no metadata):
         # fall through to a COLD session rather than failing the goal. The run
         # then reads the same restart note from its task body.
@@ -282,29 +309,8 @@ async def run_task_to_outcome(
     if autonomous:
         from agents.task.goals.autonomy_marker import mark_autonomous
         mark_autonomous(session_id, goal_id, cron_job_id=cron_job_id)
-    status = await task_agent.run_session(user_id, session_id)
-    outcome = await build_run_outcome(task_agent, session_id, status)
-    if autonomous:
-        # Goal/cron runs are one-shot: release the session's persistent shell
-        # sandbox container now. Session end runs only a PARTIAL cleanup (the
-        # orchestrator stays resident for continuous chat), which skips the
-        # container teardown, and reap_orphans is cold-start-only by design —
-        # so autonomous shell users leaked one container per run until the next
-        # service restart (live 2026-08-16: 7 containers, 3–21h old). A later
-        # self-wake re-entry that runs shell simply gets a fresh container.
-        # Routed through the orchestrator (SessionCleanupMixin.
-        # release_shell_sandbox), which owns the one allowlisted
-        # agents→tools.shell layering edge.
-        try:
-            orch = None
-            get_orch = getattr(task_agent, "get_orchestrator", None)
-            if callable(get_orch):
-                orch = get_orch(session_id)
-            release = getattr(orch, "release_shell_sandbox", None)
-            if callable(release):
-                await release()
-        except Exception:
-            logger.debug("shell sandbox release failed (non-fatal)", exc_info=True)
+    outcome = await _run_session_to_outcome(
+        task_agent, session_id, user_id=user_id, autonomous=autonomous)
     try:
         # Opt-in trajectory capture (TRAJECTORY_CAPTURE, datagen W1 T6).
         # maybe_capture is fail-open internally; this guard is belt-and-braces

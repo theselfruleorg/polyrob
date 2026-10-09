@@ -23,6 +23,15 @@ from agents.task.agent.core.self_wake import FORGED_TURN_KINDS as _FORGED_MESSAG
 # agents.agent.core -> agents.session edge for one frozenset.
 _TAINT_CLEARING_KINDS = frozenset({"comment", "continuation"})
 
+#: ``metadata["room_role"]`` stamped by the room steer (task_agent_delivery) on a
+#: line that a room ADMIN, not the owner, wrote.
+ROOM_ROLE_KEY = "room_role"
+
+
+def _owner_spoke(message: Dict[str, Any]) -> bool:
+    """False for a room admin's steer line; every other genuine kind is the owner's."""
+    return str((message.get("metadata") or {}).get(ROOM_ROLE_KEY) or "") != "admin"
+
 
 def _update_forged_turn_marker(orchestrator, messages: List[Dict[str, Any]]) -> None:
     """SK-F10: recompute the forged-turn marker from a drained message batch.
@@ -48,6 +57,15 @@ def _update_forged_turn_marker(orchestrator, messages: List[Dict[str, Any]]) -> 
     )
     orchestrator._forged_turn_kind = forged_kind
 
+    # AGT-4: the owner's OWN words for this turn — the only text a tool may take
+    # as the owner's decision (owner_ask answer=). Recomputed per drained batch,
+    # like the forged marker: a forged batch carries none; a forwarded body is a
+    # third party's words; a room admin's line is not the owner's.
+    orchestrator._owner_turn_text = None if forged_kind else "\n".join(
+        str(m.get("text") or "") for m in messages
+        if m.get("kind") in _TAINT_CLEARING_KINDS and _owner_spoke(m)
+        and not (m.get("metadata") or {}).get("forwarded"))
+
     # WS-A: a genuine owner/continuation turn clears any correspondent taint — the
     # owner is driving again, so the capability gate re-opens high-impact tools.
     #
@@ -59,9 +77,18 @@ def _update_forged_turn_marker(orchestrator, messages: List[Dict[str, Any]]) -> 
     # entering. Draining is where the message provably enters the turn, and it is the
     # same place — and the same "is the owner driving?" question — the forged-turn
     # marker above is recomputed from. Fail-open.
-    if any(m.get("kind") in _TAINT_CLEARING_KINDS for m in messages):
+    # AGT-17: a room ADMIN's addressed line rides kind="comment" too, but an admin
+    # is not the owner driving — it never clears the taint.
+    if any(m.get("kind") in _TAINT_CLEARING_KINDS and _owner_spoke(m) for m in messages):
         try:
             orchestrator._clear_correspondent_taint()
+        except Exception:
+            pass
+        # AGT-1: the owner is speaking again — the read taint of the last turn
+        # (a page, a mail it read) no longer speaks for this one.
+        try:
+            from core.security.read_taint import clear as _clear_read_taint
+            _clear_read_taint(orchestrator)
         except Exception:
             pass
         # The owner is driving again: a money refusal earlier in this session
@@ -83,6 +110,11 @@ def _update_forged_turn_marker(orchestrator, messages: List[Dict[str, Any]]) -> 
         except Exception:
             # Fail closed: the flag alone is what the gate reads.
             orchestrator._correspondent_tainted = True
+        try:
+            from core.security.read_taint import mark as _mark_read_taint
+            _mark_read_taint(orchestrator)
+        except Exception:
+            pass
 
     # P1 finalization: a genuine (non-forged) batch means the owner is driving
     # again — clear the self-wake re-entry budget for this session. Previously the
@@ -227,17 +259,6 @@ class UserIngressMixin:
 
         # Prepare session context for message injection
         if messages:
-            # Get current task phase for multi-phase tracking
-            task_phase = 1
-            if hasattr(self, 'session_manager') and self.session_manager:
-                try:
-                    task_phase = self.session_manager.get_task_phase(self.session_id)
-                    # If phase is 0 (not set), keep at 1 for first continuation
-                    if task_phase == 0:
-                        task_phase = 1
-                except Exception as e:
-                    self.logger.debug(f"Could not get task_phase: {e}")
-
             # NEW: Get workspace changes
             workspace_changes = None
             try:
@@ -258,16 +279,36 @@ class UserIngressMixin:
 
             session_context = {
                 'continuation': True,  # Signal this is a continuation (user sent new message)
-                'task_phase': task_phase,  # Include phase for phase-aware messaging
                 'workspace_changes': workspace_changes  # NEW: Include workspace context
             }
+
+            # Record the harness note the model is about to see, so a reviewer
+            # can tell what it was told (prod: "the file you uploaded" came from
+            # this note, not from the owner). Fail-open.
+            try:
+                note = (workspace_changes.format_for_agent()
+                        if workspace_changes is not None and workspace_changes.has_changes()
+                        else "")
+                if note and getattr(self, 'telemetry_manager', None):
+                    from agents.task.telemetry.views import UserMessageDuringExecutionEvent
+                    self.telemetry_manager.capture_event(UserMessageDuringExecutionEvent(
+                        agent_id=self.agent_id,
+                        step=getattr(self.state, 'n_steps', 0),
+                        message_text=str(messages[0].get('text', ''))[:200],
+                        message_kind=str(messages[0].get('kind', 'comment')),
+                        queue_depth=len(messages),
+                        execution_phase="drained",
+                        harness_note=note[:1000],
+                    ))
+            except Exception:
+                pass
 
             # Store for inject_user_guidance to use
             self._session_continuation_context = session_context
 
             self.logger.info(
                 f"Drained {len(messages)} user messages. "
-                f"Context: continuation=True, task_phase={task_phase}, "
+                f"Context: continuation=True, "
                 f"workspace_changes={workspace_changes.has_changes() if workspace_changes else False}"
             )
 

@@ -99,8 +99,8 @@ class DappBrowserTool(WalletHolderMixin, BaseTool):
         if self._price_fn:
             return self._price_fn(chain, addr)
         # 071: the one read layer; a DISPUTED quote yields None.
-        from tools.defi.price_sources import indexer_price
-        return indexer_price(chain, addr)
+        from tools.defi.price_sources import spend_price
+        return spend_price(chain, addr)
 
     def _key(self, execution_context) -> str:
         return str(getattr(execution_context, "session_id", None) or "default")
@@ -168,17 +168,14 @@ class DappBrowserTool(WalletHolderMixin, BaseTool):
         `WalletBridge` as its persist hook and called on connect/disconnect."""
         store = self._get_store()
         if store is None:
-            return
+            raise OSError("dapp budget store is unavailable")
         ctx = getattr(wallet_bridge, "_ctx", None)
         session_id = str(getattr(ctx, "session_id", None) or "default")
         user_id = str(getattr(ctx, "user_id", None) or "")
-        try:
-            from tools.dapp_browser.bridge import envelope_snapshot
-            snap = envelope_snapshot(wallet_bridge.envelope, wallet_bridge.address)
-            store.save(session_id, user_id, snap,
-                       revoked=bool(wallet_bridge.envelope.revoked))
-        except Exception as exc:
-            logger.warning("dapp session persist failed: %s", exc)
+        from tools.dapp_browser.bridge import envelope_snapshot
+        snap = envelope_snapshot(wallet_bridge.envelope, wallet_bridge.address)
+        store.save(session_id, user_id, snap,
+                   revoked=bool(wallet_bridge.envelope.revoked))
 
     def _persisted_status(self, execution_context) -> str:
         """A read-only render of a persisted session, or None when there is no
@@ -186,13 +183,13 @@ class DappBrowserTool(WalletHolderMixin, BaseTool):
         binding is gone with it, so this record CANNOT spend and says so."""
         store = self._get_store()
         if store is None:
-            return None
+            return "dapp session store is unavailable; saved status could not be read"
         try:
             row = store.get(self._key(execution_context),
                             user_id=self._uid(execution_context) or None)
         except Exception as exc:
             logger.warning("dapp session read failed: %s", exc)
-            return None
+            return "dapp session store is unavailable; saved status could not be read"
         if row is None:
             return None
         env = row.envelope or {}
@@ -285,10 +282,27 @@ class DappBrowserTool(WalletHolderMixin, BaseTool):
         except Exception as exc:
             return self._ar(error=f"allow_contracts holds an invalid address ({exc})")
 
+        key = self._key(execution_context)
+        store = self._get_store()
+        try:
+            if store is None:
+                raise OSError("dapp session store is unavailable")
+            prior = store.get(key, user_id=self._uid(execution_context) or None)
+            import math
+            prior_spend = float((prior.envelope or {}).get("spent_usd", 0)) if prior else 0.0
+            if not math.isfinite(prior_spend) or prior_spend < 0:
+                raise ValueError("invalid stored spend")
+        except Exception:
+            return self._ar(error="Cannot verify the existing dapp session budget; nothing was connected")
+
+        def _revoked():
+            current = store.get(key, user_id=self._uid(execution_context) or None)
+            return current is None or current.revoked
+
         envelope = bridge_mod.Envelope(
             chain=params.chain, max_spend_usd=params.max_spend_usd,
             session_budget_usd=params.session_budget_usd,
-            allow_contracts=allow,
+            allow_contracts=allow, spent_usd=prior_spend,
             approval_timeout_sec=params.approval_timeout_sec)
         wallet_bridge = bridge_mod.WalletBridge(
             envelope=envelope, wallet=wallet,
@@ -298,6 +312,7 @@ class DappBrowserTool(WalletHolderMixin, BaseTool):
             price_fn=self._price, rpc_fn=self._rpc_fn,
             approver=self._approver, persist_fn=self._persist_bridge,
             armed_origin=armed_origin,
+            revocation_probe=_revoked,
             taint_probe=self._taint_probe_for(execution_context),
             turn_kind_probe=self._turn_kind_probe_for(execution_context))
         wallet_bridge.require_attached_page = True
@@ -309,6 +324,8 @@ class DappBrowserTool(WalletHolderMixin, BaseTool):
             # envelopes on one page would mean two budgets, and the page would
             # spend whichever answered first.
             previous.envelope.revoked = True
+            envelope.spent_usd = max(prior_spend, previous.envelope.spent_usd)
+            envelope.sent = list(previous.envelope.sent)
         self._bridges[key] = wallet_bridge
 
         try:
@@ -332,7 +349,8 @@ class DappBrowserTool(WalletHolderMixin, BaseTool):
 
         # The wallet is armed — record the envelope durably so a session that
         # connects and never spends is still visible after a restart (043 A37).
-        self._persist_bridge(wallet_bridge)
+        if not wallet_bridge._persist():
+            return self._ar(error="dapp budget could not be saved; wallet revoked before signing")
 
         # The script runs at DOCUMENT START, so a page already open does NOT
         # have it. Navigating now is what makes the dapp see a wallet — saying

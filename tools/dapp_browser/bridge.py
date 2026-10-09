@@ -27,6 +27,7 @@ between two parties instead of checking a claim against itself.
 from __future__ import annotations
 
 import hashlib
+import asyncio
 import json
 import logging
 import time
@@ -79,10 +80,12 @@ class Envelope:
     #: Seconds a transaction may wait on an owner tap before the page is told
     #: the user rejected it. A page promise cannot hang forever.
     approval_timeout_sec: float = 300.0
+    expires_at: float = field(default_factory=lambda: time.time() + 15 * 60)
     revoked: bool = False
     spent_usd: float = 0.0
     sent: List[Dict[str, Any]] = field(default_factory=list)
     refused: List[Dict[str, Any]] = field(default_factory=list)
+    refusal_count: int = 0
 
     def remaining_usd(self) -> float:
         return max(0.0, self.session_budget_usd - self.spent_usd)
@@ -103,9 +106,11 @@ def envelope_snapshot(env: "Envelope", address: str) -> Dict[str, Any]:
         "allow_contracts": list(env.allow_contracts or ()),
         "approval_timeout_sec": env.approval_timeout_sec,
         "revoked": bool(env.revoked),
+        "expires_at": env.expires_at,
         "spent_usd": env.spent_usd,
         "sent": list(env.sent or ()),
         "refused": list(env.refused or ()),
+        "refusal_count": env.refusal_count,
     }
 
 
@@ -173,6 +178,7 @@ class WalletBridge:
                  price_fn=None, rpc_fn=None, approver=None, persist_fn=None,
                  armed_origin: Optional[str] = None,
                  taint_probe: Optional[Callable[[], bool]] = None,
+                 revocation_probe: Optional[Callable[[], bool]] = None,
                  turn_kind_probe: Optional[Callable[[], Optional[str]]] = None):
         self.envelope = envelope
         #: The ONE origin this envelope was armed for (from dapp_connect's url).
@@ -184,6 +190,7 @@ class WalletBridge:
         #: a transaction long after the arming turn, including while a third
         #: party's message is in context. A probe that raises reads as tainted.
         self._taint_probe = taint_probe
+        self._revocation_probe = revocation_probe
         #: The LIVE turn kind of the session (CR-L18) — ``_forged_turn_kind``
         #: read at request time, not the arming turn's frozen context. A page
         #: asks long after arming; a later self-wake / delegation-result /
@@ -197,6 +204,8 @@ class WalletBridge:
         #: may call the binding, and leaving the origin revokes the envelope.
         self._page = None
         self._refused_origins: set = set()
+        from core.rate_limit import SlidingWindowLimiter
+        self._request_limit = SlidingWindowLimiter(max_calls=30, window_seconds=1, max_keys=1)
         self._wallet = wallet
         self._ctx = execution_context
         self._container = container
@@ -207,8 +216,8 @@ class WalletBridge:
         self._approver = approver
         #: Called after every envelope mutation (spend, refusal) so the durable
         #: store (043 A37) mirrors what the wallet DID and ``dapp_status`` can
-        #: report it after a restart. Fail-open — persistence is a reporting
-        #: nicety and must never break a spend.
+        #: report it after a restart. Persisting the reservation before signing
+        #: also prevents a restart from resetting the session budget.
         self._persist_fn = persist_fn
 
     # -- plumbing ---------------------------------------------------------
@@ -294,6 +303,10 @@ class WalletBridge:
 
     async def handle(self, source, raw) -> str:
         """Playwright binding entry point. NEVER raises into the page."""
+        if not self._request_limit.check("page"):
+            return _error(USER_REJECTED, "wallet request rate exceeded")
+        if isinstance(raw, str) and len(raw) > 65536:
+            return _error(USER_REJECTED, "wallet request too large")
         why = self._source_refusal(source)
         if why is not None:
             # Recorded once per offending origin, so a hostile frame cannot
@@ -319,9 +332,14 @@ class WalletBridge:
         a bridge already armed in a running session must honour that on its
         next request, or the owner's revoke is a note, not a stop. Mirrored
         into the in-memory envelope once seen. An unreadable store reads as
-        "not revoked" — the in-memory flag is the primary and this is the
-        cross-process backstop; a read never creates the store.
+        revoked: unavailable revocation state cannot authorize another spend.
+        A read never creates the store.
         """
+        if self._revocation_probe is not None:
+            try:
+                return bool(self._revocation_probe())
+            except Exception:
+                return True
         session_id = getattr(self._ctx, "session_id", None)
         if not session_id:
             return False
@@ -341,13 +359,16 @@ class WalletBridge:
             row = get_dapp_session_store().get(str(session_id))
         except Exception:
             logger.debug("dapp bridge: durable revoke flag unreadable", exc_info=True)
-            return False
+            return True
         if row is not None and bool(row.revoked):
             self.envelope.revoked = True
             return True
         return False
 
     async def _dispatch(self, method: str, params: list) -> str:
+        if time.time() >= self.envelope.expires_at:
+            self.envelope.revoked = True
+            return _error(UNAUTHORIZED, "this wallet envelope expired; reconnect to authorize another one")
         if self.envelope.revoked or self._durably_revoked():
             return _error(UNAUTHORIZED, (
                 "this wallet session was revoked — reconnect with "
@@ -389,7 +410,7 @@ class WalletBridge:
 
         if method in READ_METHODS:
             try:
-                return _result(self._rpc(method, list(params)))
+                return _result(await asyncio.to_thread(self._rpc, method, list(params)))
             except Exception as exc:
                 return _error(USER_REJECTED, f"rpc read failed: {exc}")
 
@@ -476,6 +497,20 @@ class WalletBridge:
         except Exception:
             return self._refuse(USER_REJECTED, "bad-value",
                                 "value is not a hex quantity")
+
+        if value_wei > 0 and not allow:
+            try:
+                code = await asyncio.to_thread(self._rpc, "eth_getCode", [to, "latest"])
+            except Exception:
+                code = None
+            try:
+                contract_code = bytes.fromhex(code[2:]) if isinstance(code, str) and code.startswith("0x") else b""
+            except ValueError:
+                contract_code = b""
+            if not contract_code or not any(contract_code):
+                return self._refuse(USER_REJECTED, "value-to-eoa", (
+                    "the page cannot transfer native value to an unverified contract or EOA; "
+                    "authorize the exact recipient in allow_contracts"))
 
         from tools.defi.call_verb import typed_verb_only_refusal
         pinned_err = typed_verb_only_refusal(to)
@@ -588,7 +623,7 @@ class WalletBridge:
                 f"defi_trade.swap (or call with receive_token = the target).")), None
 
         try:
-            tx = rail.build_call(to=to, data=data, value=value_wei)
+            tx = await asyncio.to_thread(rail.build_call, to=to, data=data, value=value_wei)
         except Exception as exc:
             return self._refuse(USER_REJECTED, "build-failed",
                                 f"could not build the transaction: {exc}"), None
@@ -615,7 +650,7 @@ class WalletBridge:
                 amount_raw=value_wei, max_spend_usd=ceiling,
                 idempotency_key=idem)
 
-            decision = authorize(intent, tx, holder=signer.address, gate=gate,
+            decision = await asyncio.to_thread(authorize, intent, tx, holder=signer.address, gate=gate,
                                  execution_context=ctx, tool_self=self,
                                  price_fn=self._price_fn,
                                  forged_fn=_is_forged_or_autonomous_turn,
@@ -638,7 +673,7 @@ class WalletBridge:
 
             if decision.sim_gas_used:
                 try:
-                    tx = rail.size_gas(tx, decision.sim_gas_used)
+                    tx = await asyncio.to_thread(rail.size_gas, tx, decision.sim_gas_used)
                 except Exception as exc:
                     return self._refuse(USER_REJECTED, "gas",
                                         f"refused at gas sizing: {exc}"), None
@@ -649,13 +684,19 @@ class WalletBridge:
                     f"this transaction prices at ${spent:.4f} and only "
                     f"${remaining:.4f} of the session budget is left")), None
 
-            try:
-                tx_hash = rail.sign_and_send(tx)
-            except Exception as exc:
-                return self._refuse(USER_REJECTED, "broadcast",
-                                    f"broadcast failed: {exc}"), None
-
+            # Reserve durably before a signature can escape. Ambiguous sends
+            # retain this reservation; a restart must never reset the budget.
             self.envelope.spent_usd += spent
+            if not self._persist():
+                return self._refuse(USER_REJECTED, "budget-store", (
+                    "dapp budget could not be saved; wallet revoked before signing")), None
+            try:
+                tx_hash = await asyncio.to_thread(rail.sign_and_send, tx)
+            except Exception as exc:
+                from core.wallet.broadcast.evm import broadcast_failure_text
+                return self._refuse(USER_REJECTED, "broadcast",
+                                    broadcast_failure_text(exc)), None
+
             self.envelope.sent.append({
                 "tx": tx_hash, "to": to, "selector": data[:10],
                 "usd": spent, "at": time.time()})
@@ -712,21 +753,25 @@ class WalletBridge:
     def _refuse(self, code: int, kind: str, message: str) -> str:
         """Every refusal is RECORDED, so `dapp_status` can tell the agent why a
         page is not working instead of leaving it to guess from a blank screen."""
-        self.envelope.refused.append({"kind": kind, "why": message,
+        self.envelope.refusal_count += 1
+        self.envelope.refused.append({"kind": kind, "why": message[:2048],
                                       "at": time.time()})
+        del self.envelope.refused[:-128]
         self._persist()
         return _error(code, message)
 
-    def _persist(self) -> None:
-        """Mirror the envelope into the durable store after a mutation (043 A37).
-        Fail-open: a broken store must never break a spend or a refusal."""
+    def _persist(self) -> bool:
+        """Persist accounting; a store failure revokes further signing."""
         fn = self._persist_fn
         if fn is None:
-            return
+            return True
         try:
             fn(self)
+            return True
         except Exception as exc:
-            logger.debug("dapp bridge: persist failed (%s)", exc)
+            self.envelope.revoked = True
+            logger.warning("dapp bridge: persist failed (%s)", type(exc).__name__)
+            return False
 
     def _notify(self, to: str, data: str, decision, tx_hash: str) -> None:
         """The owner hears about money that moved, exactly like every other verb."""

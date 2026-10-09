@@ -295,19 +295,10 @@ def test_the_book_reads_worth_from_metadata_first():
 def test_goplus_screen_and_holders_share_one_http_answer(monkeypatch):
     from tools.defi.providers import _http, goplus
     calls = []
-
-    class _Resp:
-        status_code = 200
-
-        def json(self):
-            return {"result": {TOK.lower(): {"holder_count": "10", "holders": []}}}
-
-    class _Client:
-        def get(self, url, params=None, timeout=None):
-            calls.append(params)
-            return _Resp()
-
-    monkeypatch.setattr(_http, "client", lambda: _Client())
+    def answer(url, **kwargs):
+        calls.append(url)
+        return {"code": 1, "result": {TOK.lower(): {"holder_count": "10", "holders": []}}}
+    monkeypatch.setattr(_http, "get_json", answer)
     goplus.screen("base", TOK)
     goplus.holders("base", TOK)
     assert len(calls) == 1
@@ -316,40 +307,33 @@ def test_goplus_screen_and_holders_share_one_http_answer(monkeypatch):
 def test_goplus_does_not_cache_a_failure(monkeypatch):
     from tools.defi.providers import _http, goplus
     calls = []
-
-    class _Resp:
-        status_code = 429
-
-    class _Client:
-        def get(self, url, params=None, timeout=None):
-            calls.append(1)
-            return _Resp()
-
-    monkeypatch.setattr(_http, "client", lambda: _Client())
+    def answer(url, **kwargs):
+        calls.append(url)
+        raise _http.HttpStatusError(url, 429)
+    monkeypatch.setattr(_http, "get_json", answer)
     assert goplus.screen("base", TOK).available is False
     goplus.holders("base", TOK)
     assert len(calls) == 2
 
 
 def test_a_goplus_error_body_is_not_cached(monkeypatch):
-    """071 review: GoPlus answers 200 with code 4029 when rate-limited."""
     from core.intel import cache as intel_cache
     from tools.defi.providers import goplus, _http
     intel_cache.clear_all()
     calls = []
-
-    class _R:
-        status_code = 200
-
-        def json(self):
-            return {"code": 4029, "message": "too many requests", "result": None}
-
-    class _C:
-        def get(self, url, params=None, timeout=None):
-            calls.append(params)
-            return _R()
-
-    monkeypatch.setattr(_http, "client", lambda: _C())
+    def answer(url, **kwargs):
+        calls.append(url)
+        return {"code": 4029, "message": "too many requests", "result": None}
+    monkeypatch.setattr(_http, "get_json", answer)
     goplus._fetch("https://x/api", TOK, 5.0)
     goplus._fetch("https://x/api", TOK, 5.0)
     assert len(calls) == 2
+
+
+def test_goplus_refuses_an_answer_for_another_token(monkeypatch):
+    from core.intel import cache as intel_cache
+    from tools.defi.providers import goplus, _http
+    intel_cache.clear_all()
+    monkeypatch.setattr(_http, "get_json", lambda *a, **kw: {
+        "code": 1, "result": {TOK2: {"is_honeypot": "0", "sell_tax": "0"}}})
+    assert not goplus.screen("base", TOK).available

@@ -37,6 +37,13 @@ is a deprecated alias for `polyrob kb export`. Entries marked **related** are
 different command trees, not interchangeable aliases (`skills`/`skill`,
 `owner`/`approvals`, and the identity subgroups).
 
+**Owner verbs refuse inside the agent.** When the agent runs `polyrob` from its
+own shell, only the read verbs work — `version`, `doctor`, `finance`, `journey`,
+`--help`, and the `list`/`show`/`status`-style leaves such as `goals list` or
+`config get`. Every other verb (`config set`, `wallet export`, `owner pair`,
+`run`, the REPL, the surface launchers, …) exits with a plain refusal. A verb
+added later is owner-only until it is named a read.
+
 ---
 
 ## Start here
@@ -123,8 +130,8 @@ polyrob setup --no-prompt --owner aria --instance-id aria --openai-key sk-...
 
 Seven sections: provider keys, default model, toolset, template/persona, owner
 pairing, autonomy and guardrails, and the chat surface you want to reach it on.
-Writes `~/.polyrob/.env` (mode 600), creates `./.polyrob/sessions` for this
-project, seeds the identity docs if there are none, creates `~/.agents/skills`
+Writes `~/.polyrob/.env` (mode 600), adds `.polyrob/` to this project's
+`.gitignore`, seeds the identity docs if there are none, creates `~/.agents/skills`
 for your own skills, and records the install in
 `~/.polyrob/.polyrob-bootstrap.json`. Re-run it any time.
 
@@ -199,6 +206,7 @@ polyrob keys revoke rob_…
 These keys authenticate the A2A and OpenAI-compatible API surfaces through the
 `X-API-KEY` header. `create` prints the full secret once; `list` shows only its
 prefix and label. `revoke` accepts the 12-character prefix shown by `list`.
+Keys expire after 90 days by default; `--expires-days` accepts 1–365 days.
 
 ### `polyrob config` — settings
 
@@ -285,8 +293,9 @@ polyrob uninstall --purge    # also the data home, after a typed confirmation
 It will not delete the virtualenv it is running from or the package manager's
 copy — it prints the exact command for those. `--purge` names **both** homes
 first: `~/.polyrob` (per user — keys, settings, the **agent wallet seed**) and
-`./.polyrob` (per project — memory, goals, identity). Other project directories
-keep their own memory and are never touched. Export the mnemonic
+the data home, `~/.polyrob/data` unless `POLYROB_DATA_DIR` names another (memory,
+goals, cron, identity). A `./.polyrob` data folder that an older release left in
+a project directory is never touched; delete it yourself. Export the mnemonic
 (`polyrob wallet export`) before `--purge` if that wallet ever held funds.
 
 ### `polyrob version`
@@ -310,7 +319,7 @@ Each surface is a long-running process. Every one takes `-v/--verbose`.
 | `polyrob x` | X (Twitter) DM bot, polling |
 | `polyrob gateway` | Every enabled surface in one process (`--port`, `--telegram-token`) |
 | `polyrob serve` | The REST API (`--host`, `--port`, `--workers`; default `127.0.0.1:9000`) — see [api.md](api.md) |
-| `polyrob dashboard` | The web console (`--host`, `--port`, default `127.0.0.1:5050`; `--posture local\|own_ops\|multitenant`, `--multitenant`, `--no-browser`). Alias `polyrob webgate` — see [console.md](console.md) |
+| `polyrob dashboard` | The web console (`--host`, `--port`, default `127.0.0.1:5050`; `--posture local\|own_ops\|multitenant`, `--multitenant`, `--no-browser`). The console always asks for a sign-in, also on loopback: with no saved owner login it prints a one-run password in this terminal, and `--set-password` saves a lasting username and password to `~/.polyrob/.env`. Alias `polyrob webgate` — see [console.md](console.md) |
 
 Group chats have their own setup and rules: [groups.md](groups.md).
 
@@ -322,14 +331,16 @@ Group chats have their own setup and rules: [groups.md](groups.md).
 
 ```bash
 polyrob autonomy status [--json]        # the posture card: every axis, pauses, loop state
-polyrob autonomy on [--mode supervised|autonomous] [--global]
+polyrob autonomy on [--mode supervised|autonomous]
 polyrob autonomy off
 polyrob autonomy pause [WORD…] [--for 6h]
 polyrob autonomy resume [WORD…]
 polyrob autonomy halt                   # alias of pause with no words
 ```
 
-`on`/`off` write `AUTONOMY_ENABLED` and apply to the next process. In the REPL,
+`on`/`off` write `AUTONOMY_ENABLED` to `~/.polyrob/.env` (the active config
+home, the only env file the CLI reads) and apply to the next process. `--global`
+is still accepted and changes nothing. In the REPL,
 `/autonomy on` / `/autonomy off` write the same flag, apply it live, and start or
 stop the loops of that session with no restart.
 `pause`/`resume` are live and need no restart — they write the one pause record
@@ -375,6 +386,31 @@ occur once) and can change the schedule, cap, rig, delivery or pinned skills.
 It never rewrites the whole task, so rules elsewhere in the task survive the
 edit. An autonomous run may edit only jobs it scheduled itself; a job you
 scheduled changes only when you ask in chat or through `polyrob cron edit`.
+
+**Who wrote a job decides what it may do.** A job you schedule — `polyrob cron
+schedule`/`digest`, `/cron add`, the console, `/groups service` — is stamped
+owner-authored. A job the agent schedules is agent-authored, and so is one
+created in an owner turn that had already read third-party content (a page, a
+post, a mail, a tool result); the agent tells you when that happens. An
+agent-authored job runs under agent limits: the agent's tool ceiling, and no X
+post, room moderation, money rig or write job without your approval on each run.
+To make one yours, run `/adopt <id>` in chat or the REPL: it shows the whole
+task, schedule, rig, tools, target and every payload key, and your Confirm on
+the action card stamps it owner-authored. Pinned skills are bound by a content
+digest, so a skill edited after adoption makes the job the agent's again until
+you re-adopt it. Adoption never grants money tools; grant those yourself.
+Goals follow the same rule.
+
+Rows from before 1.3 carry no stamp and now count as the agent's. Stamp them
+once (it changes nothing on a second run):
+
+```bash
+python -m cron.stamp_authorship --dry-run    # print the plan, write nothing
+python -m cron.stamp_authorship              # apply it  [--db PATH] [--cutoff ISO]
+```
+
+Unstamped rows created on or after the cutoff become owner-authored; older ones
+become agent-authored and appear in `/adopt` for you to confirm.
 
 `digest` is the owner daily digest — the roll-up of everything the delivery
 rail could not send you live. It composes from the ledger, the event log and
@@ -575,6 +611,14 @@ polyrob owner groups allow|deny|list|mode|set|role|admins|tail|service …
 polyrob owner correspondents --history <surface> <address>   # the stored transcript
 ```
 
+⚠️ **A paired sender is treated as you, the owner, on that surface.** Pairing is
+issued by you: an unknown sender DMs the bot and receives a code, and you run
+`polyrob owner pair approve <code>`. Approve only a code that your own account
+received, never a code that somebody else gives you. Codes expire after 15
+minutes and work once. A paired sender gets full owner routing, but no host
+execution (`run_code`, `run_tests`) in local mode. Remove a pairing with
+`polyrob owner pair revoke <user_id>`.
+
 `owner correspondents`, `owner approve --all` and `owner invoices` are scoped to
 this instance's owner tenant; pass `--all-tenants` to see every bucket on the
 box. `owner groups admins <surface> <chat>` lists the ROLES POLYROB recorded for
@@ -705,6 +749,7 @@ Inside the REPL every command starts with `/`. `/help` lists them grouped;
 | Command | Description |
 |---|---|
 | `/goals` | Goal board summary |
+| `/adopt [<id>]` | Make a cron job or goal the agent wrote your own: bare lists them, `<id>` shows one in full, then confirm on its action card |
 | `/cron` (`/crons`) `[list\|show <id>\|add <schedule> <task…> [tools=a,b] [target=<address> chain=<chain>]\|edit <id> schedule\|task <value>\|cancel <id>]` | Durable scheduled runs: list, show, add, edit one field, or cancel |
 | `/apps` | Deployed apps and their state |
 | `/todos` | Workspace todos from `todo.md` |
@@ -827,8 +872,9 @@ than being printed as if it were a user-facing answer.
 
 ## Where configuration lives
 
-`~/.polyrob/.env` is your global config, `./.polyrob/.env` is the per-project
-override, and a profile replaces both. The full precedence order and the file
+`~/.polyrob/.env` is your global config, and a profile's `.env` replaces it. A
+project folder's `.env` or `./.polyrob/.env` is not read: opening an untrusted
+checkout cannot change your keys or policy. The full precedence order and the file
 each command writes are in
 [configuration.md §1](configuration.md#2-where-a-setting-lives); `polyrob
 config path` prints them for the process you are running.
@@ -854,3 +900,8 @@ run status and mark clipped labels with an ellipsis. `NO_COLOR` keeps an uncolor
 interactive prompt; `--plain`, redirected output, and `TERM=dumb` avoid cursor UI.
 Raw model chunks can contain internal state, so replies are displayed through
 typed messages or finalized answers rather than painting those chunks directly.
+
+Signal inbound identity uses the account UUID (`sourceUuid`) supplied by signal-cli.
+A phone-only envelope is refused. On upgrade, re-pair the owner and re-approve contacts
+using their UUIDs; review phone-based block/allow records before enabling the surface.
+Historical phone-based conversations remain separate and are not automatically merged.

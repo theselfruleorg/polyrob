@@ -10,11 +10,17 @@ from core.instance import (OWNER_DOC_MAX_CHARS, SELF_CONTEXT_PER_DOC_MAX_CHARS,
 
 
 def test_owner_doc_cap_has_headroom_over_prod_fill():
-    assert OWNER_DOC_MAX_CHARS >= 8000
+    # 2026-10-04: the owner asked for "rules size at least 2x" (/dev 16:06Z).
+    assert OWNER_DOC_MAX_CHARS >= 16000
 
 
 def test_self_doc_cap_has_headroom_over_prod_fill():
-    assert SELF_DOC_MAX_CHARS >= 6000
+    assert SELF_DOC_MAX_CHARS >= 12000
+
+
+def test_contract_doc_cap_doubled():
+    from core.instance import CONTRACT_DOC_MAX_CHARS
+    assert CONTRACT_DOC_MAX_CHARS >= 8000
 
 
 def test_caps_stay_within_the_per_doc_prompt_bound():

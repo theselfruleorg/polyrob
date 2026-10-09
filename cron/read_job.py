@@ -40,6 +40,9 @@ READ_VERBS: Dict[str, Tuple[str, str, str, str]] = {
     "defi_data.price": ("tools.defi.data_tool", "DefiDataTool", "price", "TokenRefParams"),
     "defi_data.token_info": ("tools.defi.data_tool", "DefiDataTool", "token_info",
                              "TokenRefParams"),
+    # An EXPLICIT address is public chain data (WalletHoldingsParams.address is
+    # required, so it never defaults to the operator wallet), and only the owner
+    # or the agent can schedule a job (cronjob is correspondent- and room-blocked).
     "defi_data.wallet_holdings": ("tools.defi.data_tool", "DefiDataTool", "wallet_holdings",
                                   "WalletHoldingsParams"),
 }

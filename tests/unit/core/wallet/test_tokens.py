@@ -18,6 +18,24 @@ _DECIMALS_SEL = "0x313ce567"
 _SYMBOL_SEL = "0x95d89b41"
 
 
+@pytest.mark.parametrize("value,decimals,expected", [
+    ("0.123456789012345678", 18, 123456789012345678),
+    ("9007199254740993", 6, 9007199254740993000000),
+    (5.1, 6, 5100000), (0, 18, 0),
+])
+def test_raw_amount_preserves_the_exact_declared_decimal(value, decimals, expected):
+    assert T.raw_amount(value, decimals) == expected
+
+
+@pytest.mark.parametrize("value,decimals", [
+    ("nan", 18), ("inf", 18), (-1, 18), (True, 18),
+    ("0.0000001", 6), (2**256, 0), (1, 1000000), (1, True),
+])
+def test_raw_amount_refuses_invalid_or_fractional_raw_units(value, decimals):
+    with pytest.raises(ValueError):
+        T.raw_amount(value, decimals)
+
+
 def _word(n: int) -> str:
     return "0x" + f"{n:064x}"
 

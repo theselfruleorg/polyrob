@@ -1,0 +1,15 @@
+# The data half of the daytona pack (073 W7): read by core.packs.manifest WITHOUT
+# importing this package. The pack contributes no tool and no policy row: it
+# contributes an EXECUTION BACKEND, pulled from LOADED packs only by
+# tools/code_exec/pack_backends.py (exec_backends() in __init__.py).
+id = "daytona"
+version = "1.3.0"
+summary = "Daytona sandboxes as an execution and shell backend, with stop and resume"
+pack_api = 1
+requires_core = "==1.3.*"
+requires_packs = []
+tier = "first-party"
+# 067 (one install): the core extra that carries this pack's SDK. Without it the
+# pack loads, and the backend's setup() names `pip install 'polyrob[daytona]'`.
+extra = "daytona"
+capabilities = []

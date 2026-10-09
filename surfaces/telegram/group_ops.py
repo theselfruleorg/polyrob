@@ -91,6 +91,12 @@ def _resolve_role(result: Any, container: Any = None, surface: Optional[str] = N
     except Exception as e:
         logger.debug("group_ops: owner check failed (reading as member): %s", e)
     if surface and chat_id is not None:
+        # CHAT-23: a raw platform id only means something on its OWN surface.
+        # A WhatsApp number that equals a Telegram admin's numeric id is not
+        # that admin — a non-owner may not act on another surface's room.
+        here_surface, _ = _here(result)
+        if str(surface).strip().lower() != str(here_surface or "").strip().lower():
+            return "member"
         raw_id = getattr(identity, "raw_user_id", None) or identity.user_id
         return group_admin.room_role(container, surface, chat_id, raw_id)
     return "member"
@@ -311,6 +317,13 @@ async def groups_reply(task_agent: Any, result: Any, args: List[str]) -> str:
             return ("Usage: /groups role here|<surface> <chat_id> <user_id> "
                     "<admin|member|blocked>")
         user_ref, new_role = tail_args[0], tail_args[1]
+        if role != "owner":
+            # CHAT-9: a room admin may block a MEMBER, never another admin
+            # (the grant overwrites the target's row, so a block demotes).
+            # The read fails closed to `blocked`, which an admin may re-block.
+            current = group_admin.room_role(container, surface, chat_id, user_ref)
+            if current in ("admin", "owner"):
+                return "🔒 Only the owner can block a room admin."
         by = result.inbound.identity.raw_user_id or result.inbound.identity.user_id
         return group_admin.set_role(container, surface, chat_id, user_ref, new_role, by=by)
     if verb == "tail":

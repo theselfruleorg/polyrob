@@ -15,7 +15,7 @@ USDC = PaymentAsset(asset_id="usdc-base", chain="base",
 
 def _q(**kw):
     base = dict(asset_id="rob", usd_per_token=0.10, liquidity_usd=50_000.0,
-                verdict="SURVIVOR", source="test", ts=1000.0)
+                verdict="SURVIVOR", source="test", ts=1000.0, confidence="high")
     base.update(kw)
     return PriceQuote(**base)
 
@@ -80,11 +80,27 @@ def test_a_crashed_price_still_sizes_and_is_bounded_by_the_caller():
                            now=1000.0) == 500 * 10 ** 18
 
 
-def test_an_amount_that_rounds_to_zero_raw_units_is_refused():
+def test_an_invoice_rounds_up_never_undercharges():
     tiny = PaymentAsset(asset_id="t", chain="base", address="0x" + "cc" * 20,
-                        decimals=0, symbol="TINY")
-    with pytest.raises(QuoteRefused, match="zero raw units"):
-        size_amount_raw(0.4, tiny, _q(usd_per_token=1.0), now=1000.0)
+                        decimals=0, symbol="TINY", min_amount_raw=1,
+                        liquidity_floor_usd=100)
+    assert size_amount_raw(0.4, tiny, _q(asset_id="t", usd_per_token=1.0), now=1000.0) == 1
+
+
+@pytest.mark.parametrize("changes", [{"min_amount_raw": 0}, {"liquidity_floor_usd": 0},
+                                     {"liquidity_floor_usd": float('nan')}])
+def test_nonstable_assets_need_positive_floors(changes):
+    from dataclasses import replace
+    with pytest.raises(QuoteRefused, match="floors"):
+        size_amount_raw(1, replace(ASSET, **changes), _q(), now=1000)
+
+
+@pytest.mark.parametrize("changes", [{"confidence": "unknown"}, {"confidence": "low"},
+                                     {"confidence": "disputed"}, {"asset_id": "other"},
+                                     {"ts": float('nan')}, {"usd_per_token": float('inf')}])
+def test_a_quote_needs_matching_asset_grade_and_finite_values(changes):
+    with pytest.raises(QuoteRefused):
+        size_amount_raw(1, ASSET, _q(**changes), now=1000)
 
 
 def test_the_floor_is_enforced_for_a_STABLE_asset_too():

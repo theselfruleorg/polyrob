@@ -132,3 +132,18 @@ def test_download_media_refuses_a_declared_size_over_the_cap(monkeypatch):
     client = WhatsAppClient(phone_number_id="9", access_token="t")
     assert asyncio.run(client.download_media("M1", max_bytes=1000)) is None
     assert len(calls) == 1          # never fetched the body
+
+
+def test_launch_requires_the_webhook_secret():
+    """CHAT-22: without the secret every inbound POST is refused — the
+    preflight must say so instead of starting a deaf surface."""
+    from surfaces.whatsapp.launch import _REQUIRED
+    assert "WHATSAPP_WEBHOOK_SECRET" in _REQUIRED
+
+
+@pytest.mark.parametrize("host,warn", [("127.0.0.1", False), ("::1", False),
+                                       ("localhost", False), ("0.0.0.0", True),
+                                       ("10.0.0.2", True)])
+def test_plain_http_bind_warning(host, warn):
+    from surfaces._launch import plain_http_bind_warning
+    assert (plain_http_bind_warning(host) is not None) is warn

@@ -328,16 +328,19 @@ class TimeoutConfig:
         'filesystem': _core_int_env('FILESYSTEM_TIMEOUT_SECONDS', 30),  # Filesystem: fast local I/O
         'polymarket': _core_int_env('POLYMARKET_TIMEOUT_SECONDS', 60),  # Polymarket API
         # Publishing evaluation 2026-09-05 (Wave 1): the build tools' own foreground
-        # ceiling (SHELL_MAX_TIMEOUT_SEC, default 300) never fired on prod — this
+        # ceiling (SHELL_MAX_TIMEOUT_SEC, default 600 since 073 W3) never fired on prod — this
         # 'default' 60 s cap killed every install/build first (tool_timeout x15).
         # Sit ABOVE the ceiling so the tool's own clean kill (with output) wins.
-        'shell': _core_int_env('SHELL_TIMEOUT_SECONDS', 330),
-        'code_execution': _core_int_env('CODE_EXEC_TIMEOUT_SECONDS', 330),
+        'shell': _core_int_env('SHELL_TIMEOUT_SECONDS', 630),
+        'code_execution': _core_int_env('CODE_EXEC_TIMEOUT_SECONDS', 630),
         # Coding-agent review B2: `coding.run_tests` runs on the same code_exec
-        # backend with the same 300 s ceiling; under 'default' (60 s) the
+        # backend with the same 600 s ceiling; under 'default' (60 s) the
         # controller killed every real suite first. Same flag, same value.
-        'coding': _core_int_env('CODE_EXEC_TIMEOUT_SECONDS', 330),
-        'default': _core_int_env('DEFAULT_TOOL_TIMEOUT_SECONDS', 60),   # Default for unknown tools
+        'coding': _core_int_env('CODE_EXEC_TIMEOUT_SECONDS', 630),
+        # Default for tools without a row. Was 60 s: on prod it cut the money
+        # rail's reconcile (24x) and the X approval wait (9x) in a week to
+        # 2026-10-09. 180 s matches MCP and stays below STEP_TIMEOUT (300 s).
+        'default': _core_int_env('DEFAULT_TOOL_TIMEOUT_SECONDS', 180),
     }
 
     # ========== SUB-AGENT CONTROLS ==========

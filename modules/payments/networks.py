@@ -16,11 +16,13 @@ def chain_configs(config: Any) -> Dict[str, Dict[str, Any]]:
     return {
         'ethereum': {
             'rpc_url': getattr(config, 'ethereum_rpc_url', None),
-            'chain_id': 1
+            'chain_id': 1,
+            'testnet': False,
         },
         'sepolia': {
             'rpc_url': getattr(config, 'sepolia_rpc_url', None),
-            'chain_id': 11155111
+            'chain_id': 11155111,
+            'testnet': True,
         }
     }
 

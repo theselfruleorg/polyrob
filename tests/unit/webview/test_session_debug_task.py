@@ -13,7 +13,8 @@ async def test_debug_reads_the_task_in_process(monkeypatch, tmp_path):
     feed = tmp_path / "s1" / "feed"
     feed.mkdir(parents=True)
     monkeypatch.setattr(server, "pm", lambda: SimpleNamespace(
-        clean_session_id=lambda sid: sid, get_feed_dir=lambda sid: feed))
+        clean_session_id=lambda sid: sid, get_feed_dir=lambda sid: feed,
+        find_session_root=lambda sid, user_id=None: feed.parent))
     monkeypatch.setattr(server, "_check_session_ownership", lambda req, sid: (True, "o", "o"))
     monkeypatch.setattr(server, "build_session_task",
                         lambda sid: {"task": "write the report", "timestamp": 7})

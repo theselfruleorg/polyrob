@@ -95,6 +95,8 @@ class VerbPolicy:
     #: verb without it is always gated as a live spend.
     simulatable: bool = False
     #: The verb can only retire exposure (``spend_lane._RISK_REDUCING_VERBS``).
+    #: On the ``defi`` lane it tiers under ``DEFI_TIERED_SPEND_LANE``; on lane
+    #: ``none`` (a venue cancel that moves no funds) it never waits on a tap.
     risk_reducing: bool = False
     #: The generic approval lanes (a subset of :data:`APPROVAL_LANES`).
     approval: FrozenSet[str] = frozenset()
@@ -133,9 +135,10 @@ class VerbPolicy:
                              "approval_owner='verb'")
         if self.approval_owner is not None and self.side is None:
             raise ValueError(f"VerbPolicy {self.name}: an approval owner needs a side")
-        if (self.simulatable or self.risk_reducing) and self.lane != "defi":
-            raise ValueError(f"VerbPolicy {self.name}: simulatable/risk_reducing are "
-                             "read only on the defi lane")
+        if ((self.simulatable and self.lane not in {"defi", "owner_always"})
+                or (self.risk_reducing and self.lane not in {"defi", "none"})):
+            raise ValueError(f"VerbPolicy {self.name}: simulation needs a money lane; "
+                             "risk_reducing needs the defi lane or none")
 
     def fields_set(self) -> Dict[str, Any]:
         """The non-default fields (``name``/``tool`` excluded)."""

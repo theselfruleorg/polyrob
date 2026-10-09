@@ -218,4 +218,7 @@ def test_install_carries_the_installed_extras_under_the_lock(tmp_path, monkeypat
     calls.clear()
     r.rollback_code()
     ran = [c[0] for c in calls]
-    assert hashed in ran and project in ran
+    rollback_closure = next(c for c in ran if len(c) > 1 and c[1].endswith("lock_closure.py"))
+    rollback_deps = rollback_closure[rollback_closure.index("-o") + 1]
+    assert rollback_deps != deps
+    assert hashed[:-1] + [rollback_deps] in ran and project in ran

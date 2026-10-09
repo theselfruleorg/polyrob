@@ -86,6 +86,7 @@ def test_prefers_user_directory_resolution():
 
 
 def test_owner_fallback_for_non_numeric_tenant(monkeypatch):
+    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda: "rob")
     monkeypatch.setattr("core.instance.resolve_owner_telegram_id", lambda *a, **k: "555")
     sink, ev = _Sink(), _EvLog()
     c = _Container({"telegram_sink": sink})
@@ -585,3 +586,15 @@ def test_terminal_attached_autonomous_session_still_routes():
         orch, "sess-goal", "blocker", event_log=ev))
     assert out == "sent"
     _SESSIONS.clear()
+
+
+def test_non_owner_tenant_never_falls_back_to_owner_chat(monkeypatch):
+    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda: "rob")
+    monkeypatch.setattr("core.instance.resolve_owner_telegram_id", lambda *a, **k: "555")
+    monkeypatch.setenv("OWNER_EMAIL", "owner@example.com")
+    from core.surfaces.owner_address import owner_address
+    sink, ev = _Sink(), _EvLog()
+    container = _Container({"telegram_sink": sink})
+    assert _deliver(container, "tenant-other", "private tenant text", event_log=ev) == "no_sink"
+    assert sink.sent == []
+    assert owner_address(container, "email", "tenant-other") is None

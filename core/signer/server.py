@@ -63,11 +63,10 @@ _FEEDBACK_FIELDS = [
 _DOMAIN_FIELDS = [
     {"name": "name", "type": "string"}, {"name": "version", "type": "string"},
     {"name": "chainId", "type": "uint256"}, {"name": "verifyingContract", "type": "address"}]
-#: 066 P3: the Hyperliquid L1 actions the signer signs — orders and their
-#: housekeeping. A withdrawal, a transfer, an agent approval or a vault move is
-#: a USER-signed action (or a transfer-shaped L1 action) and is never here.
-HL_ORDER_ACTIONS = frozenset({"order", "cancel", "cancelByCloid", "modify", "batchModify",
-                              "updateLeverage", "updateIsolatedMargin", "scheduleCancel"})
+#: The signer cannot independently value a Hyperliquid order or reconcile venue
+#: exposure yet. Only cancellations are signable, even when the opt-in is armed.
+#: Caller-authored prices, sizes and leverage are never a substitute for caps.
+HL_ORDER_ACTIONS = frozenset({"cancel", "cancelByCloid", "scheduleCancel"})
 _ZERO = "0x0000000000000000000000000000000000000000"
 _FEEDBACK_MAX_TTL_SEC = 7 * 86400
 
@@ -245,17 +244,15 @@ class SignerService:
 
     @staticmethod
     def _passes(decision) -> bool:
-        # ``owner_queue`` = every guard rule passed and only the agent-side
-        # autonomous ceiling asked for the owner; the agent ran that lane. The
-        # signer's own bound is the hard cap in its gate, checked in step 8.
+        # Structural guard success, possibly requiring independent approval.
+        # This alone is not authority to send an owner_queue decision.
         return bool(decision.allowed) or decision.lane == "owner_queue"
 
     @staticmethod
     def _cap_refusal(decision) -> bool:
-        reason = str(decision.reason or "")
-        return (decision.amount_usd is not None and reason.startswith("refused by PolicyGate:")
-                and ("catastrophic ceiling" in reason or "daily spend cap" in reason
-                     or "daily cap" in reason))
+        # The structured flag the PolicyGate sets on a cap refusal — never the reason
+        # text, which a refusal of another kind could be made to contain.
+        return decision.amount_usd is not None and bool(getattr(decision, "cap_exceeded", False))
 
     def _evaluate(self, body, *, gate, open_approval: bool):
         """``(intent, tx, decision, grant_row)`` or :class:`_Refuse`."""
@@ -275,13 +272,18 @@ class SignerService:
         if self.store.paused():
             raise _Refuse(protocol.PAUSED, "the signer's spend pause is ON (owner, on the box)")
         decision = self._authorize(intent, tx, gate=gate)
-        if self._passes(decision):
+        # Fee-only valuation cannot bound the principal of an NFT or LP exit.
+        # An app-side approval stamp is not an independent signer approval.
+        unpriced_assets = bool(intent.is_nft_op or (
+            intent.is_liquidity_op and not intent.lp_outflows))
+        needs_review = unpriced_assets or decision.lane == "owner_queue"
+        if decision.allowed and not needs_review:
             return intent, tx, decision, None
         digest = protocol.request_digest(body["intent"], tx)
-        if not self._cap_refusal(decision):
+        if not self._cap_refusal(decision) and not (needs_review and self._passes(decision)):
             raise _Refuse(protocol.GUARD_REFUSED, decision.reason,
                           amount_usd=decision.amount_usd, digest=digest)
-        # Above the HARD cap. Only a grant the owner minted on the box unlocks it.
+        # Only the owner's independent on-box grant unlocks this request.
         existing = self.store.find_approval(digest)
         amount = float(decision.amount_usd)
         if (existing is not None and existing["state"] == "granted"
@@ -296,13 +298,13 @@ class SignerService:
         if not open_approval:
             raise _Refuse(protocol.APPROVAL_REQUIRED, decision.reason,
                           amount_usd=amount, digest=digest)
-        summary = (f"{intent.chain}: ${amount:.2f} to {intent.to or '(deploy)'} — "
-                   f"{decision.reason}")
+        from core.signer.review import evm_review
+        summary = evm_review(intent, tx, decision, digest=digest, unpriced_assets=unpriced_assets)
         row_ = self.store.open_approval(digest=digest, op="evm.send", chain=intent.chain,
                                         amount_usd=amount, summary=summary,
                                         ttl_sec=self.config.approval_ttl_sec)
         raise _Refuse(protocol.APPROVAL_REQUIRED, (
-            f"${amount:.2f} is above the signer's hard cap ({decision.reason}). The owner "
+            f"${amount:.2f} requires independent signer approval ({decision.reason}). The owner "
             f"approves it ON THE BOX: `sudo polyrob owner promote signer_approval {row_['id']}`, "
             f"then the same request is retried. Nothing was signed."),
             amount_usd=amount, approval_id=row_["id"])
@@ -510,8 +512,8 @@ class SignerService:
         if not isinstance(action, dict) or action.get("type") not in HL_ORDER_ACTIONS:
             kind = action.get("type") if isinstance(action, dict) else None
             raise _Refuse(protocol.UNKNOWN_SHAPE, (
-                f"Hyperliquid action {kind!r} is not an order action — the signer signs "
-                f"{sorted(HL_ORDER_ACTIONS)} only (never a withdrawal, transfer or agent approval)"))
+                f"Hyperliquid action {kind!r} lacks independent signer valuation and caps; "
+                f"only cancellation actions {sorted(HL_ORDER_ACTIONS)} are signable"))
         is_mainnet = body["is_mainnet"]
         if not isinstance(is_mainnet, bool) or is_mainnet != (self.config.network == "mainnet"):
             raise _Refuse(protocol.UNKNOWN_SHAPE,
@@ -567,6 +569,20 @@ class SignerService:
         if typed["domain"]["name"] != "EIP8004ReputationRegistry" or \
                 typed["domain"]["version"] != "1":
             raise protocol.ProtocolError("domain is not EIP8004ReputationRegistry v1")
+        # The domain must name a PINNED reputation registry on its own chain, or the
+        # signature authorizes feedback on whatever contract/chain the caller chose.
+        from core.wallet import erc8004
+        try:
+            _chain_id = int(typed["domain"]["chainId"])
+        except (TypeError, ValueError):
+            raise protocol.ProtocolError("domain chainId is not an integer")
+        _verifier = str(typed["domain"]["verifyingContract"]).lower()
+        # The zero address (an unconfigured registry) verifies nowhere, so it is inert.
+        if _verifier != "0x" + "0" * 40 and not any(
+                row.chain_id == _chain_id and str(row.reputation).lower() == _verifier
+                for row in (erc8004.registry_for(c) for c in erc8004.supported_chains())):
+            raise _Refuse(protocol.UNKNOWN_SHAPE,
+                          "domain is not a pinned ERC-8004 reputation registry on its chain")
         msg = typed["message"]
         protocol.check_keys(msg, required=("agentId", "clientAddress", "expiresAt", "nonce"))
         expires = int(msg["expiresAt"])
@@ -659,6 +675,18 @@ class SignerService:
 
 # -- socket ------------------------------------------------------------------
 
+def peer_pid_of(conn) -> Optional[int]:
+    """The connecting process's PID (Linux ``SO_PEERCRED``); None when unknown."""
+    if not hasattr(socket, "SO_PEERCRED"):
+        return None
+    try:
+        creds = conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
+        pid, _uid, _gid = struct.unpack("3i", creds)
+    except (OSError, struct.error, TypeError):
+        return None
+    return int(pid) if pid > 0 else None
+
+
 def peer_uid_of(conn) -> int:
     """The connecting process's UID, from the kernel. Raises when unknown."""
     if hasattr(socket, "SO_PEERCRED"):
@@ -682,6 +710,47 @@ class SignerServer:
         self.conn_timeout = conn_timeout
         self._sock: Optional[socket.socket] = None
         self._stop = threading.Event()
+        self._connections = threading.BoundedSemaphore(16)
+        self._peer_warned: set = set()
+
+    def peer_process_allowed(self, conn, uid: int) -> bool:
+        """WAL-1: only the main process of a client UID (core/signer/peer.py).
+
+        Root is the owner and is never checked. ``peer_check = "uid"`` keeps the
+        UID check alone; ``"warn"`` logs a non-main peer and serves it;
+        ``"main_process"`` refuses it. "Cannot tell" (no SO_PEERCRED pid, no
+        cgroup v2, a hidden /proc) falls back to the UID check with a warning.
+        """
+        mode = getattr(self.service.config, "peer_check", "warn")
+        if uid == 0 or mode == "uid":
+            return True
+        from core.signer.peer import is_main_process
+        pid = peer_pid_of(conn)
+        verdict = is_main_process(pid, uid) if pid else None
+        if verdict is None:
+            self._warn_once(("unknown", uid),
+                            "signer: cannot tell whether uid %s pid %s is a client's main "
+                            "process (no cgroup v2 / hidden /proc?); falling back to the UID "
+                            "check", uid, pid)
+            return True
+        if verdict:
+            return True
+        if mode == "main_process":
+            logger.warning("signer: refused uid %s pid %s — not the client's main process "
+                           "(a child of the agent)", uid, pid)
+            return False
+        self._warn_once(("child", pid),
+                        "signer: uid %s pid %s is not the client's main process (a child of "
+                        "the agent); served because peer_check = \"warn\" — set "
+                        "peer_check = \"main_process\" in signer.toml to refuse it", uid, pid)
+        return True
+
+    def _warn_once(self, key, msg, *args) -> None:
+        if key in self._peer_warned:
+            return
+        if len(self._peer_warned) < 1024:
+            self._peer_warned.add(key)
+        logger.warning(msg, *args)
 
     def bind(self) -> None:
         import stat
@@ -715,7 +784,21 @@ class SignerServer:
                 if self._stop.is_set():
                     break
                 raise
-            threading.Thread(target=self._serve_conn, args=(conn,), daemon=True).start()
+            if not self._connections.acquire(blocking=False):
+                conn.close()
+                continue
+            try:
+                threading.Thread(target=self._serve_bounded, args=(conn,), daemon=True).start()
+            except RuntimeError:
+                conn.close()
+                self._connections.release()
+                logger.error("signer: connection worker unavailable")
+
+    def _serve_bounded(self, conn) -> None:
+        try:
+            self._serve_conn(conn)
+        finally:
+            self._connections.release()
 
     def _serve_conn(self, conn) -> None:
         with conn:
@@ -731,6 +814,14 @@ class SignerServer:
                 try:
                     protocol.send_frame(conn, protocol.refusal(
                         protocol.PEER_REFUSED, f"uid {uid} is not a signer client"))
+                except OSError:
+                    pass
+                return
+            if not self.peer_process_allowed(conn, uid):
+                try:
+                    protocol.send_frame(conn, protocol.refusal(
+                        protocol.PEER_REFUSED,
+                        "only the client's main process may use the signer, not a child of it"))
                 except OSError:
                     pass
                 return

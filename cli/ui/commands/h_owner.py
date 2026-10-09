@@ -227,7 +227,8 @@ def h_fulfill(ctx) -> None:
     # they ride into the unblocked goal's retry prompt (decide_ask(answer=)).
     answer = " ".join(ctx.args[1:]).strip()
     try:
-        ok, unblocked = _goal_board(write=True).decide_ask(
+        board = _goal_board(write=True)
+        ok, unblocked = board.decide_ask(
             ask_id, user_id=tenant, approved=True, answer=answer)
     except Exception as e:
         ctx.emit(f"{candy.GUTTER}(fulfill unavailable: {e})", title="fulfill")
@@ -236,7 +237,8 @@ def h_fulfill(ctx) -> None:
         ctx.emit(f"no open ask '{ask_id}' for tenant {tenant} — see /asks",
                  title="fulfill")
         return
-    ctx.emit(f"✅ ask {ask_id} fulfilled — {unblocked} goal(s) unblocked",
+    from agents.task.goals.rail_answers import decision_note
+    ctx.emit(f"✅ ask {ask_id} fulfilled — {decision_note(board, ask_id, unblocked) or 'saved'}",
              title="fulfill")
 
 

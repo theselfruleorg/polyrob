@@ -156,6 +156,9 @@ def create_cron(service: Any, *, task: str, schedule_spec: str, user_id: str,
         raise ValueError("cron create requires a real (non-anonymous) tenant")
 
     payload: Dict[str, Any] = dict(extra_payload or {})
+    # Every owner seat creates through here: the row is the owner's, stamped
+    # (an UNSTAMPED row has no standing owner authority — ``is_owner_authored``).
+    payload.setdefault("authored_by", "owner")
     _normalize_target_in(payload)
     named_tools = _clean_tools(tools)
     if named_tools:
@@ -202,8 +205,8 @@ def split_cron_options(tokens: Sequence[str]):
 def cron_options_payload(options: Dict[str, str]):
     """``(tools, extra_payload)`` for :func:`create_cron` from parsed options.
 
-    The payload is stamped ``authored_by: owner`` — a chat seat IS the owner,
-    the same stamp ``cronjob_schedule`` writes on an owner turn. A target needs
+    The payload is stamped ``authored_by: owner`` — a chat seat IS the owner
+    (the agent's ``cronjob_schedule`` follows ``owner_authored_turn``). A target needs
     its chain and a valid address for that chain (``ValueError`` otherwise), so
     a bad address is refused at create time, never stored.
     """

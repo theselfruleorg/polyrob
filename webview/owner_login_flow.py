@@ -53,8 +53,9 @@ def render_owner_login(request, *, return_to: str = "/", error=None,
         "error": t(error) if error else None,
         "csrf_token": csrf_token_for(nonce),
     }, status_code=status_code)
+    from webview import webgate
     response.set_cookie(
         "csrf_nonce", nonce, max_age=600, httponly=True, samesite="lax",
-        secure=(os.environ.get("ENVIRONMENT", "production") == "production"), path="/owner-login",
+        secure=(not webgate.is_local() and os.environ.get("ENVIRONMENT", "production") == "production"), path="/owner-login",
     )
     return response

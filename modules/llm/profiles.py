@@ -576,6 +576,7 @@ def extra_llm_config_blocks(env=None) -> Dict[str, Dict[str, object]]:
                         out.setdefault(s.name, {})["api_key"] = override_key
             else:
                 _name, key = s.resolve_env_key(env)
+                credential_source = "env"
                 if not key:
                     # No env key — try the CREDENTIAL oracle (an OAuth seat, a
                     # borrowed login). Without this the whole L1/L2 store is
@@ -587,6 +588,7 @@ def extra_llm_config_blocks(env=None) -> Dict[str, Dict[str, object]]:
                                         _shared_store(_scoped_env(env)))
                     if cred is not None and cred.value:
                         key = cred.value
+                        credential_source = cred.source
                 if not key and s.auth_type.value == "none":
                     # AuthType.NONE (Ollama & friends): the manager's bootstrap
                     # gates skip providers with no api_key — the sentinel makes
@@ -598,6 +600,8 @@ def extra_llm_config_blocks(env=None) -> Dict[str, Dict[str, object]]:
                     "base_url": s.resolved_base_url(env),
                     "auth_type": s.auth_type.value,
                 }
+                if credential_source in ("oauth", "borrowed"):
+                    out[s.name]["credential_source"] = credential_source
         return out
     except Exception:
         return {}

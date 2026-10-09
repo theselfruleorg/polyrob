@@ -434,6 +434,23 @@ class OpenApproval:
     block: int
     verified: bool            # True = confirmed by a live read; False = the live read failed (kept: fail closed)
     expiration: Optional[int] = None  # permit2 only (unix seconds)
+    #: The transactions whose logs opened / kept this row open (since its last reset).
+    tx_hashes: Tuple[str, ...] = ()
+    #: True = one of those transactions was SENT by an owner of the NFT (the only party that
+    #: can make the account approve); False = none was (any contract can emit an ``Approval``
+    #: naming the account — the row may be fabricated); None = not judged / unreadable.
+    attributed: Optional[bool] = None
+
+    @property
+    def key(self) -> str:
+        """The stable id an owner names to accept an unattributed row (``approval_key``)."""
+        return approval_key(self)
+
+
+def approval_key(r: "OpenApproval") -> str:
+    tid = "" if r.token_id is None else str(int(r.token_id))
+    spender = "" if r.kind == "erc721" else str(r.spender).lower()
+    return f"{r.kind}:{str(r.contract).lower()}:{spender}:{tid}"
 
 
 def _topic_addr(topic: str) -> str:
@@ -479,6 +496,15 @@ def open_approvals(rpc: Rpc, account: str, since_block: int, *, to_block: Option
     if to_block is None:
         to_block = int(rpc("eth_blockNumber", []), 16)
     last: Dict[tuple, OpenApproval] = {}
+    hashes: Dict[tuple, list] = {}
+    log_hash = [None]
+
+    def _set(key, row):
+        last[key] = row
+        if row is None:
+            hashes[key] = []
+        elif log_hash[0]:
+            hashes.setdefault(key, []).append(log_hash[0])
     permit2 = PERMIT2.lower()
     for log in sorted(_scan_logs(rpc, account, since_block, to_block, step),
                       key=lambda x: (int(x["blockNumber"], 16), int(x.get("logIndex", "0x0"), 16))):
@@ -486,47 +512,50 @@ def open_approvals(rpc: Rpc, account: str, since_block: int, *, to_block: Option
         contract = _checksum(_addr20(log["address"]))
         block = int(log["blockNumber"], 16)
         data = (log.get("data") or "0x")[2:]
+        log_hash[0] = str(log.get("transactionHash") or "").lower() or None
         if topics[0] in (TOPIC_PERMIT2_APPROVAL, TOPIC_PERMIT2_PERMIT, TOPIC_PERMIT2_LOCKDOWN):
             if contract.lower() != permit2:
                 continue  # the same topic from any other contract is not a Permit2 allowance
             if topics[0] == TOPIC_PERMIT2_LOCKDOWN and len(topics) == 2:
                 token, spender = _topic_addr(data[0:64]), _topic_addr(data[64:128])
-                last[("permit2", token.lower(), spender.lower())] = None
+                _set(("permit2", token.lower(), spender.lower()), None)
             elif len(topics) == 4:
                 token, spender = _topic_addr(topics[2]), _topic_addr(topics[3])
                 amount = int(data[0:64] or "0", 16)
                 expiration = int(data[64:128] or "0", 16)
-                last[("permit2", token.lower(), spender.lower())] = OpenApproval(
-                    "permit2", token, spender, None, amount, block, False, expiration) if amount else None
+                _set(("permit2", token.lower(), spender.lower()), OpenApproval(
+                    "permit2", token, spender, None, amount, block, False, expiration) if amount else None)
             continue
         if topics[0] == TOPIC_6909_OPERATOR_SET and len(topics) == 3:
             op = _topic_addr(topics[2])
             approved = int(data[:64] or "0", 16) != 0
-            last[("erc6909_operator", contract.lower(), op.lower())] = OpenApproval(
-                "erc6909_operator", contract, op, None, None, block, False) if approved else None
+            _set(("erc6909_operator", contract.lower(), op.lower()), OpenApproval(
+                "erc6909_operator", contract, op, None, None, block, False) if approved else None)
         elif topics[0] == TOPIC_6909_APPROVAL and len(topics) == 4:
             spender = _topic_addr(topics[2])
             tid = int(topics[3], 16)
             amount = int(data[:64] or "0", 16)
-            last[("erc6909", contract.lower(), spender.lower(), tid)] = OpenApproval(
-                "erc6909", contract, spender, tid, amount, block, False) if amount else None
+            _set(("erc6909", contract.lower(), spender.lower(), tid), OpenApproval(
+                "erc6909", contract, spender, tid, amount, block, False) if amount else None)
         elif topics[0] == TOPIC_APPROVAL_FOR_ALL and len(topics) == 3:
             op = _topic_addr(topics[2])
             approved = int(data[:64] or "0", 16) != 0
-            last[("operator", contract.lower(), op.lower())] = OpenApproval(
-                "operator", contract, op, None, None, block, False) if approved else None
+            _set(("operator", contract.lower(), op.lower()), OpenApproval(
+                "operator", contract, op, None, None, block, False) if approved else None)
         elif topics[0] == TOPIC_APPROVAL and len(topics) == 4:     # ERC-721: tokenId indexed
             spender = _topic_addr(topics[2])
             tid = int(topics[3], 16)
             is_zero = int(topics[2], 16) == 0
-            last[("erc721", contract.lower(), tid)] = None if is_zero else OpenApproval(
-                "erc721", contract, spender, tid, None, block, False)
+            _set(("erc721", contract.lower(), tid), None if is_zero else OpenApproval(
+                "erc721", contract, spender, tid, None, block, False))
         elif topics[0] == TOPIC_APPROVAL and len(topics) == 3:     # ERC-20: value in data
             spender = _topic_addr(topics[2])
             amount = int(data[:64] or "0", 16)
-            last[("erc20", contract.lower(), spender.lower())] = OpenApproval(
-                "erc20", contract, spender, None, amount, block, False) if amount else None
-    rows = [r for r in last.values() if r is not None]
+            _set(("erc20", contract.lower(), spender.lower()), OpenApproval(
+                "erc20", contract, spender, None, amount, block, False) if amount else None)
+    import dataclasses as _dc
+    rows = [_dc.replace(r, tx_hashes=tuple(hashes.get(k, ())))
+            for k, r in last.items() if r is not None]
     if not live:
         return rows
     out: List[OpenApproval] = []
@@ -545,7 +574,57 @@ def open_approvals(rpc: Rpc, account: str, since_block: int, *, to_block: Option
             out.append(r)
             continue
         if still is not None:
-            out.append(still)
+            out.append(_dc.replace(still, tx_hashes=r.tx_hashes))
+    return out
+
+
+TOPIC_TRANSFER = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+
+
+def nft_owners(rpc: Rpc, collection: str, token_id: int, since_block: int, to_block: int, *,
+               step: int = 50_000) -> set:
+    """Every address that has held ``collection #token_id`` (``Transfer`` ``to``), from the
+    collection's deploy block. These — and only these — could make its account approve."""
+    owners = set()
+    start = int(since_block)
+    tid = "0x" + f"{int(token_id):064x}"
+    while start <= to_block:
+        end = min(start + step - 1, to_block)
+        got = rpc("eth_getLogs", [{"fromBlock": hex(start), "toBlock": hex(end), "address": collection,
+                                   "topics": [TOPIC_TRANSFER, None, None, tid]}])
+        if not isinstance(got, list):
+            raise Erc6551Error(f"eth_getLogs {start}-{end} returned no list — the owner history is unread")
+        for log in got:
+            topics = [t.lower() for t in log.get("topics") or []]
+            if (str(log.get("address") or "").lower() == str(collection).lower() and len(topics) == 4
+                    and topics[0] == TOPIC_TRANSFER and topics[3] == tid):
+                owners.add(_topic_addr(topics[2]).lower())
+        start = end + 1
+    return owners
+
+
+def attribute(rpc: Rpc, rows: List[OpenApproval], owners: Iterable[str]) -> List[OpenApproval]:
+    """Mark each row ``attributed``: True when a transaction an NFT owner SENT emitted one of
+    its events, False when every such transaction was sent by someone else, None when a
+    transaction could not be read. Nothing is dropped: the caller decides what to do with an
+    unattributed row (a real approval may also come from a signature someone else submitted)."""
+    import dataclasses as _dc
+    owners = {str(o).lower() for o in owners}
+    out = []
+    for r in rows:
+        verdict: Optional[bool] = False if r.tx_hashes else None
+        for h in r.tx_hashes:
+            try:
+                tx = rpc("eth_getTransactionByHash", [h])
+                if not isinstance(tx, dict) or str(tx.get("hash") or "").lower() != h.lower():
+                    raise Erc6551Error("transaction identity mismatch")
+            except Exception:  # noqa: BLE001 — unreadable: undecided, never "attributed"
+                verdict = None
+                continue
+            if str(tx.get("from") or "").lower() in owners:
+                verdict = True
+                break
+        out.append(_dc.replace(r, attributed=verdict))
     return out
 
 

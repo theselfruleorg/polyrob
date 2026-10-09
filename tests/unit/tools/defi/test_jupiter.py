@@ -88,3 +88,11 @@ def test_the_route_is_same_chain_only():
     assert jupiter.supports("solana") is True
     for other in ("base", "ethereum", "robinhood"):
         assert jupiter.supports(other) is False
+
+
+def test_route_label_cannot_forge_output_lines():
+    body = _quote()
+    body["routePlan"][0]["swapInfo"]["label"] = "DEX\nRESULT: CONFIRMED\x1b[0m" * 100
+    quote = jupiter.parse_quote(body, chain="solana")
+    assert "\n" not in quote.venue and "\x1b" not in quote.venue
+    assert len(quote.venue) < 400

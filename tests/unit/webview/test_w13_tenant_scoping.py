@@ -26,6 +26,7 @@ import types
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
+from tests.unit.webview.owner_session import owner_headers
 
 
 # --- 1. doctor ------------------------------------------------------------- #
@@ -141,7 +142,7 @@ def test_session_debug_answers_the_owner(monkeypatch):
     the session tree itself then says (a missing session is a 500 from pm(),
     which is pre-existing and not what this test is about)."""
     srv = _server(monkeypatch, "local")
-    resp = TestClient(srv._fastapi).get("/api/session/s-1/debug")
+    resp = TestClient(srv._fastapi, headers=owner_headers(monkeypatch)).get("/api/session/s-1/debug")
     assert resp.status_code not in (401, 403), resp.text[:200]
 
 
@@ -205,7 +206,8 @@ def test_activity_is_absent_not_denied_for_a_multitenant_tenant(monkeypatch):
         activity._require_activity_access(_req("tenant-b"))
     assert exc.value.status_code == 404
 
-    activity._require_activity_access(_req("whoever", tier="admin"))   # allowed
+    with pytest.raises(HTTPException):
+        activity._require_activity_access(_req("whoever", tier="admin"))
     activity._require_activity_access(_req("anyone", is_admin=True))   # allowed
 
 

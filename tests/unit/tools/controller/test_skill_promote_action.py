@@ -36,7 +36,7 @@ def _seed_pending(sm):
 
 
 @pytest.mark.asyncio
-async def test_owner_can_promote_pending(monkeypatch, tmp_path):
+async def test_owner_cannot_self_promote_pending(monkeypatch, tmp_path):
     # T3-02 tightened promote to owner-only: bind u1 as the owner principal
     # (a bare genuine turn is no longer sufficient — see
     # tests/unit/skills/test_forged_turn_origin_gate.py).
@@ -49,9 +49,9 @@ async def test_owner_can_promote_pending(monkeypatch, tmp_path):
     ctx = types.SimpleNamespace(user_id="u1", is_sub_agent=False, role="orchestrator")
     params = action.param_model(action="promote", skill_id="draft-skill")
     res = await action.function(params, execution_context=ctx)
-    assert res.error is None, res.error
-    assert (tmp_path / "user_u1" / "draft-skill" / "SKILL.md").exists()
-    assert not (tmp_path / "user_u1" / ".pending" / "draft-skill" / "SKILL.md").exists()
+    assert res.error and "owner" in res.error.lower()
+    assert not (tmp_path / "user_u1" / "draft-skill" / "SKILL.md").exists()
+    assert (tmp_path / "user_u1" / ".pending" / "draft-skill" / "SKILL.md").exists()
 
 
 @pytest.mark.asyncio

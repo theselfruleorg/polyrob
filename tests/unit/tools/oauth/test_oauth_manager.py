@@ -26,10 +26,10 @@ class _MockProvider(OAuthProvider):
     def __init__(self):
         self.refresh_calls = 0
 
-    def authorize_url(self, *, state=None, redirect_uri=None):
+    def authorize_url(self, *, state, code_verifier, redirect_uri=None):
         return "https://auth.example/authorize"
 
-    async def exchange_code(self, code, *, redirect_uri=None):
+    async def exchange_code(self, code, *, code_verifier, redirect_uri=None):
         return OAuthToken(access_token="initial", refresh_token="r0")
 
     async def refresh(self, token):
@@ -135,7 +135,7 @@ async def test_generic_provider_exchange_and_refresh():
         http_post=fake_post,
     )
 
-    tok = await prov.exchange_code("the-code")
+    tok = await prov.exchange_code("the-code", code_verifier="v" * 43)
     assert tok.access_token == "AT1" and tok.refresh_token == "RT1"
     assert tok.expires_at and tok.expires_at > time.time()
 
@@ -157,9 +157,9 @@ def test_generic_provider_authorize_url():
             "redirect_uri": "https://app/cb",
         },
     )
-    url = prov.authorize_url(state="xyz")
+    url = prov.authorize_url(state="x" * 43, code_verifier="v" * 43)
     assert url.startswith("https://auth.example/authorize?")
-    assert "client_id=cid" in url and "state=xyz" in url and "scope=read" in url
+    assert "client_id=cid" in url and ("state=" + "x" * 43) in url and "scope=read" in url
 
 
 # --- T2.4 review fast-follow: refresh is serialized per (user_id, provider) ----
@@ -285,7 +285,7 @@ async def test_missing_access_token_error_never_leaks_response_values():
     )
 
     with pytest.raises(OAuthError) as exc_info:
-        await prov.exchange_code("the-code")
+        await prov.exchange_code("the-code", code_verifier="v" * 43)
 
     msg = str(exc_info.value)
     # allowlisted, human-readable OAuth2 fields ARE surfaced
@@ -314,7 +314,7 @@ async def test_missing_access_token_with_no_error_fields_still_safe():
     )
 
     with pytest.raises(OAuthError) as exc_info:
-        await prov.exchange_code("the-code")
+        await prov.exchange_code("the-code", code_verifier="v" * 43)
 
     msg = str(exc_info.value)
     assert "some-value-that-must-not-leak" not in msg

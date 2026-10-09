@@ -1148,8 +1148,8 @@ def _load_user_specs() -> Tuple[ProviderSpec, ...]:
         return ()
     try:
         import yaml  # lazy: keep module import light (entry-point weight test)
-        with open(path, "r", encoding="utf-8") as fh:
-            data = yaml.safe_load(fh) or {}
+        from core.security.workspace_io import read_trusted_config
+        data = yaml.safe_load(read_trusted_config(path)) or {}
     except Exception as exc:
         logger.warning("providers.yaml unreadable (%s) — no user providers loaded", exc)
         _LOAD_REPORT["file_error"] = f"unreadable ({exc}) — no user providers loaded"

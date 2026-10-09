@@ -44,9 +44,9 @@ def env_file_candidates(resolved_env: str = "development", *, local_mode: bool =
     the display/snapshot/guard sites (``/config check``, ``cli.keys``,
     ``cli.update.context``) derive their subsets from it (R-1).
 
-    local_mode=True (CLI): process env > project ``./.polyrob/.env`` >
-    ``~/.polyrob/.env`` > legacy ``~/.rob/.env`` (read-only transition fallback) >
-    root ``.env`` > ``config/.env.{env}`` > ``config/.env.{env}.local``.
+    local_mode=True (CLI): process env > ``~/.polyrob/.env`` > legacy
+    ``~/.rob/.env`` (read-only transition fallback). A project checkout is
+    untrusted input: merely entering it must not replace providers or keys.
     load_env loads these first-to-last with override=False, so list order IS the
     precedence order.
 
@@ -62,7 +62,6 @@ def env_file_candidates(resolved_env: str = "development", *, local_mode: bool =
     if not local_mode:
         return server_layers
     return [
-        EnvFileCandidate(Path.cwd() / ".polyrob" / ".env", "project"),
         EnvFileCandidate(polyrob_home() / ".env", "home"),
         EnvFileCandidate(Path.home() / ".rob" / ".env", "legacy-home"),
-    ] + list(reversed(server_layers))
+    ]

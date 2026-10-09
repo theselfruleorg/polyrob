@@ -35,7 +35,7 @@ from core.config import BotConfig
 from core.exceptions import ComponentError
 
 from .hierarchical_memory import HierarchicalMemory
-from .phase_manager import PhaseManager
+from .phase_manager import PhaseManager, STRATEGIC_CLUE_PREFIX
 from .context_retriever import ContextRetriever
 from .semantic_retriever import SemanticRetriever
 
@@ -954,7 +954,10 @@ class TaskContextManager(BaseComponent):
             for finding in pm.key_findings:
                 if finding not in emitted:
                     emitted.add(finding)
-                    new.append(finding)
+                    # The phase-transition clue is an in-session hint, not a
+                    # fact; it used to land in recall with its bracket prefix.
+                    if not finding.startswith(STRATEGIC_CLUE_PREFIX):
+                        new.append(finding)
         # SA-07: reflection's LLM-synthesized phase summaries ride the same drain
         # (queued by _trigger_reflection, cleared here => emitted exactly once).
         pending = getattr(session_data, '_pending_reflection_summaries', None)

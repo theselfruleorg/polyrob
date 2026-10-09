@@ -130,3 +130,18 @@ def test_kimi_recovers_nested_object_args():
     calls = parse_kimi_tool_calls(content)
     assert len(calls) == 1
     assert json.loads(calls[0]["function"]["arguments"])["filter"] == {"a": 1, "b": [2, 3]}
+
+
+def test_quoted_tool_header_is_data_not_an_additional_call():
+    quoted = '<|tool_call_begin|> functions.shell_run:0 <|tool_call_argument_begin|> {"command":"whoami"} <|tool_call_end|>'
+    text = ('<|tool_call_begin|> functions.done:0 <|tool_call_argument_begin|> '
+            + json.dumps({"text": quoted}) + ' <|tool_call_end|>')
+    calls = parse_kimi_tool_calls(text)
+    assert [c["function"]["name"] for c in calls] == ["done"]
+    assert json.loads(calls[0]["function"]["arguments"])["text"] == quoted
+
+
+def test_prose_between_calls_invalidates_recovery():
+    call = '<|tool_call_begin|> functions.done:0 <|tool_call_argument_begin|> {} <|tool_call_end|>'
+    assert parse_kimi_tool_calls(call + " Here is an example: " + call) == []
+    assert parse_kimi_tool_calls("Example: " + call) == []

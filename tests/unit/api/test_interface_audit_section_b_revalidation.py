@@ -486,7 +486,15 @@ def test_health_never_500s_on_an_unreadable_metric(monkeypatch):
     resp = TestClient(app, raise_server_exceptions=False).get("/health")
     assert resp.status_code in (200, 503), resp.text
     body = resp.json()
-    assert body["metrics"]["active_sessions"] is None
+    assert set(body) == {'status', 'service'}
+    assert 'metrics' not in body
+    # Detailed metrics stay honest, but only the administrator route exposes them.
+    route = next(route for route in app.routes if route.path == '/api/health')
+    from starlette.requests import Request
+    request = Request({'type': 'http', 'state': {'is_admin': True}})
+    detailed = asyncio.run(route.endpoint(request, user_id='admin'))
+    import json
+    assert json.loads(detailed.body)['metrics']['active_sessions'] is None
 
 
 def test_an_owner_login_is_reported_as_admin():

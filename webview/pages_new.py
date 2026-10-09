@@ -427,8 +427,7 @@ def _shell_context(request: Request, current: str) -> dict:
 
 
 def _show_logout() -> bool:
-    """A logout link exists only where a login does (own_ops / multitenant);
-    the `local` operator IS the owner and has no session to end."""
+    """All console postures have an authenticated session to end."""
     try:
         return bool(webgate.requires_owner_login())
     except Exception:
@@ -1039,12 +1038,34 @@ def _mcp_section() -> dict:
     enabled = _cli_extra_gate("mcp")
     items = []
     for name, cfg in (servers or {}).items():
-        detail = None
-        if isinstance(cfg, dict):
-            detail = cfg.get("command") or cfg.get("url") or cfg.get("transport")
+        detail = _mcp_detail(cfg) if isinstance(cfg, dict) else None
         items.append({"id": name, "kind": "mcp", "what": detail,
                       "on": enabled, "source": "mcp", "last_used": None})
     return {"items": items, "error": None, "enabled": enabled}
+
+
+def _mcp_detail(cfg: dict):
+    """What an MCP server IS, without what it holds (WEB-3/WEB-7): a URL shows
+    only its scheme and host (a key often rides in the path or query), a
+    command only its program name (arguments and env may carry a token)."""
+    url = cfg.get("url")
+    if url:
+        from urllib.parse import urlsplit
+        try:
+            parts = urlsplit(str(url))
+            host = parts.hostname or ""
+            if parts.port:
+                host = f"{host}:{parts.port}"
+            return f"{parts.scheme}://{host}" if parts.scheme and host else "url"
+        except Exception:
+            return "url"
+    command = cfg.get("command")
+    if command:
+        import os as _os
+        first = str(command).strip().split()[0] if str(command).strip() else ""
+        return _os.path.basename(first) or "command"
+    transport = cfg.get("transport")
+    return str(transport) if transport else None
 
 
 def _profiles_section() -> dict:
@@ -1084,15 +1105,20 @@ def _profiles_section() -> dict:
             "unreadable_rows": unreadable_rows}
 
 
-def _capabilities_body(user_id: str) -> dict:
+def _capabilities_body(user_id: str, *, owner: bool = True) -> dict:
     """Skills + tools + MCP + helpers as one capability answer for *user_id*.
     Each section is independently guarded, so one unreadable source degrades to
-    its own named error and never blanks the others."""
+    its own named error and never blanks the others.
+
+    The MCP servers and helper profiles are the OPERATOR's configuration: a
+    caller who is not the owner console (a multitenant tenant) gets them as
+    withheld, never listed (WEB-3)."""
+    withheld = {"items": None, "error": "owner console only", "withheld": True}
     return {
         "tools": _tools_section(),
         "skills": _skills_section(str(user_id)),
-        "mcp": _mcp_section(),
-        "helpers": _profiles_section(),
+        "mcp": _mcp_section() if owner else dict(withheld, enabled=False),
+        "helpers": _profiles_section() if owner else dict(withheld),
     }
 
 
@@ -1102,7 +1128,8 @@ async def api_capabilities(request: Request):
     both UIs; ``_effective_user_id`` resolves (and 403s) OUTSIDE the reader."""
     from webview.pages import _effective_user_id
     user_id = _effective_user_id(request)
-    return JSONResponse(_capabilities_body(str(user_id)))
+    return JSONResponse(_capabilities_body(
+        str(user_id), owner=webgate.is_owner_console()))
 
 
 async def _memory_search_body(user_id: str, query: str, limit: int) -> dict:
@@ -1249,6 +1276,8 @@ async def api_flags(request: Request, q: str = "", group: str = ""):
     may not read the owner's console."""
     from webview.pages import _effective_user_id
     _effective_user_id(request)
+    from webview.pages import _owner_console_required
+    _owner_console_required()
     return JSONResponse(_flags_body(q, group))
 
 
@@ -1282,8 +1311,6 @@ def _public_visitor(request: Request) -> bool:
     """
     try:
         from utils.auth_utils import is_authenticated
-        if webgate.posture() == "local":
-            return False
         return not is_authenticated(request)
     except Exception:
         logger.warning("visitor probe failed — treating as a stranger", exc_info=True)
@@ -1440,6 +1467,8 @@ def _as_max_steps(raw):
              response_class=JSONResponse, name="api_goal_create")
 async def api_goal_create(request: Request):
     """Create a goal from the console, with the owner's grant (043 A5)."""
+    from webview.pages import _owner_console_required
+    _owner_console_required()
     from agents.task.goals.board import DuplicateGoalError
 
     from core.owner_create import create_goal
@@ -1490,6 +1519,8 @@ async def api_cron_create(request: Request):
     ``via="webview"`` is passed to ``CronService.schedule`` so Q2's A29 service
     audit names the surface, alongside the ``console_write`` console-action row.
     """
+    from webview.pages import _owner_console_required
+    _owner_console_required()
     import os
 
     from cron.jobs import CronJobStore

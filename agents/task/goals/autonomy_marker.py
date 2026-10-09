@@ -38,8 +38,8 @@ def mark_autonomous(session_id: str, goal_id: Optional[str] = None,
         return
     _SESSIONS[session_id] = goal_id
     _SESSIONS.move_to_end(session_id)
-    while len(_SESSIONS) > _MAX:
-        _SESSIONS.popitem(last=False)
+    # Membership is an authority boundary, not an expendable cache entry.
+    # Never make a still-resumable autonomous session look like owner chat.
     if cron_job_id:
         _CRON_JOBS[session_id] = cron_job_id
         _CRON_JOBS.move_to_end(session_id)
@@ -68,3 +68,54 @@ def cron_job_for_session(session_id: Optional[str]) -> Optional[str]:
     if not session_id:
         return None
     return _CRON_JOBS.get(session_id)
+
+
+#: cron job id -> the job's task text, recorded ONLY for an OWNER-authored job
+#: (CHAT-5). A standing owner instruction ("moderate The Public Den") is the
+#: authority an autonomous run carries for that room; an agent-authored job
+#: carries none. Server-side only, like the rest of this registry.
+_OWNER_JOBS: "OrderedDict[str, str]" = OrderedDict()
+
+
+def note_owner_job(job_id: Optional[str], task: Optional[str]) -> None:
+    """Record an owner-authored cron job's task text (the cron runner calls this)."""
+    if not job_id or not task:
+        return
+    _OWNER_JOBS[job_id] = str(task)
+    _OWNER_JOBS.move_to_end(job_id)
+    while len(_OWNER_JOBS) > _MAX:
+        _OWNER_JOBS.popitem(last=False)
+
+
+#: goal id -> the goal's text, recorded ONLY for an OWNER-authored goal (the
+#: goal dispatcher calls :func:`note_owner_goal`). An owner-authored standing
+#: goal carries the same standing authority as an owner-authored cron job; an
+#: agent-authored (or unstamped) goal is never recorded.
+_OWNER_GOALS: "OrderedDict[str, str]" = OrderedDict()
+
+
+def note_owner_goal(goal_id: Optional[str], text: Optional[str]) -> None:
+    """Record an owner-authored goal's text (the goal dispatcher calls this)."""
+    if not goal_id or not text:
+        return
+    _OWNER_GOALS[goal_id] = str(text)
+    _OWNER_GOALS.move_to_end(goal_id)
+    while len(_OWNER_GOALS) > _MAX:
+        _OWNER_GOALS.popitem(last=False)
+
+
+def forget_owner_goal(goal_id: Optional[str]) -> None:
+    """Drop a goal's owner record (a run of an agent-authored goal re-checks)."""
+    if goal_id:
+        _OWNER_GOALS.pop(goal_id, None)
+
+
+def owner_job_task_for_session(session_id: Optional[str]) -> Optional[str]:
+    """The task text of the OWNER-authored cron job or goal this session runs,
+    or None (an agent-authored job or goal, a planner run, an interactive
+    session)."""
+    job = cron_job_for_session(session_id)
+    if job:
+        return _OWNER_JOBS.get(job)
+    goal = goal_for_session(session_id)
+    return _OWNER_GOALS.get(goal) if goal else None

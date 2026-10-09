@@ -28,6 +28,7 @@ defaulted to a permissive number.
 from __future__ import annotations
 
 import json
+from core.wallet.tokens import clean_name, clean_symbol
 import logging
 import urllib.error
 import urllib.parse
@@ -108,12 +109,9 @@ class BridgeQuote:
 
 
 def _post(url: str, body: Dict[str, Any], *, timeout: float) -> Dict[str, Any]:
-    req = urllib.request.Request(
-        url, data=json.dumps(body).encode("utf-8"),
-        headers={"content-type": "application/json",
-                 "user-agent": "polyrob-bridge/1.0"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    from tools.defi.providers._http import request_json
+    return request_json("POST", url, payload=body, timeout=timeout,
+                        user_agent="polyrob-bridge/1.0")
 
 
 def _get(url: str, *, timeout: float) -> Dict[str, Any]:
@@ -180,12 +178,12 @@ class RelayBridgeProvider:
         except urllib.error.HTTPError as exc:
             detail = ""
             try:
-                detail = exc.read().decode("utf-8")[:400]
+                detail = clean_name(exc.read(1024).decode("utf-8", errors="replace")) or ""
             except Exception:
                 pass
-            raise RelayError(f"relay quote HTTP {exc.code}: {detail}") from exc
+            raise RelayError(f"relay quote HTTP {exc.code}; provider detail: {detail!r}") from exc
         except Exception as exc:
-            raise RelayError(f"relay quote failed: {type(exc).__name__}: {exc}") from exc
+            raise RelayError(f"relay quote failed: {type(exc).__name__}") from exc
 
         return self._parse_quote(
             raw, origin_chain_id=origin_chain_id, dest_chain_id=dest_chain_id,
@@ -244,9 +242,10 @@ class RelayBridgeProvider:
 
         dec_in = _int(cur_in.get("decimals"))
         dec_out = _int(cur_out.get("decimals"))
-        if dec_in is None or dec_out is None:
+        if (dec_in is None or dec_out is None
+                or not 0 <= dec_in <= 36 or not 0 <= dec_out <= 36):
             raise RelayError(
-                "REFUSED: quote omits token decimals — an unknown denomination "
+                "REFUSED: quote omits or exceeds safe token decimals — an unknown denomination "
                 "misprices the order by orders of magnitude")
 
         # The arrival floor. Relay states its own destination slippage allowance
@@ -304,8 +303,8 @@ class RelayBridgeProvider:
             amount_out_raw=int(amount_out_raw),
             min_out_raw=int(min_out_raw),
             decimals_in=int(dec_in), decimals_out=int(dec_out),
-            symbol_in=str(cur_in.get("symbol") or "?"),
-            symbol_out=str(cur_out.get("symbol") or "?"),
+            symbol_in=clean_symbol(cur_in.get("symbol")) or "?",
+            symbol_out=clean_symbol(cur_out.get("symbol")) or "?",
             amount_in_usd=_float(cin.get("amountUsd")),
             amount_out_usd=_float(cout.get("amountUsd")),
             impact_pct=_float((details.get("totalImpact") or {}).get("percent")),
@@ -328,9 +327,10 @@ class RelayBridgeProvider:
         try:
             raw = self._get(url, timeout=self._timeout)
         except Exception as exc:
-            return "unknown", f"status read failed: {type(exc).__name__}: {exc}"
+            return "unknown", f"status read failed: {type(exc).__name__}"
         state = str(raw.get("status") or "").strip().lower()
-        detail = str(raw.get("details") or raw.get("error") or state or "")[:300]
+        detail = "provider detail: " + repr(clean_name(str(
+            raw.get("details") or raw.get("error") or state or "")[:1024]) or "unknown")
         if state in _SUCCESS:
             return "success", detail
         if state in _FAILURE:

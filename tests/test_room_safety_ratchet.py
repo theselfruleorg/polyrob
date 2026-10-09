@@ -42,6 +42,8 @@ _TOOL_CLASS_FALLBACK = {
     "launchpad": ("tools.launchpad.tool", "LaunchpadTool"),
     "dapp_browser": ("tools.dapp_browser.tool", "DappBrowserTool"),
     "agent_nft": ("tools.agent_nft.tool", "AgentNftTool"),
+    "hyperliquid": ("polyrob_markets.hyperliquid.service", "HyperliquidTool"),
+    "polymarket": ("polyrob_markets.polymarket.service", "PolymarketTool"),
 }
 
 

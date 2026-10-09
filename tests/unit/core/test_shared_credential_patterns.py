@@ -5,6 +5,7 @@ a stronger guarantee than the old shared-pattern-object identity check (which
 still allowed a consumer to drop a rung, exactly how the logging filter lost
 its JWT redaction).
 """
+import pytest
 import core.secret_patterns as shared
 import core.secret_scrub as persisted
 import cli.ui.secrets as display
@@ -57,3 +58,25 @@ def test_wallet_shaped_kv_keys_are_claimed():
     # a public fact under the bare key `token` stays a public fact
     addr = "0x" + "ab" * 20
     assert addr in scrub_secret_shapes(f"token: {addr}")
+
+
+@pytest.mark.parametrize("text", [
+    "This guide covers basic features of the app.",
+    "Basic usage: run the command twice.",
+    "The basic setting stays on.",
+])
+def test_basic_in_prose_is_not_a_credential(text):
+    """Regression: the HTTP Basic rule must not redact the English word 'basic'."""
+    from core.secret_scrub import scrub_secret_shapes
+    assert scrub_secret_shapes(text) == text
+
+
+@pytest.mark.parametrize("text", [
+    "Authorization: Basic dXNlcjpwYXNz",
+    "Authorization: Basic YWxhZGRpbjpvcGVuc2VzYW1l",
+    "basic dXNlcjpwYXNzd29yZA==",
+])
+def test_basic_auth_header_is_still_redacted(text):
+    from core.secret_scrub import scrub_secret_shapes
+    assert "dXNlcjpwYXNz" not in scrub_secret_shapes(text)
+    assert "YWxhZGRpbjpvcGVuc2VzYW1l" not in scrub_secret_shapes(text)

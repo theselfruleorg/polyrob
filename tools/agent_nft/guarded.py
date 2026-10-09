@@ -28,8 +28,8 @@ def idempotency_key(*, verb: str, chain: str, via: Optional[str], state: Optiona
 
 def _price(chain, addr):
     # 071: the one read layer; a DISPUTED quote yields None.
-    from tools.defi.price_sources import indexer_price
-    return indexer_price(chain, addr)
+    from tools.defi.price_sources import spend_price
+    return spend_price(chain, addr)
 
 
 async def guarded_call(tool, *, execution_context, verb: str, intent, inner_to: str,
@@ -95,8 +95,9 @@ async def guarded_call(tool, *, execution_context, verb: str, intent, inner_to: 
         try:
             tx_hash = await asyncio.to_thread(rail.sign_and_send, tx)
         except Exception as exc:  # noqa: BLE001
-            from core.wallet.broadcast.evm import broadcast_failure_text
-            return tool._ar(error=broadcast_failure_text(exc))
+            from core.wallet.broadcast.evm import broadcast_error_kind, broadcast_failure_text
+            return tool._ar(error=broadcast_failure_text(exc),
+                error_kind=broadcast_error_kind(exc))
         rec = dict(venue="defi", action=f"agent_nft_{verb}", amount_usd=decision.amount_usd or 0.0,
                    counterparty=counterparty or inner_to, idempotency_key=idem, result_ref=tx_hash,
                    chain=chain,

@@ -59,8 +59,10 @@ def test_forged_author_cannot_patch_active(tmp_path, monkeypatch):
     w.propose("Rule: always be terse.", user_id="u1", created_by="user", pending=False)
     res = w.patch(user_id="u1", old_string="terse", new_string="verbose",
                   created_by="background_review")
-    assert not res.ok
-    assert "terse" in w.read("u1")  # unchanged
+    # 2026-10-04: a forged author's patch of an ACTIVE doc lands a PENDING revision
+    # (owner promotes it); the active doc is still never touched.
+    assert res.ok and res.pending, res.errors
+    assert "terse" in w.read("u1") and "verbose" not in w.read("u1")  # active unchanged
 
 
 def test_load_contract_doc_reads_active(tmp_path):

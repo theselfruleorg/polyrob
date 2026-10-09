@@ -58,8 +58,10 @@ def test_forged_author_cannot_patch_active(tmp_path, monkeypatch):
     w.propose("Owner name: Alex.", user_id="u1", created_by="user", pending=False)
     res = w.patch(user_id="u1", old_string="Alex", new_string="Sam",
                   created_by="background_review")
-    assert not res.ok
-    assert "Alex" in w.read("u1")  # unchanged
+    # 2026-10-04: a forged author's patch of an ACTIVE doc lands a PENDING revision
+    # (owner promotes it); the active doc is still never touched.
+    assert res.ok and res.pending, res.errors
+    assert "Alex" in w.read("u1") and "Sam" not in w.read("u1")  # active unchanged
 
 
 def test_load_owner_doc_reads_active(tmp_path):
@@ -148,3 +150,32 @@ def test_promote_of_a_sourced_rewrite_passes_the_claim_guard(tmp_path, monkeypat
     res = w.promote(user_id="u1")
     assert res.ok and not res.pending, res.errors
     assert "The rail no longer works on weekends. [from: owner approved" in w.read("u1")
+
+
+# Prod 2026-10-04 16:24: a background goal patching owner.md to add the owner's
+# 16:05 email rule got "a background turn cannot patch the active self-context".
+# Nothing landed anywhere, so the owner never saw the change to approve. Skills
+# fixed the same wall on 09-19 (a background patch = a pending REVISION); the
+# identity docs keep the invariant (the active doc is never touched) the same way.
+
+def test_background_patch_of_active_doc_lands_a_pending_revision(tmp_path):
+    w = OwnerDocWriter(tmp_path)
+    assert w.propose("- rule one\n", user_id="u1", created_by="user", pending=False).ok
+    before = w.read("u1")
+    res = w.patch(user_id="u1", old_string="- rule one", new_string="- rule one\n- rule two",
+                  created_by="background_review")
+    assert res.ok and res.pending, res.errors
+    assert w.read("u1") == before, "the active doc is untouched by a background turn"
+    assert w.list_pending("u1")
+    pr = w.promote(user_id="u1")
+    assert pr.ok, pr.errors
+    assert "rule two" in w.read("u1")
+
+
+def test_background_patch_still_needs_a_match(tmp_path):
+    w = OwnerDocWriter(tmp_path)
+    assert w.propose("- rule one\n", user_id="u1", created_by="user", pending=False).ok
+    res = w.patch(user_id="u1", old_string="- nope", new_string="x",
+                  created_by="background_review")
+    assert not res.ok and "old_string not found" in res.errors
+    assert not w.list_pending("u1")

@@ -125,9 +125,10 @@ _LOGIN_COOKIES = ("auth_token", "ct0")
 
 def _write_plain_state(path: str, storage_state: dict) -> None:
     import json
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as fh:
-        json.dump(storage_state, fh)
+    from pathlib import Path
+    from core.security.workspace_io import write_text
+    target = Path(path).absolute()
+    write_text(target, target.parent, json.dumps(storage_state), mode=0o600)
 
 
 def _cookie_state(auth_token: str, ct0: str) -> dict:
@@ -158,11 +159,9 @@ def _validate_state(storage_state: dict) -> Optional[str]:
 
 @x_account.command("import-session")
 @click.argument("state_file", required=False, type=click.Path(exists=True, dir_okay=False))
-@click.option("--auth-token", default=None,
-              help="The x.com `auth_token` cookie value (alternative to a file).")
-@click.option("--ct0", default=None, help="The x.com `ct0` cookie value (with --auth-token).")
+@click.option("--cookies", is_flag=True, help="Enter auth_token and ct0 at hidden prompts.")
 @click.option("--handle", default=None, help="The account's @handle (without the @).")
-def import_session(state_file, auth_token, ct0, handle):
+def import_session(state_file, cookies, handle):
     """Store an X login captured elsewhere, encrypted under THIS box's key.
 
     Source is either a Playwright storage_state JSON (from `capture-session --out`
@@ -171,19 +170,27 @@ def import_session(state_file, auth_token, ct0, handle):
     x.com). Delete the plain file afterwards — it IS the login.
     """
     import json
-    if state_file and (auth_token or ct0):
-        raise click.UsageError("give a storage_state file OR --auth-token/--ct0, not both")
+    if state_file and cookies:
+        raise click.UsageError("give a storage_state file OR --cookies, not both")
     if state_file:
         try:
-            with open(state_file) as fh:
-                storage_state = json.load(fh)
+            from core.security.workspace_io import read_bytes
+            from pathlib import Path
+            target = Path(state_file).absolute()
+            raw = read_bytes(target, target.parent, max_bytes=1024 * 1024 + 1)
+            if len(raw) > 1024 * 1024:
+                raise ValueError("session file exceeds 1 MiB")
+            storage_state = json.loads(raw)
         except (OSError, ValueError) as e:
             raise click.ClickException(f"cannot read {state_file}: {e}")
-    elif auth_token and ct0:
-        storage_state = _cookie_state(auth_token.strip(), ct0.strip())
+    elif cookies:
+        auth_token = click.prompt("auth_token", hide_input=True).strip()
+        ct0 = click.prompt("ct0", hide_input=True).strip()
+        if not auth_token or not ct0:
+            raise click.UsageError("both cookies must be nonempty")
+        storage_state = _cookie_state(auth_token, ct0)
     else:
-        raise click.UsageError("nothing to import: give a storage_state file, or both "
-                               "--auth-token and --ct0")
+        raise click.UsageError("nothing to import: give a storage_state file, or use --cookies")
     why = _validate_state(storage_state)
     if why:
         raise click.ClickException(why)
@@ -436,7 +443,8 @@ def oauth_refresh():
 @click.option("--port", default=8765, type=int, help="Local callback port (must match the app's redirect URI).")
 @click.option("--timeout", default=600, type=int, help="Seconds to wait for the browser redirect.")
 @click.option("--no-browser", is_flag=True, default=False, help="Print the URL instead of opening a browser.")
-def oauth_login(port: int, timeout: int, no_browser: bool):
+@click.option("--account-id", default=None, help="Expected X account ID; required for the first login.")
+def oauth_login(port: int, timeout: int, no_browser: bool, account_id: str | None):
     """Mint the OAuth 2.0 user token with a PKCE flow (login AS the agent's account).
 
     Needs TWITTER_OAUTH2_CLIENT_ID (+ _CLIENT_SECRET for a confidential app) and
@@ -449,6 +457,11 @@ def oauth_login(port: int, timeout: int, no_browser: bool):
     from urllib.parse import parse_qs, urlparse
 
     from polyrob_x.x_oauth2 import authorize_url, exchange_code, pkce_pair, status
+    from polyrob_x.x_oauth2 import expected_account
+    try:
+        expected = expected_account(explicit=account_id)
+    except RuntimeError as exc:
+        raise click.ClickException(str(exc)) from exc
 
     redirect_uri = f"http://127.0.0.1:{port}/callback"
     verifier, challenge = pkce_pair()
@@ -491,7 +504,8 @@ def oauth_login(port: int, timeout: int, no_browser: bool):
     if result.get("state") != state:
         raise click.ClickException("state mismatch — refusing the code (CSRF guard).")
     try:
-        exchange_code(result["code"], redirect_uri=redirect_uri, code_verifier=verifier)
+        exchange_code(result["code"], redirect_uri=redirect_uri, code_verifier=verifier,
+                      expected_account_id=expected)
     except Exception as e:
         raise click.ClickException(f"token exchange failed: {e}")
     click.echo(click.style("stored", fg="green") + " — encrypted OAuth2 pair for the agent's X account.")

@@ -163,6 +163,10 @@ class TaskAgentChatMixin:
         given, mirroring the legacy ChatAgent's one-thread-per-user behavior."""
         return f"chat:{user_id}:{chat_id or user_id}"
     def _chat_tool_ids(self) -> List[str]:
+        from core.billing_context import is_billed
+        if is_billed():
+            from agents.task.tool_defaults import default_session_tools
+            return default_session_tools()
         from agents.task.constants import CHAT_TOOL_IDS
         return list(CHAT_TOOL_IDS)
     async def _resolve_chat_persona(self) -> str:

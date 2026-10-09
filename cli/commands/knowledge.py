@@ -43,8 +43,8 @@ async def _resolve_provider_and_data_dir():
         from core.bootstrap import _resolve_cli_data_home
         data_dir = str(_resolve_cli_data_home()[0])
     except Exception:
-        from pathlib import Path
-        data_dir = str(Path.cwd() / ".polyrob")
+        from core.runtime_paths import resolve_data_home
+        data_dir = str(resolve_data_home())
     try:
         from core.bootstrap import build_cli_container
         _logging.disable(_logging.CRITICAL)

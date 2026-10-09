@@ -8,6 +8,7 @@ and the module ``logger``; behaviour is byte-identical to the pre-split class.
 import logging
 from typing import Any, Optional
 import asyncio
+import re
 
 from core.security.redaction import redact_url
 
@@ -51,6 +52,25 @@ def _known_swap_router_addresses(chain: str) -> frozenset:
         return frozenset()
     return frozenset(
         a.lower() for a in (row.univ3_router, row.aggregator_spender) if a)
+def _own_bridge_arrival(transfer: dict, treasury: str, chain: str,
+                        asset_address) -> Optional[str]:
+    """The recorded bridge this inbound transfer is the arrival of, or None.
+    Needs the exact raw amount, the asset and a known chain; anything missing
+    confirms nothing (fail-open to the owner notice)."""
+    raw = transfer.get("amount_raw")
+    if raw is None or not asset_address or not chain:
+        return None
+    try:
+        from core.wallet import bridge_guard, chains
+        row = chains.get(chain)
+        if row is None or not getattr(row, "chain_id", 0):
+            return None
+        return bridge_guard.own_bridge_arrival(
+            dest_chain_id=int(row.chain_id), recipient=treasury,
+            currency=str(asset_address), amount_raw=int(raw))
+    except Exception:
+        logger.debug("bridge arrival correlation failed (fail-open)", exc_info=True)
+        return None
 def _own_evm_addresses() -> frozenset:
     """Every EVM address the agent's own wallet derives (all venues),
     lowercased. Empty when no wallet is readable (fail-open: the check then
@@ -698,6 +718,14 @@ class SettlementScanMixin:
                         # already received.
                         kinds=tuple(invoicing.PAYABLE_KINDS), db=self._db)
                 if not match:
+                    # Our own bridge's destination leg: sent by the provider's
+                    # solver, so neither the own-address nor the router check
+                    # sees it. Exact correlation against the recorded bridge.
+                    bid = _own_bridge_arrival(transfer, treasury, chain, asset_address)
+                    if bid:
+                        self._note_self_proceeds(transfer, treasury,
+                                                 correlation=f"own_bridge:{bid}")
+                        continue
                     # A router-sourced transfer is skipped ONLY when it
                     # correlates to a trade we ourselves broadcast. The address
                     # alone proves nothing — a Uniswap router is shared public
@@ -845,10 +873,9 @@ class SettlementScanMixin:
             logger.debug("settlement watcher: self-proceeds breadcrumb failed "
                          "(fail-open)", exc_info=True)
         logger.info(
-            "settlement watcher: transfer %s from swap router/aggregator %s "
-            "correlates to our OWN recorded trade — skipping the "
-            "unmatched-payment owner notice",
-            transfer.get("tx_hash"), transfer.get("from"))
+            "settlement watcher: transfer %s from %s correlates to our OWN "
+            "money movement (%s) — skipping the unmatched-payment owner notice",
+            transfer.get("tx_hash"), transfer.get("from"), correlation)
 
     async def _notify_unmatched(self, transfer: dict, treasury: str) -> None:
         """A detected transfer that matches NO pending invoice must never be
@@ -918,18 +945,71 @@ class SettlementScanMixin:
                     f"amount is close, a member likely sent the wrong one.")
         except Exception:
             return ""
+    async def _resolve_held_submissions(self) -> list:
+        """Release a held submission ONLY on chain proof that it never paid.
+
+        A submitted invoice whose facilitator outcome was unknown stays in
+        'settling'. After the hold window, the asset contract's EIP-3009
+        ``authorizationState(payer, nonce)`` answers the question time cannot:
+        ``false`` means the authorization never moved funds, so the invoice
+        reopens. ``true`` (it paid) or any read failure keeps it held for the
+        owner — age alone never releases a payment.
+        """
+        from modules.x402 import invoicing, settlement_holds
+        out = []
+        for row in await settlement_holds.held_submissions(db=self._db):
+            meta = invoicing._row_metadata(row)
+            auth = meta.get("authorization") or {}
+            payer, nonce = str(auth.get("payer") or ""), str(auth.get("nonce") or "")
+            asset = str(auth.get("asset") or row.get("asset_address") or "")
+            chain = str(auth.get("network") or row.get("chain") or "")
+            if not (re.fullmatch(r"0x[0-9a-fA-F]{40}", payer)
+                    and re.fullmatch(r"0x[0-9a-fA-F]{64}", nonce)
+                    and re.fullmatch(r"0x[0-9a-fA-F]{40}", asset)):
+                continue
+            target = _resolve_scan_target(chain)
+            if target is None:
+                continue
+            rpc_url, expected_chain_id = target
+            call = self._rpc_call
+            if call is None:
+                from core.wallet.onchain import _rpc
+
+                def call(method, params, _url=rpc_url):
+                    return _rpc(_url, method, params)
+            if not await self._verify_scan_network(call, expected_chain_id,
+                                                   rpc_url, chain):
+                continue
+            data = ("0xe94a0102" + payer[2:].lower().rjust(64, "0")
+                    + nonce[2:].lower())
+            try:
+                raw = await asyncio.to_thread(
+                    call, "eth_call", [{"to": asset, "data": data}, "latest"])
+                used = int(str(raw), 16) != 0
+            except Exception:
+                logger.warning("x402 held settlement %s: authorizationState read "
+                               "failed; the invoice stays held", row.get("id"),
+                               exc_info=True)
+                continue
+            if used:
+                logger.warning("x402 held settlement %s: the authorization WAS "
+                               "used on-chain; owner reconciliation required",
+                               row.get("id"))
+                continue
+            if await settlement_holds.reopen_rejected_settlement(row["id"], nonce,
+                                                          db=self._db):
+                out.append({"request_id": row["id"],
+                            "amount_usd": row.get("amount_usd"),
+                            "user_id": meta.get("tenant_id") or row.get("user_id") or "",
+                            "session_id": meta.get("session_id") or ""})
+        return out
+
     async def _sweep_stale_settling(self) -> int:
-        """H7 stale-'settling' reaper: revert invoices stranded in 'settling'
-        past 10 minutes back to 'pending' and notify the owner. A settle
-        completes well within the 300s facilitator timeout, so a longer-lived
-        'settling' row is a claim whose settling task was cancelled/crashed
-        mid facilitator round-trip. The tx-hash uniqueness guard in
-        `settle_payment_request` means a reverted-then-re-paid invoice can never
-        double-settle on-chain. Fail-open (a sweep error never breaks the tick).
-        Returns how many rows were reverted."""
+        """Age alone never releases a submitted payment; chain proof may."""
         from modules.x402 import invoicing
         reverted = await invoicing.revert_stale_settling(
             max_age_seconds=600, db=self._db)
+        reverted = list(reverted) + await self._resolve_held_submissions()
         for inv in reverted:
             try:
                 invoicing._emit(
@@ -940,10 +1020,9 @@ class SettlementScanMixin:
                         "amount_usd": inv.get("amount_usd")})
                 owner_text = (
                     f"Invoice {inv.get('request_id')} for "
-                    f"${float(inv.get('amount_usd') or 0):.2f} was stuck mid-"
-                    "settlement for over 10 minutes and has been reset to "
-                    "payable. If a payment DID clear on-chain, reconcile it — "
-                    "the on-chain tx-hash guard prevents a double-settle.")
+                    f"${float(inv.get('amount_usd') or 0):.2f} was held mid-"
+                    "settlement; the chain shows the submitted authorization "
+                    "was never used, so the invoice is payable again.")
                 await self._push_owner_notice(inv.get("user_id") or "", owner_text)
             except Exception:
                 logger.debug(

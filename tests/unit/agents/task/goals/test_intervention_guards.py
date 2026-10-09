@@ -17,7 +17,8 @@ def _claimed(board):
 def test_cancel_survives_record_success(board):
     g = _claimed(board)
     board.cancel(g.id)
-    board.record_success(g.id, session_id="s1", result="finished anyway")
+    board.record_success(g.id, session_id="s1", result="finished anyway",
+        claim_token=board.get(g.id).claim_token)
     assert board.get(g.id).status == "cancelled"
     kinds = [e["kind"] for e in board.events(g.id)]
     assert "stale_completion" in kinds and "succeeded" not in kinds
@@ -26,7 +27,7 @@ def test_cancel_survives_record_success(board):
 def test_cancel_survives_record_failure_no_resurrect(board):
     g = _claimed(board)
     board.cancel(g.id)
-    out = board.record_failure(g.id, error="boom")
+    out = board.record_failure(g.id, error="boom", claim_token=board.get(g.id).claim_token)
     assert out.status == "cancelled"
     assert out.consecutive_failures == 0  # untouched
 
@@ -34,32 +35,32 @@ def test_cancel_survives_record_failure_no_resurrect(board):
 def test_pause_blocked_survives_record_success(board):
     g = _claimed(board)
     board.update_status(g.id, "blocked")
-    board.record_success(g.id, result="late")
+    board.record_success(g.id, result="late", claim_token=board.get(g.id).claim_token)
     assert board.get(g.id).status == "blocked"
 
 
 def test_running_goal_still_completes_normally(board):
     g = _claimed(board)
-    board.record_success(g.id, session_id="s1", result="ok")
+    board.record_success(g.id, session_id="s1", result="ok", claim_token=board.get(g.id).claim_token)
     assert board.get(g.id).status == "done"
 
 
 def test_running_goal_still_fails_normally(board):
     g = _claimed(board)
-    out = board.record_failure(g.id, error="e1")
+    out = board.record_failure(g.id, error="e1", claim_token=board.get(g.id).claim_token)
     assert out.status == "ready" and out.consecutive_failures == 1
 
 
 def test_record_failure_unknown_id_still_raises(board):
     with pytest.raises(KeyError):
-        board.record_failure("nope", error="e")
+        board.record_failure("nope", error="e", claim_token=None)
 
 
 def test_record_failure_normal_running_goal_unchanged(board):
     """Regression guard for the 'AND status=running' hardening on the branch
     UPDATEs: the common (non-raced) path must behave exactly as before."""
     g = _claimed(board)
-    out = board.record_failure(g.id, error="boom")
+    out = board.record_failure(g.id, error="boom", claim_token=board.get(g.id).claim_token)
     assert out.status == "ready"
     assert out.consecutive_failures == 1
     kinds = [e["kind"] for e in board.events(g.id)]
@@ -73,7 +74,7 @@ def test_record_failure_on_already_cancelled_goal_does_not_resurrect(board):
     hold even when the row is no longer 'running' at branch-decision time."""
     g = _claimed(board)
     board.update_status(g.id, "cancelled")
-    out = board.record_failure(g.id, error="boom-after-cancel")
+    out = board.record_failure(g.id, error="boom-after-cancel", claim_token=board.get(g.id).claim_token)
     assert out.status == "cancelled"  # not resurrected to 'ready' or 'blocked'
     kinds = [e["kind"] for e in board.events(g.id)]
     assert "stale_completion" in kinds

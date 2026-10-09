@@ -20,7 +20,6 @@ from typing import Any, Callable, Dict, List, Optional, Type, TypeVar, Union, Tu
 from collections import deque  # ADDED: Import deque for bounded collections
 from agents.task.agent.tool_call_tracker import ToolCallTracker  # Robust tool call ID tracking
 
-from dotenv import load_dotenv
 
 # Import centralized constants
 from agents.task.constants import (
@@ -128,7 +127,6 @@ from agents.task.logging_config import get_task_logger
 # Import centralized path management
 from agents.task.path import pm
 
-load_dotenv()
 
 # Generic logger for the module itself (not instances)
 logger = get_task_logger('agent')

@@ -78,6 +78,8 @@ def get_task_logger(component_name: str, session_id: Optional[str] = None) -> lo
             datefmt='%Y-%m-%d %H:%M:%S'
         )
         handler.setFormatter(formatter)
+        from core.security_logging_filter import SecretScrubbingFilter
+        handler.addFilter(SecretScrubbingFilter())
         logger.addHandler(handler)
 
         # Prevent propagation to avoid duplicate logs

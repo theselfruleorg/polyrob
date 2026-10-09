@@ -80,8 +80,8 @@ def _authorize(intent, deltas, *, tx=None, price=4000.0, entry_paused=False, hal
 def test_a_reveal_of_due_ids_is_authorized_and_costs_its_fee():
     d = _authorize(_intent(), _deltas())
     assert d.allowed is True, d.reason
-    # worst fee = gas_used * 3/2 * maxFeePerGas = 225,000 * 1e8 wei = 2.25e-5 ETH at $4000
-    assert d.amount_usd == pytest.approx(0.09)
+    # The supplied 400k gas limit exceeds the simulation-based 225k estimate.
+    assert d.amount_usd == pytest.approx(0.16)
     assert "amount must be greater than zero" not in d.reason
 
 

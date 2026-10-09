@@ -86,7 +86,8 @@ class JournalParams(BaseModel):
 
 class BindParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    agent_uri: str = Field("", description="Optional registration-file URI for the account's identity.")
+    agent_uri: str = Field("", max_length=16_384, description=(
+        "Leave empty to use this instance's registration document; alternate URIs are refused."))
     max_spend_usd: float = Field(2.0, gt=0, description="Most USD of FEE authorized.")
     chain: Literal["robinhood", "robinhood-testnet"] = _CHAIN
     nft: Optional[str] = _NFT
@@ -115,6 +116,9 @@ class RevokeAllParams(BaseModel):
     nft: Optional[str] = _NFT
     account: Optional[str] = _ACCOUNT
     max_spend_usd: float = Field(2.0, gt=0, description="Most USD of FEE authorized for the whole sweep.")
+    include_unattributed: bool = Field(False, description=(
+        "Also call into contracts whose approval rows no transaction an owner of this NFT sent "
+        "(possibly fabricated: fees spent there may be wasted). Default: list them, do not call."))
     dry_run: bool = _DRY
 
 
@@ -147,6 +151,10 @@ class TakeParams(BaseModel):
     nft: Optional[str] = _NFT
     account: Optional[str] = _ACCOUNT
     max_spend_usd: float = Field(2.0, gt=0, description="Most USD of FEE authorized.")
+    accept_unattributed_approvals: list[str] = Field(default_factory=list, max_length=20, description=(
+        "OWNER ONLY: keys of open-approval rows that no transaction an owner of this NFT sent "
+        "emitted (the refusal names them). Each may be fabricated by any contract and so not "
+        "revocable; accepting one lets the NFT leave with it. A row an owner granted always blocks."))
     dry_run: bool = _DRY
 
 
@@ -413,3 +421,13 @@ class AgentNftTool(WalletHolderMixin, BaseTool):
             logger.warning("agent_nft collection reveal failed", exc_info=True)
             return self._ar(error=f"agent_nft collection reveal failed: {exc}. Nothing was broadcast unless a tx "
                                   f"hash is shown.")
+
+
+def _register_card_context() -> None:
+    """The withdraw approval card shows what the NFT's account holds before consent."""
+    from tools.controller.grant_card import register_card_context
+    from tools.agent_nft.withdraw import withdraw_card_context
+    register_card_context("agent_nft_withdraw_token", withdraw_card_context)
+
+
+_register_card_context()

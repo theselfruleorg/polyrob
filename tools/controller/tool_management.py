@@ -72,6 +72,11 @@ class ToolManagementMixin:
 
 		for tool_id in tool_ids:
 			try:
+				from core.billing_context import billed_tool_refusal
+				refusal = billed_tool_refusal(tool_id)
+				if refusal:
+					self._record_tool_load_failure(tool_id, refusal)
+					continue
 				# An id that names a controller ACTION (`message`) is not a tool
 				# object: present → nothing to load and nothing missing; absent →
 				# its flag is the honest reason (never "unknown-tool").
@@ -431,9 +436,10 @@ class ToolManagementMixin:
 		injected controller object without importing the tools tier (layering
 		ratchet: core <- modules <- agents <- tools).
 		"""
-		from tools.tool_disclosure import render_tool_catalog
+		from tools.tool_disclosure import render_tool_catalog, disclosure_ceiling
 		return render_tool_catalog(
 			container=self.container,
 			loaded_ids=set(self.list_tools()),
 			is_leaf=is_leaf,
+			allowed_ids=disclosure_ceiling(self),
 		)

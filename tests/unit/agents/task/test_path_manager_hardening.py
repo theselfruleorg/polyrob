@@ -58,6 +58,25 @@ def test_stripped_ids_no_longer_collide(pm):
     assert pm.clean_user_id("a:b") == pm.clean_user_id("a:b")  # stable
 
 
+@pytest.mark.parametrize('sid', ['a:b', 'a/b', 'a b', 'a.b', 'a' * 51, 'a' * 50 + 'other'])
+def test_session_ids_refuse_lossy_cleaning(pm, sid):
+    with pytest.raises(ValueError, match='Security violation'):
+        pm.clean_session_id(sid)
+
+
+def test_session_separators_remain_distinct(pm):
+    ids = ['a_b', 'a__b', 'a-b', 'a--b', '_abc', 'abc_', 'abc']
+    assert [pm.clean_session_id(sid) for sid in ids] == ids
+
+
+def test_api_session_entry_refuses_internal_role_aliases():
+    from fastapi import HTTPException
+    from api.task_http_api import clean_session_id_at_entry
+    with pytest.raises(HTTPException) as error:
+        clean_session_id_at_entry('planner_abc123')
+    assert error.value.status_code == 400
+
+
 def test_dot_only_id_not_the_sessions_root(pm):
     uid = pm.clean_user_id(".")
     assert uid.strip(".") and uid.startswith("user_")

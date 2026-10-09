@@ -22,6 +22,7 @@ import re
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.unit.webview.owner_session import owner_headers
 
 #: The old nav bar's top-level links that no longer appear. /sessions is deleted
 #: (043 §9 phase 5, replaced by the Chats overlay); the memory/knowledge/
@@ -44,7 +45,7 @@ def _client(monkeypatch):
     importlib.reload(wg)
     import webview.server as srv
     importlib.reload(srv)
-    return TestClient(srv._fastapi), srv
+    return TestClient(srv._fastapi, headers=owner_headers(monkeypatch)), srv
 
 
 @pytest.fixture(autouse=True)
@@ -112,8 +113,8 @@ def test_the_dead_readers_stay_deleted(monkeypatch):
     for path in ("/api/sessions",                       # A12: walked ~1,790 dirs
                  "/api/refresh",                        # A30: refreshed nothing
                  "/api/activity/backfill",              # A30: cross-tenant read
-                 "/api/session/s1/stats",               # A30: stats.js is dead
-                 "/api/session/s1/workspace/serve-token"):  # A30: no minter
+                 "/api/session/sess-1/stats",               # A30: stats.js is dead
+                 "/api/session/sess-1/workspace/serve-token"):  # A30: no minter
         assert client.get(path).status_code == 404, path
 
 

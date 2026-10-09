@@ -28,17 +28,28 @@ def _w(v):
     return "0x" + "0" * 24 + v[2:].lower() if isinstance(v, str) else "0x" + f"{int(v):064x}"
 
 
+GRANT_TX = "0x" + "9a" * 32
+
+
 class Chain:
-    def __init__(self, owner, approvals=()):
+    def __init__(self, owner, approvals=(), granter=None):
         self.owner, self.approvals = owner, list(approvals)
+        self.granter = granter or owner          # who SENT the tx that emitted the Approval
 
     def __call__(self, method, params, *a, **k):
         if method == "eth_getCode":
             return CODE if params[0].lower() == PINNED.lower() else "0x" + "60" * 45
         if method == "eth_blockNumber":
             return hex(0x300)
+        if method == "eth_getLogs" and params[0]["topics"][0] == erc6551.TOPIC_TRANSFER:
+            return [{"address": PINNED, "blockNumber": hex(0x5), "logIndex": "0x0",
+                     "topics": [erc6551.TOPIC_TRANSFER, _w("0x" + "00" * 20), _w(self.owner),
+                                "0x" + f"{3:064x}"], "data": "0x"}]
+        if method == "eth_getTransactionByHash":
+            return {"hash": params[0], "from": self.granter}
         if method == "eth_getLogs":
             return [{"address": TOKEN, "blockNumber": hex(0x10), "logIndex": "0x0",
+                     "transactionHash": GRANT_TX,
                      "topics": [erc6551.TOPIC_APPROVAL, _w(ACCOUNT), _w(s)], "data": _w(7)}
                     for s in self.approvals]
         if method == "eth_call":
@@ -191,8 +202,9 @@ def test_nft_send_on_the_owner_seat_runs_the_withdraw(armed, monkeypatch):
 
 
 def test_c17_revoke_all_revokes_erc6909_allowances_and_operators(armed, monkeypatch):
-    rows = [erc6551.OpenApproval("erc6909", PINNED, SPENDER, 7, 300, 5, True),
-            erc6551.OpenApproval("erc6909_operator", PINNED, SPENDER, None, None, 6, True)]
+    rows = [erc6551.OpenApproval("erc6909", PINNED, SPENDER, 7, 300, 5, True, tx_hashes=(GRANT_TX,)),
+            erc6551.OpenApproval("erc6909_operator", PINNED, SPENDER, None, None, 6, True,
+                                 tx_hashes=(GRANT_TX,))]
     monkeypatch.setattr(erc6551, "open_approvals", lambda *a, **k: list(rows))
     tool, seen = _tool(armed, Chain(armed.address))
     tool._impl = lambda: None
@@ -204,3 +216,77 @@ def test_c17_revoke_all_revokes_erc6909_allowances_and_operators(armed, monkeypa
     assert i2.is_nft_op and i2.nft_operator_ops == ((PINNED, SPENDER, False),)
     assert erc6551.decode_execute(tx2["data"])[2] == erc6551.encode_erc6909_operator_revoke(SPENDER)
     assert "unknown kind" not in res.extracted_content
+
+
+# ---- fabricated approval rows (any contract can emit an Approval naming the account) ------
+
+def test_revoke_all_never_calls_into_a_row_no_owner_transaction_emitted(armed):
+    tool, seen = _tool(armed, Chain(armed.address, approvals=[SPENDER], granter=STRANGER))
+    tool._impl = lambda: None
+    res = _run(tool.agent_nft_revoke_all(RevokeAllParams(nft="3", dry_run=False)))
+    assert seen == [] and not FakeRail.sent
+    assert "NOT revoked" in res.extracted_content and "possibly fabricated" in res.extracted_content
+    assert f"erc20:{TOKEN.lower()}:{SPENDER.lower()}:" in res.extracted_content   # listed, not dropped
+    res = _run(tool.agent_nft_revoke_all(RevokeAllParams(nft="3", include_unattributed=True)))
+    assert len(seen) == 1                                       # the owner's explicit opt-in
+
+
+def test_an_unreadable_origin_is_never_treated_as_attributed(armed):
+    chain = Chain(armed.address, approvals=[SPENDER])
+
+    def broken(method, params, *a, **k):
+        if method == "eth_getTransactionByHash":
+            raise OSError("rpc down")
+        return chain(method, params)
+    tool, seen = _tool(armed, broken)
+    res = _run(tool.agent_nft_revoke_all(RevokeAllParams(nft="3")))
+    assert seen == [] and "origin could not be read" in res.extracted_content
+
+
+def test_withdraw_carries_the_owner_accepted_rows_and_names_them(armed):
+    tool, seen = _tool(armed, Chain(armed.address))
+    key = f"erc20:{TOKEN.lower()}:{SPENDER.lower()}:"
+    res = _run(tool.agent_nft_withdraw_token(TakeParams(to=TO, nft="3",
+                                                        accept_unattributed_approvals=[key])))
+    assert seen[0][0].accepted_unattributed_approvals == (key,)
+    assert key in res.extracted_content
+
+
+def test_the_withdraw_card_shows_the_account_snapshot_and_the_recipient_check(armed, monkeypatch):
+    from tools.agent_nft import withdraw as W
+    from tools.agent_nft import view as V
+    tool, _seen = _tool(armed, Chain(armed.address))
+    monkeypatch.setattr(V, "build_view", lambda *a, **k: "VIEW")
+    monkeypatch.setattr(V, "render", lambda v, extra=(): "NFT #3\n  native:    1.500000 ETH")
+    lines = W.withdraw_card_context({"to": TO, "nft": "3", "chain": "robinhood"}, tool=tool)
+    text = "\n".join(lines)
+    assert "imitates no recent payee" in text and "1.500000 ETH" in text
+
+
+def test_the_withdraw_card_says_when_the_snapshot_is_unreadable(armed, monkeypatch):
+    from tools.agent_nft import withdraw as W
+    from tools.agent_nft import view as V
+    tool, _seen = _tool(armed, Chain(armed.address))
+
+    def boom(*a, **k):
+        raise V.ViewError("rpc down")
+    monkeypatch.setattr(V, "build_view", boom)
+    text = "\n".join(W.withdraw_card_context({"to": TO, "nft": "3"}, tool=tool))
+    assert "ACCOUNT HOLDINGS UNREADABLE" in text
+
+
+def test_the_withdraw_card_names_a_lookalike_recipient(armed, monkeypatch):
+    from core.wallet import address_lookalike
+    from tools.agent_nft import withdraw as W
+    monkeypatch.setattr(address_lookalike, "poisoning_refusal", lambda to, **k: "refused: looks like X")
+    tool, _seen = _tool(armed, Chain(armed.address))
+    text = "\n".join(W.withdraw_card_context({"to": TO, "nft": "3"}, tool=tool))
+    assert "RECIPIENT CHECK: refused: looks like X" in text
+
+
+def test_the_card_context_is_registered_and_rendered_on_the_grant_card():
+    from tools.controller import grant_card
+    assert "agent_nft_withdraw_token" in grant_card._CARD_CONTEXT
+    card = grant_card.render_grant_card("agent_nft_withdraw_token", {"to": TO}, "tap-1",
+                                        context_lines=["• What leaves: 2 ETH"])
+    assert "• What leaves: 2 ETH" in card

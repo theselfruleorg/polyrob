@@ -134,7 +134,8 @@ def test_a_stream_idle_between_cycles_is_not_a_stall(board, tmp_path, monkeypatc
     oid, _ = S.ensure_objective(board, "rob", stream)
     for g in S.seed_stream(board, "rob", stream, oid):
         board.claim(g.id, "w", ttl_seconds=60)
-        board.record_success(g.id, result="ok")  # the cycle finished 1 min ago
+        board.record_success(g.id, result="ok",
+            claim_token=board.get(g.id).claim_token)  # the cycle finished 1 min ago
     sink = _Sink()
     d = _dispatcher(board, _Agent(sink), monkeypatch, POLYROB_STREAMS_MANIFEST=path)
     _plan_twice(d)
@@ -151,7 +152,7 @@ def test_a_stream_whose_window_has_lapsed_does_not_suppress_the_stall(board, tmp
     oid, _ = S.ensure_objective(old, "rob", stream)
     for g in S.seed_stream(old, "rob", stream, oid):
         old.claim(g.id, "w", ttl_seconds=60)
-        old.record_success(g.id, result="ok")
+        old.record_success(g.id, result="ok", claim_token=old.get(g.id).claim_token)
     sink = _Sink()
     d = _dispatcher(board, _Agent(sink), monkeypatch, POLYROB_STREAMS_MANIFEST=path)
     _plan_twice(d)
@@ -162,7 +163,7 @@ def test_a_stream_whose_window_has_lapsed_does_not_suppress_the_stall(board, tmp
 
 def _finish(board, goal):
     board.claim(goal.id, "w", ttl_seconds=60)
-    board.record_success(goal.id, result="ok")
+    board.record_success(goal.id, result="ok", claim_token=board.get(goal.id).claim_token)
 
 
 def test_every_objective_spent_with_an_open_ask_is_covered_not_escalated(board, monkeypatch):

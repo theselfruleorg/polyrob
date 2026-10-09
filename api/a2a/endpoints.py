@@ -218,7 +218,8 @@ async def _handle_rpc_method(
 
         # Check if this is a new task or continuation
         if message.taskId:
-            # Continuation of existing task - already paid
+            # A new compute turn needs current credit/payment admission too.
+            await verify_payment_for_request(request=request, cost_credits=1)
             return await handler.send_message(message.taskId, message, user_id)
         else:
             # NEW TASK: Verify payment before creation

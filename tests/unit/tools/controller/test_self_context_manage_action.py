@@ -106,7 +106,11 @@ async def test_local_mode_promote_activates(monkeypatch, tmp_path):
     await action.function(action.param_model(action="update", content="I prefer concise answers."),
                           execution_context=ctx)
     res = await action.function(action.param_model(action="promote"), execution_context=ctx)
-    assert res.extracted_content and "promoted" in res.extracted_content.lower()
+    assert res.error and "owner" in res.error.lower()
+    from core import self_evolution
+    ok, message = self_evolution.promote("self_context", ctx.user_id, user_id=ctx.user_id,
+                                       home_dir=tmp_path, instance_id="polyrob")
+    assert ok, message
     rd = await action.function(action.param_model(action="read"), execution_context=ctx)
     assert "concise" in rd.extracted_content
 
@@ -142,7 +146,11 @@ async def test_server_owner_can_promote(monkeypatch, tmp_path):
     await action.function(action.param_model(action="update", content="owner self note here"),
                           execution_context=owner_ctx)
     res = await action.function(action.param_model(action="promote"), execution_context=owner_ctx)
-    assert res.extracted_content and "promoted" in res.extracted_content.lower()
+    assert res.error and "owner" in res.error.lower()
+    from core import self_evolution
+    ok, message = self_evolution.promote("self_context", owner_ctx.user_id, user_id=owner_ctx.user_id,
+                                       home_dir=tmp_path, instance_id="polyrob")
+    assert ok, message
 
 
 @pytest.mark.asyncio

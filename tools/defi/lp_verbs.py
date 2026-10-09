@@ -3,11 +3,13 @@
 v3: add/remove/collect. v4 (048 phase 3): lp_add of a new full-range position
 on a Pons PoolKey only — see ``tools/defi/lp_v4_verbs.py``."""
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 import time
-import uuid
+import json
+import math
 
+from core.security.refusal_taint import PreconditionUnmet
 from core.wallet import abi, chains, dex_registry, simulation, tx_guard, univ3_math as M
 from tools.defi import lp_abi as A, lp_reads as R
 
@@ -24,10 +26,8 @@ def encode(spec, values=()):
 
 
 def raw_amount(value, decimals):
-    n = Decimal(str(value)) * 10 ** decimals
-    if not n.is_finite() or n < 0 or n != int(n):
-        raise ValueError('amount must be finite, nonnegative and fit the token decimals')
-    return int(n)
+    from core.wallet.tokens import raw_amount as to_raw
+    return to_raw(value, decimals)
 
 
 def ticks(range_text, spacing, dec0, dec1, flipped=False):
@@ -84,29 +84,55 @@ def pool_price_check(p, t0, t1, dec0, dec1, sqrt_price_x96, price_fn):
     capital can move for the length of our transaction. When both legs have an
     independent price and the pool drifts past the swap rail's tolerance, the
     deposit/withdrawal is refused exactly like a disagreeing swap route. No
-    independent price for a leg: the note says so and the guard's valuation
-    stays the bound (it refuses an unpriceable leg in an existing pool).
+    independent price for a leg: a dry run names the missing check; a live
+    operation refuses rather than trusting minimums derived from that pool.
     """
     from tools.defi.trade_tool import _route_drift_max_pct
-    if price_fn is None or not sqrt_price_x96:
-        return ''
     try:
-        p0, p1 = price_fn(p.chain, t0), price_fn(p.chain, t1)
+        raw0, raw1 = price_fn(p.chain, t0), price_fn(p.chain, t1)
+        if isinstance(raw0, bool) or isinstance(raw1, bool):
+            raise ValueError('a boolean is not a price')
+        p0, p1 = float(raw0), float(raw1)
+        valid = all(math.isfinite(v) and v > 0 for v in (p0, p1, sqrt_price_x96))
     except Exception:
-        p0 = p1 = None
-    if not p0 or not p1 or p0 <= 0 or p1 <= 0:
-        return 'pool price check: UNAVAILABLE (no independent price for a leg)\n'
+        valid = False
+    if not valid:
+        message = 'pool price check: UNAVAILABLE (a finite independent price is required for both legs)'
+        if not p.dry_run:
+            raise ValueError(message + '; live liquidity operation refused')
+        return message + '\n'
     s = sqrt_price_x96 / M.Q96
     pool = (s * s) * (10 ** dec0) / (10 ** dec1)          # token1 per token0
     independent = p0 / p1
     drift = abs(pool - independent) / independent * 100.0
     limit = _route_drift_max_pct()
-    if drift > limit:
+    if not math.isfinite(drift) or drift > limit:
         raise ValueError(
             f'pool price {pool:.8g} disagrees with the independent price '
             f'{independent:.8g} by {drift:.2f}% (limit {limit:.0f}%); a thin or '
             f'manipulated pool extracts value through LP minimums. Nothing was built')
     return f'pool price check: AGREES ({drift:.2f}% drift)\n'
+
+
+def exit_price_fn(tool):
+    """The pool check's price for an EXIT (lp_remove): spend-grade, else the
+    exit-grade price the swap rail uses to keep a held position closable.
+
+    An exit withdraws the wallet's own liquidity. Requiring a spend-grade price
+    for both legs locked the agent's principal in any pool whose token has only
+    an exit-grade (low-confidence, measured-depth) price, e.g. its own launched
+    token. With neither price the live exit still refuses."""
+    def _fn(chain, addr):
+        try:
+            value = tool._price(chain, addr)
+        except Exception:
+            value = None
+        if isinstance(value, (int, float)) and not isinstance(value, bool) \
+                and math.isfinite(value) and value > 0:
+            return value
+        fallback = getattr(tool, '_fallback_price', None)
+        return fallback(chain, addr) if callable(fallback) else value
+    return _fn
 
 
 def prepare_add(p, rpc, holder, npm, price_fn=None):
@@ -164,12 +190,12 @@ def prepare_add(p, rpc, holder, npm, price_fn=None):
         if not nat:
             available = R.allowance(rpc, p.chain, t, holder, npm)
             if available < n:
-                raise ValueError(f'allowance short: {available}, need {n}. Run defi_trade.approve_token(chain={p.chain}, token={t}, spender={npm}, amount={Decimal(n) / 10**dec}) first; one exact approval per transaction.')
+                raise PreconditionUnmet(f'allowance short: {available}, need {n}. Run defi_trade.approve_token(chain={p.chain}, token={t}, spender={npm}, amount={Decimal(n) / 10**dec}) first; one exact approval per transaction.')
             balance = int(R.view(rpc, t, A.NPM_BALANCE_OF, [holder]))
         else:
             balance = int(rpc('eth_getBalance', [holder, 'latest']), 16)
         if balance < n:
-            raise ValueError(f'insufficient balance of {t}')
+            raise PreconditionUnmet(f'insufficient balance of {t}')
         out.append((None if nat else t, n))
         held.append((None if nat else t, balance))
     deadline = int(time.time()) + 600
@@ -184,7 +210,7 @@ def prepare_add(p, rpc, holder, npm, price_fn=None):
         max_spend_usd=p.max_spend_usd, is_liquidity_op=True,
         lp_outflows=tuple(out), lp_held_balances=tuple(held), watch_spenders=(npm,),
         lp_position=(npm, p.token_id), lp_position_effect='mint' if p.token_id is None else 'hold',
-        expected_events=tuple(events), idempotency_key='lp_add:' + uuid.uuid4().hex)
+        expected_events=tuple(events), idempotency_key=None)
     return Plan(intent, _multicall(inner), value, pool or 'new pool', (t0, t1), ds,
         f'pool: {pool or "WILL BE CREATED"}; ticks [{lo}, {hi}]; fee {p.fee / 10000:g}%\n'
         f'outflows (raw maxima): {out}\n' + warning)
@@ -230,7 +256,7 @@ def prepare_exit(p, rpc, holder, npm, verb, price_fn=None):
         max_spend_usd=p.max_spend_usd, is_liquidity_op=True,
         lp_inflows=((pv.token0, mins[0]), (pv.token1, mins[1])),
         lp_position=(npm, p.token_id), lp_position_effect='burn' if burn else 'hold',
-        expected_events=tuple(events), idempotency_key=verb + ':' + uuid.uuid4().hex)
+        expected_events=tuple(events), idempotency_key=None)
     return Plan(intent, _multicall(inner), 0, pv.pool, (pv.token0, pv.token1),
         (pv.dec0, pv.dec1), f'pool: {pv.pool}; position: {p.token_id}\nreceipts (raw minima): {intent.lp_inflows}\n' + note)
 
@@ -307,9 +333,11 @@ async def _perform(tool, p, ctx, verb):
         else:
             plan = (prepare_add(p, rpc, signer.address, npm, price_fn=tool._price)
                     if verb == 'lp_add' else
-                    prepare_exit(p, rpc, signer.address, npm, verb, price_fn=tool._price))
+                    prepare_exit(p, rpc, signer.address, npm, verb,
+                                 price_fn=exit_price_fn(tool)))
     except Exception as exc:
-        return tool._ar(error=f'refused: {exc}. RESULT: NOT SENT.')
+        from core.security.refusal_taint import kind_of
+        return tool._ar(error=f'refused: {exc}. RESULT: NOT SENT.', error_kind=kind_of(exc))
     async with gate.reserve():
         from tools.controller.action_registration import (
             _is_autonomous_goal_turn, _is_forged_or_autonomous_turn)
@@ -325,6 +353,14 @@ async def _perform(tool, p, ctx, verb):
             cap_note = f'LP caps: {why or "within LP_ETH_CAP / LP_ETH_DAILY_CAP / LP_ETH_FLOOR"}\n'
         try:
             tx = rail.build_call(to=npm, data=plan.data, value=plan.value)
+            from tools.defi.call_verb import intent_idempotency_key
+            # The builder refreshes deadlines on retry. Key the requested
+            # operation, not that clock-derived calldata, at this nonce.
+            request_data = json.dumps(p.model_dump(exclude={"dry_run", "max_spend_usd"}),
+                                      sort_keys=True, separators=(",", ":"))
+            plan.intent = replace(plan.intent, idempotency_key=intent_idempotency_key(
+                verb, chain=p.chain, to=npm, data=request_data, value_wei=plan.value,
+                tx=tx, execution_context=ctx))
             # CR-M10: simulation, signing RPC and receipt polling run off the
             # event loop so the held reservation never freezes other sessions.
             decision = await asyncio.to_thread(
@@ -349,10 +385,12 @@ async def _perform(tool, p, ctx, verb):
                 raise ValueError('owner paused spending before broadcast')
             tx_hash = await asyncio.to_thread(rail.sign_and_send, tx)
         except Exception as exc:
-            from core.wallet.broadcast.evm import broadcast_failure_text, outcome_unknown
+            from core.wallet.broadcast.evm import broadcast_error_kind, broadcast_failure_text, outcome_unknown
             if outcome_unknown(exc):
-                return tool._ar(error=broadcast_failure_text(exc))
-            return tool._ar(error=f'refused before broadcast: {exc}')
+                return tool._ar(error=broadcast_failure_text(exc),
+                    error_kind=broadcast_error_kind(exc))
+            return tool._ar(error=f'refused before broadcast: {exc}',
+                            error_kind=broadcast_error_kind(exc))
         tool._notify_tx(ctx, tx_notify.TxNotice(verb=verb, route=f'{p.chain}:{p.protocol}',
             chain=p.chain, amount_in=plan.description, usd=decision.amount_usd,
             tx_ref=tx_hash, lane=decision.lane), settled=False)

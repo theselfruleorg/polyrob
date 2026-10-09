@@ -188,3 +188,16 @@ async def test_large_artifacts_stored_as_valid_json(provider):
     assert len(out) == 1
     assert isinstance(out[0].artifacts, list)
     assert len(out[0].artifacts) > 0
+
+
+@pytest.mark.asyncio
+async def test_episode_secrets_are_scrubbed_before_persistence(provider):
+    secret = 'sk-proj-' + 's' * 48
+    await provider.record_episode(_rec(task=secret, summary=secret,
+                                      artifacts=[{'path': secret}], meta={'token': secret}),
+                                  session_id='secret-test', user_id='u1')
+    with wal_connect(provider.db_path) as conn:
+        row = conn.execute('SELECT task, summary, artifacts, meta FROM episodes').fetchone()
+    assert secret not in repr(tuple(row))
+    from core.secret_patterns import REDACTED
+    assert REDACTED in repr(tuple(row))

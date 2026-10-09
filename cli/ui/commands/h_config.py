@@ -315,7 +315,7 @@ def _cmd_set(ctx: ConfigCtx, rest: List[str]) -> str:
         suffix = f" (did you mean {hint}?)" if hint else ""
         return f"unknown key: {key}{suffix}"
 
-    res = set_value(key, value, scope="global" if is_global else "project",
+    res = set_value(key, value, scope="global",
                     surface="local", live=True)
     if not res.ok:
         return f"error: {res.message}"

@@ -1,3 +1,4 @@
+from core.security.session_tokens import SESSION_AUDIENCE
 import time
 from types import SimpleNamespace
 
@@ -22,7 +23,7 @@ async def test_session_urls_require_owner(monkeypatch, tmp_path, path, caller, e
         clean_session_id=lambda sid: sid, get_session_user=lambda sid: "owner"))
     headers = []
     if caller:
-        token = jwt.encode({"user_id": caller, "exp": time.time() + 60, "jti": "session"}, secret)
+        token = jwt.encode({"aud": SESSION_AUDIENCE, **{"user_id": caller, "exp": time.time() + 60, "jti": "session"}}, secret)
         headers = [(b"authorization", f"Bearer {token}".encode())]
     request = Request({"type": "http", "path": path, "headers": headers, "query_string": b""})
 

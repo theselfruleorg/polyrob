@@ -128,6 +128,25 @@ class GitTool(BaseTool):
         """
         return "::" in value or value.startswith("-")
 
+    @staticmethod
+    def _unsafe_ref(value: str) -> bool:
+        """True unless ``value`` is a PLAIN branch name (git check-ref-format rules).
+
+        The pull/push/branch verbs pass the name as a refspec positional, so refspec
+        syntax is an action the verb never offered: ``:dev`` deletes the remote
+        branch, ``+main`` force-pushes, ``a:b`` pushes to another ref. Refused:
+        a leading ``-``/``+``, any of ``: ^ ~ ? * [ \\``, whitespace or a control
+        character, ``..``, ``@{``, ``//``, a bare ``@``, a component that starts
+        with ``.`` or ends with ``.lock``, and a trailing ``/`` or ``.``.
+        """
+        if not value or value == "@" or value[0] in "-+" or value.endswith(("/", ".")):
+            return True
+        if any(c in value for c in ":^~?*[\\") or any(ord(c) < 33 or ord(c) == 127 for c in value):
+            return True
+        if ".." in value or "@{" in value or "//" in value:
+            return True
+        return any(part.startswith(".") or part.endswith(".lock") for part in value.split("/"))
+
     # --- git runner ----------------------------------------------------------
 
     async def _run_git(self, args: List[str], execution_context=None, cwd: Optional[str] = None):
@@ -198,7 +217,7 @@ class GitTool(BaseTool):
 
     @BaseTool.action("List branches, or create a branch when 'name' is given", param_model=GitBranchParams)
     async def git_branch(self, params: GitBranchParams, execution_context=None):
-        if params.name and params.name.startswith("-"):
+        if params.name and self._unsafe_ref(params.name):
             return self._err(f"refused: unsafe git branch name '{params.name}'")
         args = ["branch"] if not params.name else ["branch", params.name]
         ok, text = await self._run_git(args, execution_context)
@@ -235,9 +254,11 @@ class GitTool(BaseTool):
 
     @BaseTool.action("Pull from a remote (git pull)", param_model=GitPullParams)
     async def git_pull(self, params: GitPullParams, execution_context=None):
+        if params.branch and self._unsafe_ref(params.branch):
+            return self._err("refused: unsafe git branch (a plain branch name only, no refspec)")
         if self._unsafe_remote(params.remote):
             return self._err(f"refused: unsafe git url/remote '{params.remote}'")
-        args = ["pull", params.remote] + ([params.branch] if params.branch else [])
+        args = ["pull", "--", params.remote] + ([params.branch] if params.branch else [])
         ok, text = await self._run_git(args, execution_context)
         return self._ok(text) if ok else self._err(text)
 
@@ -246,9 +267,11 @@ class GitTool(BaseTool):
         "ator gates it (under full autonomy it then proceeds and notifies); otherwise it runs at once, so push only what the owner asked to publish",
         param_model=GitPushParams)
     async def git_push(self, params: GitPushParams, execution_context=None):
+        if params.branch and self._unsafe_ref(params.branch):
+            return self._err("refused: unsafe git branch (a plain branch name only, no refspec)")
         if self._unsafe_remote(params.remote):
             return self._err(f"refused: unsafe git url/remote '{params.remote}'")
-        args = ["push"] + (["-u"] if params.set_upstream else []) + [params.remote]
+        args = ["push"] + (["-u"] if params.set_upstream else []) + ["--", params.remote]
         if params.branch:
             args.append(params.branch)
         ok, text = await self._run_git(args, execution_context)

@@ -167,7 +167,7 @@ class _TaskAgent:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("author,stamped", [("owner", True), ("agent", False), (None, True)])
+@pytest.mark.parametrize("author,stamped", [("owner", True), ("agent", False), (None, False)])
 async def test_the_cron_run_stamps_an_owner_target(author, stamped):
     from cron.jobs import CronJob
     from cron.runner import make_agent_runner

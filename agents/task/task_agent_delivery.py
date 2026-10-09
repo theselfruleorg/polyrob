@@ -399,6 +399,11 @@ class TaskAgentDeliveryMixin:
                 _md = dict(metadata or {})
                 if reply_to:
                     _md["reply_to"] = reply_to
+                if role == "admin":
+                    # AGT-17: an admin's line is a steer, not the owner driving —
+                    # the drain must not clear taint on it nor read it as owner text.
+                    from agents.task.agent.core.user_ingress import ROOM_ROLE_KEY
+                    _md[ROOM_ROLE_KEY] = "admin"
                 _status = await self.ensure_session_and_deliver(
                     owner_user_id, session_id, addressed_block, kind="comment",
                     metadata=(_md or None),

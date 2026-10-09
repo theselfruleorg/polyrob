@@ -226,44 +226,10 @@ def is_complete(snapshot_dir: Path) -> bool:
     return (Path(snapshot_dir) / DONE_MARKER).exists()
 
 
-def restore_snapshot(snapshot_dir: Path) -> SnapshotManifest:
-    """Restore every captured item to its original path. Refuses a torn snapshot."""
-    snapshot_dir = Path(snapshot_dir)
-    if not is_complete(snapshot_dir):
-        raise RuntimeError(
-            f"refusing to restore incomplete snapshot (no {DONE_MARKER} marker): {snapshot_dir}")
-    manifest = SnapshotManifest.from_dir(snapshot_dir)
-
-    for item in manifest.items:
-        stored = snapshot_dir / item.stored
-        target = Path(item.original)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if item.kind == "db":
-            tmp = target.with_name(target.name + ".restore.tmp")
-            shutil.copy2(stored, tmp)
-            os.replace(tmp, target)          # atomic swap of the closed DB file
-            _clear_wal_sidecars(target)      # drop stale WAL so it isn't replayed
-        elif item.kind == "file":
-            tmp = target.with_name(target.name + ".restore.tmp")
-            shutil.copy2(stored, tmp)
-            os.replace(tmp, target)
-        elif item.kind == "dir":
-            # Stage beside the target, then swap: `rmtree(target); copytree(...)`
-            # lost identity/, skills/ or wallet/ outright if the copy failed
-            # between the two calls.
-            staged = target.with_name(target.name + ".restore.tmp")
-            if staged.exists():
-                shutil.rmtree(staged)
-            shutil.copytree(stored, staged)
-            old = target.with_name(target.name + ".restore.old")
-            if old.exists():
-                shutil.rmtree(old)
-            if target.exists():
-                os.rename(target, old)
-            os.rename(staged, target)
-            if old.exists():
-                shutil.rmtree(old, ignore_errors=True)
-    return manifest
+def restore_snapshot(snapshot_dir: Path, *, data_home: Path, allowed_paths=()) -> SnapshotManifest:
+    """Restore only inside the runtime home or explicit configured paths."""
+    from cli.update.restore import restore
+    return restore(snapshot_dir, data_home=data_home, allowed_paths=allowed_paths)
 
 
 def list_snapshots(snapshots_root: Path) -> List[SnapshotInfo]:

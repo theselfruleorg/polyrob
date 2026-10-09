@@ -88,6 +88,13 @@ def extract_stable_request_id(llm: Any, response: Any, provider: str) -> Optiona
     caller then falls back to record_llm_usage's fresh-uuid legacy behavior,
     so a genuinely-distinct completion is never falsely deduped.
     """
+    # A reserved call carries its own durable reference through every metering
+    # path, including streaming and auxiliary calls. Never use shared client state.
+    reserved = getattr(response, "_polyrob_billing_reservation_id", None)
+    if isinstance(response, dict):
+        reserved = reserved or getattr(response.get("raw"), "_polyrob_billing_reservation_id", None)
+    if isinstance(reserved, str) and reserved.startswith("llm-reserve:"):
+        return reserved
     # MOST-PREFERRED: the per-call attribute (see docstring). Checked before
     # anything shared-client-derived so a concurrent completion sharing the
     # same LLM client can never leak its id onto this one.

@@ -260,3 +260,32 @@ def test_rewrite_preserves_the_existing_mode(tmp_path):
     path.chmod(0o660)
     FileTokenStore(path)[("u", "p")] = b"x"
     assert stat.S_IMODE(path.stat().st_mode) == 0o660
+
+
+def test_flush_never_copies_mode_from_a_planted_symlink(tmp_path):
+    """SUP-28: a symlink at the target must not lend its world-readable mode."""
+    import os
+
+    outside = tmp_path / "outside"
+    outside.write_text("x")
+    os.chmod(outside, 0o777)
+    home = tmp_path / "home"
+    home.mkdir(mode=0o700)
+    os.chmod(home, 0o700)
+    path = home / TOKENS_FILENAME
+    path.symlink_to(outside)
+    store = FileTokenStore(path)
+    store[("u1", "p")] = b"secret"
+    assert not path.is_symlink()
+    assert stat.S_IMODE(path.stat().st_mode) & 0o077 == 0
+    assert outside.read_text() == "x"
+
+
+def test_flush_never_widens_an_existing_mode_to_other_users(tmp_path):
+    import os
+
+    path = tmp_path / TOKENS_FILENAME
+    path.write_text("{}")
+    os.chmod(path, 0o666)
+    FileTokenStore(path)[("u1", "p")] = b"secret"
+    assert stat.S_IMODE(path.stat().st_mode) & 0o007 == 0

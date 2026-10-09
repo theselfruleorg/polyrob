@@ -58,7 +58,7 @@ session as a foundation message. Scaffold it:
 polyrob identity soul init          # asks for a name and a one-line mission, then opens $EDITOR
 ```
 
-That writes two files under your data home (local CLI default: `./.polyrob`;
+That writes two files under your data home (local CLI default: `~/.polyrob/data`;
 server: `$POLYROB_DATA_DIR`), which you can also edit by hand:
 
 ```bash
@@ -150,7 +150,7 @@ model to have in `bio`, `lore` and `style`.
 |----------|-------|
 | Instance ID | `polyrob` (an unset/blank `POLYROB_INSTANCE_ID` — with no active profile — always degrades to this) |
 | CLI config home | `~/.polyrob/` — `.env`, `cli.json`, `mcp.json` (fixed; not instance-scoped) |
-| Data home (local/CLI, default) | `./.polyrob/` under the current working directory |
+| Data home (local/CLI, default) | `~/.polyrob/data/` (`<POLYROB_HOME>/data`). A `./.polyrob/` data folder from a release before 1.3 is not read; the CLI names it in a warning |
 | Data home (explicit, any mode) | `$POLYROB_DATA_DIR`, when set — the recommended way to pin a server deployment's data home |
 | Memory DB | `<data_home>/memory.db` |
 

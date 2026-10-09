@@ -182,3 +182,29 @@ def test_service_threads_wallet_policy_into_real_client(monkeypatch):
     tool = X402PayTool(wallet=w)  # no client injected -> _get_client constructs
     tool._get_client()
     assert captured["policy"] is w.policy
+
+
+@pytest.mark.asyncio
+async def test_a_signer_that_never_answered_is_named_not_shown_as_a_zero_cap(monkeypatch):
+    """The envelope clamps a never-answered signer to $0 (fail closed). The
+    refusal must say the signer is down — not tell the agent to retry with a
+    max_amount_usd at or below a "$0.00 cap"."""
+    import core.signer as signer_pkg
+    import core.signer.client as client_mod
+    from core.wallet import signer_envelope as env_mod
+    monkeypatch.delenv(env_mod.SIGNER_PROCESS_ENV, raising=False)
+    monkeypatch.setattr(signer_pkg, "signer_mode", lambda: "shadow")
+
+    class _Down:
+        def __init__(self, **kw):
+            pass
+
+        def call(self, op):
+            raise client_mod.SignerUnavailable("down")
+    monkeypatch.setattr(client_mod, "SignerClient", _Down)
+    env_mod.reset_cache()
+    client = _UnpriceableButPayingClient()
+    tool = X402PayTool(wallet=_wallet(), client=client)
+    res = await tool.x402_fetch(FetchParams(url="http://paid", max_amount_usd=1.0))
+    assert res.error and "has not answered" in res.error
+    assert "$0.00" not in res.error and client.fetched is False

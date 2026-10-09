@@ -100,10 +100,14 @@ def _no_native_order_types_on_defi_trade() -> bool:
 
 
 def _no_hyperliquid_trigger_order() -> bool:
-    """True while the Hyperliquid service exposes no TP/SL trigger-order verb."""
+    """True while the Hyperliquid service exposes no TP/SL trigger-order verb.
+
+    Only PUBLIC methods are verbs: the private ``_trigger_orders_in_scope`` /
+    ``_trigger_cancel_refusal`` helpers guard a cancel that would REMOVE an
+    owner's stop (c2a5ff0a8); they place nothing."""
     import packs.markets.polyrob_markets.hyperliquid.service as hl
     names = [n.lower() for c in vars(hl).values() if isinstance(c, type)
-             and hasattr(c, "place_limit_order") for n in dir(c)]
+             and hasattr(c, "place_limit_order") for n in dir(c) if not n.startswith("_")]
     return not any(w in n for n in names for w in ("trigger", "tpsl", "take_profit", "stop_loss"))
 
 

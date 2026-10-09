@@ -21,6 +21,7 @@ Tables:
 an older ``desk_bindings``) table. It is left in place — never dropped, never read — so no
 data is lost; nothing in the signer uses it any more.
 """
+import json
 import os
 import sqlite3
 import time
@@ -117,17 +118,26 @@ class SignerStore:
 
     def open_approval(self, *, digest: str, op: str, chain: Optional[str],
                       amount_usd: float, summary: str, ttl_sec: int) -> Dict[str, Any]:
+        from core.signer.review import MAX_REVIEW_CHARS, MAX_PENDING_APPROVALS
+        if len(summary) > MAX_REVIEW_CHARS or len(json.dumps(summary)) > MAX_REVIEW_CHARS * 2 + 2:
+            raise ValueError('Signer approval detail exceeds review limit')
         existing = self.find_approval(digest)
         if existing is not None:
             return existing
         now = self._now()
         row = {"id": "sig-" + uuid.uuid4().hex[:10], "digest": digest, "op": op,
-               "chain": chain, "amount_usd": float(amount_usd), "summary": summary[:400],
+               "chain": chain, "amount_usd": float(amount_usd), "summary": summary,
                "state": "pending", "created": now, "expires": now + int(ttl_sec),
                "decided_at": None, "decided_uid": None}
         with self._db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            count = db.execute("SELECT count(*) FROM approvals WHERE state IN ('pending','granted') "
+                               "AND expires > ?", (now,)).fetchone()[0]
+            if count >= MAX_PENDING_APPROVALS:
+                raise ValueError('Signer approval queue is full; resolve pending requests')
             db.execute("INSERT INTO approvals VALUES (:id,:digest,:op,:chain,:amount_usd,:summary,"
                        ":state,:created,:expires,:decided_at,:decided_uid)", row)
+            db.commit()
         return row
 
     def decide(self, approval_id: str, *, grant: bool, uid: int, ttl_sec: int) -> Optional[Dict[str, Any]]:

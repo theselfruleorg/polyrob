@@ -89,6 +89,17 @@ def test_create_mints_a_key_and_prints_it_once(tmp_path, monkeypatch):
     assert len(full) > len(key_prefix)
     assert full != key_hash
     assert full not in key_hash
+    con = sqlite3.connect(str(_bot_db(data)))
+    try:
+        expiry, scopes = con.execute("SELECT expires_at, scopes FROM api_keys").fetchone()
+    finally:
+        con.close()
+    from datetime import datetime, timezone
+    from core.security.api_keys import DEFAULT_EXPIRY_DAYS, DEFAULT_SCOPES
+    import json
+    remaining = (datetime.fromisoformat(expiry) - datetime.now(timezone.utc)).total_seconds()
+    assert (DEFAULT_EXPIRY_DAYS - 1) * 86400 < remaining <= DEFAULT_EXPIRY_DAYS * 86400
+    assert json.loads(scopes) == list(DEFAULT_SCOPES)
 
 
 def test_list_shows_prefixes_never_the_secret(tmp_path, monkeypatch):

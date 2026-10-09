@@ -223,3 +223,11 @@ def test_an_update_reports_no_agent_id():
     inventing a fact."""
     d = _authorize(_intent(expects_mint=False), _deltas(holder_nft_in=()))
     assert d.agent_id is None
+
+
+def test_a_declared_registry_that_is_not_the_pinned_one_refuses():
+    """`tx.to` was bound only to the caller-declared registry, so any contract that
+    minted us a token could wear a registration's name."""
+    d = _authorize(_intent(to=OTHER, expected_registry=OTHER), _deltas(holder_nft_in=_minted(OTHER)),
+                   tx=_tx(to=OTHER))
+    assert d.allowed is False and "not the pinned ERC-8004 identity registry" in d.reason

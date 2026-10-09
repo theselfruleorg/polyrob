@@ -2,7 +2,7 @@
 
 The webgate is the *self-host owner's* web UI: chat, sessions, memory, autonomy,
 identity, system. By default it runs **single-user, local-first** — bound to
-loopback (127.0.0.1:5050), no auth, every session owned by the local owner
+loopback (127.0.0.1:5050), with owner login
 (Posture 0 / "local"). Pass ``--posture own_ops`` for a public status page +
 owner-login-gated console, or ``--multitenant`` (legacy alias for
 ``--posture multitenant``) to engage the full JWT/SIWE + admin layer.
@@ -39,6 +39,90 @@ def _anchor_session_root() -> None:
     os.environ["DATA_ROOT"] = str(resolve_data_home() / "sessions")
 
 
+#: The username a first-run local console signs in with when none is set.
+DEFAULT_OWNER_USERNAME = "owner"
+
+
+def _persist_flag(key: str, value: str) -> bool:
+    """Write *key* to the global env file (``~/.polyrob/.env``) via the one
+    config writer. True on success; the value is set in this process either way."""
+    os.environ[key] = value
+    try:
+        from core import config_service
+        res = config_service.set_value(key, value, scope="global", surface="local")
+        return bool(res.ok)
+    except Exception:
+        return False
+
+
+def ensure_jwt_secret() -> None:
+    """A local console mints its own login-cookie key on first run.
+
+    ``assert_login_configured`` refuses a console without a 32+ character
+    ``JWT_SECRET_KEY``; on a workstation nobody should have to invent one. The
+    key is random and kept in the global env file, so a sign-in survives a
+    restart. An operator-set key always wins."""
+    if len(str(os.environ.get("JWT_SECRET_KEY") or "").strip()) >= 32:
+        return
+    import secrets
+    if not _persist_flag("JWT_SECRET_KEY", secrets.token_urlsafe(48)):
+        click.echo(click.style("[polyrob] WARN: ", fg="yellow")
+                   + "could not save the console login key — sign-ins end when "
+                     "this console stops.")
+
+
+def _hash_password(password: str) -> str:
+    from argon2 import PasswordHasher
+    return PasswordHasher().hash(password)
+
+
+def ensure_local_owner_login() -> None:
+    """A local console with no owner password gets a ONE-TIME password.
+
+    Loopback is NOT the owner (any local process reaches it), so the console
+    still requires a sign-in. With no ``POLYROB_OWNER_PASSWORD_HASH`` the
+    dashboard makes a random password for THIS run only, prints it here — the
+    terminal the owner just typed into — and names the command that sets a
+    lasting one. Nothing is written to disk."""
+    if str(os.environ.get("POLYROB_OWNER_PASSWORD_HASH") or "").strip():
+        # A lasting password is set: never replace it with a one-time one. A
+        # missing username falls back to the default the hash was saved with.
+        if not str(os.environ.get("POLYROB_OWNER_USERNAME") or "").strip():
+            os.environ["POLYROB_OWNER_USERNAME"] = DEFAULT_OWNER_USERNAME
+        return
+    import secrets
+    username = (str(os.environ.get("POLYROB_OWNER_USERNAME") or "").strip()
+                or DEFAULT_OWNER_USERNAME)
+    password = secrets.token_urlsafe(12)
+    os.environ["POLYROB_OWNER_USERNAME"] = username
+    os.environ["POLYROB_OWNER_PASSWORD_HASH"] = _hash_password(password)
+    click.echo(click.style("Sign in with", fg="green")
+               + f"  username: {username}   password: {password}")
+    click.echo(click.style(
+        "This password is for this run only. Set a lasting one with "
+        "`polyrob dashboard --set-password`.", dim=True))
+
+
+def set_password_interactive() -> None:
+    """``polyrob dashboard --set-password``: save a lasting owner login."""
+    username = click.prompt(
+        "Owner username",
+        default=(os.environ.get("POLYROB_OWNER_USERNAME") or DEFAULT_OWNER_USERNAME))
+    password = click.prompt("New password", hide_input=True,
+                            confirmation_prompt=True)
+    if len(password) < 8:
+        raise click.ClickException("the password must have at least 8 characters")
+    ok = (_persist_flag("POLYROB_OWNER_USERNAME", str(username).strip())
+          and _persist_flag("POLYROB_OWNER_PASSWORD_HASH", _hash_password(password)))
+    ensure_jwt_secret()
+    if not ok:
+        raise click.ClickException(
+            "could not write ~/.polyrob/.env — set POLYROB_OWNER_USERNAME and "
+            "POLYROB_OWNER_PASSWORD_HASH yourself")
+    click.echo(click.style("Saved.", fg="green")
+               + " The console signs in with this password from the next start.")
+
+
 @click.command(short_help="Launch the POLYROB Console (webgate)")
 @click.option("--multitenant", is_flag=True,
               help="Enable the multitenant layer (JWT/SIWE auth + admin pages, bind 0.0.0.0). "
@@ -48,7 +132,9 @@ def _anchor_session_root() -> None:
 @click.option("--host", default=None, help="Bind address (default 127.0.0.1 single-user)")
 @click.option("--port", type=int, default=None, help="Port to listen on (default 5050)")
 @click.option("--no-browser", is_flag=True, help="Do not open a browser window")
-def dashboard(multitenant, posture, host, port, no_browser):
+@click.option("--set-password", "set_password", is_flag=True,
+              help="Save a lasting owner username + password for the console, then exit")
+def dashboard(multitenant, posture, host, port, no_browser, set_password):
     """Run the POLYROB Console."""
     # 027 WP3: fail on a missing [server] extra BEFORE printing the URL and
     # opening a browser tab (it used to crash with a raw traceback after both).
@@ -88,6 +174,10 @@ def dashboard(multitenant, posture, host, port, no_browser):
 
     _anchor_session_root()
 
+    if set_password:
+        set_password_interactive()
+        return
+
     from webview import webgate
 
     bind_host = host or webgate.bind_host()
@@ -100,8 +190,8 @@ def dashboard(multitenant, posture, host, port, no_browser):
     if webgate.posture() == "local" and non_loopback_bind(bind_host) \
             and not _allow_override(os.environ):
         raise click.ClickException(
-            f"refusing to bind {bind_host}: the 'local' posture has no login — every "
-            "request is the owner. Use --posture own_ops (owner login), bind "
+            f"refusing to bind {bind_host}: the 'local' posture is loopback-only. "
+            "Use --posture own_ops, bind "
             f"127.0.0.1, or set {ALLOW_FLAG}=1 if your own auth layer fronts it.")
 
     # A 0.0.0.0 bind is reachable locally via loopback — show a clickable URL.
@@ -121,7 +211,11 @@ def dashboard(multitenant, posture, host, port, no_browser):
             fg="yellow"))
     else:
         click.echo(click.style(
-            "single-user mode: no auth, loopback only (the owner is you).", dim=True))
+            "single-user mode: loopback only; owner login required.", dim=True))
+        # A workstation console works on first run: its own cookie key, and a
+        # one-time password printed here when no lasting one is set.
+        ensure_jwt_secret()
+        ensure_local_owner_login()
 
     if not no_browser:
         try:

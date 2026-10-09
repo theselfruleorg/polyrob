@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import os
+from typing import Optional
 
 from core.env import bool_env as _bool_env
 from tools.code_exec.backend import (
@@ -46,6 +47,11 @@ default_registry.register("docker", DockerBackend)
 from tools.code_exec.backends.ssh import SshBackend  # noqa: E402
 default_registry.register("ssh", SshBackend)
 
+# 073 W6/W7: pack execution backends (Modal, Daytona, Vercel Sandbox, Singularity)
+# register on first use of an unknown name, pulled from the LOADED packs only.
+from tools.code_exec import pack_backends as _pack_backends  # noqa: E402
+default_registry.on_miss = lambda _name: _pack_backends.discover()
+
 
 def code_exec_enabled() -> bool:
     from core.config_policy.capability_toggles import code_exec_enabled as _core
@@ -54,6 +60,16 @@ def code_exec_enabled() -> bool:
 
 def get_backend_name() -> str:
     return os.getenv("CODE_EXEC_BACKEND", "local_subprocess")
+
+
+def docker_sandbox_unreachable_reason() -> Optional[str]:
+    """None when this process can open the Docker socket, else the honest reason.
+
+    The package-level seat of ``sandbox_guard.docker_socket_unreachable_reason`` for
+    callers outside ``tools/`` (the core reapers), which may import this package but
+    not its submodules (layering ratchet)."""
+    from tools.code_exec.sandbox_guard import docker_socket_unreachable_reason
+    return docker_socket_unreachable_reason("docker")
 
 
 def code_exec_docker_persistent_enabled() -> bool:
@@ -121,6 +137,12 @@ def resolve_backend(
     ):
         from tools.code_exec.backends.docker import DockerBackend
         return DockerBackend(session_id=session_id, dev_mode=dev_mode)
+    if registry is None and session_id and code_exec_docker_persistent_enabled():
+        # 073 W7: a pack backend gets the same session-scoped persistent seam
+        # (its persistence — snapshot / stop-resume — is the pack's concern).
+        factory = _pack_backends.backend_factory(name)
+        if factory is not None:
+            return factory(session_id=session_id, dev_mode=dev_mode)
     return (registry or default_registry).create(name)
 
 
@@ -178,3 +200,16 @@ __all__ = [
     "resolve_backend",
     "register_code_exec_tool",
 ]
+
+
+def docker_binary() -> str:
+    """Package-level re-export of the container CLI name (073 W6:
+    ``CODE_EXEC_DOCKER_BINARY``) for callers outside ``tools`` — the core
+    autonomy reaper reaches the package, never a backend module."""
+    from tools.code_exec.backends.docker import docker_binary as _b
+    return _b()
+
+
+def docker_binary_is_daemonless() -> bool:
+    from tools.code_exec.backends.docker import docker_binary_is_daemonless as _d
+    return _d()

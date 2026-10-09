@@ -259,7 +259,8 @@ def render_settled(n: TxNotice) -> str:
     if link:
         lines.append(link)
     if n.detail:
-        lines.append(str(n.detail)[:400])
+        from core.wallet.tokens import clean_provider_text
+        lines.append(f"detail (data): {clean_provider_text(n.detail)!r}")
     if n.ledger_recorded is False:
         lines.append("⚠ ledger: NOT recorded — this spend is invisible to every "
                      "other money verb's cap")

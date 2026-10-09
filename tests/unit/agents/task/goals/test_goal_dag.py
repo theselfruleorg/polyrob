@@ -33,7 +33,8 @@ def board(tmp_path):
 def _finish(board, goal):
     """Drive a goal through claim -> record_success so it lands 'done'."""
     board.claim(goal.id, "w", ttl_seconds=900)
-    board.record_success(goal.id, session_id="s", result="ok")
+    board.record_success(goal.id, session_id="s", result="ok",
+        claim_token=board.get(goal.id).claim_token)
     return board.get(goal.id)
 
 
@@ -348,9 +349,9 @@ def test_completion_sweep_concurrent_completions_flip_exactly_once(tmp_path, mon
     with monkeypatch.context() as m:
         m.setattr(GoalBoard, "_sweep_dependents_on_completion", lambda self, goal_id: None)
         b1.claim(a.id, "w1", ttl_seconds=900)
-        b1.record_success(a.id, session_id="s1", result="ok")
+        b1.record_success(a.id, session_id="s1", result="ok", claim_token=b1.get(a.id).claim_token)
         b2.claim(b.id, "w2", ttl_seconds=900)
-        b2.record_success(b.id, session_id="s2", result="ok")
+        b2.record_success(b.id, session_id="s2", result="ok", claim_token=b2.get(b.id).claim_token)
 
     # Both prerequisites are 'done' but C never got swept — still 'waiting',
     # and BOTH board instances now see it as satisfied.
@@ -410,7 +411,7 @@ def test_record_failure_breaker_trip_cascades_dependent_to_blocked_dep_failed(bo
     g = board.create(user_id="u1", title="dependent", depends_on=[dep.id])
 
     board.claim(dep.id, "w", ttl_seconds=900)
-    after = board.record_failure(dep.id, error="boom")
+    after = board.record_failure(dep.id, error="boom", claim_token=board.get(dep.id).claim_token)
     assert after.status == STATUS_BLOCKED  # max_retries=1 -> breaker tripped
 
     got = board.get(g.id)
@@ -426,7 +427,7 @@ def test_record_failure_below_threshold_does_not_cascade(board):
     g = board.create(user_id="u1", title="dependent", depends_on=[dep.id])
 
     board.claim(dep.id, "w", ttl_seconds=900)
-    after = board.record_failure(dep.id, error="transient")
+    after = board.record_failure(dep.id, error="transient", claim_token=board.get(dep.id).claim_token)
     assert after.status == STATUS_READY  # breaker not tripped yet
 
     got = board.get(g.id)
@@ -519,7 +520,8 @@ def test_create_with_already_cancelled_dep_is_immediately_blocked_dep_failed(boa
 def test_create_with_breaker_blocked_dep_is_immediately_blocked_dep_failed(board):
     dep = board.create(user_id="u1", title="prereq", max_retries=1)
     board.claim(dep.id, "w", ttl_seconds=900)
-    board.record_failure(dep.id, error="boom")  # trips breaker -> blocked, exhausted
+    board.record_failure(dep.id, error="boom",
+        claim_token=board.get(dep.id).claim_token)  # trips breaker -> blocked, exhausted
     assert board.get(dep.id).status == STATUS_BLOCKED
 
     g = board.create(user_id="u1", title="dependent", depends_on=[dep.id])
@@ -597,7 +599,8 @@ def test_dep_failed_dependent_revives_when_prerequisite_completes_after_unblock(
     assert d.status == STATUS_WAITING
 
     board.claim(p.id, "w", ttl_seconds=900)
-    board.record_failure(p.id, error="boom")  # trips breaker -> blocked
+    board.record_failure(p.id, error="boom",
+        claim_token=board.get(p.id).claim_token)  # trips breaker -> blocked
     assert board.get(p.id).status == STATUS_BLOCKED
     dep_got = board.get(d.id)
     assert dep_got.status == STATUS_BLOCKED
@@ -607,7 +610,7 @@ def test_dep_failed_dependent_revives_when_prerequisite_completes_after_unblock(
     assert board.get(p.id).status == STATUS_READY
 
     board.claim(p.id, "w", ttl_seconds=900)
-    board.record_success(p.id, session_id="s", result="ok")
+    board.record_success(p.id, session_id="s", result="ok", claim_token=board.get(p.id).claim_token)
 
     revived = board.get(d.id)
     assert revived.status == STATUS_READY
@@ -624,12 +627,12 @@ def test_dep_failed_dependent_stays_blocked_while_a_sibling_dep_still_open(board
     assert d.status == STATUS_WAITING
 
     board.claim(p1.id, "w", ttl_seconds=900)
-    board.record_failure(p1.id, error="boom")
+    board.record_failure(p1.id, error="boom", claim_token=board.get(p1.id).claim_token)
     assert board.get(d.id).payload.get("block_kind") == "dep_failed"
 
     board.unblock(p1.id, user_id="u1")
     board.claim(p1.id, "w", ttl_seconds=900)
-    board.record_success(p1.id, session_id="s", result="ok")
+    board.record_success(p1.id, session_id="s", result="ok", claim_token=board.get(p1.id).claim_token)
 
     # p2 is still open -> d must NOT revive yet
     got = board.get(d.id)
@@ -650,7 +653,7 @@ def test_reconcile_waiting_flips_stranded_satisfied_row_to_ready(board, monkeypa
         # create-writes-row-then-edges race).
         m.setattr(GoalBoard, "_sweep_dependents_on_completion", lambda self, goal_id: None)
         board.claim(a.id, "w", ttl_seconds=900)
-        board.record_success(a.id, session_id="s", result="ok")
+        board.record_success(a.id, session_id="s", result="ok", claim_token=board.get(a.id).claim_token)
 
     assert board.get(a.id).status == STATUS_DONE
     assert board.get(c.id).status == STATUS_WAITING  # stranded
@@ -698,7 +701,8 @@ def test_reconcile_waiting_cascades_dep_failed_for_stranded_breaker_exhausted_pr
     with monkeypatch.context() as m:
         m.setattr(GoalBoard, "_cascade_dep_failed", lambda self, goal_id: None)
         board.claim(p.id, "w", ttl_seconds=900)
-        board.record_failure(p.id, error="boom")  # trips breaker -> blocked
+        board.record_failure(p.id, error="boom",
+            claim_token=board.get(p.id).claim_token)  # trips breaker -> blocked
 
     assert board.get(p.id).status == STATUS_BLOCKED
     assert board.get(p.id).consecutive_failures >= board.get(p.id).max_retries

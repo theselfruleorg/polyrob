@@ -44,7 +44,7 @@ def _latest_stamp(text: str) -> str:
 def _owner_rules(sec: Section, data_dir: str, uid: str, instance_id: str,
                  pending_kinds: Dict[str, List[dict]]) -> None:
     from core.doc_claims import active_rule_lines, superseded_entries
-    from core.instance import load_owner_doc, self_tier_root
+    from core.instance import is_unreadable_note, load_owner_doc, self_tier_root
     raw = _read(self_tier_root(data_dir, uid, instance_id) / "owner.md")
     info: Dict[str, Any] = {"surface": "owner_rules"}
     if raw is None:
@@ -59,7 +59,8 @@ def _owner_rules(sec: Section, data_dir: str, uid: str, instance_id: str,
     active, superseded = active_rule_lines(raw), superseded_entries(raw)
     loaded = load_owner_doc(data_dir, uid, instance_id)
     info.update(active=len(active), superseded=len(superseded),
-                last_change=_latest_stamp(raw), loaded=bool(loaded) and not loaded.startswith("[BLOCKED"))
+                last_change=_latest_stamp(raw), loaded=bool(loaded) and not loaded.startswith("[BLOCKED")
+                and not is_unreadable_note(loaded))
     pending = pending_kinds.get("owner_doc", []) + pending_kinds.get("contract", [])
     info["pending"] = len(pending)
     bits = [f"{len(active)} active"]
@@ -119,7 +120,7 @@ def _soul(sec: Section, data_dir: str) -> None:
 def _self_notes(sec: Section, data_dir: str, uid: str, instance_id: str,
                 pending_kinds: Dict[str, List[dict]]) -> None:
     from core.config_policy import AutonomyConfig
-    from core.instance import load_self_doc, self_tier_root
+    from core.instance import is_unreadable_note, load_self_doc, self_tier_root
     root = self_tier_root(data_dir, uid, instance_id)
     raw = _read(root / "self.md")
     contract = _read(root / "contract.md")
@@ -130,7 +131,8 @@ def _self_notes(sec: Section, data_dir: str, uid: str, instance_id: str,
     elif raw.strip():
         loaded = load_self_doc(data_dir, uid, instance_id)
         info["chars"] = len(raw.strip())
-        info["loaded"] = bool(loaded) and not loaded.startswith("[BLOCKED")
+        info["loaded"] = (bool(loaded) and not loaded.startswith("[BLOCKED")
+                          and not is_unreadable_note(loaded))
         sec.lines.append(f"self notes: {info['chars']} chars"
                          + ("" if info["loaded"] else " — NOT loaded (blocked at load)"))
         if not info["loaded"]:

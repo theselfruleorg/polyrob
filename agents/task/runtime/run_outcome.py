@@ -78,6 +78,27 @@ def parse_blocked_outcome(outcome: Optional[str]) -> Optional[str]:
     return outcome.strip()[m.end():].strip()
 
 
+#: A done() text that OPENS with an uppercase BLOCKED and a separator. Narrower
+#: than `_BLOCKED_RE` on purpose: without the `OUTCOME:` prefix, "Blocked 3 spam
+#: accounts" is prose, so lowercase and a bare space never count.
+_LEADING_BLOCKED_RE = re.compile(r"^BLOCKED\s*[:—–-]")
+
+
+def leading_blocked_declaration(text: Optional[str]) -> Optional[str]:
+    """The first line of a done() text that leads with ``BLOCKED:``/``BLOCKED —``,
+    or None.
+
+    The goal prompt teaches ``OUTCOME: BLOCKED — <need>``, but a run that opened
+    its done() with ``BLOCKED: …`` and no OUTCOME line was scored as a success
+    (prod 2026-10-04 15:41): the goal closed, its ask went obsolete, and the
+    owner's approval had nothing left to resume.
+    """
+    if not text:
+        return None
+    first = text.strip().splitlines()[0].strip() if text.strip() else ""
+    return first if _LEADING_BLOCKED_RE.match(first) else None
+
+
 # ---------------------------------------------------------------------------
 # Ledger readers
 # ---------------------------------------------------------------------------
@@ -362,6 +383,8 @@ async def build_run_outcome(task_agent: Any, session_id: Optional[str],
 
     try:
         line = extract_outcome_line(outcome.done_text) or extract_outcome_line(outcome.reply_text)
+        if line is None:
+            line = leading_blocked_declaration(outcome.done_text)
         if line is None:
             s = (status or "").strip()
             if s and s.lower() not in GENERIC_STATUSES:

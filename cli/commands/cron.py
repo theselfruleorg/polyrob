@@ -122,8 +122,11 @@ def schedule(task: str, schedule_spec: str, user: Optional[str], max_duration: i
 
     svc = _service(write=True)
     try:
+        # The owner's CLI: the row is owner-authored (an unstamped row has no
+        # standing owner authority — core.config_policy.rigs.is_owner_authored).
         job = svc.schedule(task=task, schedule_spec=schedule_spec,
-                           user_id=_tenant(user), max_duration_seconds=max_duration)
+                           user_id=_tenant(user), max_duration_seconds=max_duration,
+                           payload={"authored_by": "owner"})
     except ScheduleError as e:
         raise click.ClickException(f"invalid schedule: {e}")
     nxt = job.next_run_at.strftime("%Y-%m-%d %H:%M") if job.next_run_at else "-"
@@ -187,7 +190,7 @@ def digest(schedule_spec: Optional[str], off: bool, deliver: str, days: int,
     try:
         job = svc.schedule(
             task=_DIGEST_TASK, schedule_spec=schedule_spec, user_id=tenant,
-            payload={"digest": True, "wake_agent": False,
+            payload={"digest": True, "wake_agent": False, "authored_by": "owner",
                      "deliver": deliver, "days": max(1, int(days))})
     except ScheduleError as e:
         raise click.ClickException(f"invalid schedule: {e}")
@@ -493,7 +496,7 @@ def cancel(job_id: str, user: Optional[str]):
     """Cancel a job (tenant-scoped — you can only cancel your own)."""
     svc = _service(write=True)
     job_id = _resolve_job_id(svc, job_id, _tenant(user))
-    if svc.cancel(job_id, user_id=_tenant(user)):
+    if svc.cancel(job_id, user_id=_tenant(user), via="cli"):
         click.echo(f"cancelled {job_id}")
     else:
         raise click.ClickException(f"no job {job_id!r} for this tenant")

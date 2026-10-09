@@ -16,6 +16,8 @@ neither — it returns a response object and its own error exposes
 naive port would have silently turned "429, back off and retry once" into "this
 chain has no pools", which is a WRONG ANSWER rather than a slow one.
 """
+import json
+from contextlib import contextmanager
 import pytest
 
 from tools.defi.providers import _http
@@ -27,8 +29,8 @@ class _Response:
         self._payload = payload if payload is not None else {"ok": True}
         self.reason_phrase = reason_phrase
 
-    def json(self):
-        return self._payload
+    def iter_bytes(self, **kwargs):
+        yield json.dumps(self._payload).encode()
 
 
 class _RecordingClient:
@@ -38,9 +40,11 @@ class _RecordingClient:
         self.calls = []
         self._response = response or _Response()
 
-    def get(self, url, **kwargs):
+    @contextmanager
+    def stream(self, method, url, **kwargs):
+        assert method in ("GET", "POST")
         self.calls.append((url, kwargs))
-        return self._response
+        yield self._response
 
 
 @pytest.fixture()
@@ -152,3 +156,24 @@ def test_the_default_user_agent_is_the_project_one(pooled):
     _http.get_json("https://example.test/x", timeout=5.0)
     headers = pooled.calls[0][1].get("headers") or {}
     assert headers.get("user-agent") == _http.USER_AGENT
+
+
+def test_status_error_redacts_credential_url():
+    error = _http.HttpStatusError("https://eth-mainnet.g.alchemy.com/v2/secret-key", 401)
+    assert "secret-key" not in str(error)
+    assert "secret-key" not in error.url
+
+
+@pytest.mark.parametrize("method", ["GET", "POST"])
+def test_redirect_response_is_refused(monkeypatch, method):
+    monkeypatch.setattr(_http, "client", lambda: _RecordingClient(_Response(302)))
+    with pytest.raises(_http.HttpStatusError):
+        _http.request_json(method, "https://example.test", timeout=1)
+
+
+@pytest.mark.parametrize("method", ["GET", "POST"])
+def test_oversized_decoded_response_is_refused(monkeypatch, method):
+    monkeypatch.setattr(_http, "MAX_RESPONSE_BYTES", 8)
+    monkeypatch.setattr(_http, "client", lambda: _RecordingClient(_Response(payload={"long": "a" * 100})))
+    with pytest.raises(ValueError, match="size limit"):
+        _http.request_json(method, "https://example.test", timeout=1)

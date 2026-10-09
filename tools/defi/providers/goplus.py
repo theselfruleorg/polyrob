@@ -263,7 +263,7 @@ def parse_screen(payload: Optional[Dict[str, Any]]) -> ScreenVerdict:
     flags = []
     missing = []
     for field, flag in _BOOL_RISKS.items():
-        if field not in data:
+        if str(data.get(field)).strip() not in {"0", "1"}:
             # Absent = NOT CHECKED. Never recorded as a pass, and now named, so
             # a chain the screener covers only partially cannot render clean.
             missing.append(field)
@@ -402,11 +402,20 @@ def _fetch(url: str, address: str, timeout: float):
         return 200, hit[0]
     from tools.defi.providers import _http
     # Pooled client — see the ~6 s per-connection note in _http.
-    r = _http.client().get(url, params={"contract_addresses": address},
-                           timeout=timeout)
-    if r.status_code != 200:
-        return r.status_code, None
-    payload = r.json()
+    from urllib.parse import urlencode
+    try:
+        payload = _http.get_json(url + "?" + urlencode({"contract_addresses": address}),
+                                 timeout=timeout)
+    except _http.HttpStatusError as exc:
+        return exc.code, None
+    # The response must identify the requested contract, not a neighbouring or
+    # provider-selected token. Base58 identifiers preserve case.
+    result = payload.get("result") if isinstance(payload, dict) else None
+    if isinstance(result, dict):
+        wanted = address.lower() if address.startswith("0x") else address
+        matched = {key: value for key, value in result.items()
+                   if (key.lower() if address.startswith("0x") else key) == wanted}
+        payload = {**payload, "result": matched}
     # 071 review: GoPlus answers HTTP 200 with an error code in the body (e.g.
     # 4029 rate-limited). Only a SUCCESS body (code 1) is cached.
     code = payload.get("code") if isinstance(payload, dict) else None

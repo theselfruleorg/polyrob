@@ -131,10 +131,10 @@ def test_a_failed_log_read_raises_never_none():
         ar.read_agent_id(chain, chain="robinhood", holder=HOLDER)
 
 
-def test_an_enumerable_registry_keeps_the_enumeration_path():
-    chain = Chain(owners={4: HOLDER}, transfers=[], enumerable=True)
+def test_an_enumerable_registry_still_verifies_mint_provenance():
+    chain = Chain(owners={4: HOLDER}, transfers=[(40_000_000, "0x" + "0" * 40, HOLDER, 4)], enumerable=True)
     assert ar.read_agent_id(chain, chain="robinhood", holder=HOLDER) == 4
-    assert chain.windows == []
+    assert chain.windows
 
 
 def test_a_reverting_supports_interface_falls_back_to_the_logs():
@@ -167,3 +167,21 @@ def test_agent_id_zero_refuses_a_second_register():
     why = ar.check_not_already_registered(existing_agent_id=0, chain="robinhood")
     assert why and "agentId 0" in why
     assert ar.check_not_already_registered(existing_agent_id=None, chain="robinhood") is None
+
+
+def test_unsolicited_identity_does_not_block_registration():
+    chain = Chain(owners={1: HOLDER}, transfers=[(40_000_000, OTHER, HOLDER, 1)])
+    assert ar.read_agent_id(chain, chain="robinhood", holder=HOLDER) is None
+
+
+def test_selects_self_minted_identity_even_with_a_lower_unsolicited_id():
+    chain = Chain(owners={1: HOLDER, 9: HOLDER}, transfers=[
+        (40_000_000, OTHER, HOLDER, 1), (40_000_001, "0x" + "0" * 40, HOLDER, 9)])
+    assert ar.read_agent_id(chain, chain="robinhood", holder=HOLDER) == 9
+
+
+def test_multiple_self_minted_identities_refuse_instead_of_guessing():
+    chain = Chain(owners={1: HOLDER, 9: HOLDER}, transfers=[
+        (40_000_000, "0x" + "0" * 40, HOLDER, i) for i in (1, 9)])
+    with pytest.raises(RuntimeError, match="multiple self-minted"):
+        ar.read_agent_id(chain, chain="robinhood", holder=HOLDER)

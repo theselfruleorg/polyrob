@@ -97,6 +97,8 @@ def issue_owner_session_cookie(response: Response) -> str:
         "iat": datetime.utcnow(),
         "exp": expires_at,
     }
+    from core.security.session_tokens import SESSION_AUDIENCE
+    payload["aud"] = SESSION_AUDIENCE
     token = pyjwt.encode(payload, jwt_secret, algorithm="HS256")
 
     is_production = os.environ.get("ENVIRONMENT", "production") == "production"
@@ -105,9 +107,9 @@ def issue_owner_session_cookie(response: Response) -> str:
         value=token,
         max_age=OWNER_COOKIE_TTL_SECONDS,
         path="/",
-        secure=is_production,
+        secure=is_production and not webgate.is_local(),
         httponly=True,
-        samesite="lax",
+        samesite="strict",
     )
     return token
 

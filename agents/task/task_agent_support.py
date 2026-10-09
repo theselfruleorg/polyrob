@@ -83,6 +83,8 @@ class SessionRequest:
             self.provider, self.model = _resolve_session_runtime(
                 self.provider, self.model
             )
+        from agents.task.billed_request import validate_billed_request
+        validate_billed_request(self)
 def _resolve_chat_runtime(env=None):
     """Resolve (provider, model) for chat_once via the shared core resolver (Seam 2).
 
@@ -149,7 +151,8 @@ def bind_memory_scope(session_id: str, request) -> None:
         logging.getLogger(__name__).debug("memory scope bind skipped: %s", e)
 
 
-def build_session_metadata(session_request, *, effective_tool_ids, public_session) -> dict:
+def build_session_metadata(session_request, *, effective_tool_ids, public_session,
+                           credit_billed=False) -> dict:
     """The durable session record ``create_session`` writes and
     ``_recreate_orchestrator`` reads back.
 
@@ -165,6 +168,7 @@ def build_session_metadata(session_request, *, effective_tool_ids, public_sessio
     at all when the Singular Chat bus is off.
     """
     from datetime import datetime as _dt
+    from core.billing_context import is_billed
     tools_config = (session_request.session_config.get('tools_config', {})
                     if session_request.session_config else {})
     return {
@@ -181,6 +185,7 @@ def build_session_metadata(session_request, *, effective_tool_ids, public_sessio
             'tools_config': tools_config,
         },
         'request': session_request.__dict__,
+        'billing_limited': credit_billed or is_billed(),
         'effective_tools': list(effective_tool_ids or []),
         'public_session': bool(public_session),
         'created_at': _dt.now().isoformat(),

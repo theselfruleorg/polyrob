@@ -202,7 +202,9 @@ class RecallConsolidationMixin:
         norm = self._norm_user(user_id)
         rows = execute_retry(
             self.db_path,
-            "SELECT rowid AS rid, content FROM memories WHERE user_id = ?",
+            "SELECT rowid AS rid, content FROM memories WHERE user_id = ? "
+            "AND NOT EXISTS (SELECT 1 FROM mem_provenance p "
+            "WHERE p.mem_rowid = memories.rowid AND COALESCE(p.scope, '') != '')",
             (norm,), fetch="all") or []
         corpus = [(int(dict(r)["rid"]), str(dict(r)["content"] or "")) for r in rows]
         out["rows"] = len(corpus)
@@ -235,8 +237,9 @@ class RecallConsolidationMixin:
                 out["at_ceiling"] = 1
                 break
             source = SOURCE_PREFIX + cluster.signature
-            body = note_body(cluster)[:max_chars]
-            title = note_title(cluster)
+            from core.secret_scrub import scrub_secret_shapes
+            body = scrub_secret_shapes(note_body(cluster))[:max_chars]
+            title = scrub_secret_shapes(note_title(cluster))
             prior = existing.get(source)
             try:
                 if prior is not None:
@@ -245,6 +248,7 @@ class RecallConsolidationMixin:
                     execute_retry(
                         self.db_path,
                         "UPDATE curated_memory SET content = ?, title = ?, "
+                        "status = CASE WHEN status = 'archived' THEN status ELSE 'pending' END, "
                         "updated_ts = ? WHERE id = ? AND user_id = ?",
                         (body, title, now, prior["id"], norm))
                     out["updated"] += 1
@@ -253,7 +257,7 @@ class RecallConsolidationMixin:
                     self.db_path,
                     "INSERT INTO curated_memory (user_id, content, title, tags, "
                     "links, source, created_ts, updated_ts, access_count, status, "
-                    "created_by) VALUES (?,?,?,'[]','[]',?,?,?,0,'active','curator')",
+                    "created_by) VALUES (?,?,?,'[]','[]',?,?,?,0,'pending','curator')",
                     (norm, body, title, source, now, now))
                 out["written"] += 1
                 live += 1

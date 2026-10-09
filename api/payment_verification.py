@@ -69,6 +69,8 @@ async def verify_payment_for_request(
     payment_method = getattr(request.state, 'payment_method', None)
 
     if payment_method == "x402":
+        from core.billing_context import mark_billed
+        mark_billed()
         # Payment verified by X402PaymentMiddleware
         payer_address = getattr(request.state, 'payer_address', 'unknown')
         logger.info(f"✅ x402 payment already verified for {payer_address[:10]}...")
@@ -80,11 +82,23 @@ async def verify_payment_for_request(
 
     # OPTION 2: Check for JWT (credit system)
     if user_id and user_id not in ['api_user', 'authenticated_api_user']:
+        # Every compute surface reaches this gate, including A2A, /v1 and chat.
+        # A welcome credit grant alone must not bypass the instance's access tier.
+        import os
+        if os.environ.get("ENVIRONMENT", "production") != "development":
+            from api.auth_constants import has_full_access
+            tier_manager = container.get_service("tier_manager") if container else None
+            if tier_manager is None:
+                raise HTTPException(status_code=503, detail="Account tier verification unavailable")
+            try:
+                tier = await tier_manager.get_user_tier(user_id)
+            except Exception as exc:
+                raise HTTPException(status_code=503, detail="Account tier verification unavailable") from exc
+            if not has_full_access(tier):
+                raise HTTPException(status_code=403, detail="Compute access requires an eligible account tier")
         # User authenticated → use credit system.
-        # C1: AUTHORIZE ONLY. Do NOT deduct here — the per-token LLMUsageTracker
-        # (modules/credits/usage_tracker.py::record_llm_usage) is the single
-        # deduction path, billed on ACTUAL token usage once the call completes.
-        # Deducting a flat cost_credits here too was double-billing every request.
+        # Admission does not charge a flat request fee. Each model call reserves
+        # before inference; the usage tracker settles its actual cost once.
         from core.container import DependencyContainer
         container = DependencyContainer.get_instance()
         balance_mgr = container.get_service('balance_manager')
@@ -100,6 +114,9 @@ async def verify_payment_for_request(
                 detail="Insufficient credits. Deposit more or use x402."
             )
 
+        from core.billing_context import mark_billed
+        from modules.credits.reservations import credit_reserver
+        mark_billed(credit_reserver(balance_mgr, user_id))
         return "credits", {
             "user_id": user_id,
             "credits_deducted": 0,

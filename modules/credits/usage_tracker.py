@@ -160,15 +160,11 @@ class LLMUsageTracker:
         # single request can't run away past what it paid for. In-memory (the run is
         # in-process); bounded to avoid unbounded growth on a long-lived server.
         self._x402_session_tokens: Dict[str, int] = {}
-        # Cache the user tier so we don't hit the DB on every LLM call.
-        self._tier_cache: Dict[str, str] = {}
 
         self.logger.info(f"LLMUsageTracker initialized with fail_on_insufficient={self.fail_on_insufficient}")
 
     async def _get_user_tier(self, user_id: str) -> str:
-        """Return the user's tier ('x402'/'admin'/…), cached to avoid a per-call query."""
-        if user_id in self._tier_cache:
-            return self._tier_cache[user_id]
+        """Read the current tier; revoking a billing exemption takes effect immediately."""
         tier = ""
         try:
             result = await self.db.fetch_one(
@@ -178,9 +174,6 @@ class LLMUsageTracker:
                 tier = result["tier"] or ""
         except Exception as e:
             self.logger.debug(f"tier lookup failed for {user_id}: {e}")
-        if len(self._tier_cache) > 10000:  # bound the cache
-            self._tier_cache.clear()
-        self._tier_cache[user_id] = tier
         return tier
 
     def _is_x402_prepaid(self, session_id: str) -> bool:
@@ -372,7 +365,12 @@ class LLMUsageTracker:
             # stored profile tier. A wallet that paid once keeps tier='x402' on
             # its profile; a later SIWE login under that tier must pay per token.
             charged_tier = None
-            if costs.credits_charged > 0:
+            reserved = request_id.startswith("llm-reserve:")
+            if reserved:
+                # Even zero-cost usage or a later tier change must settle an
+                # existing hold; never deduct it a second time.
+                await self._deduct_from_balance(record)
+            elif costs.credits_charged > 0:
                 if self._is_x402_prepaid(session_id):
                     charged_tier = "x402"
                 else:
@@ -527,13 +525,9 @@ class LLMUsageTracker:
         naming the request_id (an ignored duplicate means double-billing was
         ATTEMPTED -- surface it, don't hide it).
 
-        HONESTY NOTE: credit deduction (`_deduct_from_balance`) already ran
-        BEFORE this write, in `record_llm_usage`. This index stops duplicate
-        ROWS / ledger inflation in `usage_records`; it does NOT stop a
-        duplicate deduction -- that dedup is still the in-process
-        `_polyrob_billed` flag on the response object (see
-        agents/task/agent/core/next_action_internal.py). Reordering
-        deduct/write is out of scope here.
+        Credit reservations settle idempotently before this write. The index
+        also prevents duplicate usage rows after a crash between those steps.
+        Legacy calls without a reservation retain response-local dedup only.
         """
         # Build metadata with full cost breakdown
         metadata_dict = {
@@ -682,15 +676,20 @@ class LLMUsageTracker:
         Raises:
             InsufficientCreditsError: If fail_on_insufficient=True and deduction fails
         """
-        success = await self.balance.deduct_credits(
-            user_id=record.user_id,
-            amount=record.costs.credits_charged,
-            reason=(
-                f"LLM: {record.model} "
-                f"({record.tokens.prompt_tokens}+{record.tokens.completion_tokens} tokens)"
-            ),
-            session_id=record.session_id
-        )
+        if record.request_id.startswith("llm-reserve:"):
+            from modules.credits.reservations import settle_reservation
+            success = await settle_reservation(self.balance, record.user_id,
+                                               record.request_id, record.costs.credits_charged)
+        else:
+            success = await self.balance.deduct_credits(
+                user_id=record.user_id,
+                amount=record.costs.credits_charged,
+                reason=(
+                    f"LLM: {record.model} "
+                    f"({record.tokens.prompt_tokens}+{record.tokens.completion_tokens} tokens)"
+                ),
+                session_id=record.session_id
+            )
 
         if not success:
             self.logger.error(

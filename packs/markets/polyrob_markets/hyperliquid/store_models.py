@@ -7,7 +7,7 @@ name here. (067 P0.11 moved them to ``modules/database``; 067 P4 moved the handl
 and these models into the markets pack together.)
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 
@@ -64,19 +64,9 @@ class TradingLimits:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "TradingLimits":
-        return cls(
-            max_order_size_usd=data.get("max_order_size_usd", 1000.0),
-            max_total_exposure_usd=data.get("max_total_exposure_usd", 10000.0),
-            max_position_per_market_usd=data.get("max_position_per_market_usd", 5000.0),
-            max_leverage=data.get("max_leverage", 5),
-            max_daily_loss_usd=data.get("max_daily_loss_usd", 500.0),
-            require_confirmation_above_usd=data.get("require_confirmation_above_usd", 500.0),
-            enable_autonomous_trading=data.get("enable_autonomous_trading", False),
-            allowed_coins=data.get("allowed_coins", []),
-            blocked_coins=data.get("blocked_coins", []),
-            max_spread_tolerance=data.get("max_spread_tolerance", 0.01),
-            min_liquidity_required=data.get("min_liquidity_required", 50000.0),
-        )
+        # Defaults come from the dataclass fields above (one place per limit).
+        d = cls()
+        return cls(**{f.name: data.get(f.name, getattr(d, f.name)) for f in fields(cls)})
 
 
 # =============================================================================

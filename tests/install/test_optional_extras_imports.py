@@ -95,6 +95,25 @@ def test_every_cli_command_module_imports_with_all_extras_blocked():
     )
 
 
+def test_the_tool_tier_and_packs_import_with_crypto_and_httpx_extras_blocked():
+    """1.3.0 cut: a bare install resolved openai 3.x (httpx2, not httpx) and no
+    eth_utils, and ``import tools`` died — which also refused the discovery pack.
+    httpx is now a base dependency; the tool tier must import without the
+    [crypto] stack."""
+    blocked = ("playwright", "fastapi", "uvicorn", "aiogram", "web3", "eth_utils",
+               "eth_account", "solders", "solana", "tweepy", "faster_whisper")
+    proc = _import_with_blocked("tools", blocked)
+    assert proc.returncode == 0 and "IMPORT_OK" in proc.stdout, proc.stderr[-2000:]
+    proc = _import_with_blocked("polyrob_discovery.perplexity", blocked)
+    assert proc.returncode == 0 and "IMPORT_OK" in proc.stdout, proc.stderr[-2000:]
+
+
+def test_httpx_is_a_base_dependency():
+    import tomllib
+    deps = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())["project"]["dependencies"]
+    assert any(d.replace(" ", "").startswith("httpx>") or d == "httpx" for d in deps)
+
+
 def test_browser_launch_without_playwright_names_the_remedy():
     """With playwright absent, launching the browser must fail with the pip
     remedy — not a bare ModuleNotFoundError at import time."""

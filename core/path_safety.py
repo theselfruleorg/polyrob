@@ -174,6 +174,11 @@ def agent_file_refusal(path: str, root: str, *, write: bool,
             return "the .git directory"
         if write and _in_skill_dir(parts_lower):
             return "an auto-loaded skill directory (.agents/skills, .claude/skills)"
+        if write and (".husky" in parts_lower or Path(cand).name.lower() in {
+                ".mcp.json", ".pre-commit-config.yaml", "lefthook.yml", "lefthook.yaml"}
+                or any(a == ".claude" and b in {"settings.json", "settings.local.json"}
+                       for a, b in zip(parts_lower, parts_lower[1:]))):
+            return "an auto-executed hook or agent configuration file"
         if write and _is_project_context_file(cand, root):
             return "an auto-loaded project-context file (AGENTS.md/CLAUDE.md/polyrob.md/.cursorrules)"
     return data_home_refusal(path, root, extra_homes)

@@ -45,9 +45,6 @@ from core.constants import (  # noqa: F401
 PUBLIC_PATHS_EXACT: frozenset = frozenset({
     "/",
     "/health",
-    "/docs",
-    "/redoc",
-    "/openapi.json",
 })
 
 #: Path PREFIXES that are public. Every entry here is a surface an anonymous
@@ -73,8 +70,6 @@ PUBLIC_PATH_PREFIXES: Tuple[str, ...] = (
     "/a2a/agent-card",
     "/a2a/extended-card",
     "/eip8004/registration.json",
-    "/docs",
-    "/redoc",
 )
 
 

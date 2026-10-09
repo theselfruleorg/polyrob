@@ -203,3 +203,60 @@ def cutover_ready(*, now: Optional[float] = None):
     if since is None or since > now - CUTOVER_MIN_DAYS * 86400:
         return False, f"less than {CUTOVER_MIN_DAYS} days of shadow data", counts
     return True, "a clean shadow week", counts
+
+
+def signer_verdict_summary(state_dir: str, days: float = 7.0, *,
+                           now: Optional[float] = None) -> Dict[str, Any]:
+    """WAL-19: the shadow verdicts as the SIGNER recorded them.
+
+    ``signer_shadow.jsonl`` lives in the agent's data home, so any agent-UID
+    process can rewrite it into a clean week. The signer logs every
+    ``evm.verdict`` in its own ``<state_dir>/signer.sqlite`` (0600, owned by
+    ``polyrob-signer`` in a 0700 directory) — that is the record the cut-over
+    trusts. Opened read-only; a missing or unreadable store is reported as
+    unreadable, never as an empty week.
+    """
+    import sqlite3
+    now = time.time() if now is None else now
+    cutoff = now - days * 86400
+    counts = {"agree": 0, "disagree": 0}
+    path = os.path.join(str(state_dir), "signer.sqlite")
+    if not os.path.isfile(path):
+        return {"readable": False, "error": f"{path} not found", "counts": counts}
+    try:
+        db = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=10)
+        try:
+            rows = db.execute(
+                "SELECT allowed, COUNT(*), MIN(ts) FROM decisions "
+                "WHERE op = 'evm.verdict' AND ts >= ? GROUP BY allowed", (cutoff,)).fetchall()
+        finally:
+            db.close()
+    except sqlite3.Error as exc:
+        return {"readable": False, "error": f"{type(exc).__name__}: {exc}", "counts": counts}
+    first_ts: Optional[float] = None
+    for allowed, n, first in rows:
+        counts["agree" if allowed else "disagree"] += int(n)
+        if first is not None:
+            first_ts = float(first) if first_ts is None else min(first_ts, float(first))
+    return {"readable": True, "counts": counts, "since": first_ts, "days": days}
+
+
+def signer_cutover_ready(state_dir: str, *, now: Optional[float] = None):
+    """``(ok, why, counts)`` — the cut-over criterion from the signer's own log.
+
+    The install script requires BOTH this and :func:`cutover_ready`: the agent
+    log alone sees ``no_intent`` sends (they never reach the signer), but only
+    the signer's log cannot be forged by the agent UID."""
+    now = time.time() if now is None else now
+    st = signer_verdict_summary(state_dir, 7.0, now=now)
+    counts = st.get("counts") or {}
+    if not st.get("readable"):
+        return False, f"signer decision log unreadable ({st.get('error')})", counts
+    if counts.get("disagree"):
+        return False, "the signer refused a shadow verdict in the last 7 days", counts
+    if not counts.get("agree"):
+        return False, "the signer recorded no agreed verdict in the last 7 days", counts
+    since = st.get("since")
+    if since is None or since > now - CUTOVER_MIN_DAYS * 86400:
+        return False, f"less than {CUTOVER_MIN_DAYS} days of signer-side shadow data", counts
+    return True, "a clean shadow week in the signer's own log", counts

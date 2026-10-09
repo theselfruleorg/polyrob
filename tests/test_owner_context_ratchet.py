@@ -33,11 +33,8 @@ ALLOWED = {
     "surfaces/telegram/owner_ops.py": "Telegram owner seat",
     "surfaces/telegram/send_ops.py": "Telegram /send seat",
     "surfaces/telegram/token_ops.py": "Telegram token-trust seat",
-    "webview/server.py": "console owner login (auth role, not a turn)",
     "webview/owner_auth.py": "console owner login (auth role, not a turn)",
-    # ⚠️ Known least-privilege gap, not money: a missing role reads as
-    # orchestrator for the X browser gate (every other gate reads it as leaf).
-    "packs/x/polyrob_x/x_browser/tool.py": "KNOWN GAP: missing role -> orchestrator",
+
 }
 
 

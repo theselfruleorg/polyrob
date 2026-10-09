@@ -65,6 +65,18 @@ def validate_row(row: dict) -> dict:
             raise PackIndexError(f"index row {row.get('id')!r}: {key} is required")
     if not re.match(r"^[a-z][a-z0-9_]{0,31}$", row["id"]):
         raise PackIndexError(f"index row id {row['id']!r} is not a pack id")
+    # dist and version are written into a pip requirements line (`dist==version
+    # --hash=...`): only a PEP 508 project name and a plain PEP 440 version may
+    # pass, never whitespace, an option or a URL.
+    if not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,98}[A-Za-z0-9])?", row["dist"]):
+        raise PackIndexError(f"index row {row['id']!r}: dist {row['dist']!r} is not a project name")
+    if not re.fullmatch(r"[0-9][0-9A-Za-z.+!]{0,63}", row["version"]):
+        raise PackIndexError(f"index row {row['id']!r}: version {row['version']!r} is not a version")
+    from packaging.version import InvalidVersion, Version
+    try:
+        Version(row["version"])
+    except InvalidVersion:
+        raise PackIndexError(f"index row {row['id']!r}: version {row['version']!r} is not PEP 440")
     if row["tier"] not in ("first-party", "third-party"):
         raise PackIndexError(f"index row {row['id']!r}: tier {row['tier']!r}")
     sha = row.get("sha256") or ""

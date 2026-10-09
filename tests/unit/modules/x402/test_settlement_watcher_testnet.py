@@ -2,7 +2,7 @@
 detection on base-sepolia + operator-pinnable scan RPC resolution.
 
 - `base-sepolia` (and its aliases) is a scannable chain: the full
-  scan -> match -> settle -> wake path works on testnet, so the Tier-1
+  scan -> match -> settle path works on testnet, so the Tier-1
   acceptance run can happen there per the house test rule.
 - `_resolve_scan_target(chain)` is the ONE (rpc_url, usdc_addr) resolver:
   `X402_SETTLEMENT_RPC` beats `DEFI_EVM_RPC_<CHAIN>` beats the built-in
@@ -87,7 +87,7 @@ class _WakeAgent:
 # --- W1.2: sepolia is scannable end-to-end ----------------------------------
 
 @pytest.mark.asyncio
-async def test_sepolia_matched_transfer_settles_and_wakes(tmp_path, monkeypatch):
+async def test_sepolia_matched_transfer_records_without_paid_work(tmp_path, monkeypatch):
     monkeypatch.setenv("X402_DEFAULT_CHAIN", "base-sepolia")
     db = await _setup_db(tmp_path)
     try:
@@ -107,7 +107,7 @@ async def test_sepolia_matched_transfer_settles_and_wakes(tmp_path, monkeypatch)
         out = await watcher.tick_once()
 
         assert out["onchain_settled"] == 1
-        assert len(agent.wakes) == 1
+        assert agent.wakes == []
         row = await db.fetch_one(
             "SELECT status, transaction_hash FROM x402_payment_requests WHERE id = ?",
             (inv["request_id"],))

@@ -45,7 +45,7 @@ def test_recovers_done_pycall_and_strips_it():
 
 def test_recovers_invoke_xml_block():
     content = (
-        "Some brain prose.\n"
+        '{"current_state": {"memory": "Ready"}}\n'
         '<invoke name="done"><parameter name="text">All set.</parameter></invoke>'
     )
     cleaned, calls = recover_textual_tool_calls(content, _KNOWN)

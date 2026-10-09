@@ -70,7 +70,8 @@ class MCPURLValidator:
             elif ip_obj in MCPURLValidator._NAT64_PREFIX:
                 ip_obj = ipaddress.IPv4Address(ip_obj.packed[-4:])
         if (ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local
-                or ip_obj.is_reserved or ip_obj.is_multicast or ip_obj.is_unspecified):
+                or ip_obj.is_reserved or ip_obj.is_multicast or ip_obj.is_unspecified
+                or getattr(ip_obj, "is_site_local", False)):
             return True
         # CGNAT is not is_private on every Python version — block explicitly.
         if ip_obj.version == 4 and ip_obj in ipaddress.ip_network('100.64.0.0/10'):

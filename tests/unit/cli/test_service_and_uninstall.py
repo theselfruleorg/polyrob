@@ -9,6 +9,8 @@ import sys
 import pytest
 from click.testing import CliRunner
 
+from core.runtime_paths import _local_default_data_home as _REAL_LOCAL_DATA_HOME
+
 
 @pytest.fixture(autouse=True)
 def _hermetic_uninstall(tmp_path, monkeypatch):
@@ -42,14 +44,14 @@ def test_exec_argv_uses_this_interpreter_and_the_module(monkeypatch):
     assert argv[0] == sys.executable, (
         "a bare `polyrob` on PATH can be a stale wheel — run the module with "
         "the interpreter the user installed into")
-    assert argv[1:] == ["-m", "cli.polyrob", "gateway"]
+    assert argv[1:] == ["-I", "-m", "cli.polyrob", "gateway"]
 
 
 def test_exec_argv_carries_the_active_profile(monkeypatch):
     from cli.commands import service
 
     monkeypatch.setenv("POLYROB_PROFILE", "scout")
-    assert service._exec_argv()[:5] == [sys.executable, "-m", "cli.polyrob", "-P", "scout"]
+    assert service._exec_argv()[:6] == [sys.executable, "-I", "-m", "cli.polyrob", "-P", "scout"]
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="posix homes")
@@ -130,9 +132,8 @@ def test_find_shim_ignores_a_foreign_polyrob_on_path(tmp_path, monkeypatch):
 
 
 def test_purge_names_both_homes_and_never_only_the_cwd_one(tmp_path, monkeypatch):
-    """⚠️ The data home is ``cwd/.polyrob`` BY DESIGN — per PROJECT. A --purge
-    that deleted only that would wipe one project's memory while calling it
-    "your data" and leave the keys and the wallet seed behind."""
+    """A data home set apart from the config home (POLYROB_DATA_DIR) is named
+    next to the config home — the keys and the wallet seed are never left out."""
     from cli.commands.uninstall import uninstall_cmd
 
     config = tmp_path / "config"
@@ -147,7 +148,34 @@ def test_purge_names_both_homes_and_never_only_the_cwd_one(tmp_path, monkeypatch
     assert res.exit_code == 0, res.output
     assert str(config) in res.output
     assert str(project / ".polyrob") in res.output
-    assert "per-project" in res.output
+    assert "per-project" not in res.output
+
+
+def test_default_data_home_is_inside_config_home_and_cwd_polyrob_is_only_named(
+        tmp_path, monkeypatch):
+    """The default data home is <config>/data; a legacy cwd/.polyrob is named
+    as not loaded and never deleted."""
+    from cli.commands.uninstall import uninstall_cmd
+
+    config = tmp_path / "config"
+    proj = tmp_path / "proj"
+    (config / "data").mkdir(parents=True)
+    (proj / ".polyrob").mkdir(parents=True)
+    monkeypatch.setenv("POLYROB_HOME", str(config))
+    monkeypatch.delenv("POLYROB_DATA_DIR", raising=False)
+    monkeypatch.chdir(proj)
+    # the REAL local default (conftest points it at the cwd for isolation)
+    import core.runtime_paths as _rp
+    monkeypatch.setattr(_rp, "_local_default_data_home", _REAL_LOCAL_DATA_HOME)
+    monkeypatch.setattr("cli.commands.uninstall.find_shim", lambda: None)
+
+    res = CliRunner().invoke(uninstall_cmd, ["--purge"], input="DELETE\n")
+    assert res.exit_code == 0, res.output
+    assert "inside the config home" in res.output
+    assert "no longer loads it" in res.output
+    assert "Could not delete" not in res.output
+    assert not config.exists()
+    assert (proj / ".polyrob").is_dir(), "a legacy project folder is never deleted"
 
 
 def test_purge_deletes_both_homes_after_confirmation(tmp_path, monkeypatch):

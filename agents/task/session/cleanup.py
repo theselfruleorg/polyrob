@@ -296,8 +296,13 @@ class SessionCleanupMixin:
                 # tenant (whoever opened it), so without this guard a stranger's
                 # room conversation became a row in the owner's own history, and
                 # `skip_memory` for a room was only ever half true.
+                from agents.task.session_class import may_write_owner_memory
                 if is_public_session(self):
                     self.logger.debug("public (room) session: no episodic write")
+                elif not may_write_owner_memory(self):
+                    # AGT-6 / DATA-9: a session a correspondent drives (created for
+                    # one, or tainted by one) is not the owner's history either.
+                    self.logger.debug("correspondent-facing session: no episodic write")
                 elif not is_autonomous(_episode_session_id):
                     # The eviction status ("suspended") is not an account of the
                     # turn — ask the closing turn itself whether it finished.
@@ -487,7 +492,8 @@ class SessionCleanupMixin:
                                     # P0-7: push the consolidated summary + any unsynced
                                     # findings to the cross-session store (same path the
                                     # per-step loop uses). Previously discarded at close.
-                                    if _drained:
+                                    from agents.task.session_class import may_write_owner_memory
+                                    if _drained and may_write_owner_memory(self):
                                         try:
                                             from modules.memory.registry import memory_sync_turn
                                             await memory_sync_turn(
@@ -818,4 +824,3 @@ class SessionCleanupMixin:
 
         except Exception as e:
             self.logger.error(f"Error during cleanup: {e}")
-

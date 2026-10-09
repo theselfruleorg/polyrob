@@ -36,8 +36,8 @@ def _payload(*pools, base=TOKEN):
     """``/tokens/<addr>`` body: each pool is (liquidity_usd, priceUsd)."""
     return {"pairs": [
         {"baseToken": {"address": base, "symbol": "TKN", "name": "Token"},
-         "liquidity": {"usd": liq}, "priceUsd": price}
-        for liq, price in pools
+         "liquidity": {"usd": liq}, "priceUsd": price, "pairAddress": f"pool-{i}"}
+        for i, (liq, price) in enumerate(pools)
     ]}
 
 
@@ -52,11 +52,11 @@ def test_a_thin_priced_pool_is_not_high_just_because_other_pools_are_deep():
     assert info.confidence == "low"
 
 
-def test_a_priced_pool_that_clears_the_floor_is_still_high():
+def test_a_dust_second_pool_cannot_promote_the_price():
     info = parse_pair(_payload((FLOOR * 2, "1.0"), (10.0, "9.0")), TOKEN)
     assert info.price_usd == pytest.approx(1.0)             # deepest pool's price
     assert info.priced_liquidity_usd == pytest.approx(FLOOR * 2)
-    assert info.confidence == "high"
+    assert info.confidence == "low"
 
 
 def test_the_basis_is_carried_so_a_caller_never_has_to_infer_it():
@@ -111,3 +111,10 @@ def test_the_change_can_only_demote_never_promote():
             if info.confidence == "high":
                 # would also have been "high" under the old total-based rule
                 assert info.liquidity_usd >= FLOOR and info.pool_count >= 2
+
+
+def test_two_distinct_deep_pools_are_high():
+    payload = _payload((FLOOR * 2, "1.0"), (FLOOR, "1.0"))
+    assert parse_pair(payload, TOKEN).confidence == "high"
+    payload["pairs"][1]["pairAddress"] = payload["pairs"][0]["pairAddress"]
+    assert parse_pair(payload, TOKEN).confidence == "low"

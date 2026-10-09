@@ -9,9 +9,11 @@ Refactored Dec 2025: All model configuration comes from model_registry.
 No deprecated fallback constants - registry is the single source of truth.
 """
 
+from modules.llm.billing_guard import inference_sdk
 import logging, re, time, json  # noqa: E401
 from typing import List, Dict, Any, Optional, Union, Tuple
 from uuid import uuid4
+from modules.llm.recovery_boundary import structured_prefix as _recovery_prefix_is_structured, textual_envelope
 from openai import AsyncOpenAI
 
 from modules.llm.llm_client import LLMClient, translate_llm_error
@@ -50,22 +52,8 @@ _KIMI_TOKEN_MARKER = "<|tool_call"
 
 
 def _new_recovered_call_id(tag: str, i: int) -> str:
-    """Mint a GLOBALLY unique id for a recovered tool call (P0-4).
-
-    Recovered ids used to be deterministic per-response (``call_{i}_{idx}`` /
-    ``call_txt_{i}``), so two recovery turns in one session produced DUPLICATE
-    ids across history. Downstream, ``tool_message_repair.repair_tool_message_pairs``
-    keys its ``tool_msg_map`` by id over the WHOLE history (last write wins) and
-    ``del``s the id on first use — so step 1's AIMessage got paired with step 2's
-    tool result and step 2 got a fabricated "[ERROR: No response recorded...]"
-    placeholder. Textual leaks fire on ~20-25% of Kimi/NIM turns, making the
-    collision routine.
-
-    Mirrors the ``tool_call_builder.normalize_tool_call`` reference pattern
-    (uuid4 for missing ids), kept short/provider-safe: ``call_{tag}_{hex8}_{i}``.
-    The trailing enumeration index ``i`` keeps ids distinct within one response
-    even in the astronomically-unlikely event of a hex collision, and preserves
-    call ordering for debuggability.
+    """Use distinct ids across responses so history repair cannot pair a result
+    with a different recovered call. The suffix also distinguishes parallel calls.
     """
     return f"call_{tag}_{uuid4().hex[:8]}_{i}"
 
@@ -88,33 +76,41 @@ def parse_kimi_tool_calls(content: str) -> List[Dict[str, Any]]:
     text = content or ""
     out: List[Dict[str, Any]] = []
     decoder = json.JSONDecoder()
-    for i, m in enumerate(_KIMI_TOOL_CALL_HEADER_RE.finditer(text)):
+    first = _KIMI_TOOL_CALL_HEADER_RE.search(text)
+    if first and not _recovery_prefix_is_structured(
+            text[:first.start()].replace("<|tool_calls_section_begin|>", "").replace("<|tool_call_end|>", "")):
+        return []
+    pos = first.start() if first else len(text)
+    while pos < len(text):
+        m = _KIMI_TOOL_CALL_HEADER_RE.match(text, pos)
+        if not m:
+            return []
         name = m.group("name")
         idx = m.group("idx")
-        # Args start at the first '{' after the argument-begin marker. raw_decode
-        # consumes exactly one complete JSON object and ignores trailing tokens,
-        # so an embedded ``} <|tool_call_end|>`` inside a string value no longer
-        # truncates the capture.
-        brace = text.find("{", m.end())
-        if brace == -1:
-            logger.warning(
-                f"event=kimi_toolcall_parse_error model=? name={name} idx={idx} "
-                f"reason=no_opening_brace (Kimi tool-call header without JSON args — dropped)"
-            )
-            continue
         try:
-            obj, end = decoder.raw_decode(text, brace)
+            obj, end = decoder.raw_decode(text, m.end())
+            if not isinstance(obj, dict):
+                return []
         except (ValueError, TypeError) as e:
             logger.warning(
                 f"event=kimi_toolcall_parse_error name={name} idx={idx} "
                 f"reason=json_decode_failed err={e} (Kimi tool-call args did not parse — dropped)"
             )
-            continue
+            return []
         out.append({
-            "id": _new_recovered_call_id("kimi", i),
+            "id": _new_recovered_call_id("kimi", len(out)),
             "type": "function",
             "function": {"name": name, "arguments": json.dumps(obj)},
         })
+        # Advance past the COMPLETE JSON value. Markers inside quoted arguments
+        # are data, and prose between calls invalidates the entire envelope.
+        tail = text[end:].lstrip()
+        if not tail.startswith("<|tool_call_end|>"):
+            return []
+        tail = tail[len("<|tool_call_end|>"):].lstrip()
+        if tail == "<|tool_calls_section_end|>" or not tail:
+            break
+        pos = len(text) - len(tail)
     return out
 
 
@@ -353,6 +349,8 @@ def recover_textual_tool_calls(
                 )
 
     found.sort(key=lambda f: f[0])
+    if found and not textual_envelope(content, found):
+        return content, []
     calls = [
         {
             "id": _new_recovered_call_id("txt", i),
@@ -474,7 +472,7 @@ class OpenRouterClient(LLMClient):
     async def _validate_connection(self) -> None:
         """Validate OpenRouter connection."""
         try:
-            response = await self._client.chat.completions.create(
+            response = await inference_sdk(self).chat.completions.create(
                 model=self.model_type,
                 messages=[{"role": "user", "content": "Test"}],
                 max_tokens=5
@@ -570,7 +568,7 @@ class OpenRouterClient(LLMClient):
             apply_request_extras(request_params, self, max_tokens_value)
             self.logger.debug(f"{self._PROVIDER_LABEL} API request: model={self.model_type}, max_tokens={max_tokens_value}")
 
-            self.last_response = await self._client.chat.completions.create(**request_params)
+            self.last_response = await inference_sdk(self).chat.completions.create(**request_params)
 
             # Extract response
             response_text = ""
@@ -728,7 +726,7 @@ class OpenRouterClient(LLMClient):
 
             apply_request_extras(request_params, self, max_tokens_value)
             api_start = time.time()
-            response = await self._client.chat.completions.create(**request_params)
+            response = await inference_sdk(self).chat.completions.create(**request_params)
             api_duration = time.time() - api_start
 
             self.last_response = response
@@ -889,7 +887,7 @@ class OpenRouterClient(LLMClient):
             if not self._client:
                 await self._setup_client()
 
-            response = await self._client.chat.completions.create(
+            response = await inference_sdk(self).chat.completions.create(
                 model=self.model_type,
                 messages=[{"role": "user", "content": "test"}],
                 max_tokens=1
@@ -914,7 +912,7 @@ class OpenRouterClient(LLMClient):
 
         Required abstract method implementation for LLMClient base class.
         """
-        return await self._client.chat.completions.create(
+        return await inference_sdk(self).chat.completions.create(
             model=self.model_type,
             messages=[{"role": "user", "content": "test"}],
             max_tokens=1

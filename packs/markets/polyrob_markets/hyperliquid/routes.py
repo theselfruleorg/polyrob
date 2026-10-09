@@ -8,7 +8,7 @@ FastAPI endpoints for Hyperliquid tool configuration and execution.
 ``/api/packs/markets/hyperliquid/*`` (was ``/api/hyperliquid/*`` in core).
 """
 
-from fastapi import APIRouter, Depends, Request, HTTPException
+from fastapi import Query, APIRouter, Depends, Request, HTTPException
 from typing import Optional
 
 from polyrob_markets.hyperliquid.api_models import (
@@ -77,11 +77,13 @@ async def configure_hyperliquid(
         )
 
     # Build trading limits
-    trading_limits = TradingLimits(
-        max_order_size_usd=body.max_order_size_usd or 1000.0,
-        max_leverage=body.max_leverage or 5,
-        enable_autonomous_trading=body.enable_autonomous_trading or False,
-    )
+    # A field left unset (None) takes the TradingLimits dataclass default.
+    _given = {
+        "max_order_size_usd": body.max_order_size_usd,
+        "max_leverage": body.max_leverage,
+        "enable_autonomous_trading": body.enable_autonomous_trading,
+    }
+    trading_limits = TradingLimits(**{k: v for k, v in _given.items() if v is not None})
 
     await db.save_credentials(
         user_id=user_id,
@@ -302,6 +304,7 @@ def _owner_gate_and_bind(tool_name: str, user_id: str, read_actions, venue: str)
 @router.get("/tools", response_model=AvailableToolsResponse)
 async def get_available_tools(
     request: Request,
+    user_id: str = Depends(get_user_id),
 ):
     """List all available Hyperliquid tools"""
     tool = get_hyperliquid_tool(request)
@@ -449,7 +452,7 @@ async def get_open_orders(
 @router.get("/audit", response_model=AuditLogResponse)
 async def get_audit_log(
     request: Request,
-    limit: int = 50,
+    limit: int = Query(50, ge=1, le=500),
     action: Optional[str] = None,
     user_id: str = Depends(get_user_id),
 ):

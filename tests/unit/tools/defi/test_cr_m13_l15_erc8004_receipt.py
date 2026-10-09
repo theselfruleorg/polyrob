@@ -148,9 +148,9 @@ async def test_the_chain_check_runs_inside_the_reservation(monkeypatch):
     assert res.error and "already holds" in res.error
 
 
-def test_a_held_token_is_not_described_as_ours():
+def test_a_proven_self_mint_names_the_existing_registration():
     err = ar.check_not_already_registered(existing_agent_id=42, chain="base")
-    assert "42" in err and "TRANSFERRED" in err
+    assert "42" in err and "self-minted" in err
 
 
 def test_minted_id_parser_needs_exactly_one_mint_to_us():

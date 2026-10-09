@@ -75,10 +75,19 @@ def _sell_deltas(usdc_in=2_000_000, meme_out=-(10 ** 18), **kw):
     return Deltas(**base)
 
 
+def _revoke_tx_or(intent, tx):
+    """A revoke must be signed as exactly ``token.approve(spender, 0)`` (the guard asserts
+    the shape); every other fixture keeps its stub transaction."""
+    if intent is not None and intent.is_allowance_op and not intent.expected_allowance_grants:
+        return {"to": intent.token, "data": "0x095ea7b3" + "0" * 24
+                + str(intent.to).lower()[2:] + "0" * 64, "value": 0, "chainId": 8453}
+    return tx
+
+
 def _authorize(intent, deltas, *, gate=None, ctx=None, forged=False,
                autonomous_ok=False, price=None, fallback=None):
     return tx_guard.authorize(
-        intent, {"to": SPENDER, "data": "0x", "value": 0, "chainId": 8453},
+        intent, _revoke_tx_or(intent, {"to": SPENDER, "data": "0x", "value": 0, "chainId": 8453}),
         holder=HOLDER, gate=gate or _gate(),
         execution_context=ctx,
         simulate_fn=lambda **_: deltas,
@@ -101,6 +110,7 @@ def test_unpriceable_sell_to_quote_is_valued_at_measured_inflow():
     d = _authorize(_sell_intent(), _sell_deltas(usdc_in=2_000_000))
     assert d.allowed, d.reason
     assert d.amount_usd == pytest.approx(2.00)
+    assert d.valuation_basis == "inflow"
 
 
 def test_unpriceable_sell_without_declared_inflow_still_refuses():
@@ -168,15 +178,15 @@ def test_unpriceable_grant_beyond_held_balance_still_refuses():
 # 3. Cents, not sub-cent noise
 # --------------------------------------------------------------------------
 
-def test_sub_cent_drift_does_not_refuse_the_declared_max():
-    """$1.9903 vs a declared $1.99 was a live refusal → retry dance. Caps
-    operate in cents."""
+def test_sub_cent_excess_does_not_bypass_the_declared_max():
+    """Caps round risk upward; a positive excess cannot be spent for free."""
     intent = _sell_intent(amount_raw=1_990_300, held_balance_raw=2_000_000,
                           token=USDC, inflow_token=None, max_spend_usd=1.99)
     deltas = Deltas(ok=True, native_delta=0, token_deltas={USDC: -1_990_300},
                     allowance_deltas={(USDC, SPENDER): 0})
     d = _authorize(intent, deltas, price=1.0)
-    assert d.allowed, d.reason
+    assert not d.allowed
+    assert "max_spend_usd" in d.reason
 
 
 # --------------------------------------------------------------------------

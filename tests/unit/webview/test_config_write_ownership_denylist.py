@@ -63,7 +63,7 @@ def test_ordinary_flag_still_writable(monkeypatch, tmp_path):
     c = _client(monkeypatch, tmp_path)
     r = c.patch("/api/webgate/config/GOALS_ENABLED", json={"value": "on"})
     assert r.status_code == 200
-    assert "GOALS_ENABLED=on" in (tmp_path / ".polyrob" / ".env").read_text()
+    assert "GOALS_ENABLED=on" in (tmp_path / "home" / ".env").read_text()
 
 
 def test_get_marks_handover_flags_unwritable(monkeypatch, tmp_path):

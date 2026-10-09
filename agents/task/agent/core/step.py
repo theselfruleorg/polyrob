@@ -20,7 +20,6 @@ from typing import Any, Callable, Dict, List, Optional, Type, TypeVar, Union, Tu
 from collections import deque  # ADDED: Import deque for bounded collections
 from agents.task.agent.tool_call_tracker import ToolCallTracker  # Robust tool call ID tracking
 
-from dotenv import load_dotenv
 
 # Import centralized constants
 from agents.task.constants import (
@@ -113,7 +112,6 @@ from agents.task.logging_config import get_task_logger
 # Import centralized path management
 from agents.task.path import pm
 
-load_dotenv()
 
 # Generic logger for the module itself (not instances)
 logger = get_task_logger('agent')
@@ -155,6 +153,23 @@ def _should_capture_screenshot(agent: Any, use_vision: bool) -> bool:
 		return bool(agent._has_active_browser_usage())
 	except Exception:  # pragma: no cover - defensive
 		return True
+
+
+def _note_browser_state(agent: Any, state: Any) -> None:
+	"""Remember a state that shows a REAL page, for ``_has_active_browser_usage``.
+
+	That probe reads ``_last_browser_states``, but nothing ever appended to it, so
+	the numbered element list never reached the prompt and the agent could read
+	pages but not click or type (prod 2026-10-04 11:02). Placeholders (no URL,
+	about:blank, the "No Browser" stand-in) are not remembered."""
+	if state is None:
+		return
+	url = (getattr(state, 'url', '') or '').strip()
+	if not url or url == 'about:blank' or getattr(state, 'title', '') == 'No Browser':
+		return
+	states = getattr(agent, '_last_browser_states', None)
+	if states is not None:
+		states.append(state)
 
 
 def _is_fatal_step_error(error_str: str, billing_failover_enabled: bool) -> bool:
@@ -499,6 +514,7 @@ class StepMixin:
 					# byte-identical.
 					state = await browser_context.get_state(
 						capture_screenshot=_should_capture_screenshot(self, self.use_vision))
+					_note_browser_state(self, state)
 
 					# Apply page content truncation early for token safety
 					if hasattr(state, 'page_content') and state.page_content:

@@ -49,7 +49,8 @@ def test_block_from_ready_flips_only_ready_rows(tmp_path):
     g = b.create(user_id="rob", title="Post it")
     b.claim(g.id, "w", ttl_seconds=60)
     # below-breaker failure returns the goal to ready
-    b.record_failure(g.id, error="agent declared BLOCKED: need TWITTER_ENABLED")
+    b.record_failure(g.id, error="agent declared BLOCKED: need TWITTER_ENABLED",
+        claim_token=b.get(g.id).claim_token)
     assert b.get(g.id).status == STATUS_READY
     assert b.block_from_ready(g.id, error="agent declared BLOCKED: need TWITTER_ENABLED") is True
     assert b.get(g.id).status == STATUS_BLOCKED
@@ -61,7 +62,31 @@ def test_block_from_ready_respects_owner_intervention(tmp_path):
     b = GoalBoard(str(tmp_path / "g.db"))
     g = b.create(user_id="rob", title="Post it")
     b.claim(g.id, "w", ttl_seconds=60)
-    b.record_failure(g.id, error="x")  # back to ready
+    b.record_failure(g.id, error="x", claim_token=b.get(g.id).claim_token)  # back to ready
     b.cancel(g.id)
     assert b.block_from_ready(g.id, error="x") is False
     assert b.get(g.id).status == "cancelled"
+
+
+# Prod 2026-10-04 15:41: goal 7869c53524c3's run ended done("BLOCKED: cron
+# 59c15c98819f is owner-authored, so cronjob_edit was refused …") without the
+# taught `OUTCOME:` prefix. No outcome line was found, the judge passed it as
+# met, the goal closed, its own ask went obsolete, and the owner's approval
+# (tapped 21 s earlier) had no goal left to resume.
+
+def test_a_done_text_that_leads_with_blocked_is_a_declaration():
+    from agents.task.runtime.run_outcome import leading_blocked_declaration
+    text = ('BLOCKED: cron 59c15c98819f is owner-authored, so cronjob_edit was '
+            'refused.\nRaised owner_ask 958b6b930086.')
+    line = leading_blocked_declaration(text)
+    assert parse_blocked_outcome(line).startswith("cron 59c15c98819f is owner-authored")
+    assert leading_blocked_declaration("BLOCKED — need X access") == "BLOCKED — need X access"
+
+
+def test_prose_that_starts_with_blocked_is_not_a_declaration():
+    from agents.task.runtime.run_outcome import leading_blocked_declaration
+    assert leading_blocked_declaration("Blocked 3 spam accounts and reported them.") is None
+    assert leading_blocked_declaration("blocked: lowercase is prose here") is None
+    assert leading_blocked_declaration("Posted tweet. BLOCKED: nothing") is None
+    assert leading_blocked_declaration("") is None
+    assert leading_blocked_declaration(None) is None

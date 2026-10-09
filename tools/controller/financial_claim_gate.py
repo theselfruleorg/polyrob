@@ -37,7 +37,9 @@ OUTBOUND_TEXT_FIELDS: Dict[str, Tuple[str, ...]] = {
     "message": ("text",),
     "send_message": ("text",),
     # email (tools/email_tool.py)
-    "email_send": ("subject", "body"),
+    "email_send": ("subject", "body", "html"),
+    "email_reply": ("body", "html"),
+    "email_forward": ("note",),
     # X API (the X pack: polyrob_x/twitter_tool.py)
     "twitter_post": ("text", "poll_options"),
     "twitter_reply": ("text",),
@@ -48,6 +50,9 @@ OUTBOUND_TEXT_FIELDS: Dict[str, Tuple[str, ...]] = {
     "x_post": ("text",),
     "x_reply": ("text",),
     "x_dm": ("text",),
+    # Permanent public writes through an NFT account.
+    "agent_nft_journal": ("text",),
+    "agent_nft_bind_identity": ("agent_uri",),
 }
 
 
@@ -117,6 +122,9 @@ async def _receive_records(user_id: str) -> Tuple[List[SettledRecord], Optional[
             user_id=user_id, status="completed", limit=200, db=db)
         out = []
         for r in rows or []:
+            from modules.x402.income_chains import is_income_chain
+            if not is_income_chain(r.get("chain"), r.get("asset_id")):
+                continue
             try:
                 out.append(SettledRecord(
                     direction=RECEIVE, amount_usd=float(r.get("amount_usd") or 0),

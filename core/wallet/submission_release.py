@@ -156,7 +156,8 @@ def release_submission(reference: str, *, data_dir: Optional[str] = None,
                        charge_usd: Optional[float] = None, never_sent: bool = False,
                        reason: str = "", no_replay_key: bool = False,
                        inspect: Optional[Callable[[dict], object]] = None,
-                       now: Optional[float] = None) -> dict:
+                       now: Optional[float] = None,
+                       release_replay_key: bool = False) -> dict:
     """Book and release one row. Returns the audit entry (written or found).
 
     068 B5–B7: the charge books under the row's ORIGINAL venue and replay key,
@@ -164,7 +165,13 @@ def release_submission(reference: str, *, data_dir: Optional[str] = None,
     (``submission_journal.operator_release``), with at most one charge per
     submission reference — a retry after a crash finds the charge it already
     wrote instead of adding a second one.
+
+    ``release_replay_key`` (``never_sent`` only): book under a release key, not
+    the request's own, so a request PROVEN unpaid (``core.wallet.x402_expiry``:
+    the authorization expired unused on chain) may be retried.
     """
+    if release_replay_key and not never_sent:
+        raise ReleaseRefused("only a never-sent release may free the request's replay key")
     from dataclasses import asdict, is_dataclass
 
     from core.wallet import submission_journal as sj
@@ -217,7 +224,7 @@ def release_submission(reference: str, *, data_dir: Optional[str] = None,
             "counterparty": None,
             # The ORIGINAL replay key when the row carries one, so the rebuilt
             # replay set refuses a retry of the same request (068 B6).
-            "idempotency_key": (locked_row.get("idempotency_key")
+            "idempotency_key": ((None if release_replay_key else locked_row.get("idempotency_key"))
                                 or f"operator_release:{ref}"),
             "result_ref": None,
             "chain": None if ref.startswith("attempt:") else str(locked_row["chain"]),

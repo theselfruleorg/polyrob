@@ -9,6 +9,7 @@ Normalized message dict shape (produced by the harness):
     {
       "message_id":  "<id@host>",      # RFC 5322 Message-ID (dedup + idempotency key)
       "from":        "Name <a@b.com>",  # raw From header
+      "sender_authenticated": False,    # the MX's Authentication-Results proved From
       "subject":     "Re: ...",
       "body":        "...",             # plain-text body (quoted history is truncated here)
       "in_reply_to": "<out@rob>",       # In-Reply-To header (the thread anchor)
@@ -21,13 +22,16 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-from email.utils import parseaddr
 from typing import Any, Optional
 
 from core.surfaces.act import InboundResult  # canonical envelope (R-4) — was a local duplicate
 from core.surfaces.dispatcher import RouteDecision, route_inbound
 from core.surfaces.envelopes import Identity, InboundMessage, SessionSource
 from core.surfaces.media import Media
+# OS5: the ONE machine-mail classifier, below both the surface (never answer it)
+# and the agent's ``email_read_machine_mail`` (show it).
+from tools.email_providers.mime import is_auto_generated  # noqa: F401
+from tools.email_providers.mime import sender_address
 
 logger = logging.getLogger(__name__)
 
@@ -44,9 +48,11 @@ _QUOTE_BOUNDARY_RES = [
 
 
 def parse_from_address(raw_from: str) -> str:
-    """Extract the bare, normalized email address from a From header. '' if none."""
-    _, addr = parseaddr(raw_from or "")
-    return (addr or "").strip().lower()
+    """Extract the bare, normalized email address from a RAW From header.
+
+    '' if it names none or more than one (CHAT-6: see ``sender_address``).
+    """
+    return sender_address(raw_from)
 
 
 def truncate_quoted_history(body: str) -> str:
@@ -126,31 +132,6 @@ def _append_attachment_manifest(text: str, media: list) -> str:
             f"[This email carried {len(media)} attachment(s) and no message text:\n{listing}]")
 
 
-_AUTO_PRECEDENCE = frozenset({"bulk", "junk", "list", "auto_reply"})
-_AUTO_SENDERS = frozenset({"mailer-daemon", "postmaster"})
-
-
-def is_auto_generated(msg: dict) -> bool:
-    """True for a machine-sent mail the agent must never answer (OS5).
-
-    RFC 3834: an ``Auto-Submitted`` value other than ``no``; the de-facto
-    ``Precedence: bulk|junk|list|auto_reply``, ``X-Autoreply`` and
-    ``X-Autorespond``; and a bounce from ``MAILER-DAEMON``/``postmaster``.
-    Answering one starts an agent <-> auto-responder loop.
-    """
-    headers = {str(k).lower(): str(v or "").strip().lower()
-               for k, v in (msg.get("headers") or {}).items()}
-    auto = headers.get("auto-submitted", "")
-    if auto and auto != "no":
-        return True
-    if headers.get("precedence", "") in _AUTO_PRECEDENCE:
-        return True
-    if headers.get("x-autoreply") or headers.get("x-autorespond"):
-        return True
-    addr = parse_from_address(msg.get("from", "")) or ""
-    return addr.split("@", 1)[0].lower() in _AUTO_SENDERS
-
-
 def dedup_key(msg: dict) -> str:
     """Stable dedup key for a message. Uses Message-ID when present; otherwise a
     surrogate hash of from|subject|body — NEVER the empty string (an empty key would
@@ -205,7 +186,10 @@ def build_inbound_message(msg: dict, user_directory: Any) -> Optional[InboundMes
     message_id = msg.get("message_id")
     return InboundMessage(
         text=text,
-        identity=Identity(user_id=user_id, source=source, raw_user_id=addr),
+        identity=Identity(user_id=user_id, source=source, raw_user_id=addr,
+                          # CHAT-6: only an MX-authenticated From may reach a
+                          # tier above DENIED (resolve_access_tier).
+                          sender_authenticated=msg.get("sender_authenticated") is True),
         idempotency_key=str(message_id) if message_id else None,
         reply_to=(msg.get("in_reply_to") or None),
         raw=msg,

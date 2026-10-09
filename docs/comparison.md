@@ -28,7 +28,7 @@ appendix at the end for when each claim was verified.
 | **Durable task/goal board** | ✅ Goal board + objectives + cron, all restart-surviving | ✅ Kanban board with DAG decomposition | ❌ (cron + sessions only) |
 | **Proactive self-wake** | ✅ Self-wake with depth/backoff guards and a no-change gate | ❌ | ❌ |
 | **Skills system** | ✅ `SKILL.md` + install pipeline (local/git/URL, scanned and quarantined) | ✅ Autonomous skill creation and learning loop | ✅ Workspace skills |
-| **Messaging channels** | 7 — Telegram, WhatsApp, Email, Discord, Slack, Signal, X | ~30 (adds WeChat, Feishu, LINE, Matrix, iMessage, …) | ~23 + native mobile/desktop apps |
+| **Messaging channels** | 8 — Telegram, WhatsApp, Email, Discord, Slack, Signal, Feishu / Lark, DingTalk — plus X DMs through the agent's X tools | ~30 (adds WeChat, Feishu, LINE, Matrix, iMessage, …) | ~23 + native mobile/desktop apps |
 | **Group rooms** | ✅ Allow-listed rooms with a read-only room toolset, per-room policy, roles and caps | ❓ | ❓ |
 | **REST API** | ✅ Built-in, documented | ❌ (gateway / web, not a documented REST session API) | ❌ |
 | **A2A protocol** | ✅ Google spec, JSON-RPC + REST + SSE | ❌ (exposes ACP to editors) | ❌ |
@@ -41,8 +41,9 @@ appendix at the end for when each claim was verified.
 | **Portable identities** | ✅ Profiles: a whole isolated home, exportable and git-installable | ❓ | ❓ |
 | **Tenant isolation** | ✅ Multi-tenant, `user_id`-scoped inside one process | ❌ Single-operator | ❌ Single-operator |
 | **Access model** | ✅ 4 tiers — owner / correspondent / group member / denied — plus origin taint | ⚠️ Binary authorized-or-not + DM pairing | ⚠️ DM pairing + allowlists |
+| **Terminal / shell** | ✅ Persistent shell + background jobs (stdin, PTY, notify); sandboxed by default, host only for the owner's own terminal turn; a command guard with a floor no approval lifts | ✅ | ✅ |
 | **Owner-approval queue** | ✅ Durable and remotely approvable | ⚠️ In-memory, lost on restart | ⚠️ Pairing gates channel access, not per-tool |
-| **Code-exec sandboxing** | ✅ Docker (opt-in); local and ssh backends | ✅ 6 backends (local, Docker, SSH, Singularity, Modal, Daytona) | ✅ Docker / SSH / OpenShell |
+| **Code-exec sandboxing** | ✅ Docker or Podman (opt-in); local and ssh backends; Modal, Daytona, Vercel Sandbox and Singularity as optional packs ⚠️ (tested against fakes so far) | ✅ 6 backends (local, Docker, SSH, Singularity, Modal, Daytona) | ✅ Docker / SSH / OpenShell |
 | **Self-hosted** | ✅ | ✅ | ✅ |
 
 > **Licensing is table stakes, not a differentiator** — all three are MIT. POLYROB
@@ -88,9 +89,10 @@ upstream has:
   skills, memory, goals, sessions — that you can export, or install from a git repo.
   Credentials and the agent's own memories never travel with one.
 
-Where POLYROB **lags**, honestly: **channel breadth** (7 against Hermes' ~30 and
-OpenClaw's ~23, and OpenClaw's native mobile and desktop apps), **code-exec backend
-variety** (Hermes offers serverless backends such as Modal and Daytona), and
+Where POLYROB **lags**, honestly: **channel breadth** (8 against Hermes' ~30 and
+OpenClaw's ~23, and OpenClaw's native mobile and desktop apps), **maturity of its
+serverless sandboxes** (the Modal, Daytona, Vercel Sandbox and Singularity backends
+ship as optional packs but have been tested against fakes, not run at scale), and
 **community size** (POLYROB is the newer project).
 
 > POLYROB's tenant isolation is enforced by `user_id`-scoped checks inside one shared
@@ -105,7 +107,7 @@ variety** (Hermes offers serverless backends such as Modal and Daytona), and
 | Choose | When you need |
 |---|---|
 | **POLYROB** | An agent that **transacts** — quote, invoice, get paid, pay for resources, trade and deploy on-chain · **more than one person** talking to it, with a stranger's input treated as data · **durable proactive autonomy** that survives restarts · **restart-safe approvals** you can grant from your phone · **interoperability**: MCP client and server, A2A, REST and an OpenAI-compatible surface · self-hosted control of your keys and data |
-| **Hermes** | The **widest channel and model reach** for a single-user setup · a **skill learning loop** · a **kanban task swarm** with DAG decomposition · **serverless sandboxes** (Modal, Daytona) |
+| **Hermes** | The **widest channel and model reach** for a single-user setup · a **skill learning loop** · a **kanban task swarm** with DAG decomposition · **proven serverless sandboxes** (Modal, Daytona) |
 | **OpenClaw** | **Omni-channel presence** across ~23 platforms · **native mobile and desktop apps** and voice mode · a **Node.js/TypeScript** stack |
 
 ---

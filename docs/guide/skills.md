@@ -26,7 +26,7 @@ external skill of the same name. A colliding pack skill uses `<pack-id>:<skill-i
 |-------|----------|-----------|-------------------|
 | **builtin** | the installed package (`data/prompts/skills/`) | read-only, trusted | ships with POLYROB |
 | **pack:<id>** | a loaded pack's contributed skills directory | read-only, trusted with the loaded pack | installed with the pack; absent when the pack is disabled/refused |
-| **user** | `<data_home>/skills/user_<uid>/` (local CLI: `./.polyrob/skills/user_<uid>/`, or `$POLYROB_DATA_DIR`) | yes | `polyrob skill install`, or the agent authoring a skill |
+| **user** | `<data_home>/skills/user_<uid>/` (local CLI: `~/.polyrob/data/skills/user_<uid>/`, or under `$POLYROB_DATA_DIR`) | yes | `polyrob skill install`, or the agent authoring a skill |
 | **external (discovered)** | `~/.agents/skills/`, `~/.claude/skills/` (user), and per-repo `./.agents/skills/`, `./.claude/skills/` (project) | no (loaded in place) | drop a skill folder in and it's auto-discovered |
 
 Builtin skills ship inside the installed package (`data/prompts/skills/`) and are
@@ -35,6 +35,22 @@ home**, not the package tree, so they **survive `polyrob update`** — the updat
 snapshots `<data_home>/skills` first, and `polyrob update --rollback` restores it
 (data only; the code is not reverted — see
 [upgrading.md](upgrading.md#the-safety-net)).
+
+`polyrob skills list` shows every builtin. They cover coding, research, documents,
+email, the money rail and its safety checks, and skill authoring. Two of them run
+a whole procedure rather than add knowledge:
+
+- **`incident-response`** — a live incident: impact first, stabilise before root
+  cause, roll back before you debug, one change at a time, an append-only
+  timeline, and recovery only on an observed signal. It includes the order for a
+  leaked secret: revoke or rotate, scope the exposure, purge, prove the old
+  credential dead, record. It loads on words like "outage", "leaked key" or
+  "wallet drained".
+- **`adversarial-consensus`** — for a large or hard-to-reverse decision, or when
+  you ask for a blind panel: several `delegate_task` children answer
+  independently, each critiques the others' anonymised answers, and the agent
+  judges, naming agreements, disagreements and what nobody checked. It never
+  averages, and it costs about two child runs per panel member.
 
 ---
 

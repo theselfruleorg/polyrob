@@ -128,7 +128,8 @@ class TelegramSurface(Surface):
 
     async def send_text(self, chat_id: str, text: str, *, reply_to: Optional[str] = None,
                         thread_id: Optional[str] = None,
-                        actions: Optional[list] = None) -> Optional[Any]:
+                        actions: Optional[list] = None,
+                        ids_out: Optional[list] = None) -> Optional[Any]:
         """The ONE outbound text seam: split, convert to Telegram HTML, send.
 
         Retries a chunk as plain text (the original markdown source) if Telegram rejects
@@ -141,6 +142,9 @@ class TelegramSurface(Surface):
 
         064 F2: the LAST chunk carries an inline keyboard for ``actions`` (explicit
         only — never inferred from the text; ``core/surfaces/actions.py``).
+
+        0008: ``ids_out`` (when given) collects every chunk's message_id as it
+        lands, so a multi-chunk post can be deleted whole.
         """
         limit = self.capabilities.max_message_bytes
         flavor = self.capabilities.markdown_flavor
@@ -193,6 +197,8 @@ class TelegramSurface(Surface):
                         pass
                 raise
             last_id = getattr(sent, "message_id", None)
+            if ids_out is not None and last_id is not None:
+                ids_out.append(str(last_id))
         return last_id
 
     async def _send_chunk(self, chat_id: str, body: str, parse_mode, extra: dict):
@@ -222,11 +228,12 @@ class TelegramSurface(Surface):
             return SendResult(success=True)
         chat_id = chat_id_from_session_key(msg.session_key)
         last_id = None
+        ids: list = []
         try:
             last_id = await self.send_text(
                 chat_id, msg.text or "", reply_to=msg.reply_to,
                 thread_id=thread_id_from_session_key(msg.session_key),
-                actions=getattr(msg, "actions", None) or None)
+                actions=getattr(msg, "actions", None) or None, ids_out=ids)
         except Exception as e:  # fail-open: never raise into the loop
             logger.error("TelegramSurface.send to %s failed: %s", chat_id, e, exc_info=True)
             remaining = getattr(e, "remaining_text", None)
@@ -241,7 +248,7 @@ class TelegramSurface(Surface):
             # above has already landed. See _send_media.
             if msg.media:
                 failed = await self._send_media(chat_id, msg.media,
-                                                self._parse_mode())
+                                                self._parse_mode(), ids_out=ids)
                 if failed:
                     # ⚠️ D56: SAID, not just logged. The text above carries the
                     # message; the reader needs to know a picture is MISSING
@@ -258,7 +265,31 @@ class TelegramSurface(Surface):
         except Exception as e:
             logger.warning("TelegramSurface.send to %s: the text landed, a follow-up "
                            "failed: %s", chat_id, e)
-        return SendResult(success=True, surface_message_id=str(last_id) if last_id is not None else None)
+        return SendResult(success=True,
+                          surface_message_id=str(last_id) if last_id is not None else None,
+                          surface_message_ids=ids)
+
+    async def delete_message(self, chat_id, message_id):
+        """0008: Bot API ``deleteMessage`` for ONE message. Typed, never raises.
+
+        The caller (``MessageRouter.delete_post``) has already proved the id is
+        the agent's OWN post from the post ledger; Telegram itself enforces the
+        48 h window and the admin right in a channel, and its refusal is returned
+        verbatim so the agent can say exactly why."""
+        from surfaces.telegram.moderation import ModResult
+        try:
+            mid = int(str(message_id))
+        except (TypeError, ValueError):
+            return ModResult(False, f"not a Telegram message id: {message_id!r}")
+        try:
+            await self._call_flood_controlled(
+                str(chat_id), "delete_message",
+                lambda: self._bot.delete_message(chat_id, mid))
+            return ModResult(True)
+        except Exception as e:
+            logger.warning("TelegramSurface.delete_message %s/%s failed: %s",
+                           chat_id, mid, e)
+            return ModResult(False, str(e))
 
     def _voice_reply_wanted(self, msg: OutboundMessage, chat_id) -> bool:
         """064 F5: speak a committed agent reply in the OWNER's DM when the owner
@@ -310,7 +341,8 @@ class TelegramSurface(Surface):
                                  _TELEGRAM_CAPTION_MAX - 1)[0]
         return head + "…"
 
-    async def _send_media(self, chat_id: str, media: list, parse_mode) -> int:
+    async def _send_media(self, chat_id: str, media: list, parse_mode,
+                          ids_out: Optional[list] = None) -> int:
         """Send each renderable media entry (path + kind) as a photo/document.
 
         Returns the number of entries that did NOT go (D56) so the caller can
@@ -342,15 +374,18 @@ class TelegramSurface(Surface):
             try:
                 file = FSInputFile(path, filename=os.path.basename(path))
                 if entry.get("kind") == "image":
-                    await self._call_flood_controlled(
+                    sent = await self._call_flood_controlled(
                         chat_id, "send_photo",
                         lambda: self._bot.send_photo(
                             chat_id, file, caption=caption, parse_mode=parse_mode))
                 else:
-                    await self._call_flood_controlled(
+                    sent = await self._call_flood_controlled(
                         chat_id, "send_document",
                         lambda: self._bot.send_document(
                             chat_id, file, caption=caption, parse_mode=parse_mode))
+                mid = getattr(sent, "message_id", None)
+                if ids_out is not None and mid is not None:
+                    ids_out.append(str(mid))
             except Exception as e:
                 logger.warning("TelegramSurface: failed to send media %s: %s", path, e)
                 failed += 1

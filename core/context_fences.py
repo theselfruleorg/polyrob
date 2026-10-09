@@ -12,6 +12,7 @@ a forged tag inside untrusted text that is still rendered.
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Optional, Tuple
 
 #: Every tag the runtime emits as an injected context fence (found by
@@ -111,3 +112,14 @@ def strip_turn_fences(user_content: Optional[str],
         if not answer.strip():
             return user, None
     return user, answer
+
+
+def normalize_fence_text(text: str) -> str:
+    """Normalize compatibility forms and invisible format characters before fencing."""
+    return "".join(ch for ch in unicodedata.normalize("NFKC", str(text or ""))
+                   if unicodedata.category(ch) != "Cf")
+
+
+def defang_control_fences(text: str) -> str:
+    """Neutralize all runtime control tags in untrusted text."""
+    return _ANY_TAG_RE.sub("[filtered]", normalize_fence_text(text))

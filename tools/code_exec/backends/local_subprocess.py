@@ -20,7 +20,7 @@ import threading
 
 from tools.code_exec.backend import ExecutionBackend
 from tools.code_exec.env_policy import SAFE_ALLOWLIST, SECRET_PAT, build_child_env
-from tools.code_exec.limits import exec_timeout_cap
+from tools.code_exec.limits import exec_timeout_cap, max_output_bytes, max_timeout_sec
 from tools.code_exec.result import ExecutionRequest, ExecutionResult
 
 
@@ -33,8 +33,9 @@ class LocalSubprocessBackend(ExecutionBackend):
     SECRET_PAT = SECRET_PAT
 
     def __init__(self) -> None:
-        self.max_timeout = float(os.getenv("CODE_EXEC_MAX_TIMEOUT_SEC", "30"))
-        self.max_output = int(os.getenv("CODE_EXEC_MAX_OUTPUT_BYTES", "100000"))
+        # No dev mode on this backend: unset -> the confined 30 s default.
+        self.max_timeout = max_timeout_sec()
+        self.max_output = max_output_bytes()
 
     async def setup(self) -> None:  # no-op
         return None

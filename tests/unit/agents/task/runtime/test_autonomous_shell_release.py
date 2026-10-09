@@ -15,6 +15,8 @@ agents→tools.shell layering edge.
 """
 import asyncio
 
+import pytest
+
 from agents.task.runtime.run_as_session import run_task_to_outcome
 from agents.task.session.cleanup import SessionCleanupMixin
 
@@ -95,3 +97,55 @@ def test_mixin_release_calls_backend_pool_teardown(monkeypatch):
 
     monkeypatch.setattr("tools.shell.backend_pool.teardown_session", _boom)
     asyncio.run(orch.release_shell_sandbox())  # must not raise
+
+
+@pytest.mark.parametrize("mode", ["fresh", "cancelled", "error", "resumed"])
+def test_autonomous_shell_cleanup_on_every_exit(tmp_path, mode):
+    from types import SimpleNamespace
+    from agents.task.runtime.run_as_session import run_task_to_outcome
+
+    async def scenario():
+        started = asyncio.Event()
+
+        class Orchestrator:
+            released = 0
+
+            async def release_shell_sandbox(self):
+                self.released += 1
+
+        orch = Orchestrator()
+
+        class Agent:
+            session_manager = SimpleNamespace(
+                get_session_info=lambda sid: {"id": sid, "user_id": "u"})
+
+            async def create_session(self, *, user_id, request, **kwargs):
+                return {"id": "audit-session"}
+
+            async def _resolve_or_recreate(self, sid, info):
+                return orch
+
+            def get_orchestrator(self, sid):
+                return orch
+
+            async def run_session(self, user_id, sid):
+                if mode == "error":
+                    raise RuntimeError("simulated execution failure")
+                if mode == "cancelled":
+                    started.set()
+                    await asyncio.Event().wait()
+                return "Session completed successfully"
+
+        request = {"resume_session_id": "audit-session"} if mode == "resumed" else {}
+        task = asyncio.create_task(run_task_to_outcome(
+            Agent(), user_id="u", request=request, autonomous=True))
+        if mode == "cancelled":
+            await started.wait()
+            task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, RuntimeError):
+            pass
+        assert orch.released == 1
+
+    asyncio.run(scenario())

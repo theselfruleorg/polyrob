@@ -91,6 +91,8 @@ class SqliteMemoryProvider(CuratedNotesStoreMixin, KbStoreMixin, EpisodeStoreMix
             self._init_curated_schema(conn)
             self._init_kb_schema(conn)
             self._init_episodes_schema(conn)
+            from modules.memory.storage_limits import install_regular_limits
+            install_regular_limits(conn)
             conn.commit()
         finally:
             conn.close()
@@ -170,6 +172,8 @@ class SqliteMemoryProvider(CuratedNotesStoreMixin, KbStoreMixin, EpisodeStoreMix
         u, a = strip_turn_fences(user_content, assistant_content)  # 070 W1.5: no fence is stored
         content = ("" if a is None else a.strip() if cls._store_answer_only()
                    else f"User: {u}\nAssistant: {a}".strip())
+        from core.secret_scrub import scrub_secret_shapes
+        content = scrub_secret_shapes(content)
         cap = cls._row_cap()
         if cap > 0 and len(content) > cap:
             content = content[:cap]
@@ -226,10 +230,8 @@ class SqliteMemoryProvider(CuratedNotesStoreMixin, KbStoreMixin, EpisodeStoreMix
                 return False
         except Exception as e:  # dedup probe failure -> fall through to plain insert
             logger.debug("mem dedup probe skipped: %s", e)
-        rowid = execute_retry(
-            self.db_path,
-            "INSERT INTO memories (user_id, session_id, content) VALUES (?, ?, ?)",
-            (norm_user, session_id, content), fetch="lastrowid")
+        from modules.memory.storage_limits import insert_finding
+        rowid = insert_finding(self.db_path, norm_user, session_id, content)
         try:
             execute_retry(
                 self.db_path,
@@ -462,5 +464,3 @@ class SqliteMemoryProvider(CuratedNotesStoreMixin, KbStoreMixin, EpisodeStoreMix
 
 
     # ---- KB (knowledge-base) storage methods (Task 5) ----------------------
-
-

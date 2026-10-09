@@ -187,7 +187,7 @@ async def test_foreground_default_timeout_fits_an_install(monkeypatch):
     be = _FakeBackend()
     t = _tool(be)
     await t.shell_run(ShellRunParams(command="make build"), execution_context=_owner_ctx())
-    assert be.runs[-1].timeout == 120.0
+    assert be.runs[-1].timeout == 180.0  # 073 W3 (cross-agent parity); was 120
 
 
 @pytest.mark.asyncio
@@ -196,10 +196,42 @@ async def test_foreground_ceiling_is_env_driven(monkeypatch):
     be = _FakeBackend()
     t = _tool(be)
     monkeypatch.delenv("SHELL_MAX_TIMEOUT_SEC", raising=False)
-    await t.shell_run(ShellRunParams(command="make build", timeout=9999),
+    await t.shell_run(ShellRunParams(command="make build", timeout=600),
                       execution_context=_owner_ctx())
-    assert be.runs[-1].timeout == 300.0
+    assert be.runs[-1].timeout == 600.0
     monkeypatch.setenv("SHELL_MAX_TIMEOUT_SEC", "45")
-    await t.shell_run(ShellRunParams(command="make build", timeout=9999),
+    await t.shell_run(ShellRunParams(command="make build", timeout=45),
                       execution_context=_owner_ctx())
     assert be.runs[-1].timeout == 45.0
+
+
+@pytest.mark.asyncio
+async def test_timeout_above_the_ceiling_becomes_a_background_job(monkeypatch):
+    """073 W3: above the ceiling is a background job (cross-agent parity), not an error/clamp."""
+    _posture(monkeypatch, "1")
+    monkeypatch.setenv("SHELL_MAX_TIMEOUT_SEC", "45")
+    be = _FakeBackend()
+    t = _tool(be)
+    r = await t.shell_run(ShellRunParams(command="make build", timeout=9999),
+                          execution_context=_owner_ctx())
+    assert r.error is None
+    assert "background job" in r.extracted_content and "above the foreground ceiling" in r.extracted_content
+    assert be.detached and not be.runs
+
+
+@pytest.mark.asyncio
+async def test_relative_recursive_delete_follows_the_persisted_cwd(monkeypatch):
+    """`rm -rf build` is ordinary below a project folder; after `cd /` (persisted
+    from an earlier call) the same words would delete a system tree: refused."""
+    _posture(monkeypatch, "1")
+    be = _FakeBackend()
+    t = _tool(be)
+    ctx = _owner_ctx()
+    res = await t.shell_run(ShellRunParams(command="rm -rf build"), execution_context=ctx)
+    assert not res.error and len(be.runs) == 1
+    t._states[("s1", "docker")] = ShellState(cwd="/")
+    res = await t.shell_run(ShellRunParams(command="rm -rf etc"), execution_context=ctx)
+    assert res.error and "refused" in res.error and len(be.runs) == 1
+    res = await t.shell_run(ShellRunParams(command="rm -rf etc", workdir="/workspace"),
+                            execution_context=ctx)
+    assert not res.error

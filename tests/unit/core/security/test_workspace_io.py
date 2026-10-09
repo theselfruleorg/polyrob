@@ -62,6 +62,22 @@ def test_read_refuses_non_regular(tmp_path):
         wio.read_bytes(tmp_path / "fifo", tmp_path)
 
 
+def test_hard_link_cannot_expose_or_append_to_outside_file(tmp_path):
+    outside = tmp_path / "outside"
+    outside.write_text("private")
+    os.chmod(outside, 0o600)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    link = workspace / "looks-safe.txt"
+    os.link(outside, link)
+    for shared_ok in (False, True):
+        with pytest.raises(wio.UnsafePath):
+            wio.read_bytes(link, workspace, shared_ok=shared_ok)
+    with pytest.raises(wio.UnsafePath):
+        wio.append_bytes(link, workspace, b"changed")
+    assert outside.read_text() == "private"
+
+
 def test_in_root_symlink_read_follows_once(tmp_path):
     (tmp_path / "real.md").write_text("doc")
     (tmp_path / "alias.md").symlink_to(tmp_path / "real.md")
@@ -95,3 +111,23 @@ def test_unlink_removes_the_link_not_the_target(tmp_path):
     wio.unlink(tmp_path / "l.txt", tmp_path)
     assert (tmp_path / "t.txt").read_text() == "keep"
     assert not os.path.lexists(tmp_path / "l.txt")
+
+
+def test_world_readable_hard_link_is_readable_but_never_appended(tmp_path):
+    """uv/pnpm cache trees: a 0644 hard-linked file is an ordinary project file
+    to read; an append would write through the link, so it stays refused."""
+    cache = tmp_path / "cache"
+    cache.write_text("shared")
+    os.chmod(cache, 0o644)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    link = workspace / "pkg.py"
+    os.link(cache, link)
+    assert wio.read_bytes(link, workspace, shared_ok=True) == b"shared"
+    with wio.open_read(link, workspace, shared_ok=True) as stream:
+        assert stream.read() == b"shared"
+    with pytest.raises(wio.UnsafePath):        # every other caller stays strict
+        wio.read_bytes(link, workspace)
+    with pytest.raises(wio.UnsafePath):
+        wio.append_bytes(link, workspace, b"changed")
+    assert cache.read_text() == "shared"

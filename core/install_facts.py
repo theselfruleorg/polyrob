@@ -96,6 +96,15 @@ def install_lines(data_home: Optional[str] = None) -> List[str]:
     """One or two lines for the ``<environment>`` block."""
     lines: List[str] = []
     try:
+        # The version of the code that RUNS, not the one `polyrob setup` saw.
+        from core.version import running_version_line
+        lines.append(
+            f"Running version: {running_version_line()}. What shipped in a release "
+            "comes from the CHANGELOG.md deployed with your code — read it with "
+            "agent_status(release_notes='latest' or '<version>'); never guess.")
+    except Exception:
+        pass
+    try:
         from core.bootstrap_marker import describe
         lines.append("Install: " + describe(data_home).replace("bootstrap: ", "", 1))
     except Exception:

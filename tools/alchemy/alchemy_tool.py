@@ -8,6 +8,7 @@ This service acts as a fallback for the CollabLand service when CollabLand
 is unavailable or experiencing issues.
 """
 
+from core.security.redaction import redact_url
 import asyncio
 import logging
 import time
@@ -92,7 +93,7 @@ class AlchemyTool(BaseTool):
             self._enabled = False
         else:
             self.logger.info(f"Alchemy service configured:")
-            self.logger.info(f"  - Base URL: {self.base_url}")
+            self.logger.info(f"  - Base URL: {redact_url(self.base_url)}")
             self.logger.info(f"  - API Key: ******** (length: {len(self._api_key)})")
             self._enabled = True
             
@@ -145,7 +146,7 @@ class AlchemyTool(BaseTool):
                     self.logger.warning(f"Alchemy API returned status {response.status}")
         except Exception as e:
             self._status = ToolStatus.DEGRADED
-            self.logger.error(f"Failed to connect to Alchemy API: {e}")
+            self.logger.error(f"Failed to connect to Alchemy API: {type(e).__name__}")
             # Don't disable the service, as it may recover later
 
     async def _cleanup(self) -> None:
@@ -186,7 +187,7 @@ class AlchemyTool(BaseTool):
             }
             
             # Log the request details for debugging
-            self.logger.info(f"Alchemy API request: GET {url}")
+            self.logger.info(f"Alchemy API request: GET {redact_url(url)}")
             self.logger.info(f"Request params: {params}")
             
             # Make API call to Alchemy
@@ -201,7 +202,7 @@ class AlchemyTool(BaseTool):
                 if response.status == 200:
                     try:
                         data = await response.json()
-                        self.logger.debug(f"Alchemy API response data: {data}")
+
 
                         # Check if user owns any NFTs from this contract
                         owned_nfts = data.get("ownedNfts", [])
@@ -221,14 +222,14 @@ class AlchemyTool(BaseTool):
                         return has_token, token_ids, total_count
 
                     except Exception as parse_error:
-                        self.logger.error(f"Error parsing JSON response: {parse_error}")
+                        self.logger.error(f"Error parsing JSON response: {type(parse_error).__name__}")
                         response_text = await response.text()
-                        self.logger.error(f"Raw response: {response_text}")
+
                         return False, [], 0
                 else:
                     # Handle error responses
                     error_text = await response.text()
-                    self.logger.error(f"Alchemy API error: {response.status} - {error_text}")
+                    self.logger.error(f"Alchemy API error: {response.status}")
 
                     # Handle specific error cases
                     if response.status == 429:
@@ -239,20 +240,14 @@ class AlchemyTool(BaseTool):
                     return False, [], 0
 
         except Exception as e:
-            self.logger.error(f"Error checking token for {address}: {e}")
+            self.logger.error(f"Error checking token for {address}: {type(e).__name__}")
             # Log the full exception traceback for better debugging
-            import traceback
-            self.logger.error(f"Exception traceback: {traceback.format_exc()}")
             return False, [], 0
 
     # ---------------------------------------------------------------------
     # Public actions
     # ---------------------------------------------------------------------
 
-    @BaseTool.action(
-        "Check if the provided wallet address owns the required NFT token using Alchemy API",
-        param_model=CheckTokenParams,
-    )
     async def alchemy_check_token(self, params: CheckTokenParams):
         """Check token ownership using Alchemy API and return standardized response."""
         await self.ensure_initialized()
@@ -319,10 +314,8 @@ class AlchemyTool(BaseTool):
             return result
 
         except Exception as e:
-            self.logger.error(f"Failed to check token for {address}: {e}")
+            self.logger.error(f"Failed to check token for {address}: {type(e).__name__}")
             # Get full exception details
-            import traceback
-            self.logger.error(f"Exception traceback: {traceback.format_exc()}")
             return {
                 "status": "error",
                 "has_token": False,
@@ -330,14 +323,10 @@ class AlchemyTool(BaseTool):
                 "token_ids": [],
                 "token_id": None,
                 "contract_address": contract_address,
-                "message": f"Error checking token via Alchemy: {str(e)}",
+                "message": "Token verification unavailable",
                 "service": "alchemy"
             }
 
-    @BaseTool.action(
-        "Test Alchemy API connectivity and configuration",
-        param_model=None,
-    )
     async def alchemy_test_connection(self):
         """Test the Alchemy API connection and configuration."""
         await self.ensure_initialized()
@@ -371,21 +360,21 @@ class AlchemyTool(BaseTool):
                         "status": "success",
                         "message": f"Alchemy API is working correctly. Test query returned {total_count} NFTs.",
                         "response_time_ms": response_time,
-                        "api_endpoint": url,
+                        "api_endpoint": redact_url(url),
                         "service_status": self._status.value
                     }
                 else:
                     error_text = await response.text()
                     return {
                         "status": "error",
-                        "message": f"Alchemy API returned status {response.status}: {error_text}",
+                        "message": f"Alchemy API returned status {response.status}",
                         "response_time_ms": response_time
                     }
                     
         except Exception as e:
             return {
                 "status": "error",
-                "message": f"Failed to test Alchemy API: {str(e)}"
+                "message": "Alchemy connection test failed"
             } 
 
 

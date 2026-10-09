@@ -57,11 +57,12 @@ def _gate():
     return PolicyGate(max_per_tx_usd=500.0, daily_cap_usd=1000.0)
 
 
-def _authorize(intent=None, deltas=None, *, price=ETH_PRICE, gate=None):
+def _authorize(intent=None, deltas=None, *, price=ETH_PRICE, gate=None, gas_fee=0):
     """A native-value tx: ``value`` is non-zero and ``data`` carries the order."""
     return tx_guard.authorize(
         intent or _intent(),
-        {"to": RELAY, "data": "0xdeadbeef", "value": AMOUNT, "chainId": 8453},
+        {"to": RELAY, "data": "0xdeadbeef", "value": AMOUNT, "chainId": 8453,
+         "gas": 100_000, "maxFeePerGas": gas_fee},
         holder=HOLDER,
         gate=gate or _gate(),
         execution_context=None,
@@ -85,6 +86,37 @@ def test_native_send_matching_the_declaration_is_authorized():
     # 0.005 ETH at $2000 = $10, priced through the chain's wrapped native.
     assert d.amount_usd == pytest.approx(10.0)
     assert d.sim_gas_used == 90_000
+
+
+def test_native_spend_includes_worst_case_fee_in_budget():
+    decision = _authorize(gas_fee=10 ** 9)
+    assert decision.allowed
+    assert decision.amount_usd == pytest.approx(10.27)
+    # A send declared at exactly its $10 value passes: the declared max asserts
+    # the VALUE; the fee is charged to the caps (the amount below), not to it.
+    decision = _authorize(_intent(max_spend_usd=10.0), gas_fee=10 ** 9)
+    assert decision.allowed, decision.reason
+    assert decision.amount_usd == pytest.approx(10.27)
+    # ...and a value above the declared max still refuses.
+    decision = _authorize(_intent(max_spend_usd=9.99), gas_fee=10 ** 9)
+    assert not decision.allowed
+    assert "max_spend_usd" in decision.reason
+    # WAL-6 stays closed: the fee alone pushes a $10 send past a $10.10 per-tx cap.
+    decision = _authorize(_intent(max_spend_usd=10.0), gas_fee=10 ** 9,
+                          gate=PolicyGate(max_per_tx_usd=10.10, daily_cap_usd=1000.0))
+    assert not decision.allowed
+    assert "max_spend_usd" not in decision.reason
+
+
+def test_sub_cent_spend_never_rounds_down_to_free():
+    decision = _authorize(price=0.001)
+    assert decision.allowed
+    assert decision.amount_usd == 0.01
+
+
+@pytest.mark.parametrize("price", [float("inf"), float("nan"), -1.0])
+def test_invalid_valuation_never_authorizes_a_spend(price):
+    assert not _authorize(price=price).allowed
 
 
 def test_native_send_is_priced_through_the_chains_wrapped_native():

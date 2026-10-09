@@ -136,13 +136,28 @@ def read_terms(rpc, *, pair_token: str = P.NATIVE_PAIR,
             rpc, P.FACTORY, P.PAIR_TOKEN_ECONOMICS, [pair_token])
         # ⚠️ NOT always 18. USDG is 6 and cbBTC is 8; assuming 18 misprices the
         # quote leg by twelve orders of magnitude.
-        decimals = int(decimals)
+        from core.wallet.tokens import bounded_decimals
+        decimals = bounded_decimals(decimals)
+        if decimals is None:
+            raise PonsError("the factory returned unsupported pair decimals")
 
     return LaunchTerms(
         enabled=enabled, launch_fee_wei=fee, supply_raw=int(supply),
         curve_fee_bps=int(curve_fee_bps), phantom_quote=int(phantom),
         graduation_threshold=int(threshold), economics=economics,
         pair_decimals=decimals)
+
+
+def token_decimals(rpc, token: str) -> int:
+    """Read bounded units from the token being quoted, never assume ERC-20 units."""
+    from core.wallet.tokens import bounded_decimals
+    if token.lower() == P.NATIVE_PAIR.lower():
+        return 18
+    spec = {"name": "decimals", "inputs": [], "outputs": [{"type": "uint8"}]}
+    decimals = bounded_decimals(_view(rpc, token, spec))
+    if decimals is None:
+        raise PonsError("the token returned unsupported decimals")
+    return decimals
 
 
 def launched_token(rpc, token: str) -> Optional[Dict[str, Any]]:
@@ -393,14 +408,16 @@ def parse_token_launched(logs) -> Optional[Dict[str, str]]:
     """
     from eth_utils import to_checksum_address
     for entry in logs or []:
+        if not isinstance(entry, dict) or str(entry.get("address", "")).lower() != P.FACTORY.lower():
+            continue
         topics = entry.get("topics") or []
         if not topics or str(topics[0]).lower() != P.TOPIC_TOKEN_LAUNCHED:
             continue
-        if len(topics) < 4:
+        if len(topics) != 4 or any(not isinstance(t, str) or len(t) != 66 for t in topics):
             continue
-        return {
-            "token": to_checksum_address("0x" + str(topics[1])[-40:]),
-            "curve": to_checksum_address("0x" + str(topics[2])[-40:]),
-            "deployer": to_checksum_address("0x" + str(topics[3])[-40:]),
-        }
+        try:
+            return {name: to_checksum_address("0x" + topic[-40:])
+                    for name, topic in zip(("token", "curve", "deployer"), topics[1:])}
+        except ValueError:
+            continue
     return None

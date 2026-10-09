@@ -28,7 +28,8 @@ def rig(monkeypatch, tmp_path):
             'status': 1, 'transactionHash': bytes.fromhex(HASH[2:])}),
         account=SimpleNamespace(from_key=Mock(return_value=account)))
     w3 = SimpleNamespace(eth=eth, to_hex=Web3.to_hex)
-    db = SimpleNamespace(execute=AsyncMock(return_value=SimpleNamespace(rowcount=1)))
+    db = SimpleNamespace(execute=AsyncMock(return_value=SimpleNamespace(rowcount=1)),
+                         fetch_all=AsyncMock(return_value=[{'id': 1}]))
     wallet = SimpleNamespace(get_private_key_for_user_id=Mock(return_value='test-only'))
     sweeper = TreasurySweeper(db, wallet, SimpleNamespace(
         treasury_address='0x'+'2'*40, ethereum_rpc_url='https://example.invalid'))
@@ -51,6 +52,36 @@ async def test_hash_is_durable_before_send_and_fee_matches_signed_value(rig):
     w3.eth.get_transaction_count.assert_called_once_with(ADDRESS, 'pending')
     sweeper.db.execute.assert_awaited_once()
     assert not journal.unresolved()
+
+
+@pytest.mark.asyncio
+async def test_sweep_books_only_the_captured_deposit_group(rig):
+    import sqlite3
+    sweeper, w3, account, deposit = rig
+    conn = sqlite3.connect(':memory:', isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    conn.execute('CREATE TABLE crypto_payments (id INTEGER, user_id TEXT, chain TEXT, '
+                 'token_symbol TEXT, status TEXT, swept_at TEXT, sweep_tx_hash TEXT)')
+    insert = "INSERT INTO crypto_payments VALUES (?, ?, 'ethereum', ?, 'confirmed', NULL, NULL)"
+    conn.executemany(insert, [(1, 'test', 'ETH'), (2, 'test', 'ETH'),
+                              (3, 'other', 'ETH'), (4, 'test', 'USDC')])
+
+    async def fetch(sql, params):
+        return conn.execute(sql, params).fetchall()
+
+    async def execute(sql, params):
+        # A new confirmed deposit appeared while the sweep was on chain.
+        conn.execute(insert, (5, 'test', 'ETH'))
+        return conn.execute(sql, params)
+
+    sweeper.db = SimpleNamespace(fetch_all=fetch, execute=execute)
+    await sweeper._sweep_deposit(deposit)
+    rows = {row['id']: row['sweep_tx_hash'] for row in conn.execute('SELECT * FROM crypto_payments')}
+    assert rows == {1: HASH, 2: HASH, 3: None, 4: None, 5: None}
+    assert not journal.unresolved()
+    await sweeper._sweep_deposit(dict(deposit, id=2))
+    assert account.sign_transaction.call_count == 1
+    conn.close()
 
 
 @pytest.mark.asyncio

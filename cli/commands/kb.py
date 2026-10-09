@@ -98,9 +98,8 @@ async def _ensure_memory_backend() -> None:
             from core.bootstrap import _resolve_cli_data_home
             data_dir = str(_resolve_cli_data_home()[0])
         except Exception:
-            from pathlib import Path
-            rob_dir = Path.cwd() / ".polyrob"
-            data_dir = str(rob_dir) if (rob_dir.exists() or os.environ.get("POLYROB_LOCAL", "")) else "data"
+            from core.runtime_paths import resolve_data_home
+            data_dir = str(resolve_data_home())
 
     try:
         # vector recall needs the embedder; without it this is FTS-only.

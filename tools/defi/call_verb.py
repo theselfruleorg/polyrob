@@ -145,7 +145,11 @@ async def perform_call(tool, params, execution_context=None):
             "refused: calldata is shorter than a 4-byte selector — a call with "
             "no function to call is a native transfer, and that is `transfer`"))
 
-    value_wei = int(round(float(params.value or 0.0) * 10 ** 18))
+    from core.wallet.tokens import raw_amount
+    try:
+        value_wei = raw_amount(params.value or 0, 18)
+    except ValueError as exc:
+        return tool._ar(error=f"refused: {exc}")
 
     try:
         to_addr = normalize_address(params.to)
@@ -285,8 +289,9 @@ async def perform_call(tool, params, execution_context=None):
         try:
             tx_hash = await asyncio.to_thread(rail.sign_and_send, tx)
         except Exception as exc:
-            from core.wallet.broadcast.evm import broadcast_failure_text
-            return tool._ar(error=broadcast_failure_text(exc))
+            from core.wallet.broadcast.evm import broadcast_error_kind, broadcast_failure_text
+            return tool._ar(error=broadcast_failure_text(exc),
+                error_kind=broadcast_error_kind(exc))
 
         _used, _limit = tx_notify.caps_from_gate(gate)
         tool._notify_tx(execution_context, tx_notify.TxNotice(

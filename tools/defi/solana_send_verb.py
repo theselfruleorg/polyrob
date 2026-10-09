@@ -165,8 +165,8 @@ async def perform_solana_transfer(tool, params, execution_context=None):
     from tools.defi.bridge_verb import _solana_turn_refusal
     from tools.defi.trade_tool import _WSOL_MINT, _solana_trade_enabled
 
-    def refuse(why: str):
-        return tool._ar(error=f"refused: {why}. {_NOT_SENT}")
+    def refuse(why: str, kind=None):
+        return tool._ar(error=f"refused: {why}. {_NOT_SENT}", error_kind=kind)
 
     if not _solana_trade_enabled():
         from core.remedy import flag_remedy
@@ -207,6 +207,9 @@ async def perform_solana_transfer(tool, params, execution_context=None):
                       "yourself moves nothing but the fee")
     if mint and to == mint:
         return refuse("the recipient is the token's mint, not a wallet")
+    from core.wallet.address_lookalike import poisoning_refusal
+    if lookalike := poisoning_refusal(to, chain="solana"):
+        return tool._ar(error=lookalike)
 
     # The SAME turn gate solana_swap and the Solana-origin bridge run: principal,
     # owner kill-switch, entry pause (a send is never exit-shaped), forged turns,
@@ -297,15 +300,18 @@ async def perform_solana_transfer(tool, params, execution_context=None):
     try:
         deltas = await asyncio.to_thread(
             lambda: tool._solana_simulate(raw_tx=raw_tx, owner=me,
-                                          mints=((mint,) if mint else ())))
+                                          mints=((mint,) if mint else ()),
+                                          locally_built_transfer=True))
     except Exception as exc:
         return refuse(f"the simulation raised ({exc})")
     if deltas is None or not deltas.ok:
         reason = getattr(deltas, "reason", "no result") if deltas else "no result"
         hint = ("; a brand-new address must receive at least the rent-exempt "
                 "minimum (~0.00089 SOL)" if native and not recipient_exists else "")
+        from core.security.refusal_taint import simulation_kind
         return refuse(f"the simulation did not pass ({reason}){hint}. A "
-                      f"simulation that did not run is not one that passed")
+                      f"simulation that did not run is not one that passed",
+                      simulation_kind(deltas))
 
     header = (f"solana transfer {params.amount:g} {shown} -> {to}\n")
     check = _assert_deltas(deltas, native=native, mint=mint, to=to,
@@ -326,7 +332,7 @@ async def perform_solana_transfer(tool, params, execution_context=None):
     # definition). Unpriced refuses: no cap can bound a number we do not have,
     # and booking it at $0.00 would widen every other verb's headroom.
     try:
-        sol_px = tool._price("solana", _WSOL_MINT)
+        sol_px = await asyncio.to_thread(tool._price, "solana", _WSOL_MINT)
     except Exception:
         sol_px = None
     if not sol_px or sol_px <= 0:
@@ -339,7 +345,7 @@ async def perform_solana_transfer(tool, params, execution_context=None):
             token_px = 1.0
         else:
             try:
-                token_px = tool._price("solana", mint)
+                token_px = await asyncio.to_thread(tool._price, "solana", mint)
             except Exception:
                 token_px = None
         if not token_px or token_px <= 0:
@@ -348,7 +354,8 @@ async def perform_solana_transfer(tool, params, execution_context=None):
                 f"trustworthy source, so the send cannot be held to any cap\n"
                 f"  {_NOT_SENT}"))
         amount_usd += amount_raw / (10 ** decimals) * float(token_px)
-    amount_usd = round(amount_usd, 4)
+    from core.money.valuation import usd_ceiling
+    amount_usd = usd_ceiling(amount_usd)
     declared = float(params.max_spend_usd)
     header += f"  simulated value: ${amount_usd:.4f}\n"
     if amount_usd > declared:
@@ -416,9 +423,10 @@ async def perform_solana_transfer(tool, params, execution_context=None):
             # The RPC may have accepted the bytes and lost its reply: that is
             # UNKNOWN, never "not sent". The submission journal holds the
             # signature and blocks a second spend until it is reconciled.
-            from core.wallet.broadcast.evm import broadcast_failure_text
+            from core.wallet.broadcast.evm import broadcast_error_kind, broadcast_failure_text
             return tool._ar(error=broadcast_failure_text(
-                exc, nothing="funds were NOT sent"))
+                exc, nothing="funds were NOT sent"),
+                error_kind=broadcast_error_kind(exc))
         # Recorded on broadcast: a send that lands and FAILS still paid its fee,
         # and one that lands late is a spend the caps must already see.
         if _lane != "autonomous" and hasattr(gate, "note_lane"):

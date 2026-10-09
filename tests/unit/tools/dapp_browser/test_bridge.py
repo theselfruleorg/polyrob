@@ -502,3 +502,21 @@ async def test_a_guard_refusal_AFTER_approval_still_refuses():
     out = await _ask(bridge, "eth_sendTransaction", [{"to": POOL, "data": "0x01"}])
     assert "UNDECLARED allowance grant" in out["error"]["message"]
     assert _Rail.last.sent is False
+
+
+@pytest.mark.asyncio
+async def test_expired_envelope_refuses_without_signing():
+    bridge, gate = _bridge()
+    bridge.envelope.expires_at = 1
+    out = await _ask(bridge, "eth_sendTransaction", [{"to": POOL, "data": "0x01"}])
+    assert "expired" in out["error"]["message"]
+    assert not gate.recorded
+
+
+@pytest.mark.asyncio
+async def test_native_value_to_unlisted_eoa_is_refused():
+    bridge, gate = _bridge()
+    bridge._rpc = lambda *a: "0x"
+    out = await _ask(bridge, "eth_sendTransaction", [{"to": OTHER, "data": "0x01", "value": "0x1"}])
+    assert "allow_contracts" in out["error"]["message"]
+    assert not gate.recorded

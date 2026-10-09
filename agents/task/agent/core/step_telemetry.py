@@ -68,9 +68,17 @@ class StepTelemetryMixin:
 			files_read = []
 			files_deleted = []
 
-			for action in actions:
+			# Only a SUCCESSFUL action touched a file: a failed read is not a
+			# read (prod 2026-10-03 logged "File not found" reads as files_read).
+			# Results align with actions by index; an action with no result
+			# never ran.
+			_results = list(result or [])
+
+			for idx, action in enumerate(actions):
 				action_name = None
 				action_params = {}
+				if idx >= len(_results) or getattr(_results[idx], 'error', None):
+					continue
 
 				# Handle different action formats
 				if isinstance(action, dict):

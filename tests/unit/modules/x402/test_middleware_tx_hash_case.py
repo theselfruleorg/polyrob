@@ -58,7 +58,7 @@ class _FakeFacilitator:
     def __init__(self, tx):
         self._tx = tx
 
-    async def verify_and_settle_payment(self, *, payment_header, payment_requirements):
+    async def verify_and_settle_payment(self, *, payment_header, payment_requirements, before_settle=None):
         return _FakeVerifyResponse(), _FakeSettleResponse(self._tx)
 
 
@@ -109,6 +109,9 @@ def _client(monkeypatch, mixed_case_tx, captured):
 
     monkeypatch.setattr(mw_mod, "record_x402_payment", _fake_record)
     monkeypatch.setattr(mw_mod, "ensure_user_profile_for_payer", _fake_ensure_profile)
+    async def _resolve(addr):
+        return "usr_" + "0" * 16
+    monkeypatch.setattr(mw_mod, "resolve_payer_user_id", _resolve)
     # Bypass the real facilitator bootstrap (network calls / SDK config) --
     # inject the fake facilitator directly, mirroring how a real deployment
     # would have self._facilitator_client set after a successful init.

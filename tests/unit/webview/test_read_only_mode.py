@@ -7,6 +7,7 @@ import importlib
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.unit.webview.owner_session import owner_headers
 
 
 def _local_client(monkeypatch, read_only: bool):
@@ -21,7 +22,7 @@ def _local_client(monkeypatch, read_only: bool):
     importlib.reload(wg)
     import webview.server as srv
     importlib.reload(srv)
-    return TestClient(srv._fastapi)
+    return TestClient(srv._fastapi, headers=owner_headers(monkeypatch))
 
 
 def test_messages_post_refused_when_read_only(monkeypatch):

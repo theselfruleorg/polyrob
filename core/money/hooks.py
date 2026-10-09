@@ -22,7 +22,7 @@ owns them, through ONE registration each:
   Absent = the book write is skipped (fail open, as before).
 
 Registration is last-writer-wins, so a test (or a later pack) can replace a
-provider. There is NO default module any more (P5a deleted
+provider; a replacement by another module is logged and kept (:func:`replacements`). There is NO default module any more (P5a deleted
 ``_DEFAULT_MODULES``): the wallet registers every provider when the
 ``core.wallet`` package is imported (``core/wallet/__init__.py``), and the
 pack loader's phase 1 (``core.packs.loader.register_policies``, run at every
@@ -47,10 +47,31 @@ _POSITION_BOOK = "position_book"
 _PROVIDERS: Dict[str, Callable[..., Any]] = {}
 
 
+def _owner_module(fn: Callable[..., Any]) -> str:
+    return str(getattr(fn, "__module__", None) or type(fn).__module__ or "?")
+
+
 def _register(kind: str, fn: Callable[..., Any]) -> None:
     if not callable(fn):
         raise TypeError(f"money hook {kind}: {fn!r} is not callable")
+    prior = _PROVIDERS.get(kind)
+    if prior is not None and prior is not fn and _owner_module(prior) != _owner_module(fn):
+        # Last writer still wins (tests and a later pack replace providers), but a
+        # replacement of a money provider by ANOTHER module is never silent: the cap
+        # resolver, the journal and the ledger are what bound every spend.
+        logger.warning("money hook %s replaced: %s -> %s", kind, _owner_module(prior),
+                       _owner_module(fn))
+        _REPLACEMENTS.append((kind, _owner_module(prior), _owner_module(fn)))
     _PROVIDERS[kind] = fn
+
+
+#: Every cross-module replacement of a money provider, in order (kind, from, to).
+_REPLACEMENTS: list = []
+
+
+def replacements() -> list:
+    """The cross-module provider replacements this process has seen."""
+    return list(_REPLACEMENTS)
 
 
 def _provider(kind: str) -> Optional[Callable[..., Any]]:

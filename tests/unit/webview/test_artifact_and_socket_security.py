@@ -1,3 +1,4 @@
+from core.security.session_tokens import SESSION_AUDIENCE
 import time
 
 import jwt
@@ -53,10 +54,11 @@ def test_revoked_cookie_cannot_reconnect_over_socket(monkeypatch, tmp_path):
     from webview.server import _decode_socket_payload
 
     secret = "test-secret-for-security-regressions-32"
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "owner")
     monkeypatch.setenv("JWT_SECRET_KEY", secret)
     monkeypatch.setenv("TOKEN_DENYLIST_PATH", str(tmp_path / "tokens.db"))
     claims = {"user_id": "owner", "tier": "admin", "jti": "logout-token", "exp": time.time() + 60}
-    token = jwt.encode(claims, secret, algorithm="HS256")
+    token = jwt.encode({"aud": SESSION_AUDIENCE, **claims}, secret, algorithm="HS256")
     assert _decode_socket_payload(token)["user_id"] == "owner"
     get_token_denylist().revoke(claims["jti"], expires_at=claims["exp"])
     assert _decode_socket_payload(token) == {}
@@ -163,7 +165,8 @@ def test_socket_refuses_legacy_unrevocable_or_nonexpiring_tokens(monkeypatch, mi
     from webview.server import _decode_socket_payload
 
     secret = "session-token-security-test-secret-32"
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "owner")
     monkeypatch.setenv("JWT_SECRET_KEY", secret)
     claims = {"user_id": "owner", "exp": time.time() + 60, "jti": "session"}
     del claims[missing]
-    assert _decode_socket_payload(jwt.encode(claims, secret)) == {}
+    assert _decode_socket_payload(jwt.encode({"aud": SESSION_AUDIENCE, **claims}, secret)) == {}

@@ -21,9 +21,11 @@ def board(tmp_path):
 
 def _block(board, goal):
     board.claim(goal.id, "w", ttl_seconds=60)
-    board.record_failure(goal.id, error="needs twitter write access")
+    board.record_failure(goal.id, error="needs twitter write access",
+        claim_token=board.get(goal.id).claim_token)
     board.claim(goal.id, "w", ttl_seconds=60)
-    board.record_failure(goal.id, error="needs twitter write access")  # trips breaker
+    board.record_failure(goal.id, error="needs twitter write access",
+        claim_token=board.get(goal.id).claim_token)  # trips breaker
 
 
 def test_create_ask_basic(board):

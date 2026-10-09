@@ -3,14 +3,9 @@
 ``python -I -m core.signer.provision --envfile /etc/polyrob/polyrob.env
 --data-dir /var/lib/polyrob --agent-uid 998`` prints the TOML on stdout (the
 provisioning script writes it root-owned). Never reads ``wallet.env``, never
-prints a secret: the caps come from the same resolution the running agent uses
-(``load_wallet_config`` over the deployed env + the owner's approved ``budget.*``
-prefs), the addresses from ``<data>/wallet/public_identity.json``, the RPC pins
-from the env file.
-
-Owner decision D6: keep the current cap values. A disabled daily cap (``none``)
-has no value to keep and the signer will not run unbounded, so provisioning
-refuses and names the flag.
+prints a secret: hard caps must be explicit positive values in the operator env
+file. Agent-writable preferences cannot influence the independent signer limits.
+Addresses come from ``<data>/wallet/public_identity.json`` and RPC pins from env.
 """
 import argparse
 import json
@@ -37,17 +32,12 @@ def parse_env_file(path: str) -> Dict[str, str]:
 
 
 def current_caps(env: Mapping[str, str]) -> Dict[str, float]:
-    """``(per_tx, daily)`` exactly as the running agent resolves them: the same
-    ``load_wallet_config`` over the deployed env, with the same fail-open owner +
-    prefs-home resolution (``POLYROB_DATA_DIR`` must name the deployed home)."""
-    from core.wallet.config import load_wallet_config
-    cfg = load_wallet_config(dict(env))
-    if cfg.daily_cap_usd is None:
-        raise ProvisionError(
-            "WALLET_DAILY_CAP_USD is disabled (none/off) — there is no current daily cap to keep, "
-            "and the signer will not run without one. Set WALLET_DAILY_CAP_USD to the number in "
-            "use and re-run.")
-    return {"per_tx_usd": float(cfg.max_per_tx_usd), "daily_usd": float(cfg.daily_cap_usd)}
+    """Hard caps come only from explicit operator env values, never agent prefs."""
+    from core.wallet.config import explicit_operator_caps
+    try:
+        return explicit_operator_caps(env)
+    except ValueError as exc:
+        raise ProvisionError(str(exc)) from exc
 
 
 def money_chains_with_pins(env: Mapping[str, str]) -> List[str]:
@@ -113,7 +103,7 @@ def main(argv=None) -> int:
     p.add_argument("--agent-uid", type=int, action="append", required=True)
     args = p.parse_args(argv)
     env = parse_env_file(args.envfile)
-    # The owner-prefs resolution reads the DEPLOYED home, as the agent does.
+    # Resolve the deployed identity location. Hard caps never read prefs.
     os.environ["POLYROB_DATA_DIR"] = args.data_dir
     try:
         cfg = build_config(env, data_dir=args.data_dir, agent_uids=args.agent_uid)

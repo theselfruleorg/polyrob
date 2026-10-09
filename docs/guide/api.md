@@ -29,7 +29,10 @@ curl http://localhost:9000/health
 `active_sessions` and `session_capacity`; `active_sessions` is `null` — never
 `0` — when the agent cannot be read.
 
-Interactive API docs (Swagger UI) are at `http://localhost:9000/docs`.
+API docs at `/docs` and `/redoc`, the `/openapi.json` schema, and `/v1/models`
+require authentication. Send the same JWT or API-key credentials used for other
+API requests. Public `/health` returns only service and readiness status;
+`/api/health` exposes detailed metrics to authenticated administrators.
 
 > The Docker image sets `UVICORN_PORT=8000` and maps `8000:8000` — adjust the port in the examples
 > below if you're running via Docker.
@@ -48,14 +51,15 @@ Create an API key and pass it in the `X-API-KEY` header:
 curl -X POST http://localhost:9000/api/auth/api-keys \
   -H "Authorization: Bearer <jwt>" \
   -H "Content-Type: application/json" \
-  -d '{"name": "My Integration"}'
+  -d '{"name": "My Integration", "expires_days": 90, "scopes": ["read", "write"]}'
 
 # Response:
 # {
 #   "api_key": "rob_xxx...",   # full key — shown ONCE, store it now
 #   "prefix": "rob_xxx",
 #   "name": "My Integration",
-#   "expires_at": null,
+#   "expires_at": "2026-12-14T12:00:00+00:00",
+#   "scopes": ["read", "write"],
 #   "created_at": "2026-09-15T12:00:00Z",
 #   "warning": "Store this key securely — it will not be shown again."
 # }
@@ -71,6 +75,12 @@ Manage them with `GET /api/auth/api-keys` (list, prefixes only) and
 `DELETE /api/auth/api-keys/{key_prefix}` (revoke). `GET /api/auth/me` returns the
 caller the server resolved from whichever credential you sent — the fastest way to
 confirm auth is working.
+
+Keys expire after 90 days by default; choose 1–365 days. `read` permits GET,
+HEAD and OPTIONS. `write` permits the other HTTP methods, including inference
+requests; normal account and payment checks still apply. Both scopes are the
+default. For a read-only integration, request `"scopes": ["read"]`.
+Legacy keys without expiry or explicit scopes must be replaced after signing in.
 
 > **Minting a key needs the account system.** `POST /api/auth/api-keys` answers
 > **503** — with the remedy — on an instance where the account system is off:
@@ -129,7 +139,7 @@ when their flag is on, in which case the whole path space is absent rather than
 
 | Prefix | What it is | Present when |
 |---|---|---|
-| `/health` | Liveness and component status (`503` when degraded) | always |
+| `/health` | Minimal liveness/readiness (`503` when degraded) | always |
 | `/api/task/*` | Sessions: create, status, message, cancel, files | always |
 | `/api/auth/*` | SIWE sign-in, JWTs, API keys | always |
 | `/api/chat/message` | One-shot chat over the task agent (`/api/message` is the legacy alias) | always |
@@ -462,10 +472,8 @@ key that cannot be spoofed with `X-Forwarded-For`. The full money model is in
 
 The venues come from the `markets` pack (`packs/markets`). Every pack
 router mounts under `/api/packs/<pack id>`; up to and including 1.1.0 these
-routes were `/api/polymarket/*` and `/api/hyperliquid/*`. **Deprecated:** 1.2.0 still
-serves the old paths (same handlers, same auth), with a `Deprecation: true` header, a
-`Link: <new path>; rel="successor-version"` header and `X-Polyrob-Removed-In: 1.3.0`;
-they are not in the OpenAPI schema and 1.3.0 removes them. Without the pack (or with
+routes were `/api/polymarket/*` and `/api/hyperliquid/*`. 1.2.0 served the old paths
+deprecated for one release; 1.3.0 removed them (they answer 404). Without the pack (or with
 `POLYROB_PACKS_DISABLED=markets`) the routes are absent and `polyrob pack list`
 names why.
 
@@ -650,3 +658,11 @@ SDK parsers ignore comment frames per the SSE spec.
 | `409` | Session is owned by another worker (multi-worker deployments) |
 | `429` | Rate limit exceeded |
 | `500` | Internal error |
+
+**Limits and boot checks.** Rate limits key an IPv4 client by its address and an
+IPv6 client by its `/64`, so rotating addresses inside one allocation does not reset
+the window. Sign-in nonces (`/api/auth/nonce`) are limited to 10 per minute per
+client. An A2A task list returns at most 100 rows per page (default 20), and one
+caller may hold at most 8 live A2A task streams. In production (`ENVIRONMENT=production`)
+the server refuses to boot with a weak `JWT_SECRET_KEY` or one that looks like a
+template placeholder (`change-me…`, `your-secret…` and the like).

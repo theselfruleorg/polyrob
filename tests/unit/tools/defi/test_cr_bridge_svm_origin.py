@@ -27,7 +27,7 @@ VAULT = str(Pubkey.new_unique())
 EVM = "0xcAda546f6A6ddDE31B71aB21eF63d3EBF09Fa553"
 AMOUNT = 0.5
 AMOUNT_RAW = 500_000_000
-FLOOR = 10 ** 15
+FLOOR = 28 * 10 ** 15
 
 
 @pytest.fixture(autouse=True)
@@ -114,7 +114,7 @@ class _Tool:
         return self.wallet
 
     def _price(self, chain, addr):
-        return self.price
+        return self.price if chain == "solana" or self.price is None else self.price * 17.5
 
     def _solana_simulate(self, **kw):
         return SolanaDeltas(ok=True, native_delta=-(AMOUNT_RAW + 5_000),
@@ -196,6 +196,17 @@ def test_a_clean_relay_order_bridges(rig):
     assert tool.sent
 
 
+@pytest.mark.parametrize("change", [{"min_out_raw": 1}, {"impact_pct": -90}])
+def test_a_bad_value_floor_is_refused_before_signing(rig, change):
+    for key, value in change.items():
+        setattr(rig.quote, key, value)
+    tool = _Tool()
+    result = _run(tool)
+    assert "RESULT: NOT SENT" in _text(result)
+    assert "independent value check" in _text(result)
+    assert not tool.sent
+
+
 # -- CR-M04 ------------------------------------------------------------------
 
 def test_an_order_that_never_calls_relay_is_not_sent(rig):
@@ -227,7 +238,7 @@ def test_the_spend_is_valued_at_the_pinned_price_not_relays_figure(rig):
 def test_an_unpriced_outflow_refuses(rig):
     tool = _Tool(price=None)
     r = _run(tool)
-    assert "could not be priced" in _text(r)
+    assert "independent bridge valuation unavailable" in _text(r)
     assert not tool.sent
 
 

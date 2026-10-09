@@ -26,7 +26,7 @@ def test_a_new_store_is_group_writable(tmp_path):
         p = tmp_path / "new.db"
         sqlite_util.init_schema(str(p), "CREATE TABLE IF NOT EXISTS t (x)")
         assert _mode(p) & 0o060 == 0o060, f"group rw expected, got {oct(_mode(p))}"
-        assert _mode(p) & 0o002 == 0, "never world-writable"
+        assert _mode(p) & 0o007 == 0, "never accessible to other users"
     finally:
         os.umask(old)
 
@@ -48,3 +48,27 @@ def test_chmod_failure_is_not_fatal(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "chmod", _boom)
     sqlite_util.init_schema(str(p), "CREATE TABLE IF NOT EXISTS t (x)")
     assert p.exists()
+
+
+@pytest.mark.parametrize('link_kind', ['symlink', 'hardlink'])
+def test_init_schema_never_modifies_a_linked_database(tmp_path, link_kind):
+    target = tmp_path / 'private'
+    target.write_bytes(b'private data')
+    path = tmp_path / 'db'
+    if link_kind == 'symlink':
+        path.symlink_to(target)
+    else:
+        os.link(target, path)
+    with pytest.raises(OSError):
+        sqlite_util.init_schema(str(path), 'CREATE TABLE t (x)')
+    assert target.read_bytes() == b'private data'
+
+
+def test_wal_link_is_refused_before_sqlite_connects(tmp_path):
+    target = tmp_path / 'private'
+    target.write_bytes(b'private data')
+    path = tmp_path / 'db'
+    (tmp_path / 'db-wal').symlink_to(target)
+    with pytest.raises(OSError):
+        sqlite_util.init_schema(str(path), 'CREATE TABLE t (x)')
+    assert target.read_bytes() == b'private data'

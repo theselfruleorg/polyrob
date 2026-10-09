@@ -77,37 +77,10 @@ class AutonomyConfig(GoalFlagsMixin):
     def owner_doc_require_review() -> bool:
         return _bool_env("OWNER_DOC_REQUIRE_REVIEW", True)
 
-    # 035 P1-6 — the polarity flip. With this ON, a rule written on a GENUINE
-    # OWNER TURN applies immediately instead of landing in `.pending/`; a forged
-    # turn (self-wake, delegation result, sub-agent/leaf, autonomous goal run) is
-    # quarantined exactly as before, and `SelfContextWriter._resolve_pending`
-    # enforces that independently of this flag.
-    #
-    # Why: on 2026-09-08/09 the owner told the agent four times to stop posting
-    # to the Telegram den. The agent understood, agreed, and wrote the rule down
-    # correctly — into a review queue the owner was never told about, because a
-    # suppressed notification had been recorded as delivered. 22 of 22 agent
-    # writes in the subsystem's entire life were quarantined and 0 ever took
-    # effect without a separate owner step. Review protects against a FORGED
-    # author, not against the owner; the owner IS the authority.
-    #
-    # Default OFF for one release so the flip is revertible (035 §6).
-    #
-    # 2026-09-21: FLIPPED ON. The one release became four (1.0.1 → 1.1.0) and the
-    # defect recurred exactly as described. Prod, 2026-09-20 07:19:39, the owner
-    # told the agent to stop publishing bug reports; the rule landed in
-    # `.pending/`, `load_owner_doc` reads only the ACTIVE file, and it bound 27
-    # hours later at 09-21 10:48:38. In between the agent published one, and the
-    # owner asked "haven't i told you not to report about bugs?". The review lane
-    # protects against a FORGED author — and it still does: `_rules_immediate`
-    # returns False for any forged turn, `SelfContextWriter._resolve_pending`
-    # refuses a non-user author independently, and an unreadable flag fails CLOSED
-    # to the review lane. Neither side of that guard is relaxed here; only the
-    # default for a GENUINE OWNER TURN moves. `OWNER_RULES_IMMEDIATE=false`
-    # restores the queue.
     @staticmethod
     def owner_rules_immediate() -> bool:
-        return _bool_env("OWNER_RULES_IMMEDIATE", True)
+        """Retired setting: model-authored rules require separate owner review."""
+        return False
 
     # Bounded operating-contract doc (owner-authored operating rules/constraints,
     # owner-UX Phase 2) — injected after owner facts and before the evolving SELF

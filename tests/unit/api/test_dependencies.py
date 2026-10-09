@@ -397,9 +397,9 @@ class TestResolveOrchestrator:
 
         with patch("api.dependencies.pm", return_value=pm_mock):
             with patch("api.dependencies.guard_remote"):
-                await resolve_orchestrator("raw_sid", agent)
+                await resolve_orchestrator("cleaned_sid", agent)
 
-        pm_mock.clean_session_id.assert_called_once_with("raw_sid")
+        pm_mock.clean_session_id.assert_called_once_with("cleaned_sid")
 
     @pytest.mark.asyncio
     async def test_calls_guard_remote_with_cleaned_id(self):
@@ -415,7 +415,7 @@ class TestResolveOrchestrator:
 
         with patch("api.dependencies.pm", return_value=pm_mock):
             with patch("api.dependencies.guard_remote") as gr_mock:
-                await resolve_orchestrator("raw", agent)
+                await resolve_orchestrator("cln", agent)
 
         gr_mock.assert_called_once_with(agent, "cln")
 
@@ -437,7 +437,7 @@ class TestResolveOrchestrator:
                 ),
             ):
                 with pytest.raises(HTTPException) as ei:
-                    await resolve_orchestrator("raw", agent)
+                    await resolve_orchestrator("cln", agent)
 
         assert ei.value.status_code == 409
         assert ei.value.detail["owner_pid"] == 99
@@ -456,7 +456,7 @@ class TestResolveOrchestrator:
 
         with patch("api.dependencies.pm", return_value=pm_mock):
             with patch("api.dependencies.guard_remote"):
-                result = await resolve_orchestrator("raw", agent)
+                result = await resolve_orchestrator("cln", agent)
 
         agent.get_orchestrator.assert_called_once_with("cln")
         assert result is orch
@@ -471,6 +471,6 @@ class TestResolveOrchestrator:
 
         with patch("api.dependencies.pm", return_value=pm_mock):
             with patch("api.dependencies.guard_remote"):
-                result = await resolve_orchestrator("raw", agent)
+                result = await resolve_orchestrator("cln", agent)
 
         assert result is None

@@ -114,7 +114,8 @@ class StreamingThinkScrubber:
     # Pre-compute the longest tag (for partial-tag hold-back bound).
     _MAX_TAG_LEN: int = max(len(tag) for tag in _OPEN_TAGS + _CLOSE_TAGS)
 
-    def __init__(self) -> None:
+    def __init__(self, *, strict: bool = False) -> None:
+        self._strict = strict
         self._in_block: bool = False
         self._buf: str = ""
         self._last_emitted_ended_newline: bool = True
@@ -329,7 +330,7 @@ class StreamingThinkScrubber:
                 idx = buf_lower.find(tag_lower, search_start)
                 if idx == -1:
                     break
-                if self._is_block_boundary(buf, idx, already_emitted):
+                if self._strict or self._is_block_boundary(buf, idx, already_emitted):
                     if best_idx == -1 or idx < best_idx:
                         best_idx = idx
                         best_len = len(tag)

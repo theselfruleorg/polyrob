@@ -6,6 +6,14 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
+MAX_CREDIT_CHANGE = 1_000_000_000
+
+
+def validate_credit_amount(amount: int) -> None:
+    if isinstance(amount, bool) or not isinstance(amount, int) or not 0 < amount <= MAX_CREDIT_CHANGE:
+        raise ValueError(f"credit amount must be an integer in 1..{MAX_CREDIT_CHANGE}")
+
+
 
 class CreditBalanceManager:
     """Manage user credit balances."""
@@ -45,11 +53,20 @@ class CreditBalanceManager:
     async def has_sufficient_balance(self, user_id: str, amount: int) -> bool:
         """Check if user has enough credits."""
 
+        validate_credit_amount(amount)
+        # An unpaid completed call must not leave the same small balance
+        # reusable for unlimited new requests. An unreadable debt store raises.
+        unpaid = await self.db.fetch_one(
+            "SELECT id FROM billing_failures WHERE user_id = ? "
+            "AND status = 'pending' LIMIT 1", (user_id,))
+        if unpaid is not None:
+            return False
         balance = await self.get_balance(user_id)
         return balance['balance'] >= amount
 
     async def deduct_credits(self, user_id: str, amount: int,
-                             reason: str, session_id: str = None) -> bool:
+                             reason: str, session_id: str = None,
+                             *, transaction_type: str = "usage") -> bool:
         """
         Deduct credits from user balance.
 
@@ -65,6 +82,9 @@ class CreditBalanceManager:
         Returns:
             True if successful, False if insufficient balance
         """
+        validate_credit_amount(amount)
+        if transaction_type not in ("usage", "reservation"):
+            raise ValueError("Invalid credit deduction type")
         # Ensure user exists (creates with 0 balance if not)
         await self.get_balance(user_id)
 
@@ -107,8 +127,8 @@ class CreditBalanceManager:
                     INSERT INTO credit_transactions (
                         user_id, amount, transaction_type, reason,
                         session_id, balance_before, balance_after, timestamp
-                    ) VALUES (?, ?, 'usage', ?, ?, ?, ?, CURRENT_TIMESTAMP)
-                """, (user_id, -amount, reason, session_id, balance_before, new_balance))
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """, (user_id, -amount, transaction_type, reason, session_id, balance_before, new_balance))
 
                 # Commit transaction
                 await self.db.connection.commit()
@@ -148,6 +168,7 @@ class CreditBalanceManager:
             True if successful
         """
 
+        validate_credit_amount(amount)
         # Ensure the row exists (creates with 0 balance if not) so the atomic
         # UPDATE below actually matches a row.
         await self.get_balance(user_id)

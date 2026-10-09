@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json as _json
 import logging
+import re
 import time
 from typing import Optional
 
@@ -22,6 +23,18 @@ from core.surfaces import catalog as _catalog
 from core.surfaces.surface import split_message
 
 logger = logging.getLogger(__name__)
+
+
+def _literal_mentions(value):
+    if isinstance(value, str):
+        return re.sub(r'<\s*/?\s*at\b', lambda m: '‹' + m.group(0)[1:], value, flags=re.I)
+    if isinstance(value, list):
+        return [_literal_mentions(item) for item in value]
+    if isinstance(value, dict):
+        if value.get('tag') == 'at':
+            raise ValueError('Structured mentions are not permitted in generated cards')
+        return {key: _literal_mentions(item) for key, item in value.items()}
+    return value
 
 _HOSTS = {"feishu": "https://open.feishu.cn", "lark": "https://open.larksuite.com"}
 
@@ -203,12 +216,13 @@ class FeishuClient:
             "POST", "/open-apis/im/v1/messages",
             params={"receive_id_type": receive_id_type(target)},
             json={"receive_id": str(target), "msg_type": "interactive",
-                  "content": _json.dumps(card, ensure_ascii=False)})
+                  "content": _json.dumps(_literal_mentions(card), ensure_ascii=False)})
         return payload.get("data") or {}
 
     async def send_message(self, target: str, text: str) -> dict:
         """Send ``text`` to a chat or a user, split at :data:`MAX_TEXT_CHARS`.
         Returns the last message's ``data`` (``message_id``)."""
+        text = _literal_mentions(text or '')
         last: dict = {}
         for chunk in split_message(text or "", MAX_TEXT_CHARS):
             if not chunk:

@@ -190,7 +190,8 @@ def test_init_without_the_flag_writes_no_character(home, tmp_path, monkeypatch):
     res = CliRunner().invoke(init_cmd, ["--skip-keys", "--no-prompt"])
     assert res.exit_code == 0, res.output
     assert not (home / "characters").exists()
-    assert "PERSONALITY_DEFAULT_CHARACTER" not in (home / ".env").read_text()
+    env = home / ".env"
+    assert not env.exists() or "PERSONALITY_DEFAULT_CHARACTER" not in env.read_text()
 
 
 def test_init_names_the_persona_next_steps(home, tmp_path, monkeypatch):

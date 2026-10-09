@@ -257,6 +257,10 @@ async def _run_gateway(port: int, telegram_token_opt, verbose: bool, *, host: st
             from api.webhooks import router as webhooks_router, set_container_provider
 
             set_container_provider(lambda: container)
+            from surfaces._launch import plain_http_bind_warning
+            bind_warning = plain_http_bind_warning(host)
+            if bind_warning:
+                _warn(bind_warning)
             web_app = FastAPI(title="polyrob gateway — webhooks")
             web_app.include_router(webhooks_router)
             web_server = uvicorn.Server(uvicorn.Config(

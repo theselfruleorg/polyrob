@@ -462,7 +462,9 @@ def make_approval_hook(
     one declaring an amount inside the autonomous ceiling. It returns a reason
     string to skip the provider wait, or None to gate normally. It is consulted
     ONLY for an already-gated action, and it FAILS CLOSED: a raising predicate
-    gates normally rather than waving the call through.
+    gates normally rather than waving the call through. A predicate with
+    ``takes_context = True`` also receives the execution context (073 D3: the
+    shell guard's smart triage stamps its verdict there).
     """
     required = {t for t in (required_tools or []) if t}
 
@@ -471,7 +473,10 @@ def make_approval_hook(
             return None  # not gated -> allow
         if exempt_fn is not None:
             try:
-                exemption = exempt_fn(action_name, params or {})
+                if getattr(exempt_fn, "takes_context", False):
+                    exemption = exempt_fn(action_name, params or {}, context)
+                else:
+                    exemption = exempt_fn(action_name, params or {})
             except Exception as e:
                 # Fail CLOSED: a broken predicate must never widen the gate.
                 logger.error(

@@ -165,7 +165,7 @@ async def test_g6_settled_amount_reconciled_and_not_marked_estimate(fake_transpo
     fake_transport.settle_amount = "60000"     # actually settles at $0.06
 
     client = RealX402Client()
-    res = await client.fetch_with_payment(
+    res = await client.fetch_with_payment(expected_pay_to=PAY_TO,
         url="http://fake/paid", method="GET", body=None,
         signer=LocalEoaSigner(KEY), network=NETWORK, max_amount_usd=0.10,
     )
@@ -186,7 +186,7 @@ async def test_g6_no_settle_header_falls_back_to_estimate(fake_transport):
     fake_transport.omit_settle_header = True
 
     client = RealX402Client()
-    res = await client.fetch_with_payment(
+    res = await client.fetch_with_payment(expected_pay_to=PAY_TO,
         url="http://fake/paid", method="GET", body=None,
         signer=LocalEoaSigner(KEY), network=NETWORK, max_amount_usd=0.10,
     )
@@ -209,7 +209,7 @@ async def test_g6_settle_success_false_is_not_a_confirmed_payment(fake_transport
 
     client = RealX402Client()
     with caplog.at_level("ERROR"):
-        res = await client.fetch_with_payment(
+        res = await client.fetch_with_payment(expected_pay_to=PAY_TO,
             url="http://fake/paid", method="GET", body=None,
             signer=LocalEoaSigner(KEY), network=NETWORK, max_amount_usd=0.10,
         )
@@ -228,7 +228,7 @@ async def test_g6_sdk_cap_refuses_above_cap_challenge(fake_transport):
 
     client = RealX402Client()
     with pytest.raises(Exception):
-        await client.fetch_with_payment(
+        await client.fetch_with_payment(expected_pay_to=PAY_TO,
             url="http://fake/paid", method="GET", body=None,
             signer=LocalEoaSigner(KEY), network=NETWORK, max_amount_usd=0.10,
         )
@@ -243,7 +243,7 @@ async def test_g7_non_idempotent_method_issues_no_extra_probe(fake_transport):
     fake_transport.settle_amount = "50000"
 
     client = RealX402Client()
-    res = await client.fetch_with_payment(
+    res = await client.fetch_with_payment(expected_pay_to=PAY_TO,
         url="http://fake/paid", method="POST", body='{"x":1}',
         signer=LocalEoaSigner(KEY), network=NETWORK, max_amount_usd=0.10,
     )
@@ -262,7 +262,7 @@ async def test_g7_idempotent_method_keeps_probe(fake_transport):
     fake_transport.settle_amount = "50000"
 
     client = RealX402Client()
-    res = await client.fetch_with_payment(
+    res = await client.fetch_with_payment(expected_pay_to=PAY_TO,
         url="http://fake/paid", method="GET", body=None,
         signer=LocalEoaSigner(KEY), network=NETWORK, max_amount_usd=0.10,
     )
@@ -280,7 +280,7 @@ async def test_g8_probe_layer_fails_closed_on_omitted_network(fake_transport):
 
     client = RealX402Client()
     with pytest.raises(ValueError, match="testnet"):
-        await client.fetch_with_payment(
+        await client.fetch_with_payment(expected_pay_to=PAY_TO,
             url="http://fake/paid", method="GET", body=None,
             signer=LocalEoaSigner(KEY), network="testnet", max_amount_usd=0.10,
         )
@@ -299,7 +299,7 @@ async def test_g8_sdk_hook_layer_fails_closed_on_network_mismatch(fake_transport
 
     client = RealX402Client()
     with pytest.raises(Exception, match="refusing to pay|rejected by spend_controls"):
-        await client.fetch_with_payment(
+        await client.fetch_with_payment(expected_pay_to=PAY_TO,
             url="http://fake/paid", method="POST", body="{}",
             signer=LocalEoaSigner(KEY), network="testnet", max_amount_usd=0.10,
         )
@@ -354,7 +354,7 @@ async def test_task4b_testnet_mode_pays_against_genuine_v2_caip2_challenge(fake_
     # fake_transport.network already defaults to NETWORK == "eip155:84532"
 
     client = RealX402Client()
-    res = await client.fetch_with_payment(
+    res = await client.fetch_with_payment(expected_pay_to=PAY_TO,
         url="http://fake/paid", method="GET", body=None,
         signer=LocalEoaSigner(KEY), network="testnet", max_amount_usd=0.10,
     )
@@ -380,7 +380,7 @@ async def test_task4b_mainnet_mode_pays_against_genuine_v2_caip2_challenge(fake_
     fake_transport.asset = ASSET_MAINNET
 
     client = RealX402Client()
-    res = await client.fetch_with_payment(
+    res = await client.fetch_with_payment(expected_pay_to=PAY_TO,
         url="http://fake/paid", method="GET", body=None,
         signer=LocalEoaSigner(KEY), network="mainnet", max_amount_usd=0.10,
     )
@@ -408,7 +408,7 @@ async def test_task4b_mainnet_mode_rejects_testnet_caip2_prefix_collision(fake_t
 
     client = RealX402Client()
     with pytest.raises(Exception, match="refusing to pay|rejected by spend_controls"):
-        await client.fetch_with_payment(
+        await client.fetch_with_payment(expected_pay_to=PAY_TO,
             url="http://fake/paid", method="POST", body="{}",
             signer=LocalEoaSigner(KEY), network="mainnet", max_amount_usd=0.10,
         )
@@ -438,7 +438,7 @@ async def test_asset_pin_probe_layer_refuses_non_usdc_asset(fake_transport):
 
     client = RealX402Client()
     with pytest.raises(ValueError, match="canonical USDC"):
-        await client.fetch_with_payment(
+        await client.fetch_with_payment(expected_pay_to=PAY_TO,
             url="http://fake/paid", method="GET", body=None,
             signer=LocalEoaSigner(KEY), network="testnet", max_amount_usd=0.10,
         )
@@ -461,7 +461,7 @@ async def test_asset_pin_sdk_hook_layer_refuses_non_usdc_asset_no_signing(fake_t
 
     client = RealX402Client()
     with pytest.raises(Exception, match="refusing to pay|rejected by spend_controls"):
-        await client.fetch_with_payment(
+        await client.fetch_with_payment(expected_pay_to=PAY_TO,
             url="http://fake/paid", method="POST", body="{}",
             signer=LocalEoaSigner(KEY), network="testnet", max_amount_usd=0.10,
         )
@@ -494,7 +494,7 @@ async def test_asset_pin_d0_spoof_refused_before_decimals_ever_matter(fake_trans
 
     client = RealX402Client()
     with pytest.raises(Exception, match="refusing to pay|rejected by spend_controls"):
-        await client.fetch_with_payment(
+        await client.fetch_with_payment(expected_pay_to=PAY_TO,
             url="http://fake/paid", method="POST", body="{}",
             signer=LocalEoaSigner(KEY), network="testnet", max_amount_usd=0.10,
         )
@@ -529,7 +529,7 @@ async def test_c1_recheck_aborts_real_amount_over_gate_ceiling(fake_transport):
 
     client = RealX402Client(policy=gate)
     with pytest.raises(Exception, match="wallet policy"):
-        await client.fetch_with_payment(
+        await client.fetch_with_payment(expected_pay_to=PAY_TO,
             url="http://fake/paid", method="POST", body="{}",
             signer=LocalEoaSigner(KEY), network="testnet", max_amount_usd=1.00,
         )
@@ -555,7 +555,7 @@ async def test_c1_recheck_aborts_when_daily_cap_would_exceed(fake_transport):
 
     client = RealX402Client(policy=gate)
     with pytest.raises(Exception, match="wallet policy"):
-        await client.fetch_with_payment(
+        await client.fetch_with_payment(expected_pay_to=PAY_TO,
             url="http://fake/paid", method="POST", body="{}",
             signer=LocalEoaSigner(KEY), network="testnet", max_amount_usd=1.00,
         )
@@ -573,7 +573,7 @@ async def test_c1_recheck_allows_within_gate_and_pays(fake_transport):
     gate = PolicyGate(max_per_tx_usd=10.0)
 
     client = RealX402Client(policy=gate)
-    res = await client.fetch_with_payment(
+    res = await client.fetch_with_payment(expected_pay_to=PAY_TO,
         url="http://fake/paid", method="GET", body=None,
         signer=LocalEoaSigner(KEY), network="testnet", max_amount_usd=1.00,
     )
@@ -593,7 +593,7 @@ async def test_c1_no_policy_threaded_is_backward_compatible(fake_transport):
     fake_transport.settle_amount = "50000"
 
     client = RealX402Client()  # no policy
-    res = await client.fetch_with_payment(
+    res = await client.fetch_with_payment(expected_pay_to=PAY_TO,
         url="http://fake/paid", method="GET", body=None,
         signer=LocalEoaSigner(KEY), network="testnet", max_amount_usd=1.00,
     )
@@ -635,7 +635,7 @@ async def test_pinned_ip_reaches_the_sdk_paying_leg(monkeypatch):
     monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", patched)
 
     client = RealX402Client()
-    res = await client.fetch_with_payment(
+    res = await client.fetch_with_payment(expected_pay_to=PAY_TO,
         url="http://fake/paid", method="GET", body=None,
         signer=LocalEoaSigner(KEY), network=NETWORK, max_amount_usd=0.10,
         pinned_ip="93.184.216.34",
@@ -668,7 +668,7 @@ async def test_no_pinned_ip_falls_back_to_a_plain_unpinned_transport(monkeypatch
     monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", patched)
 
     client = RealX402Client()
-    res = await client.fetch_with_payment(
+    res = await client.fetch_with_payment(expected_pay_to=PAY_TO,
         url="http://fake/paid", method="GET", body=None,
         signer=LocalEoaSigner(KEY), network=NETWORK, max_amount_usd=0.10,
     )
@@ -715,7 +715,7 @@ async def test_oversized_response_is_truncated_not_discarded(monkeypatch):
     monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", patched)
 
     client = RealX402Client()
-    res = await client.fetch_with_payment(
+    res = await client.fetch_with_payment(expected_pay_to=PAY_TO,
         url="http://fake/paid", method="GET", body=None,
         signer=LocalEoaSigner(KEY), network=NETWORK, max_amount_usd=1.00,
     )
@@ -743,14 +743,41 @@ async def test_journal_persisted_before_signed_payment_and_retained_on_response_
     monkeypatch.setattr(fake_transport, 'handler', lose_reply)
     client = RealX402Client()
     with pytest.raises(Exception):
-        await client.fetch_with_payment(url='http://fake/paid', method='POST', body=None,
+        await client.fetch_with_payment(expected_pay_to=PAY_TO, url='http://fake/paid', method='POST', body=None,
                                        signer=LocalEoaSigner(KEY), network=NETWORK, max_amount_usd=0.1)
     assert len(signed_requests) == 1
     assert journal.unresolved()
     with pytest.raises(Exception):
-        await client.fetch_with_payment(url='http://fake/paid', method='POST', body=None,
+        await client.fetch_with_payment(expected_pay_to=PAY_TO, url='http://fake/paid', method='POST', body=None,
                                        signer=LocalEoaSigner(KEY), network=NETWORK, max_amount_usd=0.1)
     assert len(signed_requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_the_journal_row_carries_the_signed_authorization_terms(fake_transport, monkeypatch):
+    """An unsettled row must name the authorization the chain can decide
+    (core.wallet.x402_expiry); the signature itself is never stored."""
+    from core.wallet import submission_journal as journal
+    original = fake_transport.handler
+    seen = {}
+    def lose_reply(request):
+        header = request.headers.get('payment-signature') or request.headers.get('x-payment')
+        if header:
+            seen['auth'] = json.loads(base64.b64decode(header))['payload']['authorization']
+            raise TimeoutError('response lost')
+        return original(request)
+    monkeypatch.setattr(fake_transport, 'handler', lose_reply)
+    with pytest.raises(Exception):
+        await RealX402Client().fetch_with_payment(expected_pay_to=PAY_TO,
+            url='http://fake/paid', method='POST', body=None,
+            signer=LocalEoaSigner(KEY), network=NETWORK, max_amount_usd=0.1)
+    (row,) = journal.x402_authorizations()
+    terms = row['x402_auth']
+    assert terms['nonce'] == seen['auth']['nonce'].lower()
+    assert terms['valid_before'] == int(seen['auth']['validBefore'])
+    assert terms['authorizer'] == LocalEoaSigner(KEY).address.lower()
+    assert terms['asset'] == ASSET.lower() and terms['network'] == NETWORK
+    assert 'signature' not in json.dumps(terms)
 
 
 @pytest.mark.asyncio
@@ -767,7 +794,7 @@ async def test_failed_journal_prevents_signed_payment(fake_transport, monkeypatc
         return original(request)
     monkeypatch.setattr(fake_transport, 'handler', refuse_signed)
     with pytest.raises(Exception):
-        await RealX402Client().fetch_with_payment(
+        await RealX402Client().fetch_with_payment(expected_pay_to=PAY_TO,
             url='http://fake/paid', method='POST', body=None,
             signer=LocalEoaSigner(KEY), network=NETWORK, max_amount_usd=0.1)
 
@@ -783,7 +810,7 @@ async def test_cr_l26_refuses_a_long_authorization_window(fake_transport, timeou
     fake_transport.max_timeout_seconds = timeout
     client = RealX402Client()
     with pytest.raises(Exception, match="authorization window"):
-        await client.fetch_with_payment(
+        await client.fetch_with_payment(expected_pay_to=PAY_TO,
             url="http://fake/paid", method="POST", body="{}",
             signer=LocalEoaSigner(KEY), network="testnet", max_amount_usd=1.00,
         )
@@ -795,8 +822,31 @@ async def test_cr_l26_allows_the_limit(fake_transport):
     fake_transport.legacy_alias = False
     fake_transport.max_timeout_seconds = 600
     client = RealX402Client()
-    res = await client.fetch_with_payment(
+    res = await client.fetch_with_payment(expected_pay_to=PAY_TO,
         url="http://fake/paid", method="POST", body="{}",
         signer=LocalEoaSigner(KEY), network="testnet", max_amount_usd=1.00,
     )
     assert res.paid is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["GET", "POST"])
+@pytest.mark.parametrize("approved", [None, "bad-address", "0x" + "ab" * 20])
+async def test_unapproved_recipient_never_signs(fake_transport, monkeypatch, approved, method):
+    from core.wallet import submission_journal as journal
+    signed = []
+    signer = LocalEoaSigner(KEY)
+    monkeypatch.setattr(signer, "sign_typed_data", lambda *a, **k: signed.append(True))
+    with pytest.raises(Exception, match="expected_pay_to"):
+        await RealX402Client().fetch_with_payment(
+            url="http://fake/paid", method=method, body=None, signer=signer,
+            network=NETWORK, max_amount_usd=.1, expected_pay_to=approved)
+    assert not signed
+    assert not journal.unresolved()
+
+
+@pytest.mark.asyncio
+async def test_quote_discloses_recipient_for_approval(fake_transport):
+    details = await RealX402Client().quote_details("http://fake/paid", network=NETWORK)
+    assert details["pay_to"] == PAY_TO
+    assert details["amount"] == .05

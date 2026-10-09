@@ -65,11 +65,9 @@ async def api_artifacts(request: Request, session_id: Optional[str] = None) -> J
         # rendered "Nothing built" over a session tree full of files.
         return JSONResponse({"artifacts": None, "error": "session-scoped"})
 
-    try:
-        from agents.task.path import pm
-        clean_id = pm().clean_session_id(session_id)
-    except Exception:
-        clean_id = session_id
+    from agents.task.path import pm
+    from webview.session_access import http_session_id
+    clean_id = http_session_id(session_id, pm())
 
     try:
         from core.artifacts import get_artifact_ledger

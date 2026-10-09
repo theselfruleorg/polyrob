@@ -235,3 +235,43 @@ async def test_git_allow_protocol_set_on_every_invocation(tmp_path, monkeypatch)
     assert res.error is None
     assert captured["env"] is not None
     assert captured["env"].get("GIT_ALLOW_PROTOCOL") == "file:git:http:https:ssh"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("verb,model,branch", [
+    ("git_pull", GitPullParams, "--upload-pack=payload"),
+    ("git_push", GitPushParams, "--receive-pack=payload"),
+    ("git_push", GitPushParams, "--force"),
+])
+async def test_branch_option_rejected_before_spawn(tmp_path, monkeypatch, verb, model, branch):
+    tool = _git(tmp_path)
+    async def forbidden(*args, **kwargs):
+        raise AssertionError("must reject before running git")
+    monkeypatch.setattr(tool, "_run_git", forbidden)
+    result = await getattr(tool, verb)(model(branch=branch))
+    assert result.error and "unsafe git branch" in result.error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("verb,model", [("git_pull", GitPullParams), ("git_push", GitPushParams)])
+@pytest.mark.parametrize("branch", [":dev", "+main", "main:other", "HEAD~1", "a..b",
+                                    "x@{1}", "a b", "x.lock", ".hidden", "refs/heads/x^"])
+async def test_refspec_syntax_rejected_before_spawn(tmp_path, monkeypatch, verb, model, branch):
+    """EXEC-3: ':dev' deletes a remote branch and '+main' force-pushes."""
+    tool = _git(tmp_path)
+    async def forbidden(*args, **kwargs):
+        raise AssertionError("must reject before running git")
+    monkeypatch.setattr(tool, "_run_git", forbidden)
+    result = await getattr(tool, verb)(model(branch=branch))
+    assert result.error and "unsafe git branch" in result.error
+
+
+@pytest.mark.parametrize("name", ["main", "feature/x", "release/1.0", "v1.2"])
+def test_plain_branch_names_still_pass(name):
+    assert GitTool._unsafe_ref(name) is False
+
+
+@pytest.mark.asyncio
+async def test_branch_create_refuses_refspec_name(tmp_path):
+    result = await _git(tmp_path).git_branch(GitBranchParams(name="a:b"))
+    assert result.error and "unsafe git branch name" in result.error

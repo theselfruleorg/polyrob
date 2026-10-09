@@ -54,6 +54,8 @@ class TokenOriginParams(BaseModel):
 
 def fmt_amount(raw: int, decimals: Optional[int]) -> str:
     """Exact human amount from raw units; ``decimals=None`` says so."""
+    from core.wallet.tokens import bounded_decimals
+    decimals = bounded_decimals(decimals)
     if decimals is None:
         return f"{raw:,} raw units (decimals unknown)"
     sign = "-" if raw < 0 else ""
@@ -153,6 +155,23 @@ def render_activity(rep, *, own: bool = False):
     return "\n".join(lines), meta
 
 
+def render_own_payments(address: str, rows) -> List[str]:
+    """Our OWN recorded payments to *address* — the answer to "did we pay X?"."""
+    head = "Our own recorded transfers to this address (wallet audit ledger):"
+    if rows is None:
+        return ["", head, "  the audit ledger could not be read — UNKNOWN, not 'none'."]
+    if not rows:
+        return ["", head, "  no transfer to this address is recorded in the audit ledger."]
+    lines = ["", head]
+    for r in rows:
+        amt = r.get("amount_usd")
+        amt_txt = f"${amt:,.2f}" if isinstance(amt, (int, float)) else "amount unknown"
+        lines.append(f"  {_when(r.get('ts'))}  {amt_txt}  {r.get('asset') or ''}"
+                     f" on {r.get('chain') or '?'}  tx {r.get('result_ref') or '?'}"
+                     f"  ({r.get('lane') or 'lane unknown'})")
+    return lines
+
+
 def wallet_activity_sync(tool, params: WalletActivityParams, execution_context=None):
     from core.wallet import activity
     address, chain, own, err = tool._wallet_target(params.address, params.chain,
@@ -163,6 +182,12 @@ def wallet_activity_sync(tool, params: WalletActivityParams, execution_context=N
     text, meta = render_activity(rep, own=own)
     if meta is None:
         meta = {"verb": "wallet_activity", "report": rep.to_dict()}
+    from tools.defi.data_tool import _operator_read_refusal
+    if not own and _operator_read_refusal(execution_context) is None:
+        from core.wallet.trade_index import own_transfers_to
+        paid = own_transfers_to(address)
+        text += "\n" + "\n".join(render_own_payments(address, paid))
+        meta["own_transfers_to"] = paid
     return tool._ar(content=text, metadata=meta)
 
 

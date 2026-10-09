@@ -81,6 +81,8 @@ def _render_line(row) -> str:
         flags.append("bot")
     if row.kind == "edit":
         flags.append("edit")
+    if row.kind == "deleted":
+        flags.append("deleted by you — already handled")
     if row.media_path:
         flags.append("media")
     if row.mentions_bot:
@@ -93,7 +95,36 @@ def _render_line(row) -> str:
     text = neutralize_text(row.text or "") or "(no text — media/caption row)"
     who = neutralize_name(row.sender_name or "") or neutralize_name(str(row.sender_id or ""))
     role = neutralize_name(str(row.role_at_write or ""))
-    return f"[{stamp}] {who} ({role}){flag}: {text}"
+    # The ids `room_moderate` targets by: the sender's user id and the message id.
+    ids = f" {{uid={neutralize_name(str(row.sender_id or ''))} msg={neutralize_name(str(row.message_id or ''))}}}"
+    return f"[{stamp}] {who} ({role}){flag}{ids}: {text}"
+
+
+def room_matches(r: dict, want: str, title: str) -> bool:
+    """The ONE room-selector rule (`room_read` and `room_moderate`): the chat
+    id, ``surface:chat_id``, or a fragment of the room's name or owner label."""
+    return (want in (r["chat_id"], f"{r['surface']}:{r['chat_id']}")
+            or want.lower() in (title or "").lower()
+            or want.lower() in str(r.get("note") or "").lower())
+
+
+def _mark_read_taint(controller, execution_context) -> None:
+    """Mark the turn as having read third-party text. Never raises."""
+    orch = getattr(controller, "orchestrator", None)
+    try:
+        from core.security.read_taint import mark
+        mark(orch, execution_context)
+        return
+    except Exception:
+        pass
+    try:
+        if orch is not None:
+            setattr(orch, "_untrusted_read", True)
+        meta = getattr(execution_context, "metadata", None)
+        if isinstance(meta, dict):
+            meta["untrusted_read"] = True
+    except Exception:
+        logger.warning("room_read: could not mark the turn tainted", exc_info=True)
 
 
 def register_room_read_action(controller) -> None:
@@ -123,7 +154,8 @@ def register_room_read_action(controller) -> None:
     @controller.registry.action(
         "Read what has been said in a group/channel room you are in (e.g. The "
         "Public Den): the most recent lines from the local room ledger, "
-        "newest last. Read-only — to reply, use message(surface='telegram', "
+        "newest last. Each line carries {uid=… msg=…} for room_moderate. "
+        "Read-only — to reply, use message(surface='telegram', "
         "target=<chat_id>) or answer a mention in the room. Omit `room` to "
         "list your rooms.",
         param_model=RoomReadAction,
@@ -202,10 +234,7 @@ def register_room_read_action(controller) -> None:
                     f"fragment>.\n{_channel_proof()}"),
                 include_in_memory=True)
 
-        matches = [r for r in rooms
-                   if want in (r["chat_id"], f"{r['surface']}:{r['chat_id']}")
-                   or want.lower() in _title(r).lower()
-                   or want.lower() in str(r.get("note") or "").lower()]
+        matches = [r for r in rooms if room_matches(r, want, _title(r))]
         if not matches:
             return ActionResult(
                 extracted_content=(
@@ -245,6 +274,10 @@ def register_room_read_action(controller) -> None:
             # M01: the member lines are third-party DATA — framed as such.
             from core.security.untrusted_wrap import wrap_untrusted
             lines = [wrap_untrusted("room_ledger", "\n".join(_render_line(r) for r in rows))]
+            # CHAT-5: members wrote these lines. The turn that read them is
+            # TAINTED: a moderation it then asks for needs the owner's tap
+            # (room_moderate_action._moderation_authority).
+            _mark_read_taint(controller, execution_context)
         footer = ("read-only: this action never posts. Reply via "
                   "message(surface='telegram', target=<chat_id>) or by "
                   "answering a mention in the room.")

@@ -60,12 +60,54 @@ def _server_default_data_home() -> Path:
     return Path.home() / ".polyrob"
 
 
+#: Store names whose presence marks a directory as a pre-existing data home.
+_DATA_HOME_MARKERS = ("goals.db", "cron.db", "memory.db", "owner.md", "identity",
+                      "skills", "preferences.toml", "wallet")
+_warned_project_homes: set = set()
+
+
+def _local_default_data_home() -> Path:
+    """The local data home when nothing is configured: ``<polyrob_home>/data``.
+
+    It used to be ``cwd/.polyrob``. A cloned or downloaded directory can ship a
+    ``.polyrob/`` with ``owner.md``, ``goals.db``, ``cron.db``, skills and prefs,
+    and the agent then ran on that state as if the owner wrote it (DATA-4/SUP-2).
+    The user's own home is the only directory an untrusted tree cannot supply.
+    ``data/`` keeps the sidecar DBs apart from ``.env``/``auth.json`` (027 WP5).
+    """
+    from core.paths import polyrob_home
+    return (polyrob_home() / "data").resolve()
+
+
+def _warn_ignored_project_home(data_home: Path) -> None:
+    """Name a project ``cwd/.polyrob`` data home this process no longer reads.
+
+    The data is not moved or deleted; the warning says how to keep using it.
+    Once per directory per process; fail-open."""
+    try:
+        legacy = (Path.cwd() / ".polyrob").resolve()
+        if legacy == data_home or legacy in _warned_project_homes:
+            return
+        if not any((legacy / name).exists() for name in _DATA_HOME_MARKERS):
+            return
+        _warned_project_homes.add(legacy)
+        import logging
+        logging.getLogger(__name__).warning(
+            "polyrob no longer loads the project data home %s (a cloned directory could "
+            "supply it); using %s. Your data there is untouched — to keep using it, set "
+            "POLYROB_DATA_DIR=%s, or move its files into %s.",
+            legacy, data_home, legacy, data_home)
+    except Exception:
+        pass
+
+
 def resolve_runtime_paths(*, local: bool) -> RuntimePaths:
     """Resolve (code_root, config_dir, data_home, workspace_root).
 
     Precedence (LOCKED — doc 01 T1):
       - code_root     = the install/code root (parent of ``core/``).
-      - data_home     = ``POLYROB_DATA_DIR`` if set; elif local → ``cwd/.polyrob``;
+      - data_home     = ``POLYROB_DATA_DIR`` if set; elif local →
+                        ``<polyrob_home>/data`` (never ``cwd/.polyrob``);
                         else server → ``/var/lib/polyrob`` (if writable) else
                         ``~/.polyrob``.
       - config_dir    = ``code_root/config`` (server) or ``data_home`` (local).
@@ -77,18 +119,8 @@ def resolve_runtime_paths(*, local: bool) -> RuntimePaths:
     if env_data_dir:
         data_home = Path(env_data_dir).resolve()
     elif local:
-        # Local home is the project-scoped ``.polyrob`` dir (doc 02 rename).
-        data_home = (Path.cwd() / ".polyrob").resolve()
-        # 027 WP5: running from $HOME would collapse the data home into the
-        # CONFIG home (~/.polyrob — .env/auth.json beside the sidecar DBs,
-        # a collision core/paths.py declares must not happen). Redirect to a
-        # data/ subdir; an explicit POLYROB_DATA_DIR always wins above.
-        try:
-            from core.paths import polyrob_home
-            if data_home == polyrob_home().resolve():
-                data_home = data_home / "data"
-        except Exception:
-            pass
+        data_home = _local_default_data_home()
+        _warn_ignored_project_home(data_home)
     else:
         data_home = _server_default_data_home().resolve()
 
@@ -118,7 +150,7 @@ def resolve_data_home() -> Path:
     One policy, shared by every admin/console read of those DBs (webview
     ``pages``/``activity`` via ``webgate.data_dir()``, ``polyrob owner``,
     ``polyrob surface``): ``POLYROB_DATA_DIR`` wins, else converge on the
-    CLI/agent home (``cwd/.polyrob``). This function is the SSOT for that rule:
+    CLI/agent home (``<polyrob_home>/data``). This function is the SSOT for that rule:
     ``core.bootstrap._resolve_cli_data_home`` (build_cli_container) and
     ``core.runtime_config.get_data_root`` both delegate here, so admin verbs and
     the running daemons always read the SAME files (``POLYROB_PROJECT_DIR`` moves
@@ -168,8 +200,8 @@ def resolve_session_data_root() -> Path:
       3. Neither set → the legacy ``./data/task``, byte-identical to a bare
          ``PathManager()``.
 
-    The local-dev CLI branches (``POLYROB_DATA_DIR`` unset → ``cwd/.polyrob/
-    sessions``) are deliberately NOT mirrored: this function runs in OTHER
+    The local-dev CLI branches (``POLYROB_DATA_DIR`` unset → ``<polyrob_home>/
+    data/sessions``) are deliberately NOT mirrored: this function runs in OTHER
     processes whose cwd is not the CLI's, so guessing would be wrong more
     often than the byte-identical legacy default.
     """
@@ -189,7 +221,7 @@ def data_dir_or_home(value: Optional[str]) -> str:
 
     The ONE replacement for the ~10 scattered ``getattr(cfg, "data_dir", None) or
     "data"`` / ``data_dir="data"`` fallbacks: when no container/config is present the
-    fallback must be the data home (``POLYROB_DATA_DIR`` else ``cwd/.polyrob``), NEVER a
+    fallback must be the data home (``POLYROB_DATA_DIR`` else ``<polyrob_home>/data``), NEVER a
     relative ``"data"`` under the current working directory (a latent CWD/tree write).
     ``config.data_dir`` is absolute after bootstrap, so passing it through is a no-op.
     """
@@ -219,7 +251,7 @@ def effective_data_home() -> Path:
     """``<data_home>`` with the local-vs-server default split applied.
 
     :func:`resolve_data_home` is the LOCAL rule (``POLYROB_DATA_DIR`` else
-    ``cwd/.polyrob``); a headless deploy that left the env unset lands on the
+    ``<polyrob_home>/data``); a headless deploy that left the env unset lands on the
     server default instead. Per-tenant stores that must agree with the update
     snapshot/rollback paths (``cli/update/context.py``) resolve through here.
     """

@@ -42,6 +42,7 @@ from __future__ import annotations  # safe: @BaseTool.action uses explicit param
 
 import asyncio
 import logging
+import math
 import os
 import time
 import types
@@ -59,6 +60,7 @@ from pydantic import BaseModel, BeforeValidator, Field
 ChainName = Annotated[str, BeforeValidator(
     lambda v: v.strip().lower() if isinstance(v, str) else v)]
 
+from core.security.refusal_taint import PRECONDITION
 from tools.base_tool import BaseTool
 from tools.defi.solana_send_verb import SolanaTransferParams
 from tools.wallet_holder import WalletHolderMixin
@@ -133,7 +135,7 @@ def _shown_symbol(symbol: Optional[str], fallback: str) -> str:
 def _measured_out_label(sized: Optional[dict], quoted_label: Optional[str]) -> Optional[str]:
     """`"0.00098357 WETH"` from the receipt-sized output, or None. Pure.
 
-    *sized* is `_swap_sizes_from_receipt`'s dict, whose `out_qty` is the token_out
+    *sized* is a verified measurement dict, whose `out_qty` is the token_out
     total the receipt's own `Transfer` logs paid the holder. The unit is lifted
     from the QUOTE's label (`"≥0.00096881 WETH"`) so the measured line and the
     quoted line are directly comparable — a measurement in different units than
@@ -275,7 +277,7 @@ def _route_drift_max_pct() -> float:
         value = float(raw)
     except ValueError:
         return _ROUTE_DRIFT_MAX_PCT
-    if value <= 0:
+    if not math.isfinite(value) or value <= 0:
         return _ROUTE_DRIFT_MAX_PCT
     return min(value, _ROUTE_DRIFT_CEILING_PCT)
 
@@ -302,7 +304,7 @@ _WSOL_MINT = _wsol_mint()
 #: freezable and mintable, so those stay informational).
 _SOLANA_BLOCKING_FLAGS = frozenset({
     "transfer_fee_active", "transfer_hook_active", "default_account_frozen",
-    "non_transferable", "permanent_delegate",
+    "non_transferable", "permanent_delegate", "balance_mutable_authority",
 })
 
 
@@ -341,7 +343,7 @@ def _solana_trade_enabled() -> bool:
 def _max_slippage_bps() -> int:
     """Default slippage bound (proposal 023 T4: DEFI_MAX_SLIPPAGE_BPS, 100)."""
     from core.env import int_env
-    return int_env("DEFI_MAX_SLIPPAGE_BPS", 100)
+    return max(1, min(1000, int_env("DEFI_MAX_SLIPPAGE_BPS", 100)))
 
 
 class ApproveParams(BaseModel):
@@ -474,6 +476,8 @@ class SwapParams(BaseModel):
     max_spend_usd: float = Field(..., gt=0, description=(
         "The most USD you authorize to leave the wallet, asserted against the "
         "SIMULATED outflow."))
+    minimum_output_raw: Optional[int] = Field(None, ge=1, le=2**256-1,
+        description="Minimum raw output confirmed by the owner; every new route must preserve this floor.")
     slippage_bps: Optional[int] = Field(None, ge=1, le=1000, description=(
         "Max slippage in basis points (100 = 1%). Defaults to "
         "DEFI_MAX_SLIPPAGE_BPS. Bounds amountOutMinimum, so the swap reverts "
@@ -491,6 +495,8 @@ class SolanaSwapParams(BaseModel):
     amount_in: float = Field(..., gt=0, description="Human amount of token_in to sell")
     max_spend_usd: float = Field(..., gt=0, description=(
         "Your declared ceiling for this swap in USD. The guard holds you to it."))
+    minimum_output_raw: Optional[int] = Field(None, ge=1, le=2**256-1,
+        description="Minimum raw output confirmed by the owner; every new route must preserve this floor.")
     slippage_bps: Optional[int] = Field(None, ge=1, le=1000, description=(
         "Slippage bound in basis points. Jupiter bakes its own minimum into the "
         "transaction it builds, so this is a bar that minimum must CLEAR — a "
@@ -742,6 +748,15 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
         from tools.defi.price_sources import spend_price
         return spend_price(chain, addr)
 
+    def _trusted_buy_price(self, chain, addr):
+        """A TRUSTED buy's price check (DEFI-6): the exit-grade price, but never
+        a DISPUTED one (``core.intel.price.trusted_buy_price``) — sources that
+        disagree leave the route unverified, held to the unchecked ticket."""
+        if self._fallback_price_fn:
+            return self._fallback_price_fn(chain, addr)
+        from tools.defi.price_sources import trusted_buy_price
+        return trusted_buy_price(chain, addr)
+
     def _fallback_price(self, chain, addr):
         """Best-effort price for the guard's exit exemption (028, 2026-08-22).
 
@@ -893,8 +908,9 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
             try:
                 tx_hash = await asyncio.to_thread(rail.sign_and_send, tx)
             except Exception as exc:
-                from core.wallet.broadcast.evm import broadcast_failure_text
-                return self._ar(error=broadcast_failure_text(exc, nothing="nothing was wrapped"))
+                from core.wallet.broadcast.evm import broadcast_error_kind, broadcast_failure_text
+                return self._ar(error=broadcast_failure_text(exc, nothing="nothing was wrapped"),
+                    error_kind=broadcast_error_kind(exc))
 
             from core.wallet import tx_notify
             _used, _limit = tx_notify.caps_from_gate(gate)
@@ -1038,8 +1054,9 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
             try:
                 tx_hash = await asyncio.to_thread(rail.sign_and_send, tx)
             except Exception as exc:
-                from core.wallet.broadcast.evm import broadcast_failure_text
-                return self._ar(error=broadcast_failure_text(exc, nothing="nothing was unwrapped"))
+                from core.wallet.broadcast.evm import broadcast_error_kind, broadcast_failure_text
+                return self._ar(error=broadcast_failure_text(exc, nothing="nothing was unwrapped"),
+                    error_kind=broadcast_error_kind(exc))
 
             from core.wallet import tx_notify
             _used, _limit = tx_notify.caps_from_gate(gate)
@@ -1103,6 +1120,12 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
             to = normalize_address(params.to)
         except ValueError as exc:
             return self._ar(error=str(exc))
+        # Address poisoning (prod 2026-10-04 17:46): refuse a payee that imitates a
+        # recent one (same head and tail, different body) before anything is built.
+        from core.wallet import address_lookalike
+        poisoned = address_lookalike.poisoning_refusal(to)
+        if poisoned:
+            return self._ar(error=poisoned)
 
         if native_symbol:
             # A native send (2026-09-26): the gas asset has no contract, no
@@ -1209,9 +1232,10 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
             try:
                 tx_hash = await asyncio.to_thread(rail.sign_and_send, tx)
             except Exception as exc:
-                from core.wallet.broadcast.evm import broadcast_failure_text
+                from core.wallet.broadcast.evm import broadcast_error_kind, broadcast_failure_text
                 return self._ar(error=broadcast_failure_text(
-                    exc, nothing="funds were NOT sent"))
+                    exc, nothing="funds were NOT sent"),
+                    error_kind=broadcast_error_kind(exc))
 
             from core.wallet import tx_notify
             _used, _limit = tx_notify.caps_from_gate(gate)
@@ -1343,12 +1367,14 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
                        f"(simulation used {decision.sim_gas_used})\n")
         if dry_run:
             return self._ar(content=header + (
-                _DRY_RUN_HEAD + " Re-run with dry_run=false to send."))
+                _DRY_RUN_HEAD + " Re-run with dry_run=false to send."),
+                metadata={"valuation_basis": getattr(decision, "valuation_basis", "outflow")})
         try:
             tx_hash = await asyncio.to_thread(rail.sign_and_send, tx)
         except Exception as exc:
-            from core.wallet.broadcast.evm import broadcast_failure_text
-            return self._ar(error=broadcast_failure_text(exc))
+            from core.wallet.broadcast.evm import broadcast_error_kind, broadcast_failure_text
+            return self._ar(error=broadcast_failure_text(exc),
+                error_kind=broadcast_error_kind(exc))
         from core.wallet import tx_notify
         _used, _limit = tx_notify.caps_from_gate(gate)
         _route_label = intent.chain
@@ -1393,36 +1419,20 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
         # has a cost basis. REACH, not policy — fail-open, never gates the
         # record below. Only `swap` passes a position_ctx; approve/revoke/
         # transfer/wrap pass nothing.
-        # CR-M11: ONLY a succeeded receipt writes positions, and the sizes come
-        # from the receipt's own Transfer logs — never the QUOTED output. A
-        # reverted or unconfirmed swap booking a position is the 2026-08-25
-        # "book flat" class of lie in the other direction.
+        # Only a succeeded receipt permits a position write. Token-authored
+        # Transfer logs cannot measure balances: a hostile token can emit any
+        # amount. Use the guard's balance preview and label it as an estimate.
         _positions = None
-        # The same receipt-sized quantity the positions classifier uses is the
-        # honest answer to "what did we actually receive", and the settled
-        # notice was throwing it away: it printed `quoted … · not independently
-        # measured` while the rail reported the measured amount four minutes
-        # later (intel, 2026-09-22 — the DELTA exit quoted ≥0.00096881 WETH and
-        # received 0.00098357). `render_settled` was already right; nothing was
-        # passing it `measured`. The unit comes from the quote's own label so
-        # the two lines are directly comparable.
-        _measured = None
+        _measured = None  # A preview is never evidence of the landed fill.
         if position_ctx and receipt.succeeded:
             try:
-                sized = await asyncio.to_thread(
-                    self._swap_sizes_from_receipt, rail, tx_hash,
-                    (held.account if held is not None else signer.address), position_ctx)
+                sized = self._swap_sizes_from_simulation(decision, position_ctx)
                 if sized is not None:
                     from core import open_positions as _op
-                    # 071 W3: the sizes are the receipt's own Transfer logs (a
-                    # measured chain delta), and an unvalued swap is an UNKNOWN
-                    # basis — never the 0.0 `recorded_usd` falls back to.
                     _positions = _op.classify_swap(cost_usd=decision.amount_usd,
-                                                   qty_source="receipt", **sized)
-                    _measured = _measured_out_label(sized, amount_out_label)
+                                                   qty_source="simulation", **sized)
             except Exception:
                 _positions = None
-                _measured = None
         gate.record(venue="defi", action=venue_action,
                     amount_usd=recorded_usd,
                     counterparty=counterparty, idempotency_key=idem,
@@ -1501,45 +1511,27 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
             f"spent.\n  tx: {tx_hash}") + journal)
 
     @staticmethod
-    def _swap_sizes_from_receipt(rail, tx_hash, holder, ctx) -> Optional[dict]:
-        """``classify_swap`` kwargs sized from the LANDED receipt, or None.
-
-        Sums the ERC-20 ``Transfer`` logs of token_out TO the holder and of
-        token_in FROM the holder. A native input emits no Transfer; its size is
-        the declared amount, which the guard already held the native outflow
-        to. No readable receipt, or no token_out arriving, writes no position:
-        an unmeasured receipt is not a measured zero.
-        """
-        from core.wallet.simulation import _TOPIC_TRANSFER
-        raw = rail._rpc("eth_getTransactionReceipt", [tx_hash])
-        logs = raw.get("logs") if isinstance(raw, dict) else None
-        if not isinstance(logs, list):
+    def _swap_sizes_from_simulation(decision, ctx) -> Optional[dict]:
+        """Position estimate from the guard's balance reads, never token events."""
+        from core.wallet.addresses import same_address
+        from core.wallet.tokens import bounded_decimals
+        deltas = getattr(decision, "simulated_token_deltas", None)
+        if not isinstance(deltas, dict):
             return None
-        word = str(holder)[2:].lower().rjust(64, "0")
-        t_in = str(ctx["token_in"]).lower()
-        t_out = str(ctx["token_out"]).lower()
-        got_in = got_out = 0
-        for log in logs:
-            topics = [str(t).lower() for t in (log.get("topics") or ())]
-            if len(topics) != 3 or topics[0] != _TOPIC_TRANSFER:
-                continue
-            emitter = str(log.get("address") or "").lower()
-            data = str(log.get("data") or "0x")
-            try:
-                value = int(data[2:66] or "0", 16)
-            except ValueError:
-                continue
-            if emitter == t_out and topics[2][2:] == word:
-                got_out += value
-            if emitter == t_in and topics[1][2:] == word:
-                got_in += value
-        if got_out <= 0:
+        def delta(token):
+            return sum(v for k, v in deltas.items() if same_address(k, token))
+        got_out = delta(ctx["token_out"])
+        got_in = -delta(ctx["token_in"])
+        in_dec, out_dec = (bounded_decimals(ctx["in_decimals"]),
+                           bounded_decimals(ctx["out_decimals"]))
+        if out_dec is None or in_dec is None or got_out <= 0:
             return None
-        sized = {k: v for k, v in ctx.items()
-                 if k not in ("in_decimals", "out_decimals")}
-        sized["out_qty"] = got_out / (10 ** int(ctx["out_decimals"]))
+        if not ctx.get("in_native") and got_in <= 0:
+            return None
+        sized = {k: v for k, v in ctx.items() if k not in ("in_decimals", "out_decimals")}
+        sized["out_qty"] = got_out / (10 ** out_dec)
         if not ctx.get("in_native"):
-            sized["in_qty"] = got_in / (10 ** int(ctx["in_decimals"]))
+            sized["in_qty"] = got_in / (10 ** in_dec)
         return sized
 
     @BaseTool.action(
@@ -1858,11 +1850,7 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
         signer = wallet.operational_signer()
 
         try:
-            from modules.eip8004.registration import build_registration_file
-            base_url = os.environ.get("A2A_BASE_URL")
-            doc = build_registration_file(base_url or "http://localhost:9000")
-            agent_uri = ar.build_agent_uri(doc.model_dump(exclude_none=True),
-                                           base_url=base_url)
+            agent_uri = ar.instance_agent_uri()
             data = ar.encode_register(agent_uri)
             intent = ar.build_registration_intent(
                 chain=params.chain, max_spend_usd=params.max_spend_usd,
@@ -1931,11 +1919,7 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
         signer = wallet.operational_signer()
         try:
             registry = erc8004.resolve_identity_registry(params.chain)
-            from modules.eip8004.registration import build_registration_file
-            base_url = os.environ.get("A2A_BASE_URL")
-            doc = build_registration_file(base_url or "http://localhost:9000")
-            agent_uri = ar.build_agent_uri(doc.model_dump(exclude_none=True),
-                                           base_url=base_url)
+            agent_uri = ar.instance_agent_uri()
             data = ar.encode_set_agent_uri(params.agent_id, agent_uri)
         except ValueError as exc:
             return self._ar(error=str(exc))
@@ -2004,6 +1988,10 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
             return self._ar(error="token_in and token_out are the same token")
 
         id_out = get_token_identity(params.chain, token_out)
+        from tools.defi.buy_screen import evm_buy_refusal, unchecked_route_refusal
+        if not params.dry_run:
+            if why := await evm_buy_refusal(params.chain, token_out, id_out):
+                return self._ar(error=why)
         if native_in:
             # The native asset has no contract to ask, and every EVM chain this
             # rail supports denominates it in 18 decimals (the ChainRow records
@@ -2073,7 +2061,8 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
         if route is None:
             return self._ar(error=(
                 f"cannot route {in_label if (native_in or not id_in.symbol) else _shown_symbol(id_in.symbol, token_in)} -> "
-                f"{_shown_symbol(id_out.symbol, token_out)}: {route_why}"))
+                f"{_shown_symbol(id_out.symbol, token_out)}: {route_why}"),
+                error_kind=PRECONDITION)
 
         # Freshness window (§1.3): quoted_at is enforced, not decorative. An
         # aggregator quote is MORE perishable than a pool read, not less.
@@ -2082,11 +2071,57 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
             return self._ar(error=(
                 f"refused: the quote is stale ({age:.0f}s old, max "
                 f"{_QUOTE_MAX_AGE_SEC:.0f}s) — prices move; re-quote and execute "
-                f"promptly. Nothing was broadcast."))
+                f"promptly. Nothing was broadcast."), error_kind=PRECONDITION)
 
         amount_out_min = route.amount_out_min_raw
         if not amount_out_min or amount_out_min <= 0:
             return self._ar(error="the route carries no minimum output — refused")
+
+        if params.minimum_output_raw is not None and amount_out_min < params.minimum_output_raw:
+            return self._ar(error="The minimum received fell below the confirmed quote; nothing was built")
+
+        from tools.defi.identity_gate import trusted_buy
+        sanity_verdict, sanity_note = self._route_sanity(params.chain, route,
+                                                         id_in, id_out,
+                                                         slippage_bps=slippage,
+                                                         held_balance_raw=held_balance_raw,
+                                                         out_trusted=trusted_buy(
+                                                             id_out, chain=params.chain,
+                                                             token_out=token_out,
+                                                             execution_context=execution_context))
+        if not params.dry_run:
+            if why := unchecked_route_refusal(sanity_verdict, params.max_spend_usd):
+                return self._ar(error=why)
+        # 068 G1: WHICH contract this buys is checked by the verb, not left
+        # to the skill text the 2026-09-25 buyback read and ignored.
+        from tools.defi.identity_gate import buy_identity_refusal, container_of
+        identity_refusal = buy_identity_refusal(
+            chain=params.chain, token_out=token_out, id_out=id_out,
+            max_spend_usd=params.max_spend_usd, route_verdict=sanity_verdict,
+            execution_context=execution_context,
+            container=container_of(self))
+        if identity_refusal:
+            return self._ar(error=identity_refusal)
+        # 068 G2/B4: a run that declares its target acquires only that
+        # contract. The one exit is selling a held non-canonical token into the
+        # quote asset — USDC -> WETH is a buy, and is refused under a target.
+        from core.wallet.buy_target import acquisition_refusal
+        _t_refusal = acquisition_refusal(
+            execution_context, chain=params.chain, token_out=token_out,
+            token_in=(None if native_in else token_in), native_in=native_in)
+        if _t_refusal:
+            return self._ar(error=_t_refusal)
+        if sanity_verdict == "DISAGREES":
+            # §1.2: a disagreeing route BLOCKS — it used to only narrate. A pool
+            # price is a number anyone with capital can seed; when it disagrees
+            # with an independent source, executing anyway is how a thin or
+            # manipulated pool extracts value bounded only by amount_in.
+            return self._ar(error=(
+                f"refused: route check DISAGREES — {sanity_note}. The pool is "
+                f"quoting a price the independent source does not support "
+                f"(drift above {_route_drift_max_pct():.0f}%); a thin or "
+                f"manipulated pool extracts value this way. Nothing was "
+                f"broadcast."))
 
         # `spender` holds the allowance; `to` is the call target. They are the
         # same contract on both providers today, but they are separate fields on
@@ -2115,7 +2150,7 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
                     f"insufficient allowance: the spender may pull {allowance} but this "
                     f"swap needs {amount_in_raw}. Call approve_token(token="
                     f"{token_in}, spender={spender}, amount={params.amount_in}) "
-                    f"first, then swap, then revoke_approval."))
+                    f"first, then swap, then revoke_approval."), error_kind=PRECONDITION)
 
         if (held is not None and not native_in
                 and str(route.to).lower() != str(spender).lower()):
@@ -2185,38 +2220,6 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
 
         out_human = route.amount_out_raw / (10 ** id_out.decimals)
         min_human = amount_out_min / (10 ** id_out.decimals)
-        sanity_verdict, sanity_note = self._route_sanity(params.chain, route,
-                                                         id_in, id_out)
-        # 068 G1: WHICH contract this buys is checked by the verb, not left
-        # to the skill text the 2026-09-25 buyback read and ignored.
-        from tools.defi.identity_gate import buy_identity_refusal, container_of
-        identity_refusal = buy_identity_refusal(
-            chain=params.chain, token_out=token_out, id_out=id_out,
-            max_spend_usd=params.max_spend_usd, route_verdict=sanity_verdict,
-            execution_context=execution_context,
-            container=container_of(self))
-        if identity_refusal:
-            return self._ar(error=identity_refusal)
-        # 068 G2/B4: a run that declares its target acquires only that
-        # contract. The one exit is selling a held non-canonical token into the
-        # quote asset — USDC -> WETH is a buy, and is refused under a target.
-        from core.wallet.buy_target import acquisition_refusal
-        _t_refusal = acquisition_refusal(
-            execution_context, chain=params.chain, token_out=token_out,
-            token_in=(None if native_in else token_in), native_in=native_in)
-        if _t_refusal:
-            return self._ar(error=_t_refusal)
-        if sanity_verdict == "DISAGREES":
-            # §1.2: a disagreeing route BLOCKS — it used to only narrate. A pool
-            # price is a number anyone with capital can seed; when it disagrees
-            # with an independent source, executing anyway is how a thin or
-            # manipulated pool extracts value bounded only by amount_in.
-            return self._ar(error=(
-                f"refused: route check DISAGREES — {sanity_note}. The pool is "
-                f"quoting a price the independent source does not support "
-                f"(drift above {_route_drift_max_pct():.0f}%); a thin or "
-                f"manipulated pool extracts value this way. Nothing was "
-                f"broadcast."))
         header = (
             f"swap {params.amount_in} "
             f"{in_label if (native_in or not id_in.symbol) else _shown_symbol(id_in.symbol, token_in)} -> "
@@ -2229,7 +2232,7 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
             f"  {sanity_note}\n")
 
         async with gate.reserve():
-            return await self._run_guarded(
+            result = await self._run_guarded(
                 intent=intent, tx=tx, rail=rail, gate=gate, signer=signer,
                 execution_context=execution_context, header=header,
                 dry_run=params.dry_run, venue_action="swap", idem=idem,
@@ -2252,12 +2255,14 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
                     "out_symbol": id_out.symbol or token_out,
                     "in_qty": params.amount_in,
                     "out_qty": out_human,
-                    # CR-M11: the receipt resizes both legs from its logs.
+                    # Authorized simulation balance deltas size both legs.
                     "in_decimals": in_decimals,
                     "out_decimals": id_out.decimals,
                 },
                 held=held, journal_kind=journal_kind, journal_entry=journal_entry,
                 journal_skipped=journal_skipped)
+            result.metadata = dict(result.metadata or {}, min_out_raw=amount_out_min)
+            return result
 
     @BaseTool.action(
         "Swap one SPL token for another on SOLANA via the Jupiter aggregator. "
@@ -2312,13 +2317,19 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
         # Jupiter quotes in RAW units; the caller gives a human amount, and we
         # have no on-chain decimals reader for SPL yet, so the caller's amount
         # is treated as already-scaled by the mint's decimals via token_info.
-        ident = self._identity_solana(token_in)
+        ident = await asyncio.to_thread(self._identity_solana, token_in)
         if ident is None:
             return self._ar(error=(
                 f"cannot read decimals for {token_in} — refusing to size a swap "
                 f"against a token whose denomination is unknown. A guessed "
                 f"denomination misprices a trade by orders of magnitude."))
-        amount_in_raw = int(round(params.amount_in * (10 ** ident)))
+        from core.wallet.tokens import raw_amount
+        try:
+            amount_in_raw = raw_amount(params.amount_in, ident)
+            if not 0 < amount_in_raw < 2 ** 64:
+                raise ValueError("Solana swap amount is outside a u64")
+        except ValueError as exc:
+            return self._ar(error=f"refused: {exc}")
 
         # Held balance of the outflow token, read LAZILY (only the exit lanes
         # and the unpriceable-valuation ladder need it) and memoized.
@@ -2343,7 +2354,7 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
         # tx_guard steps 1-2, mirrored: owner kill-switch, then turn origin
         # (forged/leaf refusal, the DEFI_AUTONOMOUS_TURN_TRADING goal lane, and
         # the DEFI_MONITOR_EXITS exit-only carve-out).
-        refusal, autonomous_origin, monitor_exit = self._solana_turn_gate(
+        refusal, autonomous_origin, monitor_exit = await asyncio.to_thread(self._solana_turn_gate,
             execution_context, exit_shaped_fn=_exit_shaped)
         if refusal:
             return self._ar(error=refusal)
@@ -2363,6 +2374,7 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
                                    token_out=token_out, token_in=token_in)
         if _why:
             return self._ar(error=_why)
+        _ident = None  # the bought mint's identity; canonical outputs have none
         if token_out not in (usdc_mint, _WSOL_MINT):
             try:
                 verdict = await asyncio.to_thread(self._solana_screen, token_out)
@@ -2375,6 +2387,8 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
                     f"have the owner decide. Nothing was quoted or broadcast."))
             blocking = sorted(set(getattr(verdict, "flags", ()) or ())
                               & _SOLANA_BLOCKING_FLAGS)
+            if getattr(verdict, "missing", ()):
+                return self._ar(error="refused: the token screen is PARTIAL; missing safety checks must run before buying")
             if blocking:
                 return self._ar(error=(
                     f"refused: {token_out} carries {', '.join(blocking)} — a "
@@ -2382,9 +2396,10 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
                     f"Nothing was quoted or broadcast."))
             # 068 G1 (Solana): WHICH mint this buys. The symbol/name are the
             # mint's self-reported metadata from the same screen; verified means
-            # owner-pinned (USDC/wSOL never reach this branch). Solana has no
-            # independent route check, so the route verdict is honestly
-            # UNAVAILABLE and an unpinned buy is limited to the scouting ticket.
+            # owner-pinned (USDC/wSOL never reach this branch). The identity
+            # gate runs before the quote, so it sees UNAVAILABLE: an untrusted
+            # buy is limited to the scouting ticket; a trusted one is route-
+            # checked below against the exit-grade price.
             from core.wallet.token_pins import owner_pin
             from tools.defi.identity_gate import buy_identity_refusal, container_of
             from core.wallet.token_pins import PinStoreUnreadable
@@ -2411,7 +2426,8 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
             return self._ar(error=(
                 f"no route for {token_in} -> {token_out} on solana, or the "
                 f"lookup failed. Either way this is UNKNOWN, not a zero-value "
-                f"trade — retry before concluding the token is unreachable."))
+                f"trade — retry before concluding the token is unreachable."),
+                error_kind=PRECONDITION)
 
         # CR-H03: the quote is an untrusted third-party document. It must be
         # a quote for THIS request — same mints, same input amount — or its
@@ -2436,20 +2452,50 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
                 f"the transaction it builds, so a looser one cannot be "
                 f"rewritten — only refused."))
 
+        if params.minimum_output_raw is not None and floor < params.minimum_output_raw:
+            return self._ar(error="The minimum received fell below the confirmed quote; nothing was built")
+
+        out_decimals = await asyncio.to_thread(self._identity_solana, token_out)
+        exit_held = await asyncio.to_thread(lambda: _held_raw() if _exit_shaped() else None)
+        # DEFI-6 (as on EVM): a TRUSTED buy (owner pin, own launch, owner
+        # target) is checked against the liquidity-backed exit-grade price, so
+        # it is not held to the unchecked ticket; a lying quote still DISAGREES.
+        from tools.defi.identity_gate import trusted_buy
+        out_trusted = bool(_ident is not None and await asyncio.to_thread(
+            trusted_buy, _ident, chain="solana", token_out=token_out,
+            execution_context=execution_context))
+        sanity_verdict, sanity_note = await asyncio.to_thread(
+            self._route_sanity, "solana", quote,
+            types.SimpleNamespace(decimals=ident, symbol=token_in),
+            types.SimpleNamespace(decimals=out_decimals, symbol=token_out),
+            slippage_bps=slippage, held_balance_raw=exit_held,
+            out_trusted=out_trusted)
+        if sanity_verdict == "DISAGREES":
+            return self._ar(error=f"refused: {sanity_note}")
+        from tools.defi.buy_screen import unchecked_route_refusal
+        if not params.dry_run:
+            if why := unchecked_route_refusal(sanity_verdict, params.max_spend_usd):
+                return self._ar(error=why)
+
         raw_tx = await asyncio.to_thread(self._solana_build, quote, signer.address)
         if raw_tx is None:
             return self._ar(error=(
                 "Jupiter could not build a transaction for this route (often an "
                 "unfunded or unexpected token-account state). Nothing was sent."))
 
+        from core.wallet.solana_swap_bounds import SwapBounds
         deltas = await asyncio.to_thread(
             lambda: self._solana_simulate(raw_tx=raw_tx, owner=signer.address,
-                                          mints=(token_in, token_out)))
+                                          mints=(token_in, token_out),
+                                          swap_bounds=SwapBounds(token_in, token_out,
+                                                                 amount_in_raw, floor, slippage)))
         if deltas is None or not deltas.ok:
             reason = getattr(deltas, "reason", "no result") if deltas else "no result"
+            from core.security.refusal_taint import simulation_kind
             return self._ar(error=(
                 f"refused: the simulation did not pass ({reason}). A simulation "
-                f"that did not run is not a simulation that passed."))
+                f"that did not run is not a simulation that passed."),
+                error_kind=simulation_kind(deltas))
 
         # The Solana replacement for the undeclared-Approval refusal. A swap
         # grants nothing: any delegate, close authority, ownership change or
@@ -2460,6 +2506,11 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
                 f"accounts — {list(deltas.authority_grants)}. A swap grants "
                 f"nothing; an authority change is a future drain the swap "
                 f"itself does not perform. Nothing was broadcast."))
+
+        if any(delta < 0 for mint, delta in (deltas.token_deltas or {}).items()
+               if mint != token_in):
+            return self._ar(error=("refused: simulation shows an undeclared token outflow "
+                                   "beside the swap input. Nothing was broadcast."))
 
         # 068 R3-1: under a declared target, EVERY mint the simulation shows
         # arriving in our accounts counts, not only the named token_out — a
@@ -2622,32 +2673,43 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
         # exit within the held balance that sells into the chain's USDC — value
         # it at the simulation's measured receipt. Unpriceable refuses; no cap
         # can bound a number you do not have. Caps operate in cents.
-        amount_usd = self._solana_value_usd(
+        valuation = {"valuation_basis": "outflow"}
+        amount_usd = await asyncio.to_thread(self._solana_value_usd,
             token_in=token_in, amount_in=params.amount_in, token_out=token_out,
             out_delta_raw=out_delta_raw, usdc_mint=usdc_mint,
             exit_bounded_fn=lambda: (_held_raw() is not None
-                                     and amount_in_raw <= _held_raw()))
+                                     and amount_in_raw <= _held_raw()),
+            valuation=valuation)
         if amount_usd is None:
             return self._ar(error=(
                 "refused: the outflow could not be valued in USD by any "
                 "source, so no cap can bound it. A sell of a held token into "
                 "the chain's USDC is valued at the simulation's measured "
                 "receipt; anything else refuses. Nothing was broadcast."))
-        if native_excess > 0:
+        native_cost = native_excess + int(fee_lamports) + retained
+        # The declared max_spend_usd asserts the swap's VALUE (the outflow plus any
+        # SOL it moves beyond fees); the network fee and retained rent are charged
+        # to the PolicyGate caps only — EVM parity (tx_guard, cbf59c857). Charging
+        # them to the declared max refused every swap declared at exactly its value.
+        value_usd = amount_usd
+        if native_cost > 0:
             try:
-                sol_px = self._price("solana", _WSOL_MINT)
+                sol_px = await asyncio.to_thread(self._price, "solana", _WSOL_MINT)
             except Exception:
                 sol_px = None
-            if not sol_px or sol_px <= 0:
+            if not sol_px or not math.isfinite(sol_px) or sol_px <= 0:
                 return self._ar(error=(
-                    f"refused: {native_excess} lamports of SOL leave beyond the "
-                    f"fee and retained rent, and SOL has no trustworthy price "
+                    f"refused: {native_cost} lamports of SOL (including fees and "
+                    f"retained rent) have no trustworthy price "
                     f"to charge them against the caps. Nothing was broadcast."))
-            amount_usd = round(amount_usd + native_excess / 1e9 * float(sol_px), 2)
-        declared = round(params.max_spend_usd, 2)
-        if amount_usd > declared:
+            value_usd += native_excess / 1e9 * float(sol_px)
+            amount_usd += native_cost / 1e9 * float(sol_px)
+        from core.money.valuation import usd_ceiling
+        amount_usd = usd_ceiling(amount_usd)
+        declared = float(params.max_spend_usd)
+        if usd_ceiling(value_usd) > declared:
             return self._ar(error=(
-                f"refused: ${amount_usd:.2f} exceeds the declared "
+                f"refused: ${usd_ceiling(value_usd):.2f} exceeds the declared "
                 f"max_spend_usd ${declared:.2f}. Nothing was broadcast."))
 
         header = (f"solana swap {params.amount_in} {token_in} -> {token_out}\n"
@@ -2659,11 +2721,11 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
                   f"  valued: ${amount_usd:.2f} (declared max ${declared:.2f})\n")
 
         from core.wallet import tx_guard
-        # CR-L02: the replay key is the transaction itself — the exact bytes
-        # (which carry their blockhash) plus the turn, never a random suffix.
+        # Bind the economic intent, not the aggregator's fresh blockhash.
         import hashlib as _hashlib
         idem = "defi_solana_swap:" + _hashlib.sha256(
-            bytes(raw_tx) + _turn_id(execution_context).encode()).hexdigest()[:32]
+            f"{token_in}:{token_out}:{amount_in_raw}:{_turn_id(execution_context)}".encode()
+        ).hexdigest()[:32]
         # reserve() spans check -> broadcast -> record so two concurrent money
         # verbs cannot both clear a nearly-exhausted cap (EVM parity).
         async with gate.reserve():
@@ -2707,7 +2769,8 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
                     "amount_usd=%.2f — forged turn allowed for an EXIT-shaped "
                     "swap (DEFI_MONITOR_EXITS)", token_in, token_out, amount_usd)
             if params.dry_run:
-                return self._ar(content=header + "\n[DRY RUN] simulation only — nothing was broadcast, queued or staged.")
+                return self._ar(content=header + "\n[DRY RUN] simulation only — nothing was broadcast, queued or staged.",
+                                metadata={"min_out_raw": floor, **valuation})
 
             # RPC trust (tx_guard step 4 mirror): the simulation, the deltas
             # and the caps all read from the RPC, so the shared public endpoint
@@ -2739,7 +2802,9 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
             try:
                 signature = await asyncio.to_thread(self._solana_send, raw_tx, signer)
             except Exception as exc:
-                return self._ar(error=f"broadcast failed: {exc}")
+                from core.wallet.broadcast.evm import broadcast_error_kind, broadcast_failure_text
+                return self._ar(error=broadcast_failure_text(exc),
+                    error_kind=broadcast_error_kind(exc))
             if _lane != "autonomous" and hasattr(gate, "note_lane"):
                 gate.note_lane(idem, _lane)
             gate.record(venue="defi", action="solana_swap",
@@ -3075,14 +3140,14 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
         return int(balances.get(mint, 0))
 
     def _solana_value_usd(self, *, token_in, amount_in, token_out,
-                          out_delta_raw, usdc_mint, exit_bounded_fn):
+                          out_delta_raw, usdc_mint, exit_bounded_fn, valuation=None):
         """USD value of the outflow, EVM-parity ladder (tx_guard step 7):
         pinned USDC = $1.00 by definition → high-confidence price →
         (exit-bounded) fallback price → (exit-bounded sell-to-USDC) the
         simulation's measured quote inflow. None = unpriceable → refuse.
         """
         if usdc_mint and token_in == usdc_mint:
-            return round(float(amount_in), 2)
+            return float(amount_in)
         try:
             px = self._price("solana", token_in)
         except Exception:
@@ -3099,12 +3164,14 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
                 except Exception:
                     px = None
         if px is not None:
-            return round(float(amount_in) * float(px), 2)
+            return float(amount_in) * float(px)
         if (exit_bounded and usdc_mint and token_out == usdc_mint
                 and out_delta_raw and out_delta_raw > 0):
             out_dec = self._identity_solana(token_out)
             if out_dec is not None:
-                value = round(out_delta_raw / (10 ** out_dec), 2)
+                value = out_delta_raw / (10 ** out_dec)
+                if valuation is not None:
+                    valuation["valuation_basis"] = "inflow"
                 logger.info(
                     "defi.solana_swap exit_inflow_valuation token_in=%s "
                     "amount_usd=%.2f — outflow unpriceable by any source; caps "
@@ -3147,7 +3214,8 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
         from tools.defi.providers import jupiter
         return jupiter.build_swap(quote.raw, holder)
 
-    def _solana_simulate(self, *, raw_tx, owner, mints=(), extra_allowed=frozenset()):
+    def _solana_simulate(self, *, raw_tx, owner, mints=(), extra_allowed=frozenset(),
+                         locally_built_transfer=False, swap_bounds=None):
         """Vet the bytes, then simulate them against everything we own.
 
         ⚠️ The addresses MUST be the token accounts, not the owner. SPL
@@ -3171,7 +3239,8 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
         rail = SolanaRail(signer=None)
         return solana_tx_inspect.simulate(
             raw_tx, owner=owner, mints=mints, rpc=rail._rpc,
-            extra_allowed=extra_allowed)
+            extra_allowed=extra_allowed, locally_built_transfer=locally_built_transfer,
+            swap_bounds=swap_bounds)
 
     def _solana_confirm(self, signature):
         """``(ok, detail)`` for a broadcast signature — the EVM `await_receipt`
@@ -3216,53 +3285,78 @@ class DefiTradeTool(WalletHolderMixin, BaseTool):
         signed = signer.sign_transaction(tx)     # refuses a foreign fee payer
         return SolanaRail(signer=signer).send_raw(bytes(signed))
 
-    def _route_sanity(self, chain, route, id_in, id_out) -> Tuple[str, str]:
+    def _route_sanity(self, chain, route, id_in, id_out, *,
+                      slippage_bps=None, held_balance_raw=None,
+                      out_trusted=False) -> Tuple[str, str]:
         """(verdict, note): the route's implied price vs an INDEPENDENT source.
 
         Verdicts: ``AGREES`` (drift within ``_ROUTE_DRIFT_MAX_PCT``),
         ``DISAGREES`` (the caller REFUSES to execute — §1.2), ``UNAVAILABLE``
-        (no independent price for one side; the caller proceeds, because the
-        spend side is still priced and capped by the guard, and an unpriceable
-        token_in refuses there — but the note must stay loud, never read as
-        "route verified").
+        (no independent price for one side; live execution is limited to the
+        unchecked ticket cap, including trusted tokens). A measured held-token
+        exit may use the existing independently sourced exit-price grade, and so
+        may a TRUSTED buy (``out_trusted``: owner pin, own launch, owner target):
+        its token has no spend-grade price by nature (an own launch on a thin
+        chain), and a liquidity-backed price from a source other than the route
+        still checks the route's floor (DEFI-6) — a lying quote DISAGREES.
 
         A pool price is a number anyone with capital can seed, so agreement is
         not proof — but a wide disagreement is strong evidence the route is
         thin or manipulated, and that is now a refusal, not a narration.
         """
         try:
+            from decimal import Decimal
+            from core.wallet import chains as _c
             from tools.defi.providers.routes import is_native
+            _row = _c.get(chain)
             if is_native(route.token_in):
                 # The native asset has no contract to price, so it is priced
                 # through the chain's pinned wrapped native — the SAME
                 # substitution `tx_guard` makes to value a native outflow, kept
                 # identical on purpose so the route check and the cap check
                 # cannot disagree about what the gas asset is worth.
-                from core.wallet import chains as _c
-                _row = _c.get(chain)
                 _wrapped = getattr(_row, "wrapped_native", None) if _row else None
                 price_in = self._price(chain, _wrapped) if _wrapped else None
-                in_decimals = 18
+                in_decimals = _row.native_decimals
             else:
                 price_in = self._price(chain, route.token_in)
                 in_decimals = id_in.decimals
+                canonical = {_row.usdc, _row.wrapped_native} if _row else set()
+                from core.wallet.addresses import same_address
+                canonical_in = any(same_address(route.token_in, a) for a in canonical if a)
+                canonical_out = any(same_address(route.token_out, a) for a in canonical if a)
+                if (price_in is None and not canonical_in
+                        and canonical_out and held_balance_raw is not None
+                        and 0 < route.amount_in_raw <= held_balance_raw):
+                    price_in = self._fallback_price(chain, route.token_in)
             price_out = self._price(chain, route.token_out)
-            if not price_in or not price_out:
+            if price_out is None and out_trusted:
+                price_out = self._trusted_buy_price(chain, route.token_out)
+            if (isinstance(price_in, bool) or isinstance(price_out, bool)
+                    or not price_in or not price_out):
                 return ("UNAVAILABLE",
                         "route check: UNAVAILABLE — no independent price for one "
                         "side; the route is unverified")
-            amount_in_human = route.amount_in_raw / (10 ** in_decimals)
-            amount_out_human = route.amount_out_raw / (10 ** id_out.decimals)
+            price_in, price_out = Decimal(str(price_in)), Decimal(str(price_out))
+            if any(not p.is_finite() or p <= 0 for p in (price_in, price_out)):
+                return ("UNAVAILABLE", "route check: UNAVAILABLE — invalid independent price")
+            amount_in_human = Decimal(route.amount_in_raw) / (10 ** in_decimals)
+            amount_out_human = Decimal(route.amount_out_raw) / (10 ** id_out.decimals)
             if amount_out_human <= 0:
                 return ("UNAVAILABLE", "route check: UNAVAILABLE — zero output")
             # What this route actually charges per unit of token_out, in USD.
             route_price = (amount_in_human * price_in) / amount_out_human
-            drift = abs(route_price - price_out) / price_out * 100.0
-            verdict = "AGREES" if drift <= _route_drift_max_pct() else "DISAGREES"
+            drift = abs(route_price - price_out) / price_out * 100
+            limit = Decimal(str(_route_drift_max_pct()))
+            slippage = slippage_bps if slippage_bps is not None else _max_slippage_bps()
+            required = amount_in_human * price_in * (1 - limit / 100) * (1 - Decimal(slippage) / 10000)
+            minimum_value = Decimal(route.amount_out_min_raw) * price_out / (10 ** id_out.decimals)
+            verdict = "AGREES" if drift <= limit and minimum_value >= required else "DISAGREES"
             return (verdict,
                     f"route check: {verdict} — route implies "
                     f"${route_price:,.8f}/{_shown_symbol(id_out.symbol, 'token')} vs independent "
-                    f"${price_out:,.8f} ({drift:.2f}% drift)")
+                    f"${price_out:,.8f} ({drift:.2f}% drift); minimum received "
+                    f"${minimum_value:.4f}, independently required ${required:.4f}")
         except Exception:
             return ("UNAVAILABLE",
                     "route check: UNAVAILABLE — the route is unverified")

@@ -236,3 +236,16 @@ def test_an_outreach_job_that_sends_opt_in_dms_still_needs_the_login(tmp_path):
             '"DM for collabs / DMs open".')
     assert preflight_skip(_job(task=task, payload=_SOCIAL, jid="xo"),
                           data_dir=str(tmp_path)) is not None
+
+
+def test_the_den_moderation_task_text_is_not_an_x_dm_need(tmp_path):
+    # A room-moderation task quotes "can I get a dm" as a shill example; a
+    # quote broken across a line would have skipped every run of the job.
+    _dead_login()
+    task = ("ROOM ENGAGEMENT — periodic replies AND moderation in the room.\n"
+            "2. MODERATE FIRST. Irrelevant shill is not allowed:\n"
+            "   - unsolicited promo or marketing offers (\"promote your project\", \"KOL\",\n"
+            "     \"I can get you listed\", \"can I get a dm\", paid-post pitches);\n"
+            "   - repeated flood of the same message.\n")
+    assert preflight_skip(_job(task=task, payload=_SOCIAL, jid="den2"),
+                          data_dir=str(tmp_path)) is None

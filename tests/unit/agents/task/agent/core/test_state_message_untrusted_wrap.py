@@ -80,8 +80,7 @@ def test_web_fetch_result_renders_wrapped():
 
 @pytest.mark.parametrize("action,tool", [("done", None),
                                          ("send_message", "message"),
-                                         ("str_replace", "coding"),
-                                         ("read_file", "filesystem")])
+                                         ("str_replace", "coding")])
 def test_trusted_results_render_raw(action, tool):
     body = "a first-party result comfortably longer than the min-chars threshold"
     text = _render([_stamped(body, action, tool)])
@@ -221,8 +220,8 @@ def test_non_native_unpairable_results_over_wrap_when_any_action_is_untrusted():
 
 
 def test_non_native_trusted_step_stays_unstamped():
-    ar = ActionResult(extracted_content="42 lines")
-    _stamp(["filesystem_read_file"], [ar], {"filesystem_read_file": "filesystem"})
+    ar = ActionResult(extracted_content="all tasks complete")
+    _stamp(["done"], [ar], {"done": "task"})
     assert not (ar.metadata or {}).get("untrusted_source")
     assert "untrusted_tool_result" not in _render([ar])
 
@@ -234,7 +233,7 @@ def test_id_paired_result_uses_its_own_call():
            {"filesystem_read_file": "filesystem", "web_fetch": "web"},
            tool_calls=[{"id": "c1", "name": "filesystem_read_file"},
                        {"id": "c2", "name": "web_fetch"}])
-    assert not (a1.metadata or {}).get("untrusted_source")
+    assert a1.metadata["untrusted_source"]["action"] == "filesystem_read_file"
     assert a2.metadata["untrusted_source"]["action"] == "web_fetch"
 
 
@@ -243,3 +242,15 @@ def test_stamping_off_when_flag_off():
     _stamp(["browser_extract_content"], [ar], {"browser_extract_content": "browser"},
            wrap=False)
     assert not (ar.metadata or {}).get("untrusted_source")
+
+
+@pytest.mark.parametrize("action,tool", [
+    ("read_file", "filesystem"), ("git_show", "git"),
+    ("github_read_issue", "github"), ("delegate_task", None),
+    ("subtask", None), ("parallel_subtasks", None),
+])
+def test_external_files_and_delegates_stay_framed_on_rerender(action, tool):
+    text = _render([_stamped(PAYLOAD, action, tool)])
+    assert f'<untrusted_tool_result source="{action}">' in text
+    assert text.count("</untrusted_tool_result>") == 1
+    assert PAYLOAD in text

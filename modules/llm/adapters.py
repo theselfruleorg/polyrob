@@ -397,7 +397,8 @@ class LLMClientAdapter(BaseChatModel):
 
         if metadata:
             generation_params["metadata"] = metadata
-        return generation_params
+        from modules.llm.billing_guard import billed_generation_params
+        return billed_generation_params(self, generation_params)
 
     @staticmethod
     def _usage_metadata_from(usage_data: Optional[dict]) -> Optional[dict]:
@@ -437,6 +438,8 @@ class LLMClientAdapter(BaseChatModel):
         Returns:
             ChatResult with generations
         """
+        from modules.llm.billing_guard import check_adapter
+        check_adapter(self)
         import time
         start_time = time.time()
 
@@ -491,7 +494,11 @@ class LLMClientAdapter(BaseChatModel):
         self._logger.info(f"[DEBUG_TOOLS] Adapter extracted tools from kwargs: {len(tools) if tools else 0}")
         self._logger.info(f"[DEBUG_TOOLS] Client has generate_agent_response: {hasattr(self._client, 'generate_agent_response')}")
 
-        # Generate response
+        from core.billing_context import reserve_billed_call
+        from modules.llm.aux_metering import _llm_identity
+        reservation_id = await reserve_billed_call(*_llm_identity(self))
+        # Generate response. An exception/cancellation retains the reservation:
+        # an absent response is not evidence that the provider did no work.
         try:
             # Check if native tool path is available and should be used
             native_tool_path_available = tools and hasattr(self._client, 'generate_agent_response')
@@ -605,6 +612,8 @@ class LLMClientAdapter(BaseChatModel):
                     ai_message._polyrob_provider_response_id = provider_response_id
 
             total_duration = time.time() - start_time
+            if reservation_id:
+                ai_message._polyrob_billing_reservation_id = reservation_id
             self._logger.debug(f"_agenerate completed in {total_duration:.1f}s")
             self._logger.debug(f"Returning ChatResult with 1 generation")
 
@@ -783,6 +792,8 @@ class LLMClientAdapter(BaseChatModel):
         the final chunk as one piece, where the downstream whole-chunk brain
         scrub works. (3) hitl_manager's per-chunk scrub stays as backstop.
         """
+        from modules.llm.billing_guard import check_adapter
+        check_adapter(self)
         # Convert input to messages (mirrors ainvoke)
         if isinstance(input, list):
             messages = input
@@ -813,6 +824,9 @@ class LLMClientAdapter(BaseChatModel):
         final_event = None
         _BRAIN_MARKER = '"current_state"'
 
+        from core.billing_context import reserve_billed_call
+        from modules.llm.aux_metering import _llm_identity
+        reservation_id = await reserve_billed_call(*_llm_identity(self))
         async for event in self._client.astream_agent_response(
             messages=client_messages, tools=tools, **generation_params
         ):
@@ -895,6 +909,8 @@ class LLMClientAdapter(BaseChatModel):
         response_id = final_event.get("response_id")
         if isinstance(response_id, str) and response_id:
             final_message._polyrob_provider_response_id = response_id
+        if reservation_id:
+            final_message._polyrob_billing_reservation_id = reservation_id
         yield final_message
 
 

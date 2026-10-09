@@ -38,7 +38,23 @@ from core.env import bool_env
 #: The trailing provenance stamp this module writes and recognises. Kept
 #: deliberately loose on the source (free text, e.g. ``room_read``,
 #: ``owner said``, ``measured``) and strict on the date shape.
-_STAMP_RE = re.compile(r"\s*\[from:\s*(?P<source>[^\]]*?)\s+(?P<date>\d{4}-\d{2}-\d{2})\s*\]\s*$")
+def _stamp_parts(line: str):
+    # Search once from the right; a regex retrying every '[from:' prefix with
+    # overlapping whitespace quantifiers is cubic on malformed source text.
+    tail = line.rstrip()
+    if not tail.endswith("]"):
+        return None
+    start = tail.rfind("[from:")
+    if start < 0:
+        return None
+    payload = tail[start + 6:-1].strip()
+    if "]" in payload:
+        return None
+    parts = payload.rsplit(None, 1)
+    if not parts or re.fullmatch(r"\d{4}-\d{2}-\d{2}", parts[-1]) is None:
+        return None
+    return start, parts[-1]
+
 
 #: 057 §1 R3's lexicon. A line matching any of these is making a durable claim
 #: about what is true or permitted — exactly the shape that must not be datable
@@ -106,18 +122,19 @@ def normalize_observed_at(value: Optional[str]) -> str:
 
 def strip_stamp(line: str) -> str:
     """The line without its trailing provenance stamp (if any)."""
-    return _STAMP_RE.sub("", line)
+    stamp = _stamp_parts(line)
+    return line[:stamp[0]].rstrip() if stamp else line
 
 
 def has_stamp(line: str) -> bool:
     """Does this line already carry a provenance stamp?"""
-    return _STAMP_RE.search(line) is not None
+    return _stamp_parts(line) is not None
 
 
 def stamp_of(line: str) -> Optional[str]:
     """The ``YYYY-MM-DD`` of this line's stamp, or ``None`` when undated."""
-    m = _STAMP_RE.search(line)
-    return m.group("date") if m else None
+    stamp = _stamp_parts(line)
+    return stamp[1] if stamp else None
 
 
 def render_stamp(source: str, observed_at: Optional[str] = None) -> str:
@@ -245,7 +262,7 @@ SUPERSEDED_HEADING = "## Superseded"
 #: live file — nothing is lost: every active write archives the whole prior doc
 #: first (``SelfContextWriter._archive_existing``). Kept at 2x OWNER_DOC_MAX_CHARS
 #: so one whole retired doc still fits; the section is never injected.
-SUPERSEDED_MAX_CHARS = 16000
+SUPERSEDED_MAX_CHARS = 32000  # 2026-10-04: 2x the doubled OWNER_DOC_MAX_CHARS (16000)
 
 def owner_rules_supersede() -> bool:
     """``OWNER_RULES_SUPERSEDE`` — supersede, never evict. Default ON.

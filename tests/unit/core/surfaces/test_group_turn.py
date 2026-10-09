@@ -136,7 +136,8 @@ def test_cold_and_warm_share_ONE_framing_rule():
                          thread=None, exclude_message_id=None)
     framed = frame_context(ctx)
     assert framed.startswith('<untrusted_tool_result source="group-context">')
-    assert ctx in framed
+    assert "@alice|8123 (member): hi" in framed
+    assert "<group-context" not in framed
     assert frame_context("") == ""
 
     addressed = render_addressed(_r(2, "which chains?"), role="member")

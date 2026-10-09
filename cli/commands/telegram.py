@@ -5,7 +5,7 @@ runs the full Task agent (same front door as the API webhook path). Owner-locked
 ALLOWED_TELEGRAM_USER_IDS (raw Telegram numeric ids); with no allowlist set the bot
 replies with your id so you can lock it.
 
-Token: --token or TELEGRAM_BOT_TOKEN (process env or ./.polyrob/.env). Nothing is committed.
+Token: --token or TELEGRAM_BOT_TOKEN (process env or ~/.polyrob/.env). Nothing is committed.
 """
 import asyncio
 import os
@@ -24,7 +24,7 @@ def resolve_telegram_token(token_opt: Optional[str]) -> str:
     if not tok:
         raise TelegramTokenError(
             "No Telegram bot token. Pass --token, or set TELEGRAM_BOT_TOKEN "
-            "(process env or ./.polyrob/.env). Create a bot via @BotFather to get one."
+            "(process env or ~/.polyrob/.env). Create a bot via @BotFather to get one."
         )
     return tok
 

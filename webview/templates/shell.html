@@ -78,7 +78,7 @@
 {%- if show_logout %}
     {# own_ops / multitenant only (043 §9 residue, closed 2026-09-16): the
        owner's ≤24 h session ends here. `local` has no login, so no link. #}
-    <a class="icon-btn head-logout" href="/logout" aria-label="{{ t('shell.logout') }}"><span class="glyph" aria-hidden="true">&#9211;</span><span class="kbd">{{ t('shell.logout') }}</span></a>
+    <form action="/logout" method="post"><button type="submit" class="icon-btn head-logout" aria-label="{{ t('shell.logout') }}"><span class="glyph" aria-hidden="true">&#9211;</span><span class="kbd">{{ t('shell.logout') }}</span></button></form>
 {%- endif %}
   </header>
   <main class="main" id="main">

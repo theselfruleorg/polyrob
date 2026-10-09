@@ -38,8 +38,12 @@ def test_known_pack_id_still_requires_its_distribution_and_entry_point():
 def test_the_index_identity_is_the_polyrob_distribution():
     from core.packs.index import first_party_identities
     ids = first_party_identities()
-    assert ids == {"discovery": ("polyrob", "polyrob_discovery:pack"),
+    assert ids == {"daytona": ("polyrob", "polyrob_daytona:pack"),
+                   "discovery": ("polyrob", "polyrob_discovery:pack"),
                    "markets": ("polyrob", "polyrob_markets:pack"),
+                   "modal": ("polyrob", "polyrob_modal:pack"),
+                   "singularity": ("polyrob", "polyrob_singularity:pack"),
+                   "vercel_sandbox": ("polyrob", "polyrob_vercel_sandbox:pack"),
                    "x": ("polyrob", "polyrob_x:pack")}
 
 
@@ -57,7 +61,7 @@ def test_a_shadowing_polyrob_metadata_without_pack_entry_points_is_named(monkeyp
     monkeypatch.setattr(md, "distribution", lambda name: _Stale())
     monkeypatch.setattr(state, "set_discovery_error", seen.append)
     loader._check_first_party_metadata()
-    assert len(seen) == 1 and "polyrob.egg-info" in seen[0] and "discovery, markets, x" in seen[0]
+    assert len(seen) == 1 and "polyrob.egg-info" in seen[0] and "discovery, markets, modal, singularity, vercel_sandbox, x" in seen[0]
 
 
 def test_the_real_metadata_declares_every_first_party_pack(monkeypatch):

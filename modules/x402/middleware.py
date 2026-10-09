@@ -16,8 +16,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 import time
 
 from .x402_integration import (
-    generate_user_id_from_wallet,
     ensure_user_profile_for_payer,
+    resolve_payer_user_id,
     record_x402_payment,
     mark_payment_refund_due,
     should_refund_on_status,
@@ -238,7 +238,8 @@ class X402PaymentMiddleware(BaseHTTPMiddleware):
     def _init_facilitator(self):
         """Initialize the fastapi-x402 facilitator client."""
         try:
-            from fastapi_x402 import init_x402, get_facilitator_client
+            from fastapi_x402 import init_x402
+            from modules.x402.facilitator import get_facilitator_client
             from fastapi_x402.networks import get_network_config
 
             config = get_x402_config()
@@ -390,6 +391,8 @@ class X402PaymentMiddleware(BaseHTTPMiddleware):
         # needs to leave a refund-due row behind.
         settled = None  # dict of record_x402_payment kwargs once settled
         recorded = False
+        attempt_id = None
+        from modules.x402.facilitator import SettlementPending
         try:
             from fastapi_x402.models import PaymentRequirements
             from fastapi_x402.networks import get_default_asset_config, get_network_config
@@ -421,6 +424,14 @@ class X402PaymentMiddleware(BaseHTTPMiddleware):
                     content={"error": "Missing payer address in payment payload"}
                 )
 
+            # API-1: decide the payer's tenant BEFORE anything settles. A wallet
+            # that cannot be bound is refused unpaid, never settled-then-500.
+            user_id = await resolve_payer_user_id(payer_address)
+            if not user_id:
+                return JSONResponse(status_code=503, content={
+                    "error": "Payment wallet could not be bound to an account",
+                    "details": "No payment was taken. Try again later."})
+
             # Get asset config for network
             asset_config = get_default_asset_config(network)
             network_config = get_network_config(network)
@@ -448,10 +459,21 @@ class X402PaymentMiddleware(BaseHTTPMiddleware):
                 }
             )
 
-            # Verify AND settle payment via facilitator
+            from modules.x402.settlement_attempt import authorization_record, prepare_machine_payment
+            async def before_settle():
+                nonlocal attempt_id
+                details = authorization_record(payment_header, payment_requirements)
+                attempt_id = details['id']
+                await prepare_machine_payment(
+                    details,
+                    amount_usd=amount_usd, user_id=user_id,
+                    tenant_id=resolve_owner_user_id())
+
+            # The verified authorization is durable before the settlement POST.
             verify_response, settle_response = await self._facilitator_client.verify_and_settle_payment(
                 payment_header=payment_header,
-                payment_requirements=payment_requirements
+                payment_requirements=payment_requirements,
+                before_settle=before_settle,
             )
 
             if not verify_response.isValid:
@@ -465,7 +487,7 @@ class X402PaymentMiddleware(BaseHTTPMiddleware):
                     }
                 )
 
-            if not settle_response.success:
+            if not settle_response.success or not settle_response.transaction:
                 error_msg = settle_response.errorReason or "Payment settlement failed"
                 self.logger.warning(f"x402 settlement failed: {error_msg}")
                 return JSONResponse(
@@ -476,9 +498,8 @@ class X402PaymentMiddleware(BaseHTTPMiddleware):
                     }
                 )
 
-            # Payment successful! Create user and proceed
-            user_id = generate_user_id_from_wallet(payer_address)
-            payment_id = settlement_payment_id(
+            # Payment successful! Create user and proceed (user_id resolved above)
+            payment_id = attempt_id or settlement_payment_id(
                 settle_response.transaction,
                 payer_address,
                 request.url.path,
@@ -494,6 +515,7 @@ class X402PaymentMiddleware(BaseHTTPMiddleware):
                 transaction_hash=_norm_tx(settle_response.transaction),
                 amount_atomic=str(amount_atomic),
                 tenant_id=resolve_owner_user_id(),
+                attempt_id=attempt_id,
             )
 
             # Set request state via the canonical C4 contract (writer installed
@@ -513,11 +535,14 @@ class X402PaymentMiddleware(BaseHTTPMiddleware):
             request.state.payer_address = payer_address.lower()
 
             # Ensure user profile exists
-            await ensure_user_profile_for_payer(payer_address, user_id)
+            if not await ensure_user_profile_for_payer(payer_address, user_id):
+                raise RuntimeError("Payment wallet could not be bound to this tenant")
 
             # Record the payment. Always record (N1 fix) — even a tx-less
             # settlement must leave a reconcilable row; never silently drop revenue.
-            await record_x402_payment(**settled)
+            if not await record_x402_payment(**settled):
+                return JSONResponse(status_code=409, content={
+                    "error": "Payment already used or could not be recorded"})
             recorded = True
 
             self.logger.info(
@@ -539,6 +564,9 @@ class X402PaymentMiddleware(BaseHTTPMiddleware):
             # failed (5xx), the customer paid for nothing — flag for refund.
             if should_refund_on_status(response.status_code):
                 await mark_payment_refund_due(payment_id)
+            else:
+                from modules.x402.response_outcome import observe_paid_response
+                await observe_paid_response(response, payment_id)
 
             # Add x402 headers to response
             response.headers["X-PAYMENT-RESPONSE"] = "settled"
@@ -547,6 +575,11 @@ class X402PaymentMiddleware(BaseHTTPMiddleware):
 
             return response
 
+        except SettlementPending:
+            return JSONResponse(status_code=202, content={
+                "status": "settling", "payment_id": attempt_id,
+                "error": "Settlement is unconfirmed",
+                "details": "Do not pay again; reconciliation is required. No service was started."})
         except Exception as e:
             # API11: never echo the exception (paths, SQL, internals) to the
             # payer; give a reference id that matches the server log line.

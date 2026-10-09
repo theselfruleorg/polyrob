@@ -410,22 +410,26 @@ def _copy_vetted(src: str, dest: str, ident: Tuple[int, int], budget: int) -> in
     the SAME inode that was vetted (a swapped leaf or parent directory lands
     on another one), and count bytes AS they are copied.
     """
-    fd = os.open(src, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    fd = os.open(src, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
         st = os.fstat(fd)
-        if not stat.S_ISREG(st.st_mode) or (st.st_dev, st.st_ino) != ident:
+        if (not stat.S_ISREG(st.st_mode) or st.st_nlink != 1
+                or (st.st_dev, st.st_ino) != ident):
             raise ValueError(f"source changed while publishing: {os.path.basename(src)}")
-        written = 0
+        # Scan the exact bounded bytes that will be published, including secrets
+        # spanning read boundaries and ASCII credentials embedded in binary files.
+        from core.secret_scrub import scrub_secret_shapes
+        with os.fdopen(fd, "rb", closefd=False) as stream:
+            content = stream.read(budget + 1)
+        written = len(content)
+        if written > budget:
+            raise ValueError(f"publication too large (max "
+                             f"{MAX_PUBLISH_BYTES // (1024 * 1024)} MB)")
+        text = content.decode("utf-8", errors="replace")
+        if scrub_secret_shapes(text) != text:
+            raise ValueError(f"refusing to publish secret-shaped content: {os.path.basename(src)}")
         with open(dest, "wb") as out:
-            while True:
-                chunk = os.read(fd, 1 << 20)
-                if not chunk:
-                    break
-                written += len(chunk)
-                if written > budget:
-                    raise ValueError(f"publication too large (max "
-                                     f"{MAX_PUBLISH_BYTES // (1024 * 1024)} MB)")
-                out.write(chunk)
+            out.write(content)
         os.chmod(dest, stat.S_IMODE(st.st_mode) | 0o444)
         return written
     finally:

@@ -126,7 +126,7 @@ def test_add_refuses_a_value_that_would_smuggle_a_second_line(env, monkeypatch):
     # still carry a bare CR, so inject the raw value past the prompt.
     monkeypatch.setattr("click.prompt", lambda *a, **k: "tok\rPOLYROB_LOCAL=true")
     res = _run("add", "discord", "--no-probe")
-    assert "must not contain CR, LF or NUL" in res.output
+    assert "must not contain line separators or NUL" in res.output
     target = env / "home" / ".env"
     assert res.exit_code != 0
     assert not target.exists() or "POLYROB_LOCAL" not in target.read_text()

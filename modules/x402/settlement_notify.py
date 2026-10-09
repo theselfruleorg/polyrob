@@ -12,6 +12,15 @@ import time
 logger = logging.getLogger("modules.x402.settlement_watcher")
 
 class SettlementNotifyMixin:
+    async def _skip_unvalued_settlement(self, inv: dict) -> bool:
+        from modules.x402 import invoicing
+        from modules.x402.income_chains import is_income_chain
+        if is_income_chain(inv.get("chain"), inv.get("asset_id")):
+            return False
+        if await invoicing.claim_wake(inv["request_id"], db=self._db):
+            await self._notify(inv)
+        return True
+
     #: 046 Phase 1 seams for the room-action branch, declared HERE because this
     #: is what uses them. A settled ``room_action`` invoice bought an EFFECT,
     #: not a session's attention, so it routes to
@@ -69,6 +78,15 @@ class SettlementNotifyMixin:
         rail dedups/caps, so a resident session's wake and this notice never
         double-page. Emits the event exactly once; the caller marks the row."""
         from modules.x402.invoicing import _emit
+        from modules.x402.income_chains import is_income_chain
+
+        if not is_income_chain(inv.get("chain"), inv.get("asset_id")):
+            await self._push_owner_notice(
+                inv.get("user_id") or "",
+                f"Invoice {inv['request_id']} recorded a test-network settlement. "
+                "It does not count as income or authorize paid work.",
+                source="x402_invoice", session_id=inv.get("session_id") or None)
+            return
 
         _emit("payment_settled", user_id=inv.get("user_id") or "",
               session_id=inv.get("session_id") or "", attrs={

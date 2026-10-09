@@ -49,6 +49,9 @@ def build_mcp_child_env(configured: Optional[Dict[str, object]] = None) -> Dict[
     No secret-name filtering is applied to ``configured``: that channel is the
     sanctioned way to give a server its credential, and filtering it would break
     every authenticated MCP server.
+
+    The agent-child marker is stamped LAST (a configured value cannot clear it):
+    an MCP server the agent installed must not reach the owner's admin CLI.
     """
     env: Dict[str, str] = {k: os.environ[k] for k in MCP_ENV_ALLOWLIST
                            if k in os.environ}
@@ -56,4 +59,5 @@ def build_mcp_child_env(configured: Optional[Dict[str, object]] = None) -> Dict[
         if value is None:
             continue
         env[str(key)] = str(value)
-    return env
+    from core.security.agent_child import mark_agent_child
+    return dict(mark_agent_child(env))

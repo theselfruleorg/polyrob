@@ -106,14 +106,16 @@ def test_a_missing_session_reads_none(store):
     assert store.get("nope") is None
 
 
-def test_a_broken_store_fails_open_not_raises(tmp_path):
-    """Init failure leaves the store unready; reads/writes are no-ops, never a
-    raise — a broken store must not break a connect or a spend."""
+def test_a_broken_store_refuses_reads_and_writes(tmp_path):
     store = DappSessionStore(str(tmp_path / "dapp_sessions.db"))
     store._ready = False
-    store.save("x", "u1", _envelope())   # no raise
-    assert store.get("x") is None
-    assert store.list_for_tenant("u1") == []
+    import pytest
+    with pytest.raises(OSError, match="unavailable"):
+        store.save("x", "u1", _envelope())
+    with pytest.raises(OSError, match="unavailable"):
+        store.get("x")
+    with pytest.raises(OSError, match="unavailable"):
+        store.list_for_tenant("u1")
 
 
 def test_the_default_path_is_the_data_home_axis():

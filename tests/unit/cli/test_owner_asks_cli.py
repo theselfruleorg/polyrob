@@ -39,9 +39,10 @@ def test_fulfill_unblocks(tmp_path, monkeypatch):
     board = _board(tmp_path)
     g = board.create(user_id="alice", title="Post the launch thread on X")
     board.claim(g.id, "w", ttl_seconds=60)
-    board.record_failure(g.id, error="no write access")
+    board.record_failure(g.id, error="no write access", claim_token=board.get(g.id).claim_token)
     board.claim(g.id, "w", ttl_seconds=60)
-    board.record_failure(g.id, error="no write access")  # blocked
+    board.record_failure(g.id, error="no write access",
+        claim_token=board.get(g.id).claim_token)  # blocked
     a = board.create_ask(user_id="alice", what="Grant Twitter write access",
                          blocks_goal_ids=[g.id])
     res = CliRunner().invoke(owner, ["fulfill", a.id])

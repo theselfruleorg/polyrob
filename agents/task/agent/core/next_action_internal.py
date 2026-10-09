@@ -190,6 +190,9 @@ class NextActionInternalMixin:
 		usage metadata into one AIMessage. Shared by both structured-output fallback
 		branches (H2: the two inline copies had drifted — one referenced an undefined
 		``usage_metadata`` and raised NameError every time that branch streamed)."""
+		reset_stream = getattr(self.hitl_manager, "reset_output_stream", None)
+		if callable(reset_stream):
+			reset_stream()
 		full_content = ""
 		fallback_usage_metadata = None
 		# Fix pass 2 (money-correctness): astream() yields the single already-
@@ -459,6 +462,9 @@ class NextActionInternalMixin:
 		chunk_count = 0
 		self.logger.debug("Using streaming mode for LLM call")
 		self.logger.info(f"[DEBUG_TOOLS] Calling llm.astream with tools={len(tools) if tools else 0}")
+		reset_stream = getattr(self.hitl_manager, "reset_output_stream", None)
+		if callable(reset_stream):
+			reset_stream()
 		full_content = ""
 		collected_tool_calls = []
 

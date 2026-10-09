@@ -10,14 +10,9 @@ answer and not five heuristics (``skip_memory``, ``cron=True``,
 The marker already exists and is already authoritative:
 ``agents.task.goals.autonomy_marker`` is stamped by
 ``agents/task/runtime/run_as_session.py`` **before** ``create_session``, so it is
-visible during construction — which is exactly when the tool catalog is pinned
-and the token limits are computed. This module is a fail-open reader over it,
-never a second registry.
-
-⚠️ Fail-OPEN on every probe error: an unreadable marker must degrade to
-"interactive", i.e. to today's behaviour. A budget cap wrongly applied to an
-owner's chat turn is a visible regression; a budget cap missed on one cron run
-costs a few cents.
+visible during construction — when the tool catalog and limits are pinned.
+Probe failures are treated as autonomous because this classification also gates
+security-sensitive actions, not only budgets.
 """
 from __future__ import annotations
 
@@ -28,15 +23,30 @@ logger = logging.getLogger(__name__)
 
 
 def is_autonomous_session(session_id: Optional[str]) -> bool:
-    """True for a cron / goal / planner-spawned run. Fail-open to False."""
+    """True for a cron / goal / planner-spawned run. Fail-closed to True on probe errors."""
     if not session_id:
         return False
     try:
         from agents.task.goals.autonomy_marker import is_autonomous
         return bool(is_autonomous(str(session_id)))
     except Exception:  # pragma: no cover - defensive
-        logger.debug("autonomy marker unreadable; treating session as interactive",
+        logger.debug("autonomy marker unreadable; treating session as autonomous",
                      exc_info=True)
+        return True
+
+
+def budget_class_autonomous(session_id: Optional[str]) -> bool:
+    """The BUDGET reading of :func:`is_autonomous_session` (context, output,
+    cache TTL, disclosure, timeout shape). Fail-OPEN to interactive: a probe error
+    must not hand an owner chat the autonomous budgets. Security gates keep the
+    fail-closed reading."""
+    if not session_id:
+        return False
+    try:
+        from agents.task.goals.autonomy_marker import is_autonomous
+        return bool(is_autonomous(str(session_id)))
+    except Exception:  # pragma: no cover - defensive
+        logger.debug("autonomy marker unreadable; budget class interactive", exc_info=True)
         return False
 
 
@@ -57,7 +67,7 @@ def tool_disclosure_enabled(session_id: Optional[str] = None) -> bool:
     if tool_progressive_disclosure():
         return True
     from core.config_policy.capability_toggles import autonomous_tool_disclosure
-    return autonomous_tool_disclosure() and is_autonomous_session(session_id)
+    return autonomous_tool_disclosure() and budget_class_autonomous(session_id)
 
 
 def apply_session_output_budget(llm, session_id: Optional[str]) -> int:
@@ -69,7 +79,7 @@ def apply_session_output_budget(llm, session_id: Optional[str]) -> int:
     """
     from modules.llm.output_budget import apply_output_budget, autonomous_max_output_tokens
     cap = autonomous_max_output_tokens()
-    if cap <= 0 or not is_autonomous_session(session_id):
+    if cap <= 0 or not budget_class_autonomous(session_id):
         return 0
     return apply_output_budget(llm, cap)
 
@@ -89,7 +99,7 @@ def apply_session_cache_ttl(llm, session_id: Optional[str]) -> Optional[str]:
     session-class decision. Returns the ttl in force, or None.
     """
     from modules.llm.cache_hints import apply_cache_ttl, resolve_cache_ttl
-    ttl = resolve_cache_ttl(is_autonomous_session(session_id))
+    ttl = resolve_cache_ttl(budget_class_autonomous(session_id))
     return apply_cache_ttl(llm, ttl)
 
 
@@ -109,3 +119,9 @@ def correspondent_facing(orchestrator) -> bool:
                     or getattr(orchestrator, "_correspondent_tainted", False))
     except Exception:  # pragma: no cover - defensive
         return True
+
+
+def may_write_owner_memory(orchestrator) -> bool:
+    """Third-party sessions must never promote findings into owner recall."""
+    from core.surfaces.room_policy import is_public_session
+    return not (is_public_session(orchestrator) or correspondent_facing(orchestrator))

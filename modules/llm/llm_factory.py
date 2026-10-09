@@ -80,6 +80,8 @@ def create_chat_model(
         ValueError: If the provider is unsupported (no silent fallback to a
             different provider — that masks misconfiguration).
     """
+    from modules.llm.billing_guard import require_billable_model
+    require_billable_model(model, provider)
     # Intelligent max_tokens from model registry
     max_tokens = kwargs.pop('max_tokens', None)
     if max_tokens is None:

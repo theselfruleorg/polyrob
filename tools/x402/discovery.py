@@ -211,6 +211,10 @@ async def probe_endpoint(
     """
     method = (method or "GET").upper()
     row = _empty_row(url, method)
+    if method not in {"GET", "HEAD", "OPTIONS"} or body is not None:
+        row["error"] = "Read-only discovery accepts GET, HEAD or OPTIONS without a body"
+        row["score"], row["score_reasons"] = 0, [row["error"]]
+        return row
 
     validator = validator if validator is not None else _default_validator()
     refusal, pinned_ip = await _validate(url, validator)

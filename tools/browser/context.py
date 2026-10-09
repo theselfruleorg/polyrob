@@ -11,6 +11,7 @@ import os
 import re
 import time
 import uuid
+from tools.browser.downloads import DownloadRefused
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional, TypedDict
 from datetime import datetime
@@ -1568,11 +1569,8 @@ class BrowserContext:
 						async with page.expect_download(timeout=5000) as download_info:
 							await click_func()
 						download = await download_info.value
-						# Determine file path
-						suggested_filename = download.suggested_filename
-						unique_filename = await self._get_unique_filename(self.config.save_downloads_path, suggested_filename)
-						download_path = os.path.join(self.config.save_downloads_path, unique_filename)
-						await download.save_as(download_path)
+						from tools.browser.downloads import save_download
+						download_path = await save_download(download, self.config.save_downloads_path)
 						logger.debug(f'Download triggered. Saved file to: {download_path}')
 						return download_path
 					except TimeoutError:
@@ -1588,17 +1586,17 @@ class BrowserContext:
 
 			try:
 				return await perform_click(lambda: element_handle.click(timeout=1500))
-			except URLNotAllowedError as e:
+			except (URLNotAllowedError, DownloadRefused) as e:
 				raise e
 			except Exception:
 				try:
 					return await perform_click(lambda: page.evaluate('(el) => el.click()', element_handle))
-				except URLNotAllowedError as e:
+				except (URLNotAllowedError, DownloadRefused) as e:
 					raise e
 				except Exception as e:
 					raise Exception(f'Failed to click element: {str(e)}')
 
-		except URLNotAllowedError as e:
+		except (URLNotAllowedError, DownloadRefused) as e:
 			raise e
 		except Exception as e:
 			raise Exception(f'Failed to click element: {repr(element_node)}. Error: {str(e)}')
@@ -1791,11 +1789,5 @@ class BrowserContext:
 		)
 
 	async def _get_unique_filename(self, directory, filename):
-		"""Generate a unique filename by appending (1), (2), etc., if a file already exists."""
-		base, ext = os.path.splitext(filename)
-		counter = 1
-		new_filename = filename
-		while os.path.exists(os.path.join(directory, new_filename)):
-			new_filename = f'{base} ({counter}){ext}'
-			counter += 1
-		return new_filename
+		from tools.browser.downloads import download_name
+		return download_name(filename)

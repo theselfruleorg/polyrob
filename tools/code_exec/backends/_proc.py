@@ -13,9 +13,10 @@ import asyncio
 import os
 import signal
 import threading
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from tools.code_exec.env_policy import build_child_env
+from tools.code_exec.limits import max_output_bytes
 
 
 async def run_group(
@@ -24,6 +25,8 @@ async def run_group(
     stdin_bytes: Optional[bytes],
     timeout: Optional[float],
     label: str,
+    env: Optional[Dict[str, str]] = None,
+    cwd: Optional[str] = None,
 ) -> Tuple[int, str, str, bool]:
     """Run ``cmd`` in its own process group off the event-loop thread.
 
@@ -32,10 +35,14 @@ async def run_group(
     False)``. Timeouts, output overflow and cancellation kill the process group
     (falling back to the direct child where group signalling is unavailable).
     Output is bounded during capture; cancellation waits for child cleanup.
+
+    ``env`` replaces the default scrubbed env (callers pass another
+    ``build_child_env`` result, never ``os.environ``); ``cwd`` sets the start
+    directory (073 W1: the host shell executor).
     """
 
     stop = threading.Event()
-    limit = int(os.getenv("CODE_EXEC_MAX_OUTPUT_BYTES", "100000"))
+    limit = max_output_bytes()
 
     def kill(proc):
         try:
@@ -50,7 +57,7 @@ async def run_group(
         import subprocess
         try:
             proc = subprocess.Popen(
-                cmd, env=build_child_env({}),
+                cmd, env=env if env is not None else build_child_env({}), cwd=cwd,
                 stdin=subprocess.PIPE if stdin_bytes is not None else subprocess.DEVNULL,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 start_new_session=True,  # own process group -> killpg on timeout

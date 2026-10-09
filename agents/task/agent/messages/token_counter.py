@@ -110,8 +110,8 @@ class TokenCounterMixin:
 		self._history_budget_tokens = 0
 		budget = autonomous_context_budget()
 		if budget > 0 and max_input > budget:
-			from agents.task.session_class import is_autonomous_session
-			if is_autonomous_session(getattr(self, "session_id", None)):
+			from agents.task.session_class import budget_class_autonomous
+			if budget_class_autonomous(getattr(self, "session_id", None)):
 				# The budget bounds what the run CONTROLS — its conversation
 				# history — and drives the compaction gauge only. It must NOT
 				# clamp max_input/safe_input: the pre-call safety check counts the

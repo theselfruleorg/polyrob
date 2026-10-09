@@ -41,6 +41,8 @@ def _clean_tree(root):
     d.mkdir()
     os.chmod(root, 0o2770)
     os.chmod(d, 0o2770)
+    if not root.stat().st_mode & stat.S_ISGID or not d.stat().st_mode & stat.S_ISGID:
+        pytest.skip("Filesystem or sandbox does not preserve directory setgid")
     f = d / "session.db"
     f.write_text("x")
     os.chmod(f, 0o660)

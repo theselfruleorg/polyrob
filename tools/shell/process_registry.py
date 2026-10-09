@@ -2,10 +2,12 @@
 
 A process-global, session-keyed record of background jobs started via
 `shell_run(background=True)`. The registry holds lightweight job METADATA (id,
-command, start time, last-known status); the actual pid/log live in container files
-under `/tmp/polyrob-jobs/<id>.*` in the session container (so they survive a
+command, start time, last-known status, executor); the actual pid/log live in container
+files under `/tmp/polyrob-jobs/<id>.*` in the session container (or, for a posture-3
+host job, under the session `logs/jobs/` dir) (so they survive a
 host-process restart within the container's life). Finished jobs are retained for a TTL so `process poll/log` can
-still report them, then reaped.
+still report them, then reaped. 073 W4: a finished job also leaves a durable
+receipt (``tools/shell/receipts.py``) that outlives this in-memory view.
 
 Tenant/session scoping: a session only ever sees jobs it started (keyed by
 session_id). A leaf/forged turn can't reach these tools at all (posture gate), so no
@@ -27,6 +29,13 @@ class Job:
     created_at: float
     status: str = "running"  # running | done | killed | unknown
     finished_at: Optional[float] = None
+    #: 073 W1: which executor launched it ("docker" | "host"). The `process` tool
+    #: manages a job only through that same executor.
+    backend: str = "docker"
+    #: 073 W4: the job runs on a pseudo-terminal (host only).
+    pty: bool = False
+    #: 073 W4: "exit" | "pattern" | None — what the watcher reports back.
+    notify: Optional[str] = None
 
 
 class ProcessRegistry:
@@ -38,14 +47,19 @@ class ProcessRegistry:
         self._finished_ttl_sec = finished_ttl_sec
         self._max_per_session = max_per_session
         self._counter = 0
+        import secrets
+        self._suffix = secrets.token_hex(3)
 
     def _new_id(self) -> str:
-        # Deterministic-per-process, collision-free ids without Math.random/uuid
-        # (both fine here, but a simple counter keeps tests stable and readable).
+        # A per-process counter plus a per-process random suffix: readable, and
+        # unique ACROSS restarts — 073 W4 durable receipts outlive the process, so
+        # a fresh process's job-0001 must never collide with the last one's.
         self._counter += 1
-        return f"job-{self._counter:04d}"
+        return f"job-{self._counter:04d}-{self._suffix}"
 
-    def create(self, session_id: str, command: str, *, now: float) -> Job:
+    def create(self, session_id: str, command: str, *, now: float,
+               backend: str = "docker", pty: bool = False,
+               notify: Optional[str] = None) -> Job:
         """Register a new running job for ``session_id`` and return it."""
         with self._lock:
             jobs = self._by_session.setdefault(session_id, {})
@@ -58,7 +72,8 @@ class ProcessRegistry:
                 )
                 if finished:
                     jobs.pop(finished[0].id, None)
-            job = Job(id=self._new_id(), session_id=session_id, command=command, created_at=now)
+            job = Job(id=self._new_id(), session_id=session_id, command=command,
+                      created_at=now, backend=backend, pty=pty, notify=notify)
             jobs[job.id] = job
             return job
 

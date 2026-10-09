@@ -14,11 +14,12 @@ import tools.controller.approval as approval
 
 
 @pytest.fixture(autouse=True)
-def _clean_approval_env(monkeypatch):
+def _clean_approval_env(monkeypatch, tmp_path):
     """Isolate the module-level frozen-approval-provider snapshot (approval.py
     freezes ``APPROVAL_PROVIDER`` at import for WS-7 mutation-proofing) so the
     item-3 enforcement-warning tests don't leak state into/out of other
     ``/config`` tests."""
+    monkeypatch.setenv("POLYROB_HOME", str(tmp_path / ".polyrob"))
     monkeypatch.delenv("APPROVAL_PROVIDER", raising=False)
     approval._refreeze_approval_flags_for_tests()
     yield
@@ -140,7 +141,7 @@ def test_get_catalog_env_flag_key(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_set_catalog_flag_writes_project_env(tmp_path, monkeypatch):
+def test_set_catalog_flag_writes_config_home_env(tmp_path, monkeypatch):
     from cli.ui.commands.h_config import cmd_config
     monkeypatch.chdir(tmp_path)
     out = cmd_config(_ctx(tmp_path), ["set", "CODE_EXEC_ENABLED", "true"])
@@ -261,7 +262,7 @@ def test_get_env_only_key_still_shows_env(tmp_path, monkeypatch):
 
 def test_check_paths_come_from_env_file_candidates(tmp_path, monkeypatch):
     """/config check must feed check_env_files the helper-derived order
-    (later-wins merge => reversed precedence: home THEN project)."""
+    (untrusted project files are excluded)."""
     from pathlib import Path
     home = tmp_path / "home"; (home / ".polyrob").mkdir(parents=True)
     proj = tmp_path / "proj"; (proj / ".polyrob").mkdir(parents=True)
@@ -276,5 +277,4 @@ def test_check_paths_come_from_env_file_candidates(tmp_path, monkeypatch):
     monkeypatch.setattr("core.prefs.check_env_files", fake_check)
     from cli.ui.commands.h_config import _cmd_check
     _cmd_check(_ctx(tmp_path), [])
-    assert captured["paths"] == [home / ".polyrob" / ".env",
-                                 proj / ".polyrob" / ".env"]
+    assert captured["paths"] == [home / ".polyrob" / ".env"]

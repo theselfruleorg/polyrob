@@ -24,6 +24,18 @@ from dotenv import load_dotenv
 
 from core.context_fences import has_control_fence, strip_control_fences
 
+# Prefix on a finding written while a tool call failed (see _save_step_to_memory).
+UNVERIFIED_PREFIX = "[unverified] "
+
+
+def _results_failed(results) -> bool:
+	"""True when any action result of the step carries an error."""
+	for r in results or []:
+		err = r.get('error') if isinstance(r, dict) else getattr(r, 'error', None)
+		if err:
+			return True
+	return False
+
 # Import centralized constants
 from agents.task.constants import (
     IMG_TOKENS,
@@ -277,6 +289,17 @@ class MemoryWriterMixin:
 					# only the H-MEM finding is skipped.
 					finding = None
 
+			# A finding written while a tool call failed (this step's results,
+			# or the previous step's — the brain's memory summarises the results
+			# it last saw) is a claim the run could not verify. Prod 2026-10-03:
+			# one "File not found" became seven cross-session rows saying the
+			# file "never existed". Mark it so recall treats it as a guess.
+			step_failed = _results_failed(results)
+			if finding and (step_failed or getattr(self, '_prev_step_failed', False)):
+				if not finding.startswith(UNVERIFIED_PREFIX):
+					finding = UNVERIFIED_PREFIX + finding
+			self._prev_step_failed = step_failed
+
 			# Get total_steps from step_info if available
 			total_steps = step_info.max_steps if step_info and hasattr(step_info, 'max_steps') else None
 
@@ -345,14 +368,14 @@ class MemoryWriterMixin:
 		# No-op unless an external provider is registered; isolated + fail-open.
 		try:
 			from modules.memory.registry import memory_sync_turn
-			from core.surfaces.room_policy import is_public_session
+			from agents.task.session_class import may_write_owner_memory
 			task_str = getattr(self, 'task', '') or ''
 			promoted = []
 			if self.task_context_manager and self.session_id:
 				promoted = self.task_context_manager.drain_promoted_findings(self.session_id)
 			# 044 T4: never write a public room's content into tenant cross-session
 			# recall — a stranger's message must not become the owner's future memory.
-			if promoted and not is_public_session(getattr(self, "orchestrator", None)):
+			if promoted and may_write_owner_memory(getattr(self, "orchestrator", None)):
 				content = "\n".join(promoted)
 				await memory_sync_turn(task_str, content,
 				                       session_id=self.session_id, user_id=self.user_id)
@@ -366,7 +389,9 @@ class MemoryWriterMixin:
 					ev_attrs = emit_memory_event("memory_write", user_id=self.user_id or "",
 					                             session_id=self.session_id, source="sync_turn",
 					                             scope="cross_session", content=content,
-					                             count=len(promoted),
+					                             count=len(promoted), step=step_number,
+					                             unverified=sum(1 for f in promoted
+					                                            if f.startswith(UNVERIFIED_PREFIX)),
 					                             **telemetry_attrs(session_scope(self.session_id)))
 					if ev_attrs and getattr(self, "orchestrator", None) is not None:
 						try:
@@ -427,5 +452,4 @@ class MemoryWriterMixin:
 					return f"Found: {result.extracted_content[:200]}..."
 
 		return None
-
 

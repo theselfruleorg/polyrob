@@ -70,7 +70,7 @@ async def test_run_tests_passes_the_ceiling(monkeypatch, tmp_path):
         return _Spy()
     t._get_code_exec_backend = _backend
     await t.run_tests(RunTestsParams(command="pytest -q"))
-    assert seen["req"].ceiling == 300.0
+    assert seen["req"].ceiling == 600.0  # 073 W3: the shared ceiling default
 
 
 @pytest.mark.asyncio

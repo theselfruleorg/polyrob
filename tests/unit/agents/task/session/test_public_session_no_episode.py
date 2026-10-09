@@ -61,3 +61,14 @@ async def test_private_session_still_writes_its_episode(captured):
     await _Orch(public=False).cleanup(status="completed", full_cleanup=True)
     assert len(captured) == 1
     assert captured[0]["kind"] == "chat" and captured[0]["outcome"] == "done"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("attr", ["_correspondent_session", "_correspondent_tainted"])
+async def test_correspondent_session_writes_no_episode(captured, attr):
+    """AGT-6 / DATA-9: a session a correspondent drives (created for one, or
+    tainted by one) is not the owner's history either."""
+    orch = _Orch(public=False)
+    setattr(orch, attr, True)
+    await orch.cleanup(status="completed", full_cleanup=True)
+    assert captured == [], "a correspondent session wrote into the owner's episodic store"

@@ -13,7 +13,7 @@ import asyncio
 from typing import Optional, Dict, Any, TYPE_CHECKING
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
@@ -440,6 +440,9 @@ async def fallback_auth_middleware(request: Request, call_next):
             is_jwt_token = provided_token.count('.') == 2
             logger.debug(f"🔑 Using Bearer header, is_jwt={is_jwt_token}")
         elif cookie_token:
+            from core.security.browser_origin import mutation_origin_refusal
+            if reason := mutation_origin_refusal(request):
+                return JSONResponse(status_code=403, content={"error": reason})
             # Check if cookie contains JWT token
             provided_token = cookie_token
             is_jwt_token = provided_token.count('.') == 2
@@ -548,6 +551,27 @@ async def fallback_auth_middleware(request: Request, call_next):
     return await call_next(request)
 
 
+#: Prefixes a template or a tutorial ships ("REPLACE_WITH_SECURE_KEY",
+#: "change-me-...", "your-secret-key-here"); a random secret never starts so.
+_PLACEHOLDER_SECRET_PREFIXES = (
+    "replace", "change", "your", "generate", "insert", "example",
+    "placeholder", "secret", "todo", "xxx", "<",
+)
+
+
+def jwt_secret_weakness(secret: str):
+    """Why ``secret`` is unfit to sign tokens, or None when it is fit."""
+    value = (secret or "").strip()
+    if len(value) < 32:
+        return "is shorter than 32 characters"
+    lowered = value.lower()
+    if len(set(lowered)) < 8:
+        return "repeats too few distinct characters"
+    if lowered.startswith(_PLACEHOLDER_SECRET_PREFIXES):
+        return "looks like a template placeholder"
+    return None
+
+
 def create_app() -> FastAPI:
     """Create and configure FastAPI application."""
 
@@ -567,8 +591,11 @@ def create_app() -> FastAPI:
         title="POLYROB Platform API",
         description="AutoV2 automation platform with HTTP API",
         version=get_version(),
+        docs_url=None, redoc_url=None, openapi_url=None,
         lifespan=lifespan
     )
+    from api.api_docs import install_docs
+    install_docs(app)
 
     # CORS configuration
     # SECURITY FIX: Restrict CORS to specific origins and headers
@@ -604,6 +631,8 @@ def create_app() -> FastAPI:
     # LAST, after AuthenticationMiddleware/JWTAuthMiddleware/X402 have authenticated
     # the request. Registering it last made it outermost and shadowed the DB-backed
     # rob_xxx API-key validator (self-service keys were rejected before it ran).
+    from api.account_access import enforce_account_access
+    app.middleware("http")(enforce_account_access)
     app.middleware("http")(fallback_auth_middleware)
 
     # B2: the self-service `rob_xxx` API-key validator is registered
@@ -652,17 +681,22 @@ def create_app() -> FastAPI:
     # Add JWT authentication middleware
     from api.jwt_middleware import JWTAuthMiddleware
 
+    from core.env import is_production_env
+    # OPS-5: ONE production predicate — prod sets ENVIRONMENT=production, which
+    # the old CONFIG_ENV/ENV-only check never saw.
+    is_production = is_production_env(env)
     jwt_secret = os.environ.get("JWT_SECRET_KEY")
     if jwt_secret:
-        # Validate JWT secret has minimum length for security
-        if len(jwt_secret) < 32:
-            logger.warning("⚠️ JWT_SECRET_KEY is shorter than 32 characters - consider using a stronger secret")
+        weak = jwt_secret_weakness(jwt_secret)
+        if weak:
+            if is_production:
+                raise RuntimeError(f"JWT_SECRET_KEY is refused in production: {weak}")
+            logger.warning(f"⚠️ JWT_SECRET_KEY {weak} - use a strong random secret")
         app.add_middleware(JWTAuthMiddleware, jwt_secret=jwt_secret)
         logger.info("✅ JWT authentication middleware enabled")
     else:
         # SECURITY FIX: Check if we're in production - fail fast if so
         # In development, allow running without JWT for testing
-        is_production = env == 'production' or os.environ.get('PRODUCTION', '').lower() == 'true'
         if is_production:
             logger.critical("🚨 FATAL: JWT_SECRET_KEY not set in production!")
             raise RuntimeError(
@@ -785,8 +819,7 @@ def create_app() -> FastAPI:
     # runs innermost/last, after the real auth middlewares.)
 
     # Health check endpoint with metrics
-    @app.get("/health")
-    async def health_check():
+    async def health_check(*, detailed: bool = False):
         """Liveness + readiness, derived from signals that are actually written.
 
         B6: this used to key `degraded` off ``app_state["active_updates"]``, a
@@ -841,8 +874,23 @@ def create_app() -> FastAPI:
         if reason:
             health_status["reason"] = reason
 
+        if not detailed:
+            health_status = {"status": status, "service": "polyrob"}
+
         status_code = 200 if status == "healthy" else 503
         return JSONResponse(content=health_status, status_code=status_code)
+
+    @app.get('/health')
+    async def public_health():
+        return await health_check()
+
+    from api.dependencies import get_user_id
+
+    @app.get('/api/health')
+    async def private_health(request: Request, user_id: str = Depends(get_user_id)):
+        if not getattr(request.state, 'is_admin', False):
+            raise HTTPException(status_code=403, detail='Administrator access required')
+        return await health_check(detailed=True)
 
     # Mount Task API router on canonical path only
     app.include_router(task_router, prefix="/api")

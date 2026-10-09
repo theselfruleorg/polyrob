@@ -175,8 +175,8 @@ def _paid_usd(rpc, tx_hash: str, tx: dict, worst_usd) -> float:
 
 def _price(chain, addr):
     # 071: the one read layer; a DISPUTED quote yields None.
-    from tools.defi.price_sources import indexer_price
-    return indexer_price(chain, addr)
+    from tools.defi.price_sources import spend_price
+    return spend_price(chain, addr)
 
 
 async def run(tool, params, execution_context):

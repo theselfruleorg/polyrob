@@ -1,12 +1,8 @@
 """Loopback ``Host`` allowlist for the ``local`` console posture (H15, 2026-09-23).
 
-At ``local`` posture every request is the OWNER — no login. The only thing that
-kept a web page off that control plane was ``webgate.csrf_guard`` (Origin must
-equal Host) and the Socket.IO same-origin check. Both compare the page's origin
-with the ``Host`` header, and DNS REBINDING makes them agree: the attacker's
-page at ``http://evil.example:5050`` re-resolves its own name to ``127.0.0.1``,
-so its requests reach the loopback console with ``Origin`` and ``Host`` both
-``evil.example:5050`` — same-origin by every check the console had.
+The local console authenticates its owner and checks mutation origins. A Host
+allowlist also blocks DNS rebinding: an attacker's origin can otherwise agree
+with its Host header while resolving that hostname to the local listener.
 
 The one thing a rebinding page cannot change is the NAME in ``Host``: it is the
 attacker's domain, never ``localhost``. So at ``local`` posture this ASGI

@@ -99,6 +99,18 @@ def fresh_timestamp(raw: str, *, now: Optional[float] = None) -> bool:
 UNSIGNED_OPT_IN = "FEISHU_WEBHOOK_ALLOW_UNSIGNED"
 
 
+def _event_within_dedup(payload: dict, *, now: Optional[float] = None) -> bool:
+    """True when the event's ``header.create_time`` (epoch MILLISECONDS) is
+    inside :data:`DEDUP_WINDOW_S` — so the message-id dedup still remembers it."""
+    header = payload.get("header") if isinstance(payload.get("header"), dict) else {}
+    try:
+        created = int(str(header.get("create_time")).strip()) / 1000.0
+    except (TypeError, ValueError):
+        return False
+    now = time.time() if now is None else now
+    return -REPLAY_WINDOW_S <= now - created <= DEDUP_WINDOW_S - REPLAY_WINDOW_S
+
+
 def webhook_auth_gap(encrypt_key: str, token: str, allow_unsigned: bool) -> Optional[str]:
     """Why webhook mode cannot authenticate an event, naming the missing key;
     None when it can. The ONE rule ``launch``, the probe and the hook share."""
@@ -155,7 +167,7 @@ class FeishuWebhook(WebhookSurface):
         expected = signature(timestamp,
                              str(headers.get("x-lark-request-nonce") or ""),
                              self._encrypt_key, body or b"")
-        if not hmac.compare_digest(sig, expected):
+        if not hmac.compare_digest(sig.encode("utf-8", errors="surrogatepass"), expected.encode("utf-8")):
             return False
         # A valid signature on a stale timestamp is a replayed capture: the
         # 5-minute message-id dedup would otherwise re-run it as a new turn.
@@ -171,9 +183,14 @@ class FeishuWebhook(WebhookSurface):
         if self._token:
             header = payload.get("header") if isinstance(payload.get("header"), dict) else {}
             token = str(payload.get("token") or header.get("token") or "")
-            if not hmac.compare_digest(token, self._token):
+            if not hmac.compare_digest(token.encode("utf-8", errors="surrogatepass"), self._token.encode("utf-8")):
                 return None
         is_challenge = payload.get("type") == "url_verification"
+        if not self._encrypt_key and not is_challenge and not _event_within_dedup(payload):
+            # CHAT-22: token-only mode has no signed timestamp. A captured body
+            # older than the message-id dedup window would run again as a new
+            # turn, so an event must carry a create_time inside that window.
+            return None
         if (self._encrypt_key and headers is not None and not is_challenge
                 and not headers.get("x-lark-signature")):
             return None                       # an event must be signed

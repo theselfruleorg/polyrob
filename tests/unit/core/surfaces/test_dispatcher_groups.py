@@ -63,12 +63,19 @@ async def test_flag_off_group_denied_silent(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_flag_off_dm_still_routes(tmp_path):
+async def test_flag_off_dm_still_routes(tmp_path, monkeypatch):
+    """The OWNER's DM routes with the group flag off; a stranger's DM on a
+    non-Telegram surface is DENIED even outside local mode (CHAT-1)."""
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u1")
+    monkeypatch.setenv("POLYROB_LOCAL", "false")
     c = _Container(tmp_path, chat_reg=SessionChatRegistry(str(tmp_path / "c.db")))
     src = SessionSource(surface_id="discord", chat_id="d1", chat_type="dm")
     ident = Identity(user_id="u1", source=src, raw_user_id="u1")
     d = await route_inbound(c, InboundMessage(text="hi", identity=ident))
     assert d.kind == RouteKind.TASK_AGENT
+    stranger = Identity(user_id="u_stranger", source=src, raw_user_id="x")
+    d = await route_inbound(c, InboundMessage(text="hi", identity=stranger))
+    assert d.kind == RouteKind.DENIED and d.reason == "local_owner_required"
 
 
 @pytest.mark.asyncio

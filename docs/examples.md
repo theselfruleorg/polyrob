@@ -63,6 +63,17 @@ you the job id and the next run:
 > summary if anything is critical.
 ```
 
+A job you schedule — from the CLI, with `/cron add`, or in the console — is
+stamped as **yours** and runs with your standing authority. One the agent schedules
+on its own, or on a turn that had already read outside text, is stamped as the
+agent's: it runs with less, and the agent tells you so. To make one yours, look at
+it first:
+
+```
+/adopt              # the agent-authored jobs and goals you could adopt
+/adopt <id>         # the whole task, tools, target and pinned skills — then Confirm
+```
+
 That is the whole cron story; the rest of this page assumes it.
 
 ---
@@ -157,6 +168,16 @@ reached out first, never as a command a stranger can send.
 
 ```bash
 polyrob run "Email finance@company.com asking for this month's invoice totals"
+```
+
+The agent also works its own mailbox like a person would — list, read, reply in
+thread, forward, file into folders (IMAP; AgentMail has no folders or flags), and
+save an attachment into its workspace. Reading never marks a message as seen, and
+every send goes through the same recipient tiers:
+
+```bash
+polyrob run "List my unread mail from this week, reply in thread to the invoice
+question from finance@company.com, and move the newsletters to the Archive folder"
 ```
 
 ### A group room
@@ -262,11 +283,37 @@ CODE_EXEC_SSH_KEY=~/.ssh/agent_id_ed25519
 CODE_EXEC_SSH_SANDBOXED=true     # your attestation that the host is disposable
 ```
 
+Set `CODE_EXEC_SSH_KNOWN_HOSTS` to a pinned `known_hosts` file and an unknown host
+key is refused instead of trusted on first use. `CODE_EXEC_DOCKER_BINARY=podman`
+uses Podman instead of Docker. A cloud sandbox is an optional pack — for example
+`pip install 'polyrob[modal]'` and `CODE_EXEC_BACKEND=modal` (Daytona, Vercel
+Sandbox and Singularity likewise; these backends are tested against fakes so far).
+
 ⚠️ The `ssh` backend is **not a sandbox**: agent code runs with the SSH user's full
 privileges. A server refuses it without that attestation, and refuses
 `local_subprocess` outright. Read
 [guide/security-model.md](guide/security-model.md) before enabling any of this on a
 shared machine.
+
+### Your own terminal
+
+At your own machine, posture 3 lets the agent's shell run on the host — but only
+for your turn at this terminal:
+
+```bash
+polyrob config set AGENT_COMPUTE_POSTURE 3
+polyrob
+> Run the test suite in the background, tell me when it finishes, and fix what fails.
+```
+
+Every other turn — a goal, a cron job, a chat surface — keeps the sandbox, and a
+failed sandbox never falls back to the host. The host is also refused while the
+process holds wallet signing credentials: run a separate development instance
+without them. The command guard still judges every
+line: a floor no approval lifts, and a dangerous command waits for your `y`.
+`SHELL_ALLOW` / `SHELL_DENY` (or the `[a]lways` / `[n]ever` answers at the prompt)
+tune that per command. `sudo` stays refused unless you set `SHELL_HOST_SUDO=prompt`,
+which asks for the password on the terminal for each command.
 
 ---
 

@@ -110,10 +110,20 @@ PREF_SCHEMA: dict[str, PrefSpec] = dict((
     _spec("approvals.deny", "list", SENSITIVITY_GUARDED, "union", "next-session",
           "POLYROB_TOOL_DENYLIST",
           description="Actions the agent may never run (add=safe, remove=guarded)"),
+    # 073 W2: per-COMMAND shell lists (glob patterns over the whole command line).
+    # deny: refused before any approval (add=safe). allow: runs without the owner
+    # wait — it can never lift the guard's floor (add=guarded: it widens).
+    _spec("shell.deny", "list", SENSITIVITY_GUARDED, "union", "next-session",
+          "SHELL_DENY",
+          description="Shell command patterns the agent may never run (add=safe, remove=guarded)"),
+    _spec("shell.allow", "list", SENSITIVITY_GUARDED, "union", "next-session",
+          "SHELL_ALLOW",
+          description="Shell command patterns that skip the owner approval; never lifts the floor"),
     _spec("budget.wallet_daily_usd", "float", SENSITIVITY_GUARDED, "min", "live",
           "WALLET_DAILY_CAP_USD", min_value=0.0,
-          description="Wallet daily cap; effective = min(pref, env), wired into "
-                      "PolicyGate via load_wallet_config() (G-13)"),
+          description="Wallet daily cap; effective = min(pref, env, signer cap when a "
+                      "signer is installed), wired into PolicyGate via "
+                      "load_wallet_config() (G-13)"),
     # OWNER-OVERRIDE, not min-merged (owner decision 2026-09-18, after the
     # owner hit the min-merge wall for the second time: an approved raise
     # sat on disk as a tap that changed nothing, and the agent sent the owner
@@ -126,9 +136,9 @@ PREF_SCHEMA: dict[str, PrefSpec] = dict((
     _spec("budget.wallet_per_tx_usd", "float", SENSITIVITY_GUARDED, "override", "live",
           "AGENT_WALLET_MAX_PER_TX_USD", min_value=0.0,
           description="Wallet per-transaction cap; an owner-approved pref replaces "
-                      "the env default, clamped to the daily cap (never above "
-                      "WALLET_DAILY_CAP_USD); wired into PolicyGate via "
-                      "load_wallet_config() (G-13)"),
+                      "the env default, clamped to the daily cap and to the "
+                      "signer's per-tx cap when a signer is installed; wired into "
+                      "PolicyGate via load_wallet_config() (G-13)"),
     # NOT min-merged, unlike the two wallet caps above, and deliberately so.
     # This is not a loss ceiling -- it is how much runs WITHOUT interrupting the
     # owner, and the catastrophic backstop (AGENT_WALLET_MAX_PER_TX_USD) still
@@ -219,9 +229,9 @@ PREF_SCHEMA: dict[str, PrefSpec] = dict((
     _spec("ui.show_avatar", "bool", SENSITIVITY_SAFE, "override", "live",
           default_display=True,
           description="Show the agent's avatar in web views (identity page)"),
-    _spec("session.toolset", "str", SENSITIVITY_SAFE, "override", "next-session",
+    _spec("session.toolset", "str", SENSITIVITY_GUARDED, "override", "next-session",
           "POLYROB_AGENT_TOOLSET", description="Default toolset for new sessions"),
-    _spec("session.persona", "str", SENSITIVITY_SAFE, "override", "next-session",
+    _spec("session.persona", "str", SENSITIVITY_GUARDED, "override", "next-session",
           "POLYROB_PERSONA",
           description="Default persona (template key or literal text; threat-scanned)"),
     _spec("autonomy.self_wake", "bool", SENSITIVITY_SAFE, "and", "next-session",

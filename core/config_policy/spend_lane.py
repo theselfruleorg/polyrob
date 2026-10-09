@@ -29,11 +29,14 @@ to buy its way into this lane is refused by the simulation, not executed.
 Pure policy — no imports beyond the env helpers and the tier-0 verb-policy
 table, so every tier can read it.
 """
+import logging
 from typing import Any, Dict, Optional
 
 from core.env import bool_env, float_env
 from core.lazy_views import lazy_module_getattr, view
 from core.verb_policy import ids_where
+
+logger = logging.getLogger(__name__)
 
 # The five verb sets below are DERIVED from the per-action policy table
 # (core/verb_policy.py; rows and their per-verb rationale in
@@ -81,6 +84,12 @@ def tiered_spend_lane_enabled() -> bool:
     return bool_env("DEFI_TIERED_SPEND_LANE", False)
 
 
+#: ``DEFI_AUTONOMOUS_MAX_USD`` default — the ONE copy (tx_guard reads it too).
+DEFAULT_DEFI_AUTONOMOUS_MAX_USD = 25.0
+#: ``X402_AUTONOMOUS_MAX_USD`` default.
+DEFAULT_X402_AUTONOMOUS_MAX_USD = 1.0
+
+
 def autonomous_ceiling_usd() -> float:
     """The per-transaction autonomous ceiling — the SAME number tx_guard step 9
     reads, resolved the SAME way (owner pref ``budget.defi_autonomous_usd`` over
@@ -93,15 +102,17 @@ def autonomous_ceiling_usd() -> float:
     afternoon for trades the owner had already said may run unattended, and an
     unattended cron buyback that could never run at all. Delegating to
     tx_guard's own resolver keeps the two in sync by construction; a failed
-    resolve falls back to the env value, never to a wider one.
+    resolve fails CLOSED to 0.0 (every live spend asks): the raw env value
+    would skip the per-tx clamp and a lower owner pref.
     """
-    env_value = float_env("DEFI_AUTONOMOUS_MAX_USD", 25.0)
     try:
         # Lazy: core.wallet.tx_guard imports core.config_policy at module load.
         from core.wallet.tx_guard import autonomous_max_usd, ceiling_scope
         return float(autonomous_max_usd(*ceiling_scope(None)))
     except Exception:
-        return env_value
+        logger.warning("DeFi autonomous ceiling unresolved; every live spend asks "
+                       "the owner", exc_info=True)
+        return 0.0
 
 
 def x402_autonomous_ceiling_usd() -> float:
@@ -112,8 +123,22 @@ def x402_autonomous_ceiling_usd() -> float:
     per-tx ceiling, and the rolling daily cap — so the autonomous slice must be
     small enough that a looped drain is bounded by the daily cap long before it
     matters.
+
+    Clamped like the DeFi ceiling: never above the effective per-tx ceiling or
+    the signer's ``x402_per_payment_usd`` — a ceiling the payment can never
+    reach would be reported as reachable. A failed resolve fails CLOSED to 0.0.
     """
-    return float_env("X402_AUTONOMOUS_MAX_USD", 1.0)
+    value = float_env("X402_AUTONOMOUS_MAX_USD", DEFAULT_X402_AUTONOMOUS_MAX_USD)
+    try:
+        from core.wallet.config import effective_max_per_tx_usd
+        from core.wallet.signer_envelope import clamp
+        from core.wallet.tx_guard import ceiling_scope
+        value = min(value, float(effective_max_per_tx_usd(*ceiling_scope(None))))
+        return float(clamp(value, "x402_per_payment_usd"))
+    except Exception:
+        logger.warning("x402 autonomous ceiling unresolved; every payment asks "
+                       "the owner", exc_info=True)
+        return 0.0
 
 
 #: ``simulatable``: the DEFI_SPEND_VERBS whose param model HAS a ``dry_run``
@@ -160,11 +185,18 @@ def spend_exemption(action_name: str,
     params = params or {}
     if action_name in view(__name__, "X402_SPEND_VERBS"):
         return _x402_exemption(params)
-    if action_name not in view(__name__, "DEFI_SPEND_VERBS"):
-        return None
-
     if is_simulation(action_name, params):
         return ("dry run — the guard is consulted but nothing is broadcast")
+    if action_name not in view(__name__, "DEFI_SPEND_VERBS"):
+        if action_name in view(__name__, "_RISK_REDUCING_VERBS"):
+            # A venue cancel (lane none, risk_reducing): it retires a resting
+            # order, moves no funds and grants nothing. Making the owner tap to
+            # REDUCE exposure is how a book stays exposed. Every other gate
+            # (owner-only tool, correspondent, room, refusal taint) still holds.
+            if "revoke" in action_name:
+                return "revoke — it only reduces delegated authority; it moves no funds"
+            return "cancel — retires a resting order; it moves no funds"
+        return None
 
     if not tiered_spend_lane_enabled():
         return None

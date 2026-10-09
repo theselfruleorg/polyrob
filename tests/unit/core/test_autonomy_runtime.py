@@ -223,6 +223,7 @@ def _install_reap_spy(monkeypatch):
 async def test_start_autonomy_schedules_one_cold_start_orphan_reap_when_enabled(monkeypatch):
     monkeypatch.setenv("CODE_EXEC_DOCKER_PERSISTENT", "true")
     monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/docker" if name == "docker" else None)
+    monkeypatch.setattr(ar, "_docker_socket_reachable", lambda: True)  # hermetic: not this host's socket
     _disable_other_loops(monkeypatch)
     calls = _install_reap_spy(monkeypatch)
 
@@ -761,3 +762,68 @@ def test_the_reaper_resolver_needs_no_upward_import():
     import core.autonomy_runtime as ar
     src = inspect.getsource(ar)
     assert "agents.task.session_registry" not in src
+
+
+# --------------------------------------------------------------------------
+# 2026-10-03: the reapers skip when this process cannot open the Docker socket.
+# Prod runs as polyrob-agent, deliberately outside the `docker` group (proposal
+# 053 pending), so every reap tick spawned a `docker ps` that was refused —
+# 101 WARNING lines/day since 09-26. The socket probe already exists for
+# run_code (tools/code_exec/sandbox_guard.py); the reapers never consulted it.
+# --------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_cold_start_orphan_reap_skips_when_docker_socket_unreachable(monkeypatch):
+    monkeypatch.setenv("CODE_EXEC_DOCKER_PERSISTENT", "true")
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/docker")
+    monkeypatch.setattr(ar, "_docker_socket_reachable", lambda: False)
+    _disable_other_loops(monkeypatch)
+    calls = _install_reap_spy(monkeypatch)
+
+    handles = ar.start_autonomy(task_agent=object(), data_dir="data")
+    await asyncio.sleep(0.05)
+
+    assert calls == []
+    await handles.stop()
+
+
+@pytest.mark.asyncio
+async def test_sandbox_reap_tick_skips_when_docker_socket_unreachable(monkeypatch):
+    monkeypatch.setenv("CODE_EXEC_DOCKER_PERSISTENT", "true")
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/docker")
+    monkeypatch.setattr(ar, "_docker_socket_reachable", lambda: False)
+    calls = []
+
+    async def _fake_reap_unowned(*args, **kwargs):
+        calls.append(1)
+        return 0
+
+    from tools.code_exec.backends.docker import DockerBackend
+    monkeypatch.setattr(DockerBackend, "reap_unowned", staticmethod(_fake_reap_unowned))
+
+    class _Reg:
+        def session_ids(self):
+            return ["s1"]
+
+    ticker = ar._build_sandbox_reaper_ticker(type("A", (), {"_registry": _Reg()})())
+    await ticker.tick_coro()
+    assert calls == []
+
+
+def test_docker_socket_reachable_fails_open(monkeypatch):
+    """A probe that raises must not switch the reapers off."""
+    import tools.code_exec as ce
+
+    def _boom():
+        raise RuntimeError("probe exploded")
+
+    monkeypatch.setattr(ce, "docker_sandbox_unreachable_reason", _boom)
+    assert ar._docker_socket_reachable() is True
+
+
+def test_docker_socket_reachable_reads_the_sandbox_guard(monkeypatch):
+    import tools.code_exec as ce
+    monkeypatch.setattr(ce, "docker_sandbox_unreachable_reason", lambda: "permission denied")
+    assert ar._docker_socket_reachable() is False
+    monkeypatch.setattr(ce, "docker_sandbox_unreachable_reason", lambda: None)
+    assert ar._docker_socket_reachable() is True

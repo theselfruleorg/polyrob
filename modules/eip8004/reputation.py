@@ -6,6 +6,7 @@ Handles feedback authorization, submission, and querying for the Reputation Regi
 import os
 import logging
 import hashlib
+import secrets
 import json
 import time
 from typing import Optional, List, Dict, Any
@@ -124,9 +125,7 @@ class ReputationManager:
             raise ValueError("Agent wallet not configured (EIP8004_AGENT_WALLET)")
         
         # Generate nonce
-        nonce = hashlib.sha256(
-            f"{client_address}:{task_id or ''}:{time.time()}".encode()
-        ).hexdigest()[:16]
+        nonce = secrets.token_hex(16)
         
         expires_at = int(time.time()) + expires_in_seconds
 
@@ -517,6 +516,9 @@ class ReputationManager:
             fileHash=f"0x{file_hash}",
             feedbackAuth=feedback_auth,
         )
+        from modules.eip8004.feedback_replays import consume_feedback_auth
+        import asyncio
+        await asyncio.to_thread(consume_feedback_auth, self.config.chain_id, feedback_auth, proof_key)
         self._feedback_cache[agent_id].append(entry)
 
         # Task 15 follow-up (Finding 1): only now that the feedback has
@@ -622,4 +624,3 @@ class ReputationManager:
             }
             for e in paginated
         ]
-

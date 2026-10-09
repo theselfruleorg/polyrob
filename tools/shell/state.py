@@ -56,15 +56,22 @@ class ShellState:
     env: Dict[str, str] = field(default_factory=dict)
 
 
-def wrap_command(command: str, state: ShellState) -> str:
+def wrap_command(command: str, state: ShellState, *, fallback_cwd: str = "/workspace",
+                 workdir: str = "") -> str:
     """Build the sandbox script that runs ``command`` with persisted cwd+env and
     emits the trailing state block. The command's own exit status is preserved.
 
     Everything derived from persisted state (cwd, env values) is single-quoted via
     ``shlex.quote`` so a hostile saved value can never break out of the wrapper —
     only the model-supplied ``command`` runs unquoted (that IS the shell surface).
+
+    ``fallback_cwd`` is where a vanished saved cwd lands (``/workspace`` in the
+    container, the session workspace on the host). ``workdir`` (073 W3) runs this
+    ONE call in another directory and fails the call if it does not exist.
     """
-    lines = [f"cd {shlex.quote(state.cwd)} 2>/dev/null || cd /workspace"]
+    lines = [f"cd {shlex.quote(state.cwd)} 2>/dev/null || cd {shlex.quote(fallback_cwd)}"]
+    if workdir:
+        lines.append(f"cd {shlex.quote(workdir)} || exit 2")
     for k, v in state.env.items():
         # keys are validated on parse (identifier-shaped); values are quoted.
         lines.append(f"export {k}={shlex.quote(v)}")

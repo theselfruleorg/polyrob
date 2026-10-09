@@ -41,6 +41,16 @@ or **DENIED** (`core/surfaces/access.py::AccessTier`). A correspondent's reply c
 `<untrusted_tool_result>` wrapper, exactly like a fetched web page. A group member
 can only ever reach the room rail.
 
+The tier is only as good as the proof of who sent the message, so each surface
+proves it before the dispatcher sees the message. On every network surface except
+Telegram (which has its own allowlist, checked first), a DM from anyone who is
+not the owner or a paired sender is DENIED, even when the correspondent model is
+off. An email sender reaches OWNER or CORRESPONDENT only when the receiving
+server's topmost `Authentication-Results` shows `dmarc=pass` or an aligned DKIM/SPF
+pass; a forged `From` gets no tier. A WhatsApp webhook without
+`WHATSAPP_WEBHOOK_SECRET` rejects every payload, and a Signal surface refuses a
+plain-HTTP `signal-cli` daemon on a non-loopback host.
+
 This page is about the layer *underneath* that model: given that untrusted content
 routinely reaches the agent's context (by design — that's how it does useful work),
 what actually stops it from *acting* on that content in a dangerous way?
@@ -72,6 +82,54 @@ resolution logic. The gate's own docstring documents its sharpest edge: the
 pre-hook receives the bare *action name*, not the *tool_id* — a denylist keyed on
 the wrong one is silently dead. It's implemented correctly today, but that's a
 property of the code, not of the mechanism.
+
+### Read taint and authorship (`core/security/read_taint.py`)
+
+The correspondent gate covers a message FROM a third party. Read taint covers the
+owner's own turn after it has READ third-party text: a web page, a mail, an X
+post, MCP or x402 output, a file, a sub-agent report, a recall, room lines from
+`room_read`. The Controller marks the turn when a tool result is untrusted; the
+next genuine owner message clears it.
+
+A tainted owner turn keeps the owner's access, but it loses the owner's
+authorship:
+
+- **Standing work it writes is agent-authored.** A goal or cron job created on that
+  turn is stamped `authored_by=agent`, and the reply says so, what the row loses and
+  how to make it the owner's. Only an untainted owner turn writes owner-authored work
+  (`tools/goal_tools.py::owner_authored_turn` is the one rule).
+- **Owner-authored work carries standing authority; agent-authored work does not.**
+  An owner-authored cron job runs its rig as written, may name a write verb, may post
+  on X and moderate the room it names without a per-run approval. An agent-authored
+  job runs inside the self-goal ceiling and waits on the owner for each of those.
+  Authority reads a positive `authored_by=owner` stamp; an unstamped row is the
+  agent's.
+- **`/adopt`** is how the owner makes an agent-authored job or goal his own. It shows
+  the whole task, every payload key and each pinned skill with a content digest, and
+  binds that view: a skill edited after adoption makes the row run as the agent's
+  again until it is re-adopted. On an install that has cron rows from before the
+  stamp existed, `python -m cron.stamp_authorship --dry-run` prints the plan and the
+  same command without `--dry-run` stamps each unstamped row once.
+- **A tainted turn's money shortcuts close.** The owner self-transfer exemption, an
+  X post without approval, and room moderation all need an untainted owner turn; a
+  tainted one queues the action for the owner's tap instead.
+
+**Refusal taint** (`core/security/refusal_taint.py`) is the run-level twin for
+money: once a money verb in a run is refused, every public or non-owner send of
+that run is refused (a message to the owner still goes), and cron delivery to a
+public sink is re-routed to the owner. The run's own text cannot exempt itself:
+only an error our code tags as an unmet precondition where it builds the error
+(insufficient allowance, no route, a stale quote, a broadcast the node rejected or
+could not reach) leaves the run untainted, and the tag is never inferred from the
+error text.
+
+**A late approval sends exactly what was approved.** When the owner approves a
+queued outbound write (an X post, reply or DM, a mail) after its run has ended, the
+agent process sends those approved parameters once. It never re-runs the job or
+goal that asked, so an approval of one post can never repeat the rest of that run.
+
+What it does not do: read the text. The taint is a fact about where the turn's
+context came from, not a judgement of whether the content was hostile.
 
 ### Tool-capability table (`core/tool_capabilities.py`)
 
@@ -152,11 +210,27 @@ on a probe error):
   `*.env`, key material, and the wallet's own `meta.json`/`audit.jsonl` (whose
   rewrite would reset the rolling caps or flip an address).
 
+- **The declared bound is the value, the fee is the caps'.** A send's declared
+  `max_spend_usd` asserts what the transaction moves or grants; the network fee is
+  charged to the per-tx and daily caps only, so a send declared at exactly its value
+  passes. A shape whose fee IS its value (deploy, claim, mint) keeps the fee in the
+  declared check.
+- **Address poisoning.** A transfer to an address that only looks like a payee of
+  the last 30 days (same first and last characters, a different body) is refused;
+  unreadable payment history refuses the send. This assists, and does not replace,
+  checking the full address.
+- **Transfers to yourself.** A genuine, untainted owner turn that transfers to one
+  of `OWNER_WALLET_ADDRESSES` or to the agent's own wallet waits on no second tap.
+  The caps, `tx_guard` and the pause still hold.
+
 Persistent policy history refuses damaged storage and invalid amounts. A shared
-POSIX lock serializes check/spend/record across cooperating local processes.
-This does not make settlement atomic with recording: a crash after broadcast can
-leave a completed payment unrecorded. Durable pre-broadcast reservations and
-reconciliation are still required to close that window.
+POSIX lock serializes check/spend/record across cooperating local processes. In
+a process that holds the seed, the spend ledger (`wallet/audit.jsonl`) is
+chain-hashed and sealed with a MAC keyed from the master seed, so an edited or
+removed row fails the load and spending is refused until the ledger is repaired.
+Every on-chain submission is written to a journal (`wallet/submissions.sqlite`)
+before it is signed; an unresolved broadcast blocks new submissions until its cap
+charge is booked, and a timeout never frees it.
 
 What it does not do: protect the wallet's *key material* from a host-level
 compromise — if the process itself is compromised (see §3's "process identity" gap),
@@ -189,11 +263,16 @@ any new money verb must name its gate.
 Three tools reach the host on purpose, and each is gated by the compute posture
 rather than by a plain on/off flag:
 
-- **`shell`** (`shell_run`) and **`process`** (`process_list/poll/log/kill`) —
-  the persistent dev shell and its job manager. Every action asks
+- **`shell`** (`shell_run`) and **`process`** (`process_list/poll/wait/log/kill`,
+  plus `process_write/submit/close` for a background job's stdin) —
+  the persistent dev shell and its job manager. A background job can run under a
+  PTY on the host and notify the session on exit or on an output pattern; its
+  redacted receipt is kept for 7 days. `process_write` refuses to type into what
+  looks like a password prompt. Every action asks
   `compute_posture_allows(execution_context, 1)`: posture ≥ 1, owner tenant, not
   a leaf or sub-agent, not a forged self-wake or delegation-result turn.
-  `SHELL_TOOLS_ENABLED` defaults ON at posture ≥ 1 and OFF below it.
+  `SHELL_TOOLS_ENABLED` defaults ON at posture ≥ 1 and OFF below it. Commands run
+  in the session's container, or on the host at posture 3 (§3d).
 - **`self_env`** (`install_dep`, `read_source`, `patch_source`, `git_pull`,
   `restart_service`) — the agent patching and restarting itself, as distinct
   verbs, never raw bash. Every verb asks `compute_posture_allows(ctx, 2)` **and**
@@ -201,6 +280,32 @@ rather than by a plain on/off flag:
   `self_env_*` verb into the gated set and defaults the approval provider to
   interactive. Each call emits a `self_modification` audit event.
   `SELF_ENV_ENABLED` defaults ON at posture ≥ 2.
+
+**The command guard** (`core/security/command_guard.py`) classes every shell
+command before it runs. The **floor** — deleting a root or home tree, a fork bomb,
+writing a raw disk, a root `curl | sh`, writing the agent's own config, wallet or
+signer state, stopping the agent's own service — is refused at every posture,
+inside the container too, and no approval lifts it. The **dangerous** class
+(recursive delete, force-push, `sudo`, container and service control, nested
+interpreters, environment dumps, pipe-to-shell) waits for the owner wherever
+`shell_run` is approval-gated, and an unattended run's dangerous command is refused
+rather than queued. With `SHELL_APPROVAL_MODE=per_command` (the default) a safe
+command skips the wait; `every` makes every gated call wait; `smart` lets the aux model
+deny a dangerous command or approve it — but only inside a sandbox, never on the host.
+`SHELL_DENY` / `SHELL_ALLOW` (and the `shell.deny` / `shell.allow` prefs) refuse or pre-approve
+command patterns; an allow entry never lifts the floor. The approval prompt is keyed by the
+command, so "always" or "never" applies to that command line, not to every shell call.
+
+The guard reads the whole line, not only its first word. A `$(…)` or backtick
+substitution is classified with the same guard; a wrapper, a brace group or a
+blank-line statement is judged for every command it may run; text the parser cannot
+read is dangerous. A relative recursive delete below the working directory runs
+without the owner, but the shell tool checks it again after resolving symlinks, and
+refuses it when the same line creates a symlink or when it reaches the data home.
+A `sqlite3` write to one of the agent's own state databases (cron, goals, memory,
+cards, the wallet's submission journal and the rest) needs the owner whatever the path looks like. The agent's own
+workspace is not protected state, but a `.polyrob` state dir or an env file inside
+it still is.
 
 All three are `exec` + `high_impact` + `delegate_blocked` in the capability
 table: never in a default toolset, never given to a delegated sub-agent, and
@@ -211,8 +316,9 @@ the host at all, and — at posture ≥ 2 — self-modification without an expli
 decision.
 
 What it does not do: sandbox the command once it is approved. `shell_run` runs
-inside the session's dev container; `self_env` runs against the install tree
-itself. The posture is the choice of how much host you are handing over — leave
+inside the session's dev container (or on the host at posture 3); `self_env` runs
+against the install tree itself. The guard is pattern-based: it stops the known
+destructive shapes, not a determined author of new ones. The posture is the choice of how much host you are handing over — leave
 `AGENT_COMPUTE_POSTURE` at `0` unless you are deliberately building software
 with the agent, and `3` requires `POLYROB_LOCAL` on a single-tenant box (§3d).
 
@@ -239,6 +345,28 @@ anywhere else.
 What it does not do: change the fact that this is the same in-process pattern as
 everything else in §2 — a room is a second line behind the allowlist, not a
 sandbox. Full behaviour, roles and caps: [groups.md](groups.md#what-the-agent-can-and-cannot-do-in-a-room).
+
+### The agent's mailbox (the `email` tool)
+
+The agent can own a full mailbox: its own AgentMail address (`AGENTMAIL_API_KEY`)
+or an IMAP/SMTP account (`EMAIL_PROVIDER=smtp`). It has eleven verbs:
+
+- **Read:** `email_list` (newest first, with filters and a Gmail `query`),
+  `email_read` (headers, text body, links, the attachment list),
+  `email_save_attachment` (into the session workspace) and
+  `email_read_machine_mail` (activation links and codes from no-reply senders,
+  the mail the inbound surface never answers).
+- **Send:** `email_send` (to, cc, bcc, HTML, workspace attachments), `email_reply`
+  (threaded, the original quoted) and `email_forward` (with the original attachments).
+- **Organise, IMAP only:** `email_folders`, `email_mark`, `email_move` and
+  `email_delete` (to Trash; there is no expunge). These need an owner turn.
+
+Every send verb goes through one gate: forged and autonomous turns, the tier of
+EVERY recipient (one denied address refuses the whole send and names the owner's
+`/allow email` command), the owner pause, the secret scrub and the resend cooldown.
+The read verbs open their own read-only IMAP connection and never mark a mail as
+seen. Mail is third-party text: every result is framed as untrusted, and a turn
+that read it is tainted.
 
 ### The pattern across all of them
 
@@ -307,16 +435,36 @@ kernel; a second host over `BROWSER_WSS_URL` does. Every session gets a fresh
 context over CDP, so no login persists in the service's profile; CDP itself is
 unauthenticated on loopback, which is why nothing may persist there.
 
-### d) `AGENT_COMPUTE_POSTURE=3` ("host") is designed but unwired
+### d) `AGENT_COMPUTE_POSTURE=3` runs the shell on the host
 
-`core/config_policy/policy.py` defines the posture (0 `confined` / 1 `sandbox-dev`
-/ 2 `self-maintain` / 3 `host`) and the single gate predicate
-`compute_posture_allows(execution_context, min_posture)`, but **no code path in
-the tree currently calls it with `min_posture=3`**. Nothing today grants
-host-tier capability through this lever — it is a reserved, not an active,
-capability. If a feature is ever built against posture 3, it inherits the
-documented requirement: `POLYROB_LOCAL` **and** a single-tenant box, refused on
-any network-facing surface.
+At posture 3 the `shell` and `process` tools run commands directly on the machine,
+as the agent's own user, with the real filesystem
+(`tools/shell/host_executor.py`). `core/security/host_execution.py::host_shell_refusal`
+admits a turn only when ALL hold:
+
+1. `compute_posture_allows(ctx, 3)` — the owner's own, non-delegated, non-forged turn;
+2. `POLYROB_LOCAL` is on;
+3. no signing key is in the process (`host_execution_refusal`, the custody rule);
+4. the turn was typed at a foreground terminal of this process (`polyrob` or
+   `polyrob run`). Telegram, the API, `/v1`, A2A, rooms and the web console never
+   qualify — not even the console on loopback, because behind a reverse proxy every
+   request arrives from 127.0.0.1.
+
+Every other turn keeps the container, and a failed container is a refusal, never
+the host. The child environment is the same allowlist scrub as `run_code` (no
+`*_API_KEY`, `*_TOKEN` or seed reaches it), `sudo` is refused on the host, the
+output passes the credential-shape redaction before it enters the transcript, and
+each command leaves one `host_exec` event (a hash of the command, the exit code,
+the time — never the text or the output). The production deploy refuses to
+deploy a server whose env file sets posture 3 or `SHELL_BACKEND=host`.
+
+What it does not do: confine the command. Once a safe-class or approved command
+runs on the host, it can do anything your user can do.
+
+`sudo` on the host stays refused unless `SHELL_HOST_SUDO=prompt`: then you type the password
+at your terminal for that one command, and it reaches `sudo` on stdin only — never cached,
+logged or put in the environment. `SHELL_HOST_INIT_FILES` sources your shell files into each
+command; anything they export becomes visible to the agent's commands.
 
 ### e) Process identity is yours to set
 
@@ -340,13 +488,28 @@ Given §3, here is what a real hard boundary looks like, concretely:
   `POLYROB_DATA_DIR`). This is the single highest-leverage change against §3(e) —
   shared data permissions and browser/cache paths must be checked before cutover.
   Rootful Docker group membership remains root-equivalent. A signer sharing the
-  agent interpreter is not isolated custody, even after a non-root migration.
+  agent interpreter is not isolated custody, even after a non-root migration: the
+  signer runs from a venv of its own, and with `[server] peer_check = main_process`
+  in `signer.toml` it serves only the agent unit's main process, never a shell or
+  MCP child of the same UID (`warn`, the default, logs such a child and still
+  serves it). The agent's `HOME` belongs outside the shared data home, so another
+  identity that can write that tree cannot plant state the agent reads.
 - **`CODE_EXEC_BACKEND=docker`** (never `local_subprocess`) for any deployment
   that isn't a single, fully-trusted operator on their own box. `sandbox_guard.py`
   enforces this server-side and in custody processes, including local mode.
   See `tools/code_exec/SANDBOX_SECURITY.md` for exactly what the container
   hardening (`--network none`, `--cap-drop ALL`, read-only rootfs, non-root user,
-  scrubbed env, pid/memory/cpu caps) does and doesn't cover.
+  scrubbed env, pid/memory/cpu caps) does and doesn't cover. Related levers:
+  `CODE_EXEC_NETWORK=proxy` puts the persistent sandbox on an internal network
+  behind one allowlist proxy (package registries by default, `CODE_EXEC_EGRESS_ALLOW`);
+  the persistent dev sandbox otherwise has open egress. `CODE_EXEC_DOCKER_BINARY=podman`
+  swaps the container CLI. The `ssh` backend pins the remote host key with
+  `CODE_EXEC_SSH_KNOWN_HOSTS` (a missing file is refused; unset means trust on first
+  use). The `modal`, `daytona`, `vercel_sandbox` and `singularity` packs add remote
+  or rootless backends (`SHELL_BACKEND=<name>`); they are tested against fakes only.
+  `run_code(tools=True)` (`CODE_EXEC_TOOL_CALLS`, default OFF) lets a script call an
+  allowlist of agent tools over a per-run socket, and every call re-enters the
+  Controller, so every gate and approval above still applies.
 - **A curated MCP server allowlist**, treated as fully-trusted operator
   configuration — never something a tenant or a correspondent can add to: the
   child env is allowlisted now (§3c), but the server binary itself still runs

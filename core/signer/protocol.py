@@ -66,6 +66,7 @@ class ProtocolError(ValueError):
 # -- framing -----------------------------------------------------------------
 
 def encode_frame(obj: Dict[str, Any]) -> bytes:
+    _finite_numbers(obj)
     payload = json.dumps(obj, separators=(",", ":"), sort_keys=True).encode("utf-8")
     if len(payload) > MAX_FRAME:
         raise ProtocolError(f"frame of {len(payload)} bytes exceeds {MAX_FRAME}")
@@ -115,6 +116,7 @@ def refusal(code: str, reason: str, **extra) -> Dict[str, Any]:
 
 def parse_request(obj: Dict[str, Any]):
     """``(op, body)`` or :class:`ProtocolError`."""
+    _finite_numbers(obj)
     if set(obj) - {"v", "op", "body"}:
         raise ProtocolError(f"unknown request keys {sorted(set(obj) - {'v', 'op', 'body'})}")
     if obj.get("v") != SCHEMA_VERSION:
@@ -141,6 +143,17 @@ def check_keys(body: Dict[str, Any], *, required=(), optional=()) -> None:
 
 # -- TxIntent codec ----------------------------------------------------------
 
+def _finite_numbers(value):
+    import math
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ProtocolError("non-finite number in signing request")
+    if isinstance(value, dict):
+        for item in value.values():
+            _finite_numbers(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _finite_numbers(item)
+
 def _intent_cls():
     from core.wallet.tx_guard import TxIntent
     return TxIntent
@@ -166,6 +179,7 @@ def intent_to_wire(intent) -> Dict[str, Any]:
 def intent_from_wire(data: Dict[str, Any]):
     """Rebuild a ``TxIntent``. An unknown field refuses; a missing optional
     field takes the dataclass default, exactly as a caller omitting it would."""
+    _finite_numbers(data)
     if not isinstance(data, dict):
         raise ProtocolError("intent is not an object")
     cls = _intent_cls()

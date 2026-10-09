@@ -91,12 +91,20 @@ def _login_post(client, username, password, follow_redirects=True):
 
 # --- (a) own_ops /logout ---------------------------------------------------- #
 
+def test_logout_get_and_cross_origin_post_do_not_revoke(own_ops_client):
+    _login_post(own_ops_client, "op", "s3cret", follow_redirects=False)
+    token = own_ops_client.cookies.get("auth_token")
+    assert own_ops_client.get("/logout", follow_redirects=False).status_code == 405
+    response = own_ops_client.post("/logout", headers={"Origin": "https://attacker.example"})
+    assert response.status_code == 403
+    assert own_ops_client.cookies.get("auth_token") == token
+
 def test_own_ops_logout_clears_cookie_and_redirects(own_ops_client):
     login = _login_post(own_ops_client, "op", "s3cret", follow_redirects=False)
     assert login.status_code in (302, 303)
     assert own_ops_client.cookies.get("auth_token")
 
-    resp = own_ops_client.get("/logout", follow_redirects=False)
+    resp = own_ops_client.post("/logout", headers={"Origin": "http://testserver"}, follow_redirects=False)
     assert resp.status_code in (302, 303)
     assert resp.headers["location"] == "/owner-login"
     set_cookie = resp.headers.get("set-cookie", "")
@@ -129,7 +137,7 @@ def test_own_ops_logged_in_owner_gets_the_console_and_can_log_out(own_ops_client
     # The authenticated owner gets the console, not the public status page.
     assert "POLYROB is live" not in root.text
     # /logout is reachable (a real redirect that clears the cookie).
-    resp = own_ops_client.get("/logout", follow_redirects=False)
+    resp = own_ops_client.post("/logout", headers={"Origin": "http://testserver"}, follow_redirects=False)
     assert resp.status_code in (302, 303)
     assert resp.headers["location"] == "/owner-login"
     # Tenant-only links must still stay hidden in own_ops.
@@ -140,7 +148,7 @@ def test_own_ops_logged_in_owner_gets_the_console_and_can_log_out(own_ops_client
 def test_own_ops_logged_out_page_has_no_logout_link(own_ops_client):
     page = own_ops_client.get("/owner-login")
     assert page.status_code == 200
-    assert 'href="/logout"' not in page.text
+    assert 'action="/logout"' not in page.text
 
 
 # --- (b) failed login keeps the CSRF field ---------------------------------- #
@@ -186,7 +194,7 @@ def test_csrf_reject_rerender_recovers(own_ops_client):
 # --- (c) multitenant logout: a real redirect, no inline script (WS1) ------- #
 
 def test_multitenant_logout_still_works(multitenant_client):
-    resp = multitenant_client.get("/logout", follow_redirects=False)
+    resp = multitenant_client.post("/logout", headers={"Origin": "http://testserver"}, follow_redirects=False)
     # WS1: the old page was an inline <script> the console CSP blocks — a blank
     # page with the JWT left in localStorage. Now a 303 to /signin, and
     # Clear-Site-Data asks the browser to drop localStorage + cookies.

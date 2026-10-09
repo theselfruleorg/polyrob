@@ -116,6 +116,11 @@ def exit_price(chain: str, address: str) -> Optional[float]:
     return _intel.exit_price(chain, address)
 
 
+def trusted_buy_price(chain: str, address: str) -> Optional[float]:
+    _ensure()
+    return _intel.trusted_buy_price(chain, address)
+
+
 def indexer_price(chain: str, address: str) -> Optional[float]:
     _ensure()
     return _intel.indexer_price(chain, address)

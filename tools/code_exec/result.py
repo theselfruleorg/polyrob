@@ -25,10 +25,14 @@ class ExecutionRequest:
     # importable. False (default) = byte-identical hardened posture-0 path.
     dev_mode: bool = False
     # Coding-agent review B2: a caller-owned foreground ceiling that may RAISE the
-    # backend's default cap (``run_tests`` passes SHELL_MAX_TIMEOUT_SEC, 300 s).
+    # backend's default cap (``run_tests`` passes SHELL_MAX_TIMEOUT_SEC, 600 s).
     # None = the backend's own cap; an explicit CODE_EXEC_MAX_TIMEOUT_SEC always
     # wins (tools/code_exec/limits.py::exec_timeout_cap).
     ceiling: Optional[float] = None
+    # 073 W9 (code calls tools): a host dir holding this run's tool-RPC socket. An
+    # EPHEMERAL docker run binds it read-only at /polyrob_rpc; local_subprocess
+    # reaches the socket by its host path and ignores this. None = no tool RPC.
+    tool_rpc_dir: Optional[str] = None
 
 
 @dataclass

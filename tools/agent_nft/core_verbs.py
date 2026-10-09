@@ -128,12 +128,21 @@ async def bind(tool, params, execution_context) -> Any:
     from tools.agent_nft import view as V
     from tools.agent_nft.guarded import guarded_call
     from tools.agent_nft.withdraw import _held
-    from tools.defi.agent_registration import encode_register
+    from tools.defi.agent_registration import encode_register, instance_agent_uri
+    try:
+        agent_uri = instance_agent_uri()
+    except Exception:
+        return tool._ar(error="The instance registration document could not be safely built; nothing was broadcast")
+    if params.agent_uri and params.agent_uri != agent_uri:
+        return tool._ar(error="Bind uses this instance's registration document; an alternate agent_uri is refused")
     try:
         held, _signer = _held(tool, params, execution_context)
         rpc = tool.rpc_for(held.chain)
-        if V.identity_balance(rpc, held.chain, held.account) > 0:
-            raise V.ViewError("the account already holds an ERC-8004 identity — register() is not "
+        import asyncio
+        from tools.defi.agent_registration import read_agent_id
+        existing = await asyncio.to_thread(read_agent_id, rpc, chain=held.chain, holder=held.account)
+        if existing is not None:
+            raise V.ViewError("the account already holds its self-minted ERC-8004 identity — register() is not "
                               "idempotent and a second call splits it")
     except (NftAccountError, V.ViewError) as exc:
         return tool._ar(error=f"{exc}. Nothing was broadcast.")
@@ -143,6 +152,6 @@ async def bind(tool, params, execution_context) -> Any:
     registry, intent = _registration_intent(held.chain, expects_mint=True,
                                             max_spend_usd=params.max_spend_usd)
     return await guarded_call(tool, execution_context=execution_context, verb="bind", intent=intent,
-                              inner_to=registry, inner_data=encode_register(params.agent_uri),
+                              inner_to=registry, inner_data=encode_register(agent_uri),
                               held=held, dry_run=params.dry_run, rpc=rpc,
                               header=f"BIND — register() THROUGH the account {held.account}\n")

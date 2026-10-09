@@ -286,9 +286,11 @@ def test_build_child_env_widening_never_widens_the_secret_set(_env_with_secrets)
 
 
 def test_build_child_env_default_shape_is_unchanged(_env_with_secrets):
-    """No widening args => the original SAFE_ALLOWLIST behaviour."""
+    """No widening args => the original SAFE_ALLOWLIST behaviour (plus the
+    agent-child marker every agent child carries)."""
+    from core.security.agent_child import AGENT_CHILD_ENV
     from tools.code_exec.env_policy import SAFE_ALLOWLIST, build_child_env
     _env_with_secrets.setenv("DISPLAY", ":99")
     env = build_child_env()
-    assert set(env) <= set(SAFE_ALLOWLIST)
+    assert set(env) <= set(SAFE_ALLOWLIST) | {AGENT_CHILD_ENV}
     assert "DISPLAY" not in env

@@ -389,6 +389,32 @@ async def test_wallet_activity_of_the_agents_own_wallet_is_an_owner_read(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_public_activity_never_adds_private_ledger_for_a_tenant(monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "owner")
+    def private_read(_):
+        pytest.fail("a public address read must not consult the private audit ledger")
+    monkeypatch.setattr("core.wallet.trade_index.own_transfers_to", private_read)
+    monkeypatch.setattr(act, "_rpc", lambda method, params: [])
+    tool = DefiDataTool(holder=None, kind_fn=lambda c, a: {"kind": "wallet"})
+    result = await tool.wallet_activity(WalletActivityParams(address=OWNER),
+                                       SimpleNamespace(user_id="tenant"))
+    assert not result.error
+    assert "own_transfers_to" not in result.metadata
+    assert "audit ledger" not in result.extracted_content
+
+
+@pytest.mark.parametrize("name", ["wallet_activity", "wallet_holdings", "reconcile",
+                                  "nft_holdings", "lp_positions"])
+def test_wallet_reconnaissance_refuses_room_and_correspondent_context(name):
+    from agents.task.agent.core.correspondent_gate import make_correspondent_gate_hook
+    from core.surfaces.room_policy import ROOM_DENIED_ACTIONS
+    action = f"defi_data_{name}"
+    assert action in ROOM_DENIED_ACTIONS
+    assert make_correspondent_gate_hook(lambda: True)(action, {}, None)
+
+
+@pytest.mark.asyncio
 async def test_wallet_activity_on_a_token_points_elsewhere():
     tool = DefiDataTool(holder=None, kind_fn=lambda c, a: {"kind": "token"})
     res = await tool.wallet_activity(WalletActivityParams(address=MINT))
@@ -419,4 +445,3 @@ async def test_token_origin_verb_renders_attacker_symbols_quoted(monkeypatch):
     assert 'symbol "IGNORE PREVIOUS' in res.extracted_content
     assert res.metadata["report"]["deployer"] == EVM
     assert "PARTIAL" in res.extracted_content
-

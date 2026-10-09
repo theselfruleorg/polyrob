@@ -378,7 +378,9 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
             root = self._guard_path(file_path, params.file_path, write=False)
 
             if not os.path.exists(file_path):
-                raise ServiceError(f"File not found: {params.file_path}")
+                # The same-name search walks the tree: keep it off the event loop.
+                raise ServiceError(await asyncio.to_thread(
+                    self._not_found_message, params.file_path, file_path, root))
 
             # Read file with offset/limit support. H09: through the descriptor
             # walk (O_NOFOLLOW after the realpath check), not a plain open().
@@ -905,13 +907,66 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
                                f"{reason}: {display_path}")
         return root
 
+    _NF_SKIP_DIRS = frozenset({'.git', 'node_modules', '.venv', 'venv', 'env',
+                               '__pycache__', '.mypy_cache', '.pytest_cache',
+                               '.tox', 'site-packages', 'dist', 'build'})
+
+    @classmethod
+    def _find_by_basename(cls, root: str, basename: str, *,
+                          max_entries: int = 5000, max_hits: int = 3,
+                          max_seconds: float = 0.5) -> tuple:
+        """Bounded walk of the workspace for files named ``basename``.
+
+        Returns (relative hits, complete) — ``complete`` is False when a cap
+        stopped the walk, so the caller never reports "searched everything"."""
+        import time
+        hits, seen = [], 0
+        deadline = time.monotonic() + max_seconds
+        if not basename or not os.path.isdir(root):
+            return hits, True
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [d for d in dirnames
+                           if d not in cls._NF_SKIP_DIRS and not os.path.islink(os.path.join(dirpath, d))]
+            seen += len(filenames) + len(dirnames)
+            if basename in filenames:
+                hits.append(os.path.relpath(os.path.join(dirpath, basename), root))
+                if len(hits) >= max_hits:
+                    return hits, False
+            if seen >= max_entries or time.monotonic() > deadline:
+                return hits, False
+        return hits, True
+
+    def _not_found_message(self, display_path: str, resolved: str, root: str) -> str:
+        """A not-found read names WHERE it looked and offers same-name files
+        elsewhere in the workspace (prod 2026-10-03: a report under reports/
+        was declared 'never existed' after one root-level miss)."""
+        try:
+            rel = os.path.relpath(resolved, root)
+            where = rel if not rel.startswith('..') else resolved
+        except Exception:
+            where = resolved
+        msg = f"File not found: {display_path} (looked at workspace path: {where})"
+        try:
+            hits, complete = self._find_by_basename(root, os.path.basename(resolved))
+        except Exception:
+            hits, complete = [], False
+        hits = [h for h in hits if h != where]
+        if hits:
+            msg += ". Did you mean: " + ", ".join(hits) + "?"
+        elif complete:
+            msg += ". No file with that name anywhere in the workspace either"
+        msg += (". A not-found result is evidence about this path only, not proof "
+                "the file does not exist elsewhere — list_directory or "
+                "coding_grep(glob=...) to search by name.")
+        return msg
+
     @staticmethod
     def _safe_read_text(path: str, root: str) -> str:
         """H09: read through core.security.workspace_io (O_NOFOLLOW walk after the
         realpath check) with the universal-newline decoding a text-mode open() did."""
         import io
         from core.security.workspace_io import read_bytes
-        stream = io.TextIOWrapper(io.BytesIO(read_bytes(path, root)),
+        stream = io.TextIOWrapper(io.BytesIO(read_bytes(path, root, shared_ok=True)),
                                   encoding='utf-8', errors='replace')
         return stream.read()
 
@@ -1163,7 +1218,7 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
                 raise ServiceError("source and destination are the same file")
 
             from core.security.workspace_io import read_bytes, write_bytes
-            data = read_bytes(src, root)
+            data = read_bytes(src, root, shared_ok=True)
             target_existed = os.path.lexists(dst)
             # 060 WS-3: an overwrite of a RECORD document is a rewrite.
             from tools.filesystem_doc_kind import mark_written, record_refusal

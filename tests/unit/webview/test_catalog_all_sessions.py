@@ -88,7 +88,7 @@ def _api_sessions(server, request):
 def test_local_owner_sees_all_user_dirs(monkeypatch, catalog_tree):
     monkeypatch.setenv("POLYROB_POSTURE", "local")
     import webview.server as server
-    rows = _api_sessions(server, _FakeRequest())
+    rows = _api_sessions(server, _FakeRequest(user_id=server.webgate.local_owner_id(), authenticated=True))
     assert {r["id"] for r in rows} == {"s-console-1", "s-cli-1", "s-tg-1"}
     assert {r["user"] for r in rows} == {"rob", "local", "u_abc123"}
 
@@ -117,7 +117,7 @@ def test_own_ops_unauthenticated_gets_empty(monkeypatch, catalog_tree):
     import webview.server as server
     import utils.auth_utils as au
     monkeypatch.setattr(au, "is_authenticated", lambda request: False)
-    rows = _api_sessions(server, _FakeRequest())
+    rows = _api_sessions(server, _FakeRequest(user_id=server.webgate.local_owner_id(), authenticated=True))
     assert rows == []
 
 
@@ -135,7 +135,7 @@ def test_multitenant_unauthenticated_still_empty(monkeypatch, catalog_tree):
     import webview.server as server
     import utils.auth_utils as au
     monkeypatch.setattr(au, "is_authenticated", lambda request: False)
-    rows = _api_sessions(server, _FakeRequest())
+    rows = _api_sessions(server, _FakeRequest(user_id=server.webgate.local_owner_id(), authenticated=True))
     assert rows == []
 
 
@@ -162,7 +162,7 @@ def test_runtime_annotation_marks_remote_sessions(monkeypatch, catalog_tree):
     fake_agent.route_session = lambda sid: routes.get(sid)
     monkeypatch.setattr(server, "_in_process_task_agent", lambda: fake_agent)
 
-    rows = {r["id"]: r for r in _api_sessions(server, _FakeRequest())}
+    rows = {r["id"]: r for r in _api_sessions(server, _FakeRequest(user_id=server.webgate.local_owner_id(), authenticated=True))}
     assert rows["s-cli-1"]["runtime"] == "agent"
     assert rows["s-cli-1"]["owner_pid"] == 4242
     assert rows["s-console-1"]["runtime"] == "here"
@@ -173,7 +173,7 @@ def test_runtime_annotation_absent_without_agent(monkeypatch, catalog_tree):
     monkeypatch.setenv("POLYROB_POSTURE", "local")
     import webview.server as server
     monkeypatch.setattr(server, "_in_process_task_agent", lambda: None)
-    rows = _api_sessions(server, _FakeRequest())
+    rows = _api_sessions(server, _FakeRequest(user_id=server.webgate.local_owner_id(), authenticated=True))
     assert all("runtime" not in r for r in rows)
 
 

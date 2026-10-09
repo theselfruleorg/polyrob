@@ -194,6 +194,11 @@ _PACK_SURFACES: List[SurfaceSpec] = []
 
 _ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 
+#: Surface ids whose principal IS the local operator (``core.surfaces.access``
+#: grants them the ``POLYROB_LOCAL`` owner bypass). A pack row may never take
+#: one (CHAT-26): its remote sender would inherit the local owner.
+RESERVED_LOCAL_IDS = frozenset({"cli", "local", "repl"})
+
 
 def _under(ref: Optional[str], package: str) -> bool:
     mod = (ref or "").partition(":")[0]
@@ -205,6 +210,8 @@ def validate_surface(spec: SurfaceSpec, *, pack_id: str, package: str) -> None:
     *pack_id* (top-level package *package*). Registers nothing."""
     if not _ID_RE.match(spec.id or ""):
         raise ValueError(f"surface id {spec.id!r} must match {_ID_RE.pattern}")
+    if spec.id in RESERVED_LOCAL_IDS:
+        raise ValueError(f"surface id {spec.id!r} is reserved for the local operator")
     if spec.id in {s.id for s in all_surfaces()}:
         raise ValueError(f"surface {spec.id!r} is already in the catalog")
     if spec.alias_owner:

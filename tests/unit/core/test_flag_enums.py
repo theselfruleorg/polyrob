@@ -34,11 +34,12 @@ def test_every_enum_key_is_a_documented_flag():
 
 def test_config_service_rejects_enum_typo(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("POLYROB_HOME", str(tmp_path / "home"))
     from core.config_service import set_value
-    result = set_value("AUTONOMY_MODE", "autonmous", scope="project")
+    result = set_value("AUTONOMY_MODE", "autonmous", scope="global")
     assert result.ok is False and result.outcome == "invalid"
     assert "supervised, autonomous" in result.message
-    ok = set_value("AUTONOMY_MODE", "supervised", scope="project")
+    ok = set_value("AUTONOMY_MODE", "supervised", scope="global")
     assert ok.ok is True
 
 

@@ -21,6 +21,7 @@ import pytest
 from bs4 import BeautifulSoup
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from tests.unit.webview.owner_session import authenticate_render_app
 
 PATHS = ["/", "/inbox", "/work", "/money", "/agent"]
 LABELS = ["Chat", "Inbox", "Work", "Money", "Rob"]
@@ -45,6 +46,7 @@ def pages_new(monkeypatch):
 def client(pages_new):
     app = FastAPI()
     app.include_router(pages_new.router)
+    authenticate_render_app(app)
     return TestClient(app)
 
 
@@ -147,6 +149,7 @@ def _client_with(pages_new, monkeypatch, *, inbox=(0, False, 0), read_only=False
     monkeypatch.setattr(pages_new, "_read_only", lambda: read_only)
     app = FastAPI()
     app.include_router(pages_new.router)
+    authenticate_render_app(app)
     return TestClient(app)
 
 

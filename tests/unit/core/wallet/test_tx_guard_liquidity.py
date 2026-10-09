@@ -41,9 +41,40 @@ def probes(monkeypatch):
     monkeypatch.setattr(G, '_decimals_for', lambda *a: 6)
 
 
+def _call(name, *args):
+    from core.wallet.liquidity_guard import _V3_CALLS
+    return abi.encode_call(name, _V3_CALLS[name], list(args))
+
+
+def v3_data(i, recipient=HOLDER, decrease_min=(1, 1)):
+    """The calldata the v3 verbs build for intent *i* (WAL-2: the guard decodes it)."""
+    tid = i.lp_position[1]
+    if i.lp_outflows:
+        if tid is None:
+            calls = [_call('mint', (A, B, 3000, -60, 60, 1, 1, 0, 0, recipient, 9))]
+        else:
+            calls = [_call('increaseLiquidity', (tid, 1, 1, 0, 0, 9))]
+    else:
+        calls = [_call('decreaseLiquidity', (tid, 5, *decrease_min, 9)),
+                 _call('collect', (tid, recipient, 2**128 - 1, 2**128 - 1))]
+        if i.lp_position_effect == 'burn':
+            calls.append(_call('burn', tid))
+    if len(calls) == 1:
+        return calls[0]
+    return abi.encode_call('multicall', [{'type': 'bytes[]'}],
+                           [[bytes.fromhex(c[2:]) for c in calls]])
+
+
 def run(i=None, d=None, **kw):
-    tx = kw.pop('tx', dict(to=NPM, value=0, chainId=8453, maxFeePerGas=10**9))
-    return G.authorize(i or intent(), tx, holder=HOLDER,
+    i = i or intent()
+    tx = kw.pop('tx', None)
+    if tx is None:
+        try:
+            data = v3_data(i)
+        except Exception:
+            data = '0x'
+        tx = dict(to=NPM, value=0, chainId=8453, maxFeePerGas=10**9, data=data)
+    return G.authorize(i, tx, holder=HOLDER,
         gate=PolicyGate(max_per_tx_usd=100, daily_cap_usd=1000),
         simulate_fn=lambda **args: d or deltas(),
         liquidity_rpc=lambda *a: abi.encode([{'type': 'address'}], [HOLDER]),
@@ -55,7 +86,7 @@ def test_two_leg_mint():
     result = run()
     assert result.allowed, result.reason
     assert result.position_token_id == 42
-    assert result.amount_usd == 2
+    assert result.amount_usd == 2.01
 
 
 @pytest.mark.parametrize('change', [
@@ -99,7 +130,7 @@ def test_native_leg_matches_value():
     i = intent(lp_outflows=((None, 10**15), (A, 10**6)))
     d = deltas(native_delta=-10**15, token_deltas={A: -10**6})
     assert not run(i, d).allowed
-    assert run(i, d, tx=dict(to=NPM, value=10**15)).allowed
+    assert run(i, d, tx=dict(to=NPM, value=10**15, data=v3_data(i))).allowed
 
 
 def test_required_event_from_exact_emitter():
@@ -115,8 +146,8 @@ def test_implied_price_and_two_unpriceable():
                      '0x' + keccak(text='PoolCreated(address,address,uint24,int24,address)').hex())
     d = run(intent(expected_events=(created_event,)),
             deltas(event_topics=(created_event,)),
-            price_fn=lambda chain, token: 1 if token == A else None)
-    assert d.allowed and d.amount_usd == 2 and 'implied' in d.reason
+            price_fn=lambda chain, token: 1 if token != B else None)
+    assert d.allowed and d.amount_usd == 2.01 and 'implied' in d.reason
     assert not run(price_fn=lambda *a: None).allowed
     assert not run(price_fn=lambda *a: float('nan')).allowed
 
@@ -168,5 +199,68 @@ def test_deposit_cannot_fund_somebody_elses_position():
 def test_cr_l13_existing_pool_refuses_the_paired_leg_valuation():
     """In an existing pool the ratio is whatever its last trader seeded, so the
     unpriceable leg may not borrow the priced leg's USD."""
-    d = run(price_fn=lambda chain, token: 1 if token == A else None)
+    d = run(price_fn=lambda chain, token: 1 if token != B else None)
     assert not d.allowed and 'already exists' in d.reason
+
+
+# -- WAL-2: the signed v3 calldata is bound, not only the simulated deltas ----
+
+def _collect_intent(**kw):
+    return intent(**(dict(lp_outflows=(), lp_inflows=((A, 10), (B, 20)),
+                          lp_position=(NPM, 42), lp_position_effect='hold') | kw))
+
+
+def _collect_deltas():
+    return deltas(token_deltas={A: 10, B: 20}, holder_nft_in=())
+
+
+def _tx(data, value=0):
+    return dict(to=NPM, value=value, chainId=8453, data=data)
+
+
+def test_collect_to_another_recipient_refuses_before_simulation():
+    i = _collect_intent()
+    result = run(i, _collect_deltas(), tx=_tx(v3_data(i, recipient=C)), price_fn=lambda *a: 1)
+    assert not result.allowed and 'collect pays' in result.reason
+
+
+def test_fee_only_withdrawal_needs_a_positive_minimum():
+    i = _collect_intent(lp_inflows=((A, 0), (B, 0)))
+    result = run(i, _collect_deltas(), price_fn=lambda *a: 1)
+    assert not result.allowed and 'positive minimum' in result.reason
+
+
+def test_one_sided_fee_collection_still_passes():
+    i = _collect_intent(lp_inflows=((A, 10), (B, 0)))
+    d = deltas(token_deltas={A: 10, B: 0}, holder_nft_in=())
+    assert run(i, d, price_fn=lambda *a: 1).allowed
+
+
+def test_decrease_without_an_onchain_floor_refuses():
+    i = _collect_intent()
+    result = run(i, _collect_deltas(), tx=_tx(v3_data(i, decrease_min=(0, 0))),
+                 price_fn=lambda *a: 1)
+    assert not result.allowed and 'positive on-chain minimum' in result.reason
+
+
+def test_other_position_or_foreign_call_refuses():
+    i = _collect_intent()
+    other = _call('collect', (43, HOLDER, 1, 1))
+    assert 'not the declared' in run(i, _collect_deltas(), tx=_tx(other)).reason
+    transfer = abi.encode_call('safeTransferFrom', [{'type': 'address'}] * 2 + [{'type': 'uint256'}],
+                               [HOLDER, C, 42])
+    assert 'no liquidity verb builds' in run(i, _collect_deltas(), tx=_tx(transfer)).reason
+    assert not run(i, _collect_deltas(), tx=_tx('0x')).allowed
+
+
+def test_mint_to_another_recipient_refuses():
+    i = intent()
+    assert 'mint the position to the wallet' in run(i, tx=_tx(v3_data(i, recipient=C))).reason
+
+
+def test_deposit_may_not_carry_a_withdrawal():
+    i = intent()
+    data = abi.encode_call('multicall', [{'type': 'bytes[]'}], [[
+        bytes.fromhex(v3_data(i)[2:]),
+        bytes.fromhex(_call('collect', (42, HOLDER, 1, 1))[2:])]])
+    assert 'may not call' in run(i, tx=_tx(data)).reason

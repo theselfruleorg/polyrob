@@ -183,13 +183,14 @@ def _export_skills(out: Path, user_id: str, data_dir: str) -> int:
 def _export_identity(out: Path, user_id: str, data_dir: str) -> int:
     count = 0
     try:
-        from core.instance import load_self_context, load_self_doc, resolve_instance_id
+        from core.instance import (is_unreadable_note, load_self_context, load_self_doc,
+                                   resolve_instance_id)
         soul = load_self_context(data_dir)
-        if soul:
+        if soul and not is_unreadable_note(soul):
             _write(out / "identity" / "soul.md", soul.rstrip() + "\n")
             count += 1
         self_doc = load_self_doc(data_dir, user_id, resolve_instance_id())
-        if self_doc:
+        if self_doc and not is_unreadable_note(self_doc):
             _write(out / "identity" / "self.md", self_doc.rstrip() + "\n")
             count += 1
     except Exception:

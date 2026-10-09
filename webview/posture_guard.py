@@ -1,32 +1,9 @@
-"""Boot refusal for an anonymous console on a server-shaped deployment (S8).
+"""Refuse a mismatched console deployment posture or unusable login configuration.
 
-`webview/webgate.py::posture()` returns ``"local"`` — *every anonymous request
-is the owner*, no login, the full control plane — whenever `POLYROB_POSTURE`,
-`WEBGATE_MULTITENANT` and `WEBGATE_HOST`/`WEBVIEW_HOST` are all unset. That
-default is right for the loopback primitive on a workstation and catastrophic on
-a server: the shipped unit passes `--host 127.0.0.1` on the uvicorn **argv**
-(invisible to `posture()`, which only reads env) and nginx proxies the internet
-into that loopback socket. Lose `/etc/polyrob/webview.env` and the console
-serves pause/resume, goal & cron actions, invoice settle, app approve/kill and
-config writes to anyone, with no error anywhere.
-
-So this module reads the signals `posture()` structurally cannot, and REFUSES to
-start rather than serving owner powers anonymously:
-
-  - ``WEBVIEW_PUBLIC_URL``  — the console has a public address
-  - ``--proxy-headers`` / ``--forwarded-allow-ips`` on the process argv — it
-    runs behind a reverse proxy
-  - ``POLYROB_DATA_DIR`` pointing OUTSIDE the user's home — a system deployment
-    (``/var/lib/polyrob``). A profile's ``~/.polyrob/profiles/<name>/data`` is
-    deliberately NOT a signal: refusing there would break
-    ``polyrob dashboard -P <profile>`` on a laptop.
-
-Escape hatch: ``WEBVIEW_ALLOW_LOCAL_POSTURE=1`` for an operator who genuinely
-fronts the console with their own auth layer. It is honoured loudly (WARNING),
-never silently.
-
-Pure + injectable (``env``/``argv``/``posture`` args) so the whole rail is
-testable without a process; the lifespan calls it with no arguments.
+Local consoles require owner login and retain a loopback Host/bind restriction.
+Server signals (public URL, proxy arguments, or a system data home) require an
+explicit server posture. The existing WEBVIEW_ALLOW_LOCAL_POSTURE override only
+permits that deployment shape; it never disables authentication.
 """
 from __future__ import annotations
 
@@ -140,17 +117,15 @@ def assert_console_posture(*, env: Optional[Mapping[str, str]] = None,
         return
     if _allow_override(env):
         logger.warning(
-            "console posture is 'local' (no login — every anonymous request is the "
-            "owner) on a server-shaped deployment [%s], allowed explicitly by %s=1",
+            "console posture is 'local' (loopback with owner login) "
+            "on a server-shaped deployment [%s], allowed explicitly by %s=1",
             "; ".join(signals), ALLOW_FLAG)
         return
     message = (
-        "REFUSING TO START: the console posture is 'local' — no login, every "
-        "anonymous request is treated as the OWNER — but this looks like a server:\n"
+        "REFUSING TO START: the console posture is 'local', but "
+        "this looks like a server:\n"
         + "".join(f"  - {s}\n" for s in signals)
-        + "At 'local' posture the control plane (pause/resume, goals, cron, invoice "
-        "settle, app approve/kill, config writes) is reachable without any "
-        "credential.\n"
+        + "The local posture is intended for a loopback workstation console.\n"
         "Fix: set POLYROB_POSTURE=own_ops (plus POLYROB_OWNER_USERNAME and "
         "POLYROB_OWNER_PASSWORD_HASH) in /etc/polyrob/webview.env, or "
         f"POLYROB_POSTURE=multitenant.\n"
@@ -290,19 +265,19 @@ def assert_login_configured(*, env: Optional[Mapping[str, str]] = None,
     ``own_ops`` signs the owner in with ``POLYROB_OWNER_USERNAME`` +
     ``POLYROB_OWNER_PASSWORD_HASH`` and mints a ``JWT_SECRET_KEY`` cookie;
     ``multitenant`` needs the JWT secret. Without them the console booted and
-    every login answered 500 or "wrong password". ``local`` has no login.
+    every login answered 500 or "wrong password". Local callers also authenticate.
     """
     env = os.environ if env is None else env
     if posture is None:
         from webview import webgate
         posture = webgate.posture()
-    if posture == "local":
-        return
     needed = ["JWT_SECRET_KEY"]
-    if posture == "own_ops":
+    if posture in ("local", "own_ops"):
         needed += ["POLYROB_OWNER_USERNAME", "POLYROB_OWNER_PASSWORD_HASH"]
     missing = [k for k in needed if not str(env.get(k) or "").strip()]
     if not missing:
+        if len(str(env["JWT_SECRET_KEY"])) < 32:
+            raise RuntimeError("JWT_SECRET_KEY must contain at least 32 characters")
         return
     message = (f"REFUSING TO START: the console posture is {posture!r} but "
                + ", ".join(missing) + " is not set — no one could sign in. "

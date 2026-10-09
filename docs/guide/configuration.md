@@ -98,14 +98,17 @@ POLYROB has three kinds of settings. Each has one home and one command.
 | Kind | Example | Where it lives | Set it with |
 |---|---|---|---|
 | **Secret** (an API key or token) | `ANTHROPIC_API_KEY` | `~/.polyrob/.env` | `polyrob config set ANTHROPIC_API_KEY` (prompts, hidden) |
-| **Environment flag** (a switch or number the process reads at start) | `AUTONOMY_ENABLED`, `MEMORY_BACKEND` | `./.polyrob/.env` (this project) or `~/.polyrob/.env` (`--global`) | `polyrob config set KEY VALUE [--global]` |
+| **Environment flag** (a switch or number the process reads at start) | `AUTONOMY_ENABLED`, `MEMORY_BACKEND` | `~/.polyrob/.env` (the active config home) | `polyrob config set KEY VALUE [--global]` |
 | **Preference** (an owner setting the running agent reads live) | `style.verbosity`, `goals.daily_quota`, `chat.mode` | `<data_home>/identity/{instance_id}/user_{uid}/preferences.toml` | `polyrob config set style.verbosity brief` |
 
 `polyrob config set` routes by the shape of the key: a secret-shaped name goes
 to the **global** env file (so it never vanishes when you `cd` away), a dotted
 name that is a known preference goes to `preferences.toml`, and a name in the
-flag catalog goes to the **project** env file unless you pass `--global`. Pass
-`--project` to keep a secret per directory. Every write tells you which file it
+flag catalog goes to the active config home's env file too (`--global` is the
+default and only says so). The CLI does not load a per-directory
+`./.polyrob/.env` (a cloned directory could supply it), so `--project` is
+refused: nothing is written, and the message names the file the CLI reads.
+Every write tells you which file it
 wrote and when the value applies (`live`, `next-turn`, `next-session`, or `restart`).
 
 An **environment flag is read when the process starts**, so a change needs a
@@ -130,13 +133,13 @@ path, so they validate a value and report a problem in the same words.
 
 | Process | Reads |
 |---|---|
-| `polyrob` CLI and REPL | shell env, then `./.polyrob/.env`, then `~/.polyrob/.env` (the list below) |
+| `polyrob` CLI and REPL | shell env, then `~/.polyrob/.env` (the list below); never a project file |
 | `polyrob serve` / `python main.py` | the same, then `config/.env.<env>`, which wins |
 | a systemd unit | its `EnvironmentFile` (for example `/etc/polyrob/polyrob.env`) only |
-| the console's settings page | writes `./.polyrob/.env` of the process that serves it; under a server posture its reply says the value applies to CLI runs only |
+| the console's settings page | writes the active config home's `.env`; under a server posture its reply says the value applies to CLI runs only |
 
 When a feature is off, every hint names the fix the same way:
-`enable: `polyrob config set KEY true --global` (takes effect: restart)`, or the
+`enable: `polyrob config set KEY true` (takes effect: restart)`, or the
 feature's own verb where it has one (`polyrob autonomy on`).
 
 ### Files and precedence
@@ -144,10 +147,12 @@ feature's own verb where it has one (`polyrob autonomy on`).
 On the CLI (local mode) the first value found wins, in this order:
 
 1. your shell environment,
-2. `./.polyrob/.env` — project overrides (`polyrob config set`),
-3. `~/.polyrob/.env` — your global config (`polyrob config set --global`, `polyrob auth add`, `polyrob init`),
-4. the legacy `~/.rob/.env` (read only; `polyrob` copies `~/.rob` to `~/.polyrob` once, automatically),
-5. a repo-root `.env`, then `config/.env.<env>` and `config/.env.<env>.local` (dev checkouts only).
+2. `~/.polyrob/.env` — your active config home (`polyrob config set`, `polyrob auth add`, `polyrob init`),
+3. the legacy `~/.rob/.env` (read only).
+
+Project-local env files and MCP command configurations are not auto-loaded.
+Move intended settings into the active config home; `POLYROB_HOME` selects a
+separate operator-managed profile.
 
 A server started with `polyrob serve` or `python main.py` loads the `config/`
 files last and lets them win. A systemd deploy reads its environment from the
@@ -400,7 +405,7 @@ the six axes in §1. Set them in this order and stop when you have what you want
 
 ```bash
 polyrob autonomy status            # the posture card: every axis, pauses, loop state
-polyrob autonomy on                # writes AUTONOMY_ENABLED=true (add --global to keep it out of this project)
+polyrob autonomy on                # writes AUTONOMY_ENABLED=true to ~/.polyrob/.env, which the CLI reads
 polyrob autonomy on --mode autonomous
 polyrob autonomy off
 ```
@@ -566,6 +571,11 @@ approve <code>`) or a **correspondent** the agent contacted first, whose
 replies arrive as data, never as instructions (`CORRESPONDENT_ACCESS_ENABLED`).
 Email senders are always correspondent-or-denied.
 
+⚠️ A **paired** sender is treated as the owner on that surface (full owner
+routing; no host execution in local mode). Approve only a code that your own
+account received. Codes expire after 15 minutes and work once; remove a pairing
+with `polyrob owner pair revoke <user_id>`.
+
 ### Groups
 
 Groups are a different regime: the agent answers anyone in a room you have
@@ -727,7 +737,7 @@ context-compaction step so old adversarial text cannot hijack it. Both are on.
 
 | Symptom | Check |
 |---|---|
-| "polyrob stopped seeing my key" | `polyrob config explain ANTHROPIC_API_KEY` — a key written with `--project` lives in `./.polyrob/.env` and only applies in that directory. |
+| "polyrob stopped seeing my key" | `polyrob config explain ANTHROPIC_API_KEY` — a key in `./.polyrob/.env` is never loaded (`--project` is refused); set it with `polyrob config set`, which writes the active config home. |
 | The wrong provider answers | `polyrob model list`; pin with `polyrob model set-default`. |
 | Recall feels shallow | the log says the `sqlite-vec` extension was unavailable; install the `memory-vector` extra. |
 | Autonomy "does nothing" | `polyrob autonomy status` — check the master switch, the posture and whether a pause is active. |

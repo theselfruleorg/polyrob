@@ -29,21 +29,12 @@ logger = logging.getLogger(__name__)
 
 
 def _rules_immediate(is_forged: bool) -> bool:
-	"""May this turn's document write bind IMMEDIATELY? (035 P1-6)
+	"""Model-authored rules always require review through the owner seat.
 
-	True only when the flag is on AND the turn is a genuine owner turn. The
-	writer enforces the forged-author refusal independently
-	(`SelfContextWriter._resolve_pending`), so this is the CALLER half of a
-	two-sided guard, never the only one.
+	An owner conversation can contain untrusted tool results; its origin is
+	not proof that the owner wrote or approved the proposed rule.
 	"""
-	if is_forged:
-		return False
-	try:
-		from core.config_policy import AutonomyConfig
-		return bool(AutonomyConfig.owner_rules_immediate())
-	except Exception:
-		# Fail CLOSED: an unreadable flag keeps today's review lane.
-		return False
+	return False
 
 
 def _write_doc(writer, params, *, user_id: str, created_by: str, immediate: bool):
@@ -264,8 +255,8 @@ class DocAuthoringMixin:
 			"action='read' "
 			f"returns the current text; action='update' replaces it (≤{SELF_DOC_MAX_CHARS} chars — "
 			"consolidate, don't sprawl); action='patch' edits by exact-string replace; "
-			"action='promote' activates your pending draft (owner-only). On your owner's own "
-			"turn an update/patch applies now; otherwise it is queued for review. This is NOT your core "
+			"Draft activation requires owner review through /pending. On any "
+			"turn an update/patch is queued for review. This is NOT your core "
 			"identity/boundaries (those are operator-owned). "
 			"Pass source= (where it came from: 'measured', 'owner said', 'room_read') "
 			"and observed_at=YYYY-MM-DD (defaults to today) so each new or changed line "
@@ -320,41 +311,10 @@ class DocAuthoringMixin:
 			is_forged = _is_forged_or_autonomous_turn(execution_context, self)
 
 			if params.action == "promote":
-				# Activation is OWNER-only (Phase D). The caller is the owner when this
-				# is the single-user local CLI OR their user_id matches the bound owner
-				# principal (POLYROB_OWNER_USER_ID / first SURFACE_SUPER_ADMIN_USER_IDS).
-				# A non-owner or any forged turn can never self-promote — that is what
-				# keeps a self-wake / injected / sub-agent turn from activating its own
-				# pending identity, on the server as well as locally.
-				try:
-					from core.config_policy import local_mode_enabled
-					from core.instance import is_owner_local_safe, resolve_owner_principal
-					# The local bypass is honored ONLY for the genuine single-user local
-					# operator tenant — NOT any uid under the global POLYROB_LOCAL flag.
-					# This action runs inside a session and has no surface id, so it can't
-					# use the _LOCAL_OWNER_SURFACES filter that access.py/pairing.py apply;
-					# is_owner_local_safe is the surface-independent equivalent (a forgeable
-					# network sender's uid is never the local tenant). See permissions audit F4.
-					owner_ok = is_owner_local_safe(
-						user_id, owner_principal=resolve_owner_principal(),
-						local_enabled=local_mode_enabled())
-				except Exception:
-					owner_ok = False
-				if is_forged or not owner_ok:
-					return ActionResult(
-						error="promote is owner-only; your pending self-context awaits operator review.",
-						include_in_memory=True)
-				res = writer.promote(user_id=user_id)
-				if not res.ok:
-					return ActionResult(error=f"Promote failed: {'; '.join(res.errors)}",
-					                    include_in_memory=True)
-				_self_mod_ev("promote", pending=False, created_by="owner")
-				return ActionResult(extracted_content="Self-context promoted (active next session).",
-				                    include_in_memory=True)
+				return ActionResult(
+					error="Promotion requires owner review through /pending; a model tool call cannot approve its draft.",
+					include_in_memory=True)
 
-			# update / patch. `created_by` reflects real forged status, so the writer
-			# bars a forged turn from reading/patching an active doc and ALWAYS
-			# quarantines it — independently of the 035 P1-6 decision below.
 			created_by = PROVENANCE_BACKGROUND if is_forged else PROVENANCE_AGENT
 			immediate = _rules_immediate(is_forged)
 			before = writer.read_active(user_id) if immediate else ""
@@ -438,8 +398,8 @@ class DocAuthoringMixin:
 			f"≤{OWNER_DOC_MAX_CHARS} chars). "
 			"action='read' returns it; action='update' replaces it (consolidate, keep "
 			"only durable facts); action='patch' edits by exact-string replace; "
-			"action='promote' activates your pending draft (owner-only). On your owner's own "
-			"turn an update/patch applies now; otherwise it is queued for review. "
+			"Draft activation requires owner review through /pending. On any "
+			"turn an update/patch is queued for review. "
 			"Pass source= (where the fact came from: 'owner said', 'measured', "
 			"'room_read') and observed_at=YYYY-MM-DD (defaults to today) so each new or "
 			"changed line is written with its provenance; that stamp counts toward the "
@@ -499,25 +459,9 @@ class DocAuthoringMixin:
 			is_forged = _is_forged_or_autonomous_turn(execution_context, self)
 
 			if params.action == "promote":
-				try:
-					from core.config_policy import local_mode_enabled
-					from core.instance import is_owner_local_safe, resolve_owner_principal
-					owner_ok = is_owner_local_safe(
-						user_id, owner_principal=resolve_owner_principal(),
-						local_enabled=local_mode_enabled())
-				except Exception:
-					owner_ok = False
-				if is_forged or not owner_ok:
-					return ActionResult(
-						error="promote is owner-only; your pending owner-facts doc awaits operator review.",
-						include_in_memory=True)
-				res = writer.promote(user_id=user_id)
-				if not res.ok:
-					return ActionResult(error=f"Promote failed: {'; '.join(res.errors)}",
-					                    include_in_memory=True)
-				_self_mod_ev("promote", pending=False, created_by="owner")
-				return ActionResult(extracted_content="Owner-facts doc promoted (active next session).",
-				                    include_in_memory=True)
+				return ActionResult(
+					error="Promotion requires owner review through /pending; a model tool call cannot approve its draft.",
+					include_in_memory=True)
 
 			created_by = PROVENANCE_BACKGROUND if is_forged else PROVENANCE_AGENT
 			immediate = _rules_immediate(is_forged)

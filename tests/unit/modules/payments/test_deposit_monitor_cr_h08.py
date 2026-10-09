@@ -60,7 +60,7 @@ class _Config:
 
 
 def _usdc(balance):
-    return {"chain": "base", "token_symbol": "USDC", "amount": str(balance), "amount_usd": balance}
+    return {"chain": "ethereum", "token_symbol": "USDC", "amount": str(balance), "amount_usd": balance}
 
 
 @pytest.mark.asyncio
@@ -92,7 +92,7 @@ async def test_pre_mark_database_uses_last_credited_balance_as_baseline():
     # A row written by the old code: the whole balance reading in `amount`.
     db.raw.execute(
         "INSERT INTO crypto_payments (user_id, chain, token_symbol, amount, amount_usd,"
-        " credits_purchased, status) VALUES ('u','base','USDC','11.0',11.0,1100,'confirmed')")
+        " credits_purchased, status) VALUES ('u','ethereum','USDC','11.0',11.0,1100,'confirmed')")
     m = DepositMonitor(db, ledger, _Config())
     await m._process_deposit("u", _usdc(11.0))
     assert ledger.credits == 0
@@ -109,3 +109,25 @@ async def test_marks_table_creation_is_idempotent():
     await m._process_deposit("u", _usdc(10.0))
     row = db.raw.execute("SELECT balance FROM deposit_balance_marks").fetchone()
     assert row["balance"] == "10.0"
+
+
+@pytest.mark.asyncio
+async def test_decimal_credit_floor_does_not_lose_one_credit():
+    db, ledger = _SqliteDB(), _Ledger()
+    monitor = DepositMonitor(db, ledger, _Config())
+    await monitor._process_deposit("u", _usdc(5.1))
+    assert ledger.credits == 510
+    row = db.raw.execute("SELECT credits_purchased FROM crypto_payments").fetchone()
+    assert row["credits_purchased"] == 510
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_balance", ["NaN", "Infinity", "-Infinity", "-1"])
+async def test_invalid_balance_never_lowers_mark_or_credits(bad_balance):
+    db, ledger = _SqliteDB(), _Ledger()
+    monitor = DepositMonitor(db, ledger, _Config())
+    await monitor._process_deposit("u", _usdc(10))
+    await monitor._process_deposit("u", _usdc(bad_balance))
+    assert ledger.credits == 1000
+    row = db.raw.execute("SELECT balance FROM deposit_balance_marks").fetchone()
+    assert row["balance"] == "10"

@@ -174,9 +174,9 @@ def test_shell_offers_logout_only_where_a_login_exists(monkeypatch):
     app.include_router(mod.router)
     monkeypatch.setattr(mod, "_show_logout", lambda: True)
     html = TestClient(app).get("/inbox").text
-    assert 'href="/logout"' in html and "Log out" in html
+    assert 'action="/logout"' in html and "Log out" in html
     monkeypatch.setattr(mod, "_show_logout", lambda: False)
-    assert 'href="/logout"' not in TestClient(app).get("/inbox").text
+    assert 'action="/logout"' not in TestClient(app).get("/inbox").text
 
 
 def test_live_metadata_failure_is_named(tmp_path):

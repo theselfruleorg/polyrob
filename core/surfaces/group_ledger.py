@@ -137,6 +137,25 @@ class GroupLedger:
                           "UPDATE group_ledger SET answered_by=? WHERE surface=? AND chat_id=? AND message_id=?",
                           (session_id, surface, str(chat_id), str(mid)))
 
+    def mark_deleted(self, surface: str, chat_id: str, message_ids: List[str]) -> int:
+        """A line the bot deleted stays as a ``deleted`` stub (sender kept, text
+        dropped), so a later reader sees it was already handled instead of a
+        fresh offence. Returns the number of rows marked."""
+        n = 0
+        for mid in message_ids:
+            row = execute_retry(
+                self.db_path,
+                "SELECT 1 FROM group_ledger WHERE surface=? AND chat_id=? AND message_id=? AND kind!='deleted'",
+                (surface, str(chat_id), str(mid)), fetch="one")
+            if not row:
+                continue
+            execute_retry(self.db_path,
+                          "UPDATE group_ledger SET kind='deleted', text='(deleted by you — moderation)', "
+                          "media_path=NULL WHERE surface=? AND chat_id=? AND message_id=?",
+                          (surface, str(chat_id), str(mid)))
+            n += 1
+        return n
+
     def checkpoint(self, surface: str, chat_id: str, reader: str) -> float:
         row = execute_retry(self.db_path,
                             "SELECT ts FROM group_ledger_checkpoints WHERE surface=? AND chat_id=? AND reader=?",

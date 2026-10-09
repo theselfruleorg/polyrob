@@ -98,6 +98,12 @@
       "aliases": []
     },
     {
+      "name": "/adopt",
+      "group": "work",
+      "help": "Make a job or goal Rob wrote your own, after you see what it will do",
+      "aliases": []
+    },
+    {
       "name": "/book",
       "group": "money",
       "help": "My ledger against every money chain: one verdict, then what disagrees",

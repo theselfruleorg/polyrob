@@ -98,6 +98,7 @@ def _tool(wallet=None, *, deltas=None, **kw):
         ok=True, fee_lamports=5_000, token_deltas={USDC: -1_000_000}, native_delta=1_000_000)
     defaults = dict(
         wallet=wallet or _Wallet(),
+        price_fn=lambda c, a: 100.0 if a == WSOL else None,
         solana_decimals_fn=lambda m: 6,
         solana_quote_fn=lambda ti, to, amt, **k: _quote(ti=ti, to=to, amt=amt),
         solana_build_fn=lambda *a, **k: b"\x01",
@@ -256,9 +257,15 @@ SOL_DEC = 9
 
 def _sol_tool(deltas, **kw):
     """A tool selling native SOL: 9 decimals, priced, USDC out."""
+    def quote(ti, to, amt, **kw):
+        out = (amt * (200 if ti == WSOL else 1) * 10 ** (9 if to == WSOL else 6)
+               // ((200 if to == WSOL else 1) * 10 ** (9 if ti == WSOL else 6)))
+        return _quote(ti=ti, to=to, amt=amt, out=out, floor=out * 99 // 100)
+
     defaults = dict(deltas=deltas,
                     solana_decimals_fn=lambda m: SOL_DEC if m == WSOL else 6,
-                    price_fn=lambda c, a: 200.0)
+                    price_fn=lambda c, a: 200.0 if a == WSOL else 1.0,
+                    solana_quote_fn=quote)
     defaults.update(kw)
     return _tool(**defaults)
 
@@ -351,3 +358,18 @@ async def test_a_sol_sell_that_moves_nothing_natively_still_refuses():
     res = await _sol_tool(deltas).solana_swap(_sol_params())
     assert res.error, "no observed SOL outflow must refuse"
     assert "observe" in res.error.lower() or "moves nothing" in res.error.lower()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("token_in", [USDC, WSOL])
+async def test_unrelated_spl_outflow_never_reaches_signer(token_in):
+    from core.wallet.solana_simulation import SolanaDeltas
+    sends = []
+    deltas = SolanaDeltas(ok=True, fee_lamports=5000,
+        token_deltas={token_in: -1000000, MEME: -999999999}, native_delta=1000000)
+    tool = _tool(deltas=deltas, solana_send_fn=lambda raw: sends.append(raw),
+                 price_fn=lambda *a: 1.0)
+    result = await tool.solana_swap(_params(token_in=token_in,
+        token_out=WSOL if token_in == USDC else USDC, dry_run=False))
+    assert "undeclared token outflow" in result.error
+    assert sends == []

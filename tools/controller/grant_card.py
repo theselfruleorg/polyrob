@@ -8,7 +8,7 @@ grant). This module renders the card; per-seat formatting stays trivial because
 the decide verbs (``/approve tap-<id>``) are shared by every chat seat.
 """
 import hashlib
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 #: Every money-relevant field of every money verb (CR-M01). Each present key
 #: renders on its OWN line, in full, never counted against the extras cap: the
@@ -16,15 +16,15 @@ from typing import Any, Dict, List, Optional, Tuple
 #: approves blind. ``tests/unit/tools/controller/test_grant_card_cr_m01.py``
 #: pins that no money-verb field is dropped.
 _MONEY_KEYS = ("amount_usd", "amount", "amount_in", "amount_a", "amount_b",
-               "size", "value_usd", "max_usd", "max_spend_usd", "price",
+               "size_usd", "max_usd", "size", "value_usd", "max_spend_usd", "price",
                "value", "value_wei", "supply", "spend_max_raw",
-               "receive_min_raw", "allow_max_raw", "usd")
+               "receive_min_raw", "allow_max_raw", "usd", "max_amount_usd")
 #: What the money moves INTO / OUT OF, or who may pull it. Also rendered in
 #: full on their own lines.
 _ASSET_KEYS = ("chain", "from_chain", "to_chain", "token_in", "token_out",
                "token_a", "token_b", "spend_token", "receive_token",
                "allow_spender", "token_id", "fee", "range", "slippage_bps",
-               "dry_run")
+               "dry_run", "expected_pay_to", "allow_plaintext")
 _TARGET_KEYS = ("to", "to_email", "target", "recipient", "payer_contact",
                 "address", "market", "url", "repo", "package")
 _PURPOSE_KEYS = ("purpose", "reason", "description", "task", "subject", "text")
@@ -81,16 +81,49 @@ def _hex_blob_lines(key: str, raw: Any) -> List[str]:
     return lines
 
 
+#: Per-action card context: facts a verb's params do not carry but the owner
+#: must see before consent (e.g. what an agent NFT's account holds before it is
+#: given away). ``action_name -> fn(params) -> list[str]``; read ONCE when the
+#: ask is created and stored on it, so every seat shows the same lines.
+_CARD_CONTEXT: Dict[str, Callable[[Dict[str, Any]], List[str]]] = {}
+_MAX_CONTEXT_LINES = 40
+
+
+def register_card_context(action_name: str, fn: Callable[[Dict[str, Any]], List[str]]) -> None:
+    if not callable(fn):
+        raise TypeError(f"card context for {action_name}: {fn!r} is not callable")
+    _CARD_CONTEXT[str(action_name)] = fn
+
+
+def card_context_lines(action_name: str, params: Optional[Dict[str, Any]]) -> List[str]:
+    """The registered context lines for *action_name*, or ``[]``. Never raises:
+    a provider that fails says so ON the card (an unreadable fact is not an
+    absent one)."""
+    fn = _CARD_CONTEXT.get(str(action_name))
+    if fn is None:
+        return []
+    try:
+        lines = [str(x) for x in (fn(dict(params or {})) or [])]
+    except Exception as exc:  # noqa: BLE001
+        return [f"⚠️ Context for this approval could not be read ({type(exc).__name__}) — "
+                f"you would approve without it."]
+    if len(lines) > _MAX_CONTEXT_LINES:
+        lines = lines[:_MAX_CONTEXT_LINES] + [f"… +{len(lines) - _MAX_CONTEXT_LINES} more line(s)"]
+    return lines
+
+
 def render_grant_card(action_name: str, params: Optional[Dict[str, Any]],
                       display_id: str, *,
                       timeout_sec: Optional[float] = None,
                       grant_ttl_hours: Optional[float] = None,
-                      reply_lines: bool = True) -> str:
+                      reply_lines: bool = True,
+                      context_lines: Optional[List[str]] = None) -> str:
     """A sectioned, human-first approval card. Never raises.
 
     ``reply_lines=False`` drops the trailing ``/approve``/``/reject`` lines for
     a seat that draws its own buttons (the web Inbox); every field above them
-    is the same card.
+    is the same card. ``context_lines`` (``card_context_lines``) render after
+    the params, before the deadline.
     """
     p = dict(params or {})
     shown = set()
@@ -152,6 +185,8 @@ def render_grant_card(action_name: str, params: Optional[Dict[str, Any]],
     if hidden:
         # The grant hashes EVERY param; say that some are not on this card.
         lines.append(f"• +{hidden} more param(s) not shown — the grant covers every param")
+    for line in (context_lines or [])[:_MAX_CONTEXT_LINES + 1]:
+        lines.append(str(line))
     if timeout_sec:
         wait = int(timeout_sec)
         tail = ""

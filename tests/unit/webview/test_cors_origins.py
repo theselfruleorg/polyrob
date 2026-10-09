@@ -49,10 +49,10 @@ def test_default_cors_includes_service_port_of_record(monkeypatch):
     assert "http://localhost:5050" in server._cors_origins
 
 
-def test_default_cors_keeps_legacy_entries(monkeypatch):
+def test_default_cors_requires_explicit_legacy_origin(monkeypatch):
     server = _reload_server(monkeypatch, WEBVIEW_DOMAIN="custom.example.com")
     assert "https://custom.example.com" in server._cors_origins
-    assert "http://localhost:3000" in server._cors_origins
+    assert "http://localhost:3000" not in server._cors_origins
 
 
 def test_explicit_cors_env_wins_verbatim(monkeypatch):

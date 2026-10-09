@@ -33,6 +33,45 @@ def _held(tool, params, execution_context):
     return held, signer
 
 
+def withdraw_card_context(params: dict, *, tool=None) -> list:
+    """The approval card's facts for ``agent_nft_withdraw_token`` (the params carry only
+    ``to``, ``nft`` and the fee cap): what the NFT's account holds, read at one block,
+    and the look-alike check on ``to``. Everything the account holds leaves with the NFT,
+    so an unreadable snapshot is said ON the card, never left out."""
+    import types
+    from core.wallet.address_lookalike import poisoning_refusal
+    from tools.agent_nft import view as V
+    if tool is None:
+        from tools.agent_nft.tool import AgentNftTool
+        tool = AgentNftTool()
+    p = types.SimpleNamespace(chain=params.get("chain") or "robinhood", nft=params.get("nft"),
+                              account=params.get("account"), to=params.get("to"))
+    lines = []
+    to = str(p.to or "")
+    if to:
+        why = poisoning_refusal(to)
+        lines.append(f"⚠️ RECIPIENT CHECK: {why}" if why else
+                     f"• Recipient check: {to} imitates no recent payee")
+    try:
+        from core.wallet import collection_registry
+        held, signer = _held(tool, p, None)
+        rpc = tool.rpc_for(held.chain)
+        profile = collection_registry.profile_for(held.chain_id, held.collection)
+        view = V.build_view(rpc, held.chain, profile, held.token_id, treasury=signer.address)
+        from tools.agent_nft.core_verbs import _extend
+        snapshot = V.render(view, extra=_extend(tool, view, rpc))
+    except Exception as exc:  # noqa: BLE001 — an unreadable snapshot is not an empty account
+        lines.append(f"⚠️ ACCOUNT HOLDINGS UNREADABLE ({type(exc).__name__}: {str(exc)[:160]}) — "
+                     f"you would approve without seeing what leaves with this NFT.")
+        return lines
+    lines.append("• What leaves with the NFT (its account, read now; it may change before "
+                 "the send):")
+    lines.extend("    " + line for line in snapshot.splitlines() if line.strip())
+    lines.append("    Tokens this view does not list may also be held; everything in the "
+                 "account goes with the NFT.")
+    return lines
+
+
 async def withdraw(tool, params, execution_context) -> Any:
     from core.wallet import abi
     from core.wallet.nft_account import NftAccountError
@@ -47,16 +86,22 @@ async def withdraw(tool, params, execution_context) -> Any:
     if to.lower() == signer.address.lower():
         return tool._ar(error="the destination is this treasury itself — nothing would move. "
                               "Nothing was broadcast.")
+    from core.wallet.address_lookalike import poisoning_refusal
+    if refusal := poisoning_refusal(to):
+        return tool._ar(error=refusal)
     # C15: safeTransferFrom — a contract recipient that cannot hold an ERC-721 (no
     # onERC721Received) reverts in the simulation instead of locking the NFT and its account.
     data = abi.encode_call("safeTransferFrom", [{"type": "address"}, {"type": "address"},
                                                 {"type": "uint256"}],
                            [signer.address, to, held.token_id])
+    accepted = tuple(str(k).strip().lower() for k in (getattr(params, "accept_unattributed_approvals", None) or ()))
     intent = TxIntent(chain=params.chain, token=None, to=held.collection, amount_raw=0,
                       max_spend_usd=params.max_spend_usd, is_nft_op=True,
-                      nft_out=((held.collection, "erc721", held.token_id, 1),))
+                      nft_out=((held.collection, "erc721", held.token_id, 1),),
+                      accepted_unattributed_approvals=accepted)
     header = (f"SEND {held.label} ({held.collection} #{held.token_id}) → {to}\n"
-              f"  its account {held.account} goes with it; approvals on it must be cleared first\n")
+              f"  its account {held.account} goes with it; approvals on it must be cleared first\n"
+              + "".join(f"  ⚠ owner-accepted unattributed approval row: {k}\n" for k in accepted))
     tool._last_receipt = None
     res = await guarded_call(tool, execution_context=execution_context, verb="withdraw_token",
                              intent=intent, inner_to=held.collection, inner_data=data,
@@ -86,6 +131,10 @@ async def revoke_all(tool, params, execution_context) -> Any:
         rpc = tool.rpc_for(params.chain)
         head = int(rpc("eth_blockNumber", []), 16)
         rows = erc6551.open_approvals(rpc, held.account, profile.deploy_block, to_block=head)
+        if rows:
+            owners = erc6551.nft_owners(rpc, held.collection, held.token_id, profile.deploy_block, head)
+            owners.add(_signer.address.lower())
+            rows = erc6551.attribute(rpc, rows, owners)
     except NftAccountError as exc:
         return tool._ar(error=f"{exc}. Nothing was broadcast.")
     except Exception as exc:  # noqa: BLE001 — an unreadable table is not an empty one
@@ -95,8 +144,21 @@ async def revoke_all(tool, params, execution_context) -> Any:
         return tool._ar(content=(f"no open approvals on {held.account} ({held.label}) — scanned "
                                  f"blocks {profile.deploy_block}..{head}, kinds "
                                  f"{', '.join(erc6551.APPROVAL_KINDS)} (complete). Nothing to revoke."))
-    per = float(params.max_spend_usd) / len(rows)
+    # Any contract can emit an Approval naming the account. Call only into rows an owner's
+    # transaction granted, unless the caller opts in; list the rest (never drop them).
     lines = []
+    if not getattr(params, "include_unattributed", False):
+        skipped = [a for a in rows if a.attributed is not True]
+        rows = [a for a in rows if a.attributed is True]
+        for a in skipped:
+            why = ("no transaction an owner of this NFT sent emitted it — possibly fabricated"
+                   if a.attributed is False else "its origin could not be read")
+            lines.append(f"NOT revoked ({why}): {a.kind} {a.contract} → {a.spender}; key {a.key}. "
+                         f"Re-run with include_unattributed=true to call into it, or the owner "
+                         f"accepts it on the send (accept_unattributed_approvals).")
+        if not rows:
+            return tool._ar(content="\n".join(lines))
+    per = float(params.max_spend_usd) / len(rows)
     for a in rows:
         inner_to = a.contract
         if a.kind == "erc20":

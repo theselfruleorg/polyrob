@@ -157,6 +157,10 @@ def test_always_gated_verbs_membership():
         "self_env_restart_service", "self_env_git_pull",
         "mcp_install", "tool_manage",
         "x_browser_x_signup_start",
+        "x_browser_x_post", "x_browser_x_reply", "x_browser_x_dm",
+        # 073 W2: a DANGEROUS shell command waits for the owner even under
+        # autonomous mode; a safe one skips the wait (the guard's exemption).
+        "shell_run",
     })
 
 
@@ -171,9 +175,10 @@ def test_always_gated_verbs_stay_owner_queued(monkeypatch, tmp_path):
                  "mcp_install", "tool_manage"):
         assert verb in queued, verb
         assert verb not in reported, verb
-    # shell_run is posture-gated but NOT self-modification — it belongs to the
-    # act-and-report lane under autonomous mode (corrections item 5).
-    assert "shell_run" in reported and "shell_run" not in queued
+    # 073 W2 supersedes corrections item 5: shell_run is owner-queued, but the
+    # command guard exempts every SAFE command from the wait, so only the
+    # dangerous class reaches the owner (tools/controller/command_guard_hook.py).
+    assert "shell_run" in queued and "shell_run" not in reported
 
 
 def test_owner_pref_pin_still_tightens(monkeypatch, tmp_path):
@@ -329,15 +334,15 @@ async def test_two_lane_wiring_reported_verb_allowed_and_notifies(tmp_path, monk
     c = _make_controller(tmp_path)
 
     # Pre: allowed by auto_notify (act-and-report), never consults owner_queue.
-    reason = await c._run_pre_tool_call_hooks("shell_run", {"cmd": "ls"}, None)
+    reason = await c._run_pre_tool_call_hooks("git_push", {}, None)
     assert reason is None
     assert _SpyProvider.calls == []
 
     # Post: one owner notification for the successful run.
     ctx = types.SimpleNamespace(user_id="rob", session_id="s1")
     await c._run_post_tool_call_hooks(
-        "shell_run", {"cmd": "ls"}, ActionResult(extracted_content="ok"), ctx)
-    assert len(notified) == 1 and "shell_run" in notified[0][1]
+        "git_push", {}, ActionResult(extracted_content="ok"), ctx)
+    assert len(notified) == 1 and "git_push" in notified[0][1]
 
 
 def test_payment_tools_excluded_from_generic_reported_lane_wiring(tmp_path, monkeypatch):
@@ -353,7 +358,7 @@ def test_payment_tools_excluded_from_generic_reported_lane_wiring(tmp_path, monk
     the pure `autonomous_gating_lanes` split would route it to `reported`
     (not `_ALWAYS_GATED_VERBS`/pref-pinned). Assert the ACTUAL wiring excludes
     it from both the auto_notify pre-hook's tools set and the generic notify
-    hook's tools set, while a non-payment reported verb (shell_run) is
+    hook's tools set, while a non-payment reported verb (git_push) is
     unaffected."""
     _enable_full(monkeypatch)
     _posture2(monkeypatch)
@@ -399,11 +404,11 @@ def test_payment_tools_excluded_from_generic_reported_lane_wiring(tmp_path, monk
     ]
     assert len(reported_lane_calls) == 1
     assert "x402_invoice_x402_request" not in reported_lane_calls[0]
-    assert "shell_run" in reported_lane_calls[0]  # non-payment verb unaffected
+    assert "git_push" in reported_lane_calls[0]  # non-payment verb unaffected
 
     assert len(notify_hook_calls) == 1
     assert "x402_invoice_x402_request" not in notify_hook_calls[0]
-    assert "shell_run" in notify_hook_calls[0]
+    assert "git_push" in notify_hook_calls[0]
 
 
 @pytest.mark.asyncio

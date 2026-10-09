@@ -75,7 +75,7 @@ REASON_ROOT_OWNED = "root_owned"
 
 
 def apply_birth_mode(path) -> None:
-    """Give a file the audit's own rule at birth: group-writable, never world-writable.
+    """Give a regular file group access at birth, without access for other users.
 
     The ONE place the rule lives. `tempfile.mkstemp` births a file 0600 and
     SQLite births one 0644 whatever the umask says, so every writer that
@@ -88,8 +88,16 @@ def apply_birth_mode(path) -> None:
     problem). The directory's group is inherited via setgid, not set here.
     """
     try:
-        mode = os.stat(path).st_mode & 0o777
-        os.chmod(path, (mode | 0o060) & ~0o002)
+        from pathlib import Path
+        from core.security.confined_write import confined_parent
+        with confined_parent(Path(os.path.abspath(path)), Path('/')) as (directory, name):
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+            try:
+                info = os.fstat(fd)
+                if stat.S_ISREG(info.st_mode) and info.st_nlink == 1:
+                    os.fchmod(fd, (stat.S_IMODE(info.st_mode) | 0o060) & ~0o007)
+            finally:
+                os.close(fd)
     except OSError:
         pass
 

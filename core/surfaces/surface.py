@@ -25,11 +25,10 @@ arrives via send(), which calls _finalize_live_on_send() to COMMIT that same bub
 duplicate message. A bounded _MAX_LIVE_STREAMS cap bounds any un-finalized stream (e.g. a
 turn that streams but ends via done() instead of a reply).
 
-CAVEAT (why it stays opt-in / default-OFF): the INTERMEDIATE frames shown mid-stream are the
-raw model deltas, scrubbed per-chunk by MessageRouter (scrub_brain_blocks) — best-effort, so
-a brain/think block straddling a chunk boundary can briefly surface before the clean final
-commit. The persisted final is always clean. Enable the `stream.telegram` owner pref only where
-that intermediate exposure is acceptable; OFF keeps the buffered one-send-on-finalize path.
+MessageRouter keeps a bounded parser per DM stream: partial JSON, fences and
+reasoning tags are held until they can be scrubbed as complete constructs. Room
+previews are suppressed because a secret may span arbitrary chunks; rooms receive
+only the complete scrubbed reply. Incremental DM streaming remains opt-in.
 """
 import logging
 import time as _time

@@ -184,6 +184,12 @@ class HFDeployTool(BaseTool):
         if deny:
             return ActionResult(error=deny, include_in_memory=True)
 
+        health_path = params.health_path or "/"
+        if (not health_path.startswith("/") or health_path.startswith("//")
+                or "\\" in health_path or any(ord(c) < 33 for c in health_path)):
+            return ActionResult(error="health_path must be a relative path starting with one slash",
+                                include_in_memory=True)
+
         app_name = params.app_name
         if not _valid_app_name(app_name):
             return ActionResult(
@@ -209,7 +215,7 @@ class HFDeployTool(BaseTool):
                 include_in_memory=True)
 
         orch = self._resolve_orchestrator(sid)
-        digest, reason = tested_tree_digest(orch, workspace)
+        digest, reason = tested_tree_digest(orch, workspace, session_id=sid)
         if reason:
             return ActionResult(error=reason, include_in_memory=True)
 
@@ -260,7 +266,6 @@ class HFDeployTool(BaseTool):
             registry.record_failed(app_name, uid, error=str(e))
             return ActionResult(error=str(e), include_in_memory=True)
 
-        health_path = params.health_path or "/"
         check_url = f"{url}{health_path}"
         try:
             healthy = await broker.health_check(check_url)

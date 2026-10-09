@@ -60,10 +60,10 @@ class _FakeBoard:
     def __init__(self):
         self.successes, self.failures = [], []
 
-    def record_success(self, gid, session_id=None, result=None):
+    def record_success(self, gid, session_id=None, result=None, claim_token=None):
         self.successes.append(gid)
 
-    def record_failure(self, gid, error=None, session_id=None):
+    def record_failure(self, gid, error=None, session_id=None, claim_token=None):
         self.failures.append((gid, error))
 
 

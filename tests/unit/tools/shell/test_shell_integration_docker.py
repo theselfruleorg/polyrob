@@ -54,7 +54,8 @@ def _ctx(sid):
 
 
 @pytest.fixture(autouse=True)
-def _posture(monkeypatch):
+def _posture(monkeypatch, tmp_path):
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("AGENT_COMPUTE_POSTURE", "1")
     monkeypatch.setenv("CODE_EXEC_BACKEND", "docker")
     monkeypatch.setenv("CODE_EXEC_DOCKER_PERSISTENT", "true")

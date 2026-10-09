@@ -46,6 +46,26 @@ class RunCodeParams(BaseModel):
                     "running (e.g. ['flask==3.0.0', 'pytest']). Requires the "
                     "sandbox-dev compute posture and sandbox network.",
     )
+    tools: bool = Field(
+        False,
+        description="python only: let the script call agent tools via "
+                    "`from polyrob_tools import web_fetch, web_search, read_file, "
+                    "write_file, append_file, list_directory, kb_search, kb_list, "
+                    "memory_search, session_search, shell`. Each call runs through the "
+                    "normal tool gates; a refusal raises polyrob_tools.ToolError. Max 50 "
+                    "calls / 300 s per run. Needs CODE_EXEC_TOOL_CALLS and the sandbox-dev "
+                    "compute posture.",
+    )
+    persist: bool = Field(
+        False,
+        description="python only: run in this session's persistent kernel — variables, "
+                    "imports and functions from earlier persist=True calls stay defined, "
+                    "and a last expression is echoed. A timeout restarts the kernel "
+                    "(state lost). Not with tools=True or stdin.",
+    )
+    reset_kernel: bool = Field(
+        False, description="with persist=True: start a fresh kernel first (drop all state).",
+    )
 
 
 class CodeExecutionTool(BaseTool):
@@ -120,6 +140,32 @@ class CodeExecutionTool(BaseTool):
             return ActionResult(error=f"code exited with status {result.exit_code}\n{content}")
         return ActionResult(extracted_content=content)
 
+    async def _run_persistent(self, backend, params, workdir, execution_context):
+        """073: one cell in the session's persistent kernel (tools/code_exec/kernel.py)."""
+        from tools.code_exec.kernel import KernelUnavailable, run_cell
+        from tools.code_exec.limits import dev_exec_max_timeout_sec
+        from tools.controller.types import ActionResult
+        sid = getattr(execution_context, "session_id", None) or "kernel"
+        timeout = max(1.0, min(float(params.timeout or 60.0), dev_exec_max_timeout_sec()))
+        try:
+            cell = await run_cell(sid, backend, params.code, timeout=timeout,
+                                  workdir=workdir, reset=params.reset_kernel)
+        except KernelUnavailable as e:
+            return ActionResult(error=str(e))
+        parts = []
+        if cell.restarted:
+            parts.append("[new kernel]")
+        if cell.stdout:
+            parts.append(cell.stdout.rstrip("\n"))
+        if cell.stderr:
+            parts.append(f"[stderr]\n{cell.stderr.rstrip()}")
+        if cell.note:
+            parts.append(f"[{cell.note}]")
+        content = "\n".join(parts) if parts else "(no output)"
+        if not cell.ok:
+            return ActionResult(error=content)
+        return ActionResult(extracted_content=content)
+
     @staticmethod
     def _dev_mode_allowed(execution_context) -> bool:
         """True iff this call is entitled to sandbox-dev mode (WS-1).
@@ -129,6 +175,95 @@ class CodeExecutionTool(BaseTool):
         """
         from core.config_policy import compute_posture_allows_safe
         return compute_posture_allows_safe(execution_context, 1)
+
+    # -- 073 W9: code that calls tools (tools/code_exec/tool_rpc.py) ------------
+
+    def _tool_rpc_orchestrator(self, execution_context):
+        """The live orchestrator of the calling session (its controller dispatches
+        every tool call). ``_tool_rpc_orchestrator_resolver`` is a test seam."""
+        from tools.ship_common import resolve_orchestrator
+        sid = getattr(execution_context, "session_id", None) or ""
+        if not sid:
+            return None
+        return resolve_orchestrator(lambda: self.container, sid,
+                                    getattr(self, "_tool_rpc_orchestrator_resolver", None))
+
+    def _tool_rpc_refusal(self, params, execution_context, dev_mode: bool):
+        """Why ``tools=True`` may not run on this call, or None. Fail-closed."""
+        from tools.code_exec.tool_rpc import tool_rpc_enabled
+        if not tool_rpc_enabled():
+            return ("tools=True is off on this instance (CODE_EXEC_TOOL_CALLS). Run the "
+                    "code without tools, or call the tools directly.")
+        if (params.language or "").lower() not in ("python", "python3", "py"):
+            return "tools=True needs language='python'."
+        if not dev_mode:
+            return ("tools=True requires the sandbox-dev compute posture "
+                    "(AGENT_COMPUTE_POSTURE>=1) and an owner-steered, non-delegated turn.")
+        if getattr(execution_context, "is_sub_agent", False) or \
+                getattr(execution_context, "role", "leaf") != "orchestrator":
+            return "tools=True is not available to a sub-agent or a leaf."
+        orch = self._tool_rpc_orchestrator(execution_context)
+        controller = getattr(orch, "controller", None) if orch is not None else None
+        if controller is None or getattr(controller, "registry", None) is None:
+            return "tools=True could not reach this session's tool controller."
+        try:
+            tainted = bool(getattr(orch, "_correspondent_tainted", False))
+            if not tainted:
+                from core.security.refusal_taint import is_tainted
+                tainted = is_tainted(getattr(execution_context, "session_id", None))
+        except Exception:
+            tainted = True  # can't prove clean -> deny
+        if tainted:
+            return ("tools=True is refused on this turn: the latest input is untrusted "
+                    "correspondent data, or this run is refusal-tainted.")
+        return None
+
+    async def _run_with_tools(self, backend, req, execution_context):
+        """Run *req* with a per-run tool-RPC server bound to the session's controller."""
+        from tools.code_exec import tool_rpc
+        from tools.code_exec.limits import dev_exec_max_timeout_sec
+        from tools.controller.tool_call_bridge import perform_tool_call
+        from tools.controller.types import ActionResult
+
+        controller = self._tool_rpc_orchestrator(execution_context).controller
+        plan, why = tool_rpc.plan_socket(backend)
+        if plan is None:
+            return ActionResult(error=why)
+        meta = dict(getattr(execution_context, "metadata", None) or {})
+        meta["via"] = "code_execution.tools"
+
+        async def _dispatch(action: str, args: dict):
+            # THE one dispatch path: multi_act runs every pre-tool-call hook.
+            ctx = execution_context.clone(metadata=dict(meta))
+            return await perform_tool_call(controller, action, args, execution_context=ctx)
+
+        def _resolve(action: str):
+            a = controller.registry.get_action(action)
+            return (a is not None, getattr(a, "tool", None) if a is not None else None)
+
+        nonce = tool_rpc.new_nonce()
+        wall = tool_rpc.WALL_CLOCK_SEC
+        req.code = tool_rpc.wrap_script(req.code, plan.script_path, nonce, wall_sec=wall)
+        req.timeout = min(float(req.timeout), wall) if req.timeout else wall
+        req.ceiling = wall
+        req.tool_rpc_dir = plan.mount_dir
+        server = tool_rpc.ToolRpcServer(
+            socket_path=plan.host_path, nonce=nonce, dispatch=_dispatch, resolve=_resolve,
+            owner=getattr(backend, "user", None), wall_sec=wall,
+            shell_ceiling=dev_exec_max_timeout_sec())
+        try:
+            async with server:
+                result = await backend.run(req)
+        finally:
+            tool_rpc.cleanup_plan(plan)
+        out = self._to_action_result(result)
+        note = f"\n[tool calls: {server.stats.calls}/{server.max_calls}"
+        note += f", refused: {server.stats.refused}]" if server.stats.refused else "]"
+        if out.error:
+            out.error += note
+        else:
+            out.extracted_content = (out.extracted_content or "") + note
+        return out
 
     @BaseTool.action(
         "Execute python or bash code on the configured execution backend (CODE_EXEC_BACKEND: "
@@ -140,11 +275,32 @@ class CodeExecutionTool(BaseTool):
         """Execute ``params.code`` via the configured backend; return an ActionResult."""
         from tools.code_exec.sandbox_guard import code_exec_execution_blocked_reason
         from tools.controller.types import ActionResult
-        blocked = code_exec_execution_blocked_reason()
+        from tools.code_exec.sandbox_guard import local_host_exec_refusal
+        blocked = (code_exec_execution_blocked_reason()
+                   or local_host_exec_refusal(execution_context))
         if blocked:
             return ActionResult(error=blocked)
 
+        # Every language that is not python reaches a shell (`bash -c`) on some
+        # backend ("shell" is an alias there), so the guard classifies all of them.
+        if (params.language or "").strip().lower() not in {"python", "python3", "py"}:
+            from core.security.command_guard import classify
+            verdict = classify(params.code)
+            if verdict.is_floor:
+                return ActionResult(error=f"refused by command guard: {verdict.reason}")
+
         dev_mode = self._dev_mode_allowed(execution_context)
+        if params.reset_kernel and not params.persist:
+            return ActionResult(error="reset_kernel needs persist=True")
+        if params.persist:
+            if (params.language or "").strip().lower() != "python":
+                return ActionResult(error="persist=True runs python only")
+            if params.tools or params.stdin:
+                return ActionResult(error="persist=True cannot be combined with tools=True or stdin")
+        if params.tools:
+            refusal = self._tool_rpc_refusal(params, execution_context, dev_mode)
+            if refusal:
+                return ActionResult(error=refusal)
         packages = [str(p).strip() for p in (params.packages or []) if str(p).strip()]
         if packages:
             if not dev_mode:
@@ -215,6 +371,10 @@ class CodeExecutionTool(BaseTool):
                 env=dict(params.env or {}),
                 dev_mode=dev_mode,
             )
+            if params.persist:
+                return await self._run_persistent(backend, params, workdir, execution_context)
+            if params.tools:
+                return await self._run_with_tools(backend, req, execution_context)
             result = await backend.run(req)
             return self._to_action_result(result)
         except Exception as e:

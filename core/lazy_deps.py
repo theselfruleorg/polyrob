@@ -20,7 +20,7 @@ release lock, verified the same way (``LAZY_DEPS_MODE``, default ``trusted``):
   scrubbed child env; under wallet custody wheel-only; elsewhere a source build is
   allowed where a platform has no wheel (066 D2).
 
-``legacy`` keeps the 058 path (pip into THIS venv, constrained by the lock), and
+``legacy`` installs the shipped hashed wheel closure into THIS venv, and
 still refuses under custody (CR-M09). ``off`` refuses and names the extra.
 
 Ported from NousResearch/hermes-agent's tools/lazy_deps.py (@6bde794) with its
@@ -218,14 +218,14 @@ def overlay_paths() -> List[Path]:
             continue
         for child in children:
             if child.is_dir() and (child / ".complete").is_file() and (child / "lib").is_dir():
-                if protected and not _protected_overlay(child):
+                if not _protected_overlay(child, local=not protected):
                     logger.warning("refusing untrusted lazy overlay: %s", child)
                     continue
                 out.append(child / "lib")
     return out
 
 
-def _protected_overlay(feature: Path) -> bool:
+def _protected_overlay(feature: Path, *, local: bool = False) -> bool:
     """Validate ownership/modes independently of the caller's privileges.
 
     Root runs deployment import checks too: os.access(W_OK) would reject every
@@ -235,8 +235,7 @@ def _protected_overlay(feature: Path) -> bool:
     import pwd
     from core.lazy_installer import DEPS_USER, valid_feature
     try:
-        installer = pwd.getpwnam(DEPS_USER).pw_uid
-        trusted = {0, installer}
+        trusted = {0, os.geteuid()} if local else {0, pwd.getpwnam(DEPS_USER).pw_uid}
         if not valid_feature(feature.name):
             return False
         child = feature.absolute()
@@ -259,6 +258,8 @@ def _protected_overlay(feature: Path) -> bool:
                         or info.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
                     return False
                 if not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
+                    return False
+                if stat.S_ISREG(info.st_mode) and info.st_nlink != 1:
                     return False
         return True
     except (OSError, KeyError):
@@ -550,7 +551,7 @@ def _request_and_wait(feature: str, wait: float) -> None:
 
 
 def _ensure_legacy(feature: str, specs: Tuple[str, ...], *, prompt: bool) -> None:
-    """``LAZY_DEPS_MODE=legacy``: the 058 path — pip into THIS venv."""
+    """Install the release's hashed wheels into this venv, outside custody only."""
     # CR-M09: pip runs sdist build backends as HOST code. Under wallet custody
     # that is the same trust-domain breach git/LSP refuse, so refuse it here too.
     from core.security.host_execution import host_execution_refusal
@@ -558,6 +559,15 @@ def _ensure_legacy(feature: str, specs: Tuple[str, ...], *, prompt: bool) -> Non
     if refusal:
         raise FeatureUnavailable(
             f"{feature}: lazy install {refusal}. Remedy: {remedy(feature)}", "custody")
+    from core.lazy_closures import read_closure
+    try:
+        closure = read_closure(feature)
+        if closure is None or not closure.pins:
+            raise ValueError("missing or empty shipped dependency closure")
+    except (OSError, ValueError) as exc:
+        raise FeatureUnavailable(
+            f"{feature}: no valid release closure. Remedy: {remedy(feature)}",
+            "closure_missing") from exc
     if prompt and _stdin_is_tty():
         if not _ask(f"{feature} needs {', '.join(specs)} — install into this venv now? [y/N] "):
             raise FeatureUnavailable(f"{feature}: install declined. Remedy: {remedy(feature)}", "declined")
@@ -565,11 +575,15 @@ def _ensure_legacy(feature: str, specs: Tuple[str, ...], *, prompt: bool) -> Non
     # and a bare name resolves to whatever pip is first on it — possibly none, or
     # another interpreter's. Venv-only by construction (the running interpreter).
     constraint, tmp = _constraint_args(specs)
-    cmd = [sys.executable, "-m", "pip", "install", "--disable-pip-version-check",
-           "--no-input", *constraint, *specs]
     logger.info("lazy_deps: installing %s (%s)", feature, " ".join(specs))
     try:
-        proc = _run_installer(cmd)
+        with tempfile.TemporaryDirectory(prefix="polyrob-lazy-release-") as directory:
+            requirements = Path(directory) / "requirements.txt"
+            requirements.write_text(closure.text, encoding="utf-8")
+            cmd = [sys.executable, "-I", "-m", "pip", "install", "--disable-pip-version-check",
+                   "--no-input", "--require-hashes", "--no-deps", "--only-binary=:all:",
+                   *constraint, "-r", str(requirements)]
+            proc = _run_installer(cmd)
     finally:
         if tmp:
             try:

@@ -59,7 +59,8 @@ def test_xml_invoke_for_a_tool_not_offered_is_not_recovered():
     both = leak + ('<function_calls><invoke name="done"><parameter name="text">x'
                    '</parameter></invoke></function_calls>')
     _c, calls = recover_textual_tool_calls(both, {"done"})
-    assert [c["function"]["name"] if "function" in c else c.get("name") for c in calls] == ["done"]
+    # The prose prefix makes the whole message content, including the offered call.
+    assert calls == []
 
 
 def test_raw_tool_call_log_never_carries_argument_values():

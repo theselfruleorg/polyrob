@@ -1,6 +1,7 @@
 """WV1: in own_ops the middleware, the socket join and _check_session_ownership
 apply ONE owner rule — the owner opens every session of the instance, whatever
 identity tagged it (CLI ``local``, a room, a correspondent)."""
+from core.security.session_tokens import SESSION_AUDIENCE
 import time
 import uuid
 from types import SimpleNamespace
@@ -30,8 +31,8 @@ def own_ops(monkeypatch, tmp_path):
 
 
 def _bearer(user_id):
-    token = jwt.encode({"user_id": user_id, "role": "owner", "exp": time.time() + 60,
-                        "jti": uuid.uuid4().hex}, SECRET, algorithm="HS256")
+    token = jwt.encode({"aud": SESSION_AUDIENCE, **{"user_id": user_id, "role": "owner", "exp": time.time() + 60,
+                        "jti": uuid.uuid4().hex}}, SECRET, algorithm="HS256")
     return [(b"authorization", f"Bearer {token}".encode())]
 
 
@@ -67,7 +68,7 @@ async def test_socket_join_admits_the_owner_on_a_local_session(own_ops, monkeypa
     monkeypatch.setitem(own_ops._socket_user, sid, "bound-owner")
     try:
         await own_ops.join_session(sid, {"session_id": "cli-chat", "after_seq": 5})
-        assert entered == ["cli-chat"], emitted
+        assert entered == ["session:cli-chat"], emitted
     finally:
         own_ops._client_session.pop(sid, None)
         own_ops._session_clients.pop("cli-chat", None)

@@ -104,7 +104,7 @@ async def test_positions_verb_does_the_arithmetic(home):
     (c,) = meta["closed"]
     assert c["address"] == MEME2 and c["realized_usd"] == pytest.approx(-3.0)
     text = res.extracted_content
-    assert "measured from the swap receipt" in text and "average cost" in text
+    assert "legacy Transfer events, unverified quantity" in text and "average cost" in text
     assert "never compute" in text
 
 
@@ -219,3 +219,16 @@ async def test_reconcile_action_reads_the_rail_store(home):
     rep = res.metadata["report"]
     assert rep["unbacked"] and "[rail store]" in rep["unbacked"][0]
     assert "1 tracked row(s) on base compared" in res.extracted_content
+
+
+@pytest.mark.parametrize('confidence', ['low', 'disputed', 'unknown', None])
+def test_uncorroborated_prices_cannot_produce_barrier_figures(confidence):
+    entry = open_positions.PositionEntry(chain='base', address=MEME, qty=100,
+                                        entry_usd=100, high_water_usd=2, symbol='MEME', entry_ts=1)
+    result = positions_view.figures(entry, _px(0.25, confidence))
+    assert result.unrealized_pct is None
+    assert result.unrealized_usd is None
+    assert result.from_high_pct is None
+    if confidence == 'low':
+        assert result.value_usd == 25  # explicitly indicative, not a barrier
+        assert 'independent executable exit quote' in positions_view.render([result], [], chain=None)

@@ -15,9 +15,8 @@ goal board can:
   ``verified`` (policy :data:`modules.memory.scope.PROMOTE_POLICY`). A child's
   completion never releases the DAG's quarantine.
 
-Inert unless ``MEMORY_SCOPES_ENABLED``. Fail-open: an error means "no scope" on
-the read side of this module and "no promotion" on the write side — rows then
-stay quarantined until the curator's retention purge, never leak.
+Inert unless ``MEMORY_SCOPES_ENABLED``. Scope resolution errors refuse dispatch;
+promotion errors leave rows quarantined until the curator retention purge.
 """
 import logging
 from typing import Any, Optional
@@ -69,9 +68,9 @@ def goal_request_fields(board, goal) -> dict:
             return {}
         return {"memory_scope": spec.label, "memory_regime": spec.regime}
     except Exception:
-        logger.warning("goal memory scope resolution failed for %s — running shared",
+        logger.warning("goal memory scope resolution failed for %s — refusing dispatch",
                        getattr(goal, "id", "?"), exc_info=True)
-        return {}
+        raise RuntimeError("goal memory isolation is unavailable") from None
 
 
 def promote_after_success(board, goal, *, verified: str) -> int:

@@ -1300,7 +1300,11 @@ def _h_telemetry(ctx: CommandContext) -> None:
     since_ts = (_time.time() - secs) if secs else None
 
     log = get_event_log()
-    agg = log.aggregate(since_ts=since_ts)
+    try:
+        agg = log.aggregate(since_ts=since_ts)
+    except Exception:
+        ctx.emit("(telemetry totals unavailable: event log could not be read)")
+        return
     recent = log.query(since_ts=since_ts, limit=10)
 
     scope = f"last {window}" if secs else "all time"

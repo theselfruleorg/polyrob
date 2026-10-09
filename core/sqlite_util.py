@@ -9,6 +9,8 @@ deterministic backoff convoy under contention.
 from __future__ import annotations
 
 import random
+import os
+import stat
 import sqlite3
 import time
 from typing import Optional
@@ -18,6 +20,30 @@ _BUSY_TIMEOUT_S = 1.0
 
 
 def wal_connect(db_path: str, timeout: float = _BUSY_TIMEOUT_S) -> sqlite3.Connection:
+    if str(db_path) != ':memory:':
+        # Create private BEFORE SQLite can write sensitive rows or sidecars.
+        # Refuse existing file aliases; chmod after connect would follow them.
+        try:
+            fd = os.open(
+                db_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                | getattr(os, 'O_NOFOLLOW', 0), 0o600,
+            )
+        except FileExistsError:
+            info = os.lstat(db_path)
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise OSError('SQLite store must be a single-link regular file')
+        else:
+            os.close(fd)
+            from core.data_perms import apply_birth_mode
+            apply_birth_mode(db_path)
+        for suffix in ('-wal', '-shm', '-journal'):
+            try:
+                info = os.lstat(str(db_path) + suffix)
+            except FileNotFoundError:
+                continue
+            # nlink 0: another UID's last connection is unlinking it right now.
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink > 1:
+                raise OSError('SQLite sidecar must be a single-link regular file')
     conn = sqlite3.connect(db_path, timeout=timeout)
     conn.row_factory = sqlite3.Row
     try:

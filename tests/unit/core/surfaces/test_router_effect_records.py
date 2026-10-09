@@ -80,7 +80,8 @@ async def test_send_message_records_comms(tmp_path, tlog):
 
 
 @pytest.mark.asyncio
-async def test_owner_bound_send_is_the_owner_lane(tmp_path, tlog):
+async def test_owner_bound_send_is_the_owner_lane(tmp_path, tlog, monkeypatch):
+    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda *a, **k: "u1")
     r, _ = _router(tmp_path, chat_id="111")
     assert await r.publish(OutboundMessage(session_key="k1", text="hi owner"))
     assert await r.send_message("111", "hi owner again", "telegram")

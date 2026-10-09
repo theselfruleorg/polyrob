@@ -17,7 +17,6 @@ import traceback
 import threading
 import tempfile
 
-from dotenv import load_dotenv
 
 # Try to import Posthog, but don't fail if it's not available
 try:
@@ -41,7 +40,6 @@ from agents.task.path import pm
 from agents.task.logging_config import get_task_logger
 logger = get_task_logger('telemetry')
 
-load_dotenv()
 
 
 POSTHOG_EVENT_SETTINGS = {
@@ -655,9 +653,18 @@ class ProductTelemetry:
 				port = (_os.getenv("WEBGATE_PORT") or _os.getenv("WEBVIEW_PORT")
 						or "5050").strip() or "5050"
 				url = f"http://127.0.0.1:{port}/api/internal/emit"
+			from urllib.parse import urlsplit
+			from core.security.internal_events import emit_token, internal_emit_allowed
+			if not internal_emit_allowed((event or {}).get("type")):
+				return  # WEB-10: the feed watcher carries it (file = truth)
+			token = emit_token()
+			parsed = urlsplit(url)
+			if not token or parsed.hostname not in {"127.0.0.1", "::1", "localhost"}:
+				return
 			requests.post(
 				url,
 				json={"session_id": session_id, "event": event},
+				headers={"x-polyrob-internal-token": token}, allow_redirects=False,
 				timeout=0.1  # 100ms timeout, non-blocking
 			)
 		except Exception:

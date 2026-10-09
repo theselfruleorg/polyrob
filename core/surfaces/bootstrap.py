@@ -142,6 +142,25 @@ def _ensure_group_ledger(container, db_path: str):
         return None
 
 
+def _ensure_sent_posts(container, db_path: str):
+    """0008: register the post ledger alongside the bus, same surfaces.db (one
+    more table, no new file). Idempotent + fail-open, mirrors
+    ``_ensure_group_ledger``. Returns the store, or None on failure — the
+    router then records nothing and a post simply cannot be deleted by row."""
+    try:
+        existing = container.get_service("sent_posts")
+        if existing is not None:
+            return existing
+        from core.surfaces.sent_posts import SentPosts
+        posts = SentPosts(db_path)
+        container.register_service("sent_posts", posts)
+        logger.info("surface bus: post ledger installed (%s)", db_path)
+        return posts
+    except Exception as e:
+        logger.debug("post ledger unavailable: %s", e)
+        return None
+
+
 def _ensure_group_roles(container, db_path: str):
     """044 T16: register the per-chat role store alongside the bus, same
     surfaces.db (one more table, no new file). Idempotent + fail-open, mirrors
@@ -199,6 +218,9 @@ def install_surface_bus(container, db_path: str = None) -> bool:
         gl = _ensure_group_ledger(container, db_path)
         if gl is not None and hasattr(existing, "attach_room_ledger"):
             existing.attach_room_ledger(gl)
+        sp = _ensure_sent_posts(container, db_path)
+        if sp is not None and hasattr(existing, "attach_sent_posts"):
+            existing.attach_sent_posts(sp)
         _ensure_group_roles(container, db_path)
         return True
 
@@ -220,6 +242,9 @@ def install_surface_bus(container, db_path: str = None) -> bool:
             # service alone never did that — `record_inbound_to_ledger` was the
             # log's only writer, so it held every human line and none of ours.
             router.attach_room_ledger(gl)
+        sp = _ensure_sent_posts(container, db_path)
+        if sp is not None:
+            router.attach_sent_posts(sp)
         _ensure_group_roles(container, db_path)
 
         from core.surfaces.outbound_allowlist import OutboundAllowlist

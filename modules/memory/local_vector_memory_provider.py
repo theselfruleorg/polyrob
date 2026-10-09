@@ -491,7 +491,8 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
     async def kb_replace_source(self, *, user_id, collection: str, source_path: str,
                                 source_hash: str, chunks: list[str],
                                 mime: str = "text/plain", created_at: str = None) -> bool:
-        snapshot = tuple(chunks)
+        from core.secret_scrub import scrub_secret_shapes
+        snapshot = tuple(scrub_secret_shapes(chunk).strip() for chunk in chunks)
         ok = await super().kb_replace_source(
             user_id=user_id, collection=collection, source_path=source_path,
             source_hash=source_hash, chunks=snapshot, mime=mime, created_at=created_at,
@@ -531,7 +532,8 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
         )
         if not fts_ok or not self._vec_ok or self._anon_blocked(user_id):
             return fts_ok
-        content_stripped = (content or "").strip()
+        from core.secret_scrub import scrub_secret_shapes
+        content_stripped = scrub_secret_shapes(content).strip()
         if not content_stripped:
             return fts_ok
         try:

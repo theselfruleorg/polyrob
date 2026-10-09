@@ -20,7 +20,6 @@ from typing import Any, Callable, Dict, List, Optional, Type, TypeVar, Union, Tu
 from collections import deque  # ADDED: Import deque for bounded collections
 from agents.task.agent.tool_call_tracker import ToolCallTracker  # Robust tool call ID tracking
 
-from dotenv import load_dotenv
 
 # Import centralized constants
 from agents.task.constants import (
@@ -137,7 +136,6 @@ from agents.task.logging_config import get_task_logger
 # Import centralized path management
 from agents.task.path import pm
 
-load_dotenv()
 
 # Generic logger for the module itself (not instances)
 logger = get_task_logger('agent')
@@ -312,15 +310,12 @@ class Agent(AgentConstructionMixin, RunLoopMixin, StepMixin, StepExecutionMixin,
 		Returns:
 			True if browser was actively used recently, False otherwise
 		"""
-		# Check 1: Were browser tools used in recent actions?
-		if hasattr(self, '_previous_actions') and self._previous_actions:
-			browser_action_prefixes = ('browser_go_to', 'browser_click', 'browser_type', 
-									   'browser_scroll', 'browser_screenshot', 
-									   'browser_extract', 'browser_navigate')
-			for action in self._previous_actions:
-				action_name = str(action).lower() if action else ""
-				if any(prefix in action_name for prefix in browser_action_prefixes):
-					return True
+		# Check 1: Were browser tools used in recent actions? Reads the action NAMES
+		# (`_recent_action_names`); `_previous_actions` holds loop-detection hashes,
+		# which never matched a name — the reason this check was dead until 2026-10-04.
+		for action_name in getattr(self, '_recent_action_names', None) or ():
+			if str(action_name).lower().startswith('browser_'):
+				return True
 		
 		# Check 2: Does the last browser state have a real URL?
 		if hasattr(self, '_last_browser_states') and self._last_browser_states:

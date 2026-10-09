@@ -24,15 +24,14 @@ def _reload_server(monkeypatch, multitenant: bool):
     return importlib.reload(server)
 
 
-def test_single_user_ownership_short_circuits_to_local_owner(monkeypatch):
+def test_single_user_ownership_refuses_anonymous_client(monkeypatch):
     monkeypatch.setenv("POLYROB_LOCAL_OWNER", "rob")
     server = _reload_server(monkeypatch, multitenant=False)
     is_owner, current_user, session_owner = server._check_session_ownership(
         _FakeRequest(), "some-session-id"
     )
-    assert is_owner is True
-    assert current_user == "rob"
-    assert session_owner == "rob"
+    assert is_owner is False
+    assert current_user is None
 
 
 def test_single_user_manual_auth_check_is_noop(monkeypatch):
@@ -181,12 +180,11 @@ def test_multitenant_ownership_tenant_b_denied_tenant_a_session(monkeypatch):
     assert session_owner_id == "tenant-a"
 
 
-def test_local_posture_ownership_unchanged_by_h2b(monkeypatch):
-    """Posture 0 (local) must stay on the bypass: requires_owner_login() is False
-    for local, same as is_multitenant() was — no behavior change here."""
+def test_local_posture_ownership_requires_authentication(monkeypatch):
+    """An anonymous local request cannot open an owner session."""
     server = _reload_server(monkeypatch, multitenant=False)
     is_owner, current_user_id, session_owner_id = server._check_session_ownership(
         _FakeRequest(), "some-session-id"
     )
-    assert is_owner is True
-    assert current_user_id == session_owner_id == server.webgate.local_owner_id()
+    assert is_owner is False
+    assert current_user_id is None

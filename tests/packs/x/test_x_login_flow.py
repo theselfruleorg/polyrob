@@ -44,13 +44,15 @@ def _transport(calls, status=200, body=None):
         "scope": "dm.read tweet.read users.read offline.access", "token_type": "bearer"}
 
     def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"data": {"id": "12345", "username": "agent"}})
         calls.append(dict(httpx.QueryParams(request.content.decode())))
         return httpx.Response(status, json=body)
     return httpx.MockTransport(handler)
 
 
 def test_begin_mints_a_pkce_link_and_stores_nothing_in_the_clear(path):
-    url = flow.begin_login("owner-1", REDIRECT, path=path)
+    url = flow.begin_login("owner-1", REDIRECT, expected_account_id="12345", path=path)
     state, q = _state_of(url)
     assert url.startswith(xo.AUTHORIZE_URL)
     assert q["redirect_uri"] == [REDIRECT] and q["code_challenge_method"] == ["S256"]
@@ -60,7 +62,7 @@ def test_begin_mints_a_pkce_link_and_stores_nothing_in_the_clear(path):
 
 
 def test_complete_exchanges_the_code_and_saves_the_pair(path):
-    url = flow.begin_login("owner-1", REDIRECT, path=path)
+    url = flow.begin_login("owner-1", REDIRECT, expected_account_id="12345", path=path)
     state, q = _state_of(url)
     calls = []
     res = flow.complete_login(state, "the-code", path=path, transport=_transport(calls))
@@ -79,7 +81,7 @@ def test_complete_exchanges_the_code_and_saves_the_pair(path):
 
 
 def test_state_is_single_use(path):
-    state, _q = _state_of(flow.begin_login("owner-1", REDIRECT, path=path))
+    state, _q = _state_of(flow.begin_login("owner-1", REDIRECT, expected_account_id="12345", path=path))
     calls = []
     assert flow.complete_login(state, "c1", path=path, transport=_transport(calls)).ok
     again = flow.complete_login(state, "c2", path=path, transport=_transport(calls))
@@ -88,7 +90,7 @@ def test_state_is_single_use(path):
 
 
 def test_a_failed_exchange_still_burns_the_state(path):
-    state, _q = _state_of(flow.begin_login("owner-1", REDIRECT, path=path))
+    state, _q = _state_of(flow.begin_login("owner-1", REDIRECT, expected_account_id="12345", path=path))
     calls = []
     bad = flow.complete_login(state, "c", path=path, transport=_transport(
         calls, status=400, body={"error": "invalid_request"}))
@@ -99,7 +101,7 @@ def test_a_failed_exchange_still_burns_the_state(path):
 
 def test_an_expired_link_is_refused_without_a_post(path):
     now = time.time()
-    state, _q = _state_of(flow.begin_login("owner-1", REDIRECT, path=path, now=now))
+    state, _q = _state_of(flow.begin_login("owner-1", REDIRECT, expected_account_id="12345", path=path, now=now))
     calls = []
     res = flow.complete_login(state, "c", path=path, transport=_transport(calls),
                               now=now + flow.PENDING_TTL_SEC + 1)
@@ -107,7 +109,7 @@ def test_an_expired_link_is_refused_without_a_post(path):
 
 
 def test_a_wrong_state_finds_nothing(path):
-    flow.begin_login("owner-1", REDIRECT, path=path)
+    flow.begin_login("owner-1", REDIRECT, expected_account_id="12345", path=path)
     calls = []
     res = flow.complete_login("not-the-state", "c", path=path, transport=_transport(calls))
     assert not res.ok and "unknown" in res.reason and res.owner_user_id == ""
@@ -116,27 +118,27 @@ def test_a_wrong_state_finds_nothing(path):
 
 
 def test_the_link_is_bound_to_its_owner(path):
-    state, _q = _state_of(flow.begin_login("owner-1", REDIRECT, path=path))
+    state, _q = _state_of(flow.begin_login("owner-1", REDIRECT, expected_account_id="12345", path=path))
     calls = []
     res = flow.complete_login(state, "c", path=path, transport=_transport(calls),
                               expected_owner="someone-else")
     assert not res.ok and "another owner" in res.reason and calls == []
     with pytest.raises(flow.LoginFlowError):
-        flow.begin_login("", REDIRECT, path=path)
+        flow.begin_login("", REDIRECT, expected_account_id="12345", path=path)
 
 
 def test_expired_rows_are_pruned_and_open_links_are_capped(path):
     now = time.time()
-    flow.begin_login("owner-1", REDIRECT, path=path, now=now - 2 * flow.PENDING_TTL_SEC)
+    flow.begin_login("owner-1", REDIRECT, expected_account_id="12345", path=path, now=now - 2 * flow.PENDING_TTL_SEC)
     for i in range(flow.MAX_PENDING + 2):
-        flow.begin_login("owner-1", REDIRECT, path=path, now=now + i)
+        flow.begin_login("owner-1", REDIRECT, expected_account_id="12345", path=path, now=now + i)
     from tools.oauth.file_store import FileTokenStore
     rows = [k for k in FileTokenStore(path) if k[1] == flow.PENDING_PROVIDER]
     assert len(rows) == flow.MAX_PENDING
 
 
 def test_discard_burns_a_declined_link(path):
-    state, _q = _state_of(flow.begin_login("owner-1", REDIRECT, path=path))
+    state, _q = _state_of(flow.begin_login("owner-1", REDIRECT, expected_account_id="12345", path=path))
     assert flow.discard(state, path=path) == "owner-1"
     assert not flow.complete_login(state, "c", path=path).ok
 
@@ -170,6 +172,7 @@ def test_the_verb_answers_the_remedy_when_the_flag_is_unset(path, monkeypatch):
 
 
 def test_the_verb_sends_the_link(path, monkeypatch):
+    xo.XOAuth2Store(path).save({"account_id": "12345"})
     from polyrob_x import owner_verbs
     monkeypatch.setenv(flow.REDIRECT_FLAG, REDIRECT)
     out = owner_verbs.x_reply("owner-1", ["login"])

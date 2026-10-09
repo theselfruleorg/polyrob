@@ -119,7 +119,7 @@ describe("the transcript", () => {
   it("draws a person's turn as a bubble", () => {
     const tx = new Transcript(thread, COPY, { sessionId: "s1", now });
     tx.apply({ type: "user_message", timestamp: 1, data: { text: "Build it, then deploy." } });
-    const you = thread.querySelector(".turn.turn-you .bubble");
+    const you = thread.querySelector(".turn.turn-person .bubble");
     expect(you).not.toBe(null);
     expect(you.textContent).toBe("Build it, then deploy.");
   });
@@ -204,7 +204,7 @@ describe("the transcript", () => {
     const ev = { type: "user_message", timestamp: 1, data: { text: "go" } };
     tx.apply(ev);
     tx.apply(ev);
-    expect(thread.querySelectorAll(".turn-you").length).toBe(1);
+    expect(thread.querySelectorAll(".turn-person").length).toBe(1);
   });
 
   it("Stop calls the cancel endpoint, same-origin, with the cookie", async () => {
@@ -279,12 +279,12 @@ describe("the backfill order", () => {
     ]);
     const turns = [...thread.querySelectorAll(".turn")];
     expect(turns.length).toBe(4);
-    expect(turns[0].classList.contains("turn-you")).toBe(true);
+    expect(turns[0].classList.contains("turn-person")).toBe(true);
     expect(turns[0].textContent).toContain("question one");
     expect(turns[1].classList.contains("turn-rob")).toBe(true);
     expect(turns[1].textContent).toContain("did a thing");
     expect(turns[1].textContent).toContain("answer one");
-    expect(turns[2].classList.contains("turn-you")).toBe(true);
+    expect(turns[2].classList.contains("turn-person")).toBe(true);
     expect(turns[2].textContent).toContain("question two");
     expect(turns[3].textContent).toContain("answer two");
   });
@@ -745,8 +745,8 @@ describe("follow-ups during a run", () => {
       { type: "tool_result", timestamp: T0 + 6, data: { call_id: "b", action_name: "run", narration: "Ran" } },
     ]);
     const turns = [...thread.querySelectorAll(".turn")];
-    expect(turns.map((t) => t.classList.contains("turn-you"))).toEqual([false, true, false]);
-    expect(turns[1].textContent).toBe("also check the tests");
+    expect(turns.map((t) => t.classList.contains("turn-person"))).toEqual([false, true, false]);
+    expect(turns[1].querySelector(".bubble").textContent).toBe("also check the tests");
     // the follow-up closed the first turn as "so far"
     expect(turns[0].querySelector(".receipt").textContent).toBe("3s and 1 step before your message.");
   });
@@ -757,16 +757,16 @@ describe("follow-ups during a run", () => {
       { type: "user_message_during_execution", timestamp: T0, data: { message_text: "stop  after this" } },
       { type: "user_message", timestamp: T0 + 1, data: { text: "stop after this" } },
     ]);
-    expect(thread.querySelectorAll(".turn-you").length).toBe(1);
+    expect(thread.querySelectorAll(".turn-person").length).toBe(1);
   });
 
   it("the full user_message text replaces the cut copy", () => {
     const full = "x".repeat(250);
     const tx = new Transcript(thread, COPY, { sessionId: "s1", now });
     tx.apply({ type: "user_message_during_execution", timestamp: T0, data: { message_text: full.slice(0, 200) } });
-    expect(thread.querySelector(".turn-you .bubble").textContent).toBe(`${"x".repeat(200)}…`);
+    expect(thread.querySelector(".turn-person .bubble").textContent).toBe(`${"x".repeat(200)}…`);
     tx.apply({ type: "user_message", timestamp: T0 + 2, data: { text: full } });
-    const bubbles = thread.querySelectorAll(".turn-you .bubble");
+    const bubbles = thread.querySelectorAll(".turn-person .bubble");
     expect(bubbles.length).toBe(1);
     expect(bubbles[0].textContent).toBe(full);
   });
@@ -775,7 +775,7 @@ describe("follow-ups during a run", () => {
     const tx = new Transcript(thread, COPY, { sessionId: "s1", now });
     tx.apply({ type: "user_message", timestamp: T0, data: { text: "yes" } });
     tx.apply({ type: "user_message", timestamp: T0 + 120, data: { text: "yes" } });
-    expect(thread.querySelectorAll(".turn-you").length).toBe(2);
+    expect(thread.querySelectorAll(".turn-person").length).toBe(2);
   });
 });
 
@@ -843,8 +843,8 @@ describe("070 W0.12 — the stored first line", () => {
       { type: "agent_message", timestamp: 4000, data: { text: "Yes." } },
     ]);
     const turns = thread.querySelectorAll(".turn");
-    expect(turns[0].classList.contains("turn-you")).toBe(true);
-    expect(turns[0].textContent).toBe("are u here?");
+    expect(turns[0].classList.contains("turn-person")).toBe(true);
+    expect(turns[0].querySelector(".bubble").textContent).toBe("are u here?");
   });
 
   it("a later user_message with the same text does not double it", () => {
@@ -855,10 +855,10 @@ describe("070 W0.12 — the stored first line", () => {
       { type: "user_message", timestamp: 4000, data: { text: "are u here?" } },
       { type: "agent_message", timestamp: 4001, data: { text: "Yes." } },
     ]);
-    expect(thread.querySelectorAll(".turn-you").length).toBe(1);
+    expect(thread.querySelectorAll(".turn-person").length).toBe(1);
     // a real repeat, later, is a new message
     t.apply({ type: "user_message", timestamp: 9000, data: { text: "are u here?" } });
-    expect(thread.querySelectorAll(".turn-you").length).toBe(2);
+    expect(thread.querySelectorAll(".turn-person").length).toBe(2);
   });
 });
 
@@ -978,7 +978,7 @@ describe("FE6 — two owner lines with distinct ids are two bubbles", () => {
     const tx = new Transcript(thread, COPY, { sessionId: "s1", now });
     tx.apply({ _id: "u1", type: "user_message", timestamp: T0, data: { text: "yes" } });
     tx.apply({ _id: "u2", type: "user_message", timestamp: T0 + 10, data: { text: "yes" } });
-    expect(thread.querySelectorAll(".turn-you").length).toBe(2);
+    expect(thread.querySelectorAll(".turn-person").length).toBe(2);
   });
 
   it("the during copy and its user_message still merge across two ids", () => {
@@ -986,11 +986,11 @@ describe("FE6 — two owner lines with distinct ids are two bubbles", () => {
     const tx = new Transcript(thread, COPY, { sessionId: "s1", now });
     tx.apply({ _id: "d1", type: "user_message_during_execution", timestamp: T0, data: { message_text: "yes" } });
     tx.apply({ _id: "u1", type: "user_message", timestamp: T0 + 1, data: { text: "yes" } });
-    expect(thread.querySelectorAll(".turn-you").length).toBe(1);
+    expect(thread.querySelectorAll(".turn-person").length).toBe(1);
     // a second "yes" (its own pair) is a second bubble
     tx.apply({ _id: "d2", type: "user_message_during_execution", timestamp: T0 + 5, data: { message_text: "yes" } });
     tx.apply({ _id: "u2", type: "user_message", timestamp: T0 + 6, data: { text: "yes" } });
-    expect(thread.querySelectorAll(".turn-you").length).toBe(2);
+    expect(thread.querySelectorAll(".turn-person").length).toBe(2);
   });
 
   it("the same id applied again (a re-backfill) stays one bubble", () => {
@@ -999,7 +999,7 @@ describe("FE6 — two owner lines with distinct ids are two bubbles", () => {
     const e = { _id: "u1", type: "user_message", timestamp: T0, data: { text: "yes" } };
     tx.apply(e);
     tx.applyAll([e]);
-    expect(thread.querySelectorAll(".turn-you").length).toBe(1);
+    expect(thread.querySelectorAll(".turn-person").length).toBe(1);
   });
 });
 
@@ -1077,5 +1077,24 @@ describe("WS4 — a feed_gap refills after its window", () => {
     socket.fire("feed_gap", { session_id: "s1", retry_after: 99999 });
     expect(timers.length).toBe(2);
     expect(timers[1][1]).toBe(300000);
+  });
+});
+
+describe("human attribution", () => {
+  it("does not present unknown authors as the owner", () => {
+    const thread = makeThread();
+    const tx = new Transcript(thread, COPY, { sessionId: "s1" });
+    tx.apply({ type: "user_message", data: { text: "hello", metadata: { origin: "owner", sender_user_id: "owner" } } });
+    expect(thread.querySelector(".person-label").textContent).toBe("Person (identity unavailable)");
+  });
+  it("keeps identical messages from different senders separate", () => {
+    const thread = makeThread();
+    const tx = new Transcript(thread, COPY, { sessionId: "s1" });
+    for (const sender of ["alice", "bob"]) {
+      tx.apply({ type: "user_message", timestamp: 1, data: { text: "yes", sender_user_id: sender, sender_surface: "api" } });
+    }
+    expect(thread.querySelectorAll(".turn-person").length).toBe(2);
+    expect(thread.textContent).toContain("alice");
+    expect(thread.textContent).toContain("bob");
   });
 });

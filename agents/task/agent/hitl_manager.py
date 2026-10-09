@@ -7,20 +7,12 @@ Centralizes all human interaction logic.
 from __future__ import annotations
 import asyncio
 import logging
-import os
 import time
 from collections import deque
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 
-#: OR-7: scrub brain-state from streamed chunks at this single funnel (default ON).
-#: Set STREAM_BRAIN_SCRUB=off/false/0/no to restore the legacy all-or-nothing guard.
-_STREAM_BRAIN_SCRUB = os.getenv("STREAM_BRAIN_SCRUB", "true").strip().lower() not in (
-    "0",
-    "false",
-    "off",
-    "no",
-)
+# Stream scrubbing is mandatory; the legacy STREAM_BRAIN_SCRUB toggle is ignored.
 
 
 class HITLManager:
@@ -60,6 +52,7 @@ class HITLManager:
         # Streaming output
         self._output_callbacks = []
         self._stream_lock = asyncio.Lock()
+        self.reset_output_stream()
         self._callback_failures = 0
 
     async def queue_user_message(
@@ -226,6 +219,10 @@ class HITLManager:
         if callback not in self._output_callbacks:
             self._output_callbacks.append(callback)
 
+    def reset_output_stream(self) -> None:
+        from modules.llm.brain_scrubber import StreamingBrainScrubber
+        self._output_scrubber = StreamingBrainScrubber()
+
     async def stream_output(self, chunk: str) -> None:
         """Stream output chunk to callbacks.
 
@@ -241,31 +238,15 @@ class HITLManager:
         if not self._output_callbacks:
             return
 
-        # Suppress agent brain-state JSON (internal telemetry, not user-facing).
-        # OR-7: scrub brain blocks out of the chunk (handles fenced / mixed-with-
-        # prose / truncated shapes the legacy whole-string guard missed), keeping
-        # any real prose. Fail-open: on any scrub error, fall back to the legacy
-        # all-or-nothing guard so a genuine reply is never dropped.
-        chunk_to_send = chunk
-        if _STREAM_BRAIN_SCRUB:
-            try:
-                from modules.llm.brain_scrubber import scrub_brain_blocks
-                scrubbed = scrub_brain_blocks(chunk)
-                # Drop only when the chunk was *wholly* brain-state telemetry —
-                # scrub_brain_blocks returns "" (empty string) in that case.
-                # A whitespace-only chunk (e.g. " " between tokens) is legitimate
-                # content and must NOT be dropped: scrub returns it unchanged.
-                if scrubbed is None or scrubbed == "":
-                    return  # chunk was wholly brain-state telemetry
-                chunk_to_send = scrubbed
-            except Exception:
-                from agents.task.utils_json import is_brain_state_content
-                if is_brain_state_content(chunk):
-                    return
-        else:
-            from agents.task.utils_json import is_brain_state_content
-            if is_brain_state_content(chunk):
-                return
+        # Keep parsing state across chunks. A split key or opener must never
+        # expose the interior of a brain/think block to any consumer.
+        try:
+            chunk_to_send = self._output_scrubber.feed(chunk)
+        except Exception:
+            self.logger.warning("Stream scrub failed; suppressing preview")
+            return
+        if not chunk_to_send:
+            return
 
         async with self._stream_lock:
             for callback in self._output_callbacks:

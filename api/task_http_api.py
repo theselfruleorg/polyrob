@@ -55,9 +55,9 @@ def clean_session_id_at_entry(session_id: str) -> str:
     every endpoint into the generic 500 handler — telling the caller the server
     broke, when the caller sent a bad id.
     """
-    from agents.task.path import pm
+    from agents.task.path import require_canonical_session_id
     try:
-        return pm().clean_session_id(session_id)
+        return require_canonical_session_id(session_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Invalid session id: {e}")
 
@@ -219,6 +219,13 @@ async def send_user_message(
         # E8 (A6 gap 4): the caller must own this session — any authenticated
         # caller could otherwise inject a message into another tenant's session.
         _require_session_owner(req, user_id)
+        from api.payment_verification import verify_payment_for_request
+        from agents.task.billed_request import validate_billed_session
+        await verify_payment_for_request(req, cost_credits=1)
+        try:
+            validate_billed_session(session_info)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         _record_owner_thread_line(req, agent, session_id, user_id, request)  # 061
 
         # ============================================================================
@@ -386,6 +393,8 @@ async def send_user_message(
                     'user_message',
                     {
                         'text': request.text,
+                        'sender_user_id': str(user_id),
+                        'sender_surface': 'api',
                         'kind': request.kind,
                         'metadata': request.metadata or {},
                         'timestamp': time.time()
@@ -1557,6 +1566,9 @@ async def verify_files_ready(
     import asyncio
 
     workspace_dir = pm().get_workspace_dir(session_id, user_id)
+    from core.security.workspace_io import read_bytes
+    if any(Path(path).is_absolute() or ".." in Path(path).parts for path in file_paths):
+        return False, ["Invalid attachment path"]
 
     # Exponential backoff: 0.1s, 0.2s, 0.4s, 0.8s, 1.6s, 3.2s, ...
     wait_time = 0.1
@@ -1571,25 +1583,14 @@ async def verify_files_ready(
         for file_path in file_paths:
             full_path = workspace_dir / file_path
 
-            # Check existence
-            if not full_path.exists():
-                missing_files.append(file_path)
-                continue
-
-            # Check readability and size
             try:
-                stat = full_path.stat()
-                if stat.st_size == 0:
+                if not read_bytes(full_path, workspace_dir, max_bytes=1):
                     unreadable_files.append(f"{file_path} (0 bytes)")
                     continue
-
-                # Try to open for reading (verifies no write lock)
-                with open(full_path, 'rb') as f:
-                    # Read first byte to ensure file is actually accessible
-                    f.read(1)
-
-            except (IOError, PermissionError) as e:
-                unreadable_files.append(f"{file_path} ({e})")
+            except FileNotFoundError:
+                missing_files.append(file_path)
+            except OSError:
+                unreadable_files.append(f"{file_path} (unavailable)")
 
         # All files ready?
         if not missing_files and not unreadable_files:
@@ -1773,7 +1774,8 @@ async def upload_document(
                 session_id=session_id,
                 user_id=user_id,
                 filename=safe_filename,
-                size=len(file_content)
+                size=len(file_content),
+                path=str(file_path.relative_to(workspace_dir)),
             )
             logger.debug(f"Notified workspace context of upload: {safe_filename}")
         except Exception as e:

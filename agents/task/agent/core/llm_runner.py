@@ -272,8 +272,11 @@ class LLMRunnerMixin:
 			# Check if send_message is available (preferred - keeps session alive)
 			if 'send_message' in available_actions:
 				recovery_actions = [ActionModel(send_message={
-					"text": f"⚠️ The AI took too long to respond (timeout after {timeout:.0f}s). "
-					        f"This can happen with complex tasks. Please send another message to retry or simplify your request."
+					# The notice does NOT pause the session: the next step retries at once.
+					# Prod 2026-10-04 17:26 the old "send another message to retry" text
+					# preceded a 60 USDC send 8 s later — obeying it would have paid twice.
+					"text": f"⚠️ The model was slow (timeout after {timeout:.0f}s). I'm retrying "
+					        f"your last request now and will confirm when it's done — don't resend it."
 				})]
 				self.logger.info("Recovery: notified user via send_message (session continues)")
 				# DON'T mark as done - session stays alive

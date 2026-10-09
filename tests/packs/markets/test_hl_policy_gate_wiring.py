@@ -11,6 +11,7 @@ import types
 import pytest
 
 from core.wallet.policy import PolicyGate
+from polyrob_markets.hyperliquid import service as _hl_service
 from polyrob_markets.hyperliquid.service import (
     HyperliquidTool, PlaceLimitOrderParams, PlaceMarketOrderParams, CancelOrderParams,
 )
@@ -28,12 +29,15 @@ class _FakeExchange:
         self.cancel_calls = []
 
     def order(self, **kwargs):
+        return self.post("/exchange", kwargs)
+
+    def post(self, url, kwargs):
         self.calls.append(kwargs)
-        return {"status": "ok"}
+        return {"status": "ok", "response": {"data": {"statuses": [{"resting": {"oid": 1}}]}}}
 
     def cancel(self, coin, order_id):
         self.cancel_calls.append((coin, order_id))
-        return {"status": "ok"}
+        return {"status": "ok", "response": {"data": {"statuses": [{"resting": {"oid": 1}}]}}}
 
 
 def _tool(monkeypatch, gate, mid=100.0):
@@ -44,6 +48,8 @@ def _tool(monkeypatch, gate, mid=100.0):
         trading_limits=types.SimpleNamespace(require_confirmation_above_usd=1_000_000.0),
         can_trade=lambda: True,
     )
+    from ._risk_fixtures import hyperliquid
+    hyperliquid(tool, creds, monkeypatch)
     monkeypatch.setattr(tool, "ensure_initialized", lambda: _async(None))
     monkeypatch.setattr(tool, "rate_limit", lambda *a, **k: _async(None))
     monkeypatch.setattr(tool, "_get_user_credentials", lambda: _async(creds))
@@ -60,7 +66,7 @@ async def test_limit_order_denied_over_ceiling(monkeypatch):
     gate = PolicyGate(max_per_tx_usd=10.0)
     tool, ex = _tool(monkeypatch, gate)
     res = await tool.place_limit_order(
-        PlaceLimitOrderParams(coin="ETH", is_buy=True, size=1.0, price=100.0)
+        PlaceLimitOrderParams(max_usd=1000, coin="ETH", is_buy=True, size=1.0, price=100.0)
     )
     assert res["success"] is False
     assert "policy" in res["error"].lower()
@@ -77,7 +83,7 @@ async def test_limit_order_refused_for_forged_turn(monkeypatch):
     ctx = ActionExecutionContext()
     ctx.role = "leaf"  # a delegated/forged worker — must never move money
     res = await tool.place_limit_order(
-        PlaceLimitOrderParams(coin="ETH", is_buy=True, size=0.01, price=100.0),
+        PlaceLimitOrderParams(max_usd=1000, coin="ETH", is_buy=True, size=0.01, price=100.0),
         execution_context=ctx,
     )
     assert res["success"] is False
@@ -90,14 +96,15 @@ async def test_limit_order_within_ceiling_records_audit(monkeypatch):
     gate = PolicyGate(max_per_tx_usd=10_000.0)
     tool, ex = _tool(monkeypatch, gate)
     res = await tool.place_limit_order(
-        PlaceLimitOrderParams(coin="ETH", is_buy=True, size=0.01, price=100.0)
+        PlaceLimitOrderParams(max_usd=1000, coin="ETH", is_buy=True, size=0.01, price=100.0)
     )
     assert res["success"] is True
     assert len(ex.calls) == 1
     audit = gate.audit_log
     assert len(audit) == 1
     assert audit[0]["venue"] == "hyperliquid"
-    assert audit[0]["amount_usd"] == pytest.approx(1.0)
+    # the notional plus the worst venue fee (the fee leaves the margin account too)
+    assert audit[0]["amount_usd"] == pytest.approx(1.0 * (1 + _hl_service.HL_WORST_FEE_RATE))
 
 
 @pytest.mark.asyncio
@@ -105,7 +112,7 @@ async def test_market_order_denied_over_ceiling(monkeypatch):
     gate = PolicyGate(max_per_tx_usd=10.0)
     tool, ex = _tool(monkeypatch, gate, mid=100.0)
     res = await tool.place_market_order(
-        PlaceMarketOrderParams(coin="ETH", is_buy=True, size=1.0)
+        PlaceMarketOrderParams(max_usd=1000, coin="ETH", is_buy=True, size=1.0)
     )
     assert res["success"] is False
     assert "policy" in res["error"].lower()
@@ -121,7 +128,7 @@ async def test_limit_order_refused_while_halted(monkeypatch):
     gate = PolicyGate(max_per_tx_usd=10_000.0)
     tool, ex = _tool(monkeypatch, gate)
     res = await tool.place_limit_order(
-        PlaceLimitOrderParams(coin="ETH", is_buy=True, size=0.01, price=100.0)
+        PlaceLimitOrderParams(max_usd=1000, coin="ETH", is_buy=True, size=0.01, price=100.0)
     )
     assert res["success"] is False
     assert "autonomy pause" in res["error"].lower()
@@ -188,7 +195,7 @@ async def test_concurrent_orders_cannot_both_pass_a_nearly_exhausted_cap(monkeyp
         return (ex, None)
     monkeypatch.setattr(tool, "_get_exchange_client", _slow)
 
-    p = PlaceLimitOrderParams(coin="ETH", is_buy=True, size=0.06, price=100.0)  # $6
+    p = PlaceLimitOrderParams(max_usd=1000, coin="ETH", is_buy=True, size=0.06, price=100.0)  # $6
     r1, r2 = await asyncio.gather(tool.place_limit_order(p), tool.place_limit_order(p))
     successes = [r for r in (r1, r2) if r.get("success")]
     denials = [r for r in (r1, r2) if not r.get("success")]
@@ -215,12 +222,12 @@ async def test_lost_order_response_blocks_retry(monkeypatch):
     gate = PolicyGate(max_per_tx_usd=100)
     tool, exchange = _tool(monkeypatch, gate)
     calls = []
-    def lose_reply(**kwargs):
+    def lose_reply(url, kwargs):
         assert journal.unresolved()[0]["chain"] == "hyperliquid"
         calls.append(kwargs)
         raise TimeoutError("reply lost after venue acceptance")
-    monkeypatch.setattr(exchange, "order", lose_reply)
-    params = PlaceLimitOrderParams(coin="ETH", is_buy=True, size=0.01, price=100)
+    monkeypatch.setattr(exchange, "post", lose_reply)
+    params = PlaceLimitOrderParams(max_usd=1000, coin="ETH", is_buy=True, size=0.01, price=100)
     assert not (await tool.place_limit_order(params))["success"]
     assert journal.unresolved()
     assert not (await tool.place_limit_order(params))["success"]

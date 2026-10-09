@@ -70,11 +70,11 @@ import shutil
 import time
 from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 
-from core.env import bool_env as _bool_env, float_env as _float_env, int_env as _int_env
+from core.env import bool_env as _bool_env
 from tools.code_exec.backend import ExecutionBackend, ExecutionBackendError
 from tools.code_exec.backends._proc import run_group
 from tools.code_exec.env_policy import SECRET_PAT
-from tools.code_exec.limits import exec_timeout_cap
+from tools.code_exec.limits import exec_timeout_cap, max_output_bytes, max_timeout_sec
 from tools.code_exec.result import ExecutionRequest, ExecutionResult
 
 logger = logging.getLogger(__name__)
@@ -136,12 +136,16 @@ class SshBackend(ExecutionBackend):
     name = "ssh"
 
     def __init__(self, *, ssh_runner: Optional[SshRunner] = None) -> None:
-        self.max_timeout = _float_env("CODE_EXEC_MAX_TIMEOUT_SEC", 30.0)
-        self.max_output = _int_env("CODE_EXEC_MAX_OUTPUT_BYTES", 100000)
+        self.max_timeout = max_timeout_sec()
+        self.max_output = max_output_bytes()
         self.host = os.getenv("CODE_EXEC_SSH_HOST", "")
         self.user = os.getenv("CODE_EXEC_SSH_USER", "")
         self.port = os.getenv("CODE_EXEC_SSH_PORT", "22")
         self.key = os.getenv("CODE_EXEC_SSH_KEY", "")
+        # Pinned known_hosts: set -> StrictHostKeyChecking=yes against this file
+        # only (no first-contact trust); unset -> accept-new (TOFU), as before.
+        self.known_hosts = os.path.expanduser(
+            os.getenv("CODE_EXEC_SSH_KNOWN_HOSTS", "").strip())
         self.sandboxed = _bool_env("CODE_EXEC_SSH_SANDBOXED", False)
         # Only the DEFAULT runner ever shells out to the real 'ssh' binary — an
         # injected runner (tests, or a future non-CLI transport) never does, so
@@ -168,6 +172,7 @@ class SshBackend(ExecutionBackend):
             raise ExecutionBackendError(
                 "ssh backend selected but the 'ssh' binary was not found on PATH."
             )
+        self._host_key_options()
 
     async def teardown(self) -> None:  # ephemeral-only v1: nothing persists
         return None
@@ -248,6 +253,12 @@ class SshBackend(ExecutionBackend):
         begins with ``-`` — such a value could otherwise be misread by OpenSSH
         as an option flag.
         """
+        timeout = self._clamp_timeout(request.timeout, getattr(request, "ceiling", None))
+        return self.ssh_argv(self._build_remote_command(request, timeout))
+
+    def ssh_target(self) -> str:
+        """PURE: ``user@host`` (or ``host``). Raises ``ExecutionBackendError`` when
+        the host or user begins with ``-`` (an option OpenSSH could misread)."""
         if self.host.startswith("-"):
             raise ExecutionBackendError(
                 f"CODE_EXEC_SSH_HOST value {self.host!r} begins with '-' — "
@@ -260,18 +271,49 @@ class SshBackend(ExecutionBackend):
                 "refusing to build an ssh invocation OpenSSH could misinterpret "
                 "as an option flag."
             )
-        timeout = self._clamp_timeout(request.timeout, getattr(request, "ceiling", None))
+        return f"{self.user}@{self.host}" if self.user else self.host
+
+    def _host_key_options(self) -> List[str]:
+        """``StrictHostKeyChecking`` options. With ``CODE_EXEC_SSH_KNOWN_HOSTS``
+        set, only a host key already in that file is trusted (``yes``); a path
+        that is missing or unreadable is refused, never a silent fall back to
+        trust-on-first-use. Unset keeps ``accept-new``."""
+        if not self.known_hosts:
+            return ["-o", "StrictHostKeyChecking=accept-new"]
+        path = self.known_hosts
+        if not os.path.isfile(path) or not os.access(path, os.R_OK):
+            raise ExecutionBackendError(
+                f"CODE_EXEC_SSH_KNOWN_HOSTS={path!r} is not a readable file — "
+                "refusing to connect without the pinned host key (add the host "
+                "key with `ssh-keyscan <host> >> <file>` after you verify it, or "
+                "unset the flag to use accept-new)."
+            )
+        if path.startswith("-") or any(c in path for c in "\n\r"):
+            raise ExecutionBackendError(
+                f"CODE_EXEC_SSH_KNOWN_HOSTS value {path!r} is not a plain path.")
+        return ["-o", "StrictHostKeyChecking=yes",
+                "-o", f"UserKnownHostsFile={path}"]
+
+    def ssh_argv(self, remote_command: Optional[str], *,
+                 extra_options: Tuple[str, ...] = ()) -> List[str]:
+        """PURE: ``ssh <opts> [extra_options] -- <target> [remote_command]`` — the
+        ONE argv shape (073 W6: the shell's ControlMaster session adds its
+        ``-o Control*`` options and ``-O exit`` here). ``--`` precedes the target
+        (see the module docstring)."""
+        target = self.ssh_target()
         argv = [
             "ssh",
             "-o", "BatchMode=yes",
             "-o", "ConnectTimeout=10",
-            "-o", "StrictHostKeyChecking=accept-new",
+            *self._host_key_options(),
             "-p", str(self.port),
         ]
         if self.key:
             argv += ["-i", self.key]
-        target = f"{self.user}@{self.host}" if self.user else self.host
-        argv += ["--", target, self._build_remote_command(request, timeout)]
+        argv += list(extra_options)
+        argv += ["--", target]
+        if remote_command is not None:
+            argv.append(remote_command)
         return argv
 
     # -- run ------------------------------------------------------------------

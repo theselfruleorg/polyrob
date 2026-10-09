@@ -10,10 +10,11 @@ an address.
 from __future__ import annotations
 
 import logging
+from urllib.parse import urlencode
 from typing import Any, Dict, List, Optional
 
 from core.wallet.tokens import clean_name, clean_symbol
-from tools.defi.providers.base import Candidate, PriceInfo, confidence_for
+from tools.defi.providers.base import Candidate, PriceInfo, confidence_for, LIQUIDITY_CONFIDENCE_FLOOR_USD
 
 logger = logging.getLogger(__name__)
 
@@ -157,9 +158,13 @@ def parse_pair(payload: Optional[Dict[str, Any]], address: str) -> PriceInfo:
     total_liq = 0.0
     deepest = None
     deepest_liq = -1.0
+    deep_pools = set()
     for pair in mine:
         liq = _f((pair.get("liquidity") or {}).get("usd")) or 0.0
         total_liq += liq
+        pool = str(pair.get("pairAddress") or "").strip()
+        if pool and liq >= LIQUIDITY_CONFIDENCE_FLOOR_USD and _price(pair.get("priceUsd")):
+            deep_pools.add(pool)
         if liq > deepest_liq:
             deepest_liq, deepest = liq, pair
     price = _price((deepest or {}).get("priceUsd"))
@@ -176,7 +181,7 @@ def parse_pair(payload: Optional[Dict[str, Any]], address: str) -> PriceInfo:
     priced_pool = str((deepest or {}).get("pairAddress") or "").strip() or None
     return PriceInfo(price_usd=price, liquidity_usd=total_liq,
                      pool_count=len(mine),
-                     confidence=confidence_for(price, priced_liq, len(mine)),
+                     confidence=confidence_for(price, priced_liq, len(deep_pools)),
                      priced_liquidity_usd=priced_liq,
                      priced_pool_address=priced_pool)
 
@@ -190,17 +195,14 @@ def _get(url: str, timeout: float = 8.0) -> Optional[Dict[str, Any]]:
         from tools.defi.providers import _http
         # The POOLED client — a fresh one pays ~6 s of connection setup on this
         # box (broken outbound IPv6); see the note in _http.
-        r = _http.client().get(url, timeout=timeout)
-        if r.status_code != 200:
-            return None
-        return r.json()
+        return _http.get_json(url, timeout=timeout)
     except Exception:
         logger.debug("dexscreener: request failed for %s", url, exc_info=True)
         return None
 
 
 def search(symbol: str, timeout: float = 8.0) -> List[Candidate]:
-    return parse_search(_get(f"{SEARCH_URL}?q={symbol}", timeout))
+    return parse_search(_get(f"{SEARCH_URL}?{urlencode({'q': symbol})}", timeout))
 
 
 def token(chain: str, address: str, timeout: float = 8.0) -> PriceInfo:

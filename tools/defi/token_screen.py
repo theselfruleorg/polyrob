@@ -18,8 +18,8 @@ Check names reuse GoPlus's field names where a check overlaps (``mintable``,
 ``freezable``, ``is_honeypot``, ``buy_tax`` …), so the same question asked of
 two sources lands on one name and a GoPlus gap closes when the chain answers it.
 
-Read side ONLY: nothing on the spend path reads this yet (the identity gate and
-``defi_trade`` keep their own inputs).
+The EVM buy path consumes this same screen through ``buy_screen``; a hard
+failure or an unanswered sell check refuses a live acquisition.
 """
 from __future__ import annotations
 

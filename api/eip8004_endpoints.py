@@ -70,11 +70,8 @@ def require_owner_or_admin(request: Request) -> bool:
 async def require_authenticated(request: Request) -> str:
     """Any authenticated caller (B20).
 
-    ``/reputation/feedback`` and ``/validation/request`` WRITE to the local
-    registries and were reachable anonymously — anyone on the internet could
-    stuff an agent's feedback list or its pending-validation queue. They are
-    not admin operations (a client submits its own feedback), so the gate is
-    authentication, not privilege.
+    Clients submit their own feedback through ``/reputation/feedback``.
+    Validation queue writes instead require the owner/admin dependency.
     """
     from api.dependencies import get_user_permissive
 
@@ -111,12 +108,8 @@ async def get_registration_file(request: Request):
     Returns:
         Registration file JSON per ERC-8004 spec
     """
-    # Determine base URL
-    scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
-    host = request.headers.get("host", request.url.netloc)
-    base_url = f"{scheme}://{host}"
-    
-    registration = build_registration_file(base_url)
+    # The registry advertises the operator-configured origin, never a caller's Host.
+    registration = build_registration_file()
     return registration.model_dump(exclude_none=True)
 
 
@@ -226,6 +219,7 @@ class SubmitFeedbackBody(BaseModel):
 )
 async def submit_feedback(
     body: SubmitFeedbackBody,
+    request: Request,
     manager: ReputationManager = Depends(get_reputation_manager),
 ):
     """Submit feedback for an agent.
@@ -242,6 +236,10 @@ async def submit_feedback(
     try:
         # Parse feedback auth
         auth = FeedbackAuth(**body.feedbackAuth)
+        from core.wallet.addresses import same_address
+        caller = getattr(request.state, "wallet_address", None)
+        if not caller or not same_address(str(caller), auth.clientAddress):
+            raise HTTPException(status_code=403, detail="Feedback authorization belongs to another wallet")
         
         # Parse proof of payment if provided
         pop = None
@@ -261,6 +259,8 @@ async def submit_feedback(
         )
         
         return result
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -345,7 +345,7 @@ class ValidationRequestBody(BaseModel):
 
 @router.post(
     "/validation/request",
-    dependencies=[Depends(require_eip8004_enabled), Depends(require_authenticated)],
+    dependencies=[Depends(require_eip8004_enabled), Depends(require_owner_or_admin)],
 )
 async def request_validation(
     body: ValidationRequestBody,
@@ -486,4 +486,3 @@ async def list_validators(
         name: f"{description} (simulated)"
         for name, description in manager.get_supported_validators().items()
     }
-

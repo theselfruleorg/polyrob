@@ -1,5 +1,9 @@
 """polyrob x — chat with the agent over X (Twitter) DMs.
 
+OBSOLETE (2026-10-04): X stopped delivering new DMs to ``/2/dm_events`` in
+2026-09 (they go to encrypted X Chat), so this poller sees no new inbound. The
+agent reads and sends DMs through X Chat (``twitter_get_dms`` / ``twitter_dm``).
+
 No public URL needed: polls ``GET /2/dm_events`` with the account's OAuth 1.0a
 user-context creds (the SAME ``TWITTER_*`` env vars the twitter tool uses) and
 replies via ``POST /2/dm_conversations/with/:participant_id/messages``.
@@ -64,6 +68,10 @@ async def _run_x(verbose: bool):
             from core.remedy import flag_command
             click.echo(click.style("x dm bot online", fg="green")
                        + f" — polling dm_events every {os.getenv('X_DM_POLL_SEC', '90')}s…")
+            click.echo(click.style(
+                "OBSOLETE: X no longer delivers new DMs to dm_events (they go to "
+                "encrypted X Chat); this poller will see no new inbound.",
+                fg="yellow"))
             click.echo(click.style(
                 "note: X allows 15 DM reads + 15 DM sends per 15 min — "
                 "replies can lag under load", dim=True))

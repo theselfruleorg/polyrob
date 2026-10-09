@@ -53,7 +53,7 @@ def test_snapshot_restore_live_wal_db(tmp_path):
     conn.close()
     assert _count(db) == 150
 
-    restore_snapshot(info.path)
+    restore_snapshot(info.path, data_home=data_home)
     assert _count(db) == 100  # back to snapshot-time state, WAL data included
 
 
@@ -70,7 +70,7 @@ def test_restore_recreates_deleted_db(tmp_path):
     db.with_name("goals.db-shm").unlink(missing_ok=True)
     assert not db.exists()
 
-    restore_snapshot(info.path)
+    restore_snapshot(info.path, data_home=data_home)
     assert db.exists() and _count(db) == 7
 
 
@@ -84,7 +84,7 @@ def test_restore_refuses_without_done_marker(tmp_path):
 
     (info.path / DONE_MARKER).unlink()  # simulate a torn snapshot
     with pytest.raises(RuntimeError, match="incomplete snapshot"):
-        restore_snapshot(info.path)
+        restore_snapshot(info.path, data_home=data_home)
 
 
 def test_config_file_and_dir_roundtrip(tmp_path):
@@ -106,7 +106,7 @@ def test_config_file_and_dir_roundtrip(tmp_path):
     (ident / "SELF.md").write_text("tampered")
     (ident / "extra.md").write_text("added later")
 
-    restore_snapshot(info.path)
+    restore_snapshot(info.path, data_home=data_home)
     assert env.read_text() == "SECRET=keep-me\n"
     assert (ident / "SELF.md").read_text() == "i am rob"
     assert not (ident / "extra.md").exists()  # dir restored to snapshot state
@@ -167,7 +167,7 @@ def test_snapshot_with_concurrent_writer_is_consistent(tmp_path):
     stored = info.path / next(i.stored for i in info.manifest.items)
     assert sqlite3.connect(str(stored)).execute("SELECT COUNT(*) FROM t").fetchone()[0] >= 100
     # And restoring it produces a clean, readable DB.
-    restore_snapshot(info.path)
+    restore_snapshot(info.path, data_home=data_home)
     assert _count(db) >= 100
 
 
@@ -189,7 +189,7 @@ def test_corrupt_manifest_is_graceful(tmp_path):
     assert infos[0].manifest is None
     # restore surfaces the parse error rather than partially restoring.
     with pytest.raises(Exception):
-        restore_snapshot(info.path)
+        restore_snapshot(info.path, data_home=data_home)
 
 
 def test_snapshot_dir_is_owner_only(tmp_path):

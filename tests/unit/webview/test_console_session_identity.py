@@ -1,4 +1,5 @@
 """Signed sessions for other identities must not become the console owner."""
+from core.security.session_tokens import SESSION_AUDIENCE
 import time
 import uuid
 
@@ -30,8 +31,8 @@ def console(monkeypatch, tmp_path):
 
 
 def _token(user_id, role="user"):
-    return jwt.encode({"user_id": user_id, "role": role, "tier": "admin",
-                       "exp": time.time() + 60, "jti": uuid.uuid4().hex},
+    return jwt.encode({"aud": SESSION_AUDIENCE, **{"user_id": user_id, "role": role, "tier": "admin",
+                       "exp": time.time() + 60, "jti": uuid.uuid4().hex}},
                       "console-identity-regression-secret-32", algorithm="HS256")
 
 
@@ -63,7 +64,7 @@ def test_own_ops_accepts_bound_owner_on_every_decoder(console):
 def test_multitenant_still_accepts_customer_identity(console, monkeypatch):
     from webview import webgate
     server, client = console
-    monkeypatch.setattr(webgate, "is_own_ops", lambda: False)
+    monkeypatch.setenv("POLYROB_POSTURE", "multitenant")
     token = _token("customer")
     response = client.get("/api/webgate/wallet", headers={"Authorization": "Bearer " + token})
     assert response.status_code == 200

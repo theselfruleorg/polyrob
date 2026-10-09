@@ -8,6 +8,8 @@ import re
 from typing import Optional, Dict, Any, List
 from pydantic import BaseModel, Field, field_validator
 
+from polyrob_markets.hyperliquid.store_models import TradingLimits as _Limits
+
 
 # =============================================================================
 # Validation Patterns
@@ -37,9 +39,9 @@ class ConfigureHyperliquidRequest(BaseModel):
     demo_mode: bool = Field(True, description="Read-only mode (True) or trading enabled (False)")
 
     # Trading limits
-    max_order_size_usd: Optional[float] = Field(1000.0, ge=10, le=100000)
-    max_leverage: Optional[int] = Field(5, ge=1, le=50)
-    enable_autonomous_trading: Optional[bool] = Field(False)
+    max_order_size_usd: Optional[float] = Field(_Limits.max_order_size_usd, ge=10, le=100000)
+    max_leverage: Optional[int] = Field(_Limits.max_leverage, ge=1, le=50)
+    enable_autonomous_trading: Optional[bool] = Field(_Limits.enable_autonomous_trading)
 
     @field_validator("wallet_address", "agent_wallet_address", mode="before")
     @classmethod

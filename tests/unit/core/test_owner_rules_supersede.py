@@ -57,12 +57,12 @@ def test_headings_are_structure_not_rules():
 
 
 def test_the_section_is_bounded_oldest_first():
-	entries = "\n".join(f"- rule {i} " + "x" * 90 + " — superseded 2026-01-01" for i in range(200))
+	entries = "\n".join(f"- rule {i} " + "x" * 90 + " — superseded 2026-01-01" for i in range(SUPERSEDED_MAX_CHARS // 100 + 50))
 	doc = "- live rule\n\n" + SUPERSEDED_HEADING + "\n\n" + entries + "\n"
 	out = carry_superseded(doc, "- live rule\n")
 	sup = split_superseded(out)[1]
 	assert len(sup) <= SUPERSEDED_MAX_CHARS
-	assert "rule 199" in sup and "rule 0 " not in sup
+	assert f"rule {SUPERSEDED_MAX_CHARS // 100 + 49} " in sup and "rule 0 " not in sup
 
 
 def test_stamping_leaves_the_superseded_section_alone():

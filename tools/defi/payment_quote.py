@@ -8,10 +8,8 @@ holds the READ.
 (`size_amount_raw`), never a zero price — so an indexer outage costs a paid
 action rather than giving one away.
 
-⚠️ The price and the screen come from the SAME pool, and that pool is the
-DEEPEST one. A token's pools disagree, and the thin one is the one an attacker
-seeded; pricing against one pool while screening another would let the screen
-bless liquidity the price never touched.
+The deepest pool supplies the screen, checked against the shared spend-grade
+price seam. A single spot pool cannot set an invoice price by itself.
 """
 from __future__ import annotations
 
@@ -115,11 +113,14 @@ def _side_is(rel, side: str, gt_network: str, chain: str, want: str) -> bool:
 
 
 class PaymentQuoter:
-    """One quote per asset, from the DEEPEST pool the indexer knows."""
+    """Independent spend-grade price plus a corroborating deepest-pool screen."""
 
-    def __init__(self, pool_fn: Optional[Callable] = None) -> None:
+    def __init__(self, pool_fn: Optional[Callable] = None,
+                 price_fn: Optional[Callable] = None) -> None:
         #: Injected for tests. ``(chain, address) -> (pool, usd_per_token) | None``
         self._pool_fn = pool_fn or _deepest_priced_pool
+        from tools.defi.price_sources import spend_price
+        self._price_fn = price_fn or spend_price
 
     def quote(self, asset) -> Optional[PriceQuote]:
         address = getattr(asset, "address", None)
@@ -136,13 +137,24 @@ class PaymentQuoter:
             return None
         try:
             pool, price = found
+            independent = self._price_fn(chain, address)
+            if isinstance(independent, bool) or independent is None:
+                return None
+            independent = float(independent)
+            if not math.isfinite(independent) or independent <= 0:
+                return None
+            from tools.defi.trade_tool import _route_drift_max_pct
+            if (not math.isfinite(float(price))
+                    or abs(float(price) - independent) / independent * 100 > _route_drift_max_pct()):
+                return None
             from tools.defi.pool_screen import classify
             verdict = classify(pool)
             return PriceQuote(
                 asset_id=getattr(asset, "asset_id", ""),
-                usd_per_token=float(price),
+                usd_per_token=independent,
                 liquidity_usd=float(getattr(pool, "liquidity_usd", 0) or 0),
-                verdict=verdict.verdict, source="geckoterminal", ts=time.time())
+                verdict=verdict.verdict, source="independent + geckoterminal screen",
+                ts=time.time(), confidence="high")
         except Exception as e:
             logger.warning("payment quote: classify failed for %s (%s)",
                            getattr(asset, "asset_id", "?"), e)

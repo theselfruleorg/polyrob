@@ -24,8 +24,11 @@ class _FakeExchange:
         self.calls = []
 
     def order(self, **kwargs):
+        return self.post("/exchange", kwargs)
+
+    def post(self, url, kwargs):
         self.calls.append(kwargs)
-        return {"status": "ok"}
+        return {"status": "ok", "response": {"data": {"statuses": [{"resting": {"oid": 1}}]}}}
 
 
 def _make_tool(monkeypatch, mid=100.0, exchange=None, mid_success=True):
@@ -35,6 +38,8 @@ def _make_tool(monkeypatch, mid=100.0, exchange=None, mid_success=True):
     creds = types.SimpleNamespace(
         trading_limits=types.SimpleNamespace(require_confirmation_above_usd=1_000_000.0),
     )
+    from ._risk_fixtures import hyperliquid
+    hyperliquid(tool, creds, monkeypatch)
     monkeypatch.setattr(tool, "ensure_initialized", lambda: _async(None))
     monkeypatch.setattr(tool, "rate_limit", lambda *a, **k: _async(None))
     monkeypatch.setattr(tool, "_get_user_credentials", lambda: _async(creds))
@@ -49,10 +54,40 @@ def _make_tool(monkeypatch, mid=100.0, exchange=None, mid_success=True):
 
 
 @pytest.mark.asyncio
+async def test_market_order_cannot_exceed_approved_usd_with_slippage(monkeypatch):
+    tool, exchange = _make_tool(monkeypatch, mid=100)
+    result = await tool.place_market_order(PlaceMarketOrderParams(
+        coin="ETH", is_buy=True, size=1, slippage=.2, max_usd=100))
+    assert not result["success"] and "approved max_usd" in result["error"]
+    assert exchange.calls == []
+
+
+@pytest.mark.asyncio
+async def test_limit_sell_live_value_cannot_exceed_approved_usd(monkeypatch):
+    from polyrob_markets.hyperliquid.service import PlaceLimitOrderParams
+    tool, exchange = _make_tool(monkeypatch, mid=100)
+    result = await tool.place_limit_order(PlaceLimitOrderParams(
+        coin="ETH", is_buy=False, size=1, price=80, max_usd=80))
+    assert not result["success"] and "approved max_usd" in result["error"]
+    assert exchange.calls == []
+
+
+def test_order_schema_requires_a_finite_explicit_usd_ceiling():
+    from pydantic import ValidationError
+    from polyrob_markets.hyperliquid.service import PlaceLimitOrderParams
+    for cls, extra in ((PlaceMarketOrderParams, {}), (PlaceLimitOrderParams, {"price": 100})):
+        with pytest.raises(ValidationError):
+            cls(coin="ETH", is_buy=True, size=1, **extra)
+        for bad in (0, -1, float("nan"), float("inf")):
+            with pytest.raises(ValidationError):
+                cls(coin="ETH", is_buy=True, size=1, max_usd=bad, **extra)
+
+
+@pytest.mark.asyncio
 async def test_place_market_order_is_registered(monkeypatch):
     tool, _ = _make_tool(monkeypatch)
     res = await tool.execute_action(
-        "place_market_order", {"coin": "ETH", "is_buy": True, "size": 0.1}
+        "place_market_order", {"coin": "ETH", "is_buy": True, "size": 0.1, "max_usd": 1000}
     )
     assert res.error is None or "Unknown tool" not in (res.error or "")
     assert res.success is True
@@ -63,7 +98,7 @@ async def test_market_buy_uses_ioc_limit_within_slippage(monkeypatch):
     ex = _FakeExchange()
     tool, _ = _make_tool(monkeypatch, mid=100.0, exchange=ex)
     res = await tool.place_market_order(
-        PlaceMarketOrderParams(coin="eth", is_buy=True, size=0.1, slippage=0.05)
+        PlaceMarketOrderParams(max_usd=1000, coin="eth", is_buy=True, size=0.1, slippage=0.05)
     )
     assert res["success"] is True
     assert len(ex.calls) == 1
@@ -81,7 +116,7 @@ async def test_market_sell_prices_below_mid(monkeypatch):
     ex = _FakeExchange()
     tool, _ = _make_tool(monkeypatch, mid=100.0, exchange=ex)
     await tool.place_market_order(
-        PlaceMarketOrderParams(coin="ETH", is_buy=False, size=1.0, slippage=0.1)
+        PlaceMarketOrderParams(max_usd=1000, coin="ETH", is_buy=False, size=0.5, slippage=0.1)
     )
     assert ex.calls[0]["limit_px"] == pytest.approx(90.0)
 
@@ -91,7 +126,7 @@ async def test_market_order_refuses_without_live_mid(monkeypatch):
     ex = _FakeExchange()
     tool, _ = _make_tool(monkeypatch, mid_success=False, exchange=ex)
     res = await tool.place_market_order(
-        PlaceMarketOrderParams(coin="ZZZ", is_buy=True, size=1.0)
+        PlaceMarketOrderParams(max_usd=1000, coin="ZZZ", is_buy=True, size=1.0)
     )
     assert res["success"] is False
     assert "price" in res["error"].lower()

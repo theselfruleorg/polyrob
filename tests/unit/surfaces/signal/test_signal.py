@@ -9,11 +9,12 @@ from surfaces.signal.surface import (SignalSurface, parse_envelope,
                                      target_from_session_key)
 
 ACCOUNT = "+15550000000"
+SENDER_UUID = "d71910b1-9c34-4b90-9cd8-88428d03e1b2"
 
 
 def _envelope(**kw):
     e = {"source": "+15551112222", "sourceNumber": "+15551112222",
-         "sourceName": "alice", "timestamp": 1720000000000,
+         "sourceUuid": SENDER_UUID, "sourceName": "alice", "timestamp": 1720000000000,
          "dataMessage": {"message": "hello"}}
     e.update(kw)
     return e
@@ -23,10 +24,10 @@ def test_parse_dm():
     inbound = parse_envelope(_envelope(), ACCOUNT)
     assert inbound.text == "hello"
     assert inbound.identity.source.chat_type == "dm"
-    assert inbound.identity.source.chat_id == "+15551112222"
-    assert inbound.identity.user_id == "u_signal_+15551112222"
+    assert inbound.identity.source.chat_id == SENDER_UUID
+    assert inbound.identity.user_id == "u_signal_" + SENDER_UUID
     assert inbound.mentions_bot is None
-    assert inbound.idempotency_key == "+15551112222:1720000000000"
+    assert inbound.idempotency_key == SENDER_UUID + ":1720000000000"
 
 
 def test_parse_group():
@@ -113,7 +114,7 @@ async def test_harness_dedup_and_delivery(tmp_path, monkeypatch):
     monkeypatch.setattr("surfaces.telegram.harness.act_on_inbound", fake_act)
 
     await harness.handle_envelope(_envelope())
-    assert sent == [("+15551112222", "ack!")]
+    assert sent == [(SENDER_UUID, "ack!")]
     await harness.handle_envelope(_envelope())  # same timestamp -> dedup
     assert len(sent) == 1
 
@@ -186,9 +187,45 @@ def test_send_includes_configured_account():
 
 def test_parse_envelope_source_uuid_fallback():
     from surfaces.signal.surface import parse_envelope
-    env = {"sourceUuid": "ab12-cd34", "timestamp": 5,
+    env = {"sourceUuid": SENDER_UUID, "timestamp": 5,
            "dataMessage": {"message": "hello"}}
     inbound = parse_envelope(env, account="+19995550000")
     assert inbound is not None
-    assert inbound.identity.raw_user_id == "ab12-cd34"
-    assert inbound.identity.user_id == "u_signal_ab12-cd34"
+    assert inbound.identity.raw_user_id == SENDER_UUID
+    assert inbound.identity.user_id == "u_signal_" + SENDER_UUID
+
+
+def test_number_visibility_cannot_change_tenant_or_dedup():
+    visible = parse_envelope(_envelope(), ACCOUNT)
+    hidden = parse_envelope(_envelope(source=None, sourceNumber=None), ACCOUNT)
+    changed = parse_envelope(_envelope(source="+15559999999", sourceNumber="+15559999999"), ACCOUNT)
+    assert visible.identity == hidden.identity == changed.identity
+    assert visible.idempotency_key == hidden.idempotency_key == changed.idempotency_key
+
+
+@pytest.mark.parametrize("sender_uuid", [None, "", "not-a-uuid"])
+def test_phone_only_identity_is_refused(sender_uuid):
+    assert parse_envelope(_envelope(sourceUuid=sender_uuid), ACCOUNT) is None
+
+
+import pytest as _pytest
+
+
+@_pytest.mark.parametrize("url,ok", [
+    ("http://127.0.0.1:8080", True),
+    ("http://localhost:8080", True),
+    ("http://[::1]:8080", True),
+    ("https://signal.example.org", True),
+    ("http://10.0.0.5:8080", False),
+    ("http://signal.example.org", False),
+    ("ftp://127.0.0.1", False),
+])
+def test_daemon_url_must_be_loopback_or_tls(url, ok):
+    """CHAT-21: the daemon has no auth — plain HTTP only to loopback."""
+    from surfaces.signal.client import SignalClient, SignalEventStream, daemon_url_problem
+    assert (daemon_url_problem(url) is None) is ok
+    if not ok:
+        with _pytest.raises(ValueError):
+            SignalClient(url, "+1555")
+        with _pytest.raises(ValueError):
+            SignalEventStream(url)

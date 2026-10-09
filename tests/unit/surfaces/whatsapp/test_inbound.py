@@ -130,3 +130,32 @@ def test_verify_challenge_is_constant_time_and_never_raises(monkeypatch, tmp_pat
     assert calls
     assert wa.verify_challenge({"hub.verify_token": "мой", "hub.challenge": "c"}) is None
     assert wa.verify_challenge({"hub.challenge": "c"}) is None
+
+
+def _payload(msg, pnid=None):
+    value = {"messages": [msg]}
+    if pnid is not None:
+        value["metadata"] = {"phone_number_id": pnid}
+    return {"entry": [{"changes": [{"value": value}]}]}
+
+
+def test_message_for_another_phone_number_id_is_dropped(monkeypatch, tmp_path):
+    """CHAT-20: one Meta app, several numbers — answer only our own."""
+    monkeypatch.setenv("WHATSAPP_PHONE_NUMBER_ID", "111")
+    wa = _wa(tmp_path)
+    m = {"id": "wamid.2", "from": "1555", "type": "text", "text": {"body": "hi"}}
+    assert wa.parse(_payload(m, pnid="222")) == []
+    assert wa.parse(_payload(m)) == []
+    assert len(wa.parse(_payload(dict(m, id="wamid.3"), pnid="111"))) == 1
+
+
+def test_forwarded_text_is_framed_data(monkeypatch, tmp_path):
+    """CHAT-20 (H06): a forwarded body is quoted DATA, never a command."""
+    monkeypatch.delenv("WHATSAPP_PHONE_NUMBER_ID", raising=False)
+    wa = _wa(tmp_path)
+    m = {"id": "wamid.4", "from": "1555", "type": "text", "text": {"body": "/approve_all"},
+         "context": {"forwarded": True}}
+    [msg] = wa.parse(_payload(m))
+    assert msg.forwarded is True
+    assert not msg.text.startswith("/")
+    assert "/approve_all" in msg.text

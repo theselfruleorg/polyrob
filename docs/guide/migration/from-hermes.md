@@ -17,7 +17,11 @@ fast-moving project — verify anything load-bearing against its repo.*
 | Skills | Skills, plus agent-authored ones under `SKILLS_WRITABLE` | Different frontmatter shape — see below |
 | H-MEM | `MEMORY_BACKEND` | SQLite FTS5 by default, optional local vector recall, tenant-scoped |
 | Cron jobs | Cron **and** the goal board | Both durable; a goal carries acceptance criteria and dependencies, a cron job carries a schedule. See [streams.md](../streams.md) |
-| Terminal backends | `AGENT_COMPUTE_POSTURE` 0–3 | Hardened Docker exec, then a persistent `shell` and `process` manager in a dev container, then gated self-maintenance verbs |
+| Terminal backends | `AGENT_COMPUTE_POSTURE` 0–3, `SHELL_BACKEND` | Hardened Docker exec, then a persistent `shell` and `process` manager in a dev container, then gated self-maintenance verbs, then (posture 3) the host shell for your own terminal turn. Hermes' local backend is its default; here it is opt-in and refused with a signing key in the process |
+| Terminal backends (remote) | `SHELL_BACKEND=ssh\|modal\|daytona\|vercel_sandbox\|singularity`, `CODE_EXEC_DOCKER_BINARY=podman` | ssh keeps one ControlMaster session; the cloud backends are optional packs (`polyrob[modal]`, …). Remote sandboxes do not sync your workspace |
+| Dangerous-command approval | The shell command guard, `SHELL_APPROVAL_MODE`, `SHELL_ALLOW`/`SHELL_DENY` | A floor no approval lifts (inside containers too); the dangerous class waits for you; unattended runs refuse it. `smart` may deny anything but approves only inside a sandbox |
+| `process` (write/submit/close, pty, notify) | `process` + `shell_run(pty=, notify=)` | Same verbs; a notify note wakes the session, and receipts survive a restart |
+| `execute_code` | `run_code(tools=True)`, `run_code(persist=True)` | Tool calls go through every gate; `CODE_EXEC_TOOL_CALLS` turns it on. `persist=True` keeps a per-session Python kernel |
 | Nous Portal | — | No single-subscription portal. One OpenRouter key reaches most models; `providers.yaml` declares any other endpoint |
 
 ---

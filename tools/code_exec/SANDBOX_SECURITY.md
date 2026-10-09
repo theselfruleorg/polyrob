@@ -43,9 +43,16 @@ daemon in `test_docker_escape.py`.
 (backend default) selects `none` (default) → `--network none`, `egress` →
 `--network bridge` (outbound allowed, no host network namespace — an operator-added
 egress proxy is expected if this is used), or `host` → `--network host` (escape hatch,
-opt-in only, never the default). **Nothing in this codebase sets `CODE_EXEC_NETWORK` to
-anything other than its `none` default** — enabling egress or host networking is a
-deliberate operator action, not a POLYROB default.
+opt-in only, never the default). A one-shot run defaults to `none`.
+
+⚠️ **Exception — the persistent dev sandbox.** A posture-1 dev container (the
+session-persistent container, `_resolve_setup_network`) defaults to `--network bridge`
+when `CODE_EXEC_NETWORK` is unset, because pip installs and port publishing need
+egress. That container therefore has **open outbound internet**: agent-authored code
+in it can reach any host (data exfiltration, C2). The host allowlist is opt-in: set
+`CODE_EXEC_NETWORK=proxy` to route the dev container through the egress-proxy sidecar
+(exact/`*.suffix` host allowlist, ports 80/443 + configured), or `CODE_EXEC_NETWORK=none`
+to close it. Host networking is never a default.
 
 ## Defense in depth beyond the sandbox itself
 

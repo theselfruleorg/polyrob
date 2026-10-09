@@ -6,7 +6,7 @@ metadata:
   polyrob-priority: '3'
   polyrob-auto-activate: 'true'
   polyrob-triggers: '{"action_names":[],"keywords":["fix","implement","refactor","add function","bug","write code","run tests","debug","edit code"],"task_patterns":["fix.*bug","implement.*","refactor.*","add.*function","write.*code","run.*tests","debug.*"],"tool_ids":[]}'
-  polyrob-version: '1'
+  polyrob-version: '2'
 ---
 # Coding Workflow
 
@@ -34,3 +34,14 @@ Fixing a bug, implementing/refactoring code, adding a function, or running tests
 
 ## Notes
 - Touch only what the task needs; leave unrelated code alone.
+
+## Deeper methods — read one only when the step needs it
+Load with `read_skill_resource(skill_id="coding-workflow", resource_path="references/<file>.md")`.
+- `review-lenses.md` — before you ship a non-trivial diff, or when asked to
+  review one. Its first lens asks which claim has no test behind it.
+- `build-failure-triage.md` — a build, install, lint or CI run fails with
+  more than one error.
+- `debugging-method.md` — the cause is not clear after one careful read, a
+  test fails only sometimes, or a first fix did not work.
+- `cleanup-passes.md` — after the change works and is green, to remove dead
+  code, copies and needless layers without changing behaviour.

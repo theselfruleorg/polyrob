@@ -41,7 +41,9 @@ _DIRECT_ACTION_MODULES = (
     "tools/controller/autonomy_control_action.py",  # 031: owner pause/resume (extracted)
     "tools/controller/doc_authoring.py",  # self_context_manage/owner_doc_manage (extracted 2026-09-08)
     "tools/controller/room_read_action.py",  # gated direct action; still a real runtime name
+    "tools/controller/room_moderate_action.py",  # gated direct action (room_moderate)
     "tools/controller/owner_ask_action.py",  # H04: gated direct action (owner_ask)
+    "tools/controller/avatar_action.py",
     "tools/controller/card_actions.py",  # action cards: present_choice / propose_action
     "tools/controller/worker_manage_action.py",  # 041 phase 2: gated direct action
 )

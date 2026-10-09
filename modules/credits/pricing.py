@@ -24,8 +24,9 @@ from typing import Any, Dict, Mapping, Optional, Union
 # CREDIT BONUSES - Single source of truth for all bonus amounts
 # ============================================================================
 
-# Welcome bonus given to ALL new users on sign up
-WELCOME_BONUS: int = int(os.environ.get("WELCOME_BONUS", "100"))
+# Public wallet creation does not prove a unique person; no automatic subsidy.
+from core.env import int_env
+WELCOME_BONUS: int = max(0, int_env("WELCOME_BONUS", 0))
 
 # One-time DEN Sign Up Allowance per token ID (prevents transfer abuse)
 DEN_SIGNUP_ALLOWANCE: int = int(os.environ.get("DEN_SIGNUP_ALLOWANCE", "2000"))

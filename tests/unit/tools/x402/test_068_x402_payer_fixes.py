@@ -142,5 +142,6 @@ async def test_service_pays_the_cheap_base_entry_listed_second(monkeypatch):
 
 
 def test_quote_and_preflight_share_the_payer_selection():
-    src = inspect.getsource(C.quote)
+    src = inspect.getsource(C.quote_details)
     assert "configured=network" in src
+    assert "network=network" in inspect.getsource(C.quote)

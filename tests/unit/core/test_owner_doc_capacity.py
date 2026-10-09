@@ -49,7 +49,9 @@ def test_an_over_cap_doc_blocks_the_whole_block_not_a_truncation(tmp_path):
     from core.instance import self_tier_root
     root = self_tier_root(tmp_path, "rob", "rob")
     root.mkdir(parents=True, exist_ok=True)
-    (root / "owner.md").write_text("Owner prefers short answers.\n" * 400,
+    from core.instance import OWNER_DOC_MAX_CHARS
+    line = "Owner prefers short answers.\n"
+    (root / "owner.md").write_text(line * (OWNER_DOC_MAX_CHARS // len(line) + 10),
                                    encoding="utf-8")
     assert "[BLOCKED" in load_owner_doc(tmp_path, "rob", "rob")
     (root / "owner.md").write_text("Owner prefers short answers.\n", encoding="utf-8")

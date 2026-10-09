@@ -60,6 +60,11 @@ class TestTaskAgentContinuousChat:
         llm_module = MagicMock()
         llm_module.get_llm.return_value = MagicMock()
         container.get.side_effect = lambda name: llm_module if name == 'llm' else None
+        # A bare MagicMock would answer get_service('balance_manager') with a truthy
+        # mock and make every run a credit-billed one (session_compute awaits the
+        # async TierManager.get_user_tier). These tests exercise session locking on
+        # an unbilled install: no balance manager, no tier manager.
+        container.get_service.side_effect = lambda name: None
         return container
 
     @pytest.fixture

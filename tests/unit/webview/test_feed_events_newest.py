@@ -13,6 +13,7 @@ import time
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.unit.webview.owner_session import owner_headers
 
 PATH = "/api/session/{sid}/feed/events"
 
@@ -29,7 +30,7 @@ def client(monkeypatch, tmp_path):
     importlib.reload(wg)
     import webview.server as srv
     importlib.reload(srv)
-    yield TestClient(srv._fastapi), srv
+    yield TestClient(srv._fastapi, headers=owner_headers(monkeypatch)), srv
     for key in ("POLYROB_POSTURE", "ENV"):
         monkeypatch.delenv(key, raising=False)
     importlib.reload(wg)

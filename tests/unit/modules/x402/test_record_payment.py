@@ -118,8 +118,8 @@ async def test_duplicate_nonce_is_idempotent(tmp_path, monkeypatch):
             transaction_hash="0xsametx",
         )
         assert await record_x402_payment(**kwargs) is True
-        # Replay of the same on-chain tx must not create a second row or raise.
-        assert await record_x402_payment(**kwargs) is True
+        # A replay leaves one row and explicitly refuses another paid request.
+        assert await record_x402_payment(**kwargs) is False
         rows = await db.fetch_all(
             "SELECT id FROM x402_payment_requests WHERE nonce = '0xsametx'"
         )

@@ -52,6 +52,36 @@ def _sse_failure(e: Exception, what: str) -> str:
     return _format_sse_error(f"{what} failed (reference {ref})")
 
 
+#: API-11: concurrent live SSE pollers one caller may hold. Each polls the
+#: feed at 1 Hz for up to an hour, so an unbounded count is a CPU/IO lever.
+MAX_STREAMS_PER_USER = 8
+_ACTIVE_STREAMS: dict = {}
+
+
+async def bounded_stream(user_id: Optional[str], stream: AsyncGenerator[str, None]
+                         ) -> AsyncGenerator[str, None]:
+    """Run *stream* only while *user_id* holds fewer than
+    :data:`MAX_STREAMS_PER_USER` live streams. Claimed and released inside the
+    generator, so a response that never starts never leaks a slot."""
+    key = str(user_id or "anonymous")
+    if _ACTIVE_STREAMS.get(key, 0) >= MAX_STREAMS_PER_USER:
+        await stream.aclose()
+        yield _format_sse_error(
+            f"Too many open task streams (max {MAX_STREAMS_PER_USER}); close one first")
+        return
+    _ACTIVE_STREAMS[key] = _ACTIVE_STREAMS.get(key, 0) + 1
+    try:
+        async for chunk in stream:
+            yield chunk
+    finally:
+        left = _ACTIVE_STREAMS.get(key, 1) - 1
+        if left > 0:
+            _ACTIVE_STREAMS[key] = left
+        else:
+            _ACTIVE_STREAMS.pop(key, None)
+        await stream.aclose()
+
+
 async def task_event_stream(
     task_id: str,
     handler: A2ATaskHandler,
@@ -368,7 +398,7 @@ async def stream_message(
     # Check if continuing existing task
     task_id = request_body.message.taskId
     if task_id:
-        # Continue existing task - already paid
+        await verify_payment_for_request(request=request, cost_credits=1)
         await handler.send_message(task_id, request_body.message, user_id)
     else:
         # NEW TASK: Verify payment before creation
@@ -396,7 +426,7 @@ async def stream_message(
 
     # Return streaming response
     return StreamingResponse(
-        task_event_stream(task_id, handler),
+        bounded_stream(user_id, task_event_stream(task_id, handler)),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -430,7 +460,7 @@ async def stream_task_events(
         raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
 
     return StreamingResponse(
-        task_event_stream(task_id, handler, historyLength),
+        bounded_stream(user_id, task_event_stream(task_id, handler, historyLength)),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -487,7 +517,7 @@ async def resubscribe_to_task(
 
     # Return streaming response
     return StreamingResponse(
-        task_event_stream(task_id, handler, historyLength),
+        bounded_stream(user_id, task_event_stream(task_id, handler, historyLength)),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

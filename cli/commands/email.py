@@ -5,7 +5,7 @@ the agent), so an email sender is at most a correspondent the agent already cont
 (their reply -> DATA into the originating session) or DENIED. The agent contacts third
 parties via the email tool; their replies flow back here.
 
-Credentials: the existing gmail_email / gmail_app_password config (./.polyrob/.env or
+Credentials: the existing gmail_email / gmail_app_password config (~/.polyrob/.env or
 config/.env.*). Nothing is committed.
 """
 import asyncio

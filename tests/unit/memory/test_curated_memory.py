@@ -53,3 +53,16 @@ def test_over_char_cap_rejected(provider):
 def test_anon_refused(provider):
     assert asyncio.run(provider.curated_add("", "no tenant")) is False
     assert asyncio.run(provider.curated_read("")) == ""
+
+
+def test_removal_treats_sql_wildcards_as_literal_text(provider):
+    asyncio.run(provider.curated_add("alice", "keep ordinary note"))
+    asyncio.run(provider.curated_add("alice", "discount is 10%"))
+    assert asyncio.run(provider.curated_remove("alice", "%")) == 1
+    assert "ordinary" in asyncio.run(provider.curated_read("alice"))
+
+
+def test_curated_memory_does_not_persist_credential_shapes(provider):
+    secret = "sk-" + "a" * 24
+    assert asyncio.run(provider.curated_add("alice", secret))
+    assert secret not in asyncio.run(provider.curated_read("alice"))

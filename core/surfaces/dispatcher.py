@@ -53,6 +53,7 @@ _COMMANDS = ("/task", "/cancel", "/new", "/help",
              "/halt", "/resume", "/pause",  # owner pause record (031; /halt = alias of /pause)
              "/cron", "/goal", "/wallet", "/invoices", "/settle",  # G13 write verbs
              "/rail",   # 036: standing work (rails + their grants), owner-only
+             "/adopt",  # 2026-10-08: make an agent-authored job/goal the owner's (card confirm)
              "/trade",  # owner-launched money-granted run (2026-09-09)
              "/bridge",  # 037 cross-chain move; owner-only, approval-gated
              "/launch", "/deploy", "/lp",  # token/liquidity writes; owner-only, capped
@@ -436,8 +437,7 @@ async def _route_inbound_impl(
                              reason="other_bot_command")
 
     # 0) ACCESS GATE (polyrob D3) — when POLYROB_REQUIRE_PAIRING is on, an unpaired
-    #    non-owner is denied (and issued a pairing code). Fail-open + default-off, so
-    #    this is byte-identical until an operator opts into pairing.
+    #    non-owner is denied (and issued a pairing code). Store failures deny access.
     try:
         from core.pairing import guard_inbound
         surface_id = getattr(inbound.identity.source, "surface_id", None)
@@ -446,8 +446,10 @@ async def _route_inbound_impl(
             return RouteDecision(RouteKind.DENIED, session_key,
                                  pairing_code=denial.pairing_code,
                                  reason="pairing_required")
-    except Exception as e:  # never block routing on a guard fault
-        logger.debug("route_inbound access-gate skipped: %s", e)
+    except Exception as e:
+        logger.warning("route_inbound pairing gate unavailable: %s", type(e).__name__)
+        return RouteDecision(RouteKind.DENIED, session_key, silent=True,
+                             reason="pairing_required")
 
     # 0a-groups) W3 GROUP CHAT (opt-in GROUP_CHAT_ENABLED, default OFF). In an
     #    allowlisted group chat: the owner gets the legacy flow (mention-gated);
@@ -746,6 +748,29 @@ async def _route_inbound_impl(
             )
             return RouteDecision(RouteKind.DENIED, session_key,
                                  reason="forgeable_sender")
+
+        # Local mode grants the owner's tools and provider credentials. A remote
+        # DM must prove ownership even when correspondent routing is disabled.
+        # Use the same resolver as the enabled path (including paired senders),
+        # never the local-mode "any nonempty user" shortcut.
+        #
+        # CHAT-1: the same holds OUTSIDE local mode for every network surface but
+        # Telegram. A standalone `polyrob slack|discord|signal|whatsapp|x` leaves
+        # the correspondent model off, and a stranger's DM reached the
+        # COMMAND/STEER/TASK_AGENT path. Telegram keeps its own upstream gate
+        # (the ALLOWED_TELEGRAM_USER_IDS allowlist, checked before any work).
+        from core.config_policy import local_mode_enabled
+        _local = local_mode_enabled()
+        if (surface_id not in {"cli", "local", "repl"}
+                and (_local or surface_id != "telegram")):
+            from core.surfaces.access import AccessTier, resolve_access_tier
+            try:
+                owner = resolve_access_tier(container, inbound.identity) == AccessTier.OWNER
+            except Exception:
+                owner = False
+            if not owner:
+                return RouteDecision(RouteKind.DENIED, session_key,
+                                     reason="local_owner_required")
 
     # Resolve the bound session row ONCE — used by both COMMAND (so /cancel & /new can
     # act on the running session) and STEER. Fail-open: a lookup error degrades to cold.

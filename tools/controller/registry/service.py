@@ -2,7 +2,7 @@ import asyncio
 import os
 import threading
 from collections import OrderedDict
-from inspect import iscoroutinefunction, signature
+from inspect import Parameter, iscoroutinefunction, signature
 from typing import Any, Callable, Dict, List, Optional, Sequence, Type, TYPE_CHECKING
 import logging
 
@@ -356,6 +356,10 @@ class Registry:
 				raise ValueError(f'Action {action_name} not found')
 
 			action = self.registry.actions[action_name]
+		from core.billing_context import billed_tool_refusal
+		refusal = billed_tool_refusal(action.tool)
+		if refusal:
+			raise ValueError(refusal)
 		try:
 			# Handle None params - convert to empty dict
 			if params is None:
@@ -397,7 +401,16 @@ class Registry:
 					not is_pydantic
 					and isinstance(first_anno, str)
 					and action.param_model is not None
-					and first_anno == action.param_model.__name__
+					and first_anno.rsplit('.', 1)[-1] == action.param_model.__name__
+				):
+					is_pydantic = True
+				# An UNANNOTATED `params` first argument with an explicit param_model is
+				# the model too (prod 2026-10-05: wallet_activity splatted → TypeError).
+				if (
+					not is_pydantic
+					and first_anno is Parameter.empty
+					and parameters[0].name == 'params'
+					and action.param_model is not None
 				):
 					is_pydantic = True
 			parameter_names = [param.name for param in parameters]

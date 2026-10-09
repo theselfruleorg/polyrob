@@ -8,7 +8,7 @@ def theme_preference(request) -> str:
     from core.prefs import resolve
     from webview import webgate
     from utils.auth_utils import is_authenticated
-    if webgate.posture() != "local" and not is_authenticated(request):
+    if request is None or not is_authenticated(request):
         return "auto"
     try:
         from webview.pages import _effective_user_id
@@ -24,7 +24,7 @@ def show_avatar(request) -> bool:
     from core.prefs import resolve
     from webview import webgate
     from utils.auth_utils import is_authenticated
-    if webgate.posture() != 'local' and not is_authenticated(request):
+    if request is None or not is_authenticated(request):
         return True
     try:
         from webview.pages import _effective_user_id

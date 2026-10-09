@@ -12,6 +12,7 @@ import asyncio
 import logging
 import os
 import time
+import uuid
 from typing import Any, Optional
 
 from core.surfaces.envelopes import (Identity, InboundMessage, OutboundMessage,
@@ -67,9 +68,17 @@ def parse_envelope(envelope: dict, account: str,
     data = envelope.get("dataMessage")
     if not isinstance(data, dict):
         return None
-    sender = str(envelope.get("sourceNumber") or envelope.get("source")
-                 or envelope.get("sourceUuid") or "")
-    if not sender or sender == account:
+    number = str(envelope.get("sourceNumber") or envelope.get("source") or "")
+    if number and number == account:
+        return None
+    # A phone number can disappear under Signal's privacy settings or be
+    # reassigned. It must never select a second tenant for the same account.
+    try:
+        sender = str(uuid.UUID(str(envelope.get("sourceUuid") or "")))
+    except (ValueError, AttributeError):
+        logger.warning("Signal message refused: daemon supplied no valid account UUID")
+        return None
+    if sender == account:
         return None
     text = str(data.get("message") or "").strip()
     media = parse_attachments(data)

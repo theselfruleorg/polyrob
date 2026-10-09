@@ -37,7 +37,8 @@ def pnl_asset(tmp_path):
     home = str(tmp_path / "home")
     AssetStore(store_path(home)).upsert(PaymentAsset(
         asset_id="pnl", chain="robinhood", address="0x" + "bb" * 20,
-        decimals=18, symbol="PNL", rail="onchain_scan", source="operator"))
+        decimals=18, symbol="PNL", rail="onchain_scan", source="operator",
+        min_amount_raw=1, liquidity_floor_usd=100))
     return home
 
 
@@ -57,7 +58,7 @@ class _Quoter:
         import time
         return PriceQuote(asset_id=asset.asset_id, usd_per_token=self._price,
                           liquidity_usd=self._liq, verdict=self._verdict,
-                          source="test", ts=time.time())
+                          source="test", ts=time.time(), confidence="high")
 
 
 # --- the defect ------------------------------------------------------------

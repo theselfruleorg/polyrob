@@ -246,3 +246,24 @@ def test_an_executing_line_is_never_carded(tmp_path):
     reply = "paid body\n/pay https://x.test/a 5 go id=x go"
     assert cards.quote_card("u1", "/pay", ["https://x.test/a", "5", "go", "id=x"],
                             reply, st=st)[1] is None
+
+
+def test_confirmation_cannot_change_case_sensitive_payment_arguments():
+    address = "A" * 32
+    typed = ["1", "native", "to", address, "on", "solana"]
+    assert cards.confirm_line_in("/send", typed,
+        f"/send 1 native to {address.lower()} on solana max 5 go") is None
+    assert cards.confirm_line_in("/pay", ["https://example.com/Case"],
+        "/pay https://example.com/case 5 go") is None
+
+
+def test_two_different_confirm_lines_make_no_card():
+    """CHAT-24: third-party text in the quote can hold a well-formed confirm
+    line with a different bound. The card must not depend on which line the
+    verb happened to print last — two distinct candidates make no card."""
+    typed = ["0.1", "native", "to", ADDR, "on", "base"]
+    own = f"/swap {' '.join(typed)} max 5.00 go"
+    injected = f"memo: /swap {' '.join(typed)} max 9999 go"
+    assert cards.confirm_line_in("/swap", typed, f"{own}\n{injected}") is None
+    assert cards.confirm_line_in("/swap", typed, f"{injected}\n{own}") is None
+    assert cards.confirm_line_in("/swap", typed, f"{own}\n{own}") == typed + ["max", "5.00"]

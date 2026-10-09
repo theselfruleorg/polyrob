@@ -240,6 +240,7 @@ _SPEND_VERBS = (
     "hyperliquid_cancel_order", "hyperliquid_cancel_all_orders",
     "hyperliquid_place_limit_order", "hyperliquid_place_market_order",
     "polymarket_place_limit_order", "polymarket_place_market_order",
+    "polymarket_cancel_order", "polymarket_cancel_all_orders",
     "defi_trade_transfer", "defi_trade_swap", "defi_trade_solana_swap",
     "defi_trade_approve_token", "defi_trade_revoke_approval",
     # ⚠️ `defi_trade_bridge` is deliberately ABSENT (039). It owns its gate inside
@@ -282,6 +283,17 @@ _SPEND_VERBS = (
     "agent_nft_collection_mint", "agent_nft_withdraw_token", "agent_nft_adopt", "agent_nft_bind_identity", "agent_nft_journal", "agent_nft_revoke_all", "agent_nft_collection_reveal",
 )
 
+#: On the hook, but never waiting on a tap (2026-10-08): a Polymarket cancel
+#: moves no funds and Polymarket has no stop orders
+#: (test_polymarket_cancel_skips_the_owner_queue). A Hyperliquid cancel skips
+#: the hook too; a cancel of a TRIGGER order (stop-loss / take-profit) asks the
+#: owner inside the verb (tests/packs/markets/test_hl_trigger_cancel_tap.py).
+#: hyperliquid_revoke_agent only reduces delegated authority.
+_TAP_EXEMPT = frozenset({"polymarket_cancel_order", "polymarket_cancel_all_orders",
+                         "hyperliquid_cancel_order", "hyperliquid_cancel_all_orders",
+                         "hyperliquid_revoke_agent"})
+_QUEUED_VERBS = tuple(v for v in _SPEND_VERBS if v not in _TAP_EXEMPT)
+
 
 def test_mode_auto_still_queues_trade_verbs_through_owner_queue(tmp_path, monkeypatch):
     monkeypatch.setenv("PAYMENT_APPROVAL_MODE", "auto")
@@ -292,7 +304,7 @@ def test_mode_auto_still_queues_trade_verbs_through_owner_queue(tmp_path, monkey
     # LIVE params: the defi verbs default dry_run=True, and a simulation is
     # exempt from the tap by design (023 D3) — a spend is what must queue.
     live = {"amount_usd": 5, "dry_run": False, "max_spend_usd": 5}
-    for verb in _SPEND_VERBS:
+    for verb in _QUEUED_VERBS:
         _SpyProvider.calls = []
         reason = asyncio.run(c._run_pre_tool_call_hooks(verb, dict(live), _owner_ctx()))
         assert reason is None, verb  # the spy (owner_queue) approved
@@ -313,8 +325,7 @@ def test_mode_auto_trade_verb_denied_when_owner_queue_denies(tmp_path, monkeypat
 
 
 @pytest.mark.parametrize("mode", ["approve", "auto"])
-@pytest.mark.parametrize("verb", ["cancel_order", "cancel_all_orders", "approve_agent",
-                                  "revoke_agent", "update_leverage"])
+@pytest.mark.parametrize("verb", ["approve_agent", "update_leverage"])
 def test_hyperliquid_mutations_cannot_bypass_owner_queue(tmp_path, monkeypatch, mode, verb):
     monkeypatch.setenv("PAYMENT_APPROVAL_MODE", mode)
     monkeypatch.setenv("DEFI_TIERED_SPEND_LANE", "true")
@@ -362,7 +373,7 @@ def test_mode_approve_also_queues_trade_verbs_unchanged(tmp_path, monkeypatch):
 
     c = _make_controller(tmp_path)
     live = {"amount_usd": 5, "dry_run": False, "max_spend_usd": 5}
-    for verb in _SPEND_VERBS:
+    for verb in _QUEUED_VERBS:
         _SpyProvider.calls = []
         reason = asyncio.run(c._run_pre_tool_call_hooks(verb, dict(live), _owner_ctx()))
         assert reason is None, verb
@@ -657,7 +668,10 @@ def test_tiered_lane_on_executes_within_ceiling_and_queues_above(tmp_path, monke
         reason = asyncio.run(c._run_pre_tool_call_hooks(
             verb, {"dry_run": False, "max_spend_usd": 0.9}, _owner_ctx()))
         assert reason is None, verb
-        assert _SpyProvider.calls == [], f"{verb} within ceiling must not queue"
+        if verb in {"defi_trade_transfer", "defi_trade_solana_transfer"}:
+            assert _SpyProvider.calls, "third-party payments require an owner decision"
+        else:
+            assert _SpyProvider.calls == [], f"{verb} within ceiling must not queue"
 
         _SpyProvider.calls = []
         asyncio.run(c._run_pre_tool_call_hooks(
@@ -703,3 +717,22 @@ def test_a_payment_lane_that_fails_to_wire_denies_its_tools(tmp_path, monkeypatc
     assert reason and "could not be wired" in reason
     # A non-payment action is untouched by the fallback.
     assert asyncio.run(c._run_pre_tool_call_hooks("read_file", {}, None)) is None
+
+
+
+@pytest.mark.parametrize("mode", ["approve", "auto"])
+@pytest.mark.parametrize("verb", ["polymarket_cancel_order", "polymarket_cancel_all_orders"])
+def test_polymarket_cancel_skips_the_owner_queue(tmp_path, monkeypatch, mode, verb):
+    """The owner's "cancel my Polymarket orders": no second tap. An order still taps."""
+    monkeypatch.setenv("PAYMENT_APPROVAL_MODE", mode)
+    monkeypatch.delenv("DEFI_TIERED_SPEND_LANE", raising=False)
+    constants._refreeze_payment_approval_flags_for_tests()
+    monkeypatch.setitem(approval._PROVIDERS, "owner_queue", _SpyProvider)
+    _SpyProvider.outcome = False
+    _SpyProvider.calls = []
+    c = _make_controller(tmp_path)
+    assert asyncio.run(c._run_pre_tool_call_hooks(verb, {"order_id": "0x1"}, _owner_ctx())) is None
+    assert _SpyProvider.calls == []
+    reason = asyncio.run(c._run_pre_tool_call_hooks(
+        "polymarket_place_limit_order", {"amount_usd": 5}, _owner_ctx()))
+    assert reason is not None and _SpyProvider.calls

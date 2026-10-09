@@ -11,6 +11,11 @@ async def launch(ctx: LaunchContext):
         ctx.warn("SIGNAL_SURFACE_ENABLED=true but no SIGNAL_ACCOUNT "
                  "(the +E164 number linked in signal-cli). Skipping Signal.")
         return None
+    from surfaces.signal.client import daemon_url_problem
+    problem = daemon_url_problem(daemon)
+    if problem:
+        ctx.warn(f"{problem}. Skipping Signal.")
+        return None
     from surfaces.signal.harness import build_signal_harness
     return harness_launched(build_signal_harness(
         ctx.container, ctx.task_agent, daemon_url=daemon, account=account,

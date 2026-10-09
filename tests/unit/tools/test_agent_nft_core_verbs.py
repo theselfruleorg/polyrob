@@ -148,8 +148,24 @@ def test_bind_registers_through_the_account(armed):
     assert erc6551.decode_execute(tx["data"])[0].lower() == REGISTRY.lower()
 
 
+def _identity_chain(owner, *, minted=True):
+    base = ViewChain(owner, identities=1)
+    def rpc(method, params, *args, **kw):
+        if method == "eth_blockNumber":
+            return hex(34_617_892)
+        if method == "eth_getLogs" and params[0].get("address", "").lower() == REGISTRY.lower():
+            from core.wallet.simulation import _TOPIC_TRANSFER
+            return [{"address": REGISTRY, "topics": [
+                _TOPIC_TRANSFER, _w(0) if minted else _w(OTHER), _w(ACCOUNT), _w(3)]}]
+        if method == "eth_call" and params[0]["to"].lower() == REGISTRY.lower():
+            if params[0]["data"].startswith(abi.selector("ownerOf(uint256)")):
+                return _w(ACCOUNT)
+        return base(method, params, *args, **kw)
+    return rpc
+
+
 def test_bind_refuses_a_second_identity(armed):
-    tool, seen = _tool(armed, ViewChain(armed.address, identities=1))
+    tool, seen = _tool(armed, _identity_chain(armed.address))
     res = _run(_no_package(tool).agent_nft_bind_identity(BindParams(nft="3")))
     assert res.error and "already holds" in res.error and seen == []
 
@@ -173,3 +189,36 @@ def test_the_anchor_key_follows_the_prefix():
     from tools.agent_nft.core_verbs import anchor_key
     assert anchor_key(types.SimpleNamespace(journal_prefix="POLYROB")) == "polyrob.journal"
     assert anchor_key(types.SimpleNamespace(journal_prefix=None)) == "agent.journal"
+
+
+def test_bind_refuses_a_foreign_registration_uri_before_signing(armed):
+    tool, seen = _tool(armed, ViewChain(armed.address))
+    result = _run(_no_package(tool).agent_nft_bind_identity(
+        BindParams(nft="3", agent_uri="https://attacker.example/identity.json", dry_run=False)))
+    assert "alternate agent_uri" in result.error
+    assert not seen and not FakeRail.sent
+
+
+def test_journal_refuses_credentials_before_any_signature(armed, monkeypatch):
+    secret = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda omega"
+    monkeypatch.setenv("AGENT_WALLET_MASTER_SEED", secret)
+    tool, seen = _tool(armed, ViewChain(armed.address))
+    result = _run(_no_package(tool).agent_nft_journal(
+        JournalParams(kind="note", text=secret, nft="3", dry_run=False)))
+    assert "credential material" in result.error
+    assert secret not in result.error
+    assert not seen and not FakeRail.sent
+
+
+def test_automatic_journal_entries_use_the_same_secret_check():
+    from core.wallet.nft_account import build_entry
+    with pytest.raises(ValueError, match="credential material"):
+        build_entry(prior=[], account=ACCOUNT, chain_id=4663, kind="entry", owner=OTHER,
+                    text="API_KEY=sk-" + "a" * 48)
+
+
+def test_bind_ignores_an_unsolicited_identity(armed):
+    tool, seen = _tool(armed, _identity_chain(armed.address, minted=False))
+    res = _run(_no_package(tool).agent_nft_bind_identity(BindParams(nft="3")))
+    assert res.error is None, res.error
+    assert len(seen) == 1

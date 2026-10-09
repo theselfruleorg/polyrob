@@ -1,6 +1,14 @@
 """057 WS-A: named tool rigs for autonomous sessions."""
 import pytest
 
+
+def test_explicit_agent_tools_are_rechecked_after_operator_reduces_ceiling():
+    from core.config_policy.rigs import resolve_rig_tools
+    payload = {"authored_by": "agent", "tools": ["defi_trade", "filesystem"]}
+    assert resolve_rig_tools(payload, agent_ceiling=["filesystem"]) == ["filesystem"]
+    payload["authored_by"] = "owner"
+    assert resolve_rig_tools(payload, agent_ceiling=["filesystem"]) == ["defi_trade", "filesystem"]
+
 from core.config_policy.rigs import (
     FULL_RIG, RIGS, default_rig_name, is_rig, resolve_rig_tools, rig_names,
     rig_tools,

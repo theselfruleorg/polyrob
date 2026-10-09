@@ -25,7 +25,7 @@ def _ctx(session_id="owner-sess", user_id="rob"):
 def _done(board, title, priority=5):
     g = board.create(user_id="rob", title=title, priority=priority, force=True)
     board.claim(g.id, "w", ttl_seconds=60)
-    board.record_success(g.id, result="ok")
+    board.record_success(g.id, result="ok", claim_token=board.get(g.id).claim_token)
     return g
 
 

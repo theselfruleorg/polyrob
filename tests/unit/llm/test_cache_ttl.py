@@ -87,13 +87,32 @@ def test_marker_shape():
 def test_session_class_wrapper_uses_the_marker(monkeypatch):
     from agents.task import session_class
 
+    from agents.task.goals import autonomy_marker
+
     monkeypatch.delenv("ANTHROPIC_CACHE_TTL", raising=False)
-    monkeypatch.setattr(session_class, "is_autonomous_session", lambda sid: False)
+    monkeypatch.setattr(autonomy_marker, "is_autonomous", lambda sid: False)
     client = _Client()
     assert session_class.apply_session_cache_ttl(client, "sess-1") == "1h"
     assert cache_ttl_for(client) == "1h"
 
-    monkeypatch.setattr(session_class, "is_autonomous_session", lambda sid: True)
+    monkeypatch.setattr(autonomy_marker, "is_autonomous", lambda sid: True)
     cron = _Client()
     assert session_class.apply_session_cache_ttl(cron, "cron-1") == "5m"
     assert cache_ttl_for(cron) is None
+
+
+def test_session_class_cache_ttl_fails_open_to_interactive(monkeypatch):
+    """The cache TTL is a BUDGET reading: an unreadable marker means the chat
+    window (1h), not the autonomous one — only security gates fail closed."""
+    from agents.task import session_class
+    from agents.task.goals import autonomy_marker
+
+    def _boom(sid):
+        raise RuntimeError("marker unreadable")
+
+    monkeypatch.delenv("ANTHROPIC_CACHE_TTL", raising=False)
+    monkeypatch.setattr(autonomy_marker, "is_autonomous", _boom)
+    assert session_class.budget_class_autonomous("sess-x") is False
+    assert session_class.is_autonomous_session("sess-x") is True
+    client = _Client()
+    assert session_class.apply_session_cache_ttl(client, "sess-x") == "1h"

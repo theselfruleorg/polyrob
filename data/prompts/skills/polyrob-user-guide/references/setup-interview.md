@@ -54,7 +54,7 @@ propose writing them as plain files — always go through:
 
 - **Durable facts about the owner** (question 1) -> `owner_doc_manage`
   (`action="patch"` to add a line; `"update"` replaces the whole doc).
-  Capped at `OWNER_DOC_MAX_CHARS` (4000 characters of active text; a
+  Capped at `OWNER_DOC_MAX_CHARS` (16000 characters of active text; a
   `## Superseded` section does not count); keep only durable facts, not the
   conversation transcript.
 - **Style preferences** (question 2) -> `preferences(operation="set",

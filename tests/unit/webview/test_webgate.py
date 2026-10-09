@@ -156,8 +156,8 @@ def test_is_local_true_only_for_local(webgate, monkeypatch):
     assert webgate.is_local() is False
 
 
-def test_requires_owner_login_false_for_local(webgate):
-    assert webgate.requires_owner_login() is False
+def test_requires_owner_login_true_for_local(webgate):
+    assert webgate.requires_owner_login() is True
 
 
 @pytest.mark.parametrize("val", ["own_ops", "multitenant"])

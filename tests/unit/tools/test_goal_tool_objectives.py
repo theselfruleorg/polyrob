@@ -25,7 +25,13 @@ def _tool(tmp_path):
 
 
 def _ctx(session_id="owner-sess", user_id="rob"):
-    return SimpleNamespace(session_id=session_id, parent_session_id=None, user_id=user_id)
+    return SimpleNamespace(session_id=session_id, parent_session_id=None, user_id=user_id,
+                           role="orchestrator", is_sub_agent=False, metadata={})
+
+
+@pytest.fixture(autouse=True)
+def bound_owner(monkeypatch):
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
 
 
 def run(coro):
@@ -107,3 +113,19 @@ def test_autonomous_subagent_blocked_via_parent(tmp_path):
     ctx = SimpleNamespace(session_id="virtual-sub", parent_session_id="goal-sess-2", user_id="rob")
     r = run(t.objective_add(ObjectiveAddAction(title="Sub sneaky"), ctx))
     assert r.error and "autonomous" in r.error.lower()
+
+
+@pytest.mark.parametrize("change", [
+    {"role": "leaf"}, {"is_sub_agent": True},
+    {"metadata": {"turn_kind": "self_wake"}},
+    {"metadata": {"turn_kind": "group"}}, {"user_id": "stranger"},
+])
+def test_owner_identity_alone_does_not_authorize_goal_mutation(tmp_path, change):
+    tool = _tool(tmp_path)
+    goal = tool._goal_board.create(user_id="rob", title="Owner's standing work")
+    ctx = _ctx()
+    for key, value in change.items():
+        setattr(ctx, key, value)
+    result = run(tool.goal_update(GoalUpdateAction(goal_id=goal.id, priority=10), ctx))
+    assert result.error
+    assert tool._goal_board.get(goal.id).priority != 10

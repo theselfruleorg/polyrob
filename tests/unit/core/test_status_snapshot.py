@@ -32,7 +32,8 @@ def _seed_goals(data_dir, *, ready=0, blocked=True, asks=True, exhausted_objecti
         board.create(user_id=OWNER, title=f"Ready goal {i}", status=STATUS_READY)
     if blocked:
         g = board.create(user_id=OWNER, title="Execute first treasury trade once defi_trade is granted")
-        board.record_failure(g.id, error="agent declared BLOCKED: need the owner to grant defi_trade")
+        board.record_failure(g.id, error="agent declared BLOCKED: need the owner to grant defi_trade",
+            claim_token=board.get(g.id).claim_token)
         board.update_status(g.id, "blocked")
     if asks:
         board.create_ask(user_id=OWNER, what="Unblock goal: deploy one x402 endpoint",

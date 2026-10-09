@@ -22,12 +22,26 @@ class _Pool:
 
 
 def test_the_quote_carries_the_screen_verdict_and_the_pool_depth():
-    q = PaymentQuoter(pool_fn=lambda c, a: (_Pool(), 0.10)).quote(ASSET)
+    q = PaymentQuoter(pool_fn=lambda c, a: (_Pool(), 0.10),
+                      price_fn=lambda c, a: 0.10).quote(ASSET)
     assert q.usd_per_token == 0.10
     assert q.liquidity_usd == 50_000.0
     assert q.verdict
     assert q.asset_id == "rob"
-    assert q.source == "geckoterminal"
+    assert q.source == "independent + geckoterminal screen"
+    assert q.confidence == "high"
+
+
+def test_a_single_pumped_pool_cannot_size_an_invoice():
+    q = PaymentQuoter(pool_fn=lambda c, a: (_Pool(), 1000),
+                      price_fn=lambda c, a: 0.1).quote(ASSET)
+    assert q is None
+
+
+def test_missing_independent_price_cannot_size_an_invoice():
+    q = PaymentQuoter(pool_fn=lambda c, a: (_Pool(), 0.1),
+                      price_fn=lambda c, a: None).quote(ASSET)
+    assert q is None
 
 
 def test_no_pool_yields_no_quote_never_a_zero_price():

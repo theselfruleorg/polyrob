@@ -33,7 +33,8 @@ def test_quota_blocks_dispatch(tmp_path, monkeypatch):
     board = GoalBoard(str(tmp_path / "g.db"))
     g1 = board.create(user_id="rob", title="goal one distinct")
     board.claim(g1.id, "w", ttl_seconds=60)
-    board.record_success(g1.id, result="ok")  # 1 started in last 24h
+    board.record_success(g1.id, result="ok",
+        claim_token=board.get(g1.id).claim_token)  # 1 started in last 24h
     board.create(user_id="rob", title="another different goal")
     d = GoalDispatcher(board, _NullAgent())
     dispatched = asyncio.run(d.dispatch_once())

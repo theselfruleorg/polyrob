@@ -26,14 +26,14 @@ def test_present_line_names_the_home_file_tier(tmp_path, monkeypatch):
     assert key not in line
 
 
-def test_present_line_names_the_project_file_tier(tmp_path, monkeypatch):
+def test_project_file_is_not_a_credential_source(tmp_path, monkeypatch):
     _, proj = _isolated(tmp_path, monkeypatch)
     (proj / ".polyrob").mkdir()
     key = "sk-ant-0123456789abcdefgh"
     (proj / ".polyrob" / ".env").write_text(f"ANTHROPIC_API_KEY={key}\n")
     lines = doctor_report({"ANTHROPIC_API_KEY": key})
     line = next(ln for ln in lines if ln.strip().startswith("anthropic:"))
-    assert "./.polyrob/.env" in line
+    assert "process env" in line and "./.polyrob/.env" not in line
 
 
 def test_process_env_override_is_named(tmp_path, monkeypatch):
@@ -65,12 +65,10 @@ def test_malformed_line_names_tier_and_global_scope(tmp_path, monkeypatch):
     assert "polyrob config unset ANTHROPIC_API_KEY --global" in line
 
 
-def test_malformed_in_a_non_unset_tier_names_the_file(tmp_path, monkeypatch):
-    # `config unset` only manages the two .polyrob files — for a legacy tier
-    # (root .env) the honest remedy is the file itself, not a verb that will miss.
+def test_ignored_project_env_is_not_named_as_a_credential_source(tmp_path, monkeypatch):
     _, proj = _isolated(tmp_path, monkeypatch)
     (proj / ".env").write_text("ANTHROPIC_API_KEY=x\n")
     lines = doctor_report({"ANTHROPIC_API_KEY": "x"})
     line = next(ln for ln in lines if ln.strip().startswith("anthropic:"))
-    assert ".env" in line
-    assert "remove it from" in line
+    assert "process env" in line
+    assert "remove it from" not in line

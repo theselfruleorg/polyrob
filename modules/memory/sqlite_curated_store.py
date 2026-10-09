@@ -110,7 +110,9 @@ class CuratedNotesStoreMixin:
         [[wikilinks]] in the body are parsed into the links column at write."""
         if self._anon_blocked(user_id):
             return None
-        content = (content or "").strip()
+        from core.secret_scrub import scrub_secret_shapes
+        content = scrub_secret_shapes(content).strip()
+        title = scrub_secret_shapes(title) if title is not None else None
         if not content:
             return None
         max_entries, max_chars = self._curated_caps()
@@ -156,7 +158,8 @@ class CuratedNotesStoreMixin:
             return False
         sets, args = ["updated_ts = ?"], [int(time.time())]
         if content is not None:
-            content = content.strip()
+            from core.secret_scrub import scrub_secret_shapes
+            content = scrub_secret_shapes(content).strip()
             if not content:
                 return False
             _, max_chars = self._curated_caps()
@@ -165,7 +168,8 @@ class CuratedNotesStoreMixin:
             sets += ["content = ?", "links = ?"]
             args += [content, json.dumps(parse_wikilinks(content))]
         if title is not None:
-            sets.append("title = ?"); args.append(title.strip() or None)
+            from core.secret_scrub import scrub_secret_shapes
+            sets.append("title = ?"); args.append(scrub_secret_shapes(title).strip() or None)
         if tags is not None:
             sets.append("tags = ?"); args.append(json.dumps(self._tags_list(tags)))
         if status is not None:
@@ -340,8 +344,8 @@ class CuratedNotesStoreMixin:
         try:
             rows = execute_retry(
                 self.db_path,
-                "SELECT id FROM curated_memory WHERE user_id = ? AND content LIKE ?",
-                (self._norm_user(user_id), f"%{substring}%"), fetch="all",
+                "SELECT id FROM curated_memory WHERE user_id = ? AND instr(lower(content), lower(?)) > 0",
+                (self._norm_user(user_id), substring), fetch="all",
             )
             ids = [r["id"] for r in (rows or [])]
             for _id in ids:

@@ -37,6 +37,26 @@ class Launched:
     on_signal: Optional[Callable[[], None]] = None
 
 
+def plain_http_bind_warning(host: str) -> Optional[str]:
+    """A warning when the webhook server binds a NON-loopback address (CHAT-22).
+
+    The server speaks plain HTTP; on a public address the webhook secrets and
+    every inbound body cross the network in clear unless a TLS proxy sits in
+    front. None for a loopback bind.
+    """
+    import ipaddress
+    h = (host or "").strip().strip("[]").lower()
+    if h == "localhost":
+        return None
+    try:
+        if ipaddress.ip_address(h).is_loopback:
+            return None
+    except ValueError:
+        pass
+    return (f"the webhook server binds {host or '0.0.0.0'} over plain HTTP. Put a TLS "
+            "proxy in front of it, or bind 127.0.0.1 behind that proxy (--host)")
+
+
 def harness_launched(h: Any) -> Launched:
     """The uniform ``run()``/``stop()`` harness shape (discord/slack/signal/x)."""
     return Launched(run=h.run, stop=h.stop)
