@@ -28,6 +28,7 @@ BASE = frozenset({
     "pydantic-settings", "pyjwt", "python-dotenv", "pyyaml", "requests", "rich",
     "tiktoken",
     "multidict",  # Already required by aiohttp; explicit security floor for every install.
+    "httpx",  # Was transitive via openai until openai 3.x moved to httpx2; core and tools import it.
 })
 
 

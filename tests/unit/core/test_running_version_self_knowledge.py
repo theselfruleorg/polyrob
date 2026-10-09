@@ -99,6 +99,8 @@ def test_absent_self_context_stays_empty(tmp_path):
 
 def test_the_deploy_ships_and_rolls_back_the_changelog():
     root = Path(__file__).resolve().parents[3]
+    if not (root / "scripts/deploy_prod.sh").exists():
+        pytest.skip("the deploy scripts are not in the public tree")
     prod = (root / "scripts/deploy_prod.sh").read_text(encoding="utf-8")
     assert 'rsync -a "$TMP/CHANGELOG.md" "$APP_DIR/CHANGELOG.md"' in prod
     tx = (root / "scripts/deploy_transaction.sh").read_text(encoding="utf-8")

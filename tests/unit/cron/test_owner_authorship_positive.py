@@ -88,7 +88,7 @@ def test_cli_cron_schedule_and_digest_stamp_owner(tmp_path, monkeypatch):
 
 
 def test_operator_seeder_stamps_owner(tmp_path):
-    from scripts._seed_cron import seed
+    seed = pytest.importorskip("scripts._seed_cron", reason="scripts/ is not in the public tree").seed
     job = seed(str(tmp_path / "cron.db"), {"task": "digest", "schedule_spec": "1d",
                                             "user_id": "rob", "payload": {"digest": True}})
     assert job.payload["authored_by"] == "owner" and job.payload["digest"] is True
