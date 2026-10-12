@@ -61,7 +61,8 @@ def test_reflection_runs_before_save_and_summary_drains(monkeypatch):
 	"""When close-reflection is enabled + threshold met, the consolidated summary is
 	queued and comes back in the drained list (so the caller can sync it)."""
 	monkeypatch.setenv("REFLECTION_ON_SESSION_CLOSE", "true")
-	monkeypatch.setenv("REFLECTION_SESSION_CLOSE_THRESHOLD", "3")
+	monkeypatch.setattr(
+		"modules.memory.task.task_context_manager.REFLECTION_SESSION_CLOSE_THRESHOLD", 3)
 	mgr = _make_manager()
 	mgr.create_session(session_id="s2", task="t")
 	_add_findings(mgr, "s2", 5)

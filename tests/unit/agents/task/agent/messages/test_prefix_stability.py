@@ -37,8 +37,8 @@ from agents.task.agent.message_manager.service import MessageManager
 from agents.task.agent.prompts import SystemPrompt
 from agents.task.agent.views import AgentStepInfo
 from modules.llm.messages import HumanMessage
-from tools.browser.views import BrowserState
-from tools.dom.views import DOMElementNode
+from agents.task.loop_types.browser_views import BrowserState
+from agents.task.loop_types.dom_views import DOMElementNode
 
 from tests.support.prefix_cache import (
 	PrefixCacheProbe,

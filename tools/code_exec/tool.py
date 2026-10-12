@@ -123,7 +123,7 @@ class CodeExecutionTool(BaseTool):
 
     @staticmethod
     def _to_action_result(result):
-        from tools.controller.types import ActionResult
+        from agents.task.loop_types.controller_types import ActionResult
 
         parts = []
         if result.stdout:
@@ -144,7 +144,7 @@ class CodeExecutionTool(BaseTool):
         """073: one cell in the session's persistent kernel (tools/code_exec/kernel.py)."""
         from tools.code_exec.kernel import KernelUnavailable, run_cell
         from tools.code_exec.limits import dev_exec_max_timeout_sec
-        from tools.controller.types import ActionResult
+        from agents.task.loop_types.controller_types import ActionResult
         sid = getattr(execution_context, "session_id", None) or "kernel"
         timeout = max(1.0, min(float(params.timeout or 60.0), dev_exec_max_timeout_sec()))
         try:
@@ -199,18 +199,18 @@ class CodeExecutionTool(BaseTool):
         if not dev_mode:
             return ("tools=True requires the sandbox-dev compute posture "
                     "(AGENT_COMPUTE_POSTURE>=1) and an owner-steered, non-delegated turn.")
-        if getattr(execution_context, "is_sub_agent", False) or \
-                getattr(execution_context, "role", "leaf") != "orchestrator":
+        from core.security.owner_turn import is_leaf
+        if is_leaf(execution_context):
             return "tools=True is not available to a sub-agent or a leaf."
         orch = self._tool_rpc_orchestrator(execution_context)
         controller = getattr(orch, "controller", None) if orch is not None else None
         if controller is None or getattr(controller, "registry", None) is None:
             return "tools=True could not reach this session's tool controller."
         try:
-            tainted = bool(getattr(orch, "_correspondent_tainted", False))
-            if not tainted:
-                from core.security.refusal_taint import is_tainted
-                tainted = is_tainted(getattr(execution_context, "session_id", None))
+            from core.security import taints
+            held = taints.of(orchestrator=orch,
+                             session_id=getattr(execution_context, "session_id", None))
+            tainted = held.correspondent or held.refusal
         except Exception:
             tainted = True  # can't prove clean -> deny
         if tainted:
@@ -223,7 +223,7 @@ class CodeExecutionTool(BaseTool):
         from tools.code_exec import tool_rpc
         from tools.code_exec.limits import dev_exec_max_timeout_sec
         from tools.controller.tool_call_bridge import perform_tool_call
-        from tools.controller.types import ActionResult
+        from agents.task.loop_types.controller_types import ActionResult
 
         controller = self._tool_rpc_orchestrator(execution_context).controller
         plan, why = tool_rpc.plan_socket(backend)
@@ -274,7 +274,7 @@ class CodeExecutionTool(BaseTool):
     async def run_code(self, params: RunCodeParams, execution_context=None):
         """Execute ``params.code`` via the configured backend; return an ActionResult."""
         from tools.code_exec.sandbox_guard import code_exec_execution_blocked_reason
-        from tools.controller.types import ActionResult
+        from agents.task.loop_types.controller_types import ActionResult
         from tools.code_exec.sandbox_guard import local_host_exec_refusal
         blocked = (code_exec_execution_blocked_reason()
                    or local_host_exec_refusal(execution_context))

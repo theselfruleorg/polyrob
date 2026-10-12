@@ -141,7 +141,7 @@ def test_rotation_takes_the_append_lock(tele, tmp_path, monkeypatch):
             return False
 
     monkeypatch.setattr(svc, "SafeFileLock", _Rec)
-    monkeypatch.setenv("TELEMETRY_EVENTS_MAX_BYTES", "1")
+    monkeypatch.setattr(svc, "TELEMETRY_EVENTS_MAX_BYTES", 1)
     f = tmp_path / "events.jsonl"
     f.write_text("{}\n{}\n")
     t._rotate_events_file(f)

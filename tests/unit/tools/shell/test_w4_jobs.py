@@ -17,7 +17,7 @@ import pytest
 
 import agents.task.constants as c
 import core.security.host_execution as he
-from tools.controller.execution_context import ActionExecutionContext
+from agents.task.loop_types.execution_context import ActionExecutionContext
 from tools.shell import backend_pool
 from tools.shell import receipts as rc_mod
 from tools.shell import sudo as sudo_mod

@@ -27,10 +27,10 @@ def test_sessions_list_has_json_flag():
     async def _fake_build(*args, **kwargs):
         return mock_container
 
-    # build_cli_container is a function-local import from core.bootstrap, so it must
+    # build_cli_container is a function-local import from polyrob.app.bootstrap, so it must
     # be patched at its definition site (there is no module-level alias in
     # cli.commands.session to patch).
-    with patch("core.bootstrap.build_cli_container", side_effect=_fake_build), \
+    with patch("polyrob.app.bootstrap.build_cli_container", side_effect=_fake_build), \
          patch("cli.keys.preflight_or_onboard", lambda **k: True):
         result = runner.invoke(session, ["list", "--json"])
         # Should not crash on --json flag
@@ -56,7 +56,7 @@ def test_session_list_survives_null_task(monkeypatch):
         return mock_container
 
     monkeypatch.setattr("cli.keys.preflight_or_onboard", lambda **k: True)
-    with patch("core.bootstrap.build_cli_container", side_effect=_fake_build):
+    with patch("polyrob.app.bootstrap.build_cli_container", side_effect=_fake_build):
         result = runner.invoke(session, ["list"])
 
     assert result.exception is None, result.exception
@@ -142,7 +142,7 @@ def test_session_show_uses_get_session_info():
     async def _fake_build(*args, **kwargs):
         return mock_container
 
-    with patch("core.bootstrap.build_cli_container", side_effect=_fake_build), \
+    with patch("polyrob.app.bootstrap.build_cli_container", side_effect=_fake_build), \
          patch("cli.keys.preflight_or_onboard", lambda **k: True):
         result = runner.invoke(session, ["show", "abc123", "--json"])
 

@@ -359,14 +359,34 @@ async def test_denied_does_not_start_session_and_returns_message():
 # --- owner_allowed (ALLOWED_TELEGRAM_USER_IDS gate) --------------------------
 
 def test_owner_allowed_empty_allowlist_returns_none(monkeypatch):
-    """No allowlist set -> None ('no allowlist; bootstrap mode')."""
+    """No allowlist and no owner id -> None ('no allowlist; bootstrap mode')."""
     monkeypatch.delenv("ALLOWED_TELEGRAM_USER_IDS", raising=False)
+    monkeypatch.delenv("POLYROB_OWNER_TELEGRAM_ID", raising=False)
     assert owner_allowed("12345") is None
 
 
 def test_owner_allowed_blank_allowlist_returns_none(monkeypatch):
     monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "  ")
+    monkeypatch.delenv("POLYROB_OWNER_TELEGRAM_ID", raising=False)
     assert owner_allowed("12345") is None
+
+
+def test_the_configured_owner_id_is_admitted_without_an_allowlist(monkeypatch):
+    """D4 (owner, 2026-10-10): POLYROB_OWNER_TELEGRAM_ID IS the owner. It already
+    gets the owner menu; the DM gate must admit it too. Anyone else is ignored
+    (the bot is locked to its owner, not in bootstrap mode)."""
+    monkeypatch.delenv("ALLOWED_TELEGRAM_USER_IDS", raising=False)
+    monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "4242")
+    assert owner_allowed("4242") is True
+    assert owner_allowed(4242) is True
+    assert owner_allowed("12345") is False
+
+
+def test_the_configured_owner_id_joins_the_allowlist(monkeypatch):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "111,999")
+    monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "4242")
+    assert owner_allowed("4242") is True and owner_allowed("111") is True
+    assert owner_allowed("12345") is False
 
 
 def test_owner_allowed_listed_id_true(monkeypatch):

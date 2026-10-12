@@ -24,6 +24,9 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# Output-reserve ceiling (internal tuning; was an env knob).
+COMPLETION_RESERVE_TOKENS = 16384
+
 
 def completion_reserve_cap() -> int:
 	"""Ceiling on the output reserve subtracted from the input budget (P1,
@@ -34,11 +37,10 @@ def completion_reserve_cap() -> int:
 	202752 window) that surrendered 65% of the window, and rows with
 	reserve==window clamped the budget to the 1,000-token floor. The reserve is
 	an OUTPUT allowance, not a per-request guarantee, so a bounded ceiling is
-	honest: ``COMPLETION_RESERVE_TOKENS`` (default 16384; ``0`` disables the cap
-	and restores the legacy full-reserve behavior).
+	honest: ``COMPLETION_RESERVE_TOKENS`` (16384; ``0`` would disable the cap
+	and restore the legacy full-reserve behavior).
 	"""
-	from core.env import int_env
-	return int_env("COMPLETION_RESERVE_TOKENS", 16384)
+	return COMPLETION_RESERVE_TOKENS
 
 
 def _capped_reserve(max_completion_tokens: int) -> int:
@@ -62,18 +64,6 @@ def autonomous_context_budget() -> int:
 	"""
 	from core.env import int_env
 	return int_env("AUTONOMOUS_CONTEXT_BUDGET_TOKENS", 0)
-
-
-def count_tool_schemas_enabled() -> bool:
-	"""Whether the gauge includes the tool-schema (`tools` param) tokens (P4).
-
-	The schemas are real billed prompt bytes every step (7.5K on the default
-	local rig) but were invisible to every gauge sum. Default ON; set
-	``CTX_COUNT_TOOL_SCHEMAS=false`` for the legacy messages-only numerator.
-	"""
-	from core.env import bool_env
-	return bool_env("CTX_COUNT_TOOL_SCHEMAS", True)
-
 
 
 def _foundation_tokens(manager) -> int:
@@ -426,23 +416,19 @@ class TokenCounterMixin:
 
 		Stamped by the step loop after the provider schemas are generated (the
 		registry memoizes the estimate, so this is a cheap per-step write). The
-		value rides `get_actual_token_count` behind CTX_COUNT_TOOL_SCHEMAS —
+		value rides `get_actual_token_count` —
 		schemas are sent as the `tools` request param, NOT as a message, so they
 		never enter `history.total_tokens`.
 		"""
 		self._tool_schema_tokens = max(0, int(tokens or 0))
 
 	def _tool_schema_tokens_for_gauge(self) -> int:
-		"""The tool-schema slot the gauge counts (P4), or 0 when suppressed.
+		"""The tool-schema slot the gauge counts (P4).
 
 		The schemas ride the `tools` REQUEST PARAM, not a message, so they never
 		enter ``history.total_tokens`` — but the provider bills them every step.
-		``CTX_COUNT_TOOL_SCHEMAS=false`` restores the legacy messages-only
-		numerator. One reader, so `/context` cannot render a slot the gauge
-		suppresses (F18).
+		One reader, so `/context` and the gauge show the same slot (F18).
 		"""
-		if not count_tool_schemas_enabled():
-			return 0
 		return int(getattr(self, '_tool_schema_tokens', 0) or 0)
 
 	def _count_hmem_tokens(self, context: str) -> int:

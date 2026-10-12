@@ -13,14 +13,12 @@ from core.surfaces.chat_policy import set as set_pol
 
 def test_defaults(tmp_path, monkeypatch):
     monkeypatch.delenv("GROUP_DEFAULT_MODE", raising=False)
-    monkeypatch.delenv("GROUP_REQUIRE_MENTION", raising=False)
     p = load(tmp_path, "rob", "telegram", "-1", instance_id="polyrob")
     assert p.mode == "mention" and p.reply_cap_per_hour == 20 and p.context_lines == 30
 
 
 def test_missing_file_is_defaults_not_an_error(tmp_path, monkeypatch):
     monkeypatch.delenv("GROUP_DEFAULT_MODE", raising=False)
-    monkeypatch.delenv("GROUP_REQUIRE_MENTION", raising=False)
     assert load(tmp_path, "rob", "telegram", "never-seen",
                 instance_id="polyrob") == ChatPolicy.defaults()
 
@@ -118,7 +116,6 @@ def test_a_hand_edited_mode_that_is_not_a_mode_falls_back(tmp_path, monkeypatch)
     """`load` never trusts the file: a value the writer would have refused is
     dropped back to the default rather than disabling the room by accident."""
     monkeypatch.delenv("GROUP_DEFAULT_MODE", raising=False)
-    monkeypatch.delenv("GROUP_REQUIRE_MENTION", raising=False)
     path = chat_preferences_path(tmp_path, "rob", "telegram", "-1", "polyrob")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text('[chat]\nmode = "loud"\n', encoding="utf-8")
@@ -132,7 +129,6 @@ def test_an_unreadable_file_fails_toward_listen(tmp_path, monkeypatch):
     together, so an unparseable file un-muted the room it was muting.
     """
     monkeypatch.delenv("GROUP_DEFAULT_MODE", raising=False)
-    monkeypatch.delenv("GROUP_REQUIRE_MENTION", raising=False)
     path = chat_preferences_path(tmp_path, "rob", "telegram", "-1", "polyrob")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("this is not toml = = =", encoding="utf-8")
@@ -144,7 +140,6 @@ def test_an_unreadable_file_keeps_the_last_good_policy(tmp_path, monkeypatch):
     it rather than reverting to anything wider."""
     import core.surfaces.chat_policy as cp
     monkeypatch.delenv("GROUP_DEFAULT_MODE", raising=False)
-    monkeypatch.delenv("GROUP_REQUIRE_MENTION", raising=False)
     cp._CACHE.clear()
     path = chat_preferences_path(tmp_path, "rob", "telegram", "-9", "polyrob")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -156,20 +151,19 @@ def test_an_unreadable_file_keeps_the_last_good_policy(tmp_path, monkeypatch):
 
 def test_env_default_mode(tmp_path, monkeypatch):
     monkeypatch.setenv("GROUP_DEFAULT_MODE", "listen")
-    monkeypatch.delenv("GROUP_REQUIRE_MENTION", raising=False)
     assert load(tmp_path, "rob", "telegram", "-1", instance_id="polyrob").mode == "listen"
 
 
-def test_require_mention_false_is_the_active_alias(tmp_path, monkeypatch):
-    """One release of back-compat: `GROUP_REQUIRE_MENTION=false` meant "answer
-    everything in an allowlisted room", which is exactly `chat.mode=active`."""
+def test_retired_require_mention_is_not_read(tmp_path, monkeypatch):
+    """`GROUP_REQUIRE_MENTION` was retired after 1.4; `GROUP_DEFAULT_MODE=active`
+    (or a per-room `chat.mode`) is the one way to answer every line."""
     monkeypatch.delenv("GROUP_DEFAULT_MODE", raising=False)
     monkeypatch.setenv("GROUP_REQUIRE_MENTION", "false")
-    assert load(tmp_path, "rob", "telegram", "-1", instance_id="polyrob").mode == "active"
+    assert load(tmp_path, "rob", "telegram", "-1", instance_id="polyrob").mode == "mention"
 
 
-def test_a_written_mode_beats_the_alias(tmp_path, monkeypatch):
-    monkeypatch.setenv("GROUP_REQUIRE_MENTION", "false")
+def test_a_written_mode_beats_the_default_mode(tmp_path, monkeypatch):
+    monkeypatch.setenv("GROUP_DEFAULT_MODE", "active")
     ok, msg = set_pol(tmp_path, "rob", "telegram", "-1", "chat.mode", "listen",
                       instance_id="polyrob")
     assert ok, msg

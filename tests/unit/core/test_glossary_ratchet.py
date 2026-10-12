@@ -31,7 +31,7 @@ CEILINGS = {
     "verbs": 24,
     "prefs": 0,
     "inbox_render": 16,
-    "telegram_owner": 79,
+    "telegram_owner": 78,
     "repl_owner": 26,
 }
 

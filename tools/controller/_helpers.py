@@ -15,7 +15,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, Dict
 
-from tools.controller.types import ActionResult
+from agents.task.loop_types.controller_types import ActionResult
 
 
 # Define observe function to replace the import

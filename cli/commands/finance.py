@@ -17,7 +17,7 @@ import click
 def finance(days: int, user: Optional[str]) -> None:
     """Balance sheet: income, spend, pending invoices, net — plus runtime cost."""
     import os
-    from core.bootstrap import setup_project_path, setup_sqlite_compat, load_env
+    from polyrob.app.bootstrap import setup_project_path, setup_sqlite_compat, load_env
     from cli.ui.commands.h_finance import render_finance
 
     setup_project_path()

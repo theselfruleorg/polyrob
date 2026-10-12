@@ -61,7 +61,7 @@ def test_reconcile_fails_open_on_getter_error(tmp_path):
 
 
 def test_autonomy_runtime_schedules_reconcile_only_when_enabled(monkeypatch):
-    import core.autonomy_runtime as rt
+    import polyrob.app.autonomy_runtime as rt
     import tools.hf_deploy.reconcile as rec
 
     calls = []

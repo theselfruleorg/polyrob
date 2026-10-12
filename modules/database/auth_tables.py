@@ -177,13 +177,12 @@ class AuthTables:
                     -- 1h one) and calculate_cost has billed it since G3 -- but
                     -- the row stored reads only, so nothing after the fact could
                     -- say whether a session's cache paid for itself. Mirrored in
-                    -- schema.sql and migrations v1_10_0.
+                    -- migrations v1_10_0.
                     cache_creation_tokens INTEGER DEFAULT 0,
                     api_cost_usd REAL DEFAULT 0.0,
                     markup_multiplier REAL DEFAULT 1.0,
                     -- G-26: real column for the request_id record_llm_usage generates
-                    -- "for deduplication" -- kept in sync with schema.sql. See the
-                    -- partial unique index below.
+                    -- "for deduplication". See the partial unique index below.
                     request_id TEXT,
                     metadata TEXT,
                     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

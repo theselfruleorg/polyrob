@@ -122,7 +122,7 @@ def test_own_ops_unauthenticated_gets_empty(monkeypatch, catalog_tree):
 
 
 def test_multitenant_stays_strictly_per_tenant(monkeypatch, catalog_tree):
-    monkeypatch.setenv("WEBGATE_MULTITENANT", "true")
+    monkeypatch.setenv("POLYROB_POSTURE", "multitenant")
     import webview.server as server
     import utils.auth_utils as au
     monkeypatch.setattr(au, "is_authenticated", lambda request: True)
@@ -131,7 +131,7 @@ def test_multitenant_stays_strictly_per_tenant(monkeypatch, catalog_tree):
 
 
 def test_multitenant_unauthenticated_still_empty(monkeypatch, catalog_tree):
-    monkeypatch.setenv("WEBGATE_MULTITENANT", "true")
+    monkeypatch.setenv("POLYROB_POSTURE", "multitenant")
     import webview.server as server
     import utils.auth_utils as au
     monkeypatch.setattr(au, "is_authenticated", lambda request: False)

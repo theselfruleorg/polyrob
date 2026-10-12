@@ -11,8 +11,10 @@ import re
 import tokenize
 from pathlib import Path
 
+from tests.support.repo_index import repo_index
+
 ROOT = Path(__file__).resolve().parents[1]
-SCAN_DIRS = ("agents", "core", "tools", "surfaces", "api", "cli", "cron", "modules")
+SCAN_DIRS = ("agents", "core", "polyrob", "tools", "surfaces", "api", "cli", "cron", "modules")
 
 BANNED = re.compile(
     r"\b(?:the\s+)?(?:user|owner)\s+(?:has\s+|just\s+)*"
@@ -28,7 +30,7 @@ ALLOWED: dict = {}
 
 def _string_literals(path: Path):
     try:
-        toks = tokenize.generate_tokens(io.StringIO(path.read_text(encoding="utf-8")).readline)
+        toks = tokenize.generate_tokens(io.StringIO(repo_index().text(path)).readline)
         for tok in toks:
             if tok.type == tokenize.STRING or tok.type == getattr(tokenize, "FSTRING_MIDDLE", -1):
                 yield tok.start[0], tok.string

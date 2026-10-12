@@ -3,8 +3,7 @@
 The Application is built headlessly here (DummyOutput / pipe input) — only the
 constructible pieces and the pure builders are unit-tested; the live "pins at the
 bottom, content scrolls above, status updates during the turn" behaviour needs a
-real TTY. The persistent input is now the DEFAULT for an interactive TTY
-(opt-OUT via POLYROB_PERSISTENT_INPUT=0).
+real TTY. The persistent input is the REPL path for an interactive TTY.
 """
 
 from __future__ import annotations
@@ -236,27 +235,6 @@ def test_persistent_ctrl_l_forces_full_repaint():
     assert ev.app.renderer.cleared == 1
     # Ctrl-L must not exit the app or touch the buffer.
     assert ev.app.exited_with == "UNSET"
-
-
-# ---------------------------------------------------------------------------
-# Gate: persistent input is ON by default (the pinned-bottom UX); opt-OUT only
-# ---------------------------------------------------------------------------
-
-
-def test_persistent_input_enabled_by_default(monkeypatch):
-    monkeypatch.delenv("POLYROB_PERSISTENT_INPUT", raising=False)
-    assert cli_app.persistent_input_enabled() is True
-
-
-def test_persistent_input_opt_out(monkeypatch):
-    for val in ("0", "false", "off", "no"):
-        monkeypatch.setenv("POLYROB_PERSISTENT_INPUT", val)
-        assert cli_app.persistent_input_enabled() is False, val
-
-
-def test_persistent_input_explicit_on(monkeypatch):
-    monkeypatch.setenv("POLYROB_PERSISTENT_INPUT", "1")
-    assert cli_app.persistent_input_enabled() is True
 
 
 # ---------------------------------------------------------------------------

@@ -163,7 +163,7 @@ async def test_empty_ledger_never_implies_own_posts_failed(home):
     057 WS-E: that sentence is no longer written here — both sites CITE the one
     verification table, which is also what the SEND path renders. Pin the exact
     row rather than a substring, so a reworded table cannot quietly drop it."""
-    from core.rails.verification import verification_line
+    from tools.rails.verification import verification_line
     chat = _seed_room(home, chat_id="-1001000000001", note="Announcement channel (@example_channel)")
     c = _Controller(home)
     fn, model = _action(c)

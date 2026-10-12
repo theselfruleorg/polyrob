@@ -17,11 +17,34 @@ def _build_twitter_tool(config: Any, container: Any) -> Any:
     return TwitterTool("twitter", config, container)
 
 
+async def build_ready_twitter_tool(config: Any, container: Any) -> Any:
+    """A built tool is not a usable one: its API client is made in
+    ``initialize()``. Without it every write fails "client is not constructed"
+    (prod 2026-10-11: two owner-approved buyback posts were lost that way)."""
+    tool = _build_twitter_tool(config, container)
+    if hasattr(tool, "client") and tool.client is None:
+        await tool.initialize()
+    return tool
+
+
+async def close_quietly(tool: Any) -> None:
+    """A one-use tool owns its API clients; the X Chat client holds an aiohttp
+    session that, left open, logs "Unclosed client session" (prod 2026-10-10/11)."""
+    close = getattr(tool, "close", None)
+    if close is None:
+        return
+    try:
+        await close()
+    except Exception:
+        logger.debug("twitter tool close failed", exc_info=True)
+
+
 async def deliver_post(task_agent: Any, job: Any, final: str) -> bool:
-    from cron.delivery import _config_and_container, _delivery_context, _record_delivery_write
+    from polyrob.sdk import delivery_config_and_container as _config_and_container, \
+        delivery_context as _delivery_context, record_delivery_write as _record_delivery_write
     from polyrob_x.twitter_tool import TwitterPostAction
     config, container = _config_and_container(task_agent)
-    tool = _build_twitter_tool(config, container)
+    tool = await build_ready_twitter_tool(config, container)
     text = final.strip()
     if len(text) > 280:
         text = text[:277] + "..."
@@ -30,8 +53,11 @@ async def deliver_post(task_agent: Any, job: Any, final: str) -> bool:
     # hourly rate limit, TWITTER_REQUIRE_APPROVAL, the cross-session repeat-post
     # cooldown, the 031 pause gate and the social_write record — a cron job with
     # deliver=twitter published with zero governance.
-    res = await tool.twitter_post(TwitterPostAction(text=text),
-                                  execution_context=_delivery_context(job))
+    try:
+        res = await tool.twitter_post(TwitterPostAction(text=text),
+                                      execution_context=_delivery_context(job))
+    finally:
+        await close_quietly(tool)
     _record_delivery_write(job, "twitter", "twitter_post", res,
                            target="open", fingerprint=text)
     if getattr(res, "error", None):

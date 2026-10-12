@@ -67,7 +67,7 @@ def _owner_tenant(user: Optional[str] = None) -> str:
 def _get_board(data_root: Optional[Path] = None) -> GoalBoard:
     """Get the GoalBoard instance for the current user."""
     from cli._admin_home import admin_data_dir
-    from core.bootstrap import setup_project_path, setup_sqlite_compat
+    from polyrob.app.bootstrap import setup_project_path, setup_sqlite_compat
 
     setup_project_path()
     setup_sqlite_compat()

@@ -54,7 +54,7 @@ propose writing them as plain files — always go through:
 
 - **Durable facts about the owner** (question 1) -> `owner_doc_manage`
   (`action="patch"` to add a line; `"update"` replaces the whole doc).
-  Capped at `OWNER_DOC_MAX_CHARS` (16000 characters of active text; a
+  Capped at `OWNER_DOC_MAX_CHARS` (24000 characters of active text; a
   `## Superseded` section does not count); keep only durable facts, not the
   conversation transcript.
 - **Style preferences** (question 2) -> `preferences(operation="set",
@@ -80,12 +80,9 @@ To add one line, `owner_doc_manage(action="patch", …)` is the smaller write.
 
 Tell the owner plainly what changed, using what each write returned:
 
-- On a genuine owner turn, with `OWNER_RULES_IMMEDIATE` on (the default), a
-  `contract_propose` or `owner_doc_manage` write **applies immediately** —
-  the result says it was applied and names the change. Say it is active.
-- On a forged turn (self-wake, delegation result, sub-agent, autonomous
-  goal/cron run), or with `OWNER_RULES_IMMEDIATE` off, the write is queued —
-  the result says so. Say it waits for the owner in `/pending`.
+- A `contract_propose` or `owner_doc_manage` write is always queued as a
+  draft, on every turn — the result says so. Say it waits for the owner in
+  `/pending`, where the owner activates it (or through the owner CLI).
 - A SAFE `set` (style) applies immediately. A GUARDED `set` (approvals,
   budget ceilings) is ALWAYS queued for `/pending`, on every turn.
 
@@ -130,6 +127,6 @@ a capability might work — an absent extra is a fact you can see.
 This interview is one-time. Once an `## Owner facts` section (or a legacy
 `## Operating contract` section) appears in your identity context, do not
 re-offer the interview in later sessions — the existence of the owner's rules
-doc IS "done". Because a genuine owner-turn write applies immediately, the
-section appears from the next session on. You can still help the owner refine
+doc IS "done". The section appears from the next session after the owner
+activates the draft in `/pending`. You can still help the owner refine
 it on request, just not via this scripted opener again.

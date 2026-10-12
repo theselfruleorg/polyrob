@@ -46,8 +46,7 @@ def _log():
 
 def _enabled() -> bool:
     from core.event_log import event_log_enabled
-    from core.security_flags import security_event_log_enabled
-    return security_event_log_enabled() and event_log_enabled()
+    return event_log_enabled()
 
 
 #: Resolved once per process — the owner binding is env-derived and stable, and
@@ -96,8 +95,8 @@ def deployment_tenant() -> str:
 
 
 def security_log_enabled() -> bool:
-    """Public name of :func:`_enabled` (``SECURITY_EVENT_LOG_ENABLED`` and the
-    event log both on) for the other perimeter emitters."""
+    """Public name of :func:`_enabled` (the event log is on) for the other
+    perimeter emitters."""
     return _enabled()
 
 

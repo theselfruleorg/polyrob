@@ -1,9 +1,9 @@
 """``AGENT_BUILDER_MODE`` — the FIFTH named default bundle (proposal 032).
 
-Sibling of ``autonomy_mode.py`` (the ``AUTONOMY_MODE`` precedent): it moves the
-DEFAULTS of a fixed publishing-flag group; an explicit per-flag env always wins
-at the call site (this is only the default argument to ``bool_env``). It never
-moves money verbs, host access (``AGENT_COMPUTE_POSTURE``) or secrets.
+Sibling of ``autonomy_mode.py`` (the ``AUTONOMY_MODE`` precedent): it sets a
+fixed publishing-flag group (its members; a ``POLYROB_OVERRIDES`` entry changes
+one — ``core/config_policy/members.py``). It never moves money verbs, host
+access (``AGENT_COMPUTE_POSTURE``) or secrets.
 
     off    — today. Byte-identical.
     build  — PUBLISH_ENABLED + GITHUB_TOOL_ENABLED default ON; the agent can build,
@@ -73,10 +73,10 @@ def effective_builder_mode() -> str:
 
 def publish_enabled() -> bool:
     """The static ship rail's switch: default OFF, ON under ``build``/``ship``;
-    explicit env wins. Lives here (not in ``tools/publish``) so the goal-toolset
-    gate in the agents tier can read it without an agents->tools import."""
-    from core.env import bool_env
-    return bool_env("PUBLISH_ENABLED", _builder_capability_default("PUBLISH_ENABLED"))
+    a ``POLYROB_OVERRIDES`` entry wins. Lives here (not in ``tools/publish``) so the
+    goal-toolset gate in the agents tier can read it without an agents->tools import."""
+    from core.config_policy.members import member_flag
+    return member_flag("PUBLISH_ENABLED")
 
 
 def _builder_capability_default(flag_name: str) -> bool:

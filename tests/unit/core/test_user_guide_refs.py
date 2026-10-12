@@ -1,43 +1,17 @@
 """Contract test for the polyrob-user-guide config reference (owner-UX P3 T1).
 
-Mirrors tests/unit/core/test_flags.py's pattern: the committed reference must
-be exactly what the checked-in generator produces (drift guard), and every
-flag documented in the runtime catalog (core/flags_catalog.py::CATALOG) must
+Mirrors tests/unit/core/test_flags.py's pattern: every flag documented in the runtime catalog (core/flags_catalog.py::CATALOG) must
 be discoverable in the compact reference the skill reads.
 """
-import subprocess
-import sys
 from pathlib import Path
-
-import pytest
 
 from core.flags_catalog import CATALOG
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-GENERATOR = REPO_ROOT / "scripts" / "gen_user_guide_refs.py"
 REFERENCE = (
     REPO_ROOT / "data" / "prompts" / "skills" / "polyrob-user-guide"
     / "references" / "configuration.md"
 )
-
-
-def test_reference_is_up_to_date_with_generator():
-    """The committed reference must be exactly what the checked-in generator
-    produces (the standard generated-file contract, same as
-    test_flags.py::test_generator_parity_with_checked_in_catalog`).
-
-    ``scripts/`` is private-only (never shipped to the public repo — the whole
-    directory is on the publish denylist), so skip this check when the
-    generator is absent; the reference file itself still ships and the
-    catalog-coverage test below still runs everywhere.
-    """
-    if not GENERATOR.exists():
-        pytest.skip("gen_user_guide_refs generator is private-only (scripts/ not shipped)")
-    proc = subprocess.run(
-        [sys.executable, str(GENERATOR), "--check"],
-        capture_output=True, text=True,
-    )
-    assert proc.returncode == 0, proc.stderr
 
 
 def test_reference_file_exists_and_has_content():
@@ -70,3 +44,18 @@ def test_every_catalog_flag_appears_in_reference():
         f"the user-guide reference — run `python scripts/gen_user_guide_refs.py`: "
         f"{missing[:10]}"
     )
+
+
+def test_skill_text_names_the_current_owner_doc_cap():
+    """The skill teaches the agent the owner-doc cap; a raised cap (16000 ->
+    24000 on 2026-10-11) must not leave the old number in the skill text."""
+    import re
+
+    from core.instance import OWNER_DOC_MAX_CHARS
+
+    skill_dir = REPO_ROOT / "data" / "prompts" / "skills" / "polyrob-user-guide"
+    for path in (skill_dir / "SKILL.md", skill_dir / "references" / "setup-interview.md"):
+        text = path.read_text()
+        named = re.findall(r"`OWNER_DOC_MAX_CHARS` \((\d+) characters", text)
+        assert named, f"{path.name} no longer names the owner-doc cap"
+        assert all(int(n) == OWNER_DOC_MAX_CHARS for n in named), (path.name, named)

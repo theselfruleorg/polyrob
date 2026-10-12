@@ -58,7 +58,7 @@ class BaseTool(BaseComponent):
         ``error_kind`` — set ONLY by the line that built *error*, from what it
         knows (``core.security.refusal_taint.PRECONDITION`` for an unmet
         precondition or a market error); never derived from the error text."""
-        from tools.controller.types import ActionResult
+        from agents.task.loop_types.controller_types import ActionResult
         if error is not None:
             if error_kind:
                 from core.security.refusal_taint import ERROR_KIND_KEY

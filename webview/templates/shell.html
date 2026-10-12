@@ -1,8 +1,8 @@
 {#
   THE shell. One nav, one head, one skip link, one <main>.
 
-  Derived once from docs/design/040/_build.py::nav() + head() + page(), which
-  exist in the mockup set for exactly this reason: so the frame stays
+  Derived once from the mockup set's nav() + head() + page() builders, which
+  exist in it for exactly this reason: so the frame stays
   byte-identical across screens and the claim is checkable rather than promised.
   Rule 1 of the design system is "one nav component; it rotates axis at 768 px;
   it never forks" — the rotation is pure CSS (app.css, @media 768px), so there

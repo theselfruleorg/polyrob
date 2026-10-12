@@ -193,7 +193,7 @@ def surface_profile(orchestrator: Any) -> Optional[dict]:
             # (core may not import agents; a parity test pins the two together).
             "correspondent": bool(
                 getattr(orchestrator, "_correspondent_session", False)
-                or getattr(orchestrator, "_correspondent_tainted", False)),
+                or _correspondent_tainted(orchestrator)),
         }
     except Exception as e:  # fail-open: unknown -> no surface block
         logger.debug("surface_profile failed: %s", e)
@@ -249,3 +249,8 @@ def surface_ask_capability(orchestrator: Any) -> Optional[bool]:
     except Exception as e:  # fail-open: unknown -> legacy behavior
         logger.debug("surface_ask_capability failed: %s", e)
         return None
+
+
+def _correspondent_tainted(orchestrator) -> bool:
+    from core.security.taints import correspondent_tainted
+    return correspondent_tainted(orchestrator)

@@ -50,8 +50,8 @@ def record_refusal(fs, normalized_path: str, display_path: str, root: str,
     let through here (logged): the write verb itself reports that failure, and a
     guard that cannot read the history cannot claim to protect it.
     """
-    from core.doc_kind import doc_kind_enforced, is_doc_path, record_write_refusal
-    if not (doc_kind_enforced() and is_doc_path(normalized_path)):
+    from core.doc_kind import is_doc_path, record_write_refusal
+    if not is_doc_path(normalized_path):
         return None
     if not os.path.isfile(normalized_path):
         return None

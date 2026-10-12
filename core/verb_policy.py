@@ -80,6 +80,14 @@ APPROVAL_OWNERS: FrozenSet[Optional[str]] = frozenset({None, "hook", "verb"})
 #: ``AUTONOMY_MODE=autonomous`` (``_ALWAYS_GATED_VERBS``).
 APPROVAL_LANES: FrozenSet[str] = frozenset({"recommended", "posture2", "always_queued"})
 
+#: W4 (2026-10-10): the KIND of outbound verb, the ONE source of every
+#: "outbound" list. ``""`` = not outbound; ``write`` = a post, reply, DM or mail
+#: to a third party (the words ARE the act; evidence counts it as produced
+#: output); ``text`` = other words that leave the box (``message`` and
+#: ``send_message``, which may reach the owner; a public record, issue or page).
+#: The refusal-taint gate holds every outbound verb in a tainted run.
+OUTBOUND_KINDS: FrozenSet[str] = frozenset({"", "write", "text"})
+
 
 @dataclass(frozen=True, slots=True)
 class VerbPolicy:
@@ -110,11 +118,39 @@ class VerbPolicy:
     #: A room (public) turn may never call it, whoever spoke
     #: (``core/surfaces/room_policy.ROOM_DENIED_ACTIONS``).
     room_denied: bool = False
+    #: The outbound kind (:data:`OUTBOUND_KINDS`).
+    outbound: str = ""
+    #: The param fields whose words leave the box. The send-time financial-claim
+    #: gate reads them (``financial_claim_gate.OUTBOUND_TEXT_FIELDS``).
+    text_fields: Tuple[str, ...] = ()
+    #: A late owner approval sends exactly the approved params ONCE and never
+    #: re-runs the job that asked (``approval_queue.OUTBOUND_WRITE_TOOLS``).
+    late_send: bool = False
+    #: A success is produced output even when no file lands
+    #: (``evidence.OUTPUT_ACTION_ALLOWLIST``; every ``write`` counts too).
+    output: bool = False
+    #: A PUBLIC read a deterministic cron read job may run with no turn context
+    #: (``cron/read_job.READ_VERBS``).
+    read_job: bool = False
 
     def __post_init__(self) -> None:
-        for field in ("simulatable", "risk_reducing", "correspondent_blocked", "room_denied"):
+        for field in ("simulatable", "risk_reducing", "correspondent_blocked", "room_denied",
+                      "late_send", "output", "read_job"):
             if type(getattr(self, field)) is not bool:
                 raise ValueError(f"VerbPolicy {self.name}: {field} must be a boolean")
+        if isinstance(self.text_fields, str) or not all(
+                isinstance(f, str) and f for f in self.text_fields):
+            raise ValueError(f"VerbPolicy {self.name}: text_fields must be field names")
+        object.__setattr__(self, "text_fields", tuple(self.text_fields))
+        if self.outbound not in OUTBOUND_KINDS:
+            raise ValueError(f"VerbPolicy {self.name}: unknown outbound kind {self.outbound!r}")
+        if self.text_fields and not self.outbound:
+            raise ValueError(f"VerbPolicy {self.name}: text_fields needs an outbound kind")
+        if self.late_send and self.outbound != "write":
+            raise ValueError(f"VerbPolicy {self.name}: late_send needs outbound='write'")
+        if self.read_job and (self.outbound or self.effect not in {"none", "inherit"}
+                              or self.lane != "none"):
+            raise ValueError(f"VerbPolicy {self.name}: a read_job verb is a read")
         if not self.name or self.name != self.name.strip():
             raise ValueError(f"VerbPolicy: bad action name {self.name!r}")
         if self.effect not in EFFECT_VALUES:
@@ -269,7 +305,7 @@ RESERVED_ACTION_NAMES: FrozenSet[str] = _load_core_rows()
 
 
 __all__ = [
-    "EFFECT_CLASSES", "EFFECT_VALUES", "RESERVED_ACTION_NAMES", "VERB_POLICY",
+    "EFFECT_CLASSES", "EFFECT_VALUES", "OUTBOUND_KINDS", "RESERVED_ACTION_NAMES", "VERB_POLICY",
     "VerbPolicy", "ids_where", "ordered_ids_where", "policy_for",
     "register_verb_policy", "validate_verb_policy", "view_conflict",
 ]

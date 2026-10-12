@@ -1,7 +1,7 @@
 """D5: the persistent-input turn runner + scheduler (control flow, headless).
 
 The actual Application.run_async() + run_in_terminal print routing needs a live
-TTY (gated POLYROB_PERSISTENT_INPUT). What IS unit-testable is the control flow: one
+TTY. What IS unit-testable is the control flow: one
 turn runs start→respond→complete→end; a cancelled turn renders an interrupt; the
 scheduler runs one turn at a time and interrupt cancels the in-flight task.
 """

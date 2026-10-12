@@ -165,7 +165,8 @@ def install(feature: str, *, root: Path, wheel_only: bool, python: Optional[str]
     if closure is None or not closure.lock_digest:
         raise InstallRefused("closure_missing",
                              f"{feature}: no shipped closure (core/lazy_closures/{feature}.txt); "
-                             f"remedy: rerun scripts/gen_lazy_closures.py, or add the extra at deploy")
+                             f"remedy: reinstall polyrob (the closures ship in the package), "
+                             f"or install the extra at deploy")
     if wheel_only and not closure.wheel:
         raise InstallRefused("sdist_refused",
                              f"{feature}: its closure has a package with no wheel, and this box "
@@ -392,7 +393,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     p = sub.add_parser("prune", help="remove every overlay but the current digest")
     p.add_argument("--keep")
     args = ap.parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    # D6: `import core` no longer configures the root logger; this entry does
+    # (same sinks + secret-scrubbing filter the import used to install).
+    from core.logging import setup_logging
+    setup_logging(log_level="INFO")
     from core.lazy_closures import shipped_lock_digest
     if args.cmd == "digest":
         print(shipped_lock_digest() or "")

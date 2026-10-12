@@ -11,7 +11,7 @@ the sibling flags' tests do.
 """
 import pytest
 
-from agents.task.constants import (
+from core.config_policy import (
     PAYMENT_APPROVAL_TOOLS,
     _refreeze_payment_approval_flags_for_tests,
     approval_grant_ttl_hours,

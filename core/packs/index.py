@@ -1,21 +1,24 @@
 """The curated pack index and the kill list (067 P7, proposal §7) — local
 files, no network.
 
-- ``index.json`` — every pack ``polyrob pack install <id>`` resolves. Rows:
+- First-party rows are BUILT AT RUNTIME (W11): one row per ``polyrob.packs``
+  entry point the ``polyrob`` distribution declares (the source checkout's
+  ``pyproject.toml`` first, like ``core.version``; else the installed
+  metadata), with the pack's own ``pack.toml`` (summary, capabilities) and the
+  core version. They are the ONE list of core-reviewed identities the loader
+  grants the custody exemption (``core.packs.loader._FIRST_PARTY``):
+  distribution AND entry point must match. A release bump edits nothing here.
+- ``index.json`` — the THIRD-PARTY rows ``polyrob pack install <id>`` resolves:
   ``id, dist, version, sha256, tier, summary, capabilities, requires_core,
-  homepage, entry_point``. First-party rows are GENERATED from the core pyproject
-  (``scripts/gen_pack_index.py``); third-party rows are human-merged, reviewed
-  rows with a pinned version and wheel hash. The first-party rows are also the
-  ONE list of core-reviewed identities the loader grants the custody exemption
-  (``core.packs.loader._FIRST_PARTY``): distribution AND entry point must match.
+  homepage, entry_point``. Human-merged, reviewed rows with a pinned version and
+  wheel hash. A first-party row in the file is ignored (the file cannot grant
+  that identity), and so is a third-party row that reuses a first-party id.
 - ``removed.json`` — the kill list: ``id, versions (PEP 440 specifier), reason,
   date`` (optional ``dist``). Enforced by the loader at phase 1 AND phase 2,
   ``polyrob pack enable``, ``polyrob pack install`` and (via :func:`killed`)
   the updater.
 
-The repo copies live in ``packs/``; the generator (``scripts/gen_pack_index.py``) mirrors them byte-identical
-into this package so an installed core reads them (``*.json`` is package data).
-No imports above core.
+Both files are package data of this package (one copy each). No imports above core.
 """
 import json
 from pathlib import Path
@@ -107,13 +110,104 @@ def validate_removed(row: dict) -> dict:
     return row
 
 
-def rows() -> List[dict]:
-    """The index rows (validated). An unreadable index reads as empty here;
-    :func:`first_party_identities` then grants no exemption (fail closed)."""
+GROUP = "polyrob.packs"
+DIST = "polyrob"
+HOMEPAGE = "https://github.com/theselfruleorg/polyrob/tree/main/packs/{id}"
+
+
+def _source_entry_points() -> Optional[Dict[str, str]]:
+    """The ``polyrob.packs`` entry points of the source checkout's
+    ``pyproject.toml`` (``core/packs/`` -> repo root), or None when this is not
+    a polyrob source tree. First, like ``core.version``: a stale egg-info or
+    editable metadata must not shadow the code that actually runs."""
     try:
-        return [validate_row(r) for r in _read(INDEX_FILE)]
+        import tomllib
+        path = _HERE.parents[1] / "pyproject.toml"
+        if not path.is_file():
+            return None
+        project = tomllib.loads(path.read_text(encoding="utf-8")).get("project", {})
+        if str(project.get("name", "")).strip().lower() != DIST:
+            return None
+        eps = (project.get("entry-points") or {}).get(GROUP) or {}
+        return {str(k): str(v) for k, v in eps.items()}
+    except Exception:  # noqa: BLE001 — fall through to the installed metadata
+        return None
+
+
+def first_party_entry_points() -> Dict[str, str]:
+    """``pack id -> entry point`` of every pack shipped INSIDE ``polyrob``."""
+    eps = _source_entry_points()
+    if eps is not None:
+        return eps
+    try:
+        from importlib.metadata import distribution
+        dist = distribution(DIST)
+        return {ep.name: ep.value for ep in dist.entry_points if ep.group == GROUP}
+    except Exception:  # noqa: BLE001 — no metadata: no first-party identity (fail closed)
+        return {}
+
+
+def _pack_toml(entry_point: str) -> dict:
+    """The pack's ``pack.toml`` (found WITHOUT importing the pack), or {}."""
+    try:
+        import importlib.util
+        import tomllib
+        spec = importlib.util.find_spec(entry_point.partition(":")[0].split(".", 1)[0])
+        for loc in (spec.submodule_search_locations or []) if spec else []:
+            path = Path(loc) / "pack.toml"
+            if path.is_file():
+                return tomllib.loads(path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 — the row stays, without summary/capabilities
+        pass
+    return {}
+
+
+def first_party_rows() -> List[dict]:
+    """One validated row per first-party entry point, built at runtime."""
+    from core.version import get_version
+    version = get_version()
+    out = []
+    for pack_id, entry_point in sorted(first_party_entry_points().items()):
+        manifest = _pack_toml(entry_point)
+        try:
+            out.append(validate_row({
+                "id": pack_id, "dist": DIST, "version": version, "sha256": "",
+                "tier": "first-party", "summary": str(manifest.get("summary", "")),
+                "capabilities": sorted(manifest.get("capabilities", []) or []),
+                "requires_core": str(manifest.get("requires_core") or f"=={version}"),
+                "homepage": str(manifest.get("homepage") or HOMEPAGE.format(id=pack_id)),
+                "entry_point": entry_point,
+            }))
+        except PackIndexError:
+            continue
+    return out
+
+
+def third_party_rows() -> List[dict]:
+    """The reviewed third-party rows of ``index.json``. An unreadable file reads
+    as empty; a first-party row in it, or one reusing a first-party id, is ignored."""
+    first = set(first_party_entry_points())
+    out = []
+    try:
+        data = _read(INDEX_FILE)
     except (OSError, ValueError):
         return []
+    for raw in data:
+        try:
+            row = validate_row(raw)
+        except PackIndexError:
+            continue
+        if row["tier"] == "third-party" and row["id"] not in first:
+            out.append(row)
+    return out
+
+
+def rows() -> List[dict]:
+    """Every index row (validated): the runtime first-party rows, then the
+    reviewed third-party rows. With no polyrob metadata and no source tree there
+    is no first-party row, and :func:`first_party_identities` grants no
+    exemption (fail closed)."""
+    return sorted(first_party_rows() + third_party_rows(), key=lambda r: r["id"])
 
 
 def find(pack_id: str) -> Optional[dict]:
@@ -140,8 +234,8 @@ def retired_dist(name: str) -> bool:
 def first_party_identities() -> Dict[str, Tuple[str, str]]:
     """``pack id -> (canonical distribution, entry point)`` of every
     first-party index row: the core-reviewed identities."""
-    return {r["id"]: (_canon(r["dist"]), r["entry_point"])
-            for r in rows() if r["tier"] == "first-party"}
+    return {pack_id: (_canon(DIST), entry_point)
+            for pack_id, entry_point in first_party_entry_points().items()}
 
 
 def removed_rows() -> List[dict]:
@@ -178,5 +272,7 @@ def killed(name: str, version: Optional[str]) -> Optional[str]:
     return None
 
 
-__all__ = ["INDEX_FILE", "REMOVED_FILE", "RETIRED_DISTS", "ROW_KEYS", "retired_dist", "find", "first_party_identities",
+__all__ = ["INDEX_FILE", "REMOVED_FILE", "RETIRED_DISTS", "ROW_KEYS", "retired_dist", "find",
+           "first_party_entry_points", "first_party_identities", "first_party_rows",
+           "third_party_rows",
            "killed", "removed_rows", "rows", "search", "validate_removed", "validate_row"]

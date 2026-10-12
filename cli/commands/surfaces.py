@@ -28,7 +28,8 @@ _DEPLOYED_UNREADABLE = "__deployed_env_unreadable__"
 
 def _surface_keys() -> set:
     from core.surfaces.catalog import surfaces as catalog
-    keys = {"OPENAI_API_KEY", "EMAIL_PROVIDER", "GMAIL_IMAP_SERVER", "AUTONOMY_MODE"}
+    keys = {"OPENAI_API_KEY", "EMAIL_PROVIDER", "GMAIL_IMAP_SERVER", "AUTONOMY_MODE",
+            "POLYROB_OVERRIDES"}
     for spec in catalog():
         keys.update(spec.credentials)
         keys.add(spec.enabled_flag)
@@ -43,7 +44,7 @@ def _load_env() -> dict:
     home rule: an owner verb on the prod box describes the running instance, not
     an empty shell). An env file this user may not read is recorded as such, so
     a credential reads "cannot tell", never "missing"."""
-    from core.bootstrap import load_env
+    from polyrob.app.bootstrap import load_env
     try:
         load_env(local_mode=True)
     except Exception:
@@ -155,7 +156,8 @@ def list_cmd(do_probe: bool):
     env = _load_env()
     rows = []
     for spec in catalog():
-        flag = (env.get(spec.enabled_flag) or "").strip()
+        from core.config_policy.members import flag_raw
+        flag = (flag_raw(spec.enabled_flag, env) or "").strip()
         if flag:
             from core.env import parse_bool
             enabled = parse_bool(flag, False)
@@ -258,9 +260,14 @@ def add_cmd(surface_id: str, env_file: Optional[str], enable: bool, no_probe: bo
         written.append(key)
         click.echo(f"    wrote {key} = {fingerprint(value)}")
     if enable:
-        upsert_env_var(target, spec.enabled_flag, "true", secure=True)
-        env[spec.enabled_flag] = "true"
-        written.append(spec.enabled_flag)
+        from core.config_policy.members import OVERRIDES_ENV, upsert_flag, with_override
+        key = upsert_flag(target, spec.enabled_flag, "true", secure=True)
+        if key == spec.enabled_flag:
+            env[key] = "true"
+        else:   # a posture member (EMAIL_SURFACE_ENABLED) lives in POLYROB_OVERRIDES
+            env.pop(spec.enabled_flag, None)
+            env[OVERRIDES_ENV] = with_override(env.get(OVERRIDES_ENV), spec.enabled_flag, "true")
+        written.append(key)
     click.echo(f"{len(written)} line(s) written to {target}")
     if spec.extra:
         # 064 factory audit: a new surface's SDK is an opt-in extra, and neither
@@ -275,5 +282,5 @@ def add_cmd(surface_id: str, env_file: Optional[str], enable: bool, no_probe: bo
     if not no_probe:
         result = asyncio.run(_probe(spec, env))
         click.echo(f"probe: {result.render()}")
-    click.echo("Restart the process that runs this surface (the gateway, "
-               "`polyrob service restart`, or its systemd unit) to pick it up.")
+    click.echo("Restart the process that runs this surface to pick it up: "
+               "`polyrob service restart` (or /restart from your chat).")

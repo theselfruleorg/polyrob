@@ -544,7 +544,7 @@ def migrate_legacy_user_skills(legacy_root: Path, *, lock_timeout: float = 5.0) 
         written after a completed pass; any later call returns 0 immediately
         without re-scanning ``legacy_root``.
       - **Single-flight / concurrency-safe**: the whole pass runs under a
-        :class:`~agents.task.utils.SafeFileLock` at
+        :class:`~core.file_lock.SafeFileLock` at
         ``<data_home>/skills/.migrate.lock`` so parallel workers/processes
         booting at once don't race each other. On contention/timeout this
         returns 0 rather than blocking indefinitely or racing.
@@ -596,7 +596,7 @@ def migrate_legacy_user_skills(legacy_root: Path, *, lock_timeout: float = 5.0) 
         if marker.exists():
             return 0
 
-        from agents.task.utils import SafeFileLock
+        from core.file_lock import SafeFileLock
 
         lock_path = home / _MIGRATION_LOCK_NAME
         try:

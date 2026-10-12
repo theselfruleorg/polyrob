@@ -12,7 +12,11 @@ Three verdicts:
                   published ports make "inside" leaky, so we do not). No approval,
                   no allowlist lifts it: deleting a root/home tree, a fork bomb,
                   writing a raw disk, a root ``curl | sh``, writing the agent's own
-                  config/wallet state, stopping the agent's own service.
+                  config/wallet/signer state IN ONE COMMAND SEGMENT (D2, 2026-10-10:
+                  ``grep … /var/lib/polyrob/logs > errors.txt`` is a read plus a write
+                  of an ordinary file, not a write of the agent's state), reading the
+                  wallet seed, stopping the agent's own service. The rows are
+                  enumerated in ``core.security.settings.FLOOR``.
 - ``dangerous`` — runs only on an owner decision (the existing approval
                   provider). Recursive delete outside the working directory,
                   permission sweeps, force-push, service/container control,
@@ -103,6 +107,145 @@ _WRITE_VERB_RE = re.compile(
     r"(>>?|\btee\b|\brm\b|\bmv\b|\bcp\b|\bsed\s+-i|\bchmod\b|\bchown\b|\btruncate\b"
     r"|\bln\b|\bdd\b|\binstall\b|\bunlink\b|\bshred\b)"
 )
+
+#: A unit that sets where a LATER segment acts (``cd``, an assignment, a loop
+#: head): a protected path here plus a write in a later segment is the floor.
+_CONTEXT_UNIT_RE = re.compile(
+    r"^\s*((cd|pushd|export|declare|typeset|local|readonly|for|select)\b|[A-Za-z_][A-Za-z0-9_]*=)")
+#: Pipeline heads that turn their input lines into arguments of a write.
+_ARGS_FROM_INPUT_RE = re.compile(r"^\s*(xargs|parallel)\b")
+_SEGMENT_STOPS = ";|&()\n"
+_WORD_STOPS = " \t;|&()<>\n"
+
+
+def _redirect_target(text: str, j: int) -> Tuple[str, int]:
+    """The word after a redirection operator at ``text[j:]`` (quote-aware)."""
+    n = len(text)
+    while j < n and text[j] in " \t":
+        j += 1
+    word: List[str] = []
+    quote = None
+    while j < n:
+        ch = text[j]
+        if quote:
+            if ch == quote:
+                quote = None
+            else:
+                word.append(ch)
+        elif ch in "'\"":
+            quote = ch
+        elif ch in _WORD_STOPS:
+            break
+        else:
+            word.append(ch)
+        j += 1
+    return "".join(word), j
+
+
+def _write_units(text: str) -> Tuple[List[str], List[str]]:
+    """``(segments, redirect_targets)`` of a command line.
+
+    Splits on unquoted ``;`` ``&&`` ``||`` ``|`` ``&`` newlines and parentheses,
+    and lifts every output redirection (``>``, ``>>``, ``2>``, ``&>``, ``>|``)
+    out of its segment as a target. Quoted text stays inside its segment, so
+    ``bash -c "echo x > /etc/polyrob/k"`` is one segment holding both the path
+    and the write. An unbalanced quote keeps the rest as one segment (the
+    co-occurrence answer: stricter)."""
+    units: List[str] = []
+    targets: List[str] = []
+    cur: List[str] = []
+    quote = None
+    i, n = 0, len(text)
+
+    def _flush() -> None:
+        unit = "".join(cur).strip()
+        if unit:
+            units.append(unit)
+        cur.clear()
+
+    while i < n:
+        c = text[i]
+        if quote:
+            cur.append(c)
+            if c == "\\" and quote == '"' and i + 1 < n:
+                cur.append(text[i + 1])
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+            i += 1
+            continue
+        if c == "\\" and i + 1 < n:
+            cur.append(text[i:i + 2])
+            i += 2
+            continue
+        if c in "'\"":
+            quote = c
+            cur.append(c)
+            i += 1
+            continue
+        if c == ">" or text.startswith("&>", i):
+            j = i + (2 if c == "&" else 1)
+            if j < n and text[j] in ">|":
+                j += 1
+            if j < n and text[j] == "&":     # `>&2`: a descriptor, not a file
+                j += 1
+            target, i = _redirect_target(text, j)
+            targets.append(target)
+            cur.append(" ")
+            continue
+        if c in _SEGMENT_STOPS:
+            _flush()
+            i += 1
+            continue
+        cur.append(c)
+        i += 1
+    _flush()
+    return units, targets
+
+
+def _state_write_floor(masked: str) -> bool:
+    """D2 (owner, 2026-10-10): True when ONE segment of ``masked`` (the line with
+    the agent's own workspace masked) writes the agent's config, wallet or signer
+    state — a write verb and a protected path in the same segment, a redirect
+    to a protected path, a write after a segment that moved INTO a protected path
+    (``cd``, an assignment, a loop head), or a protected listing piped into
+    ``xargs``/``parallel`` with a write. A protected path read in one segment and
+    an ordinary file written in another is NOT the floor (the read stays an owner
+    decision)."""
+    units, targets = _write_units(masked)
+    if any(_PROTECTED_PATH_RE.search(t) for t in targets):
+        return True
+    context = False
+    prev_protected = False
+    for unit in units:
+        protected = bool(_PROTECTED_PATH_RE.search(unit))
+        writes = bool(_WRITE_VERB_RE.search(unit))
+        if protected and writes:
+            return True
+        if context and writes:
+            return True
+        if prev_protected and writes and _ARGS_FROM_INPUT_RE.match(unit):
+            return True
+        if protected and _CONTEXT_UNIT_RE.match(unit):
+            context = True
+        prev_protected = protected
+    return bool(context and targets)
+
+
+#: D2 floor row ``seed_read``: a wallet seed variable named on a line that also
+#: reads an env file or dumps an environment would put the seed on screen or in
+#: a file. Naming the variable in code work (``grep -rn MASTER_SEED core/``) is fine.
+from core.security.custody_env import CUSTODY_SECRET_ENV as _SEED_NAMES  # noqa: E402
+
+_SEED_NAME_RE = re.compile(r"\b(" + "|".join(sorted(set(_SEED_NAMES) | {"MASTER_SEED"},
+                                                    key=len, reverse=True)) + r")\b")
+_SEED_SOURCE_RE = re.compile(
+    r"(/etc/polyrob\b|\bpolyrob\.env\b|\bwallet\.env\b|\.polyrob/\.env\b"
+    r"|(^|[\s/'\"=])\.env(\.local|\.production|\.development)?(?![\w.])"
+    r"|/proc/[^\s/]+/environ\b|(^|[;&|(\s])(env|printenv)(\s|$)"
+    r"|\bexport\s+-p\b|\bdeclare\s+-x\b)")
+
 
 _FLOOR_RAW: Tuple[Tuple[re.Pattern, str], ...] = (
     (re.compile(r"(\b\w+|:)\s*\(\)\s*\{[^}]*\1\s*\|\s*\1\s*&"), "fork bomb"),
@@ -355,21 +498,26 @@ _RAW_ADMIN_CLI_RE = re.compile(
     r"(\S*/)?polyrob(-\w+)?(?=\s+[a-z]|\s*$|\s*[;&|)'\"`])"
     r"|\bcli[./]polyrob\b"
     r"|\b(cp|ln|install|rsync|mv)\b[^\n;|&]*\bpolyrob\b)")
+#: A package manager's install verb: ``pip install polyrob-x402`` installs a
+#: package named polyrob-*, it does not copy or run the admin CLI. The verb is
+#: neutralised before the admin-CLI backstop reads the line.
+_PKG_INSTALL_RE = re.compile(
+    r"(?i)\b(pip\d*(\.\d+)?|pipx|uv(\s+pip)?|poetry|pdm|hatch|conda|mamba|npm|pnpm|yarn|bun"
+    r"|brew|apt(-get)?|dnf|yum)\s+(install|add)\b")
 _RAW_ADMIN_DB_RE = re.compile(r"(?i)\bsqlite3?\b[^\n;|&]*(approval|\.polyrob|/polyrob\b|polyrob[^\s]*\.db)")
 #: The agent's own state databases by FILE NAME, wherever the path points
 #: (``sqlite3 ../cron.db``, ``$D/data/goals.db``): the path rule above needs a
 #: ``.polyrob``/``/polyrob`` component a relative or variable path never has.
-_STATE_DB_NAMES = frozenset({
-    "app_services.db", "artifacts.db", "autonomy_state.db", "bot.db", "bridges.db",
-    "cards.db", "control.sqlite3", "conversations.db", "correspondents.db", "cron.db",
-    "dapp_sessions.db", "dead_targets.db", "defi_tokens.db", "deployed_apps.db",
-    "goals.db", "group_allowlist.db", "login_attempts.db", "memory.db", "open_positions.db",
-    "outbox.db", "owner_thread.db", "pairing.db", "payment_assets.db", "publications.db",
-    "refusal_taint.db", "room_actions.db", "session_registry.db", "signer.sqlite",
-    "submissions.sqlite", "surface_state.db", "surfaces.db", "token_denylist.db",
-    "token_pins.db", "token_provenance.db", "verdicts.db", "wakes.db", "wa_window.db",
-    "x_write_attempts.db",
-})
+#: W4/W8 (2026-10-10): the ONE source is ``core.db_manifest.state_db_names()``
+#: (the registry, wallet/signer files included, plus every surface state file).
+def state_db_names() -> frozenset:
+    """The state-db file names the guard protects, read at call time (a pack's
+    surface state files join the catalog after import). Lazy import: most lines
+    never name ``sqlite3``."""
+    from core.db_manifest import state_db_names as _manifest_names
+    return frozenset(n.lower() for n in _manifest_names())
+
+
 #: SQL (or a sqlite3 dot-command) that changes a database. A read — SELECT,
 #: ``.schema``, ``.tables``, ``.dump`` — stays ok.
 _SQL_WRITE_RE = re.compile(
@@ -383,7 +531,7 @@ def _sqlite_state_write(args: List[str]) -> bool:
     may change it: write SQL anywhere on the line, ``-init``, or no SQL at all
     (interactive or stdin — what runs is not on the line)."""
     dbs = [a for a in args
-           if os.path.basename(a.strip("\"'")).lower() in _STATE_DB_NAMES]
+           if os.path.basename(a.strip("\"'")).lower() in state_db_names()]
     if not dbs:
         return False
     rest = [a for a in args if a not in dbs]
@@ -755,8 +903,10 @@ def classify(command: str, *, _depth: int = 0, _strict: bool = False) -> Verdict
     for pat, why in _FLOOR_RAW:
         if pat.search(raw):
             return Verdict(FLOOR, why)
+    if _SEED_NAME_RE.search(raw) and _SEED_SOURCE_RE.search(raw):
+        return Verdict(FLOOR, "reads the wallet seed")
     raw_masked = _mask_own_workspace(raw)
-    if _PROTECTED_PATH_RE.search(raw_masked) and _WRITE_VERB_RE.search(raw):
+    if _state_write_floor(raw_masked):
         return Verdict(FLOOR, "writes the agent's own config, wallet or signer state")
 
     tokens = _lex(raw)
@@ -770,8 +920,10 @@ def classify(command: str, *, _depth: int = 0, _strict: bool = False) -> Verdict
         for pat, why in _FLOOR_RAW:
             if pat.search(joined):
                 return Verdict(FLOOR, why)
+        if _SEED_NAME_RE.search(joined) and _SEED_SOURCE_RE.search(joined):
+            return Verdict(FLOOR, "reads the wallet seed")
         joined_masked = _mask_own_workspace(joined)
-        if _PROTECTED_PATH_RE.search(joined_masked) and _WRITE_VERB_RE.search(joined):
+        if _state_write_floor(joined_masked):
             return Verdict(FLOOR, "writes the agent's own config, wallet or signer state")
         segments = _segments(tokens)
         cd_safe = _cd_is_safe(segments)
@@ -821,7 +973,7 @@ def classify(command: str, *, _depth: int = 0, _strict: bool = False) -> Verdict
     # awk/vim/git-alias payloads, here-strings) still reaches the owner.
     if _RAW_RM_RE.search(raw):
         return Verdict(DANGEROUS, "recursive delete of an absolute or home path")
-    if _RAW_ADMIN_CLI_RE.search(raw_masked):
+    if _RAW_ADMIN_CLI_RE.search(_PKG_INSTALL_RE.sub(r"\1 _pkg_", raw_masked)):
         return Verdict(DANGEROUS, "runs the owner's administrative CLI")
     if _RAW_ADMIN_DB_RE.search(raw_masked):
         return Verdict(DANGEROUS, "opens the agent's own databases")
@@ -1048,4 +1200,4 @@ def glob_for(command: str) -> str:
 
 
 __all__ = ["Verdict", "classify", "mentions_sudo", "relative_delete_refusal", "parse_globs",
-           "matches_any", "glob_for", "FLOOR", "DANGEROUS", "OK"]
+           "matches_any", "glob_for", "state_db_names", "FLOOR", "DANGEROUS", "OK"]

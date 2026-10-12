@@ -4,7 +4,6 @@ import logging
 import functools
 from typing import Awaitable, Callable, Dict, List, Optional, Any, TYPE_CHECKING
 from pathlib import Path
-import os
 from datetime import datetime
 import time
 import json
@@ -56,6 +55,9 @@ from agents.task.session.hooks import SessionHooksMixin
 from agents.task.constants import BASE_DEFAULT_TOOLS as _BASE_DEFAULT_TOOLS
 DEFAULT_TOOLS = list(_BASE_DEFAULT_TOOLS)
 
+# Per-session LLM concurrency (internal tuning; was an env knob).
+SESSION_LLM_LIMIT = 5
+
 # SA-01: strong refs for fire-and-forget async-delegation wake kicks. asyncio only
 # weakly references a bare create_task result, so without this the kick task could be
 # GC'd mid-flight before it re-runs the idle session's loop.
@@ -78,7 +80,7 @@ def _maybe_seed_owner_profile(db: Optional[Any]) -> None:
     row(s) (G-1) so FK-constrained metering writes (usage_records) don't raise
     IntegrityError on a headless/single-owner deployment where nothing else
     seeds user_profiles. Covers plain chat sessions when the autonomy runtime
-    (core.autonomy_runtime.start_autonomy) isn't running.
+    (polyrob.app.autonomy_runtime.start_autonomy) isn't running.
 
     Guarded by the module-level ``_owner_profile_seed_scheduled`` once-flag —
     see its docstring. A ``db is None`` call is a no-op and does NOT consume
@@ -415,7 +417,7 @@ class SessionOrchestrator(WorkspaceMixin, FeedMixin, BrowserPoolMixin, HITLIngre
         # Track initialization status
         self._initialized = False
         # LLM concurrency management with validation
-        self.session_llm_limit = max(1, int(os.environ.get('SESSION_LLM_LIMIT', '5')))
+        self.session_llm_limit = SESSION_LLM_LIMIT
         self._session_llm_semaphore = asyncio.Semaphore(self.session_llm_limit)
         self.agent_llm_limits = {}  # agent_id -> limit mapping
         

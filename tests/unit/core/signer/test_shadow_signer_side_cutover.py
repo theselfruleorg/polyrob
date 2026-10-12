@@ -1,9 +1,7 @@
 """WAL-19: the shadow cut-over criterion is read from the signer's own
 decision log (signer.sqlite, 0600 polyrob-signer), not only from the
 agent-writable signer_shadow.jsonl."""
-from pathlib import Path
 
-import pytest
 
 from core.signer.shadow import signer_cutover_ready
 from core.signer.store import SignerStore
@@ -57,15 +55,3 @@ def test_other_ops_do_not_count(tmp_path):
     t[0] = NOW - DAY
     _log(st, True)
     assert signer_cutover_ready(st.state_dir, now=NOW)[0] is True
-
-
-def test_install_script_checks_the_signer_log_as_the_signer_user():
-    path = (Path(__file__).resolve().parents[4] / "deployment" / "hardening"
-            / "install-signer.sh")
-    if not path.exists():
-        pytest.skip("the hardening scripts are not in the public tree")
-    text = path.read_text()
-    block = text.split("shadow_clean(){")[1].split("\n}\n")[0]
-    assert 'runuser -u "$SIGNER_USER"' in block and "signer_cutover_ready" in block
-    assert '"$STATE"' in block
-    assert "cutover_ready()" in block          # the agent log still counts no_intent

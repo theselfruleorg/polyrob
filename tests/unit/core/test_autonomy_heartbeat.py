@@ -49,7 +49,7 @@ def test_autonomy_handles_emit_heartbeats(tmp_path, monkeypatch):
     log = el.TelemetryEventLog(str(tmp_path / "te.db"))
     monkeypatch.setattr(el, "get_event_log", lambda *a, **k: log)
 
-    from core.autonomy_runtime import AutonomyHandles
+    from polyrob.app.autonomy_runtime import AutonomyHandles
     h = AutonomyHandles()
     h._entries = [("cron", SimpleNamespace(done=lambda: False), None),
                   ("goals", SimpleNamespace(done=lambda: True), None)]
@@ -61,7 +61,7 @@ def test_autonomy_handles_emit_heartbeats(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_autonomy_handles_start_a_heartbeat_task(monkeypatch):
-    from core.autonomy_runtime import AutonomyHandles
+    from polyrob.app.autonomy_runtime import AutonomyHandles
 
     class _Ticker:
         async def run_forever(self, stop_event):

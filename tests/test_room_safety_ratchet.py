@@ -181,9 +181,14 @@ def test_room_publish_is_scrubbed_and_capped():
 
 
 def test_group_turn_kind_is_forged():
-    src = (REPO / "tools/controller/turn_origin.py").read_text()
-    # Quote-style agnostic: the literal is `== 'group'` in the shipped source.
-    assert '"group"' in src or "'group'" in src
+    # W5: the ONE owner-turn definition holds the room rule; turn_origin delegates.
+    src = (REPO / "core/security/owner_turn.py").read_text()
+    assert 'ROOM_TURN_KIND = "group"' in src
+    from types import SimpleNamespace
+    from tools.controller.turn_origin import _is_forged_or_autonomous_turn
+    ctx = SimpleNamespace(role="orchestrator", is_sub_agent=False, session_id="",
+                          metadata={"turn_kind": "group"})
+    assert _is_forged_or_autonomous_turn(ctx, None) is True
 
 
 def test_router_and_surface_profile_fall_back_by_session_key():

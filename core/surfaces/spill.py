@@ -12,7 +12,7 @@ in any single producer, so goal completions, cron delivery, escalations and
 digests all inherit it without a call-site change.
 
 The contract the 2026-08-21 owner directive asked for — gist + attachment +
-console link — shipped in ``scripts/ops_alert.py`` (the ops sidecar) and never
+console link — shipped in ``scripts/ops/ops_alert.py`` (the ops sidecar) and never
 reached the agent's own rail. This closes that gap.
 
 Nothing here is best-effort-silent: a spill that cannot be written returns None
@@ -27,7 +27,7 @@ import re
 import time
 from typing import List, Optional
 
-from core.env import bool_env, int_env
+from core.env import bool_env
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +43,11 @@ _RETENTION_DAYS = 14
 _KEEP_LINE_RE = re.compile(r"^\s*(Console|Session|Link|URL)\s*:\s*\S+", re.IGNORECASE)
 
 
+#: Internal tuning (not env-driven): spill threshold and gist budget.
+USER_DELIVERY_SPILL_CHARS = 1200
+USER_DELIVERY_GIST_CHARS = 600
+
+
 def spill_enabled() -> bool:
     """Master gate for the long-body spill (default ON)."""
     return bool_env("USER_DELIVERY_SPILL", True)
@@ -54,12 +59,12 @@ def spill_threshold_chars() -> int:
     Deliberately well under a single Telegram message (4096) — the goal is a
     body the owner reads at a glance, not one that merely avoids chunking.
     """
-    return max(200, int_env("USER_DELIVERY_SPILL_CHARS", 1200))
+    return max(200, USER_DELIVERY_SPILL_CHARS)
 
 
 def gist_chars() -> int:
     """Character budget for the gist that replaces a spilled body."""
-    return max(120, int_env("USER_DELIVERY_GIST_CHARS", 600))
+    return max(120, USER_DELIVERY_GIST_CHARS)
 
 
 def build_gist(body: str, *, attachment_name: Optional[str] = None,

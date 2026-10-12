@@ -12,9 +12,8 @@ from core.packs import index, state
 from tests.unit.core.packs.conftest import write_pack
 from tests.unit.core.packs.test_loader import _install, _toml
 
-#: the first-party packs move with the core version (every pack.toml pin moves at a cut)
-_FP = {r["id"]: r["version"] for r in json.loads(
-    (Path(__file__).resolve().parents[4] / "core" / "packs" / "index.json").read_text())}
+#: the first-party packs move with the core version (W11: inherited at runtime)
+_FP = {r["id"]: r["version"] for r in index.first_party_rows()}
 
 REPO = Path(__file__).resolve().parents[4]
 
@@ -35,13 +34,37 @@ def _row(pid="echo", versions=">=0", dist=None):
 
 # --- the files -------------------------------------------------------------------
 
-def test_the_index_and_kill_list_are_generated_and_mirrored_into_core():
-    if (REPO / "scripts/gen_pack_index.py").is_file():  # scripts/ is not in the public export
-        out = subprocess.run([sys.executable, "scripts/gen_pack_index.py", "--check"], cwd=REPO,
-                             capture_output=True, text=True)
-        assert out.returncode == 0, out.stdout + out.stderr
+def test_one_index_and_one_kill_list_holding_only_reviewed_rows():
+    """W11: one copy of each file (core/packs/, package data); the index holds
+    third-party rows only — the first-party rows are built at runtime."""
     for name in ("index.json", "removed.json"):
-        assert (REPO / "packs" / name).read_bytes() == (REPO / "core/packs" / name).read_bytes()
+        assert not (REPO / "packs" / name).exists(), f"packs/{name} is a second copy"
+        data = json.loads((REPO / "core/packs" / name).read_text())
+        assert isinstance(data, list)
+    for row in json.loads((REPO / "core/packs/index.json").read_text()):
+        assert index.validate_row(row)["tier"] == "third-party", row
+    index.removed_rows()
+
+
+def test_the_first_party_rows_carry_the_core_version_and_their_manifest():
+    from core.version import get_version
+    rows = {r["id"]: r for r in index.first_party_rows()}
+    assert rows and {r["version"] for r in rows.values()} == {get_version()}
+    assert {r["requires_core"] for r in rows.values()} == {f"=={get_version()}"}
+    assert "tools" in rows["discovery"]["capabilities"] and rows["x"]["summary"]
+
+
+def test_the_index_file_cannot_grant_first_party_identity(tmp_path, monkeypatch):
+    path = tmp_path / "index.json"
+    path.write_text(json.dumps([
+        {"id": "evil", "dist": "evil", "version": "1.0", "tier": "first-party",
+         "entry_point": "evil:pack"},
+        {"id": "x", "dist": "evil", "version": "1.0", "tier": "third-party",
+         "entry_point": "evil:pack", "sha256": "a" * 64}]))
+    monkeypatch.setattr(index, "INDEX_FILE", path)
+    assert "evil" not in index.first_party_identities()
+    assert index.find("x")["dist"] == "polyrob"
+    assert index.find("evil") is None
 
 
 def test_every_in_repo_pack_has_a_first_party_row():
@@ -324,7 +347,11 @@ def test_root_pack_install_refuses_before_clone_or_build(cli, fake_clone, monkey
 
 
 def test_remote_signer_pack_install_refuses_without_local_seed(cli, fake_clone, monkeypatch):
+    """With the owner's packs_under_custody=refuse (D1: a setting, not a default)."""
+    import cli.commands.pack as pack_cmd
     import core.security.host_execution as he
+    monkeypatch.setattr(pack_cmd, "_pip", lambda args: pytest.fail("pip must never run here"))
+    monkeypatch.setenv("SECURITY_SETTINGS", "packs_under_custody=refuse")
     monkeypatch.setattr(he, "wallet_custody_enabled", lambda: False)
     monkeypatch.setenv("WALLET_SIGNER", "remote")
     r = cli("install", f"git+https://example.com/p.git@{SHA}", "--accept-capabilities")

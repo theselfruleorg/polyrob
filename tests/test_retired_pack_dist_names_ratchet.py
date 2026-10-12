@@ -11,6 +11,8 @@ import re
 import subprocess
 from pathlib import Path
 
+from tests.support.repo_index import repo_index
+
 import pytest
 
 from core.packs.index import RETIRED_DISTS
@@ -52,7 +54,7 @@ def test_no_live_file_spells_a_retired_pack_distribution_name():
             continue
         path = REPO / rel
         try:
-            text = path.read_text(encoding="utf-8")
+            text = repo_index().text(path)
         except (OSError, UnicodeDecodeError):
             continue
         for i, line in enumerate(text.splitlines(), 1):

@@ -28,11 +28,13 @@ posture — they don't replace the local behavior, they add to it.
 `webgate.posture()` (`webview/webgate.py`) resolves in this order:
 
 1. **Explicit `POLYROB_POSTURE`** (`local` | `own_ops` | `multitenant`, case-insensitive) — wins outright.
-2. **`WEBGATE_MULTITENANT=true`** (back-compat alias) → `multitenant`.
-3. **Derived from an explicit `WEBGATE_HOST` / `WEBVIEW_HOST` override**: a loopback
+2. **Derived from an explicit `WEBGATE_HOST` / `WEBVIEW_HOST` override**: a loopback
    address (`127.0.0.1`, `localhost`, `::1`) → `local`; anything else → `own_ops`.
-4. **No override, `WEBGATE_MULTITENANT` not set** → `local` (today's default:
-   loopback with owner login).
+3. **No override** → `local` (today's default: loopback with owner login).
+
+The retired alias `WEBGATE_MULTITENANT=true` (retired in 1.4) is no longer read: set
+without `POLYROB_POSTURE`, it refuses to start and names the rename
+(`POLYROB_POSTURE=multitenant`).
 
 `webgate.bind_host()` mirrors that logic for the actual bind: `local` → `127.0.0.1`,
 `own_ops`/`multitenant` → `0.0.0.0`, unless `WEBGATE_HOST`/`WEBVIEW_HOST` is set
@@ -296,7 +298,7 @@ needs console access is you and you already have a VPN/tailnet set up.
 | Variable | Default | Meaning |
 |---|---|---|
 | `POLYROB_POSTURE` | unset (derived) | `local` \| `own_ops` \| `multitenant`. Explicit value always wins. |
-| `WEBGATE_MULTITENANT` | `false` | Back-compat alias for `POLYROB_POSTURE=multitenant`. |
+| `WEBGATE_MULTITENANT` | — | Retired in 1.4. `true` without `POLYROB_POSTURE` refuses to start; set `POLYROB_POSTURE=multitenant`. |
 | `WEBGATE_HOST` / `WEBVIEW_HOST` | unset | Explicit bind host override; also feeds posture derivation when `POLYROB_POSTURE` is unset. |
 | `WEBGATE_PORT` / `WEBVIEW_PORT` | `5050` | Bind port. |
 | `WEBVIEW_ALLOW_LOCAL_POSTURE` | off | Override the `local`-posture-on-a-server boot refusal. Only if you front the console with your own auth. |

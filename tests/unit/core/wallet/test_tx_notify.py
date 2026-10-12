@@ -196,19 +196,6 @@ def test_a_tenantless_notice_is_recorded_but_never_cross_delivered(monkeypatch):
     assert not called
 
 
-def test_the_flag_off_delivers_nothing(monkeypatch):
-    monkeypatch.setenv("TX_NOTIFY_ENABLED", "false")
-    called = []
-
-    async def _deliver(*a, **kw):
-        called.append(a)
-        return "sent"
-    monkeypatch.setattr("core.surfaces.user_delivery.deliver_user_message", _deliver)
-    assert _run(tn.notify(None, "owner", tn.TxNotice(verb="swap", route="base"),
-                          settled=False)) == "skipped"
-    assert not called
-
-
 def test_notify_soon_holds_a_reference_to_its_task(monkeypatch):
     """A task with no strong reference can be garbage collected mid-flight —
     which would drop the notice silently, the exact failure this rail ends."""
@@ -364,10 +351,13 @@ def test_the_broadcast_audit_event_is_recorded_at_broadcast_not_after_the_hold(m
     tn._reset_hold_state()
 
     async def _drive():
+        # Only this loop's tasks: an earlier test's asyncio.run can close with a
+        # task still pending, and its done-callback never prunes _PENDING.
+        before = set(tn._PENDING)
         tn.notify_soon(None, "owner", _bc(), settled=False)
         await asyncio.sleep(0.05)
         assert "tx_broadcast" in recorded
-        for t in list(tn._PENDING):
+        for t in set(tn._PENDING) - before:
             t.cancel()
     asyncio.run(_drive())
 

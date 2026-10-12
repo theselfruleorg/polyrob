@@ -25,6 +25,7 @@ container services, the way `core/surfaces/group_admin.py` reaches `group_ledger
 """
 from __future__ import annotations
 
+from core.runtime_paths import surfaces_db_path
 import re
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
@@ -924,7 +925,7 @@ async def _target_protection(container: Any, surface: str, chat_id: str,
                           "protected_target")
 
     from core.surfaces.group_roles import GroupRoles
-    role = GroupRoles(os.path.join(_data_dir(container), "surfaces.db")).role(
+    role = GroupRoles(surfaces_db_path(_data_dir(container))).role(
         surface, chat_id, str(target_user_id), is_owner=False)
     if role in ("owner", "admin"):
         return True, ("That person cannot be targeted here.", "protected_target")

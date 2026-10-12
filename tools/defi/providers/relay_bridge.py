@@ -94,6 +94,10 @@ class BridgeQuote:
     #: True when the ORIGIN is Solana, i.e. the SVM signer path.
     svm_origin: bool
     raw: Dict[str, Any]
+    #: ERC-20 ORIGIN only: the spender Relay's own approve step names. We never
+    #: sign Relay's approve — the verb builds an EXACT one to the pinned
+    #: depository — but a quote whose approve names someone else is refused.
+    approve_spender: Optional[str] = None
 
     @property
     def amount_out_formatted(self) -> float:
@@ -268,6 +272,23 @@ class RelayBridgeProvider:
         steps = raw.get("steps") or []
         if not steps:
             raise RelayError("relay quote carries no steps — nothing to sign")
+        approve_spender = None
+        erc20_origin = (not _same_address(origin_currency, NATIVE_EVM)
+                        and str(origin_currency).startswith("0x"))
+        if erc20_origin and len(steps) == 2 and steps[0].get("id") == "approve":
+            # An ERC-20 origin is [approve, deposit]. The approve is only READ
+            # (its spender must be the deposit target, asserted by the leg);
+            # the verb signs its own exact-amount approve instead.
+            a_items = steps[0].get("items") or []
+            a_data = (a_items[0].get("data") or {}) if len(a_items) == 1 else {}
+            calldata = str(a_data.get("data") or "")
+            if (not _same_address(a_data.get("to"), origin_currency)
+                    or not calldata.lower().startswith("0x095ea7b3")
+                    or len(calldata) < 74):
+                raise RelayError(
+                    "REFUSED: the approve step is not approve() on the origin token")
+            approve_spender = "0x" + calldata[34:74]
+            steps = steps[1:]
         if len(steps) != 1:
             # Multi-step means an approval leg or a chained order. Neither is
             # modelled by the two-phase guard yet, and guessing which step is
@@ -313,6 +334,7 @@ class RelayBridgeProvider:
             tx_data=tx_data,
             svm_origin=svm_origin,
             raw=raw,
+            approve_spender=approve_spender,
         )
 
     # -- status -----------------------------------------------------------
@@ -339,6 +361,20 @@ class RelayBridgeProvider:
             return "pending", detail
         return "unknown", detail or f"unrecognised status {state!r}"
 
+    def out_tx_hashes(self, request_id: str) -> Optional[list]:
+        """The DESTINATION transaction hashes Relay reports (``txHashes``), or
+        None when the status could not be read. A hash is only a pointer: the
+        caller reads that transaction on-chain and measures what it paid us."""
+        url = f"{STATUS_URL}?requestId={urllib.parse.quote(str(request_id))}"
+        try:
+            raw = self._get(url, timeout=self._timeout)
+        except Exception:
+            return None
+        hashes = raw.get("txHashes")
+        if not isinstance(hashes, list):
+            return None
+        return [str(h) for h in hashes if isinstance(h, str) and h.strip()]
+
 
 def _same_address(a, b) -> bool:
     """Case-insensitive for EVM hex; exact for base58 — the ONE rule in
@@ -354,8 +390,11 @@ def _same_address(a, b) -> bool:
 # already run. See core/wallet/bridge_status.py.
 def _register_status_seam() -> None:
     try:
-        from core.wallet.bridge_status import register_status_reader
+        from core.wallet.bridge_status import register_chain_alias, register_status_reader
         register_status_reader(lambda request_id: RelayBridgeProvider().status(request_id))
+        register_chain_alias(SOLANA_CHAIN_ID, "solana")
+        from core.wallet.bridge_status import register_out_tx_reader
+        register_out_tx_reader(lambda request_id: RelayBridgeProvider().out_tx_hashes(request_id))
     except Exception:  # pragma: no cover - never let a seam break an import
         logger.debug("relay: status seam registration skipped", exc_info=True)
 

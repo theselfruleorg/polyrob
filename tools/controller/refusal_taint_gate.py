@@ -22,9 +22,9 @@ Controller):
   recipient is not the owner is refused with
   :data:`core.security.refusal_taint.PUBLIC_REFUSAL_TEXT`.
 
-Outbound = the send-time text table (``financial_claim_gate.OUTBOUND_TEXT_FIELDS``)
-plus any verb the effect table calls ``social`` or ``comms``, plus the
-text-bearing ``public`` verbs in :data:`PUBLIC_TEXT_VERBS`. The owner lane stays
+Outbound = every verb whose policy row has an ``outbound`` kind (W4: the one
+column the claim gate, the approval queue and the evidence ledger also read)
+plus any verb the effect table calls ``social`` or ``comms``. The owner lane stays
 open: ``message`` to the owner (any spelling, or the omitted/``owner`` default),
 ``email_send`` to the owner's address, ``send_message`` outside a room, and every
 verb that is not outbound at all (``owner_ask``, ``done``, reads, trades).
@@ -33,10 +33,9 @@ NOTE: no ``from __future__ import annotations`` in this package.
 """
 import logging
 
-logger = logging.getLogger(__name__)
+from core.lazy_views import lazy_module_getattr, view
 
-#: ``public``-effect verbs that carry words to the world (not code deploys).
-PUBLIC_TEXT_VERBS = frozenset({"publish", "github_issue_create", "github_pr_comment"})
+logger = logging.getLogger(__name__)
 
 #: Effect classes whose every verb reaches a recipient other than this box.
 _OUTBOUND_EFFECTS = frozenset({"social", "comms"})
@@ -95,10 +94,22 @@ def _bound_to_room(controller):
         return True  # cannot prove the bound chat is private: treat it as public
 
 
+def _build_outbound_names():
+    from core.verb_policy import ids_where
+    return ids_where(outbound=bool)
+
+
+#: The verbs whose policy row names an outbound kind (core and pack rows; lazy).
+__getattr__ = lazy_module_getattr(__name__, {"OUTBOUND_NAMES": _build_outbound_names})
+
+
+def outbound_names():
+    return view(__name__, "OUTBOUND_NAMES")
+
+
 def is_outbound(controller, action_name):
-    from tools.controller.financial_claim_gate import OUTBOUND_TEXT_FIELDS
     name = str(action_name or "")
-    if name in OUTBOUND_TEXT_FIELDS or name in PUBLIC_TEXT_VERBS:
+    if name in outbound_names():
         return True
     return _effect(controller, name) in _OUTBOUND_EFFECTS
 
@@ -182,5 +193,5 @@ def make_refusal_taint_gate_hook(controller):
     return _refusal_taint_gate
 
 
-__all__ = ["PUBLIC_TEXT_VERBS", "is_outbound", "make_refusal_taint_gate_hook",
+__all__ = ["OUTBOUND_NAMES", "is_outbound", "outbound_names", "make_refusal_taint_gate_hook",
            "make_refusal_taint_record_hook", "note_denied_action", "reaches_non_owner"]

@@ -10,15 +10,15 @@ unaffected until cron is explicitly turned on.
 """
 from __future__ import annotations
 
+from core.runtime_paths import cron_db_path
 import os
 from typing import Any, Dict, List, Optional
 
-from core.env import bool_env as _bool_env
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from tools.base_tool import BaseTool
-from tools.controller.types import ActionResult
+from agents.task.loop_types.controller_types import ActionResult
 from cron.jobs import CronJobStore
 from cron.schedule import ScheduleError
 from cron.service import AGENT_MAX_ACTIVE_JOBS, CronService
@@ -152,6 +152,21 @@ def _authored_by(job) -> str:
     return str((job.payload or {}).get("authored_by") or "")
 
 
+def _author_tag(job) -> str:
+    """``owner-authored`` / ``agent-authored`` for the job list: the author, not
+    the task text, decides whether its posts need a per-post owner approval."""
+    return "owner-authored" if _authored_by(job) == "owner" else "agent-authored"
+
+
+def _author_line(job) -> str:
+    who = _authored_by(job) or "unstamped (not the owner)"
+    if _authored_by(job) == "owner":
+        return f"authored by: {who}"
+    return (f"authored by: {who} — its X posts and room actions each need an owner "
+            f"approval, whatever its task text says; the owner can make it his own "
+            f"with `/adopt {job.id}`")
+
+
 
 def _provider_line(payload: dict) -> str:
     """Which seat a job runs on — and, for a pin that is credit-dead, where it goes instead.
@@ -182,7 +197,7 @@ class CronJobTool(BaseTool):
             from core.runtime_paths import data_dir_or_home
             data_dir = data_dir_or_home(
                 getattr(self.config, "data_dir", None) if getattr(self, "config", None) else None)
-            self._cron_service = CronService(CronJobStore(os.path.join(data_dir, "cron.db")))
+            self._cron_service = CronService(CronJobStore(cron_db_path(data_dir)))
         return self._cron_service
 
     @staticmethod
@@ -323,7 +338,7 @@ class CronJobTool(BaseTool):
         if not jobs:
             return ActionResult(extracted_content="No scheduled cron jobs.", include_in_memory=True)
         lines = [
-            f"- `{j.id}` [{j.status}] {j.schedule_spec} -> "
+            f"- `{j.id}` [{j.status}] [{_author_tag(j)}] {j.schedule_spec} -> "
             f"{j.next_run_at.isoformat() if j.next_run_at else '-'}: {j.task[:60]}"
             for j in jobs
         ]
@@ -348,7 +363,7 @@ class CronJobTool(BaseTool):
             _provider_line(p),
             f"deliver: {p.get('deliver') or '(silent)'}",
             f"skills: {', '.join(p.get('skills') or []) or '(keyword match)'}",
-            f"authored by: {_authored_by(job) or 'unstamped (not the owner)'}",
+            _author_line(job),
         ]
         if job.status == "cancelled":
             lines.append(_cancel_line(job.id))
@@ -501,12 +516,8 @@ def cron_enabled() -> bool:
     cron (time-based initiative) on by default; `silent`/`owner-visible` keep it OFF.
     An explicit CRON_ENABLED always wins.
     """
-    try:
-        from core.config_policy import _posture_autonomy_default
-        default = _posture_autonomy_default("CRON_ENABLED")
-    except Exception:
-        default = False
-    return _bool_env("CRON_ENABLED", default)
+    from core.config_policy import AutonomyConfig
+    return AutonomyConfig.cron_enabled()
 
 
 def register_cronjob_tool(force: bool = False) -> bool:

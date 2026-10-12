@@ -1,6 +1,12 @@
 """Shared pytest fixtures for the ROB test suite."""
 import asyncio
+import importlib
+import itertools
 import os
+import pathlib
+import re
+import sys
+import threading
 
 import pytest
 
@@ -19,33 +25,14 @@ _load_packs()
 # ---------------------------------------------------------------------------
 # Operator-env sandbox (§3.5, 2026-07-16): tests must never read the dev box
 # operator's REAL env files. The first test that built a CLI container ran
-# core.bootstrap.load_env(local_mode=True), which read ~/.polyrob/.env (real
+# polyrob.app.bootstrap.load_env(local_mode=True), which read ~/.polyrob/.env (real
 # provider keys / owner binding) and could backfill config/.env.production
 # secrets into os.environ — poisoning every later test (the order-dependent
 # failures: chat_resolver_parity, budget_gate, identity, protected_config_guard).
 # ---------------------------------------------------------------------------
 
-@pytest.fixture(scope="session", autouse=True)
-def _operator_env_file_sandbox():
-    """Disable the config/.env.production key backfill for the whole session.
-
-    Without this, the first keyless test that ran load_env(local_mode=True)
-    adopted up to ~144 production secrets into os.environ. NOTE: deliberately
-    does NOT redirect POLYROB_HOME/HOME — many tests isolate by patching
-    ``Path.home`` or setting HOME themselves, and a session-wide POLYROB_HOME
-    would shadow that (it regressed ~20 init/identity/mcp-config tests when
-    tried). The cross-test leak from ~/.polyrob/.env and the legacy ~/.rob/.env
-    is handled by the per-test restore guard below instead.
-    """
-    prior = os.environ.get("POLYROB_ENV_KEY_BACKFILL")
-    os.environ["POLYROB_ENV_KEY_BACKFILL"] = "0"
-    try:
-        yield
-    finally:
-        if prior is None:
-            os.environ.pop("POLYROB_ENV_KEY_BACKFILL", None)
-        else:
-            os.environ["POLYROB_ENV_KEY_BACKFILL"] = prior
+# The config/.env.production key backfill is deleted (polyrob/app/bootstrap.py), so no session
+# fixture has to switch it off; the per-test restore guard below handles ~/.rob/.env.
 
 
 # The narrow var set an operator env file can inject through load_env paths the
@@ -138,33 +125,120 @@ _OPERATOR_ENV_VARS = (
 ) + _provider_key_env_vars() + _wallet_env_vars()
 
 
-@pytest.fixture(autouse=True)
-def _reset_signer_envelope_cache():
-    """The signer envelope caches the signer's caps per process (and keeps the
-    last good ones). A test that fakes a signer must not clamp the next test."""
-    yield
+def _try_import(name):
+    """The module, or None when it cannot import in this install (a missing
+    extra). Only ImportError is swallowed — any other import failure is a bug
+    the suite must show."""
     try:
-        from core.wallet.signer_envelope import reset_cache
-        reset_cache()
-    except Exception:
-        pass
+        return importlib.import_module(name)
+    except ImportError:
+        return None
+
+
+def _loaded(name):
+    """The module if this process already imported it, else None. A reset of a
+    module nobody imported is a no-op — and importing it just to reset it cost
+    every test the import and put modules in ``sys.modules`` the test never used."""
+    return sys.modules.get(name)
+
+
+def _reset_singletons(after: bool) -> None:
+    # The signer envelope caches the signer's caps per process (and keeps the
+    # last good ones). A test that fakes a signer must not clamp the next test.
+    m = _loaded("core.wallet.signer_envelope")
+    if after and m is not None:
+        try:
+            m.reset_cache()
+        except Exception:
+            pass
+    # 066 P0: the custody-secret holder and the hardening result are PROCESS-
+    # level. A seed one test's load_wallet_config() took out of os.environ must
+    # not be what a later, seedless test reads back.
+    for name in ("core.security.custody_env", "core.security.process_hardening"):
+        m = _loaded(name)
+        if m is not None:
+            try:
+                m._reset_for_tests()
+            except Exception:
+                pass
+    # 025: the session -> memory-scope binding is a process-global LRU; a scope
+    # one test bound must never reach another test's recall.
+    m = _loaded("modules.memory.scope")
+    if m is not None:
+        try:
+            m.reset_bindings()
+        except Exception:
+            pass
+    # The autonomous-session marker is a module-global set; a goal/cron helper
+    # (run_task_to_outcome marks ids like "s1") leaked it and the forged-turn
+    # guard misread a genuine owner turn as autonomous (tools/controller tests).
+    m = _loaded("core.autonomy_marker")
+    if m is not None:
+        m._SESSIONS.clear()
+    if after:
+        # get_skill_usage_store binds _STORE to the FIRST data_dir it sees; a test
+        # recording skill provenance pinned it to its tmp dir and the recap
+        # "nothing to report" test became order-dependent (2026-07-12).
+        m = _loaded("modules.skills.skill_usage")
+        if m is not None:
+            with m._STORE_LOCK:
+                m._STORE = None
+        # 064 F4: the bot-pair loop guard counts in process memory; a test that
+        # sends bot lines must not spend a later test's budget.
+        m = _loaded("core.surfaces.bot_pair_guard")
+        if m is not None:
+            try:
+                m.reset()
+            except Exception:
+                pass
+
+
+@pytest.fixture(autouse=True)
+def _reset_process_singletons():
+    """Reset the process-global singletons around every test (W10: seven
+    fixtures merged into one; each block above names its incident).
+
+    031: core.autonomy_control keeps two process-local registries (the warn-once
+    path set and the transition hooks) and polyrob.app.autonomy_runtime a once-per-
+    process sweep flag; a test that pauses, registers a hook or starts autonomy
+    leaked them into every later test (order-dependent failures). The hooks a
+    test found are restored, never dropped."""
+    _reset_singletons(after=False)
+    _ac = _loaded("core.autonomy_control")
+    _hooks = None
+    if _ac is not None:
+        _ac._WARNED_PATHS.clear()
+        _hooks = list(_ac._TRANSITION_HOOKS)
+        _ac._TRANSITION_HOOKS.clear()
+    try:
+        yield
+    finally:
+        _ac = _ac or _loaded("core.autonomy_control")
+        if _ac is not None:
+            _ac._WARNED_PATHS.clear()
+            _ac._TRANSITION_HOOKS[:] = _hooks or []
+        _ar = _loaded("polyrob.app.autonomy_runtime")
+        if _ar is not None:
+            _ar._self_binding_sweep_scheduled = False
+        _reset_singletons(after=True)
 
 
 @pytest.fixture(autouse=True)
 def _restore_operator_env_vars():
-    """Undo raw os.environ writes of the operator-file var set after each test.
+    """Undo raw os.environ writes after each test — the WHOLE environment.
 
     monkeypatch-based changes tear down before this runs (LIFO), so this only
-    catches UNMANAGED writes — exactly the load_env injection class.
+    catches UNMANAGED writes: the load_env injection class, and code under test
+    that setdefault()s surface flags or a POLYROB_OVERRIDES line. Restoring only
+    the operator var set let 27 tests leak (2026-10-11: a leaked
+    POLYROB_OVERRIDES / CORRESPONDENT_ACCESS_ENABLED denied every later
+    dispatcher route on that xdist worker).
     """
-    before = {k: os.environ.get(k) for k in _OPERATOR_ENV_VARS}
+    before = dict(os.environ)
     yield
-    for k, v in before.items():
-        if os.environ.get(k) != v:
-            if v is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = v
+    if dict(os.environ) != before:
+        os.environ.clear()
+        os.environ.update(before)
     # 026 P1.1: load_env now re-freezes the frozen policy flags ONCE per
     # process — a CliRunner test that triggered the first load_env with a
     # monkeypatched env would otherwise leave the frozen globals drifted for
@@ -279,22 +353,54 @@ def _local_data_home_follows_cwd(monkeypatch):
     yield
 
 
-@pytest.fixture(autouse=True)
-def _tests_are_not_a_deployed_box(tmp_path, monkeypatch):
-    """The suite runs as a DEV CHECKOUT, wherever it runs.
+# ---------------------------------------------------------------------------
+# W10 (2026-10-10): the per-test temp directory, made O(1).
+# pytest's own ``tmp_path`` allocates with ``make_numbered_dir``, which LISTS the
+# whole base temp directory on every call to find the next free number. Over a
+# run of N tests that is O(N^2): the webview suite (6,444 tests) spent 129 s of
+# SYSTEM time listing directories. This override keeps the contract (a fresh,
+# empty, unique directory per test under the session's base temp, kept by the
+# normal base-temp rotation) and allocates by counter into shards of 1,000.
+# ``tmpdir`` (the legacy py.path fixture) is built on ``tmp_path``, so it follows.
+# ---------------------------------------------------------------------------
 
-    ``core/admin_data_home.py`` reads the box's deployment evidence — the env
-    file ``/etc/polyrob/polyrob.env`` and the ``polyrob*.service`` units — to
-    pick the owner tenant, the deployed data home and (via the WS-G root guard
-    in ``cli/_admin_home.py``) to REFUSE mutating owner verbs typed as root.
-    On a deployed box's maintenance clone (sitting beside that env file, run as
-    root) 80 CLI verb tests refused with the remedy text instead of exercising
-    their verb, and the keys test resolved tenant ``rob`` from the deployed env
-    (2026-09-21). Every seat under test points at ``tmp_path``, so the suite
-    never touches the shared home: point the evidence at an EMPTY tmp tree so
-    every box looks like a dev checkout. The guard's own tests patch
-    ``_deployed_box`` / ``_deployment_evidence`` back themselves. Fail-open on
-    import."""
+_FAST_TMP_SEQ = itertools.count()
+
+
+def _fast_tmp_dir(tmp_path_factory, name: str) -> pathlib.Path:
+    n = next(_FAST_TMP_SEQ)
+    shard = tmp_path_factory.getbasetemp() / f"t{n // 1000:04d}"
+    path = shard / f"{re.sub(r'[^A-Za-z0-9_]', '_', name)[:30]}-{n}"
+    path.mkdir(parents=True)
+    return path
+
+
+@pytest.fixture
+def tmp_path(request, tmp_path_factory):
+    """A fresh, empty directory unique to this test (O(1) allocation; see above)."""
+    return _fast_tmp_dir(tmp_path_factory, request.node.name)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_data_home(tmp_path, tmp_path_factory, monkeypatch):
+    """ONE per-test isolation of every durable store a test could reach (W10).
+
+    This was fourteen autouse fixtures, each asking for ``tmp_path`` and each
+    paying its own setup. They are one fixture now; every protection and every
+    path is unchanged (the stores still live under the test's own ``tmp_path``,
+    in the same sub-paths, so a test that opens ``tmp_path / "telemetry_events.db"``
+    still reads the store the code under test wrote). Each block names the
+    incident it exists for. Same-scope autouse fixtures run in NAME order
+    (pytest collects a conftest's fixtures alphabetically), so this one runs
+    after ``_isolate_path_manager``.
+    """
+    # -- the suite is a DEV CHECKOUT, wherever it runs (2026-09-21) -----------
+    # core/admin_data_home.py reads the box's deployment evidence (the env file
+    # /etc/polyrob/polyrob.env and the polyrob*.service units) to pick the owner
+    # tenant and the deployed home, and the WS-G root guard REFUSES mutating owner
+    # verbs typed as root. On the prod maintenance clone 80 CLI verb tests refused
+    # instead of exercising their verb. Point the evidence at an EMPTY tmp tree;
+    # the guard's own tests patch _deployed_box/_deployment_evidence back.
     try:
         import core.admin_data_home as _adh
         empty = tmp_path / "_no_deploy"
@@ -302,135 +408,205 @@ def _tests_are_not_a_deployed_box(tmp_path, monkeypatch):
         monkeypatch.setattr(_adh, "UNIT_DIRS", (str(empty / "units"),))
     except Exception:
         pass
-    yield
 
+    # -- the wallet audit sink (H3 round 2, 2026-08-22) -----------------------
+    # get_policy_gate()/get_agent_wallet() are PROCESS singletons built from
+    # default_audit_sink(); the first test to reach them read the developer's REAL
+    # audit trail (797 entries / $880 trailing-24h) and four unrelated money tests
+    # failed "daily spend cap $100.00 would be exceeded". Substitute the ONE
+    # resolver the sink and core.wallet.derivation share — NOT a global
+    # POLYROB_DATA_DIR (the first attempt; it broke four cwd-relative tests).
+    # Escape hatches, read at CALL time (fixture order is not guaranteed): an
+    # explicit data_dir, or a POLYROB_DATA_DIR the TEST set, reach the REAL
+    # resolver (test_wallet_audit_sink_isolation.py pins both). The factory
+    # singleton is reset before and after every test.
+    # A store whose module cannot import here (an install without its extra —
+    # the static CI shard runs with none) cannot be reached by any test either.
+    _audit_sink_mod = _try_import("core.wallet.audit_sink")
+    _wallet_factory = _try_import("core.wallet.factory")
+    if _audit_sink_mod is not None:
+        wallet_root = str(tmp_path / "wallet_isolate")
+        _real_wallet_data_dir = _audit_sink_mod._wallet_data_dir
 
-@pytest.fixture(autouse=True)
-def _reset_custody_latches():
-    """066 P0: the custody-secret holder and the hardening result are
-    PROCESS-level. A seed one test's ``load_wallet_config()`` took out of
-    ``os.environ`` must not be what a later, seedless test reads back."""
-    def _reset():
-        try:
-            from core.security import custody_env, process_hardening
-            custody_env._reset_for_tests()
-            process_hardening._reset_for_tests()
-        except Exception:
-            pass
-    _reset()
-    yield
-    _reset()
+        def _isolated_wallet_data_dir(data_dir=None, *, for_meta=False):
+            if data_dir is not None:
+                return _real_wallet_data_dir(data_dir, for_meta=for_meta)
+            if (os.environ.get("POLYROB_DATA_DIR") or "").strip():
+                return _real_wallet_data_dir(None, for_meta=for_meta)
+            return os.path.join(wallet_root, "wallet")
 
+        monkeypatch.setattr(_audit_sink_mod, "_wallet_data_dir", _isolated_wallet_data_dir)
+    if _wallet_factory is not None:
+        _wallet_factory.reset_agent_wallet_cache()
 
-@pytest.fixture(autouse=True)
-def _isolate_wallet_audit_sink(tmp_path, monkeypatch):
-    """Keep the wallet PolicyGate/AgentWallet — and the durable audit sink they
-    read real trailing-24h spend from — OUT of the developer's real data home,
-    WITHOUT touching the global ``POLYROB_DATA_DIR`` env var.
+    # -- per-store default paths (each resolved under the data root before) ----
+    # telemetry_events.db: owner pushes / ANY user-bound delivery keep their
+    #   dedup/rate memory here; a real-home row leaked dedup state across runs.
+    monkeypatch.setenv("TELEMETRY_EVENT_LOG_PATH", str(tmp_path / "telemetry_events.db"))
+    # verdicts.db (057 WS-F): a rejected SMTP login / X-API 402 in a test would
+    #   suppress the developer's own rails for 15 minutes. A SUBDIRECTORY: a file
+    #   directly in tmp_path is visible to tests that walk their tmp dir.
+    monkeypatch.setenv("VERDICTS_DB_PATH", str(tmp_path / "_verdicts" / "verdicts.db"))
+    # deployed_apps.db (hf_deploy) and app_services.db (032): the registry getter
+    #   and the boot-reconcile sweep resolve the default.
+    monkeypatch.setenv("DEPLOYED_APPS_DB_PATH", str(tmp_path / "deployed_apps.db"))
+    monkeypatch.setenv("APP_SERVICES_DB_PATH", str(tmp_path / "app_services.db"))
+    # artifacts.db: the ledger and its cached singleton.
+    monkeypatch.setenv("ARTIFACTS_DB_PATH", str(tmp_path / "artifacts.db"))
+    # the ship rail: its DB AND its SERVED FILE TREE — on a box with a live vhost,
+    #   files under the real publish root would be publicly served.
+    monkeypatch.setenv("PUBLICATIONS_DB_PATH", str(tmp_path / "publications.db"))
+    monkeypatch.setenv("PUBLISH_ROOT", str(tmp_path / "publish"))
+    monkeypatch.setenv("PUBLISH_BASE_URL", "https://pub.test.invalid")
 
-    H3 fix round 2 (2026-08-22 review): ``core.wallet.factory.get_policy_gate()``
-    / ``get_agent_wallet()`` are PROCESS-LEVEL singletons (module globals
-    ``_cached``/``_resolved``) built from ``default_audit_sink()``, which
-    resolves ``<POLYROB_DATA_DIR or resolve_data_home()>/wallet/audit.jsonl`` —
-    on a dev machine running pytest from the repo root with no override, that is
-    this repo's own real ``.polyrob/wallet/audit.jsonl``. H3 gave
-    ``WALLET_DAILY_CAP_USD`` a finite $100 default (was unbounded); the FIRST
-    unit test in a session that reaches ``get_policy_gate()`` — in ANY
-    directory, not just ``tests/unit/core/wallet/``/``tests/unit/tools/x402/``
-    (which already reset the cache themselves) — silently built its singleton
-    from this developer's REAL, populated audit trail (797 entries / $880
-    trailing-24h spend, diagnosed live) and then kept that cached object for the
-    rest of the WHOLE pytest session regardless of any later test's own env.
-    Four tests outside the wallet-owned directories
-    (hyperliquid/polymarket/crypto_trade_gate) failed with "daily spend cap
-    $100.00 would be exceeded" as a direct, confirmed result (toggling
-    ``WALLET_DAILY_CAP_USD=none`` alone made all four pass). Unit tests must
-    never be able to reach a real durable audit sink at all — a root-level
-    guarantee, not a directory-by-directory one, mirroring
-    ``_isolate_autonomy_state_store`` below for ``AUTONOMY_STATE_DURABLE``.
+    # -- the session tree (pm() default root) --------------------------------
+    # With DATA_ROOT and POLYROB_DATA_DIR unset (the normal test state, above),
+    # resolve_session_data_root() falls back to the legacy ./data/task under the
+    # cwd — the repo root, shared by every xdist worker and the developer's own
+    # tree. Session-dir stores (core.session_control's control.sqlite3, the
+    # feed, workspaces) then collided across workers: test_run_budget_gate's
+    # `sess-budget` live-run row was seen by another worker. Point the fallback at
+    # this test's tmp_path; a test that sets DATA_ROOT/POLYROB_DATA_DIR still
+    # gets the env-driven branches unchanged.
+    try:
+        import core.runtime_paths as _rp_sessions
+        monkeypatch.setattr(_rp_sessions, "_LEGACY_SESSIONS_DEFAULT",
+                            str(tmp_path / "data" / "task"))
+    except Exception:
+        pass
 
-    ⚠️ FIRST ATTEMPT AT THIS FIX (still visible in git history) set
-    ``POLYROB_DATA_DIR`` globally via ``monkeypatch.setenv`` — that broke FOUR
-    unrelated tests that specifically depend on ``POLYROB_DATA_DIR`` being
-    UNSET so their own ``monkeypatch.chdir(tmp_path)`` drives a CWD-relative
-    resolution (``test_cli_container_workspace_is_cwd``,
-    ``test_config_data_dir_resolves_under_base_dir``, the digest/init-guardrail
-    prefs tests, and a telegram-harness test that failed outright because the
-    isolated dir was never even created on disk for that consumer). A global
-    env var is too broad a lever for a wallet-specific problem. This version
-    instead monkeypatches the ONE shared resolver both the audit sink AND
-    ``core.wallet.derivation`` funnel through —
-    ``core.wallet.audit_sink._wallet_data_dir`` (both do a lazy
-    ``from core.wallet.audit_sink import ...`` at call time, so patching the
-    module attribute redirects both) — so ONLY wallet state is isolated and
-    every other ``POLYROB_DATA_DIR`` consumer in the suite is completely
-    unaffected.
+    # -- the kill-switch probe (H6 leg 3) ------------------------------------
+    # autonomy_halted() is fail-CLOSED and checks for an AUTONOMY_HALT FILE under
+    # POLYROB_DATA_DIR / DATA_ROOT / the resolved home; a developer who ever ran
+    # `polyrob owner halt` here would fail every money-path test as "kill-switch
+    # on". Drop the env overrides (the resolve_data_home FUNCTION is left real —
+    # its own tests patch it). The fixture this replaced also set a per-test
+    # POLYROB_DATA_DIR, but autouse fixtures run in NAME order and
+    # _isolate_path_manager (later in that order) popped it before every test, so
+    # tests have always run with POLYROB_DATA_DIR UNSET — several depend on that
+    # (cwd-relative homes), and the wallet/pause escape hatches above and below
+    # read "set" as "the TEST set it". Kept that way on purpose.
+    monkeypatch.delenv("AUTONOMY_HALT", raising=False)
+    monkeypatch.delenv("DATA_ROOT", raising=False)
 
-    TWO escape hatches keep the wallet's own tests honest, because substituting
-    unconditionally would silently NEUTER them (they would then assert the
-    fixture's behaviour, not the production resolver's):
-      * an explicit ``data_dir`` argument still reaches the REAL resolver;
-      * a test that sets ``POLYROB_DATA_DIR`` itself still gets the REAL
-        env-anchored resolution — this is what keeps
-        ``test_wallet_meta_resolution_survives_cwd_change_via_data_dir_env`` and
-        ``test_wallet_meta_path_and_audit_sink_share_directory_by_default``
-        meaningful. This does not reopen the leak: the leak path is the
-        NO-override branch (``resolve_data_home()`` -> ``cwd/.polyrob``), and
-        ``_isolate_path_manager`` pops ``POLYROB_DATA_DIR`` before every test, so
-        a value present at call time was set by the test itself and points at
-        that test's own location.
-    The substitution therefore covers exactly the one branch that could reach a
-    real durable sink, and nothing else.
+    # -- the 031 pause record -------------------------------------------------
+    # state_bases ALWAYS appends the resolved home, so ac.pause(tmp_path) wrote a
+    # real AUTONOMY_PAUSE.json into cwd/.polyrob; read_state is fail-CLOSED, so a
+    # leaked PAUSE refuses every later goals/cron/money/social test. Substitute
+    # the one seam (_resolved_home; state_bases is imported by name elsewhere).
+    # Escape hatches at CALL time: a test-set POLYROB_DATA_DIR, or a test-patched
+    # resolve_data_home, get the REAL resolution (test_autonomy_pause_isolation.py).
+    try:
+        from core import autonomy_control as _ac
+        import core.runtime_paths as _rp
+        pause_home = str(tmp_path / "autonomy_pause_isolate")
+        _real_resolved_home = _ac._resolved_home
+        _real_resolver = _rp.resolve_data_home
 
-    Also resets ``core.wallet.factory``'s process-level singleton before AND
-    after every test — closing the SEPARATE hazard where a stale cached
-    PolicyGate/AgentWallet (built under one test's isolated dir, e.g. holding
-    recorded spend from that test's own trades) survives into a LATER test
-    with a different — but still isolated-away-from-disk — tmp path, causing
-    cross-test spend-cap flakiness within the suite itself.
-    """
-    from core.wallet import audit_sink as _audit_sink_mod
-    isolated_root = str(tmp_path / "wallet_isolate")
-    _real_wallet_data_dir = _audit_sink_mod._wallet_data_dir
+        def _isolated_resolved_home():
+            if (os.environ.get("POLYROB_DATA_DIR") or "").strip():
+                return _real_resolved_home()
+            if _rp.resolve_data_home is not _real_resolver:
+                return _real_resolved_home()
+            return pause_home
 
-    def _isolated_wallet_data_dir(data_dir=None, *, for_meta=False):
-        # Both escape hatches are evaluated at CALL time (inside the test body),
-        # never at fixture-setup time. That is deliberate: pytest does NOT order
-        # same-scope autouse fixtures by declaration order, and
-        # ``_isolate_path_manager`` does a raw ``os.environ.pop("POLYROB_DATA_DIR")``
-        # at ITS setup — a setup-time read here would race that pop. Reading the
-        # env inside the substituted callable removes the ordering dependency
-        # entirely: by the time production code calls this, every fixture has run.
-        if data_dir is not None:
-            return _real_wallet_data_dir(data_dir, for_meta=for_meta)
-        if (os.environ.get("POLYROB_DATA_DIR") or "").strip():
-            return _real_wallet_data_dir(None, for_meta=for_meta)
-        return os.path.join(isolated_root, "wallet")
+        monkeypatch.setattr(_ac, "_resolved_home", _isolated_resolved_home)
+    except Exception:
+        pass
 
-    monkeypatch.setattr(_audit_sink_mod, "_wallet_data_dir", _isolated_wallet_data_dir)
-    from core.wallet.factory import reset_agent_wallet_cache
-    reset_agent_wallet_cache()
+    # -- run safety state and the owner login budget --------------------------
+    refusal_taint = _try_import("core.security.refusal_taint")
+    refusal_taint_store = _try_import("core.security.refusal_taint_store")
+    if refusal_taint_store is not None:
+        monkeypatch.setattr(refusal_taint_store, "path", lambda: tmp_path / "refusal_taint.db")
+    if refusal_taint is not None:
+        refusal_taint.reset_for_tests()
+    login_limits = _try_import("webview.login_limits")
+    if login_limits is not None:
+        monkeypatch.setattr(login_limits, "_db_path", lambda: tmp_path / "login_attempts.db")
+
+    # -- credential verdicts / artifacts / publish: drop the cached singletons --
+    _cv = _try_import("core.credential_verdicts")
+    _artifacts = _try_import("core.artifacts")
+    _publish = _try_import("core.publish")
+
+    def _drop_store_singletons():
+        if _cv is not None:
+            _cv._reset_for_tests()
+        if _artifacts is not None:
+            _artifacts.reset_artifact_ledger()
+        if _publish is not None:
+            _publish.reset_publish_store()
+
+    _drop_store_singletons()
+
+    # -- the action-card store: every quote on a money verb writes a card row --
+    # Its own directory, outside tmp_path (a test that lists its tmp_path must not
+    # see cards.db), created on FIRST USE — most tests never touch a card.
+    _cards = None
+    try:
+        from core.surfaces import cards as _cards
+        _cards.set_store(_LazyCardStore(_cards, tmp_path_factory))
+    except Exception:
+        _cards = None
+
+    # -- 066 P1: never install into / import from the operator's lazy overlays,
+    # never run a real network install by accident. Both roots point into a
+    # per-test directory (outside tmp_path); the trusted install refuses unless a
+    # test patches it back.
+    _ld = importlib.import_module("core.lazy_deps")
+    overlay = pathlib.Path(str(tmp_path) + "-lazy-overlay")
+
+    def _overlay(leaf):
+        overlay.mkdir(exist_ok=True)
+        return overlay / leaf
+
+    monkeypatch.setattr(_ld, "system_root", lambda: _overlay("system"))
+    monkeypatch.setattr(_ld, "local_root", lambda: _overlay("local"))
+
+    def _blocked(feature, *, wheel_only):
+        raise _ld.FeatureUnavailable(
+            f"{feature}: real lazy installs are blocked under pytest (tests/conftest.py). "
+            f"Remedy: {_ld.remedy(feature)}", "test_blocked")
+
+    monkeypatch.setattr(_ld, "_trusted_install", _blocked)
+
     try:
         yield
     finally:
-        reset_agent_wallet_cache()
+        if _wallet_factory is not None:
+            _wallet_factory.reset_agent_wallet_cache()
+        if refusal_taint is not None:
+            refusal_taint.reset_for_tests()
+        _drop_store_singletons()
+        if _cards is not None:
+            _cards.set_store(None)
+            _cards._LISTENERS.clear()
 
 
-@pytest.fixture(autouse=True)
-def _reset_memory_scope_bindings():
-    """025: the session -> memory-scope binding is process-global (a bounded
-    LRU in ``modules.memory.scope``). Clear it around every test so a scope one
-    test bound never reaches another test's recall."""
-    try:
-        from modules.memory.scope import reset_bindings
-    except Exception:  # pragma: no cover - import guard
-        yield
-        return
-    reset_bindings()
-    try:
-        yield
-    finally:
-        reset_bindings()
+class _LazyCardStore:
+    """A ``CardStore`` whose directory and schema are made on first use.
+
+    Creating the sqlite file eagerly cost ~2.5 ms on every test of the suite."""
+
+    def __init__(self, cards_mod, tmp_path_factory):
+        self._mod = cards_mod
+        self._factory = tmp_path_factory
+        self._real = None
+        # A test may first touch the store from two threads at once (a tap
+        # thread polling while the action inserts); both must get ONE store.
+        self._lock = threading.Lock()
+
+    def _store(self):
+        if self._real is None:
+            with self._lock:
+                if self._real is None:
+                    d = _fast_tmp_dir(self._factory, "cards")
+                    self._real = self._mod.CardStore(str(d / "cards.db"))
+        return self._real
+
+    def __getattr__(self, name):
+        return getattr(self._store(), name)
 
 
 @pytest.fixture(autouse=True)
@@ -457,7 +633,7 @@ def _credit_sentinel_off():
 
 
 @pytest.fixture(autouse=True)
-def _isolate_autonomy_state_store():
+def _isolate_autonomy_state_store(monkeypatch, tmp_path_factory):
     """Keep restart-durable autonomy state OUT of the developer's real data home.
 
     ``get_autonomy_state_store()`` resolves ``autonomy_state.db`` under
@@ -465,23 +641,25 @@ def _isolate_autonomy_state_store():
     touching the ReentryBudget singleton or an orchestrator would persist budget/
     delegation rows there and leak them into later test runs (this bit
     test_self_wake's singleton test on its second run). Durability tests inject an
-    explicit store/tmp path, so forcing the flag off here doesn't reduce coverage.
-    A test may still opt in by setting AUTONOMY_STATE_DURABLE inside its own body.
+    explicit store/tmp path, so the default store is None here (the in-memory
+    registries) and the default path points at an empty temp dir, so the boot
+    recovery sweep never reads the real DB. A test may still monkeypatch
+    ``get_autonomy_state_store`` itself to opt in.
     """
-    prev = os.environ.get("AUTONOMY_STATE_DURABLE")
-    os.environ["AUTONOMY_STATE_DURABLE"] = "off"
+    try:
+        from agents.task.agent import autonomy_state
+        monkeypatch.setattr(autonomy_state, "get_autonomy_state_store", lambda: None)
+        _iso = tmp_path_factory.getbasetemp() / "_autonomy_state_iso"
+        monkeypatch.setattr(autonomy_state, "default_autonomy_state_db",
+                            lambda: str(_iso / "autonomy_state.db"))
+    except Exception:
+        pass
     try:
         from agents.task.agent.core.self_wake import reset_reentry_budget
         reset_reentry_budget()
     except Exception:
         pass
-    try:
-        yield
-    finally:
-        if prev is None:
-            os.environ.pop("AUTONOMY_STATE_DURABLE", None)
-        else:
-            os.environ["AUTONOMY_STATE_DURABLE"] = prev
+    yield
 
 
 @pytest.fixture(autouse=True)
@@ -499,11 +677,12 @@ def _isolate_provider_registry():
     os.environ["LLM_CUSTOM_PROVIDERS"] = ""
 
     def _reset():
-        try:
-            from modules.llm.provider_spec import reset_provider_registry_cache
-            reset_provider_registry_cache()
-        except Exception:
-            pass
+        m = _loaded("modules.llm.provider_spec")
+        if m is not None:
+            try:
+                m.reset_provider_registry_cache()
+            except Exception:
+                pass
 
     _reset()
     try:
@@ -514,42 +693,6 @@ def _isolate_provider_registry():
         else:
             os.environ["LLM_CUSTOM_PROVIDERS"] = prev
         _reset()
-
-
-@pytest.fixture(autouse=True)
-def _reset_autonomy_marker_global():
-    """The in-process autonomous-session marker is a module-global set; any test
-    that runs a goal/cron helper (run_task_to_outcome marks ids like "s1")
-    leaks it into unrelated suites — the forged-turn guard then misreads a
-    genuine owner turn as autonomous (this bit tools/controller tests).
-    Promoted from the goals-suite conftest to global scope. Fail-open."""
-    try:
-        from agents.task.goals import autonomy_marker
-        autonomy_marker._SESSIONS.clear()
-    except Exception:
-        pass
-    yield
-    try:
-        from agents.task.goals import autonomy_marker
-        autonomy_marker._SESSIONS.clear()
-    except Exception:
-        pass
-
-
-@pytest.fixture(autouse=True)
-def _isolate_telemetry_event_log(tmp_path, monkeypatch):
-    """Keep the durable telemetry event log OUT of the developer's real data home.
-
-    ``get_event_log()`` resolves ``telemetry_events.db`` under the data root — on
-    a dev machine that is the repo's ``.polyrob``. Tests that trigger owner
-    pushes/escalations (or, since §3.2, ANY user-bound delivery — the rail's
-    dedup/rate memory lives in this log) would persist rows there and leak
-    dedup state across test runs. Redirect the default to a per-test tmp db;
-    tests that want a specific store still pass an explicit path/instance.
-    """
-    monkeypatch.setenv("TELEMETRY_EVENT_LOG_PATH",
-                       str(tmp_path / "telemetry_events.db"))
-    yield
 
 
 @pytest.fixture(autouse=True)
@@ -567,100 +710,6 @@ def _restore_container_singleton():
     before = DependencyContainer._instance
     yield
     DependencyContainer._instance = before
-
-
-@pytest.fixture(autouse=True)
-def _isolate_credential_verdicts(tmp_path, monkeypatch):
-    """Keep the external-rail verdict store OUT of the developer's real data home.
-
-    057 WS-F made ``core.credential_verdicts`` durable (``verdicts.db`` under the
-    data home). A test that records a rejected SMTP login or an X-API 402 would
-    otherwise write a REAL verdict into ``~/.polyrob`` and suppress the
-    developer's own email/X rails for the next 15 minutes. The module also caches
-    its schema-init per path and keeps a fail-open fallback dict, so both are
-    reset around every test.
-    """
-    # A SUBDIRECTORY: a stray file planted directly in ``tmp_path`` is visible to
-    # every test that walks its own tmp dir (the knowledge-inventory suite does).
-    monkeypatch.setenv("VERDICTS_DB_PATH", str(tmp_path / "_verdicts" / "verdicts.db"))
-    from core import credential_verdicts as _cv
-    _cv._reset_for_tests()
-    yield
-    _cv._reset_for_tests()
-
-
-@pytest.fixture(autouse=True)
-def _isolate_deployed_apps_db(tmp_path, monkeypatch):
-    """Keep the hf_deploy ``deployed_apps.db`` OUT of the developer's real data home.
-
-    ``default_deployed_apps_db()`` resolves under the data root — on a dev
-    machine that is the repo's ``.polyrob``. Redirect the default to a
-    per-test tmp db (mirrors ``_isolate_telemetry_event_log`` above); the
-    hf_deploy suite additionally passes an explicit ``db_path`` per test
-    (belt), so this is the suspenders for any code path that resolves the
-    default (e.g. the tool's production registry getter, the boot-reconcile
-    sweep).
-    """
-    monkeypatch.setenv("DEPLOYED_APPS_DB_PATH", str(tmp_path / "deployed_apps.db"))
-    yield
-
-
-@pytest.fixture(autouse=True)
-def _isolate_artifacts_db(tmp_path, monkeypatch):
-    """Keep the artifact ledger OUT of the developer's real data home.
-
-    Mirrors ``_isolate_deployed_apps_db``: ``default_artifacts_db()`` resolves
-    under the data root, which on a dev machine is the repo's ``.polyrob``.
-    The cached module singleton is dropped too, so a test that already built
-    one cannot leak it into the next test's tmp path.
-    """
-    monkeypatch.setenv("ARTIFACTS_DB_PATH", str(tmp_path / "artifacts.db"))
-    from core.artifacts import reset_artifact_ledger
-    reset_artifact_ledger()
-    yield
-    reset_artifact_ledger()
-
-
-@pytest.fixture(autouse=True)
-def _isolate_publish_store(tmp_path, monkeypatch):
-    """Keep the ship rail's DB and its SERVED FILE TREE out of the real data home.
-
-    The publish root is a directory a test could otherwise populate under the
-    developer's ~/.polyrob — and on a box where the vhost is live, those files
-    would be publicly served.
-    """
-    monkeypatch.setenv("PUBLICATIONS_DB_PATH", str(tmp_path / "publications.db"))
-    monkeypatch.setenv("PUBLISH_ROOT", str(tmp_path / "publish"))
-    monkeypatch.setenv("PUBLISH_BASE_URL", "https://pub.test.invalid")
-    from core.publish import reset_publish_store
-    reset_publish_store()
-    yield
-    reset_publish_store()
-
-
-@pytest.fixture(autouse=True)
-def _isolate_card_store(tmp_path_factory):
-    """Keep the action-card store (``core.surfaces.cards``) out of the real data
-    home: every quote on a money verb now writes a card row."""
-    try:
-        from core.surfaces import cards as _cards
-    except Exception:
-        yield
-        return
-    # Its own tmp dir: a test that lists its tmp_path must not see this file.
-    _cards.set_store(_cards.CardStore(str(tmp_path_factory.mktemp("cards") / "cards.db")))
-    yield
-    _cards.set_store(None)
-    _cards._LISTENERS.clear()
-
-
-@pytest.fixture(autouse=True)
-def _isolate_app_services_db(tmp_path, monkeypatch):
-    """032: keep the durable app registry out of the developer's real data home
-    (mirrors ``_isolate_deployed_apps_db``; the app_service suite also passes an
-    explicit db_path per test)."""
-    monkeypatch.setenv("APP_SERVICES_DB_PATH", str(tmp_path / "app_services.db"))
-    yield
 
 
 @pytest.fixture(autouse=True)
@@ -686,201 +735,48 @@ def _isolate_external_skill_roots(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _isolate_autonomy_control_module_state():
-    """031: ``core.autonomy_control`` keeps two process-local registries — the
-    warn-once path set and the transition hooks — and ``core.autonomy_runtime``
-    keeps a once-per-process sweep flag. A test that pauses, registers a hook or
-    starts autonomy would otherwise leak that state into every later test in the
-    same process (order-dependent failures). Reset both around each test."""
-    try:
-        from core import autonomy_control as _ac
-    except Exception:
-        yield
-        return
-    _ac._WARNED_PATHS.clear()
-    _hooks = list(_ac._TRANSITION_HOOKS)
-    _ac._TRANSITION_HOOKS.clear()
-    try:
-        yield
-    finally:
-        _ac._WARNED_PATHS.clear()
-        _ac._TRANSITION_HOOKS[:] = _hooks
-        try:
-            from core import autonomy_runtime as _ar
-            _ar._self_binding_sweep_scheduled = False
-        except Exception:
-            pass
-
-
-@pytest.fixture(autouse=True)
-def _isolate_autonomy_pause_record(tmp_path, monkeypatch):
-    """Keep the 031 pause record OUT of the developer's real data home.
-
-    ``core.autonomy_control.state_bases`` ALWAYS appends the resolved data home,
-    even when an explicit ``data_dir`` was passed. So ``ac.pause(tmp_path)`` in a
-    test that does not ALSO pin the resolver writes a real
-    ``AUTONOMY_PAUSE.json`` (and ``AUTONOMY_PAUSE.json.lock``, and an
-    ``autonomy_state.db`` audit row) into ``cwd/.polyrob`` — this repo's own live
-    dev home when pytest runs from the repo root. Verified: with the repo
-    conftest loaded, ``state_bases(tmp)`` returns
-    ``[<tmp>, '<repo>/.polyrob']``, and ``<repo>/.polyrob/AUTONOMY_PAUSE.json.lock``
-    exists today as the fossil of exactly that. A leaked PAUSE record is the
-    worst possible leak in this suite: ``read_state`` is fail-CLOSED, so every
-    later goals/cron/money/social test in ANY directory would honestly refuse to
-    run for a reason that has nothing to do with the test — the same failure
-    class ``_credit_sentinel_off`` and ``_isolate_autonomy_state_store`` exist
-    for. That every 031 test patches ``resolve_data_home`` by hand today (and
-    ``test_twitter_pause_gate.py`` carries a "⚠️ Never call ac.pause() without
-    isolating state_bases" comment) is the proof the footgun is real.
-
-    Substitutes the ONE seam every base beyond the caller's own ``data_dir``
-    funnels through — ``core.autonomy_control._resolved_home`` — exactly as
-    ``_isolate_wallet_audit_sink`` substitutes ``_wallet_data_dir``. Patching
-    ``state_bases`` itself would NOT work: ``core.surfaces.owner_admin`` imports
-    that name at module import, so it holds its own binding.
-
-    TWO escape hatches keep the pause tests honest (substituting
-    unconditionally would make them assert the fixture, not production):
-      * a test that sets ``POLYROB_DATA_DIR`` itself gets the REAL resolution
-        (which honours that variable, so it points at the test's own dir);
-      * a test that monkeypatches ``core.runtime_paths.resolve_data_home`` gets
-        the REAL resolution too (it pinned the home deliberately).
-    Both are evaluated at CALL time, never at fixture-setup time: pytest does not
-    order same-scope autouse fixtures deterministically, and
-    ``_isolate_path_manager`` pops ``POLYROB_DATA_DIR`` at ITS setup.
-    """
-    try:
-        from core import autonomy_control as _ac
-        import core.runtime_paths as _rp
-    except Exception:
-        yield
-        return
-    isolated = str(tmp_path / "autonomy_pause_isolate")
-    _real_resolved_home = _ac._resolved_home
-    _real_resolver = _rp.resolve_data_home
-
-    def _isolated_resolved_home():
-        if (os.environ.get("POLYROB_DATA_DIR") or "").strip():
-            return _real_resolved_home()
-        if _rp.resolve_data_home is not _real_resolver:
-            return _real_resolved_home()
-        return isolated
-
-    monkeypatch.setattr(_ac, "_resolved_home", _isolated_resolved_home)
-    yield
-
-
-@pytest.fixture(autouse=True)
-def _isolate_autonomy_halt_probe(tmp_path, monkeypatch):
-    """Keep ``AutonomyConfig.autonomy_halted()``'s kill-switch probe out of the
-    developer's real local data home.
-
-    ``autonomy_halted()`` (agents/task/constants.py) is fail-CLOSED (H6 leg 3):
-    besides the ``AUTONOMY_HALT`` env flag, it checks for an ``AUTONOMY_HALT``
-    FILE at ``POLYROB_DATA_DIR``/``DATA_ROOT``/the RESOLVED data home
-    (``core.runtime_paths.resolve_data_home()``). With none of those env vars
-    set, ``resolve_data_home()`` converges on ``cwd/.polyrob`` — this repo's own
-    real local dev data dir when pytest runs from the repo root. A developer who
-    has ever run ``polyrob owner halt`` (or hand-touched the file) in this tree
-    would otherwise have EVERY money-path test (PolicyGate, wallet, trading
-    approval) that doesn't itself mock the probe silently fail-closed for a
-    reason that has nothing to do with the test — and, worse, misattribute it to
-    "the kill-switch is on" (see the PolicyGate probe-failure-reason fix).
-
-    Close every lever the probe reads, without touching the ``resolve_data_home``
-    FUNCTION object itself (several tests — ``test_data_home_resolver.py``,
-    ``test_owner_halt.py`` — import/patch that function directly and must see
-    the REAL implementation): drop the ``AUTONOMY_HALT``/``DATA_ROOT`` env
-    overrides, and give every test its own throwaway ``POLYROB_DATA_DIR``
-    (fresh, empty ``tmp_path`` subdir — never contains an ``AUTONOMY_HALT``
-    file). ``resolve_data_home()`` itself honors ``POLYROB_DATA_DIR`` first, so
-    one env var closes both the explicit ``bases[0]`` check AND the resolved-
-    data-home check in the SAME call.
-
-    A test that wants to exercise a REAL halt file or a specific data home sets
-    its own env/monkeypatch inside the test body (e.g.
-    ``test_autonomy_halted_fail_closed.py``, ``test_owner_halt.py``,
-    ``test_data_home_resolver.py``) — applied after this fixture's setup, those
-    calls win normally, so existing halt/data-home tests are unaffected.
-    Fail-open (never raise from this fixture).
-    """
-    monkeypatch.delenv("AUTONOMY_HALT", raising=False)
-    monkeypatch.delenv("DATA_ROOT", raising=False)
-    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "autonomy_halt_isolate"))
-    yield
-
-
-@pytest.fixture(autouse=True)
-def _isolate_refusal_taint_store(tmp_path, monkeypatch):
-    """Never write run safety state into the developer's real data home."""
-    from core.security import refusal_taint, refusal_taint_store
-    monkeypatch.setattr(refusal_taint_store, 'path', lambda: tmp_path / 'refusal_taint.db')
-    refusal_taint.reset_for_tests()
-    yield
-    refusal_taint.reset_for_tests()
-
-
-@pytest.fixture(autouse=True)
-def _isolate_owner_login_budget(tmp_path, monkeypatch):
-    from webview import login_limits
-    monkeypatch.setattr(login_limits, '_db_path', lambda: tmp_path / 'login_attempts.db')
-
-
-@pytest.fixture(autouse=True)
-def _reset_skill_usage_singleton():
-    """Unbind the first-caller-wins skill-usage store singleton after every test.
-
-    ``modules.skills.skill_usage.get_skill_usage_store`` binds the process-global
-    ``_STORE`` to the FIRST data_dir it is called with. A test that records skill
-    provenance (e.g. ``test_self_evolution.py`` creating authored skills for
-    "alice") pins the singleton to its tmp dir; every later test asking for a
-    DIFFERENT data home silently reads that stale store — which made the recap
-    "nothing to report" test order-dependent (2026-07-12 parity wave sweep).
-    Fail-open, post-yield (mirrors the telemetry/event-log isolation above).
-    """
-    yield
-    try:
-        import modules.skills.skill_usage as _su
-        with _su._STORE_LOCK:
-            _su._STORE = None
-    except Exception:
-        pass
-
-
-@pytest.fixture(autouse=True)
-def _reset_bot_pair_guard():
-    """064 F4: the bot-pair loop guard counts in process memory; a test that
-    sends bot lines must not spend a later test's budget."""
-    yield
-    try:
-        from core.surfaces import bot_pair_guard
-        bot_pair_guard.reset()
-    except Exception:
-        pass
-
-
-@pytest.fixture(autouse=True)
-def _lazy_overlay_sandbox(tmp_path_factory, monkeypatch):
-    """066 P1: a test never installs into, or imports from, the operator's real
-    lazy overlays (``~/.polyrob/pylibs``, ``<data home>/pylibs``), and never runs
-    a real network install by accident. Both roots point into a per-test tmp dir;
-    the in-process trusted install refuses unless a test patches it back."""
-    import core.lazy_deps as _ld
-    base = tmp_path_factory.mktemp("lazy-overlay")
-    monkeypatch.setattr(_ld, "system_root", lambda: base / "system")
-    monkeypatch.setattr(_ld, "local_root", lambda: base / "local")
-
-    def _blocked(feature, *, wheel_only):
-        raise _ld.FeatureUnavailable(
-            f"{feature}: real lazy installs are blocked under pytest (tests/conftest.py). "
-            f"Remedy: {_ld.remedy(feature)}", "test_blocked")
-
-    monkeypatch.setattr(_ld, "_trusted_install", _blocked)
-
-
-@pytest.fixture(autouse=True)
 def _isolate_inbound_denial_budgets(monkeypatch):
     from core.rate_limit import SlidingWindowLimiter
     from core.surfaces import command_reply
     monkeypatch.setattr(command_reply, '_DENIAL_SENDERS', SlidingWindowLimiter(max_calls=1, window_seconds=60, max_keys=4096))
     monkeypatch.setattr(command_reply, '_DENIAL_TOTAL', SlidingWindowLimiter(max_calls=50, window_seconds=60, max_keys=1))
+
+
+# ---------------------------------------------------------------------------
+# W10: the `slow` marker, applied by rule rather than by hand. A test module is
+# slow when it spawns a real process, browser or container (the source names
+# subprocess.run/Popen/check_*, asyncio.create_subprocess_*, sys.executable,
+# playwright, or a docker CLI/SDK call) or lives under tests/install/ (pip,
+# venvs, wheels). CI runs these in their own shard; the inner loop is
+# `pytest -m "not slow"`. A hand-written @pytest.mark.slow still works.
+# ---------------------------------------------------------------------------
+
+_SLOW_SOURCE = re.compile(
+    r"subprocess\.(?:run|Popen|check_output|check_call|call)\("
+    r"|asyncio\.create_subprocess_|sys\.executable"
+    r"|async_playwright|sync_playwright|chromium\.launch"
+    r"|docker\.from_env|[\"']docker[\"']\s*,")
+_SLOW_DIRS = ("tests/install/",)
+_SLOW_BY_FILE: dict = {}
+
+
+def _module_is_slow(path: pathlib.Path) -> bool:
+    hit = _SLOW_BY_FILE.get(path)
+    if hit is None:
+        rel = path.as_posix()
+        hit = any(f"/{d}" in rel for d in _SLOW_DIRS)
+        if not hit:
+            try:
+                hit = bool(_SLOW_SOURCE.search(path.read_text(encoding="utf-8", errors="replace")))
+            except OSError:
+                hit = False
+        _SLOW_BY_FILE[path] = hit
+    return hit
+
+
+def pytest_collection_modifyitems(config, items):
+    slow = pytest.mark.slow
+    for item in items:
+        path = getattr(item, "path", None)
+        if path is not None and path.suffix == ".py" and _module_is_slow(path):
+            item.add_marker(slow)

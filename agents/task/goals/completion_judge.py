@@ -246,7 +246,7 @@ async def _invoke_judge(task_agent: Any, session_id: Optional[str], goal: Any,
         if llm is None:
             return (VERDICT_UNCLEAR, "no judge model available")
         if timeout is None:
-            from agents.task.constants import AutonomyConfig
+            from core.config_policy import AutonomyConfig
             timeout = float(AutonomyConfig.goal_judge_timeout_sec())
         import time as _time
         verdict, reason = VERDICT_UNCLEAR, "unparseable judge response"

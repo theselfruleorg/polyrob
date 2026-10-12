@@ -41,7 +41,10 @@ def test_pause_apps_denies_app_kinds_only(tmp_path, monkeypatch):
 
 def test_flag_rows_cataloged():
     from core.flags import REGISTRY
-    for n in ("APP_SERVICE_ENABLED", "APP_SERVICE_ALLOW_PUBLIC", "APP_SERVICE_BASE_DOMAIN",
+    from core.config_policy.members import MEMBER_FLAGS
+    # D7: the two bundle members are set by AGENT_BUILDER_MODE, not a row.
+    assert {"APP_SERVICE_ENABLED", "APP_SERVICE_ALLOW_PUBLIC"} <= MEMBER_FLAGS
+    for n in ("APP_SERVICE_BASE_DOMAIN",
               "APP_SERVICE_MAX_LIVE", "APP_SERVICE_DAILY_MAX", "APP_SERVICE_MIN_INTERVAL_SEC",
               "APP_SERVICE_MEMORY_MB", "APP_SERVICE_CPUS", "APP_SERVICE_PIDS",
               "APP_SERVICE_SNAPSHOT_MAX_MB", "APP_SERVICE_EGRESS_DEFAULT", "APP_SERVICE_PORT_RANGE",

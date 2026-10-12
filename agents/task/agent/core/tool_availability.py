@@ -27,8 +27,13 @@ logger = logging.getLogger(__name__)
 GATED_TOOL_REGISTRY: dict = gate_disclosure_map()
 
 
+def _set_line(name: str) -> str:
+    from core.config_policy.members import set_line
+    return set_line(name, "true")
+
+
 def _hint_enabled() -> bool:
-    from agents.task.constants import _bool_env
+    from core.config_policy import _bool_env
     return _bool_env("TOOL_AVAILABILITY_HINT", True)
 
 
@@ -77,7 +82,7 @@ def compute_gate(tool: str) -> tuple:
         if not limbs[limb]:
             return (f"{flag_name}=false (posture {posture} already met)",
                     "disabled",
-                    f"owner sets {flag_name}=true — raising the posture changes nothing here")
+                    f"owner sets {_set_line(flag_name)} — raising the posture changes nothing here")
         return (f"{flag_name}=true, posture {posture}", "loadable", _COMPUTE_SESSION_REMEDY)
     except Exception:
         logger.debug("compute gate for %s failed (fail-open to registry)", tool, exc_info=True)

@@ -59,7 +59,7 @@ def _inject_script() -> Optional[str]:
     override = (os.getenv("DEV_RAIL_SCRIPT") or "").strip()
     if override:
         return override if os.path.isfile(override) else None
-    default = Path(__file__).resolve().parents[2] / "scripts" / "dev_inject.sh"
+    default = Path(__file__).resolve().parents[2] / "scripts" / "ops" / "dev_inject.sh"
     return str(default) if default.is_file() else None
 
 

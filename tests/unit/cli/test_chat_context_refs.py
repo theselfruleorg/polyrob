@@ -21,7 +21,7 @@ def test_context_references_enabled_default_off(monkeypatch):
     """With no POLYROB_LOCAL and env unset → False (server byte-identical)."""
     monkeypatch.delenv("CONTEXT_REFERENCES_ENABLED", raising=False)
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
-    from agents.task.constants import AutonomyConfig
+    from core.config_policy import AutonomyConfig
     assert AutonomyConfig.context_references_enabled() is False
 
 
@@ -29,7 +29,7 @@ def test_context_references_enabled_via_env(monkeypatch):
     """Explicit CONTEXT_REFERENCES_ENABLED=true turns it on regardless of POLYROB_LOCAL."""
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
     monkeypatch.setenv("CONTEXT_REFERENCES_ENABLED", "true")
-    from agents.task.constants import AutonomyConfig
+    from core.config_policy import AutonomyConfig
     assert AutonomyConfig.context_references_enabled() is True
 
 
@@ -37,7 +37,7 @@ def test_context_references_enabled_via_local_mode(monkeypatch):
     """POLYROB_LOCAL=true defaults CONTEXT_REFERENCES_ENABLED to ON."""
     monkeypatch.delenv("CONTEXT_REFERENCES_ENABLED", raising=False)
     monkeypatch.setenv("POLYROB_LOCAL", "true")
-    from agents.task.constants import AutonomyConfig
+    from core.config_policy import AutonomyConfig
     assert AutonomyConfig.context_references_enabled() is True
 
 
@@ -45,7 +45,7 @@ def test_context_references_explicit_off_wins_over_local(monkeypatch):
     """Explicit CONTEXT_REFERENCES_ENABLED=false wins even under POLYROB_LOCAL."""
     monkeypatch.setenv("POLYROB_LOCAL", "true")
     monkeypatch.setenv("CONTEXT_REFERENCES_ENABLED", "false")
-    from agents.task.constants import AutonomyConfig
+    from core.config_policy import AutonomyConfig
     assert AutonomyConfig.context_references_enabled() is False
 
 

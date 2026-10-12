@@ -52,14 +52,14 @@ def test_config_patch_pref_and_flag(monkeypatch, tmp_path):
                  json={"value": "5", "confirm": True})
     assert r3.status_code == 200
     # flag write lands in the project env file, restart-effective
-    r4 = c.patch("/api/webgate/config/GOALS_ENABLED", json={"value": "on"})
+    r4 = c.patch("/api/webgate/config/TOOL_AVAILABILITY_HINT", json={"value": "on"})
     assert r4.status_code == 200
-    assert "GOALS_ENABLED=on" in (tmp_path / "home" / ".env").read_text()
+    assert "TOOL_AVAILABILITY_HINT=on" in (tmp_path / "home" / ".env").read_text()
 
 
 def test_flag_write_denied_off_owner_postures(monkeypatch, tmp_path):
     c = _client(monkeypatch, tmp_path, posture="multitenant")
-    r = c.patch("/api/webgate/config/GOALS_ENABLED", json={"value": "on"})
+    r = c.patch("/api/webgate/config/TOOL_AVAILABILITY_HINT", json={"value": "on"})
     assert r.status_code == 403
     # prefs still writable in multitenant (tenant-scoped store)
     r2 = c.patch("/api/webgate/config/goals.daily_quota", json={"value": "3"})
@@ -92,5 +92,5 @@ def test_config_get_marks_console_unwritable(monkeypatch, tmp_path):
     row = next(r for r in rows if r["key"] == "LLM_CUSTOM_PROVIDERS")
     assert row["console_writable"] is False
     rows2 = c.get("/api/webgate/config",
-                  params={"query": "GOALS_ENABLED"}).json()["settings"]
-    assert next(r for r in rows2 if r["key"] == "GOALS_ENABLED")["console_writable"] is True
+                  params={"query": "TOOL_AVAILABILITY_HINT"}).json()["settings"]
+    assert next(r for r in rows2 if r["key"] == "TOOL_AVAILABILITY_HINT")["console_writable"] is True

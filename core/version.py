@@ -16,8 +16,9 @@ from importlib.metadata import PackageNotFoundError, version as _pkg_version
 from pathlib import Path
 from typing import Optional
 
-# Dev-checkout fallback. MUST equal pyproject.toml [project].version.
-_FALLBACK_VERSION = "1.3.0"
+# Neither a source pyproject nor installed metadata: an unknown build. Not a
+# release literal (W11) — a release bump edits pyproject.toml ONLY.
+_FALLBACK_VERSION = "0+unknown"
 
 # Project names this module is willing to claim from an adjacent pyproject.toml, so
 # a parent/monorepo pyproject can never mislabel the version.

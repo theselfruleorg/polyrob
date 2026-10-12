@@ -126,7 +126,7 @@ async def test_forged_or_delegated_turn_cannot_schedule(tmp_path, ctx):
 
 @pytest.mark.asyncio
 async def test_autonomous_session_cannot_schedule(tmp_path):
-    from agents.task.goals import autonomy_marker
+    from core import autonomy_marker
     sid = "sess-autonomous-m07"
     autonomy_marker._SESSIONS[sid] = "goal-1"
     try:

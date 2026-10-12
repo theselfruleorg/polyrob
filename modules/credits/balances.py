@@ -36,7 +36,9 @@ async def provider_balance_usd() -> Optional[float]:
     # CHAT_PROVIDER pins the actually-active provider (task_agent_lite.py,
     # cli/config_store.py) — it must win over a stale DEFAULT_PROVIDER, or
     # this probe could show a real-but-wrong provider's balance (a lie).
-    provider = (os.getenv("CHAT_PROVIDER") or os.getenv("DEFAULT_PROVIDER") or "").strip().lower()
+    from core.runtime_config import operator_provider_pin
+    from modules.llm.profiles import canonicalize_provider
+    provider = (canonicalize_provider(operator_provider_pin()) or "").lower()
     if provider != "openrouter":
         return None
     key = os.getenv("OPENROUTER_API_KEY")

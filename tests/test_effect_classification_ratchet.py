@@ -202,7 +202,7 @@ def test_every_direct_seam_module_reaches_the_recorder():
 def test_no_direct_surface_send():
     """A surface's send() outside the router seam would be an unrecorded write."""
     import subprocess
-    out = subprocess.run(["git", "ls-files", "--", "core", "modules", "agents", "tools",
+    out = subprocess.run(["git", "ls-files", "--", "core", "polyrob", "modules", "agents", "tools",
                           "api", "cli", "surfaces", "webview", "cron"],
                          cwd=REPO, capture_output=True, text=True, timeout=30).stdout
     offenders = []
@@ -220,9 +220,11 @@ def test_no_direct_surface_send():
 # --- the Controller seam ---------------------------------------------------------
 
 def test_the_controller_registers_both_effect_hooks():
-    src = (REPO / "tools/controller/service.py").read_text()
-    assert "make_effect_record_hook(self)" in src
-    assert "make_effect_gate_hook(self)" in src
+    src = (REPO / "tools/controller/policy_chain.py").read_text()   # W5: the one builder
+    assert "make_effect_record_hook(controller)" in src
+    assert "make_effect_gate_hook(controller)" in src
+    assert "install_controller_policy(self)" in (
+        REPO / "tools/controller/service.py").read_text()
     assert _reaches_recorder(REPO / "tools/controller/effect_hooks.py")
 
 

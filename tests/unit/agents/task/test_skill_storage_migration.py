@@ -433,7 +433,7 @@ def test_migration_returns_zero_when_lock_acquisition_times_out(tmp_path, monkey
         def __exit__(self, *a):
             return False
 
-    monkeypatch.setattr("agents.task.utils.SafeFileLock", _AlwaysTimesOut)
+    monkeypatch.setattr("core.file_lock.SafeFileLock", _AlwaysTimesOut)
 
     moved = skill_store.migrate_legacy_user_skills(
         legacy_root=tmp_path / "pkg" / "data" / "prompts" / "skills"

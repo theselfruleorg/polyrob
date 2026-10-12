@@ -7,7 +7,7 @@ import logging
 import os
 from pydantic import BaseModel
 
-from tools.controller.registry.views import RegisteredAction
+from agents.task.loop_types.registry_views import RegisteredAction
 from agents.task.utils import fix_openai_schema, fix_anthropic_schema
 
 logger = logging.getLogger(__name__)

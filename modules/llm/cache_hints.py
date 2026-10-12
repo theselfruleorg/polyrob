@@ -116,16 +116,13 @@ def apply_openrouter_cache_control(
     For Anthropic/Gemini models routed through OpenRouter, convert the (string) system
     message into a single content block carrying ``cache_control: ephemeral`` so the
     large, stable system+tools prefix is served from cache on repeated calls. A no-op
-    for automatic/none strategies, when caching is disabled, or when the OpenRouter
-    passthrough is switched off (``OPENROUTER_PROMPT_CACHE``, default ON since
-    2026-09-22 — a billing failover to ``anthropic/*`` or ``google/*`` on OpenRouter
-    sent no breakpoints at all; ``false`` is the escape).
+    for automatic/none strategies or when caching is disabled (always on for OpenRouter
+    since 2026-09-22 — a billing failover to ``anthropic/*`` or ``google/*`` on
+    OpenRouter used to send no breakpoints at all).
 
     Returns the (possibly mutated) message list; never raises.
     """
     if not prompt_cache_enabled():
-        return formatted_messages
-    if not _bool_env("OPENROUTER_PROMPT_CACHE", True):
         return formatted_messages
     if openrouter_cache_strategy(model_type) != "breakpoints":
         return formatted_messages
@@ -156,14 +153,12 @@ def apply_openrouter_tools_cache_control(
     array — for OpenRouter, tools are a separate top-level request field placed AFTER
     messages, so a system-only breakpoint re-bills the ~3.7k-token tool schema every
     step. A ``cache_control`` marker on the last tool extends the cached prefix over the
-    tools block. No-op unless caching + OPENROUTER_PROMPT_CACHE are on and the model is
+    tools block. No-op unless caching is on and the model is
     breakpoint-style. Never raises; returns the (possibly mutated) tools list.
     """
     if not tools:
         return tools
     if not prompt_cache_enabled():
-        return tools
-    if not _bool_env("OPENROUTER_PROMPT_CACHE", True):
         return tools
     if openrouter_cache_strategy(model_type) != "breakpoints":
         return tools

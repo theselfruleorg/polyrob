@@ -1,5 +1,5 @@
 import inspect
-import core.bootstrap as bootstrap
+import polyrob.app.bootstrap as bootstrap
 
 
 def test_build_cli_container_source_sets_rob_local():

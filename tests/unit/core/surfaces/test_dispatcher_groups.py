@@ -45,7 +45,7 @@ def _group_inbound(text, *, user, surface="discord", chat="chan-1",
 def _clean_env(monkeypatch):
     for k in ("POLYROB_REQUIRE_PAIRING", "POLYROB_LOCAL",
               "POLYROB_OWNER_USER_ID", "CORRESPONDENT_ACCESS_ENABLED",
-              "GROUP_CHAT_ENABLED", "GROUP_REQUIRE_MENTION",
+              "GROUP_CHAT_ENABLED", "GROUP_DEFAULT_MODE",
               "SESSION_RESET_MODE"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("SESSION_RESET_MODE", "none")
@@ -167,7 +167,7 @@ async def test_member_unmentioned_denied_silent(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_owner_unmentioned_allowed_when_gate_off(tmp_path, monkeypatch):
     monkeypatch.setenv("GROUP_CHAT_ENABLED", "true")
-    monkeypatch.setenv("GROUP_REQUIRE_MENTION", "false")
+    monkeypatch.setenv("GROUP_DEFAULT_MODE", "active")
     monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u_owner")
     GroupAllowlist(str(tmp_path / "group_allowlist.db")).allow("discord", "chan-1")
     c = _Container(tmp_path, chat_reg=SessionChatRegistry(str(tmp_path / "c.db")))

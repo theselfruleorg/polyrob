@@ -9,10 +9,17 @@ every name so existing importers are unaffected. Import order (a DAG): _env -> l
 import os
 from core.config_policy._env import _bool_env, _float_env, _int_env
 from core.config_policy.local_profile import _safe_autonomy_default
-from core.config_policy.autonomy_posture import _autonomy_group_default, _posture_autonomy_default
+from core.config_policy.autonomy_posture import _autonomy_group_default, _posture_autonomy_default  # noqa: F401
+from core.config_policy.members import member_flag
 
 
 from core.config_policy.goal_flags import GoalFlagsMixin
+
+
+#: Internal tuning (not env-driven): background-review step cap and the goal
+#: completion judge's timeout in seconds.
+BG_REVIEW_MAX_STEPS = 8
+GOAL_JUDGE_TIMEOUT_SEC = 60
 
 
 class AutonomyConfig(GoalFlagsMixin):
@@ -26,7 +33,7 @@ class AutonomyConfig(GoalFlagsMixin):
     # W1 — self-wake rail
     @staticmethod
     def self_wake_enabled() -> bool:
-        return _bool_env("SELF_WAKE_ENABLED", _autonomy_group_default("SELF_WAKE_ENABLED"))
+        return member_flag("SELF_WAKE_ENABLED")
 
     @staticmethod
     def self_wake_max_reentries() -> int:
@@ -39,13 +46,12 @@ class AutonomyConfig(GoalFlagsMixin):
     # QW-1 (proposal 021) — completion deliverables attach to the owner chat
     @staticmethod
     def deliverables_attach_enabled() -> bool:
-        return _bool_env("DELIVERABLES_ATTACH_ENABLED",
-                         _autonomy_group_default("DELIVERABLES_ATTACH_ENABLED"))
+        return member_flag("DELIVERABLES_ATTACH_ENABLED")
 
     # W2 — writable skills + background review
     @staticmethod
     def skills_writable() -> bool:
-        return _bool_env("SKILLS_WRITABLE", _autonomy_group_default("SKILLS_WRITABLE"))
+        return member_flag("SKILLS_WRITABLE")
 
     @staticmethod
     def skills_writable_require_review() -> bool:
@@ -60,7 +66,7 @@ class AutonomyConfig(GoalFlagsMixin):
     # polyrob C-write — evolving SELF identity (agent-writable per-(instance,user) doc)
     @staticmethod
     def self_context_writable() -> bool:
-        return _bool_env("SELF_CONTEXT_WRITABLE", _autonomy_group_default("SELF_CONTEXT_WRITABLE"))
+        return member_flag("SELF_CONTEXT_WRITABLE")
 
     @staticmethod
     def self_context_require_review() -> bool:
@@ -71,16 +77,11 @@ class AutonomyConfig(GoalFlagsMixin):
     # seam. Same quarantine-then-promote model as SELF; ON under the local profile.
     @staticmethod
     def owner_doc_writable() -> bool:
-        return _bool_env("OWNER_DOC_WRITABLE", _autonomy_group_default("OWNER_DOC_WRITABLE"))
+        return member_flag("OWNER_DOC_WRITABLE")
 
     @staticmethod
     def owner_doc_require_review() -> bool:
         return _bool_env("OWNER_DOC_REQUIRE_REVIEW", True)
-
-    @staticmethod
-    def owner_rules_immediate() -> bool:
-        """Retired setting: model-authored rules require separate owner review."""
-        return False
 
     # Bounded operating-contract doc (owner-authored operating rules/constraints,
     # owner-UX Phase 2) — injected after owner facts and before the evolving SELF
@@ -92,19 +93,14 @@ class AutonomyConfig(GoalFlagsMixin):
     def contract_doc_enabled() -> bool:
         return _bool_env("CONTRACT_DOC_ENABLED", True)
 
-    @staticmethod
-    def contract_doc_require_review() -> bool:
-        return _bool_env("CONTRACT_DOC_REQUIRE_REVIEW", True)
-
     # §7.1 — self-evolution transparency + owner control loop
     @staticmethod
     def self_evolution_transparency() -> bool:
-        return _bool_env("SELF_EVOLUTION_TRANSPARENCY",
-                         _autonomy_group_default("SELF_EVOLUTION_TRANSPARENCY"))
+        return member_flag("SELF_EVOLUTION_TRANSPARENCY")
 
     @staticmethod
     def background_review_enabled() -> bool:
-        return _bool_env("BACKGROUND_REVIEW_ENABLED", _autonomy_group_default("BACKGROUND_REVIEW_ENABLED"))
+        return member_flag("BACKGROUND_REVIEW_ENABLED")
 
     @staticmethod
     def bg_review_interval() -> int:
@@ -112,14 +108,7 @@ class AutonomyConfig(GoalFlagsMixin):
 
     @staticmethod
     def bg_review_max_steps() -> int:
-        return _int_env("BG_REVIEW_MAX_STEPS", 8)
-
-    # 019 — live run-state observability: master gate for the span/wait feed
-    # events (tool_started / llm_started / awaiting_approval / approval_resolved).
-    # Default ON, fail-open; OFF restores the pre-019 outcome-only feed.
-    @staticmethod
-    def run_events_enabled() -> bool:
-        return _bool_env("RUN_EVENTS_ENABLED", True)
+        return BG_REVIEW_MAX_STEPS
 
     # 019 P2 — Telegram live progress bubble (throttled edits of the one
     # ⚙️ Working… status message). Per-owner opt-out via pref progress.telegram.
@@ -162,18 +151,24 @@ class AutonomyConfig(GoalFlagsMixin):
     # W4 — durable goal board
     @staticmethod
     def goals_enabled() -> bool:
-        return _bool_env("GOALS_ENABLED", _autonomy_group_default("GOALS_ENABLED"))
+        return member_flag("GOALS_ENABLED")
+
+    @staticmethod
+    def cron_enabled() -> bool:
+        """Whether the cron subsystem is on (opt-in). W1-1: the default is governed by
+        AUTONOMY_POSTURE (only ``full`` turns cron on); a POLYROB_OVERRIDES entry wins.
+        ``tools.cronjob_tools.cron_enabled`` delegates here."""
+        return member_flag("CRON_ENABLED")
 
     @staticmethod
     def goal_planner_enabled() -> bool:
-        return _bool_env("GOAL_PLANNER_ENABLED", _autonomy_group_default("GOAL_PLANNER_ENABLED"))
+        return member_flag("GOAL_PLANNER_ENABLED")
 
     @staticmethod
     def goal_self_wake_enabled() -> bool:
         # Was unconditional; redundant-cost finding (grok livetest 2026-06-27).
         # W1-1: default governed by AUTONOMY_POSTURE (owner-visible/full turn it on).
-        return _bool_env("GOAL_SELF_WAKE_ENABLED",
-                         _posture_autonomy_default("GOAL_SELF_WAKE_ENABLED"))
+        return member_flag("GOAL_SELF_WAKE_ENABLED")
 
     @staticmethod
     def goal_notify_on_done() -> bool:
@@ -232,11 +227,11 @@ class AutonomyConfig(GoalFlagsMixin):
     # from the learning loops. Set =false to restore the unjudged legacy path.
     @staticmethod
     def goal_completion_judge() -> bool:
-        return _bool_env("GOAL_COMPLETION_JUDGE", True)
+        return member_flag("GOAL_COMPLETION_JUDGE")
 
     @staticmethod
     def goal_judge_timeout_sec() -> int:
-        return _int_env("GOAL_JUDGE_TIMEOUT_SEC", 60)
+        return GOAL_JUDGE_TIMEOUT_SEC
 
     # §5.3: ancient blocked goals age out to 'cancelled' (visible, logged)
     # instead of rotting as permanent planner context. 0 disables aging.
@@ -260,8 +255,7 @@ class AutonomyConfig(GoalFlagsMixin):
     # payload.change_gated, delivery jobs never gated.
     @staticmethod
     def wake_change_gate() -> bool:
-        return _bool_env("WAKE_CHANGE_GATE",
-                         _posture_autonomy_default("WAKE_CHANGE_GATE"))
+        return member_flag("WAKE_CHANGE_GATE")
 
     # §7.2 — blocker → owner escalation. When a goal trips the circuit breaker
     # (status='blocked') OR the pipeline drains, surface a concrete ask to the owner
@@ -269,8 +263,7 @@ class AutonomyConfig(GoalFlagsMixin):
     @staticmethod
     def goal_blocker_escalation() -> bool:
         # W1-1: default governed by AUTONOMY_POSTURE (owner-visible/full turn it on).
-        return _bool_env("GOAL_BLOCKER_ESCALATION",
-                         _posture_autonomy_default("GOAL_BLOCKER_ESCALATION"))
+        return member_flag("GOAL_BLOCKER_ESCALATION")
 
     @staticmethod
     def goal_empty_pipeline_escalate_after() -> int:
@@ -293,13 +286,12 @@ class AutonomyConfig(GoalFlagsMixin):
     @staticmethod
     def autonomous_continuity_bridge() -> bool:
         # W1-1: default governed by AUTONOMY_POSTURE (owner-visible/full turn it on).
-        return _bool_env("AUTONOMOUS_CONTINUITY_BRIDGE",
-                         _posture_autonomy_default("AUTONOMOUS_CONTINUITY_BRIDGE"))
+        return member_flag("AUTONOMOUS_CONTINUITY_BRIDGE")
 
     # W5 — curator
     @staticmethod
     def curator_enabled() -> bool:
-        return _bool_env("CURATOR_ENABLED", _autonomy_group_default("CURATOR_ENABLED"))
+        return member_flag("CURATOR_ENABLED")
 
     @staticmethod
     def curator_interval_hours() -> int:
@@ -325,8 +317,7 @@ class AutonomyConfig(GoalFlagsMixin):
     # owner-authored notes.
     @staticmethod
     def knowledge_curator_enabled() -> bool:
-        return _bool_env("KNOWLEDGE_CURATOR_ENABLED",
-                         _autonomy_group_default("KNOWLEDGE_CURATOR_ENABLED"))
+        return member_flag("KNOWLEDGE_CURATOR_ENABLED")
 
     @staticmethod
     def knowledge_note_stale_days() -> int:
@@ -340,21 +331,20 @@ class AutonomyConfig(GoalFlagsMixin):
     # W7 — insights tool (read-only authored-skill reuse metric)
     @staticmethod
     def insights_tool() -> bool:
-        return _bool_env("INSIGHTS_TOOL", _autonomy_group_default("INSIGHTS_TOOL"))
+        return member_flag("INSIGHTS_TOOL")
 
     # I-6 — agent_status introspection tool (read-only runtime self-report:
     # steps used/remaining, active tools, context usage, wallet+ledger)
     @staticmethod
     def agent_status_tool() -> bool:
-        return _bool_env("AGENT_STATUS_TOOL", _safe_autonomy_default("AGENT_STATUS_TOOL"))
+        return member_flag("AGENT_STATUS_TOOL")
 
     # The agent's own avatar (core/avatar.py): read the slot, copy the image
     # INTO its own session workspace so the media rail can deliver it, and
     # set it — on an owner turn only.
     @staticmethod
     def avatar_tool_enabled() -> bool:
-        return _bool_env("AVATAR_TOOL_ENABLED",
-                         _safe_autonomy_default("AVATAR_TOOL_ENABLED"))
+        return member_flag("AVATAR_TOOL_ENABLED")
 
     # 2026-08-28 status SSOT — per-turn <live-health> note for the agent (the
     # same health block the owner's /status renders), so "how are you doing?"
@@ -368,7 +358,7 @@ class AutonomyConfig(GoalFlagsMixin):
     # successful run_tests. See agents/task/runtime/edit_verify.py.
     @staticmethod
     def verify_before_done() -> bool:
-        return _bool_env("VERIFY_BEFORE_DONE", _safe_autonomy_default("VERIFY_BEFORE_DONE"))
+        return member_flag("VERIFY_BEFORE_DONE")
 
     # I-2 / H1 (dedup decision D2) — LSP diagnostics-after-edit: after a
     # successful str_replace/apply_patch/create_file, run an external type/lint
@@ -398,25 +388,19 @@ class AutonomyConfig(GoalFlagsMixin):
     # KB — knowledge-base feature gate (Task 2 / local_vector prerequisite)
     @staticmethod
     def kb_enabled() -> bool:
-        return _bool_env("KB_ENABLED", _safe_autonomy_default("KB_ENABLED"))
+        return member_flag("KB_ENABLED")
 
     # C1 — context-reference expansion (@file/@folder/@diff/@url)
     # Default ON under POLYROB_LOCAL (single-user CLI), OFF on the server.
     @staticmethod
     def context_references_enabled() -> bool:
-        return _bool_env(
-            "CONTEXT_REFERENCES_ENABLED",
-            _safe_autonomy_default("CONTEXT_REFERENCES_ENABLED"),
-        )
+        return member_flag("CONTEXT_REFERENCES_ENABLED")
 
     # C9 — auto-load CLAUDE.md/AGENTS.md/.cursorrules as a PROJECT_CONTEXT foundation
     # message. Default ON under POLYROB_LOCAL (single-user CLI), OFF on the server.
     @staticmethod
     def project_context_autoload() -> bool:
-        return _bool_env(
-            "PROJECT_CONTEXT_AUTOLOAD",
-            _safe_autonomy_default("PROJECT_CONTEXT_AUTOLOAD"),
-        )
+        return member_flag("PROJECT_CONTEXT_AUTOLOAD")
 
     @staticmethod
     def project_context_max_tokens() -> int:
@@ -435,7 +419,7 @@ class AutonomyConfig(GoalFlagsMixin):
     # Default ON under POLYROB_LOCAL (single-user CLI), OFF on multi-tenant server.
     @staticmethod
     def kb_auto_prefetch() -> bool:
-        return _bool_env("KB_AUTO_PREFETCH", _safe_autonomy_default("KB_AUTO_PREFETCH"))
+        return member_flag("KB_AUTO_PREFETCH")
 
     # Task 2 — episodic activity ledger (durable per-run provenance rows).
     # Default ON under POLYROB_LOCAL (single-user CLI) OR AUTONOMY_POSTURE
@@ -443,16 +427,12 @@ class AutonomyConfig(GoalFlagsMixin):
     # activity ledger, so episodic is part of the posture group).
     @staticmethod
     def episodic_memory_enabled() -> bool:
-        return _bool_env("EPISODIC_MEMORY_ENABLED",
-                         _autonomy_group_default("EPISODIC_MEMORY_ENABLED")
-                         or _posture_autonomy_default("EPISODIC_MEMORY_ENABLED"))
+        return member_flag("EPISODIC_MEMORY_ENABLED")
 
     # Task 3 — inject a recent-episodes digest into the session.
     @staticmethod
     def episodic_digest_inject() -> bool:
-        return _bool_env("EPISODIC_DIGEST_INJECT",
-                         _autonomy_group_default("EPISODIC_DIGEST_INJECT")
-                         or _posture_autonomy_default("EPISODIC_DIGEST_INJECT"))
+        return member_flag("EPISODIC_DIGEST_INJECT")
 
     # Session-close reflection (consolidate a short session's findings
     # at close; one extra aux call per closed session). Posture-governed so an
@@ -460,19 +440,12 @@ class AutonomyConfig(GoalFlagsMixin):
     # modules/memory/task/task_context_manager.py (reads this resolver lazily).
     @staticmethod
     def reflection_on_session_close() -> bool:
-        return _bool_env("REFLECTION_ON_SESSION_CLOSE",
-                         _posture_autonomy_default("REFLECTION_ON_SESSION_CLOSE"))
-
-    # Restart-durable autonomy state (background delegations + reentry
-    # budgets in autonomy_state.db). Default ON; off restores volatile registries.
-    @staticmethod
-    def autonomy_state_durable() -> bool:
-        return _bool_env("AUTONOMY_STATE_DURABLE", True)
+        return member_flag("REFLECTION_ON_SESSION_CLOSE")
 
     # Task 4 — cross-session continuity bridge (thread_key stitching).
     @staticmethod
     def continuity_bridge_enabled() -> bool:
-        return _bool_env("CONTINUITY_BRIDGE_ENABLED", _autonomy_group_default("CONTINUITY_BRIDGE_ENABLED"))
+        return member_flag("CONTINUITY_BRIDGE_ENABLED")
 
     # Task 4 — LLM-generated continuity summary at reset. Intentionally NOT in
     # _SAFE_LOCAL_FLAGS: OFF everywhere by default (adds latency at reset).

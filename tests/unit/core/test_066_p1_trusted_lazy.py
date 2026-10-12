@@ -264,7 +264,7 @@ def test_a_server_under_custody_without_the_installer_refuses(monkeypatch):
     monkeypatch.setattr(ld, "_local_mode", lambda: False)
     with pytest.raises(FeatureUnavailable) as exc:
         ld.ensure("docs.pdf", prompt=False)
-    assert exc.value.kind == "no_installer" and "install-deps-installer.sh" in str(exc.value)
+    assert exc.value.kind == "no_installer" and "polyrob-deps@" in str(exc.value)
 
 
 def test_local_custody_installs_wheel_only_and_elsewhere_allows_a_source_build(monkeypatch):

@@ -30,9 +30,8 @@ _CLONE_SUBDIRS = ("characters", "skills")
 
 #: Identity-shaped env keys lifted out of a legacy project's ``.polyrob/.env``
 #: by ``create --from-project`` (provider keys etc. stay where they are).
-_IDENTITY_ENV_KEYS = ("POLYROB_INSTANCE_ID", "BOT_INSTANCE_ID", "POLYROB_PERSONA",
-                      "PERSONALITY_DEFAULT_CHARACTER", "POLYROB_OWNER_USER_ID",
-                      "BOT_OWNER_USER_ID")
+_IDENTITY_ENV_KEYS = ("POLYROB_INSTANCE_ID", "POLYROB_PERSONA",
+                      "PERSONALITY_DEFAULT_CHARACTER", "POLYROB_OWNER_USER_ID")
 
 #: Sidecar DBs copied only under ``--include-data``.
 _DATA_DB_GLOBS = ("*.db",)
@@ -178,6 +177,22 @@ def _write_profile_yaml(home: Path, name: str, description: str) -> None:
         yaml.safe_dump(meta, sort_keys=False), encoding="utf-8")
 
 
+def _refuse_retired_identity_aliases(env_file: Path) -> None:
+    """A legacy project that pins only a retired identity alias (1.4) is refused
+    BEFORE the profile is created: dropping it silently would give the profile
+    a different instance id or owner than the project had."""
+    if not env_file.is_file():
+        return
+    from core.config_policy.retired_flags import (
+        RetiredFlagError, refuse_retired_alias)
+    env_keys = _read_env_file(env_file)
+    try:
+        refuse_retired_alias("BOT_INSTANCE_ID", env_keys)
+        refuse_retired_alias("BOT_OWNER_USER_ID", env_keys)
+    except RetiredFlagError as exc:
+        raise click.ClickException(f"{env_file}: {exc}")
+
+
 def create_profile(name: str, *, from_profile: str = None, from_project: str = None,
                    include_data: bool = False, description: str = "") -> dict:
     """Pure creator (click-free core; adopt + tests reuse it).
@@ -193,6 +208,9 @@ def create_profile(name: str, *, from_profile: str = None, from_project: str = N
         raise click.ClickException(
             f"profile '{name}' already exists at {home} (use `polyrob profile "
             f"show {name}` or pick another name)")
+    if from_project:
+        _refuse_retired_identity_aliases(
+            Path(from_project).expanduser().resolve() / ".polyrob" / ".env")
 
     copied = []
     home.mkdir(parents=True)
@@ -227,6 +245,7 @@ def create_profile(name: str, *, from_profile: str = None, from_project: str = N
         if not src_data.is_dir():
             raise click.ClickException(
                 f"no legacy data dir at {src_data} — nothing to migrate")
+        env_keys = _read_env_file(src_data / ".env")
         if (src_data / "identity").is_dir():
             shutil.copytree(src_data / "identity", home / "data" / "identity",
                             dirs_exist_ok=True)
@@ -235,12 +254,7 @@ def create_profile(name: str, *, from_profile: str = None, from_project: str = N
             shutil.copytree(src_data / "characters", home / "characters",
                             dirs_exist_ok=True)
             copied.append("characters/")
-        env_keys = _read_env_file(src_data / ".env")
         lifted = {k: v for k, v in env_keys.items() if k in _IDENTITY_ENV_KEYS}
-        # A legacy project that pinned only the BOT_INSTANCE_ID alias must not
-        # be shadowed by the profile default's canonical POLYROB_INSTANCE_ID.
-        if "BOT_INSTANCE_ID" in lifted and "POLYROB_INSTANCE_ID" not in lifted:
-            lifted["POLYROB_INSTANCE_ID"] = lifted["BOT_INSTANCE_ID"]
         if lifted:
             _upsert_env_file(home / ".env", lifted)
             copied.extend(sorted(lifted))
@@ -295,14 +309,14 @@ _register_transfer_commands()
 
 # The ONE per-profile unit text. `deployment/polyrob@.service` is this template
 # rendered with the server defaults (pinned byte-for-byte by
-# tests/unit/cli/test_profile_service_unit.py, the same contract the browser units
+# ops/tests/cli/test_profile_service_unit.py, the same contract the browser units
 # carry) — so `polyrob profile create --service` can never emit a weaker or
 # differently-named copy again. Until 2026-09-18 it hand-rolled a
 # `polyrob-<name>.service` with no User=/WorkingDirectory=/host env layer/
 # MemoryMax/TimeoutStopSec/KillMode, and the name collided with the
 # polyrob-email / polyrob-webview siblings (a profile named "email" overwrote
 # the live email unit).
-PROFILE_UNIT_TEMPLATE = '# polyrob@<profile>.service — one POLYROB daemon per named profile (W7).\n#\n# Install:  cp deployment/polyrob@.service /etc/systemd/system/\n#           systemctl enable --now polyrob@rob polyrob@scout\n#\n# Isolation is the OS process boundary (one process per profile — no\n# multiplexing). Selection mechanism: POLYROB_PROFILE below is the strong env\n# tier — the CLI\'s activate_profile() resolves it at process start and points\n# POLYROB_HOME/POLYROB_DATA_DIR at <POLYROB_PROFILES_ROOT>/%i. The two env\n# lines are REQUIRED: without them the daemon runs in legacy mode and writes\n# into the default home, not the profile.\n#\n# ⚠️ The profile must live under the SAME registry root this unit names.\n# The CLI default is ~/.polyrob/profiles; for this server layout create the\n# profile with:\n#     POLYROB_PROFILES_ROOT=__PROFILES_ROOT__ polyrob profile create <name>\n# (or move an existing profile dir there). `polyrob profile create <name>\n# --service` emits a unit matched to wherever the profile actually is.\n#\n# ⚠️ Each profile needs its OWN surface credentials in its .env (e.g. its own\n# TELEGRAM bot token). Two units long-polling one token — including the plain\n# polyrob.service next to a polyrob@<name> for the same bot — fight each other\n# (Telegram 409 Conflict).\n#\n# ⚠️ This unit does NOT load /etc/polyrob/polyrob.env (the PRIMARY instance\'s\n# env). Until 2026-09-17 it did, first, so any key the profile\'s .env did not\n# override leaked through: the primary\'s TELEGRAM_BOT_TOKEN (409 fight), its\n# TWITTER_* keys (the profile posted AS the primary), its POLYROB_OWNER_* ids\n# and its money flags. A profile daemon reads exactly two files: an optional\n# host-level /etc/polyrob/profiles/<name>.env for secrets you keep out of the\n# data tree, then the profile\'s own .env. Copy the LLM key(s) into one of them.\n#\n# Profiles share the unprivileged agent identity and data group. They are not\n# mutually isolated tenants; run an untrusted instance under a separate OS\n# identity and data root, or on its own host.\n\n[Unit]\nDescription=POLYROB agent — profile %i\nAfter=network-online.target\nWants=network-online.target\nStartLimitIntervalSec=500\nStartLimitBurst=5\n\n[Service]\nType=simple\nUser=polyrob-agent\n# Shared runtime state remains writable without root privileges.\nGroup=polyrob-data\nUMask=0002\nWorkingDirectory=__WORKDIR__\nEnvironment="PYTHONUNBUFFERED=1"\nEnvironment="HOME=/var/lib/polyrob-agent"\nEnvironment="POLYROB_PROFILES_ROOT=__PROFILES_ROOT__"\nEnvironment="POLYROB_PROFILE=%i"\n# Host-level per-profile secrets first, the profile\'s own .env last (later\n# files win in systemd). NEVER the primary instance\'s /etc/polyrob/polyrob.env.\nEnvironmentFile=-/etc/polyrob/profiles/%i.env\nEnvironmentFile=-__PROFILES_ROOT__/%i/.env\nExecStart=/usr/bin/env CODE_EXEC_ENABLED=false __POLYROB_EXE__ telegram\nRestart=on-failure\nRestartSec=10\nTimeoutStopSec=60\nKillMode=mixed\nKillSignal=SIGTERM\nStandardOutput=journal\nStandardError=journal\n# "polyrob@%i" (not "polyrob-%i") so a profile named "email"/"webview" can\n# never collide with the polyrob-email/polyrob-webview sibling units\' tags.\nSyslogIdentifier=polyrob@%i\nMemoryMax=3G\n\nNoNewPrivileges=true\nPrivateTmp=true\nProtectSystem=strict\nProtectHome=true\nProtectKernelTunables=true\nProtectKernelModules=true\nProtectKernelLogs=true\nProtectControlGroups=true\nProtectClock=true\nProtectHostname=true\nProtectProc=invisible\nRestrictSUIDSGID=true\nRestrictRealtime=true\nLockPersonality=true\nRemoveIPC=true\nRestrictAddressFamilies=AF_UNIX AF_INET AF_INET6\nCapabilityBoundingSet=\nAmbientCapabilities=\nReadWritePaths=/var/lib/polyrob -/var/lib/polyrob-agent\nReadWritePaths=-/var/lib/polyrob-deps/requests\n\n[Install]\nWantedBy=multi-user.target\n'
+PROFILE_UNIT_TEMPLATE = '# polyrob@<profile>.service — one POLYROB daemon per named profile (W7).\n#\n# Install:  polyrob profile create <name> --service   (writes /etc/systemd/system/polyrob@.service)\n#           systemctl enable --now polyrob@rob polyrob@scout\n#\n# Isolation is the OS process boundary (one process per profile — no\n# multiplexing). Selection mechanism: POLYROB_PROFILE below is the strong env\n# tier — the CLI\'s activate_profile() resolves it at process start and points\n# POLYROB_HOME/POLYROB_DATA_DIR at <POLYROB_PROFILES_ROOT>/%i. The two env\n# lines are REQUIRED: without them the daemon runs in legacy mode and writes\n# into the default home, not the profile.\n#\n# ⚠️ The profile must live under the SAME registry root this unit names.\n# The CLI default is ~/.polyrob/profiles; for this server layout create the\n# profile with:\n#     POLYROB_PROFILES_ROOT=__PROFILES_ROOT__ polyrob profile create <name>\n# (or move an existing profile dir there). `polyrob profile create <name>\n# --service` emits a unit matched to wherever the profile actually is.\n#\n# ⚠️ Each profile needs its OWN surface credentials in its .env (e.g. its own\n# TELEGRAM bot token). Two units long-polling one token — including the plain\n# polyrob.service next to a polyrob@<name> for the same bot — fight each other\n# (Telegram 409 Conflict).\n#\n# ⚠️ This unit does NOT load /etc/polyrob/polyrob.env (the PRIMARY instance\'s\n# env). Until 2026-09-17 it did, first, so any key the profile\'s .env did not\n# override leaked through: the primary\'s TELEGRAM_BOT_TOKEN (409 fight), its\n# TWITTER_* keys (the profile posted AS the primary), its POLYROB_OWNER_* ids\n# and its money flags. A profile daemon reads exactly two files: an optional\n# host-level /etc/polyrob/profiles/<name>.env for secrets you keep out of the\n# data tree, then the profile\'s own .env. Copy the LLM key(s) into one of them.\n#\n# Profiles share the unprivileged agent identity and data group. They are not\n# mutually isolated tenants; run an untrusted instance under a separate OS\n# identity and data root, or on its own host.\n\n[Unit]\nDescription=POLYROB agent — profile %i\nAfter=network-online.target\nWants=network-online.target\nStartLimitIntervalSec=500\nStartLimitBurst=5\n\n[Service]\nType=simple\nUser=polyrob-agent\n# Shared runtime state remains writable without root privileges.\nGroup=polyrob-data\nUMask=0002\nWorkingDirectory=__WORKDIR__\nEnvironment="PYTHONUNBUFFERED=1"\nEnvironment="HOME=/var/lib/polyrob-agent"\nEnvironment="POLYROB_PROFILES_ROOT=__PROFILES_ROOT__"\nEnvironment="POLYROB_PROFILE=%i"\n# Host-level per-profile secrets first, the profile\'s own .env last (later\n# files win in systemd). NEVER the primary instance\'s /etc/polyrob/polyrob.env.\nEnvironmentFile=-/etc/polyrob/profiles/%i.env\nEnvironmentFile=-__PROFILES_ROOT__/%i/.env\nExecStart=/usr/bin/env CODE_EXEC_ENABLED=false __POLYROB_EXE__ telegram\nRestart=on-failure\nRestartSec=10\n# 077: exit 75 = a drained restart the owner asked for: start again, never a failure.\nRestartForceExitStatus=75\nSuccessExitStatus=75\nTimeoutStopSec=90\nKillMode=mixed\nKillSignal=SIGTERM\nStandardOutput=journal\nStandardError=journal\n# "polyrob@%i" (not "polyrob-%i") so a profile named "email"/"webview" can\n# never collide with the polyrob-email/polyrob-webview sibling units\' tags.\nSyslogIdentifier=polyrob@%i\nMemoryMax=3G\n\nNoNewPrivileges=true\nPrivateTmp=true\nProtectSystem=strict\nProtectHome=true\nProtectKernelTunables=true\nProtectKernelModules=true\nProtectKernelLogs=true\nProtectControlGroups=true\nProtectClock=true\nProtectHostname=true\nProtectProc=invisible\nRestrictSUIDSGID=true\nRestrictRealtime=true\nLockPersonality=true\nRemoveIPC=true\nRestrictAddressFamilies=AF_UNIX AF_INET AF_INET6\nCapabilityBoundingSet=\nAmbientCapabilities=\nReadWritePaths=/var/lib/polyrob -/var/lib/polyrob-agent\nReadWritePaths=-/var/lib/polyrob-deps/requests\n\n[Install]\nWantedBy=multi-user.target\n'
 
 PROFILE_UNIT_DEFAULTS = {
     "profiles_root": "/var/lib/polyrob/profiles",

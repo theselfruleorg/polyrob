@@ -56,14 +56,9 @@ DELIVERED_OUTCOMES = frozenset({"sent"})
 
 # --- flags -------------------------------------------------------------------
 
-def owner_thread_enabled() -> bool:
-    """Write the owner thread from every rail (default ON — repairs a live defect)."""
-    return bool_env("OWNER_THREAD_ENABLED", True)
-
-
 def owner_thread_inject() -> bool:
     """Read the thread into owner sessions (tail/delta/referent/rail slice)."""
-    return owner_thread_enabled() and bool_env("OWNER_THREAD_INJECT", True)
+    return bool_env("OWNER_THREAD_INJECT", True)
 
 
 def tail_hours() -> float:
@@ -370,8 +365,6 @@ def record_owner_out(container: Any, user_id: str, text: str, *, via: str,
                      ask_id: Optional[str] = None, attachments: Any = None,
                      now: Optional[float] = None) -> bool:
     """Record a line the owner RECEIVED. Never raises; False = not recorded."""
-    if not owner_thread_enabled():
-        return False
     body = (text or "").strip() + _attachment_suffix(attachments)
     if not body.strip() or not str(user_id or "").strip():
         return False
@@ -394,8 +387,6 @@ def record_owner_in(container: Any, user_id: str, text: str, *, via: str,
                     now: Optional[float] = None) -> bool:
     """Record a line the owner SENT (owner tier only — the caller has resolved
     the tier; a correspondent or room line never comes here). Never raises."""
-    if not owner_thread_enabled():
-        return False
     body = (text or "").strip()
     if not body or not str(user_id or "").strip():
         return False
@@ -581,8 +572,10 @@ def render_line(row: dict, *, this_session: str = "") -> str:
         return f"{_hhmm(row.get('ts'))} owner→you{same}{ref}: {body}"
     origin = _origin(row)
     mid = f" [msg {row['mid']}]" if row.get("mid") else ""
-    return (f"{_hhmm(row.get('ts'))} you→owner"
-            f"{' (' + origin + ')' if origin else ''}{same}{mid}: {body}")
+    # "private chat" is spelled out: on 2026-10-10 a cron run read its own
+    # misrouted den reply here and still told the owner "nothing went to your inbox".
+    return (f"{_hhmm(row.get('ts'))} you→owner (sent to the owner's PRIVATE chat"
+            f"{', ' + origin if origin else ''}){same}{mid}: {body}")
 
 
 _HEAD = {

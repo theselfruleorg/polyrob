@@ -605,10 +605,20 @@ class SignerService:
 
     def _deposit_seed(self) -> str:
         fn = self._secret_fn or (lambda n: None)
-        seed = fn("PAYMENT_MASTER_SEED") or fn("MASTER_SEED")
+        seed = fn("PAYMENT_MASTER_SEED")
+        from core.config_policy.retired_flags import (
+            RetiredFlagError, refuse_retired_alias)
+        try:
+            # MASTER_SEED was retired in 1.4: alone, it refuses with the rename.
+            refuse_retired_alias("MASTER_SEED", {
+                "MASTER_SEED": fn("MASTER_SEED") or "",
+                "PAYMENT_MASTER_SEED": seed or "",
+            })
+        except RetiredFlagError as exc:
+            raise _Refuse(protocol.NOT_CONFIGURED, str(exc))
         if not seed or len(seed) < 32:
             raise _Refuse(protocol.NOT_CONFIGURED,
-                          "no deposit master seed (PAYMENT_MASTER_SEED/MASTER_SEED) in the signer")
+                          "no deposit master seed (PAYMENT_MASTER_SEED) in the signer")
         return seed
 
     def _deposit_account(self, user_id: str):

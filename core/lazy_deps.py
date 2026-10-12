@@ -9,7 +9,7 @@ learning what an extra is.
 release lock, verified the same way (``LAZY_DEPS_MODE``, default ``trusted``):
 
 * the closure is shipped and hashed (``core/lazy_closures/<feature>.txt``,
-  generated from ``requirements.lock`` by ``scripts/gen_lazy_closures.py``);
+  generated from ``requirements.lock`` by ``devtools/gen_lazy_closures.py``);
 * it lands in an OVERLAY (``<root>/<lock-digest>/<feature>/``) appended to the END
   of ``sys.path`` — the base venv always wins a name collision, and the venv the
   deploy verified is never mutated;
@@ -46,62 +46,64 @@ from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-#: feature -> the PyPI specs that satisfy it. ⚠️ THE allowlist: a name that is not
-#: a key here never reaches pip. Specs are PyPI-by-name with a version floor; the
-#: exact version is decided by the lock (see ``_constraint_args``).
-LAZY_DEPS: Dict[str, Tuple[str, ...]] = {
-    "provider.gemini": ("google-generativeai>=0.8.0",),
-    "provider.anthropic": ("anthropic>=0.20.0",),
-    "docs.pdf": ("pypdf>=6.16.1",),
-    "docs.docx": ("python-docx>=0.8.0",),
-    "memory.vector": ("apsw>=3.46", "sqlite-vec>=0.1.6", "numpy>=1.24.0"),
-    "media.gif": ("imageio>=2.37.0",),
-    "media.qr": ("qrcode>=7.4",),
-    "tool.anysite": ("anysite-cli>=0.3",),
+#: feature -> (the pyproject extra it belongs to, the distributions of that
+#: extra it installs). ⚠️ THE allowlist: a distribution that is not named here
+#: never reaches pip. W11: the VERSION CLAUSES are not copied here — they come
+#: from that extra in ``pyproject.toml`` (THE dependency spec, read through
+#: ``core.extras_spec``), and the exact version is decided by the lock (see
+#: ``_constraint_args``). Row order matters once: the FIRST feature of an extra
+#: is the one ``EXTRA_FEATURE`` installs for the whole extra.
+LAZY_FEATURES: Dict[str, Tuple[str, Tuple[str, ...]]] = {
+    "provider.gemini": ("gemini", ("google-generativeai",)),
+    "provider.anthropic": ("anthropic", ("anthropic",)),
+    "docs.pdf": ("docs", ("pypdf",)),
+    "docs.docx": ("docs", ("python-docx",)),
+    "memory.vector": ("memory-vector", ("apsw", "sqlite-vec", "numpy")),
+    "media.qr": ("media", ("qrcode",)),
+    "media.gif": ("media", ("imageio",)),
+    "tool.anysite": ("anysite", ("anysite-cli",)),
     # 062: the three extras a first run actually asks for. `polyrob serve`,
     # `polyrob telegram` and voice transcription each used to stop at "install
     # the extra yourself" on the machine where lazy installs are ON — the one
-    # machine where we can just do it. Every spec is still on THE allowlist;
+    # machine where we can just do it. Every name is still on THE allowlist;
     # `browser` is deliberately absent, because a first-use pip install that
     # then downloads ~150 MB of Chromium mid-turn is a hang, not a capability.
-    "server.api": ("fastapi==0.141.1", "starlette==1.6.0",
-                   "uvicorn[standard]==0.38.0", "Jinja2==3.1.6",
-                   "python-socketio>=5.11.0", "python-multipart>=0.0.6",
-                   "watchfiles>=1.0.0", "argon2-cffi>=23.1.0",
-                   "python-magic>=0.4.27"),
-    "surface.telegram": ("aiogram>=3.17.0",),
-    "voice.transcribe": ("faster-whisper>=1.0.0",),
+    "server.api": ("server", ("fastapi", "starlette", "uvicorn", "jinja2",
+                              "python-socketio", "python-multipart", "watchfiles",
+                              "argon2-cffi", "python-magic")),
+    "surface.telegram": ("telegram", ("aiogram",)),
+    "voice.transcribe": ("voice", ("faster-whisper",)),
 }
 
+
+def _derive_lazy_deps() -> Dict[str, Tuple[str, ...]]:
+    """feature -> the PyPI specs that satisfy it: each allowlisted name with the
+    version clause its extra declares (a bare name when the spec is unreadable)."""
+    from core.extras_spec import dist_name, extra_specs
+    try:
+        extras = extra_specs()
+    except Exception:  # noqa: BLE001 — bare names are still the allowlist
+        extras = {}
+    out: Dict[str, Tuple[str, ...]] = {}
+    for feature, (extra, names) in LAZY_FEATURES.items():
+        declared = {dist_name(spec): spec for spec in extras.get(extra, ())}
+        out[feature] = tuple(declared.get(dist_name(n), n) for n in names)
+    return out
+
+
+#: feature -> the PyPI specs that satisfy it (derived; see LAZY_FEATURES).
+LAZY_DEPS: Dict[str, Tuple[str, ...]] = _derive_lazy_deps()
+
 #: feature -> the pyproject extra a server operator must declare (PROD_EXTRAS).
-_FEATURE_EXTRA: Dict[str, str] = {
-    "provider.gemini": "gemini",
-    "provider.anthropic": "anthropic",
-    "docs.pdf": "docs",
-    "docs.docx": "docs",
-    "memory.vector": "memory-vector",
-    "media.gif": "media",
-    "media.qr": "media",
-    "tool.anysite": "anysite",
-    "server.api": "server",
-    "surface.telegram": "telegram",
-    "voice.transcribe": "voice",
-}
+_FEATURE_EXTRA: Dict[str, str] = {f: extra for f, (extra, _) in LAZY_FEATURES.items()}
 
 #: pyproject extra -> the lazy feature that installs it, for the ONE preflight
 #: (`cli.commands._errors.require_extra_or_exit`). An extra with no row here is
-#: reported, never installed.
-EXTRA_FEATURE: Dict[str, str] = {
-    "server": "server.api",
-    "telegram": "surface.telegram",
-    "voice": "voice.transcribe",
-    "docs": "docs.pdf",
-    "anysite": "tool.anysite",
-    "gemini": "provider.gemini",
-    "anthropic": "provider.anthropic",
-    "memory-vector": "memory.vector",
-    "media": "media.qr",
-}
+#: reported, never installed. Derived: the first LAZY_FEATURES row of the extra.
+EXTRA_FEATURE: Dict[str, str] = {}
+for _feature, (_extra, _) in LAZY_FEATURES.items():
+    EXTRA_FEATURE.setdefault(_extra, _feature)
+del _feature, _extra
 
 
 def feature_for_extra(extra: str) -> Optional[str]:
@@ -153,8 +155,8 @@ def remedy(feature: str) -> str:
     extra = _FEATURE_EXTRA.get(feature, feature)
     text = f"pip install 'polyrob[{extra}]'"
     if not lazy_installs_enabled():
-        text += (f" (on a deployed server add `{extra}` to PROD_EXTRAS in "
-                 f"scripts/deploy_prod.sh and redeploy, or set LAZY_DEPS_MODE=trusted; "
+        text += (f" (on a deployed server add `{extra}` to the extras your deploy "
+                 f"installs and redeploy, or set LAZY_DEPS_MODE=trusted; "
                  f"lazy installs are off here)")
     return text
 
@@ -457,7 +459,7 @@ def _ensure_trusted(feature: str, specs: Tuple[str, ...], *, prompt: bool,
             raise FeatureUnavailable(
                 f"{feature}: this server holds wallet custody and has no trusted installer "
                 f"(no {system_root() / 'requests'}); a lazy install is refused here. Remedy: "
-                f"provision it (deployment/hardening/install-deps-installer.sh), or "
+                f"provision the root-run installer (the polyrob-deps@ unit), or "
                 f"{remedy(feature)}", "no_installer")
         if custody:
             from core.security.process_hardening import custody_reads_closed, hardening_state
@@ -511,7 +513,8 @@ def _request_and_wait(feature: str, wait: float) -> None:
         raise FeatureUnavailable(
             f"{feature}: agent write attempt refused — the overlay {writable} is writable by "
             f"this process, so it is not the read-only overlay the installer guarantees. "
-            f"Remedy: rerun deployment/hardening/install-deps-installer.sh", "overlay_writable")
+            f"Remedy: re-provision the root-run installer (the polyrob-deps@ unit), which "
+            f"leaves the overlay read-only to this process", "overlay_writable")
     digest = _lock_digest()
     if not digest:
         raise FeatureUnavailable(

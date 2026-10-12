@@ -1,7 +1,7 @@
 """Single source of truth for tool metadata and configuration.
 
 This module consolidates all tool-related constants that were previously
-duplicated between tools/__init__.py and core/initialization.py.
+duplicated between tools/__init__.py and polyrob/app/initialization.py.
 
 IMPORTANT: This is the ONLY place tool metadata should be defined.
 """

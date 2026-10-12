@@ -63,7 +63,7 @@ def test_tenant_isolation(board):
 
 
 def test_threshold_zero_disables(board, monkeypatch):
-    monkeypatch.setenv("GOAL_DEDUP_THRESHOLD", "0")
+    monkeypatch.setattr("core.config_policy.goal_flags.GOAL_DEDUP_THRESHOLD", 0)
     board.create(user_id="rob", title="Research concrete revenue angles for POLYROB")
     g2 = board.create(user_id="rob", title="Research concrete revenue angles for POLYROB")
     assert g2.id

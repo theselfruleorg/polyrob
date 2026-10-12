@@ -118,7 +118,7 @@ class SessionStatusResponse(BaseModel):
 
     # 019 P1: what the agent is doing RIGHT NOW (phase/detail/seconds_in_state/
     # step/call_id), derived from the run-state feed events. None when unknown —
-    # session idle since restart, RUN_EVENTS_ENABLED=off, or a REMOTE session
+    # session idle since restart, or a REMOTE session
     # owned by another worker (in-process snapshot).
     current_activity: Optional[Dict[str, Any]] = Field(
         None,

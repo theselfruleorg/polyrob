@@ -5,7 +5,7 @@
 An explicit ``MESSAGE_TOOL_ENABLED`` env value always wins over the local-mode default.
 """
 
-from agents.task.constants import message_tool_enabled
+from core.config_policy import message_tool_enabled
 
 
 def test_off_by_default(monkeypatch):

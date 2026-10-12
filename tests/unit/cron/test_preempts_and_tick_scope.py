@@ -53,6 +53,7 @@ def test_set_preempts_merges_the_payload(tmp_path):
 async def test_after_a_yield_only_preempting_jobs_run_this_tick(tmp_path, monkeypatch):
     monkeypatch.setenv("GOAL_YIELD_FOR_MONEY_RAIL", "true")
     monkeypatch.setenv("POLYROB_WORKSPACE_LOCK_DIR", str(tmp_path / "locks"))
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))  # the turn marker stays per-test
     from core import interactive_gate as g
     g._busy_depth = 0
     g.mark_busy()  # a goal run holds the process
@@ -81,6 +82,7 @@ async def test_after_a_yield_only_preempting_jobs_run_this_tick(tmp_path, monkey
 @pytest.mark.asyncio
 async def test_a_normal_tick_still_runs_everything_due(tmp_path, monkeypatch):
     monkeypatch.setenv("POLYROB_WORKSPACE_LOCK_DIR", str(tmp_path / "locks"))
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))  # the turn marker stays per-test
     from core import interactive_gate as g
     g._busy_depth = 0
     store = CronJobStore(str(tmp_path / "cron.db"))
@@ -103,6 +105,7 @@ async def test_the_yield_probe_runs_under_the_tick_lock(tmp_path, monkeypatch):
     """A second worker holding the lock must not get a second pre-emption."""
     monkeypatch.setenv("GOAL_YIELD_FOR_MONEY_RAIL", "true")
     monkeypatch.setenv("POLYROB_WORKSPACE_LOCK_DIR", str(tmp_path / "locks"))
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))  # the turn marker stays per-test
     from core import interactive_gate as g
     from cron.scheduler import TickLock
     g._busy_depth = 0

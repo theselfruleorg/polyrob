@@ -11,7 +11,7 @@ import pytest
 import agents.task.agent.service  # noqa: F401 (import order)
 from agents.task.agent.message_manager.service import MessageManager
 from agents.task.agent.prompts import SystemPrompt
-from agents.task.goals.autonomy_marker import mark_autonomous
+from core.autonomy_marker import mark_autonomous
 
 
 def _mm(session_id, max_input=None):

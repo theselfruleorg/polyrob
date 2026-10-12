@@ -21,7 +21,7 @@ def _ctx(args):
 
 def test_tap_list_and_add(monkeypatch, tmp_path):
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "home"))
-    monkeypatch.setattr("agents.task.constants.local_mode_enabled", lambda: True)
+    monkeypatch.setattr("core.config_policy.local_mode_enabled", lambda: True)
     ctx, buf = _ctx(["tap", "add", "acme/kit"])
     asyncio.run(h_skills(ctx))
     assert "Added tap acme/kit" in buf.getvalue()
@@ -33,7 +33,7 @@ def test_tap_list_and_add(monkeypatch, tmp_path):
 
 def test_tap_add_refused_when_not_local(monkeypatch, tmp_path):
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "home"))
-    monkeypatch.setattr("agents.task.constants.local_mode_enabled", lambda: False)
+    monkeypatch.setattr("core.config_policy.local_mode_enabled", lambda: False)
     ctx, buf = _ctx(["tap", "add", "acme/kit"])
     asyncio.run(h_skills(ctx))
     assert "Refused" in buf.getvalue()
@@ -41,7 +41,7 @@ def test_tap_add_refused_when_not_local(monkeypatch, tmp_path):
 
 
 def test_search_and_update_use_the_library(monkeypatch):
-    monkeypatch.setattr("agents.task.constants.local_mode_enabled", lambda: True)
+    monkeypatch.setattr("core.config_policy.local_mode_enabled", lambda: True)
     tap = skill_hub.Tap("anthropics/skills", "trusted", True)
     monkeypatch.setattr(skill_hub, "search", lambda q, refresh=False: [
         skill_hub.TapListing(tap, [skill_hub.TapSkill("docx", "Word files", "skills/docx", tap)])])

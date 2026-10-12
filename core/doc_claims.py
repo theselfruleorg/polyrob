@@ -262,17 +262,7 @@ SUPERSEDED_HEADING = "## Superseded"
 #: live file — nothing is lost: every active write archives the whole prior doc
 #: first (``SelfContextWriter._archive_existing``). Kept at 2x OWNER_DOC_MAX_CHARS
 #: so one whole retired doc still fits; the section is never injected.
-SUPERSEDED_MAX_CHARS = 32000  # 2026-10-04: 2x the doubled OWNER_DOC_MAX_CHARS (16000)
-
-def owner_rules_supersede() -> bool:
-    """``OWNER_RULES_SUPERSEDE`` — supersede, never evict. Default ON.
-
-    ``false`` restores the flat owner doc: a dropped line is gone, the loader
-    injects the whole file and the cap counts the whole file. Literal name on
-    purpose (``test_flags_reverse`` scans for it).
-    """
-    return bool_env("OWNER_RULES_SUPERSEDE", True)
-
+SUPERSEDED_MAX_CHARS = 48000  # 2026-10-11: 2x OWNER_DOC_MAX_CHARS (24000)
 
 def split_superseded(text: str):
     """``(active, superseded)`` — the doc before the ``## Superseded`` heading,
@@ -284,6 +274,31 @@ def split_superseded(text: str):
             sup = "\n".join(lines[i + 1:]).strip("\n")
             return active, sup
     return (text or ""), ""
+
+
+def split_superseded_raw(text: str):
+    """``(head, tail)`` with ``head + tail == text`` exactly: ``tail`` starts at the
+    ``## Superseded`` heading line (``""`` when there is none). A patch edits
+    ``head`` only and re-joins the untouched ``tail`` — history is never rewritten
+    by a string replace (prod 2026-10-09/11: a ``replace_all`` rewrote retired
+    entries and the active rule kept the old cron id)."""
+    text = text or ""
+    pos = 0
+    for line in text.splitlines(keepends=True):
+        if _SUPERSEDED_RE.match(line.rstrip("\r\n")):
+            return text[:pos], text[pos:]
+        pos += len(line)
+    return text, ""
+
+
+_SUPERSEDED_DATE_RE = re.compile(r"(— superseded) \d{4}-\d{2}-\d{2}")
+
+
+def _entry_key(line: str) -> str:
+    """Dedup key of one superseded entry: the entry WITHOUT its retirement date.
+    The same rule retired with the same successor on two days (a draft diffed
+    once at queue time and again at promote time) is one fact, not two."""
+    return _SUPERSEDED_DATE_RE.sub(r"\1", line.strip())
 
 
 def superseded_entries(text: str) -> List[str]:
@@ -324,9 +339,11 @@ def carry_superseded(old: str, new: str, *, observed_at: Optional[str] = None) -
                and strip_stamp(l).strip() not in new_bodies]
     entries: List[str] = []
     seen = set()
+    # Exact AND date-only duplicates collapse (first kept) — prod 2026-10-11
+    # held one retired rule 3x, differing only in "superseded <date>".
     for line in (old_sup + "\n" + new_sup).splitlines():
-        if line.strip() and line.strip() not in seen:
-            seen.add(line.strip())
+        if line.strip() and _entry_key(line) not in seen:
+            seen.add(_entry_key(line))
             entries.append(line.rstrip())
     if dropped:
         date = normalize_observed_at(observed_at)
@@ -340,8 +357,8 @@ def carry_superseded(old: str, new: str, *, observed_at: Optional[str] = None) -
             entry = f"- {_entry_body(line)} — superseded {date}"
             if successor:
                 entry += f" by: {successor}"
-            if entry.strip() not in seen:
-                seen.add(entry.strip())
+            if _entry_key(entry) not in seen:
+                seen.add(_entry_key(entry))
                 entries.append(entry)
     if not entries:
         return new
@@ -356,8 +373,8 @@ __all__ = [
     "SUPERSEDED_MAX_CHARS",
     "active_rule_lines",
     "carry_superseded",
-    "owner_rules_supersede",
     "split_superseded",
+    "split_superseded_raw",
     "superseded_entries",
     "claim_provenance_required",
     "changed_lines",

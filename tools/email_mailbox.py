@@ -34,7 +34,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from pydantic import BaseModel, ConfigDict, Field
 
 from tools.base_tool import BaseTool
-from tools.controller.types import ActionResult
+from agents.task.loop_types.controller_types import ActionResult
 from tools.email_providers.mime import (
     _attachments, _decode, _plain_body, strip_html,
 )

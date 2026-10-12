@@ -63,7 +63,7 @@ def marker_path(data_dir: str) -> Path:
 def _resolve_context() -> tuple:
     """(autonomy_on, data_dir, config_path) from the live process env. Fail-soft:
     any piece that can't resolve degrades to a safe value, never raises."""
-    from agents.task.constants import autonomy_enabled, local_mode_enabled
+    from core.config_policy import autonomy_enabled, local_mode_enabled
 
     autonomy_on = bool(autonomy_enabled())
     try:

@@ -39,7 +39,7 @@ from tools.browser.context import (
 	BrowserContext,
 	BrowserContextConfig,
 )
-from tools.browser.views import BrowserError
+from agents.task.loop_types.browser_views import BrowserError
 
 
 def google_search_url(query: str) -> str:
@@ -48,13 +48,13 @@ def google_search_url(query: str) -> str:
 	from urllib.parse import quote_plus
 	return f'https://www.google.com/search?q={quote_plus(str(query or ""))}&udm=14'
 from tools.base_tool import BaseTool
-from tools.controller.types import ActionResult
+from agents.task.loop_types.controller_types import ActionResult
 from tools.browser.actions import (
 	SearchGoogleAction, GoToUrlAction, ClickElementAction, InputTextAction,
 	SwitchTabAction, OpenTabAction, ScrollAction, SendKeysAction,
 	NoParamsAction, ExtractPageContentAction
 )
-from tools.controller.execution_context import ActionExecutionContext
+from agents.task.loop_types.execution_context import ActionExecutionContext
 
 
 async def _semantic_snapshot(page, format_tree) -> tuple:

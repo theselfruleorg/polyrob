@@ -385,7 +385,7 @@ def test_owner_authored_cron_job_loads_beyond_the_self_goal_ceiling(monkeypatch)
     needs (e.g. git) — the ceiling bounds agent-authored work only. Money stays
     explicit-grant-only, and an agent-authored job keeps the ceiling (AGT-14)."""
     from agents.task import session_class
-    from agents.task.goals import autonomy_marker as am
+    from core import autonomy_marker as am
     from tools import goal_tools
     monkeypatch.setattr(session_class, 'is_autonomous_session', lambda sid: True)
     monkeypatch.setattr(goal_tools, 'allowed_self_goal_tools', lambda: frozenset({'web_fetch'}))

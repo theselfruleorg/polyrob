@@ -42,7 +42,7 @@ def test_boot_sweep_removes_self_bindings(tmp_path, monkeypatch):
     import asyncio
     monkeypatch.setenv("POLYROB_AGENT_EMAIL", "rob@theselfrule.org")
     from core.surfaces.correspondents import CorrespondentRegistry
-    from core import autonomy_runtime as ar
+    from polyrob.app import autonomy_runtime as ar
     monkeypatch.setattr(ar, "_self_binding_sweep_scheduled", False)  # once-per-process flag
     reg = CorrespondentRegistry(str(tmp_path / "c.db"))
     reg.seed(surface="email", address="rob@theselfrule.org", session_id="s1", user_id="rob",

@@ -10,7 +10,7 @@ only schema the model sees.
 import agents.task.agent.service  # noqa: F401 — avoid controller<->orchestrator import cycle
 from pydantic import BaseModel
 
-from tools.controller.registry.views import ActionRegistry, RegisteredAction
+from agents.task.loop_types.registry_views import ActionRegistry, RegisteredAction
 
 
 class _Params(BaseModel):

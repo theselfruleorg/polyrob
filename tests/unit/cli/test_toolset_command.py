@@ -65,7 +65,7 @@ def test_resolve_tool_list_toolset_resolves():
     """_resolve_tool_list(None, 'research') resolves to the research set (pruned)."""
     from cli.commands.run import _resolve_tool_list
     from agents.task.tool_defaults import resolve_toolset
-    from core.bootstrap import cli_unavailable_tools
+    from core.cli_tool_tables import cli_unavailable_tools
 
     tool_list, _notes = _resolve_tool_list(None, "research")
 
@@ -126,7 +126,7 @@ def test_toolset_handler_no_args_lists_toolsets(capsys):
     ctx.emit = fake_emit  # type: ignore
 
     # Patch cli_unavailable_tools to return nothing (all available).
-    with mock.patch("core.bootstrap.cli_unavailable_tools", return_value=[]):
+    with mock.patch("core.cli_tool_tables.cli_unavailable_tools", return_value=[]):
         _h_toolset(ctx)
 
     combined = "\n".join(output_lines)
@@ -153,7 +153,7 @@ def test_toolset_handler_with_name_persists_and_shows_resolved_ids(tmp_path, cap
     ctx = _make_ctx(args=["research"], home_dir=tmp_path)
     ctx.emit = fake_emit  # type: ignore
 
-    with mock.patch("core.bootstrap.cli_unavailable_tools", return_value=[]):
+    with mock.patch("core.cli_tool_tables.cli_unavailable_tools", return_value=[]):
         _h_toolset(ctx)
 
     combined = "\n".join(output_lines)
@@ -182,7 +182,7 @@ def test_toolset_handler_unknown_name_rejected_lists_valid_names(tmp_path):
     ctx = _make_ctx(args=["no_such_set"], home_dir=tmp_path)
     ctx.emit = fake_emit  # type: ignore
 
-    with mock.patch("core.bootstrap.cli_unavailable_tools", return_value=[]):
+    with mock.patch("core.cli_tool_tables.cli_unavailable_tools", return_value=[]):
         _h_toolset(ctx)
 
     combined = "\n".join(output_lines)

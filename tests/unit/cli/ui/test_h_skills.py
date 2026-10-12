@@ -205,7 +205,7 @@ def _spy_to_thread(monkeypatch):
 
 
 def test_install_is_offloaded_to_thread(monkeypatch):
-    monkeypatch.setattr("agents.task.constants.local_mode_enabled", lambda: True)
+    monkeypatch.setattr("core.config_policy.local_mode_enabled", lambda: True)
 
     called = {}
 
@@ -234,7 +234,7 @@ def test_install_is_offloaded_to_thread(monkeypatch):
 
 
 def test_install_quarantine_message_offloaded(monkeypatch):
-    monkeypatch.setattr("agents.task.constants.local_mode_enabled", lambda: True)
+    monkeypatch.setattr("core.config_policy.local_mode_enabled", lambda: True)
     monkeypatch.setattr(
         "cli.commands.skill_install.dispatch_install",
         lambda spec, *, user_id, trust, ref: _InstallRes("staged", approved=False),
@@ -251,7 +251,7 @@ def test_install_quarantine_message_offloaded(monkeypatch):
 
 
 def test_install_refused_when_not_local_operator(monkeypatch):
-    monkeypatch.setattr("agents.task.constants.local_mode_enabled", lambda: False)
+    monkeypatch.setattr("core.config_policy.local_mode_enabled", lambda: False)
     record = _spy_to_thread(monkeypatch)
 
     ctx, buf = _plain_ctx(args=["install", "owner/repo"], user_id="local")
@@ -265,7 +265,7 @@ def test_install_refused_when_not_local_operator(monkeypatch):
 
 
 def test_approve_is_offloaded_to_thread(monkeypatch):
-    monkeypatch.setattr("agents.task.constants.local_mode_enabled", lambda: True)
+    monkeypatch.setattr("core.config_policy.local_mode_enabled", lambda: True)
 
     called = {}
 

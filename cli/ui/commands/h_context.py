@@ -93,9 +93,7 @@ def render_context_breakdown(message_manager: Any) -> str:
     F18: every number that is a local ESTIMATE is prefixed with ``≈``. When the
     provider has reported its own ``prompt_tokens`` the total is measured and the
     mark is dropped, and a "last request (provider-reported)" line names the
-    prompt / cached / written split. The tool-schema slot honours
-    ``CTX_COUNT_TOOL_SCHEMAS`` — `/context` must never render a slot the gauge
-    suppresses.
+    prompt / cached / written split.
     """
     if message_manager is None:
         return _NO_SESSION_LINE
@@ -103,15 +101,9 @@ def render_context_breakdown(message_manager: Any) -> str:
     usage = _usage_view(message_manager)
     measured = usage.get("source") == "provider_usage"
     mark = "" if measured else "≈"
-    schemas_counted = True
-    if usage:
-        schemas_counted = bool(usage.get("slots", {}).get("tool_schemas", 0)) or _int_attr(
-            message_manager, "_tool_schema_tokens") == 0
 
     slots: List[Tuple[str, int]] = []
     for label, attr in _SLOT_SPECS:
-        if attr == "_tool_schema_tokens" and not schemas_counted:
-            continue
         tokens = _int_attr(message_manager, attr)
         if tokens > 0:
             slots.append((label, tokens))

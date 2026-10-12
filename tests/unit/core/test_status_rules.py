@@ -19,7 +19,6 @@ UID = "u1"
 @pytest.fixture(autouse=True)
 def _env(monkeypatch):
 	monkeypatch.setenv("POLYROB_INSTANCE_ID", "rob")
-	monkeypatch.delenv("OWNER_RULES_SUPERSEDE", raising=False)
 
 
 def _keys(sec):
@@ -63,12 +62,24 @@ def test_a_pending_rule_is_named_as_not_in_effect(tmp_path):
 	assert "NOT in effect" in item.text and "bug-fix" in item.text
 
 
-def test_written_but_not_loaded_is_critical(tmp_path):
+def test_written_but_not_loaded_is_critical(tmp_path, monkeypatch):
+	import modules.memory.task.threat_scan as ts
+	monkeypatch.setattr(ts, "is_identity_suspicious", lambda _t: True)
+	root = self_tier_root(tmp_path, UID, "rob")
+	root.mkdir(parents=True, exist_ok=True)
+	(root / "owner.md").write_text("- a rule the identity scan flags\n")
+	sec = rules_section(UID, str(tmp_path), str(tmp_path / "cron.db"))
+	assert "rules_owner_not_loaded" in _keys(sec)
+
+
+def test_an_over_cap_owner_doc_is_named_as_truncated(tmp_path):
+	"""2026-10-11: over the cap loads the head (it used to drop every rule)."""
 	root = self_tier_root(tmp_path, UID, "rob")
 	root.mkdir(parents=True, exist_ok=True)
 	(root / "owner.md").write_text("- " + "x" * (OWNER_DOC_MAX_CHARS + 10))  # a direct-FS over-cap write
 	sec = rules_section(UID, str(tmp_path), str(tmp_path / "cron.db"))
-	assert "rules_owner_not_loaded" in _keys(sec)
+	assert "rules_owner_truncated" in _keys(sec)
+	assert "rules_owner_not_loaded" not in _keys(sec)
 
 
 def test_rail_prose_is_measured(tmp_path):

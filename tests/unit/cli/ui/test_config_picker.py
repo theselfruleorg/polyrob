@@ -14,7 +14,7 @@ def test_choices_cover_both_namespaces_with_badges(tmp_path):
     choices = build_setting_choices("u1", str(tmp_path))
     by_key = {c.model: c for c in choices}
     assert "goals.daily_quota" in by_key
-    assert "GOALS_ENABLED" in by_key
+    assert "TOOL_AVAILABILITY_HINT" in by_key
     row = by_key["goals.daily_quota"]
     assert row.provider == "goals"            # group header
     assert row.display_name == "goals.daily_quota"
@@ -23,7 +23,7 @@ def test_choices_cover_both_namespaces_with_badges(tmp_path):
     assert "⛨" in guarded.pricing_hint        # guarded badge
     advisory = by_key["style.tone"]
     assert "≈" in advisory.pricing_hint       # advisory badge
-    flag = by_key["GOALS_ENABLED"]
+    flag = by_key["TOOL_AVAILABILITY_HINT"]
     assert "↻" in flag.pricing_hint           # restart badge
 
 

@@ -245,14 +245,14 @@ async def _collection_trust(user_id: str, verb: str, tokens: List[str], *, typed
         if not execute:
             return (f"This stops me acting from the accounts of {address} on {chain}.\n\n"
                     f"Add `go` to untrust it: /nft {typed} go")
-        _ok, msg = await asyncio.to_thread(collection_trust.untrust, owner_seat_ctx(user_id),
+        _ok, msg = await asyncio.to_thread(collection_trust.untrust, owner_seat_ctx(user_id, "telegram"),
                                            chain, address)
         return msg
     if not execute:
         return await asyncio.to_thread(collection_trust.trust_quote, chain, address,
                                        max_supply=max_supply, from_block=from_block,
                                        confirm_line=f"/nft {typed}")
-    _ok, msg = await asyncio.to_thread(collection_trust.trust, owner_seat_ctx(user_id), chain,
+    _ok, msg = await asyncio.to_thread(collection_trust.trust, owner_seat_ctx(user_id, "telegram"), chain,
                                        address, max_supply=max_supply, from_block=from_block)
     return msg
 

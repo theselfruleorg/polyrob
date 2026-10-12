@@ -47,6 +47,7 @@ import logging
 import time
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
+from core.lazy_views import lazy_module_getattr, view
 from tools.controller.approval import ApprovalProvider, register_approval_provider
 
 logger = logging.getLogger(__name__)
@@ -669,8 +670,8 @@ def decide_tool_approval(board: Any, display_id: str, *, user_id: str,
                     except RuntimeError:
                         loop = None
                     if loop is not None and callable(deliver):
-                        loop.create_task(deliver(session_id, user_id, text,
-                                                 metadata=meta))
+                        from core.async_bridge import spawn_retained
+                        spawn_retained(deliver(session_id, user_id, text, metadata=meta))
                         delivered = True
                 if not delivered:
                     # The deciding process does NOT own the session (prod: the
@@ -690,10 +691,19 @@ def decide_tool_approval(board: Any, display_id: str, *, user_id: str,
 #: sends exactly the approved params ONCE (``run_approved_outbound``); it never
 #: re-arms the job or goal that asked, because re-running the job repeats every
 #: other step in it — a buyback's swap included (prod 2026-10-08).
-OUTBOUND_WRITE_TOOLS = frozenset({
-    "twitter_post", "twitter_reply", "twitter_quote", "twitter_thread", "twitter_dm",
-    "x_post", "x_reply", "x_dm", "email_send", "email_reply", "email_forward",
-})
+#: The ``late_send`` column of the verb-policy rows (W4; a pack's in its
+#: ``pack.toml``), built on first read.
+def _build_outbound_write_tools():
+    from core.verb_policy import ids_where
+    return ids_where(late_send=True)
+
+
+__getattr__ = lazy_module_getattr(__name__, {"OUTBOUND_WRITE_TOOLS": _build_outbound_write_tools})
+
+
+def _outbound_write_tools():
+    return view(__name__, "OUTBOUND_WRITE_TOOLS")
+
 
 #: tool name -> ``async (tool_name, params, task_agent) -> (ok, text)``. A pack
 #: registers the sender for its own tools (the X pack: ``polyrob_x.twitter_tool``).
@@ -701,9 +711,11 @@ _LATE_SENDERS: Dict[str, Any] = {}
 
 
 def register_late_sender(tool_names, sender) -> None:
-    for name in tool_names:
-        if name not in OUTBOUND_WRITE_TOOLS:
-            raise ValueError(f"{name!r} is not an outbound write")
+    from core.verb_policy import policy_for     # the row, not the view: a pack
+    for name in tool_names:                     # registers at import, before views
+        row = policy_for(name)
+        if row is None or not row.late_send:
+            raise ValueError(f"{name!r} is not a late_send outbound write")
         _LATE_SENDERS[name] = sender
 
 
@@ -760,7 +772,7 @@ async def run_approved_outbound(metadata: Dict[str, Any], user_id: str,
     p = row.payload or {}
     tool = str(p.get("tool_name") or "")
     if (p.get("decision") != "approved" or not p.get("outbound_write")
-            or tool not in OUTBOUND_WRITE_TOOLS):
+            or tool not in _outbound_write_tools()):
         return True
     sender = _LATE_SENDERS.get(tool)
     if sender is None:
@@ -803,7 +815,7 @@ def _cron_job_id(session_id: str) -> Optional[str]:
     that cannot name its job is still created and still approvable — it merely
     redeems on the job's own next scheduled tick instead of right away."""
     try:
-        from agents.task.goals.autonomy_marker import cron_job_for_session
+        from core.autonomy_marker import cron_job_for_session
         return cron_job_for_session(session_id) or None
     except Exception:
         logger.debug("owner_queue: cron-job-for-session lookup failed (fail-open)",
@@ -839,7 +851,7 @@ def _blocked_goal_ids(session_id: str) -> list:
     exists to close.
     """
     try:
-        from agents.task.goals.autonomy_marker import goal_for_session
+        from core.autonomy_marker import goal_for_session
         gid = goal_for_session(session_id)
         return [gid] if gid else []
     except Exception:
@@ -1270,9 +1282,9 @@ class OwnerQueueApprover(ApprovalProvider):
             # first created. Without this, an approval raised again by a later
             # goal run re-arms whatever the FIRST run happened to stamp — which,
             # for every ask created before 039, is nothing at all.
-            if action_name not in OUTBOUND_WRITE_TOOLS:
+            if action_name not in _outbound_write_tools():
                 board.add_ask_blocked_goals(ask.id, _blocked_goal_ids(session_id))
-        _outbound = action_name in OUTBOUND_WRITE_TOOLS
+        _outbound = action_name in _outbound_write_tools()
         context_lines: list = []
         if ask is None:
             # Facts the params do not carry (grant_card.register_card_context),
@@ -1359,7 +1371,7 @@ class OwnerQueueApprover(ApprovalProvider):
             logger.info(
                 "owner_queue: autonomous goal run asked for '%s' and released the "
                 "slot (ask %s); the next run redeems the grant", action_name, ask.id)
-            if action_name in OUTBOUND_WRITE_TOOLS:
+            if action_name in _outbound_write_tools():
                 _poller_gone(board, ask.id)
             return False
 
@@ -1416,7 +1428,7 @@ class OwnerQueueApprover(ApprovalProvider):
             # The caller's timeout ended the wait (the X post: "waiting for the
             # owner"). From now on a late approval is sent by the drain
             # (`run_approved_outbound`), never by re-running the job.
-            if action_name in OUTBOUND_WRITE_TOOLS:
+            if action_name in _outbound_write_tools():
                 _poller_gone(board, ask.id)
             raise
         finally:

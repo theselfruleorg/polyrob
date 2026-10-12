@@ -280,23 +280,6 @@ async def delete_credentials(
     return SuccessResponse(success=deleted, message="Credentials deleted" if deleted else "No credentials found")
 
 
-def _owner_gate_and_bind(tool_name: str, user_id: str, read_actions, venue: str):
-    """CR-M14: an HTTP ``/execute`` of a trade or mutation verb is an OWNER act.
-
-    The route used to call the verb with no execution context, which
-    ``trade_turn_refusal`` read as a direct owner call — so any authenticated
-    tenant could place, cancel or re-lever orders past the wallet authority.
-    A non-read verb needs the bound owner (403 otherwise), and the caller is
-    bound as the ambient exec identity so the verb's own ``turn_refusal``
-    re-checks the SAME principal. Returns the token to reset in a finally."""
-    from core.exec_identity import set_exec_identity
-    from core.wallet.authority import network_verb_refusal
-    refusal = network_verb_refusal(tool_name, user_id, read_actions)
-    if refusal:
-        raise HTTPException(status_code=403, detail=refusal)
-    return set_exec_identity(user_id, f"http:{venue}")
-
-
 # =============================================================================
 # Tool Endpoints
 # =============================================================================
@@ -321,16 +304,11 @@ async def execute_tool(
 ):
     """Execute a Hyperliquid tool action"""
     tool = get_hyperliquid_tool(request)
-    from core.exec_identity import reset_exec_identity
-    from polyrob_markets.hyperliquid.service import HL_READ_ACTIONS
-    token = _owner_gate_and_bind(body.tool_name, user_id, HL_READ_ACTIONS,
-                                 "hyperliquid")
-    try:
-        # Set user context (task-local — CR-M14)
-        tool.set_user_context(user_id)
-        result = await tool.execute_action(body.tool_name, body.arguments or {})
-    finally:
-        reset_exec_identity(token)
+    from polyrob_markets.http_seat import execute_as_seat
+    from polyrob_markets.hyperliquid.service import hl_read_actions
+    result = await execute_as_seat(
+        tool, tool_id="hyperliquid", tool_name=body.tool_name, arguments=body.arguments,
+        user_id=user_id, read_actions=hl_read_actions(), venue="hyperliquid")
 
     return ExecuteToolResponse(
         success=result.success,

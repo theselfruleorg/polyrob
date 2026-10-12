@@ -51,8 +51,8 @@ async def _run_discord(token_opt: Optional[str], verbose: bool):
         async def _announce():
             click.echo(click.style("discord bot online", fg="green")
                        + " — connecting to gateway…")
-            from core.env import bool_env
-            if bool_env("GROUP_CHAT_ENABLED", False):
+            from core.config_policy.members import member_flag
+            if member_flag("GROUP_CHAT_ENABLED"):
                 click.echo(click.style(
                     "group chat ON — only allowlisted channels respond "
                     "(polyrob owner groups allow discord <channel_id>)", dim=True))
@@ -61,6 +61,7 @@ async def _run_discord(token_opt: Optional[str], verbose: bool):
         return SurfaceJob(harness=harness, run=harness.run, announce=_announce)
 
     await run_surface(
+        surface_id="discord",
         extra_env={"DISCORD_SURFACE_ENABLED": "true"},
         verbose=verbose,
         resolve_credentials=lambda: resolve_discord_token(token_opt),

@@ -69,6 +69,32 @@ class SpendIntent:
     #: Given = decide the lane (act vs owner queue) with ``spend_exemption``.
     params: Optional[Mapping[str, Any]] = None
 
+    # -- the named bar sets (W5): a caller picks one, never a hand-mixed set --
+
+    @classmethod
+    def verb_gate(cls, what: str, **kw) -> "SpendIntent":
+        """A money verb's FIRST check: principal + leaf. The pause is re-checked
+        right before signing (:meth:`pause_recheck`), so it is off here."""
+        return cls(what=what, pause=False, **kw)
+
+    @classmethod
+    def pause_recheck(cls, *, entry: bool, **kw) -> "SpendIntent":
+        """The pause right before signing: the principal already ran in this
+        call (:meth:`verb_gate`), and a genuine owner turn passes the pause."""
+        return cls(principal=False, leaf=False, entry=entry, **kw)
+
+    @classmethod
+    def principal_only(cls, **kw) -> "SpendIntent":
+        """The bound owner only (the Controller's wallet-authority hook): the
+        leaf, turn and pause bars belong to the verb and its guard."""
+        return cls(leaf=False, turn=False, pause=False, **kw)
+
+    @classmethod
+    def turn_origin(cls, **kw) -> "SpendIntent":
+        """The turn-origin bar alone (a forged turn refused unless admitted as
+        the autonomous lane) — the guard runs the principal after it."""
+        return cls(principal=False, leaf=False, turn=True, pause=False, **kw)
+
 
 @dataclass(frozen=True)
 class Verdict:

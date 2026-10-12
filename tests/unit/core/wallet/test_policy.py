@@ -118,7 +118,7 @@ def test_audit_sink_records_entry_without_key_material():
 # future money verb) refuses while halted, regardless of call-site discipline.
 
 def test_check_refuses_while_autonomy_halted(monkeypatch):
-    monkeypatch.setattr("agents.task.constants.AutonomyConfig.autonomy_halted",
+    monkeypatch.setattr("core.config_policy.AutonomyConfig.autonomy_halted",
                         lambda: True)
     gate = PolicyGate(max_per_tx_usd=100.0)
     d = gate.check(venue="hyperliquid", amount_usd=1.0, idempotency_key="k")
@@ -134,7 +134,7 @@ def test_check_fails_closed_when_halt_probe_raises(monkeypatch):
     misattributed to the owner having halted autonomy."""
     def _boom():
         raise RuntimeError("halt probe blew up")
-    monkeypatch.setattr("agents.task.constants.AutonomyConfig.autonomy_halted", _boom)
+    monkeypatch.setattr("core.config_policy.AutonomyConfig.autonomy_halted", _boom)
     gate = PolicyGate(max_per_tx_usd=100.0)
     d = gate.check(venue="polymarket", amount_usd=1.0, idempotency_key="k")
     assert d.allowed is False
@@ -146,7 +146,7 @@ def test_check_fails_closed_when_halt_probe_raises(monkeypatch):
 def test_check_allows_when_not_halted(monkeypatch):
     """Default envelope: not halted -> the halt probe is transparent; the existing
     ceiling/idempotency/cap checks decide exactly as before (byte-identical decision)."""
-    monkeypatch.setattr("agents.task.constants.AutonomyConfig.autonomy_halted",
+    monkeypatch.setattr("core.config_policy.AutonomyConfig.autonomy_halted",
                         lambda: False)
     gate = PolicyGate(max_per_tx_usd=100.0)
     d = gate.check(venue="x402", amount_usd=5.0, idempotency_key="k")

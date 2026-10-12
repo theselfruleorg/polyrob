@@ -50,7 +50,9 @@ LEGACY_INSTANCE_ID = "rob"
 # the prompt.
 # ⚠️ 2026-10-04: 8000 → 16000 with the owner-doc cap below (owner /dev 16:06Z "expand
 # rules size at least 2x"); a writer cap above this bound would only move the refusal.
-SELF_CONTEXT_PER_DOC_MAX_CHARS = 16000
+# ⚠️ 2026-10-11: 16000 → 24000 with OWNER_DOC_MAX_CHARS (prod owner.md active rules
+# at 15,899/16,000; 5 owner-rule writes refused in 72h).
+SELF_CONTEXT_PER_DOC_MAX_CHARS = 24000
 SELF_CONTEXT_TOTAL_MAX_CHARS = 60000
 
 # The evolving SELF doc (agent-writable, per-(instance,user)). Capped tighter
@@ -75,14 +77,17 @@ SELF_DOC_MAX_CHARS = 12000
 # i.e. one rule from the next eviction. Raised to the CONTRACT_DOC_MAX_CHARS line
 # (~1000 tokens of a ~7k foundation) — this is always-injectable owner intent, the
 # highest-value content in the block. ⚠️ The cap is read on BOTH sides:
-# `load_owner_doc` replaces an over-cap doc with [BLOCKED…], so the whole
-# owner-facts block vanishes from the prompt rather than truncating.
+# `load_owner_doc` used to replace an over-cap doc with [BLOCKED…], so the whole
+# owner-facts block vanished from the prompt; since 2026-10-11 it loads the head
+# with a TRUNCATED banner instead (the identity scan still blocks the whole doc).
 # ⚠️ 2026-10-02: 4000 filled in under two weeks (prod 3928/4000) and refused the
 # owner's house-style rule — raised to the per-doc injection bound (8000).
 # ⚠️ 2026-10-04: 8000 refused the owner's email rule (prod owner.md over cap at
 # 16:05Z); the owner asked for "rules size at least 2x" — 16000, with the per-doc
 # injection bound raised to match.
-OWNER_DOC_MAX_CHARS = 16000
+# ⚠️ 2026-10-11: 16000 → 24000. Prod active rules sat at 15,899/16,000 and 5 of 8
+# owner_doc_manage writes in 72h were refused at the cap ("16668/16000").
+OWNER_DOC_MAX_CHARS = 24000
 
 # Operator-authored self-context docs, read in this order (identity first).
 _SELF_CONTEXT_DOCS = ("identity.md", "operating.md")
@@ -93,6 +98,9 @@ _CONTRACT_DOC_NAME = "contract.md"
 _BLOCKED_PLACEHOLDER = "[BLOCKED: self-context failed the identity safety scan]"
 _OWNER_BLOCKED_PLACEHOLDER = "[BLOCKED: owner-facts doc failed the identity safety scan]"
 _CONTRACT_BLOCKED_PLACEHOLDER = "[BLOCKED: operating contract failed the identity safety scan]"
+#: Start of an over-cap owner doc's load banner (``load_owner_doc``); /status
+#: names it so a truncated rule set is never reported as fully loaded.
+OWNER_TRUNCATED_PREFIX = "[⚠ TRUNCATED:"
 #: Prefix of the note a load_* returns for an unreadable doc. Prompt-only: an
 #: export or a "loaded?" check must test for it (``is_unreadable_note``).
 UNREADABLE_PREFIX = "[⚠ self-context doc "
@@ -206,8 +214,10 @@ def load_owner_doc(home_dir: Path | str, user_id: Optional[str],
 
     Mirrors :func:`load_self_doc` — anonymous/blank user or no doc → ``""`` (inert
     default); the on-disk doc is identity-scanned (fail-closed to a ``[BLOCKED…]``
-    placeholder) and any doc larger than the writer's cap (only possible via a
-    direct-FS write, since the writer ERRORS over-cap) is blocked. Never raises.
+    placeholder). An ACTIVE part larger than the writer's cap (a direct-FS write,
+    or a cap lowered under a live doc) loads its head with a TRUNCATED banner —
+    it used to be blocked whole, which dropped EVERY owner rule from the prompt
+    over one extra character. Never raises.
     """
     uid = (str(user_id).strip() if user_id is not None else "")
     if not uid or not is_safe_tenant_id(uid):
@@ -233,13 +243,20 @@ def load_owner_doc(home_dir: Path | str, user_id: Optional[str],
     # 060 WS-6: only the ACTIVE rules are injected; the `## Superseded` section
     # is history (kept, dated, never evicted) and never steers a session.
     try:
-        from core.doc_claims import owner_rules_supersede, split_superseded
-        if owner_rules_supersede():
-            text = split_superseded(text)[0].strip()
+        from core.doc_claims import split_superseded
+        text = split_superseded(text)[0].strip()
     except Exception:
         pass
     if len(text) > OWNER_DOC_MAX_CHARS:
-        return _OWNER_BLOCKED_PLACEHOLDER
+        # Bounded and loud, never a cliff: the identity scan above already ran on
+        # the WHOLE doc, so the cap here is a prompt-size bound, not a safety one.
+        logger.warning("owner-facts doc %s: active rules %d/%d chars — TRUNCATED at "
+                       "load; the tail is NOT in context", path, len(text),
+                       OWNER_DOC_MAX_CHARS)
+        text = (f"{OWNER_TRUNCATED_PREFIX} the owner rules are {len(text)} chars, over the "
+                f"{OWNER_DOC_MAX_CHARS}-char cap. The END is MISSING from your "
+                f"context — tighten the wording with owner_doc_manage.]\n"
+                + text[:OWNER_DOC_MAX_CHARS] + "\n…[truncated]")
     return text
 
 
@@ -307,15 +324,17 @@ class BotInstance:
 def resolve_instance_id(env: Optional[Mapping[str, str]] = None) -> str:
     """Resolve the instance id from the environment, defaulting to ``"polyrob"``.
 
-    ``POLYROB_INSTANCE_ID`` is the canonical name; ``BOT_INSTANCE_ID`` is also
-    accepted (the canonical name wins if both are set). A blank value degrades to
-    the default so a single-instance deploy stays byte-equivalent.
+    ``POLYROB_INSTANCE_ID`` is the name. A blank value degrades to the default
+    so a single-instance deploy stays byte-equivalent. The retired alias
+    ``BOT_INSTANCE_ID`` (1.4) set alone REFUSES (``RetiredFlagError``) — a
+    silent fallback would open a different data home.
     """
     src = os.environ if env is None else env
-    for key in ("POLYROB_INSTANCE_ID", "BOT_INSTANCE_ID"):
-        val = (src.get(key) or "").strip()
-        if val:
-            return val
+    from core.config_policy.retired_flags import refuse_retired_alias
+    refuse_retired_alias("BOT_INSTANCE_ID", src)
+    val = (src.get("POLYROB_INSTANCE_ID") or "").strip()
+    if val:
+        return val
     # W4: the active profile IS the instance. Profile creation pins
     # POLYROB_INSTANCE_ID in the profile's .env; this tier covers a profile
     # assembled by hand (unsafe names refused, never rewritten).
@@ -339,8 +358,9 @@ def resolve_owner_principal(
     tenant".
 
     Precedence:
-    1. ``POLYROB_OWNER_USER_ID`` / ``BOT_OWNER_USER_ID`` — explicit binding (a distinct
-       human owner uid).
+    1. ``POLYROB_OWNER_USER_ID`` — explicit binding (a distinct human owner uid).
+       The retired alias ``BOT_OWNER_USER_ID`` (1.4) set alone REFUSES
+       (``RetiredFlagError``) instead of silently changing the owner.
     2. the FIRST entry of ``SURFACE_SUPER_ADMIN_USER_IDS`` — the role ladder's top.
     3. :func:`resolve_owner_user_id` — the ONE owner-tenant resolver
        (``POLYROB_LOCAL_OWNER``, else ``local``).
@@ -371,10 +391,11 @@ def resolve_owner_principal(
     an explicit owner and the local tenant).
     """
     src = os.environ if env is None else env
-    for key in ("POLYROB_OWNER_USER_ID", "BOT_OWNER_USER_ID"):
-        val = (src.get(key) or "").strip()
-        if val and not is_anonymous(val):
-            return val
+    from core.config_policy.retired_flags import refuse_retired_alias
+    refuse_retired_alias("BOT_OWNER_USER_ID", src)
+    val = (src.get("POLYROB_OWNER_USER_ID") or "").strip()
+    if val and not is_anonymous(val):
+        return val
     raw = (src.get("SURFACE_SUPER_ADMIN_USER_IDS") or "").strip()
     if raw:
         first = raw.split(",")[0].strip()
@@ -408,8 +429,8 @@ def resolve_owner_user_id(env: Optional[Mapping[str, str]] = None) -> str:
 
     Precedence:
     1. an explicitly-bound owner — :func:`resolve_owner_principal` with
-       ``default_to_instance=False`` (``POLYROB_OWNER_USER_ID`` /
-       ``BOT_OWNER_USER_ID`` / the first ``SURFACE_SUPER_ADMIN_USER_IDS`` entry).
+       ``default_to_instance=False`` (``POLYROB_OWNER_USER_ID`` / the first
+       ``SURFACE_SUPER_ADMIN_USER_IDS`` entry).
     2. ``POLYROB_LOCAL_OWNER`` — the single-user local-console owner override.
        Ranked BELOW an explicit bound owner but ABOVE the unbound default —
        unlike :func:`resolve_owner_principal`, which does not consult it at all.
@@ -505,7 +526,7 @@ def implicit_owner_alias_warning(env: Optional[Mapping[str, str]] = None) -> Opt
 def resolve_owner_email(env: Optional[Mapping[str, str]] = None) -> Optional[str]:
     """The single configured owner email address, or None.
 
-    ``POLYROB_OWNER_EMAIL`` (or ``BOT_OWNER_EMAIL``) — for single-owner headless
+    ``POLYROB_OWNER_EMAIL`` — for single-owner headless
     deploys where no ``user_directory`` service is registered. Mirrors
     :func:`resolve_owner_telegram_id`: the SSOT consumed by the out-of-band cron
     delivery reverse lookup (``cron/delivery.py::_owner_email``) so ``deliver="email"``
@@ -513,10 +534,9 @@ def resolve_owner_email(env: Optional[Mapping[str, str]] = None) -> Optional[str
     then has no email recipient — fail-open, no send).
     """
     src = os.environ if env is None else env
-    for key in ("POLYROB_OWNER_EMAIL", "BOT_OWNER_EMAIL"):
-        val = (src.get(key) or "").strip()
-        if val and "@" in val:
-            return val
+    val = (src.get("POLYROB_OWNER_EMAIL") or "").strip()
+    if val and "@" in val:
+        return val
     return None
 
 

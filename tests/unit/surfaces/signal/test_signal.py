@@ -65,7 +65,8 @@ class _FakeClient:
 
 
 def test_surface_send_splits_and_targets(monkeypatch):
-    monkeypatch.setenv("SIGNAL_SEND_MIN_INTERVAL_SEC", "0")
+    import surfaces.signal.surface as _sig
+    monkeypatch.setattr(_sig, "SIGNAL_SEND_MIN_INTERVAL_SEC", 0.0)
     client = _FakeClient()
     surface = SignalSurface(client)
     res = asyncio.run(surface.send(OutboundMessage(
@@ -77,7 +78,8 @@ def test_surface_send_splits_and_targets(monkeypatch):
 
 
 def test_surface_send_fail_open(monkeypatch):
-    monkeypatch.setenv("SIGNAL_SEND_MIN_INTERVAL_SEC", "0")
+    import surfaces.signal.surface as _sig
+    monkeypatch.setattr(_sig, "SIGNAL_SEND_MIN_INTERVAL_SEC", 0.0)
     res = asyncio.run(SignalSurface(_FakeClient(fail=True)).send(
         OutboundMessage(session_key="agent:main:signal:dm:+1:u_x", text="x")))
     assert res.success is False

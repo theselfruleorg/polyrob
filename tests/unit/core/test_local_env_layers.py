@@ -12,7 +12,7 @@ def test_project_env_cannot_override_owner_home(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
     monkeypatch.chdir(proj)
     monkeypatch.delenv("DEFAULT_MODEL", raising=False)
-    from core.bootstrap import load_env
+    from polyrob.app.bootstrap import load_env
     load_env(local_mode=True)
     assert os.environ["DEFAULT_MODEL"] == "global-model"
 
@@ -26,7 +26,7 @@ def test_process_env_wins_over_rob_files(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
     monkeypatch.chdir(proj)
     monkeypatch.setenv("DEFAULT_MODEL", "shell-model")  # exported before launch
-    from core.bootstrap import load_env
+    from polyrob.app.bootstrap import load_env
     load_env(local_mode=True)
     assert os.environ["DEFAULT_MODEL"] == "shell-model"  # process env wins
 

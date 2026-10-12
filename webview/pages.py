@@ -28,7 +28,6 @@ import logging
 import asyncio
 import os
 import re
-
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
@@ -42,10 +41,11 @@ from core.event_kinds import (
     CONSOLE_INVOICE_SETTLE, CONSOLE_PENDING_DECIDE,
     CONSOLE_PREF_WRITE,
 )
+from core.runtime_paths import correspondents_db_path, cron_db_path, goals_db_path
 
 # Reused services / config — imported at module level so tests can monkeypatch
 # them at the ``webview.pages`` seam (the proof of reuse).
-from agents.task.constants import AutonomyConfig
+from core.config_policy import AutonomyConfig
 from agents.task.goals.board import GoalBoard
 from cli.commands.doctor import doctor_report, local_flag_on, resolve_memory_backend
 from core.instance import (
@@ -423,7 +423,7 @@ async def api_goals(request: Request):
         return JSONResponse({"enabled": False, "goals": []})
     user_id = _effective_user_id(request)  # raises 403 outside this try — must not be fail-open-swallowed
     try:
-        board = GoalBoard(os.path.join(_data_dir(), "goals.db"))
+        board = GoalBoard(goals_db_path(_data_dir()))
         goals = board.list_recent(user_id=user_id)
         counts = board.status_counts(user_id=user_id)
         asks = board.asks(user_id=user_id, status="open")
@@ -446,7 +446,7 @@ async def api_cron(request: Request):
         return JSONResponse({"enabled": False, "jobs": []})
     user_id = _effective_user_id(request)  # raises 403 outside this try — must not be fail-open-swallowed
     try:
-        service = CronService(CronJobStore(os.path.join(_data_dir(), "cron.db")))
+        service = CronService(CronJobStore(cron_db_path(_data_dir())))
         jobs = service.list_jobs(user_id=user_id)
         return JSONResponse({"enabled": True, "jobs": [_cron_dict(j) for j in jobs]})
     except Exception as exc:
@@ -538,7 +538,7 @@ def _avatar_data_dir() -> str:
     """Data home to read the avatar from.
 
     The avatar is usually SET from the CLI, whose data home defaults to
-    ``<polyrob_home>/data`` when ``POLYROB_DATA_DIR`` is unset (``core.bootstrap.
+    ``<polyrob_home>/data`` when ``POLYROB_DATA_DIR`` is unset (``polyrob.app.bootstrap.
     _resolve_cli_data_home``). Mirror that so set↔serve agree in local dev; in
     prod (``POLYROB_DATA_DIR`` set) this is identical to :func:`_data_dir`.
     """
@@ -1124,7 +1124,7 @@ def _pending_kwargs(request: Request) -> dict:
 def _webgate_goal_board():
     """Same construction ``polyrob owner pending`` uses (``cli/commands/owner.py::
     _goal_board`` / ``api_goals`` above) — one ``goals.db`` under the data home."""
-    return GoalBoard(os.path.join(_data_dir(), "goals.db"))
+    return GoalBoard(goals_db_path(_data_dir()))
 
 
 def _console_task_agent():
@@ -1142,7 +1142,7 @@ def _webgate_correspondent_registry():
     (``cli/commands/owner.py::_registry``) — one ``correspondents.db`` under the
     data home."""
     from core.surfaces.correspondents import CorrespondentRegistry
-    return CorrespondentRegistry(os.path.join(_data_dir(), "correspondents.db"))
+    return CorrespondentRegistry(correspondents_db_path(_data_dir()))
 
 
 @router.get("/api/webgate/pending")
@@ -1515,7 +1515,7 @@ async def api_cron_cancel(request: Request, job_id: str):
     cancel`` with ``user_id=``). The id is resolved within the caller's OWN
     jobs first, so another tenant's job id is a 404 miss."""
     user_id = _effective_user_id(request)
-    service = CronService(CronJobStore(os.path.join(_data_dir(), "cron.db")))
+    service = CronService(CronJobStore(cron_db_path(_data_dir())))
     mine = {j.id for j in service.list_jobs(user_id=user_id)}
     if job_id not in mine:
         return JSONResponse(

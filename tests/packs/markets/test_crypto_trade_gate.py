@@ -154,7 +154,7 @@ async def test_polymarket_place_limit_order_refused_for_forged_turn(monkeypatch)
     hyperliquid + x402). Refused before any client/CLOB path."""
     import types
     from polyrob_markets.polymarket.service import PolymarketTool, PlaceLimitOrderParams
-    from tools.controller.execution_context import ActionExecutionContext
+    from agents.task.loop_types.execution_context import ActionExecutionContext
 
     async def _coro(*a, **k):
         return None
@@ -198,7 +198,7 @@ def test_trade_turn_refusal_forged_leaf(monkeypatch):
     # A leaf/delegated/forged turn can never place or mutate an order.
     monkeypatch.delenv("AUTONOMY_HALT", raising=False)
     from polyrob_markets.trade_gate import trade_turn_refusal
-    from tools.controller.execution_context import ActionExecutionContext
+    from agents.task.loop_types.execution_context import ActionExecutionContext
     ctx = ActionExecutionContext()  # role defaults to "leaf" == forged
     r = trade_turn_refusal(ctx, object())
     assert r and ("forged" in r.lower() or "owner must drive" in r.lower())
@@ -209,7 +209,7 @@ def test_trade_turn_refusal_genuine_owner_allows(monkeypatch):
     # no halt is allowed — the gate must not block real owner-driven trading.
     monkeypatch.delenv("AUTONOMY_HALT", raising=False)
     from polyrob_markets.trade_gate import trade_turn_refusal
-    from tools.controller.execution_context import ActionExecutionContext
+    from agents.task.loop_types.execution_context import ActionExecutionContext
     ctx = ActionExecutionContext(user_id="local", role="orchestrator")
     assert trade_turn_refusal(ctx, object()) is None
 
@@ -227,7 +227,7 @@ def test_trade_turn_refusal_halt_overrides_genuine_owner(monkeypatch):
     # Even a genuine owner turn is refused while halted.
     monkeypatch.setenv("AUTONOMY_HALT", "1")
     from polyrob_markets.trade_gate import trade_turn_refusal
-    from tools.controller.execution_context import ActionExecutionContext
+    from agents.task.loop_types.execution_context import ActionExecutionContext
     r = trade_turn_refusal(ActionExecutionContext(user_id="local", role="orchestrator"), object())
     assert r and "autonomy pause" in r.lower()
 
@@ -253,7 +253,7 @@ def test_trade_turn_refusal_forged_probe_fails_closed(monkeypatch):
         raise RuntimeError("forged probe down")
     monkeypatch.setattr(ar, "_is_forged_or_autonomous_turn", _boom)
     from polyrob_markets.trade_gate import trade_turn_refusal
-    from tools.controller.execution_context import ActionExecutionContext
+    from agents.task.loop_types.execution_context import ActionExecutionContext
     r = trade_turn_refusal(ActionExecutionContext(user_id="local", role="orchestrator"), object())
     assert r and ("forged" in r.lower() or "owner must drive" in r.lower())
 
@@ -367,7 +367,7 @@ def test_trade_turn_refusal_genuine_agent_turn_risk_reducing_STILL_blocked_by_ha
     the kill-switch bar applies to it exactly as if risk_reducing were False."""
     monkeypatch.setenv("AUTONOMY_HALT", "1")
     from polyrob_markets.trade_gate import trade_turn_refusal
-    from tools.controller.execution_context import ActionExecutionContext
+    from agents.task.loop_types.execution_context import ActionExecutionContext
     ctx = ActionExecutionContext(user_id="local", role="orchestrator")  # genuine owner-turn, NOT forged
     r = trade_turn_refusal(ctx, object(), risk_reducing=True)
     assert r and "autonomy pause" in r.lower()
@@ -378,7 +378,7 @@ def test_trade_turn_refusal_risk_reducing_still_blocks_forged_turn(monkeypatch):
     # regardless of execution_context or halt state.
     monkeypatch.delenv("AUTONOMY_HALT", raising=False)
     from polyrob_markets.trade_gate import trade_turn_refusal
-    from tools.controller.execution_context import ActionExecutionContext
+    from agents.task.loop_types.execution_context import ActionExecutionContext
     ctx = ActionExecutionContext()  # role defaults to "leaf" == forged
     r = trade_turn_refusal(ctx, object(), risk_reducing=True)
     assert r and ("forged" in r.lower() or "owner must drive" in r.lower())

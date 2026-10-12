@@ -910,8 +910,13 @@ async def test_usage_empty_breakdown_falls_back():
 
 @pytest.mark.asyncio
 async def test_replay_replays_feed_dir(tmp_path, monkeypatch):
-    # Build a small feed dir mirroring the real captured shape.
-    feed = tmp_path / ".polyrob" / "sessions" / "local" / "mysession" / "feed"
+    # Build a small feed dir mirroring the real captured shape, under the pm()
+    # session tree (W8: the cwd/.polyrob/sessions fallback is gone).
+    from agents.task.path import get_path_manager
+    _pmgr = get_path_manager(data_root=str(tmp_path / "sessions"))
+    monkeypatch.setattr("agents.task.path.pm", lambda: _pmgr)
+    feed = (Path(_pmgr.data_root) / _pmgr.clean_user_id("local")
+            / _pmgr.clean_session_id("mysession") / "feed")
     feed.mkdir(parents=True)
     (feed / "000001_session_start.json").write_text(
         json.dumps({"type": "session_start", "data": {"task": "t", "model_name": "m"}})
@@ -929,9 +934,6 @@ async def test_replay_replays_feed_dir(tmp_path, monkeypatch):
         json.dumps({"type": "session_completion", "data": {"success": True, "total_steps": 1,
                                                             "metrics": {"final_result": "done"}}})
     )
-
-    # Force pm() resolution to miss so the CLI-store fallback (cwd/.polyrob) is used.
-    monkeypatch.chdir(tmp_path)
 
     events_seen = []
 

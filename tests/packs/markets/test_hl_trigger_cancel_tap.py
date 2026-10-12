@@ -13,7 +13,7 @@ from polyrob_markets.hyperliquid.service import CancelAllOrdersParams, CancelOrd
 from tests.packs.markets.test_hl_cancel_leverage_live_gate import (
     _async, _clear_trading_env, _make_tool,
 )
-from tools.controller.execution_context import ActionExecutionContext
+from agents.task.loop_types.execution_context import ActionExecutionContext
 
 
 def _live(monkeypatch):

@@ -11,7 +11,7 @@ The phrasing is NOT here: every word comes from :mod:`core.copy` under the
 say the same thing, and a translator changes one file. This module only chooses
 the key and fills the numbers.
 
-Three hard rules, from ``docs/design/040/web/chat-running.html``:
+Three hard rules, from the interface design's running-chat mockup:
 
 * One line. No ``[step]`` / ``[event]`` / ``[iter]`` trace token, ever.
 * No ``repr()`` of the event, and no raw machine name (a tool id is a machine

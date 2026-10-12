@@ -38,7 +38,7 @@ rec = state.record("echo")
 import core.effects, core.config_policy.spend_lane, core.surfaces.room_policy
 import core.security.untrusted_wrap as uw
 import agents.task.agent.skill_manager as sm
-import core.bootstrap as bs
+import polyrob.app.bootstrap as bs
 print(json.dumps({
     "status": rec.status, "reason": rec.reason,
     "non_write": sorted(core.effects.NON_WRITE_ACTIONS.get("echo", ())),

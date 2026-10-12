@@ -17,6 +17,7 @@ authorization (owner-only) is the caller's job — these functions do not gate o
 """
 from __future__ import annotations
 
+from core.runtime_paths import memory_db_path
 import hashlib
 import json
 import logging
@@ -158,7 +159,7 @@ def _resolve_skill_manager(skill_manager):
 
 def _curated_db_path(home_dir: "Path | str") -> Path:
     import os
-    return Path(os.path.join(str(home_dir), "memory.db"))
+    return Path(memory_db_path(str(home_dir)))
 
 
 def _curated_norm_user(user_id) -> str:

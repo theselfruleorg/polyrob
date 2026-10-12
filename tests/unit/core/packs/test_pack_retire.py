@@ -11,7 +11,6 @@ import sys
 from importlib import metadata
 from pathlib import Path
 
-import pytest
 
 from core.packs import retire as rt
 from core.packs.index import RETIRED_DISTS
@@ -129,15 +128,6 @@ def test_the_list_is_the_index_constant_and_the_script_is_stdlib_only():
     out = subprocess.run([sys.executable, str(REPO / "core/packs/retire.py")],
                          capture_output=True, text=True)
     assert out.returncode == 0, out.stderr
-
-
-def test_the_helper_ships_in_the_public_export():
-    import re
-    manifest = REPO / "scripts/public_manifest.txt"
-    if not manifest.is_file():
-        pytest.skip("scripts/ is not in the public export")
-    pats = [l for l in manifest.read_text().splitlines() if l and not l.startswith("#")]
-    assert any(re.search(p, "core/packs/retire.py") for p in pats)
 
 
 # --- Codex final check: containment, own hooks only, the precondition ----------

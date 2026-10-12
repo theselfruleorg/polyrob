@@ -44,10 +44,14 @@ async def test_twitter_delivery_goes_through_the_gated_action(monkeypatch):
         async def post(self, *a, **k):
             raise AssertionError("cron must not call the ungated post() helper")
 
+        async def close(self):
+            called["closed"] = True
+
     monkeypatch.setattr("cron.delivery._config_and_container", lambda ta: ({}, None))
     monkeypatch.setattr(d, "_build_twitter_tool", lambda cfg, c: _Tool())
 
     assert await d.deliver_post(None, _Job(), "hello world") is True
+    assert called.get("closed"), "the one-use tool must close its clients"
     assert called["text"] == "hello world"
     assert called["ctx"].user_id == "tenant-1"
     assert called["ctx"].session_id == "sess-1"

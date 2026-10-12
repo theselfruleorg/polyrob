@@ -25,7 +25,7 @@ from pydantic import BaseModel
 from tools.base_tool import BaseTool, ToolStatus
 from core.config import BotConfig
 from core.exceptions import ServiceError
-from tools.controller.types import ActionResult
+from agents.task.loop_types.controller_types import ActionResult
 from tools.controller.views import (
     TodoListAction,
     TodoAddAction,

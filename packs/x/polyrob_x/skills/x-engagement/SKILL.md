@@ -108,7 +108,7 @@ before 2026-09-17 an agent could ask and never learn the answer.
 What counts as proof is DIFFERENT on each rail, and getting it wrong costs a turn
 in both directions. Every write tool now returns its own `proof:` line — read it
 instead of going to look for the post. The full table is
-`docs/guide/rails-verification.md` (generated from `core/rails/verification.py`).
+`docs/guide/rails-verification.md` (generated from `tools/rails/verification.py`).
 
 - **X post / X reply** — the returned status URL or id IS the proof, and it is
   fetchable. No URL back means it did not publish.

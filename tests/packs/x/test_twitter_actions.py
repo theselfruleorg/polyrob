@@ -17,7 +17,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from tools.base_tool import ToolStatus
-from tools.controller.execution_context import ActionExecutionContext
+from agents.task.loop_types.execution_context import ActionExecutionContext
 from polyrob_x.twitter_tool import (
     TwitterTool,
     TwitterPostAction,
@@ -657,7 +657,7 @@ async def test_owner_turn_posts_with_no_provider_configured(monkeypatch, require
 
 def _cron_ctx(monkeypatch, sid, job_id, *, owner_job=True, tainted=False,
               sub_agent=False):
-    from agents.task.goals import autonomy_marker as am
+    from core import autonomy_marker as am
     am.mark_autonomous(sid, cron_job_id=job_id)
     if owner_job:
         am.note_owner_job(job_id, "Daily 09:00: post the buyback notice on X")
@@ -793,6 +793,7 @@ async def test_late_approval_posts_once_with_the_approved_text_and_no_second_swa
     monkeypatch.delenv("APPROVAL_PROVIDER", raising=False)
     t = _tool(monkeypatch, require_approval=False)
     t.client.create_tweet.return_value = _resp()
+    client = t.client                     # send_approved closes the tool after the send
     monkeypatch.setattr(cd, "_build_twitter_tool", lambda config, container: t)
     board, pushed = _real_queue(monkeypatch, tmp_path, wait_s=0.3)
 
@@ -822,11 +823,11 @@ async def test_late_approval_posts_once_with_the_approved_text_and_no_second_swa
     assert len(rows) == 1 and rows[0].metadata["kind"] == "approved_outbound"
     runner = runner_for(rows[0].metadata)
     assert await runner(dict(rows[0].metadata), "u1", None) is True
-    t.client.create_tweet.assert_called_once()
-    assert t.client.create_tweet.call_args.kwargs.get("text") == text
+    client.create_tweet.assert_called_once()
+    assert client.create_tweet.call_args.kwargs.get("text") == text
     # A second drain (or a duplicate row) sends nothing: the grant is used.
     assert await runner(dict(rows[0].metadata), "u1", None) is True
-    t.client.create_tweet.assert_called_once()
+    client.create_tweet.assert_called_once()
     assert any("sent (once" in p for p in pushed)
 
 
@@ -881,3 +882,36 @@ async def test_approval_wait_ends_inside_the_controller_action_timeout(monkeypat
     assert res.error and "waiting for the owner's approval" in res.error
     assert len(board.asks(user_id="u1", status="open")) == 1
     t.client.create_tweet.assert_not_called()
+
+
+# Prod 2026-10-11 02:54: the owner tapped two late approvals and both failed
+# with "Twitter client is not constructed" — send_approved built a FRESH
+# TwitterTool and never initialized it, so its client was None.
+
+@pytest.mark.asyncio
+async def test_send_approved_initializes_a_freshly_built_tool(monkeypatch):
+    import polyrob_x.cron_delivery as cd
+    from polyrob_x import twitter_tool as tt
+
+    t = _tool(monkeypatch, require_approval=False)
+    live_client = t.client
+    live_client.create_tweet.return_value = _resp()
+    t.client = None                       # what a fresh, uninitialized tool has
+
+    async def _init():
+        t.client = live_client
+    t.initialize = _init
+    monkeypatch.setattr(cd, "_build_twitter_tool", lambda config, container: t)
+    monkeypatch.setattr("polyrob.sdk.delivery_config_and_container",
+                        lambda agent: (MagicMock(), MagicMock()), raising=False)
+
+    closed = []
+
+    async def _close():
+        closed.append(True)
+    t.close = _close
+
+    ok, text = await tt.send_approved("twitter_post", {"text": "Bought PNL. tx 0xabc"})
+    assert ok, text
+    live_client.create_tweet.assert_called_once()
+    assert closed, "a one-use tool must close its clients (Unclosed client session)"

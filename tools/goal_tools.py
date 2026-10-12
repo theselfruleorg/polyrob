@@ -20,7 +20,7 @@ from typing import Any, List, Optional, Dict
 from pydantic import BaseModel, ConfigDict, Field
 
 from tools.base_tool import BaseTool
-from tools.controller.types import ActionResult
+from agents.task.loop_types.controller_types import ActionResult
 from agents.task.goals.board import DuplicateGoalError, GoalBoard
 
 logger = logging.getLogger(__name__)
@@ -102,17 +102,8 @@ def owner_seat_turn(execution_context) -> bool:
     This is an ACCESS check. Authorship is :func:`owner_authored_turn` (this
     check AND no third-party content read in the turn). Fail closed.
     """
-    if execution_context is None:
-        return False
-    try:
-        from tools.controller.turn_origin import _is_forged_or_autonomous_turn
-        if _is_forged_or_autonomous_turn(execution_context, None):
-            return False
-        from core.security.owner_turn import owner_turn_refusal
-        return owner_turn_refusal(execution_context, verb="goal", does="sets owner work",
-                                  public="set owner work") is None
-    except Exception:
-        return False
+    from core.security.owner_turn import is_genuine_owner_turn
+    return is_genuine_owner_turn(execution_context)
 
 
 def owner_authored_turn(execution_context) -> bool:
@@ -494,7 +485,7 @@ _OBJ_STATUS_MAP = {"pause": "paused", "activate": "active", "drop": "dropped"}
 
 
 def _autonomy_refusal(execution_context) -> Optional[ActionResult]:
-    from agents.task.goals.autonomy_marker import is_autonomous
+    from core.autonomy_marker import is_autonomous
     sid = getattr(execution_context, "session_id", None)
     psid = getattr(execution_context, "parent_session_id", None)
     if is_autonomous(sid) or is_autonomous(psid):
@@ -744,7 +735,7 @@ class GoalTool(BaseTool):
         user_id = self._user(execution_context)
         sid = str(getattr(execution_context, "session_id", "") or "")
         from core.surfaces.owner_address import is_owner_tenant
-        from agents.task.goals.autonomy_marker import goal_for_session
+        from core.autonomy_marker import goal_for_session
         if not is_owner_tenant(user_id):
             return ActionResult(error="Refused: this tenant cannot raise an owner ask.")
         own_goal = goal_for_session(sid)

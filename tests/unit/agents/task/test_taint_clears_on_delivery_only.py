@@ -89,9 +89,9 @@ def test_taint_survives_a_dropped_message_to_a_missing_agent():
 
 
 def test_taint_survives_a_rejected_message_when_the_queue_is_full():
-    import os
+    from agents.task.session.hitl_ingress import MAX_QUEUED_MESSAGES
 
-    orch = _Orch({"a1": _Agent(size=int(os.environ.get("MAX_QUEUED_MESSAGES", "10")))})
+    orch = _Orch({"a1": _Agent(size=MAX_QUEUED_MESSAGES)})
     _taint(orch)
     with pytest.raises(MessageQueueFullError):
         asyncio.run(orch.submit_user_message("a1", "ok", kind="comment"))
@@ -101,11 +101,10 @@ def test_taint_survives_a_rejected_message_when_the_queue_is_full():
 
 
 def test_taint_survives_a_full_pending_queue():
-    import os
+    from agents.task.session.hitl_ingress import MAX_QUEUED_MESSAGES
 
     orch = _Orch({})  # no agents -> pending path
-    orch._pending_messages = [("x", "comment", {})] * int(
-        os.environ.get("MAX_QUEUED_MESSAGES", "10"))
+    orch._pending_messages = [("x", "comment", {})] * MAX_QUEUED_MESSAGES
     _taint(orch)
     with pytest.raises(MessageQueueFullError):
         asyncio.run(orch.submit_user_message(None, "ok", kind="comment"))

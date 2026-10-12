@@ -3,7 +3,7 @@
 ``core`` may not import ``tools`` (``tests/test_layering_ratchet.py``). A tool
 that needs a one-shot reconcile at cold start (``hf_deploy`` re-checks its
 ``live`` Spaces) registers a coroutine function here at import;
-``core/autonomy_runtime.py`` looks it up by tool id. Same seam shape as
+``polyrob/app/autonomy_runtime.py`` looks it up by tool id. Same seam shape as
 ``core/wallet/bridge_status.py``. No registration means no sweep.
 """
 from typing import Awaitable, Callable, Dict, Optional

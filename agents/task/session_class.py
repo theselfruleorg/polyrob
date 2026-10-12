@@ -8,7 +8,7 @@ answer and not five heuristics (``skip_memory``, ``cron=True``,
 ``SessionProfile``, ``creator``, "does it have a goal_id").
 
 The marker already exists and is already authoritative:
-``agents.task.goals.autonomy_marker`` is stamped by
+``core.autonomy_marker`` is stamped by
 ``agents/task/runtime/run_as_session.py`` **before** ``create_session``, so it is
 visible during construction — when the tool catalog and limits are pinned.
 Probe failures are treated as autonomous because this classification also gates
@@ -27,7 +27,7 @@ def is_autonomous_session(session_id: Optional[str]) -> bool:
     if not session_id:
         return False
     try:
-        from agents.task.goals.autonomy_marker import is_autonomous
+        from core.autonomy_marker import is_autonomous
         return bool(is_autonomous(str(session_id)))
     except Exception:  # pragma: no cover - defensive
         logger.debug("autonomy marker unreadable; treating session as autonomous",
@@ -43,7 +43,7 @@ def budget_class_autonomous(session_id: Optional[str]) -> bool:
     if not session_id:
         return False
     try:
-        from agents.task.goals.autonomy_marker import is_autonomous
+        from core.autonomy_marker import is_autonomous
         return bool(is_autonomous(str(session_id)))
     except Exception:  # pragma: no cover - defensive
         logger.debug("autonomy marker unreadable; budget class interactive", exc_info=True)
@@ -115,8 +115,9 @@ def correspondent_facing(orchestrator) -> bool:
     if orchestrator is None:
         return False
     try:
+        from core.security.taints import correspondent_tainted
         return bool(getattr(orchestrator, "_correspondent_session", False)
-                    or getattr(orchestrator, "_correspondent_tainted", False))
+                    or correspondent_tainted(orchestrator))
     except Exception:  # pragma: no cover - defensive
         return True
 

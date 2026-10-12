@@ -9,7 +9,7 @@ via the generic descriptor-driven registrar; this asserts the BEHAVIOR (the serv
 import asyncio
 import types
 
-import core.bootstrap as bootstrap
+import polyrob.app.bootstrap as bootstrap
 
 
 class _FakeContainer:

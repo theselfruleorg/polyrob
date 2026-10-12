@@ -6,8 +6,8 @@ max_completion_tokens=131072 on a 202752 window, so the legacy formula
 (0.95*window - reserve) shrank the input budget to 61,542 (65% of the window
 reserved for output). Five registry rows with reserve==window clamped all the
 way to the 1,000-token floor. The fix: reserve = min(max_completion_tokens,
-COMPLETION_RESERVE_TOKENS) with default 16384; `COMPLETION_RESERVE_TOKENS=0`
-restores the legacy full-reserve behavior.
+COMPLETION_RESERVE_TOKENS) = 16384 (a module constant); 0 would restore
+the legacy full-reserve behavior.
 """
 import logging
 from types import SimpleNamespace
@@ -64,7 +64,6 @@ def _calc(monkeypatch, window, completion):
 
 
 def test_default_cap_restores_glm5_budget(monkeypatch):
-    monkeypatch.delenv("COMPLETION_RESERVE_TOKENS", raising=False)
     max_input, safe_input, reserve = _calc(monkeypatch, 202752, 131072)
     assert reserve == 16384
     assert max_input == int(202752 * 0.95) - 16384  # 176,230 — not 61,542
@@ -73,41 +72,32 @@ def test_default_cap_restores_glm5_budget(monkeypatch):
 
 def test_default_cap_rescues_reserve_equals_window_rows(monkeypatch):
     # kimi-k2 shape: reserve == window used to clamp the budget to the 1,000 floor.
-    monkeypatch.delenv("COMPLETION_RESERVE_TOKENS", raising=False)
     max_input, _safe, reserve = _calc(monkeypatch, 131072, 131072)
     assert reserve == 16384
     assert max_input == int(131072 * 0.95) - 16384  # 108,134 — not 1,000
 
 
 def test_small_reserve_unchanged_by_cap(monkeypatch):
-    monkeypatch.delenv("COMPLETION_RESERVE_TOKENS", raising=False)
     max_input, _safe, reserve = _calc(monkeypatch, 128000, 8192)
     assert reserve == 8192
     assert max_input == int(128000 * 0.95) - 8192
 
 
 def test_zero_disables_cap_legacy_behavior(monkeypatch):
-    monkeypatch.setenv("COMPLETION_RESERVE_TOKENS", "0")
+    monkeypatch.setattr(tc_mod, "COMPLETION_RESERVE_TOKENS", 0)
     max_input, _safe, reserve = _calc(monkeypatch, 202752, 131072)
     assert reserve == 131072
     assert max_input == int(202752 * 0.95) - 131072  # legacy 61,542
 
 
-def test_explicit_env_cap_wins(monkeypatch):
-    monkeypatch.setenv("COMPLETION_RESERVE_TOKENS", "32768")
+def test_explicit_cap_wins(monkeypatch):
+    monkeypatch.setattr(tc_mod, "COMPLETION_RESERVE_TOKENS", 32768)
     max_input, _safe, reserve = _calc(monkeypatch, 202752, 131072)
     assert reserve == 32768
     assert max_input == int(202752 * 0.95) - 32768
 
 
-def test_garbage_env_falls_back_to_default(monkeypatch):
-    monkeypatch.setenv("COMPLETION_RESERVE_TOKENS", "not-a-number")
-    _max, _safe, reserve = _calc(monkeypatch, 202752, 131072)
-    assert reserve == 16384
-
-
 def test_recalibrate_applies_the_same_cap(monkeypatch):
-    monkeypatch.delenv("COMPLETION_RESERVE_TOKENS", raising=False)
     # Fallback onto a glm-5-shaped model: the recalibrated budget must use the
     # capped reserve, mirroring _calculate_token_limits.
     host = _RecalHost(202752, 131072, max_input=900000, safe_input=855000)
@@ -118,8 +108,8 @@ def test_recalibrate_applies_the_same_cap(monkeypatch):
         expected_max * (1 - RobustParseConfig.SAFETY_MARGIN_PERCENT))
 
 
-def test_recalibrate_zero_env_keeps_legacy(monkeypatch):
-    monkeypatch.setenv("COMPLETION_RESERVE_TOKENS", "0")
+def test_recalibrate_zero_cap_keeps_legacy(monkeypatch):
+    monkeypatch.setattr(tc_mod, "COMPLETION_RESERVE_TOKENS", 0)
     host = _RecalHost(202752, 131072, max_input=900000, safe_input=855000)
     host.recalibrate_token_counts(force=True)
     assert host.max_input_tokens == max(1000, int(202752 * 0.95) - 131072)

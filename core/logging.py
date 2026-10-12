@@ -433,7 +433,11 @@ def setup_logging(
         if 'logs' in str(log_dir.parent):
             log_dir = log_dir.parent
 
-        if not _ROOT_LOGGER_CONFIGURED:
+        # D6 (2026-10-10): only an EXPLICIT setup call (configure_root=True,
+        # i.e. a process entry point) installs the root handlers. A component
+        # logger created at import time (get_component_logger) must not, or
+        # `import core` would reconfigure an embedding host's root logger.
+        if configure_root and not _ROOT_LOGGER_CONFIGURED:
             # Clear any pre-existing handlers to start from a clean state
             root_logger.handlers.clear()
 
@@ -498,7 +502,7 @@ def setup_logging(
 
             # Mark root logger as configured so we don't duplicate handlers
             _ROOT_LOGGER_CONFIGURED = True
-        else:
+        elif _ROOT_LOGGER_CONFIGURED:
             # Root logger already configured. Only an EXPLICIT setup call may
             # re-level its handlers; component-logger creation must not.
             if configure_root:
@@ -537,6 +541,13 @@ def setup_logging(
             basic_handler.setFormatter(basic_formatter)
             basic_handler.addFilter(_SECURITY_FILTER)
             logger.addHandler(basic_handler)
+
+def entrypoint_logger(name: str, log_level: str = 'INFO') -> logging.Logger:
+    """D6: configure the ROOT logger for a process entry point (``import core``
+    no longer does) and return *name*'s logger."""
+    setup_logging(log_level=log_level)
+    return logging.getLogger(name)
+
 
 def get_component_logger(
     component_name: str,

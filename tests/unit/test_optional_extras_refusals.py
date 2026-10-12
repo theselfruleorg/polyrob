@@ -26,7 +26,7 @@ def _block(monkeypatch, *names):
         return real(name, *a, **kw)
 
     monkeypatch.setattr(builtins, "__import__", fake)
-    monkeypatch.setenv("LAZY_DEPS_ENABLED", "false")
+    monkeypatch.setenv("LAZY_DEPS_MODE", "off")
 
 
 # --- docs: pypdf / python-docx via the ONE parser seam ------------------------ #
@@ -57,7 +57,7 @@ def test_filesystem_pdf_mixin_imports_without_pypdf(monkeypatch):
 
 def test_gif_falls_back_to_text_only_and_names_media(monkeypatch, tmp_path, caplog):
     _block(monkeypatch, "imageio")
-    from utils import gif_utils
+    from agents.task import gif_utils
     shot = tmp_path / "s.png"
     from PIL import Image
     Image.new("RGB", (8, 8)).save(shot)
@@ -109,7 +109,7 @@ def test_anysite_missing_binary_names_its_extra(monkeypatch):
 # --- 058 follow-up: every lazy row has a caller; the extras map knows the moves ---
 
 @pytest.mark.parametrize("feature,call", [
-    ("media.gif", lambda: __import__("utils.gif_utils", fromlist=["x"]).create_gif_with_retry(["/nonexistent-shot.png"], "/tmp/x.gif", ["c"], max_retries=1)),
+    ("media.gif", lambda: __import__("agents.task.gif_utils", fromlist=["x"]).create_gif_with_retry(["/nonexistent-shot.png"], "/tmp/x.gif", ["c"], max_retries=1)),
     ("media.qr", lambda: __import__("modules.cards.cards", fromlist=["x"])._build_qr_image("0xabc")),
     ("tool.anysite", lambda: __import__("polyrob_discovery.anysite.client", fromlist=["x"]).missing_requirement()),
     ("docs.pdf", lambda: __import__("tools.filesystem_pdf", fromlist=["x"])._require_pypdf()),
@@ -121,7 +121,7 @@ def test_first_use_asks_lazy_deps_for_the_extra(monkeypatch, feature, call):
     asked = []
     monkeypatch.setattr(ld, "ensure", lambda f, *, prompt=True: asked.append(f))
     if feature == "media.gif":
-        monkeypatch.setattr("utils.gif_utils.create_text_only_gif", lambda *a, **k: True)
+        monkeypatch.setattr("agents.task.gif_utils.create_text_only_gif", lambda *a, **k: True)
     if feature == "tool.anysite":
         pytest.importorskip("polyrob_discovery")
         monkeypatch.setattr("polyrob_discovery.anysite.client.binary_available", lambda: False)

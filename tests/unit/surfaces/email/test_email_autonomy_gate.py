@@ -55,19 +55,19 @@ async def _run_email(container, harness, start_autonomy_mock):
     from cli.commands import email as em
 
     with ExitStack() as stack:
-        stack.enter_context(patch("core.bootstrap.build_cli_container",
+        stack.enter_context(patch("polyrob.app.bootstrap.build_cli_container",
                                   return_value=container))
-        stack.enter_context(patch("core.bootstrap.setup_project_path"))
-        stack.enter_context(patch("core.bootstrap.setup_sqlite_compat"))
+        stack.enter_context(patch("polyrob.app.bootstrap.setup_project_path"))
+        stack.enter_context(patch("polyrob.app.bootstrap.setup_sqlite_compat"))
         stack.enter_context(patch("cli.keys.preflight_or_onboard", return_value=True))
         stack.enter_context(patch("core.surfaces.bootstrap.install_surface_bus"))
         stack.enter_context(patch("tools.email_tool.EmailTool",
                                   return_value=MagicMock(name="email_tool")))
         stack.enter_context(patch("surfaces.email.harness.build_email_harness",
                                   return_value=harness))
-        stack.enter_context(patch("agents.task.constants.local_mode_enabled",
+        stack.enter_context(patch("core.config_policy.local_mode_enabled",
                                   return_value=True))
-        stack.enter_context(patch("core.autonomy_runtime.start_autonomy",
+        stack.enter_context(patch("polyrob.app.autonomy_runtime.start_autonomy",
                                   start_autonomy_mock))
         await em._run_email(poll_opt=7, verbose=True)
 

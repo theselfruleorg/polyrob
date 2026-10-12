@@ -58,7 +58,7 @@ def register_hf_deploy_tool(force: bool = False) -> bool:
 
 
 async def _boot_reconcile() -> int:
-    """Cold-start sweep for ``core/autonomy_runtime`` (proposal §3.5).
+    """Cold-start sweep for ``polyrob/app/autonomy_runtime`` (proposal §3.5).
 
     Imports stay inside so a monkeypatched ``reconcile_deployed_apps`` applies.
     """

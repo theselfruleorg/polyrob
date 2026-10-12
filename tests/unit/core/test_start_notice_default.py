@@ -19,7 +19,7 @@ def _clean(monkeypatch):
 
 
 def _start_notice():
-    from agents.task.constants import AutonomyConfig
+    from core.config_policy import AutonomyConfig
     return AutonomyConfig.autonomy_start_notice()
 
 

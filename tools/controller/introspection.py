@@ -2,8 +2,8 @@
 (UP-11, verbatim code-motion)."""
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Type, Union
 
-from tools.controller.registry.views import ActionModel
-from tools.controller.types import ActionResult
+from agents.task.loop_types.registry_views import ActionModel
+from agents.task.loop_types.controller_types import ActionResult
 
 
 class IntrospectionMixin:

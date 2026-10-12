@@ -21,7 +21,7 @@ from pydantic import BaseModel
 
 from core.instance import OWNER_DOC_MAX_CHARS, SELF_DOC_MAX_CHARS
 from core.runtime_paths import data_dir_or_home
-from tools.controller.types import ActionResult
+from agents.task.loop_types.controller_types import ActionResult
 from tools.controller._helpers import self_mod_emitter
 from tools.controller.turn_origin import _is_forged_or_autonomous_turn
 
@@ -64,6 +64,19 @@ def _write_doc(writer, params, *, user_id: str, created_by: str, immediate: bool
 		# same honesty rule as apply_now: a superseded draft must leave the queue
 		writer.retire_pending(user_id=user_id)
 	return res, None
+
+
+def _identity_location(writer, user_id: str) -> str:
+	"""Where the identity docs live (prod 2026-10-09: the agent told the owner it
+	"cannot find an identity md" while owner.md/self.md sat in this directory)."""
+	try:
+		root = writer._root(user_id)
+	except Exception:
+		return ""
+	return (f"[identity docs in {root}: owner.md = the owner's rules (this tool), "
+	        f"self.md = your own notes (self_context_manage), contract.md = the operating "
+	        f"contract. Change them only through these tools — a direct file edit skips "
+	        f"the safety scan and the owner's review.]\n\n")
 
 
 def _sweep_report(controller, rule: str, user_id: str, data_dir: str) -> str:
@@ -396,8 +409,12 @@ class DocAuthoringMixin:
 			"(reply length, tone, digest, quotas, caps) use `preferences` instead — "
 			"it applies immediately and is actually enforced (a small owner.md, "
 			f"≤{OWNER_DOC_MAX_CHARS} chars). "
-			"action='read' returns it; action='update' replaces it (consolidate, keep "
-			"only durable facts); action='patch' edits by exact-string replace; "
+			"It is the file owner.md in your identity directory "
+			"(<data_dir>/identity/<instance>/user_<id>/, next to self.md); "
+			"action='read' returns it with its path — never search the disk for it. "
+			"action='update' replaces it (consolidate, keep "
+			"only durable facts); action='patch' edits the ACTIVE rules by exact-string "
+			"replace (the '## Superseded' history is never patched); "
 			"Draft activation requires owner review through /pending. On any "
 			"turn an update/patch is queued for review. "
 			"Pass source= (where the fact came from: 'owner said', 'measured', "
@@ -444,7 +461,8 @@ class DocAuthoringMixin:
 					except Exception:
 						body = "[BLOCKED: identity scanner unavailable]"
 				return ActionResult(
-					extracted_content=(body or "(no owner-facts doc yet)"),
+					extracted_content=(_identity_location(writer, user_id)
+					                   + (body or "(no owner-facts doc yet)")),
 					include_in_memory=True,
 				)
 

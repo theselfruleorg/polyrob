@@ -2,7 +2,7 @@
 broadcasts real fund-moving transactions (``treasury_sweeper.py`` sweep loop) but
 previously started on config presence alone — ``TREASURY_ADDRESS`` + a resolved
 master seed, no enable flag, absent from the flag SSOT
-(``core/initialization.py:680-693`` pre-fix).
+(``polyrob/app/initialization.py:680-693`` pre-fix).
 
 This is a regression guard on the real code path (not just a flag default):
 with a FULL treasury sweeper config (treasury address + wallet generator
@@ -15,7 +15,7 @@ import asyncio
 import pytest
 
 from core.config import BotConfig
-from core.initialization import _treasury_sweeper_enabled, initialize_auth_services
+from polyrob.app.initialization import _treasury_sweeper_enabled, initialize_auth_services
 
 
 # ---------------------------------------------------------------------------

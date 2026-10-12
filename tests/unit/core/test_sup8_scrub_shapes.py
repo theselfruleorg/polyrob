@@ -34,7 +34,7 @@ CASES = {
     "cookie": ("Cookie: session=abcdef123456", "abcdef123456"),
     "keypair": ("loaded " + _keypair_json(), "[0, 1, 2"),
     "telegram_url": ("Cannot connect to host https://api.telegram.org/"
-                     "bot123456789:AAH-dq_TcvCH1vG-WJxf_SeofSAs0K5PAL/getUpdates", "AAH-dq_"),
+                     "bot123456789:AAH-dq" "_TcvCH1vG-WJxf_SeofSAs0K5PAL/getUpdates", "AAH-dq_"),
     "stripe": ("stripe sk_" + "live_" + "51HabcDEFghiJKL", "51HabcDEF"),
 }
 

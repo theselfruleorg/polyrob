@@ -23,132 +23,10 @@ WHEEL — and never ``docs/CONFIGURATION.md``, which ships only in the sdist
 """
 from core.flags_catalog import CATALOG
 
-# Frozen 2026-09-21 at the live count. Lower it when flags are retired.
-# 2026-09-22: 736 -> 738 — LAZY_DEPS_ENABLED + TOOL_USAGE_TELEMETRY (058 T4.3), none retired.
-# 2026-09-23 (064 factory): +1 — ONE <SURFACE>_SURFACE_ENABLED pattern row, so a new
-# surface needs no enable-flag row of its own (configured = on).
-# 2026-09-30 (069 P0): the four pre-069 agent-NFT rows renamed AGENT_NFT_* — net zero, no aliases.
-# 2026-09-30 (069 v4 A1): 773 -> 771 — AGENT_NFT_GAS_REFILL_FLOOR_ETH and
-# AGENT_NFT_GAS_REFILL_CAP_ETH retired with the account gas refill (no operator key to refill).
-# 2026-10-02: 771 -> 772 — FEISHU_WEBHOOK_ALLOW_UNSIGNED, the explicit opt-in for an
-# unsigned (token-only) Feishu webhook, which is now refused by default.
-# 2026-10-03: 772 -> 773 — VALUELESS_CHAIN_MONEY (C13), the owner's opt-in to a core run on the
-# Robinhood Chain testnet (native at $0, fee bounded in wei); off by default.
-# 2026-10-05: 773 -> 776 — 073 W1–W3 host shell: SHELL_BACKEND (where the shell runs),
-# SHELL_APPROVAL_MODE (per-command vs every-call owner wait), SHELL_MAX_OUTPUT_CHARS.
-# 2026-10-06: 776 -> 786 — 073 rest (terminal parity): SHELL_ALLOW, SHELL_DENY,
-# SHELL_HOST_SUDO, SHELL_HOST_FORWARD_AGENT, SHELL_HOST_INIT_FILES, CODE_EXEC_DOCKER_BINARY,
-# CODE_EXEC_DOCKER_REUSE_ACROSS_RESTART, CODE_EXEC_TOOL_CALLS, CODE_EXEC_EGRESS_ALLOW/_PORTS.
-# 2026-10-06: 786 -> 794 — the 073 sandbox packs' own knobs had no rows (test_flags_reverse
-# red): DAYTONA_SANDBOX_IMAGE/_PERSIST, MODAL_SANDBOX_IMAGE/_SNAPSHOT/_TIMEOUT_SEC,
-# SINGULARITY_BINARY/_IMAGE, VERCEL_SANDBOX_TIMEOUT_SEC.
-# 2026-10-08: 794 -> 796 — the security-review fixes read two env vars with no rows
-# (test_flags_reverse red): TWITTER_DM_MAX_PER_HOUR (the durable X DM budget) and
-# WEBGATE_JWT_SECRET (fallback secret for the loopback fast-push token).
-# 2026-10-08: 796 -> 797 — OWNER_WALLET_ADDRESSES: the owner's own receive
-# addresses, so an owner-turn transfer to them needs no second tap.
-# 2026-10-08: 797 -> 798 — CODE_EXEC_SSH_KNOWN_HOSTS: a pinned known_hosts for the
-# ssh backend (StrictHostKeyChecking=yes instead of trust on first use).
-CEILING = 798  # 2026-09-29 impl handoff E (collection revealer): +2 — CRON_WRITE_JOBS_ENABLED
-               # (the one scheduled write verb, off by default), the reveal gas cap.
-               # 771: 2026-09-29 core handoff W12 / 080 D42a: +2 — the two account gas-refill
-               # rows (retired again by 069 v4, above).
-               # 769: 2026-09-29 core handoff W6 / 090 R4: +3 — LP_ETH_CAP, LP_ETH_DAILY_CAP,
-               # LP_ETH_FLOOR (the v4 LP program's caps, in config, not in prose).
-               # 766: X eval option A: +1 X_OAUTH2_REDIRECT_URI (the console callback `/x login`
-               # sends X to; nothing is derived when unset).
-               # 765: 2026-09-24: 067 P2 +2 — POLYROB_PACKS, POLYROB_PACKS_DISABLED (the pack
-               # loader's enabled set; the proposal's two flags for the whole feature).
-               # 763: 2026-09-24: 067 F4b -4 — HITL_MODE, DESTRUCTIVE_ACTION_POLICY, API_HOST,
-               # API_PORT: their only reader was an unread ServerConfig field (deleted),
-               # so the rows documented knobs that never had an effect.
-               # 767: 2026-09-24: 067 F4 +8 — the reverse contract's READ_RE now sees the
-               # aliased _core_int_env/_core_float_env reads in agents/task/constants.py:
-               # the 7 per-tool timeouts (MCP/BROWSER/FILESYSTEM/POLYMARKET/SHELL/
-               # CODE_EXEC/DEFAULT_TOOL_TIMEOUT_SECONDS) and SCREENSHOT_JPEG_QUALITY were
-               # live but undocumented; the 4 dead close timeouts became constants.
-               # 759: 2026-09-24: 067 F2 -21 — deleted proven waste: 3 dead rows
-               # (POLYROB_SUPERVISED, SURFACE_ADMIN_USER_IDS, PAYMENT_ASSETS_ENABLED);
-               # 6 named *_SURFACE_ENABLED rows folded into the <SURFACE>_SURFACE_ENABLED
-               # pattern (EMAIL_SURFACE_ENABLED stays: an AUTONOMY_MODE bundle member);
-               # 7 OWNER_*_ID rows -> OWNER_<SURFACE>_ID; 9 AUX slot rows ->
-               # AUX_MODEL_<SLOT> / AUX_PROVIDER_<SLOT> / AUX_FALLBACK_<SLOT>. No reader
-               # changed; the reverse contract matches the patterns.
-               # Previous: 780. 2026-09-23: +1 — DEFI_PORTFOLIO_PRICE_BUDGET_SEC (bounds the portfolio
-               # pricing loop after it outlived the 600s stall limit twice and blinded
-               # the SAFETY monitor). Previous: 779 (050 +1, the agent-NFT enable flag).
-#              2026-09-23: 025 +2 — MEMORY_SCOPES_ENABLED (the master switch, default
-#              false) + AUTONOMY_MEMORY_REGIME (shared|scoped|sealed, default scoped);
-#              promotion policy / row cap / retention are module constants, not knobs.
-#              776: 2026-09-23: 033 +3 — EXTERNAL_WRITE_TELEMETRY + EXTERNAL_WRITE_PAUSE_GATE
-#              (default on) + EXTERNAL_WRITE_STRICT (default off): the effect
-#              recorder, its pause gate, and the unclassified-writer refusal.
-#              773: 2026-09-23: 066 P2 +1 — WALLET_SIGNER (local|shadow|remote, default local:
-#              where the agent's signatures come from; polyrob-signer); none retired.
-#              772: 2026-09-23: 064 order 0007 +3 — the DingTalk surface: DINGTALK_CLIENT_ID,
-#              DINGTALK_CLIENT_SECRET, OWNER_DINGTALK_ID (enable flag = the pattern row).
-#              769: 2026-09-23: 064 order 0003 +3 — the Feishu webhook fallback: FEISHU_TRANSPORT
-#              (ws|webhook), FEISHU_ENCRYPT_KEY, FEISHU_VERIFICATION_TOKEN; none retired.
-#              766: 2026-09-23: 022 +1 — FINANCIAL_CLAIM_GATE_ENABLED (the emergency off switch
-#              for the send-time financial-claim gate, default ON); none retired.
-#              765: 2026-09-23: 064 order 0001 +4 — the Feishu / Lark surface: FEISHU_APP_ID,
-#              FEISHU_APP_SECRET, FEISHU_DOMAIN, OWNER_FEISHU_ID (its enable flag is the
-#              <SURFACE>_SURFACE_ENABLED pattern row); none retired.
-#              761: 2026-09-23: 066 P1 +1 — LAZY_DEPS_MODE (off|trusted|legacy; the old
-#              boolean LAZY_DEPS_ENABLED stays as its deprecated alias, one release).
-#              760: 2026-09-23: 060 WS-8 -3 — VOICE_TRANSCRIPT_ECHO, TELEGRAM_INCREMENTAL_STREAM
-#              and USER_DELIVERY_LIFECYCLE_DAILY_CAP retired into PREF_SCHEMA
-#              (voice.transcript_echo / stream.telegram / delivery.lifecycle_daily_cap):
-#              the owner sets them from chat. Net 060: +3 -3 = 0.
-#              763: 2026-09-23: 060 WS-3 DOC_KIND_ENFORCED (the revert for the RECORD guard
-#              on workspace documents; undeclared = record).
-#              762: 2026-09-23: 060 WS-6 OWNER_RULES_SUPERSEDE (the revert for supersede,
-#              never evict — a dropped owner rule is kept, dated, and not injected).
-#              761: 2026-09-23: 060 WS-1 SELF_CONTEXT_COMBINED (the revert that re-joins the
-#              unwelded self-context blocks, byte-identical; WS-8 retires owner knobs
-#              into PREF_SCHEMA to pay it back).
-#              760: 2026-09-23: 063 F9 ANTHROPIC_DEFERRED_TOOLS (shape (b), Anthropic's
-#              native mid-conversation tool changes — the default late-tool path
-#              on a capable Anthropic model; TOOL_SCHEMAS_FROZEN flipped to
-#              default OFF in the same commit and stays as the opt-in shape (a)).
-#              759: 2026-09-23: 063 F15 TOOL_RESULT_AGE_CHARS (demote long OLD tool
-#              results to one line + the offload pointer at the compaction
-#              boundary; a 40k web_fetch used to ride every request verbatim).
-#              757: 2026-09-23: 063 F11 COMPACTION_WARM_PREFIX (the compaction
-#              summariser replays the cached prefix and appends the instruction,
-#              instead of sending the whole middle again as cold text).
-#              756: 2026-09-23: 063 F16(ii) STATE_MESSAGE_EPHEMERAL (the per-step
-#              state message rides the one-shot ephemeral rail instead of being
-#              appended into history and spliced back out mid-deque every step).
-#              The count also carries two rows that landed in this shared working
-#              tree from the parallel 063 streams: F9 TOOL_SCHEMAS_FROZEN and
-#              F13 FOUNDATION_REPLAY. All three retire one minor release later.
-#              754: 2026-09-23: 063 F13 FOUNDATION_REPLAY (replay the PERSISTED
-#              foundation on a reload instead of re-rendering every block from
-#              the live env; a deploy re-wrote the whole cached prefix).
-#              753: 2026-09-23: 063 F8 TOOL_CATALOG_TAIL_UPDATES (the tool catalog
-#              becomes a pinned baseline + tail deltas; the in-place rewrite of
-#              foundation [7] re-billed the whole conversation on any status flip).
-#              752: 2026-09-22: F7 MEDIA_KEEP_MAX / MEDIA_RETIRE_BATCH / MEDIA_KEEP_FLOOR
-#              (the image-retirement step function; the old rule re-wrote the
-#              previously-newest screenshot turn on every step of a browser run).
-#              749: F4 ANTHROPIC_CACHE_TTL (the Anthropic prompt-cache window
-#              by session class: 1h interactive, 5m autonomous) and F26
-#              MAX_EXTRACTED_CONTENT_TURN_SIZE (the per-turn tool-result offload
-#              budget).
-#              747: 062 POLYROB_BOOTSTRAP_STAGES (the installer's handoff to
-               # `polyrob setup`; an env var shipped code READS must be documented, and it
-               # is not a knob an operator sets)
-               # 2026-09-22: +1 KB_AUTO_INGEST_ARTIFACTS (WS-K3) — the ONE revert for
-               # indexing what the agent writes. Prod held 76 indexed sources against 473
-               # produced documents; a fix that ships default-off fixes nothing.
-               # 2026-09-22: +1 SESSION_RETENTION_DAYS (WS-K2) — the third retention
-               # window. `memories` and `episodes` had one; the largest store on disk
-               # (2,449 trees, 5.0 GB) had none. Offsets the DEAD
-               # AUTO_KNOWLEDGE_RETENTION_DAYS field deleted in the same commit, which
-               # had a default of 7 and zero consumers (it was never in the catalog).
-               # 2026-09-22: +1 MEMORY_CONSOLIDATE (WS-K4) — the revert for distilling
-               # repeated recall. 19,001 raw rows against 0 curated notes on prod.
+# The live count. Lower it when a flag is retired; raise it only with the reason
+# in the commit message. The history lives in `git log -p` of this line and in
+# CHANGELOG.md — not here, so parallel flag commits do not conflict on a comment.
+CEILING = 672
 # A flag row is a deliberate act — unlike file line counts there is no ordinary
 # churn to absorb, so the ceiling tracks the real count exactly.
 SLACK = 0
@@ -157,7 +35,7 @@ SLACK = 0
 # scripts/gen_flags_catalog.py) is what `doctor --flags` shows by default — the
 # operator surface. Same exact-tracking rule, slack 0: a new public flag is a
 # deliberate act, so raise this in the same commit and say why.
-PUBLIC_CEILING = 88  # 067 F2: +OWNER_<SURFACE>_ID (the pattern replaced named rows)
+PUBLIC_CEILING = 79  # D7: -10 posture members, +POLYROB_OVERRIDES
 
 
 def test_flag_count_does_not_grow():

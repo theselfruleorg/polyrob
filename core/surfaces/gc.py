@@ -1,4 +1,5 @@
 """GC that never drops a binding with pending outbound (would orphan a queued reply)."""
+from core.runtime_paths import correspondents_db_path
 import logging
 from core.sqlite_util import execute_retry
 
@@ -36,7 +37,7 @@ def prune_surface_stores(registry) -> None:
     except Exception as e:
         logger.warning("surface GC: room-caps prune failed: %s", e)
     try:
-        corr_db = os.path.join(os.path.dirname(db_path) or ".", "correspondents.db")
+        corr_db = correspondents_db_path(os.path.dirname(db_path) or ".")
         if os.path.exists(corr_db):
             from core.surfaces.correspondents import CorrespondentRegistry
             n = CorrespondentRegistry(corr_db).prune_thread_anchors(

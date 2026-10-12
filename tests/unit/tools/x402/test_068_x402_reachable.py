@@ -172,7 +172,7 @@ async def test_go_pays_as_the_owner_and_bounds_the_body(fake_tool):
     out = await pay_reply("owner", [URL, "$0.10", "go"])
     kind, amount, ctx = fake_tool.calls[0]
     assert kind == "fetch" and amount == 0.10
-    assert ctx.role == "owner" and ctx.user_id == "owner" and not ctx.is_sub_agent
+    assert ctx.role == "orchestrator" and ctx.user_id == "owner" and not ctx.is_sub_agent
     assert "more characters" in out and len(out) < 1700
 
 
@@ -220,8 +220,8 @@ async def test_pay_keys_by_the_command_identity(monkeypatch):
 
 def test_the_telegram_seat_passes_the_update_id():
     import inspect
-    import surfaces.telegram.harness as h
-    src = inspect.getsource(h._handle_owner_admin)
+    import surfaces.telegram.admin_verbs as h  # W9: the /pay handler's home
+    src = inspect.getsource(h._pay)
     assert "request_id=(f\"tg:{_key}\"" in src
 
 

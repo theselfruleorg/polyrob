@@ -17,7 +17,7 @@ COMMANDS_DIR = Path(__file__).resolve().parents[3] / "cli" / "commands"
 #: reads flags/credentials (directly, or via a helper that does).
 SEAM_MARKERS = (
     "ensure_env_loaded",      # the 026 P1.2 seam
-    "load_env(",              # direct core.bootstrap.load_env call
+    "load_env(",              # direct polyrob.app.bootstrap.load_env call
     "preflight_or_onboard",   # cli.keys preflight (loads env internally)
     "cli_container(",         # _bootstrap.cli_container (preflight inside)
     "run_surface(",           # _surface_runner envelope (preflight inside)
@@ -34,6 +34,8 @@ EXEMPT = {
     "__init__.py",
     "_errors.py",
     "_grouped.py",
+    # 077 helpers: called from commands that already loaded the env ladder.
+    "_lifecycle.py", "_lifecycle_boot.py", "_service_ops.py",
 }
 
 
@@ -77,7 +79,7 @@ def test_ensure_env_loaded_is_memoized(monkeypatch):
         calls.append((a, k))
         return "development"
 
-    import core.bootstrap as core_bootstrap
+    import polyrob.app.bootstrap as core_bootstrap
     monkeypatch.setattr(core_bootstrap, "load_env", _fake_load_env)
     bootstrap.ensure_env_loaded()
     bootstrap.ensure_env_loaded()

@@ -8,8 +8,13 @@ call site is untouched. `goals_enabled`/`goal_planner_enabled`/
 posture/autonomy-group defaults defined there.
 """
 from core.env import bool_env as _bool_env
-from core.env import float_env as _float_env
 from core.env import int_env as _int_env
+
+#: Internal tuning (not env-driven). Tests patch these module constants.
+#: Trigram similarity at or above which a new goal is a duplicate (0 disables).
+GOAL_DEDUP_THRESHOLD = 0.6
+#: Recent goals the planner reads as history.
+GOAL_PLANNER_HISTORY_N = 10
 
 
 class GoalFlagsMixin:
@@ -108,18 +113,13 @@ class GoalFlagsMixin:
         return _int_env("GOAL_MAX_CONCURRENT", 2)
 
     @staticmethod
-    def goal_fair_dispatch() -> bool:
-        """Round-robin the ready queue across objectives instead of a global order."""
-        return _bool_env("GOAL_FAIR_DISPATCH", True)
-
-    @staticmethod
     def goal_per_objective_cap() -> int:
         """Max concurrent goal runs for ONE objective. <=0 disables the extra cap."""
         return _int_env("GOAL_PER_OBJECTIVE_CAP", 0)
 
     @staticmethod
     def goal_dedup_threshold() -> float:
-        return _float_env("GOAL_DEDUP_THRESHOLD", 0.6)
+        return GOAL_DEDUP_THRESHOLD
 
     @staticmethod
     def goal_planner_min_ready() -> int:
@@ -131,20 +131,7 @@ class GoalFlagsMixin:
 
     @staticmethod
     def goal_planner_history_n() -> int:
-        return _int_env("GOAL_PLANNER_HISTORY_N", 10)
-
-    @staticmethod
-    def goal_planner_scaling() -> bool:
-        """Derive the planner's ceilings + service order from the objective count.
-
-        ONE revert for the whole planner half of the stream-scaling work: `=false`
-        restores the pre-scaling shape — a fixed ready ceiling of
-        ``PLANNER_READY_FLOOR`` (the old "Never exceed 5 ready goals total"
-        literal), the fixed ``GOAL_PLANNER_MIN_READY`` thinness gate, and no
-        "SERVE THESE OBJECTIVES FIRST" block in the prompt. ``GOAL_FAIR_DISPATCH``
-        reverts dispatch; this reverts planning.
-        """
-        return _bool_env("GOAL_PLANNER_SCALING", True)
+        return GOAL_PLANNER_HISTORY_N
 
     @staticmethod
     def goal_planner_goals_per_run() -> int:

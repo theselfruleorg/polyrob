@@ -75,10 +75,11 @@ def test_session_request_carries_the_target():
 def test_step_context_and_both_swap_verbs_read_it():
     import inspect
     from agents.task.agent.core import step_execution
-    from tools.defi.trade_tool import DefiTradeTool
+    from tools.defi import solana_swap_verb  # W9: the verb bodies moved
+    from tools.defi.swap_verb import perform_swap
     assert '"money_target"' in inspect.getsource(step_execution)
-    for verb, send in ((DefiTradeTool.swap, "_run_guarded"),
-                       (DefiTradeTool.solana_swap, "_solana_quote")):
+    for verb, send in ((perform_swap, "_run_guarded"),
+                       (solana_swap_verb, "_solana_quote")):
         src = inspect.getsource(verb)
         assert "acquisition_refusal" in src and src.index("acquisition_refusal") < src.index(send)
 

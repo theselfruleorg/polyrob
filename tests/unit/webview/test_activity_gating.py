@@ -150,3 +150,17 @@ def test_cold_backfill_merges_sources(monkeypatch, tmp_path):
     assert "goal_created" in kinds
     assert "session_start" in kinds
     assert events == sorted(events, key=lambda e: e["ts"])
+
+
+def test_activity_telemetry_source_uses_the_telemetry_path_seam(monkeypatch, tmp_path):
+    """The telemetry tail resolves through core.event_log.telemetry_db_path, so the
+    TELEMETRY_EVENT_LOG_PATH override and the relocated sidecar are honoured."""
+    from webview import activity
+
+    override = tmp_path / "elsewhere" / "telemetry_events.db"
+    monkeypatch.setenv("TELEMETRY_EVENT_LOG_PATH", str(override))
+    monkeypatch.setattr(activity, "_data_dir", lambda: str(tmp_path))
+    monkeypatch.setattr(activity, "_sessions_data_root", lambda: str(tmp_path / "sessions"))
+
+    sources = dict(activity.activity_db_sources())
+    assert sources["telemetry"].db_path == str(override)

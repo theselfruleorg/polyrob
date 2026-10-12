@@ -1,7 +1,7 @@
 """066 P1 — the hashed, pinned closure of every lazily installable feature.
 
 One ``<feature>.txt`` per ``core.lazy_deps.LAZY_DEPS`` row, generated from
-``requirements.lock`` by ``scripts/gen_lazy_closures.py`` and pinned by
+``requirements.lock`` by ``devtools/gen_lazy_closures.py`` and pinned by
 ``tests/unit/core/test_lazy_closures_drift.py``. They ship as package data (the
 ``"*" = ["*.txt"]`` glob), so a PyPI/pipx install carries them too — the lock
 itself ships only in the sdist.

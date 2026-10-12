@@ -6,7 +6,6 @@ accessor. Moved verbatim off the ``Agent`` god-file; ``Agent`` composes
 """
 from __future__ import annotations
 
-import os
 from typing import Dict
 
 
@@ -22,7 +21,6 @@ class ResourceMixin:
         self._file_references = BoundedDict(max_size=500)
 
         # NOTE: User message queue removed - managed by HITLManager
-        self._max_user_guidance_tokens = int(os.getenv("MAX_USER_GUIDANCE_TOKENS", "1000"))
 
         self.logger.debug("Initialized memory management with bounded collections")
 

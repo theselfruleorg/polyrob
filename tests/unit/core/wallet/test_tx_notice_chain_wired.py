@@ -87,7 +87,7 @@ def test_the_swap_broadcast_and_settled_notices_carry_their_chain(marker):
 
 
 def test_the_solana_swap_notices_carry_solana():
-    source = (_REPO / "tools" / "defi" / "trade_tool.py").read_text()
+    source = (_REPO / "tools" / "defi" / "solana_swap_verb.py").read_text()
     for marker in ('verb="solana_swap", route="solana", chain="solana", usd=amount_usd,\n                tx_ref',
                    'verb="solana_swap", route="solana", chain="solana", usd=amount_usd, tx_ref=signature'):
         assert marker in source
@@ -107,7 +107,7 @@ def test_every_bridge_notice_carries_the_ORIGIN_chain():
 
 def test_the_watcher_names_the_origin_and_never_the_destination():
     source = (_REPO / "core" / "wallet" / "bridge_watcher.py").read_text()
-    assert source.count("chain=origin_name") == 3
+    assert source.count("chain=origin_name") == 4  # + the SVM proven-arrival notice
     assert 'origin_name = bridge_guard.chain_name_for_id(row.get("origin_chain_id"))' in source
     assert "chain=chain_name" not in source
 

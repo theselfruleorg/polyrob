@@ -7,6 +7,10 @@ from tools.code_exec.sandbox_guard import require_sandbox_or_none, code_exec_exe
 
 @pytest.fixture
 def custody(monkeypatch):
+    """Custody WITH the owner's ``host_exec_under_custody=refuse`` row. Owner
+    decision D1 (2026-10-10) made this refusal a setting: by default these
+    children run under custody (tests/unit/core/security/test_host_exec_under_custody.py)."""
+    monkeypatch.setenv("SECURITY_SETTINGS", "host_exec_under_custody=refuse")
     # Test custody policy independently of this host's Docker socket permissions.
     monkeypatch.setattr("tools.code_exec.sandbox_guard.docker_socket_unreachable_reason",
                         lambda backend: None)

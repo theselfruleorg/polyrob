@@ -166,8 +166,8 @@ class PaymentQuoter:
 def register_payment_quoter(container) -> bool:
     """Register the ``payment_quoter`` service on *container*. Idempotent.
 
-    ⚠️ ONE join, called from BOTH container builders (`core/bootstrap.py` for
-    the CLI/headless agent, `core/initialization.py` for the server), because
+    ⚠️ ONE join, called from BOTH container builders (`polyrob/app/bootstrap.py` for
+    the CLI/headless agent, `polyrob/app/initialization.py` for the server), because
     the two drifting is exactly how this service came to have call sites in
     `core/surfaces/room_actions.py` and `modules/x402/invoicing.py` and no
     registration anywhere — so every non-stable asset was unpriceable.

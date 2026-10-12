@@ -18,7 +18,7 @@ class _FakeRequest:
 
 
 def _reload_server(monkeypatch, multitenant: bool):
-    monkeypatch.setenv("WEBGATE_MULTITENANT", "true" if multitenant else "false")
+    monkeypatch.setenv("POLYROB_POSTURE", "multitenant" if multitenant else "local")
     monkeypatch.setenv("ENV", "development")
     import webview.server as server
     return importlib.reload(server)

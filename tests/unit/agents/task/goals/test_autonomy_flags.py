@@ -1,4 +1,4 @@
-from agents.task.constants import AutonomyConfig
+from core.config_policy import AutonomyConfig
 
 
 def test_defaults(monkeypatch):
@@ -6,10 +6,8 @@ def test_defaults(monkeypatch):
         "GOAL_PLANNER_ENABLED",
         "GOAL_PLANNER_MIN_READY",
         "GOAL_PLANNER_COOLDOWN_SEC",
-        "GOAL_PLANNER_HISTORY_N",
         "GOAL_DAILY_QUOTA",
         "GOAL_SELF_WAKE_ENABLED",
-        "GOAL_DEDUP_THRESHOLD",
     ):
         monkeypatch.delenv(var, raising=False)
     assert AutonomyConfig.goal_planner_enabled() is False

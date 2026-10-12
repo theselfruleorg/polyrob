@@ -15,8 +15,7 @@ from agents.task.constants import AUX_MODEL_MAP, resolve_aux_chain
 @pytest.fixture(autouse=True)
 def _clean_aux_env(monkeypatch):
     for name in (
-        "AUX_AUTO", "COMPACTION_AUTO_AUX", "AUX_PROVIDER", "COMPACTION_PROVIDER",
-        "COMPACTION_MODEL", "AUX_MODEL_JUDGE",
+        "AUX_AUTO", "COMPACTION_AUTO_AUX", "AUX_MODEL_JUDGE",
     ):
         monkeypatch.delenv(name, raising=False)
     for slot in ("COMPACTION", "JUDGE", "REFLECTION"):
@@ -47,11 +46,6 @@ class TestPrecedenceAndBlastRadius:
         monkeypatch.setenv("AUX_PROVIDER_JUDGE", "openrouter")
         chain = resolve_aux_chain("judge", provider="zai-coding")
         assert chain[0]["provider"] == "openrouter"
-
-    def test_generic_aux_provider_env_still_wins(self, monkeypatch):
-        monkeypatch.setenv("AUX_AUTO", "true")
-        monkeypatch.setenv("AUX_PROVIDER", "openrouter")
-        assert resolve_aux_chain("judge", provider="zai-coding")[0]["provider"] == "openrouter"
 
     def test_an_explicit_model_is_not_pinned(self, monkeypatch):
         # Only a model that CAME FROM the cheap map is pinned. An operator naming

@@ -48,8 +48,8 @@ def test_the_room_verb_handlers_are_awaitable(name):
 def test_the_harness_awaits_every_one_of_them():
     """A handler made async but called without `await` returns a coroutine that
     is never run — the verb would silently do nothing at all."""
-    import surfaces.telegram.harness as h
-    src = inspect.getsource(h._handle_owner_admin)
+    import surfaces.telegram.admin_verbs as h  # W9: the pre-gate room verbs' home
+    src = inspect.getsource(h.pre_gate_reply)
     for name in ("mute_reply", "unmute_reply", "ban_reply", "unban_reply",
                  "paid_reply"):
         idx = src.find(name)

@@ -30,7 +30,6 @@ def test_agent_config_exists_and_has_agent_fields():
         'max_sessions_in_memory',
         'session_cleanup_interval',
         'max_sessions_per_user',
-        'default_character',
         'data_dir',
         'db_path',
         'log_level',
@@ -51,7 +50,6 @@ def test_agent_config_has_no_server_fields():
         'x402_payment_recipient',
         'enable_auth',
         'enable_credit_system',
-        'master_seed',
         'treasury_address',
         'ethereum_rpc_url',
         'eip8004_enabled',
@@ -79,7 +77,6 @@ def test_bot_config_extends_agent_config(monkeypatch):
     assert hasattr(bc, 'openai_api_key')
     assert hasattr(bc, 'session_ttl_seconds')
     assert bc.session_ttl_seconds == 86400
-    assert bc.default_character == 'polyrob'
 
 
 def test_bot_config_keeps_server_fields():
@@ -91,7 +88,6 @@ def test_bot_config_keeps_server_fields():
         'jwt_secret_key',
         'x402_enabled',
         'enable_auth',
-        'master_seed',
     ]:
         assert hasattr(bc, field), f"BotConfig lost server field {field}"
 
@@ -113,23 +109,23 @@ def test_core_bot_initialize_does_not_call_phase_6():
 
     Source-text check because the function is heavily decorated and asyncio.
     """
-    with open('core/bot.py') as f:
+    with open('polyrob/app/bot.py') as f:
         src = f.read()
 
     # Find the _initialize method body
     import re
     m = re.search(r'async def _initialize\(self\)(.*?)(?=async def )', src, re.DOTALL)
-    assert m, "_initialize method not found in core/bot.py"
+    assert m, "_initialize method not found in polyrob/app/bot.py"
     body = m.group(1)
     assert 'initialize_auth_services' not in body, (
         "CoreBot._initialize must not auto-call phase 6 auth services; "
-        "use build_server_bot from core.bootstrap instead"
+        "use build_server_bot from polyrob.app.bootstrap instead"
     )
 
 
 def test_core_bot_exposes_initialize_server_services():
     """Phase 6 is opt-in via an explicit method on Bot."""
-    from core.bot import Bot
+    from polyrob.app.bot import Bot
 
     assert hasattr(Bot, 'initialize_server_services')
     method = Bot.initialize_server_services
@@ -138,7 +134,7 @@ def test_core_bot_exposes_initialize_server_services():
 
 def test_build_server_bot_exists():
     """build_server_bot is the server entry point that adds phase 6."""
-    from core.bootstrap import build_bot, build_server_bot
+    from polyrob.app.bootstrap import build_bot, build_server_bot
 
     assert build_server_bot is not build_bot
     assert inspect.iscoroutinefunction(build_server_bot)

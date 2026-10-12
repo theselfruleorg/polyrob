@@ -21,7 +21,7 @@ def _temp_config(monkeypatch, tmp_path):
 async def test_register_cli_tools_registers_tools_and_their_dependency(monkeypatch, tmp_path):
     config = _temp_config(monkeypatch, tmp_path)
     from core.container import DependencyContainer
-    from core.bootstrap import register_cli_tools
+    from polyrob.app.bootstrap import register_cli_tools
 
     DependencyContainer._instance = None
     container = DependencyContainer.get_instance(config)
@@ -40,7 +40,7 @@ async def test_cli_filesystem_tool_initializes(monkeypatch, tmp_path):
     'Required dependency rate_limit_manager not available'. It must init cleanly."""
     config = _temp_config(monkeypatch, tmp_path)
     from core.container import DependencyContainer
-    from core.bootstrap import register_cli_tools
+    from polyrob.app.bootstrap import register_cli_tools
 
     DependencyContainer._instance = None
     container = DependencyContainer.get_instance(config)

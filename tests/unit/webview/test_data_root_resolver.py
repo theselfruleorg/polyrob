@@ -21,10 +21,17 @@ from core.runtime_paths import resolve_session_data_root
 
 
 @pytest.fixture(autouse=True)
-def _clean_env(monkeypatch):
+def _clean_env(monkeypatch, tmp_path):
     monkeypatch.delenv("DATA_ROOT", raising=False)
     monkeypatch.delenv("POLYROB_DATA_DIR", raising=False)
     monkeypatch.delenv("POLYROB_PROJECT_DIR", raising=False)
+    # tests/conftest.py points the legacy ./data/task fallback at each test's
+    # tmp_path (xdist workers shared it). These tests pin the SHIPPED fallback:
+    # restore it, in a tmp cwd so nothing is created in the repo.
+    import core.runtime_paths as rp
+    assert '_LEGACY_SESSIONS_DEFAULT = "./data/task"' in Path(rp.__file__).read_text()
+    monkeypatch.setattr(rp, "_LEGACY_SESSIONS_DEFAULT", "./data/task")
+    monkeypatch.chdir(tmp_path)
     yield
 
 
@@ -54,7 +61,7 @@ def test_parity_with_agent_bootstrap_resolution(monkeypatch, tmp_path):
     build_cli_container derives pm data_root = _resolve_cli_data_home()[0] /
     'sessions'. The shared resolver must produce the identical path."""
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "vlp"))
-    from core.bootstrap import _resolve_cli_data_home
+    from polyrob.app.bootstrap import _resolve_cli_data_home
 
     data_home, _ws_is_root, _project = _resolve_cli_data_home()
     assert resolve_session_data_root() == data_home / "sessions"
@@ -65,7 +72,7 @@ def test_parity_holds_with_project_dir_set(monkeypatch, tmp_path):
     session tree lives when POLYROB_DATA_DIR is set."""
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "vlp"))
     monkeypatch.setenv("POLYROB_PROJECT_DIR", str(tmp_path / "proj"))
-    from core.bootstrap import _resolve_cli_data_home
+    from polyrob.app.bootstrap import _resolve_cli_data_home
 
     data_home, _ws_is_root, _project = _resolve_cli_data_home()
     assert resolve_session_data_root() == data_home / "sessions"
@@ -83,7 +90,7 @@ def _stub_heavy_startup(monkeypatch):
     the late auth/task half) so we test only the pm() install."""
     import core.container
     import core.config
-    import core.initialization
+    import polyrob.app.initialization
 
     monkeypatch.setattr(core.container.DependencyContainer, "get_instance",
                         classmethod(lambda cls, *a, **k: MagicMock()), raising=False)
@@ -92,7 +99,7 @@ def _stub_heavy_startup(monkeypatch):
     async def _noop(*a, **k):
         return None
 
-    monkeypatch.setattr(core.initialization, "initialize_core", _noop)
+    monkeypatch.setattr(polyrob.app.initialization, "initialize_core", _noop)
     # S8 (2026-09-14): startup now refuses `local` posture on a server-shaped
     # deployment, and POLYROB_DATA_DIR outside $HOME (a pytest tmp_path) is one
     # of the signals. These tests are about the pm() install, not the posture —

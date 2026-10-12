@@ -450,8 +450,7 @@ class MCPStdioTransport(MCPTransport):
             refusal = host_execution_refusal()
             if refusal:
                 raise MCPConnectionError(
-                    "MCP stdio is unavailable in a custody process; use a separately "
-                    "isolated HTTP MCP service. " + refusal
+                    "MCP stdio refused: " + refusal + " (an HTTP MCP service still works)"
                 )
             from tools.mcp.child_env import build_mcp_child_env
             full_env = build_mcp_child_env(self.env)
@@ -488,7 +487,7 @@ class MCPStdioTransport(MCPTransport):
 
             # Start stderr reader task for debugging
             if self.process.stderr:
-                asyncio.create_task(self._read_stderr())
+                self._stderr_task = asyncio.create_task(self._read_stderr())  # retained
             
         except Exception as e:
             raise MCPConnectionError(f"Failed to start STDIO transport: {e}")

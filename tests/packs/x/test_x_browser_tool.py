@@ -351,7 +351,7 @@ async def test_x_reply_refused_for_leaf(monkeypatch):
 async def test_x_post_result_carries_the_x_post_proof_rule(monkeypatch):
     """A returned status URL is the proof an X post exists — and a draft is not
     a post. That rule lives in ONE table; the result cites it."""
-    from core.rails.verification import verification_line
+    from tools.rails.verification import verification_line
     from polyrob_x.x_browser.tool import XPostAction
     driver = FakeDriver(url="https://x.com/robbot/status/42")
     tool = _tool(monkeypatch, session={"handle": "robbot", "storage_state": {}},
@@ -364,7 +364,7 @@ async def test_x_post_result_carries_the_x_post_proof_rule(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_x_reply_result_carries_the_x_reply_proof_rule(monkeypatch):
-    from core.rails.verification import verification_line
+    from tools.rails.verification import verification_line
     from polyrob_x.x_browser.tool import XReplyAction
 
     class _ReplyDriver(FakeDriver):

@@ -41,7 +41,7 @@ def test_endpoint_absent_is_owner_work_not_agent_work(monkeypatch):
     assert "no HTTP endpoint" in out
     assert "not needed to get paid" in out
     assert "owner-only" in out
-    assert "scripts/setup_x402_endpoint.sh" in out
+    assert "docs/guide/payments.md" in out
 
 
 def test_endpoint_live_is_reported_and_drops_the_runbook(monkeypatch):
@@ -50,7 +50,7 @@ def test_endpoint_live_is_reported_and_drops_the_runbook(monkeypatch):
     monkeypatch.setenv("A2A_BASE_URL", "https://agent.example.com")
     out = receive_rail_summary()
     assert "https://agent.example.com" in out
-    assert "setup_x402_endpoint.sh" not in out
+    assert "docs/guide/payments.md" not in out
 
 
 def test_detect_state_is_reported(monkeypatch):

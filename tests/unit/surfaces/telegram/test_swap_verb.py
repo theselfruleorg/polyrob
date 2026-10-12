@@ -84,7 +84,7 @@ def test_go_swaps_once_bounded():
     live = [p for p, _ in tool.calls if not p.dry_run]
     assert len(live) == 1 and live[0].max_spend_usd == pytest.approx(262.51)
     assert "SENT" in out
-    assert tool.calls[-1][1].role == "owner"
+    assert tool.calls[-1][1].metadata["turn_kind"] == "owner_seat"
 
 
 def test_solana_native_is_the_wrapped_mint():

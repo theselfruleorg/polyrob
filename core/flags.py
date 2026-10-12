@@ -26,41 +26,41 @@ from dataclasses import dataclass, replace
 from typing import Callable, Optional
 
 from core.env import parse_bool
-from core.flags_catalog import CATALOG
+from core.flags_catalog import ACCESS, CATALOG
 from core.security.redaction import redact_config_urls
-
-# Suffix-based so LLM_MAX_OUTPUT_TOKENS / POLYROB_PROJECT_SECRET_REFUSE stay visible.
-# _SEED covers wallet seed material (PAYMENT_MASTER_SEED/MASTER_SEED — "KEEP
-# SECRET!" per core/config.py); _HASH covers POLYROB_OWNER_PASSWORD_HASH (echoing
-# the argon2 hash enables offline cracking of the console password).
-_SECRET_SUFFIXES = (
-    "_KEY", "_TOKEN", "_SECRET", "_PASSWORD", "_MNEMONIC", "_JWT", "_PRIVATE_KEY",
-    "_PRIVATE_KEYS_B64", "_PASSPHRASE", "_SEED", "_HASH",
-)
-
-# S10 (2026-09-14): a managed-RPC endpoint IS a credential — the API key is IN
-# the URL (`https://base-mainnet.g.alchemy.com/v2/<key>`), so the suffix rule
-# above never matched it and `GET /api/webgate/config` plus the agent's own
-# `preferences explain` returned live keys intact. Matched as a NAME SUBSTRING
-# because the shape is `*_RPC` (X402_SETTLEMENT_RPC, DEFI_SOLANA_RPC),
-# `*_RPC_URL` (BASE_RPC_URL) and `*_RPC_<CHAIN>` (DEFI_EVM_RPC_BASE) alike.
-# A flag can still be reported as SET vs unset — only the value is hidden — so
-# "is my chain pinned?" stays answerable from `doctor --flags`.
-# The exact set this currently covers is pinned by
-# tests/unit/core/test_flags.py::test_rpc_flags_are_secret, so a future non-URL
-# `_RPC` flag has to be looked at rather than silently masked.
-_SECRET_NAME_PARTS = ("_RPC",)
 
 _TRUEISH_DOC = ("on", "true", "yes", "1")
 _FALSEISH_DOC = ("off", "false", "no", "0")
 
 
 def is_secret_flag(name: str) -> bool:
-    """Whether a flag's value must be masked in any report output."""
-    upper = name.upper()
-    return (upper.endswith(_SECRET_SUFFIXES)
-            or upper in {"BROWSER_WSS_URL", "BROWSER_CDP_URL", "MCP_SERVER_URL"}
-            or any(part in upper for part in _SECRET_NAME_PARTS))
+    """Whether a flag's value must be masked in any report output.
+
+    A cataloged flag (an exact row or a ``<...>`` pattern row) is secret when
+    its row's Access column says ``secret`` (``core.flags_catalog.ACCESS``,
+    generated from docs/CONFIGURATION.md) — the class is declared per row, never
+    derived from the spelling of a name. A name the catalog does not know (an
+    arbitrary env line a report shows) is masked when it LOOKS like a credential
+    (``core.secrets.is_secret_key``, or an RPC URL that carries its key), so an
+    unknown value fails safe toward masking.
+    """
+    cls = access_class(name)
+    if cls is not None:
+        return cls == "secret"
+    try:
+        from core.secrets import is_secret_key
+        return bool(is_secret_key(name)) or "_RPC" in name.upper()
+    except Exception:             # pragma: no cover — fail toward masking
+        return True
+
+
+def access_class(name: str) -> Optional[str]:
+    """``console`` | ``file`` | ``secret`` for a cataloged flag, else None."""
+    cls = ACCESS.get(name)
+    if cls is not None:
+        return cls
+    pattern = pattern_flag_for(name)
+    return ACCESS.get(pattern.name) if pattern is not None else None
 
 
 def _enum_kind(name: str) -> Optional[str]:

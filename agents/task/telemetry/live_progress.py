@@ -205,7 +205,8 @@ class TurnProgressTracker:
         now = self._clock()
         if immediate or (now - self._last_edit_at) >= self._interval:
             self._last_edit_at = now
-            loop.create_task(self._do_edit())
+            from core.async_bridge import spawn_retained
+            spawn_retained(self._do_edit())
         elif self._pending_edit is None or self._pending_edit.done():
             remaining = self._interval - (now - self._last_edit_at)
             self._pending_edit = loop.create_task(self._delayed_edit(remaining))

@@ -8,7 +8,6 @@ import pytest
 def log(tmp_path, monkeypatch):
     monkeypatch.setenv("TELEMETRY_EVENT_LOG_PATH", str(tmp_path / "t.db"))
     monkeypatch.setenv("TELEMETRY_EVENT_LOG_ENABLED", "true")
-    monkeypatch.setenv("SECURITY_EVENT_LOG_ENABLED", "true")
     import core.event_log as el
     import core.rate_limit as rl
     import core.surfaces.access_log as al
@@ -62,13 +61,6 @@ def test_key_is_truncated(log):
     from core.rate_limit import report_trip
     assert report_trip("api_minute", "x" * 500) is True
     assert len(_trips(log)[0]["attrs"]["key"]) == 64
-
-
-def test_disabled_security_log_records_nothing(log, monkeypatch):
-    monkeypatch.setenv("SECURITY_EVENT_LOG_ENABLED", "false")
-    from core.rate_limit import report_trip
-    assert report_trip("api_minute", "k") is False
-    assert _trips(log) == []
 
 
 def test_raising_log_never_changes_the_decision(log, monkeypatch):

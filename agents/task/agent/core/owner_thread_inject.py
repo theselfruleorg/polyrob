@@ -91,7 +91,7 @@ class OwnerThreadInjectMixin:
                 rail_slice, referent, render_block, thread_tail)
             container = getattr(self, "container", None)
             user_id = getattr(self, "user_id", "")
-            from agents.task.goals.autonomy_marker import (
+            from core.autonomy_marker import (
                 cron_job_for_session, goal_for_session, is_autonomous)
             bootstrapped = getattr(self, "_session_bootstrap_done", False)
             if is_autonomous(self.session_id):
@@ -128,7 +128,7 @@ class OwnerThreadInjectMixin:
         try:
             if not self._owner_thread_applicable():
                 return
-            from agents.task.goals.autonomy_marker import is_autonomous
+            from core.autonomy_marker import is_autonomous
             if is_autonomous(self.session_id):
                 return
             since = self._owner_thread_seen_ts()

@@ -82,7 +82,7 @@ def find_compaction_checkpoints(data_root: Path, session_id: str) -> List[Path]:
 def session_history(session_id: str, dump):
     """List (or --dump) compaction checkpoints for a session."""
     import json
-    from core.bootstrap import setup_project_path, setup_sqlite_compat
+    from polyrob.app.bootstrap import setup_project_path, setup_sqlite_compat
     setup_project_path()
     setup_sqlite_compat()
 
@@ -184,7 +184,7 @@ def session_tail(session_id: str, follow: bool):
 
 async def _session_tail(session_id: str, follow: bool = False):
     import json
-    from core.bootstrap import setup_project_path, setup_sqlite_compat
+    from polyrob.app.bootstrap import setup_project_path, setup_sqlite_compat
     setup_project_path()
     setup_sqlite_compat()
 

@@ -40,7 +40,7 @@ def env_file_candidates(resolved_env: str = "development", *, local_mode: bool =
     """THE canonical .env candidate list, in PRECEDENCE order (highest wins first).
 
     This is the single source of truth for which files configure the process and
-    who beats whom — ``core.bootstrap.load_env`` iterates exactly this list, and
+    who beats whom — ``polyrob.app.bootstrap.load_env`` iterates exactly this list, and
     the display/snapshot/guard sites (``/config check``, ``cli.keys``,
     ``cli.update.context``) derive their subsets from it (R-1).
 

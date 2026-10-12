@@ -76,6 +76,15 @@ class Verb:
                  promise the surface does not keep — which is why this is a
                  field rather than a convention. Seat names are the surface ids
                  the tree already uses (``repl``, ``telegram``, ``console``).
+        room_refused: Never runs from inside a group room (044 I10: an owner
+                 verb a member talked him into). A CONTRIBUTED verb is refused
+                 there anyway unless its contributor named it room-safe
+                 (``register_verbs(room_verbs=...)``); the flag is for the
+                 core rows. Seats read :func:`room_refused`, never a literal.
+        background: Non-empty for a money verb whose executing (``go``) form
+                 waits on a chain receipt or the owner's own tap: a chat seat
+                 runs it off its poll loop and names it with this word in the
+                 "started" reply (TG2; :func:`background_word`).
     """
 
     name: str
@@ -83,6 +92,8 @@ class Verb:
     help: str
     aliases: tuple[str, ...] = ()
     seats: tuple[str, ...] = ()
+    room_refused: bool = False
+    background: str = ""
 
     def runs_on(self, seat: str) -> bool:
         """True when ``seat`` can run this verb (no ``seats`` = every seat)."""
@@ -95,6 +106,15 @@ class Verb:
 #: help bodies, which live in tiers ``core/`` may not reach) but are kept in
 #: step with the Telegram ``_HELP_BODY`` SSOT so the seats do not describe one
 #: verb differently.
+#: ``room_refused`` (044 I10) — the reasons that sat in the Telegram literal:
+#: /pause /halt /resume and /run (070) control autonomy; /cron /goal /fulfill
+#: (D43) mutate durable work; /rail (036) grants a tool to standing work;
+#: /thread (061) is the one owner transcript; /contacts is private
+#: correspondence; /why (O10) names tools, amounts and addresses; /cards
+#: confirms a money line; /approve /reject /allow /deny /config /prefs /mcp
+#: /apps /dev /identity are owner writes. A contributed verb (the money verbs,
+#: /writeoff, /adopt, /check …) is refused unless its contributor names it
+#: room-safe.
 _CORE_TABLE: tuple[Verb, ...] = (
     # talk
     Verb("/start", "talk", "A welcome and a short tour of what I can do"),
@@ -103,8 +123,8 @@ _CORE_TABLE: tuple[Verb, ...] = (
          "Everything waiting on a decision from you, blocking first"),
     Verb("/pending", "needs you",
          "Every approval waiting on you: spends, contacts, tokens, and proposals"),
-    Verb("/approve", "needs you", "Approve something that is waiting on you"),
-    Verb("/reject", "needs you", "Decline something that is waiting on you"),
+    Verb("/approve", "needs you", "Approve something that is waiting on you", room_refused=True),
+    Verb("/reject", "needs you", "Decline something that is waiting on you", room_refused=True),
     # REPL-local: the terminal is the seat where the owner sits while the agent
     # works, so it is where "what will stop and ask me" belongs.
     Verb("/gates", "needs you", "Which actions need your approval",
@@ -113,32 +133,38 @@ _CORE_TABLE: tuple[Verb, ...] = (
     Verb("/missed", "needs you",
          "Messages I could not deliver live: capped, paused, or undelivered"),
     Verb("/fulfill", "needs you",
-         "Mark an ask fulfilled so its work can continue"),
+         "Mark an ask fulfilled so its work can continue", room_refused=True),
     Verb("/cards", "needs you",
-         "Open action cards: confirm a quote, answer a choice, or cancel"),
+         "Open action cards: confirm a quote, answer a choice, or cancel", room_refused=True),
     # work
-    Verb("/goal", "work", "Steer one goal or a whole stream"),
+    Verb("/goal", "work", "Steer one goal or a whole stream", room_refused=True),
     Verb("/goals", "work", "The goal board summary"),
-    Verb("/rail", "work", "Standing work: list, create, switch, drop and grant rails"),
-    Verb("/cron", "work", "Durable scheduled runs: list, add, edit, or cancel"),
+    Verb("/rail", "work", "Standing work: list, create, switch, drop and grant rails",
+         room_refused=True),
+    Verb("/cron", "work", "Durable scheduled runs: list, add, edit, or cancel", room_refused=True),
     Verb("/apps", "work",
-         "Deployed apps: approve an address, check health, or kill one"),
+         "Deployed apps: approve an address, check health, or kill one", room_refused=True),
     # money: no core row. The 13 money verbs are CONTRIBUTED
     # (``register_verbs``) — today by ``core/money_verbs.py``, after 067 P5b by
     # the wallet pack. With none registered the group renders its install hint.
     # control
     Verb("/cancel", "control", "Stop the task I am running now"),
-    Verb("/pause", "control", "Stop autonomous work now, all of it or one scope"),
-    Verb("/resume", "control", "Lift the pause"),
-    Verb("/halt", "control", "Stop all autonomous work now"),
-    Verb("/run", "control", "Pause, resume or stop one background run"),
+    Verb("/pause", "control", "Stop autonomous work now, all of it or one scope",
+         room_refused=True),
+    Verb("/resume", "control", "Lift the pause", room_refused=True),
+    Verb("/halt", "control", "Stop all autonomous work now", room_refused=True),
+    Verb("/run", "control", "Pause, resume or stop one background run", room_refused=True),
     Verb("/mode", "control",
          "The effective autonomy posture and how to change it"),
-    Verb("/dev", "control", "Message the dev and ops loop directly"),
+    Verb("/dev", "control", "Message the dev and ops loop directly", room_refused=True),
+    # 077: confirmed by a card; the restart drains first and reports back here.
+    Verb("/restart", "control", "Restart me once my current work is done", room_refused=True),
+    Verb("/update", "control", "Update me to the latest release, then report back",
+         room_refused=True),
     # remember
     Verb("/recap", "remember", "The same as /journey"),
     Verb("/thread", "remember",
-         "Our conversation across every session and rail, newest last"),
+         "Our conversation across every session and rail, newest last", room_refused=True),
     Verb("/journey", "remember", "What I have done over a recent window"),
     Verb("/kb", "remember", "Search and list my knowledge base"),
     Verb("/memory", "remember", "Recall across sessions and inspect memory scopes",
@@ -153,11 +179,12 @@ _CORE_TABLE: tuple[Verb, ...] = (
     # that name — separated so neither has to pretend to be the other.
     Verb("/meter", "look", "This turn's meter", seats=("repl",)),
     Verb("/contacts", "look",
-         "Who I have been writing to, and the transcript with one of them"),
-    Verb("/why", "look", "The last things I refused to do, and the reason for each"),
+         "Who I have been writing to, and the transcript with one of them", room_refused=True),
+    Verb("/why", "look", "The last things I refused to do, and the reason for each",
+         room_refused=True),
     # set up
-    Verb("/allow", "set up", "Allow me to message a target"),
-    Verb("/deny", "set up", "Revoke a message permission"),
+    Verb("/allow", "set up", "Allow me to message a target", room_refused=True),
+    Verb("/deny", "set up", "Revoke a message permission", room_refused=True),
     Verb("/allowlist", "set up", "Who I am allowed to message"),
     Verb("/groups", "set up",
          "Room presence admin: allow, deny, mode, roles, and more"),
@@ -165,19 +192,20 @@ _CORE_TABLE: tuple[Verb, ...] = (
     Verb("/ban", "set up", "Ban a member for a while"),
     Verb("/unban", "set up", "Lift a member's ban"),
     Verb("/unmute", "set up", "End a member's mute early"),
-    Verb("/config", "set up", "Read or set preferences"),
+    Verb("/config", "set up", "Read or set preferences", room_refused=True),
     # REPL-local (041 phase 2): the terminal holds the live session, so it is
     # where a RUNNING worker is stopped or steered; the store half is
     # `polyrob workers` on the same machine.
     Verb("/workers", "set up",
          "Named helpers: approve them, and stop or steer a running one",
          seats=("repl",)),
-    Verb("/prefs", "set up", "The preferences you have set"),
-    Verb("/mcp", "set up", "MCP servers I can use: add, remove, or test"),
+    Verb("/prefs", "set up", "The preferences you have set", room_refused=True),
+    Verb("/mcp", "set up", "MCP servers I can use: add, remove, or test", room_refused=True),
     # display
     Verb("/avatar", "display", "This instance's avatar image — show, set, clear"),
     Verb("/identity", "display",
-         "My on-chain identity: register it, or update where it is published (spends gas)"),
+         "My on-chain identity: register it, or update where it is published (spends gas)",
+              room_refused=True, background="Identity registration"),
     # leave
     Verb("/help", "leave", "This help, or the detail for one verb",
          aliases=("/h", "/?")),
@@ -323,8 +351,20 @@ def routed_names() -> frozenset:
 
 
 def room_refused(name: str) -> bool:
-    """True for a contributed verb that must not run from inside a group room."""
+    """True for a verb that must not run from inside a group room: a core row
+    flagged ``room_refused``, or a contributed verb its contributor did not
+    name room-safe."""
+    row = verb_for(name)
+    if row is not None and row.room_refused:
+        return True
     return name in routed_names() and name not in _ROOM_OK
+
+
+def background_word(name: str) -> str:
+    """The word a seat's "started" reply names for a background money verb,
+    or ``""`` for a verb that answers inline (:attr:`Verb.background`)."""
+    row = verb_for(name)
+    return row.background if row is not None else ""
 
 
 def handler_ref(seat: str, name: str) -> Optional[str]:
@@ -465,6 +505,7 @@ __all__ = [
     "register_verbs",
     "registered_verbs",
     "room_refused",
+    "background_word",
     "routed_names",
     "unregister_verbs",
 ]

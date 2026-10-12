@@ -48,7 +48,7 @@ def _env():
 
 
 def _autonomous(sid):
-    from agents.task.goals.autonomy_marker import mark_autonomous
+    from core.autonomy_marker import mark_autonomous
     mark_autonomous(sid, "goal-x")
 
 

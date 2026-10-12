@@ -5,6 +5,7 @@ Split out of ``modules/x402/settlement_watcher.py`` (S6, 2026-08-29). A mixin ov
 seams (``_rpc_call``/``_usdc_addr``/``_goal_board_override``/``_reputation_manager_override``)
 and the module ``logger``; behaviour is byte-identical to the pre-split class.
 """
+from core.runtime_paths import goals_db_path
 import logging
 from typing import Any, Optional
 import time
@@ -313,7 +314,7 @@ class SettlementNotifyMixin:
         import os
         from agents.task.goals.board import GoalBoard
         from core.runtime_config import get_data_root
-        return GoalBoard(os.path.join(get_data_root(), "goals.db"))
+        return GoalBoard(goals_db_path(get_data_root()))
     async def _push_owner_notice(self, user_id: str, text: str,
                                  source: str = "subscriptions",
                                  session_id: Optional[str] = None) -> None:

@@ -91,7 +91,11 @@ def test_doctor_and_telemetry_health_refuse_a_tenant(monkeypatch):
     assert exc.value.status_code == 403
     route = next(r for r in srv._fastapi.routes
                  if getattr(r, "path", "") == "/api/telemetry/health")
-    assert any(d.call is webgate.owner_console_guard for d in route.dependant.dependencies)
+    # Match by module + qualname, not identity: test_webgate.py reloads
+    # webview.webgate, so under xdist the route can hold the pre-reload guard.
+    assert any(getattr(d.call, "__module__", "") == "webview.webgate"
+               and getattr(d.call, "__qualname__", "") == "owner_console_guard"
+               for d in route.dependant.dependencies)
 
 
 # --- WEB-4: security / trust flags are operator-file-only -------------------
@@ -101,7 +105,7 @@ def test_doctor_and_telemetry_health_refuse_a_tenant(monkeypatch):
     "CORRESPONDENT_ACCESS_ENABLED", "X402_TRUSTED_PROXIES",
     "X402_PAYMENT_ADDRESS", "X402_FACILITATOR_URL", "POLYROB_TOOL_DENYLIST",
     "FS_REALPATH_CONFINE", "FEISHU_WEBHOOK_ALLOW_UNSIGNED",
-    "CRYPTO_TRADE_LIVE_ENABLED", "GROUP_TURN_TOOLS", "LAZY_DEPS_ENABLED",
+    "CRYPTO_TRADE_LIVE_ENABLED", "GROUP_TURN_TOOLS", "LAZY_DEPS_MODE",
     "GMAIL_SMTP_SERVER", "EMAIL_PROVIDER", "APP_SERVICE_IMAGE",
 ])
 def test_trust_flags_refused_remotely(key):

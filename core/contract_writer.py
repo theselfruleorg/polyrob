@@ -13,8 +13,7 @@ Implemented as a thin ``SelfContextWriter`` subclass: the propose/patch/reject/
 promote/scan/atomic-write machinery is the base class's ONE shared body (audit
 T4, 2026-07-16 — previously ``propose``/``promote``/archives were copy-pasted
 here and could drift from the security gate). Only the target file
-(``contract.md``), the char cap (``CONTRACT_DOC_MAX_CHARS``), the review flag
-(``CONTRACT_DOC_REQUIRE_REVIEW``), the pending-listing ``kind`` (``contract``)
+(``contract.md``), the char cap (``CONTRACT_DOC_MAX_CHARS``), the pending-listing ``kind`` (``contract``)
 and the archive filename prefixes differ — all expressed as class attributes.
 """
 from __future__ import annotations
@@ -22,7 +21,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from core.config_policy import AutonomyConfig
 from core.instance import (
     CONTRACT_DOC_MAX_CHARS,
     _CONTRACT_DOC_NAME,
@@ -62,10 +60,9 @@ class ContractWriter(SelfContextWriter):
     # --- review flag (contract-specific) --------------------------------------
 
     def _resolve_pending(self, created_by: str, pending: Optional[bool]) -> bool:
-        if pending is not None:
-            base = pending
-        else:
-            base = AutonomyConfig.contract_doc_require_review()
+        # A contract draft always waits for owner review unless the caller
+        # says otherwise (the CONTRACT_DOC_REQUIRE_REVIEW switch is gone).
+        base = True if pending is None else pending
         if created_by in _NON_USER_AUTHORS:  # a forged author can never auto-activate
             return True
         return base

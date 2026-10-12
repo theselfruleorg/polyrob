@@ -1,6 +1,6 @@
 import asyncio
 
-from agents.task.goals.autonomy_marker import is_autonomous, mark_autonomous
+from core.autonomy_marker import is_autonomous, mark_autonomous
 from agents.task.runtime.run_as_session import run_task_as_session
 
 

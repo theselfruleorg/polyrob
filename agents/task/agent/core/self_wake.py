@@ -189,7 +189,7 @@ def effective_self_wake_enabled(user_id, home_dir) -> bool:
     was DEAD: settable/displayed but every consumer read the env directly).
     No pref file present => byte-identical to
     ``AutonomyConfig.self_wake_enabled()``. Fail-open to the env value."""
-    from agents.task.constants import AutonomyConfig
+    from core.config_policy import AutonomyConfig
     from core.prefs import effective_autonomy_switch
     return effective_autonomy_switch("autonomy.self_wake",
                                      AutonomyConfig.self_wake_enabled(),
@@ -204,7 +204,7 @@ def get_reentry_budget() -> ReentryBudget:
     global _BUDGET_SINGLETON
     with _BUDGET_LOCK:
         if _BUDGET_SINGLETON is None:
-            from agents.task.constants import AutonomyConfig
+            from core.config_policy import AutonomyConfig
             # Durable budget (restart-carried depth cap). The store
             # requires a wall clock; without a store keep the legacy monotonic.
             store = None

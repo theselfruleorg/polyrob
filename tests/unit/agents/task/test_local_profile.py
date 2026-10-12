@@ -9,11 +9,13 @@ order-dependent failures in unrelated suites).
 import agents.task.constants as constants
 
 
-def test_rob_local_alias_enables_local_mode(monkeypatch):
-    # ROB_LOCAL is a deprecated back-compat alias for POLYROB_LOCAL (older docs/scripts
-    # said ROB_LOCAL) — it must NOT be a silent no-op.
+def test_retired_rob_local_alias_is_not_read(monkeypatch):
+    # ROB_LOCAL was retired in 1.4 (core/config_policy/retired_flags.py; doctor
+    # warns on it). Only POLYROB_LOCAL enables local mode.
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
     monkeypatch.setenv("ROB_LOCAL", "1")
+    assert constants.local_mode_enabled() is False
+    monkeypatch.setenv("POLYROB_LOCAL", "1")
     assert constants.local_mode_enabled() is True
 
 

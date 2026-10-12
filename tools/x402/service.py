@@ -298,8 +298,8 @@ class X402PayTool(BaseTool):
         # idempotency replay-guard) must run UNCONDITIONALLY before fetch_with_payment.
         # When the probe can't price it, fail closed to the agent's authorized
         # ceiling (max_amount_usd) as the worst-case spend — never skip the gate.
-        from core.wallet.signer_envelope import UNANSWERED_TEXT, envelope, signer_unanswered
-        if signer_unanswered():
+        from core.wallet.signer_envelope import UNANSWERED_TEXT, envelope, spend_held_by_signer
+        if spend_held_by_signer():
             # Its $0 clamp is not a cap to pay under: say the signer is down.
             return self._ar(error=f"x402 payment refused: {UNANSWERED_TEXT}. Nothing was paid.")
         signer_cap = envelope("x402_per_payment_usd")

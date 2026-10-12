@@ -381,3 +381,84 @@ def test_wrapper_scan_stops_at_a_plain_program(command):
 ])
 def test_wrapper_scan_still_sees_a_wrapped_command(command):
     assert classify(command).level == DANGEROUS, command
+
+
+# --- D2 (owner, 2026-10-10): the floor applies per command segment ----------------
+# A protected path and a write verb in two DIFFERENT segments (or a redirect to an
+# ordinary file) is not "writes the agent's own state". The read of the protected
+# path stays an owner decision (dangerous), never the floor.
+
+@pytest.mark.parametrize("command", [
+    "grep -r ERROR /var/lib/polyrob/logs > errors.txt",
+    "ls /var/lib/polyrob/logs | tee listing.txt",
+    "cp README.md docs/ && ls ~/.polyrob/data/wallet",
+    "tail -n 50 /var/lib/polyrob/logs/agent.log >> notes.md",
+    "cat /etc/polyrob/README 2>/dev/null; echo done > out.txt",
+])
+def test_cross_segment_cooccurrence_is_not_the_floor(command):
+    assert classify(command).level != FLOOR, command
+
+
+@pytest.mark.parametrize("command", [
+    "echo x > /etc/polyrob/polyrob.env",
+    "ls | tee /var/lib/polyrob/wallet/k",
+    "cd /etc/polyrob && echo x > polyrob.env",
+    "cd ~/.polyrob/data/wallet && rm audit.jsonl",
+    "W=/var/lib/polyrob/wallet; cp evil $W/",
+    "ls ~/.polyrob/data/wallet | xargs rm",
+    'bash -c "echo hi > /etc/polyrob/x"',
+    "true && cp x /var/lib/polyrob/signer/k",
+    "for f in /etc/polyrob/*; do rm $f; done",
+    "echo x >'/etc/polyrob/polyrob.env'",
+    "echo x 2>> ~/.polyrob/.env",
+])
+def test_a_write_to_the_agent_state_in_its_own_segment_is_the_floor(command):
+    assert classify(command).level == FLOOR, command
+
+
+@pytest.mark.parametrize("command", [
+    "grep AGENT_WALLET_MASTER_SEED ~/.polyrob/.env",
+    "printenv AGENT_WALLET_MASTER_SEED",
+    "grep MASTER_SEED /etc/polyrob/wallet.env",
+    "cat /proc/1/environ | grep EIP8004_AGENT_PRIVATE_KEY",
+])
+def test_reading_the_wallet_seed_is_the_floor(command):
+    assert classify(command).level == FLOOR, command
+
+
+@pytest.mark.parametrize("command", [
+    "grep -rn MASTER_SEED core/ docs/",
+    "grep AGENT_WALLET_MASTER_SEED config/.env.example",
+])
+def test_naming_the_seed_variable_in_code_work_is_not_the_floor(command):
+    assert classify(command).level != FLOOR, command
+
+
+@pytest.mark.parametrize("command", [
+    "pip install polyrob-x402",
+    "uv pip install polyrob-x402",
+    "python -m pip install polyrob-x402",
+    "pip install polyrob",
+])
+def test_installing_a_polyrob_package_is_not_running_the_admin_cli(command):
+    v = classify(command)
+    assert "administrative CLI" not in v.reason, (command, v)
+
+
+@pytest.mark.parametrize("command", [
+    "cp /usr/local/bin/polyrob /tmp/p", "uv run polyrob owner pending", "polyrob config set X y",
+])
+def test_the_admin_cli_backstop_still_holds(command):
+    assert classify(command).level != OK, command
+
+
+def test_state_db_names_derive_from_the_db_manifest():
+    """W4: the guard's state-db names are the manifest's, plus the wallet/signer files."""
+    from core.db_manifest import SIDECAR_DB_NAMES
+    from core.security.command_guard import state_db_names
+    names = state_db_names()
+    assert set(SIDECAR_DB_NAMES) <= names
+    assert {"bot.db", "signer.sqlite", "submissions.sqlite"} <= names
+    for missing in ("feedback_replays.db", "telemetry_events.db", "skill_usage.db",
+                    "users.db", "messages.db"):
+        assert classify(f"sqlite3 {missing} 'delete from x'").level == DANGEROUS, missing

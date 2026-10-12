@@ -218,9 +218,9 @@ def _owner_ctx(user_id: str):
     none the same send to the same address was 'replay blocked' forever on
     Solana (validation, 2026-09-27)."""
     import uuid
-    from types import SimpleNamespace
-    return SimpleNamespace(user_id=user_id, role="owner", is_sub_agent=False,
-                           metadata={"turn_id": f"send-{uuid.uuid4().hex}"})
+    from core.security.turn_facts import owner_seat_context
+    return owner_seat_context(user_id, seat="telegram",
+                              turn_id=f"send-{uuid.uuid4().hex}")
 
 
 def _caps_line(tool) -> str:

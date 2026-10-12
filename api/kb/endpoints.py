@@ -72,7 +72,7 @@ def kb_api_enabled() -> bool:
     rest of POLYROB's env flags.
 
     B33: read from ``core.env`` — the lowest tier that owns this rule — not
-    from ``agents.task.constants._bool_env``. The api tier importing a private
+    from ``core.config_policy._bool_env``. The api tier importing a private
     helper out of the agents tier is a layering edge the ratchet only tolerates
     because it is old.
     """
@@ -92,15 +92,24 @@ def _ensure_backend() -> None:
     """
     try:
         from modules.memory.backend_factory import maybe_register_memory_backend
-        from core.config import BotConfig
-        try:
-            cfg = BotConfig()
-            data_dir = getattr(cfg, "data_dir", "data") or "data"
-        except Exception:
-            data_dir = "data"
-        maybe_register_memory_backend(data_dir=data_dir)
+        maybe_register_memory_backend(data_dir=_kb_memory_data_dir())
     except Exception as e:
         logger.debug("KB API: memory backend registration skipped: %s", e)
+
+
+def _kb_memory_data_dir() -> str:
+    """The directory holding the memory.db the AGENT writes: ``<data_home>``.
+
+    W8 (2026-10-10): this used ``BotConfig().data_dir`` — on a server that is
+    ``<data_home>/data`` (one level below the data home), so the HTTP KB opened
+    ``<data_home>/data/memory.db`` while the agent and the console use
+    ``<data_home>/memory.db``. Read-both/write-new (``data_home_db_path``,
+    ``prefer_container``): the data-home file wins; an install whose ONLY
+    memory.db is the legacy one keeps using it; both present logs a warning.
+    """
+    import os
+    from core.runtime_paths import data_home_db_path
+    return os.path.dirname(data_home_db_path("memory.db", prefer_container=True))
 
 
 # ---------------------------------------------------------------------------

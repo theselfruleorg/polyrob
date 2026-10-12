@@ -19,7 +19,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from core.action_names import action_names
+from core.lazy_views import lazy_module_getattr, view
 
 logger = logging.getLogger(__name__)
 
@@ -31,21 +31,16 @@ ERRORS_TAIL_STEPS = 5  # errors in the final N steps
 
 # Actions whose successful result is itself evidence of produced output
 # (proposal 007's allowlist) — descriptors recorded even when no file lands
-# in the workspace.
-# Registered keys (``core.action_names``), never bare method names — the
-# ledger carries ``coding_str_replace``, not ``str_replace`` (review B1).
-OUTPUT_ACTION_ALLOWLIST = frozenset({
-    "twitter_post",
-    "twitter_reply",
-    "filesystem_write_file",
-    "knowledge_kb_ingest",
-    "x402_invoice_x402_request",
-    "message",
-    "email_send",
-    "email_reply",
-    "email_forward",
-}) | action_names("coding", "apply_patch", "str_replace", "create_file") \
-   | action_names("code_execution", "run_code")
+# in the workspace. W4: a derived view of the verb-policy rows — the ``output``
+# column plus every ``outbound="write"`` verb (a post, reply, DM or mail, the
+# X browser rail included). Registered keys, never bare method names (review B1).
+def _build_output_action_allowlist():
+    from core.verb_policy import ids_where
+    return ids_where(output=True) | ids_where(outbound="write")
+
+
+__getattr__ = lazy_module_getattr(__name__, {
+    "OUTPUT_ACTION_ALLOWLIST": _build_output_action_allowlist})
 
 _URL_RE = re.compile(r"https?://[^\s'\"<>)\]]+")
 _PATH_RE = re.compile(r"(?:workspace|project)/[\w][\w./\-]*")
@@ -259,7 +254,7 @@ def collect_artifacts(orchestrator: Any, *, workspace_dir: Optional[str] = None,
     # 1) ledger descriptors — a successful allowlisted action IS produced output
     try:
         for label, name, _action, result in _walk_ledger(orchestrator):
-            if label or name not in OUTPUT_ACTION_ALLOWLIST:
+            if label or name not in view(__name__, "OUTPUT_ACTION_ALLOWLIST"):
                 continue
             if result is None or getattr(result, "error", None):
                 continue

@@ -32,7 +32,7 @@ def test_lock_was_compiled_for_the_pyproject_python_floor():
     floor = _floor()
     header = _lock_header()
     assert f"--python-version {floor}" in header, (
-        f"regenerate with `python scripts/gen_lazy_closures.py --relock` (it runs "
+        f"regenerate with `python devtools/gen_lazy_closures.py --relock` (it runs "
         f"uv pip compile over pyproject.toml + packs/*/pyproject.toml with --all-extras "
         f"--universal --python-version {floor}); header was:\n{header}"
     )

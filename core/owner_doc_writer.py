@@ -74,9 +74,7 @@ class OwnerDocWriter(SelfContextWriter):
         a quarantined write, else the active doc). Fail-open to the body as given:
         superseding is bookkeeping, and a fault in it must not block a rule."""
         try:
-            from core.doc_claims import carry_superseded, owner_rules_supersede
-            if not owner_rules_supersede():
-                return body
+            from core.doc_claims import carry_superseded
             quarantine = self._resolve_pending(created_by, pending)
             old = self._provenance_baseline(uid, quarantine=quarantine)
             return carry_superseded(old, body, observed_at=observed_at)
@@ -87,12 +85,32 @@ class OwnerDocWriter(SelfContextWriter):
         """The cap counts the ACTIVE rules only; the superseded section has its own
         bound (``doc_claims.SUPERSEDED_MAX_CHARS``) and is never injected."""
         try:
-            from core.doc_claims import owner_rules_supersede, split_superseded
-            if owner_rules_supersede():
-                return len(split_superseded(body)[0])
+            from core.doc_claims import split_superseded
+            return len(split_superseded(body)[0])
         except Exception:
             pass
         return len(body)
+
+    # --- patch scope + cap detail (2026-10-11) ---------------------------------
+
+    _PATCH_SCOPE = "the active rules"
+
+    def _patch_split(self, text: str):
+        """A patch edits the ACTIVE rules; ``## Superseded`` is frozen history."""
+        from core.doc_claims import split_superseded_raw
+        return split_superseded_raw(text)
+
+    def _cap_detail(self, body: str) -> str:
+        """Name the largest active rules, so the tightening has a target."""
+        try:
+            from core.doc_claims import split_superseded
+            active = split_superseded(body)[0]
+            rules = [l.strip() for l in active.split("\n\n") if l.strip()]
+            rules.sort(key=len, reverse=True)
+            top = [f"{len(r)} chars: {r[:60]}…" for r in rules[:3]]
+            return (" Largest active rules — " + " | ".join(top)) if top else ""
+        except Exception:
+            return ""
 
     # --- review flag (owner-doc-specific) ------------------------------------
 

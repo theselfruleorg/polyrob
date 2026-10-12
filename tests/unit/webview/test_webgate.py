@@ -26,14 +26,23 @@ def test_is_multitenant_default_off(webgate):
     assert webgate.is_multitenant() is False
 
 
-@pytest.mark.parametrize("val", ["1", "true", "TRUE", "yes", "on", " On "])
-def test_is_multitenant_truthy(webgate, monkeypatch, val):
-    monkeypatch.setenv("WEBGATE_MULTITENANT", val)
+def test_is_multitenant_from_posture(webgate, monkeypatch):
+    monkeypatch.setenv("POLYROB_POSTURE", "multitenant")
     assert webgate.is_multitenant() is True
 
 
+@pytest.mark.parametrize("val", ["1", "true", "TRUE", "yes", "on", " On "])
+def test_retired_webgate_multitenant_alone_refuses(webgate, monkeypatch, val):
+    # WEBGATE_MULTITENANT was retired in 1.4: set alone (truthy) it refuses
+    # instead of silently landing a multitenant deploy on "local".
+    from core.config_policy.retired_flags import RetiredFlagError
+    monkeypatch.setenv("WEBGATE_MULTITENANT", val)
+    with pytest.raises(RetiredFlagError, match="POLYROB_POSTURE"):
+        webgate.posture()
+
+
 @pytest.mark.parametrize("val", ["0", "false", "no", "off", ""])
-def test_is_multitenant_falsey(webgate, monkeypatch, val):
+def test_retired_webgate_multitenant_falsey_is_ignored(webgate, monkeypatch, val):
     monkeypatch.setenv("WEBGATE_MULTITENANT", val)
     assert webgate.is_multitenant() is False
 
@@ -43,7 +52,7 @@ def test_bind_host_loopback_when_single_user(webgate):
 
 
 def test_bind_host_all_interfaces_when_multitenant(webgate, monkeypatch):
-    monkeypatch.setenv("WEBGATE_MULTITENANT", "true")
+    monkeypatch.setenv("POLYROB_POSTURE", "multitenant")
     assert webgate.bind_host() == "0.0.0.0"
 
 
@@ -51,7 +60,7 @@ def test_bind_host_env_override_wins(webgate, monkeypatch):
     monkeypatch.setenv("WEBGATE_HOST", "10.0.0.5")
     assert webgate.bind_host() == "10.0.0.5"
     # Even in multitenant mode, the explicit override still wins.
-    monkeypatch.setenv("WEBGATE_MULTITENANT", "true")
+    monkeypatch.setenv("POLYROB_POSTURE", "multitenant")
     assert webgate.bind_host() == "10.0.0.5"
 
 
@@ -118,15 +127,11 @@ def test_posture_explicit_env_case_insensitive(webgate, monkeypatch, val, expect
     assert webgate.posture() == expected
 
 
-def test_posture_explicit_env_wins_over_webgate_multitenant(webgate, monkeypatch):
+def test_posture_explicit_env_wins_over_retired_webgate_multitenant(webgate, monkeypatch):
+    # Both set: the canonical name wins and the stale alias line does not refuse.
     monkeypatch.setenv("POLYROB_POSTURE", "local")
     monkeypatch.setenv("WEBGATE_MULTITENANT", "true")
     assert webgate.posture() == "local"
-
-
-def test_posture_backcompat_webgate_multitenant_true(webgate, monkeypatch):
-    monkeypatch.setenv("WEBGATE_MULTITENANT", "true")
-    assert webgate.posture() == "multitenant"
 
 
 def test_posture_derives_own_ops_from_nonloopback_host_override(webgate, monkeypatch):
@@ -241,18 +246,9 @@ def test_invalid_posture_logs_warning_and_still_derives(webgate, monkeypatch, ca
     monkeypatch.setenv("POLYROB_POSTURE", "own-ops")  # typo: dash instead of underscore
     with caplog.at_level("WARNING", logger="webview.webgate"):
         result = webgate.posture()
-    # No host override, WEBGATE_MULTITENANT unset -> derivation falls to "local".
+    # No host override -> derivation falls to "local".
     assert result == "local"
     assert any("own-ops" in rec.message for rec in caplog.records), caplog.text
-
-
-def test_invalid_posture_warning_then_derives_multitenant(webgate, monkeypatch, caplog):
-    monkeypatch.setenv("POLYROB_POSTURE", "bogus")
-    monkeypatch.setenv("WEBGATE_MULTITENANT", "true")
-    with caplog.at_level("WARNING", logger="webview.webgate"):
-        result = webgate.posture()
-    assert result == "multitenant"
-    assert any("bogus" in rec.message for rec in caplog.records), caplog.text
 
 
 def test_valid_posture_does_not_warn(webgate, monkeypatch, caplog):

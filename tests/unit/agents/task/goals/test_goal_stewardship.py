@@ -60,7 +60,7 @@ def test_autonomy_runtime_runs_the_sweep(tmp_path, monkeypatch):
     """start_autonomy must sweep the goal board at boot (mirrors its existing
     cold-start sweeps for docker orphans + delegations)."""
     import inspect
-    import core.autonomy_runtime as rt
+    import polyrob.app.autonomy_runtime as rt
     src = inspect.getsource(rt)
     assert "requeue_running_on_boot" in src
 

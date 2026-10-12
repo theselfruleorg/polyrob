@@ -1,7 +1,7 @@
 """066 P1 — the shipped closures and requirements.txt equal what the lock says.
 
 The same both-generators discipline as the flag catalog: `requirements.lock`
-changes -> `python scripts/gen_lazy_closures.py` in the SAME commit, or this fails.
+changes -> `python devtools/gen_lazy_closures.py` in the SAME commit, or this fails.
 Regenerates in memory from ``core.lock_closure`` (no ``scripts/`` import: that
 tree does not ship in the public package).
 """
@@ -15,7 +15,7 @@ from core.lazy_closures import closure_dir, read_closure, shipped_lock_digest
 from core.lazy_deps import LAZY_DEPS, _dist_name
 
 ROOT = Path(__file__).resolve().parents[3]
-REGEN = "python scripts/gen_lazy_closures.py"
+REGEN = "python devtools/gen_lazy_closures.py"
 
 
 @pytest.fixture(scope="module")
@@ -45,7 +45,7 @@ def test_the_lock_compiles_the_core_pyproject_with_the_one_command(lock_text, lo
     header = lock_text.splitlines()[1]
     assert header == "#    " + " ".join(lc.lock_command(ROOT)), (
         f"requirements.lock was not compiled by the current command; run "
-        f"`python scripts/gen_lazy_closures.py --relock`")
+        f"`python devtools/gen_lazy_closures.py --relock`")
     assert "polyrob" not in lock.entries and "pandas" not in lock.entries
 
 

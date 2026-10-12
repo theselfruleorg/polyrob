@@ -98,11 +98,11 @@ def code_exec_docker_persistent_enabled() -> bool:
 
     WS-1 (compute posture): the DEFAULT flips to True at ``AGENT_COMPUTE_POSTURE
     >= 1`` — sandbox-dev installs must survive across ``run_code`` calls, which
-    requires the persistent container. An explicit env value (either way) still
-    wins; posture 0 keeps the historical default OFF.
+    requires the persistent container. A ``POLYROB_OVERRIDES`` entry (either way)
+    still wins; posture 0 keeps the historical default OFF.
     """
-    from core.config_policy import posture_flag
-    return posture_flag("CODE_EXEC_DOCKER_PERSISTENT", 1)
+    from core.config_policy import member_flag
+    return member_flag("CODE_EXEC_DOCKER_PERSISTENT")
 
 
 def resolve_backend(

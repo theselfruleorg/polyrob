@@ -8,7 +8,7 @@ already made for ``/launch``/``/deploy``.
 Renders the registry's ``group``/``help_long``/``elsewhere`` metadata
 (``cli/ui/commands/registry.py::Command``):
 
-- No argument → the grouped catalog. ``docs/design/040/cli/help-grouped-80.txt``
+- No argument → the grouped catalog. The interface design's grouped-help mockup
   is the specification: ten groups (:data:`~cli.ui.commands.registry.GROUP_ORDER`),
   names only, wrapped at the terminal width. Only REGISTERED verbs render —
   the mockup lists a few verbs that don't have a REPL command yet.
@@ -175,7 +175,7 @@ def _default_registry():
 # (still an honest answer — R14 asks for SOME answer for every verb, not a
 # long-form one for every verb).
 #
-# ``pause`` is the ``docs/design/040/cli/help-verb-80.txt`` mockup, verbatim —
+# ``pause`` is the interface design's per-verb help mockup, verbatim —
 # including its closing "Lift it with /resume…" sentence — so ``elsewhere``
 # stays empty for it rather than splitting that sentence out under a second
 # "Elsewhere:" label the mockup doesn't show.
@@ -224,6 +224,28 @@ HELP_TEXT: Dict[str, Tuple[str, str]] = {
         "  pick. Same effect as /pause with nothing after it — everything\n"
         "  in-flight is cancelled and put back on the board.",
         "/halt works the same in chat, on Telegram and here; plain words are never a command.",
+    ),
+    "restart": (
+        "  Restart the background service — the process that runs your chats\n"
+        "  and background work. It finishes its current work first (up to\n"
+        "  10 minutes), restarts, and tells you its version when it is back.\n"
+        "  Confirm with the button it shows, or type the line it prints.\n"
+        "\n"
+        "    /restart        once the current work is done\n"
+        "    /restart now    at once, even in the middle of work\n"
+        "\n"
+        "  This REPL keeps its own code until you leave it and start it again.",
+        "/restart in chat; `polyrob service restart` in a shell.",
+    ),
+    "update": (
+        "  Update the background service to the latest release. It finishes\n"
+        "  its current work, restarts, takes a snapshot, installs, migrates\n"
+        "  and verifies, then starts the new version. Any failure — or a new\n"
+        "  version that does not start — rolls back.\n"
+        "\n"
+        "    /update         the latest release\n"
+        "    /update pre     include pre-releases",
+        "/update in chat; `polyrob update --apply` in a shell.",
     ),
     "pending": (
         "  I sometimes write things I don't apply until you look at them: a\n"

@@ -12,7 +12,7 @@ import time
 
 import pytest
 
-from agents.task.constants import AutonomyConfig
+from core.config_policy import AutonomyConfig
 from cron.jobs import CronJob
 from cron.wake_gate import (
     WakeGateStore,

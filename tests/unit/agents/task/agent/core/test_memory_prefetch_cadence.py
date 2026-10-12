@@ -37,7 +37,7 @@ class _Agent(mp.MemoryPrefetchMixin):
 @pytest.fixture
 def _stub_build(monkeypatch):
     """Make build_prefetch_message return a sentinel so a fire => one push."""
-    async def _fake(query, *, session_id, user_id=None):
+    async def _fake(query, *, session_id, user_id=None, seen=None):
         return object()  # non-None -> mixin pushes it
 
     monkeypatch.setattr(mp, "build_prefetch_message", _fake)
@@ -75,7 +75,7 @@ async def test_cadence_two_fires_on_even_steps(monkeypatch, _stub_build):
 async def test_no_provider_message_never_raises(monkeypatch):
     monkeypatch.setattr(mp, "memory_prefetch_cadence", lambda **kw: 2)
 
-    async def _none(query, *, session_id, user_id=None):
+    async def _none(query, *, session_id, user_id=None, seen=None):
         return None
 
     monkeypatch.setattr(mp, "build_prefetch_message", _none)

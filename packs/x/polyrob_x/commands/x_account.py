@@ -60,14 +60,14 @@ def _bind_home(verb: str) -> None:
     deployed box the key + owner id must come from the service env; the
     resolved home is exported so the token store, the browser-session store
     and ``verdicts.db`` all resolve there."""
-    from cli import _admin_home as ah
+    from polyrob import sdk
     write = verb not in _READ_ONLY_VERBS
-    if not ah._deployed_box():
+    if not sdk.deployed_box():
         return
     missing = [k for k in _DEPLOYED_REQUIRED_ENV if not (os.environ.get(k) or "").strip()]
     if missing:
         raise click.ClickException(_deployed_env_remedy(missing, verb))
-    path = ah.admin_data_dir(write=write)
+    path = sdk.admin_data_dir(write=write)
     if path and not (os.environ.get("POLYROB_DATA_DIR") or "").strip():
         os.environ["POLYROB_DATA_DIR"] = str(path)
 
@@ -76,7 +76,7 @@ def _bind_home(verb: str) -> None:
 @click.pass_context
 def x_account(ctx):
     """Manage the agent's own X (x.com) browser account."""
-    from cli.commands._bootstrap import ensure_env_loaded
+    from polyrob.sdk import ensure_env_loaded
     ensure_env_loaded()
     _bind_home(ctx.invoked_subcommand or "")
 

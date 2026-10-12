@@ -9,8 +9,8 @@ import pytest
 
 from agents.task.agent.core.result_processing import ResultProcessingMixin
 from agents.task.agent.views import AgentBrain, AgentOutput
-from tools.controller.registry.views import ActionModel
-from tools.controller.types import ActionResult
+from agents.task.loop_types.registry_views import ActionModel
+from agents.task.loop_types.controller_types import ActionResult
 
 
 class _CapturingMM:

@@ -69,7 +69,7 @@ async def test_mark_episode_surfaced_sets_flag(provider):
     try:
         import os
         os_env = os.environ
-        os_env["EPISODIC_MEMORY_ENABLED"] = "true"
+        os_env["POLYROB_OVERRIDES"] = "EPISODIC_MEMORY_ENABLED=true"
         await finalize_episode(session_id="s1", user_id="u1", kind="goal", outcome="done")
         provider.mark_episode_surfaced(session_id="s1")
         # exclude_surfaced=True must now omit this row
@@ -79,7 +79,7 @@ async def test_mark_episode_surfaced_sets_flag(provider):
         out_all = await provider.recall_episodes(user_id="u1", limit=5)
         assert len(out_all) == 1
     finally:
-        os_env.pop("EPISODIC_MEMORY_ENABLED", None)
+        os_env.pop("POLYROB_OVERRIDES", None)
         reg.reset_memory_registry()
 
 
@@ -124,12 +124,12 @@ async def test_digest_excludes_surfaced(provider):
 
     reg.reset_memory_registry()
     reg.set_external_memory_provider(provider)
-    os.environ["EPISODIC_MEMORY_ENABLED"] = "true"
+    os.environ["POLYROB_OVERRIDES"] = "EPISODIC_MEMORY_ENABLED=true"
     try:
         await finalize_episode(session_id="s", user_id="u1", kind="goal", outcome="done")
         provider.mark_episode_surfaced(session_id="s")
         out = await provider.recall_episodes(user_id="u1", exclude_surfaced=True, limit=5)
         assert out == []
     finally:
-        os.environ.pop("EPISODIC_MEMORY_ENABLED", None)
+        os.environ.pop("POLYROB_OVERRIDES", None)
         reg.reset_memory_registry()

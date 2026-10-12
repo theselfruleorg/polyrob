@@ -204,7 +204,7 @@ def effective_approval_state(user_id: Optional[str], home_dir) -> tuple:
 
 def _refreeze_approval_flags_for_tests() -> None:
     """Re-snapshot from the current env. Callers: tests, and — when this module
-    was imported before env-file layering — ``core.bootstrap.load_env``'s
+    was imported before env-file layering — ``polyrob.app.bootstrap.load_env``'s
     once-per-process refreeze (026 P1.1), which fires before any agent exists."""
     global _FROZEN_APPROVAL_REQUIRED_TOOLS, _FROZEN_APPROVAL_PROVIDER, \
         _FROZEN_APPROVAL_TIMEOUT_SEC
@@ -389,16 +389,13 @@ def get_approval_provider_or_deny(name: Optional[str], *, user_id: Optional[str]
 
 
 def _emit_approval_event(kind: str, action_name: str, context: Any, **fields: Any) -> None:
-    """Emit a 019 approval wait-state feed event (fail-open, flag-gated).
+    """Emit a 019 approval wait-state feed event (fail-open).
 
     The approval layer holds no TelemetryManager, so this routes through the
     manager-free ``emit_feed_event`` seam; the event carries its own session_id
     (from the execution context) or is dropped.
     """
     try:
-        from core.config_policy import AutonomyConfig
-        if not AutonomyConfig.run_events_enabled():
-            return
         session_id = getattr(context, "session_id", None)
         if not session_id:
             return

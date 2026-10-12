@@ -1,7 +1,7 @@
 """Unit tests for the ``EIP8004_PAYMENT_FEEDBACK`` flag helper (Task 15,
 Phase 4). It rides ``EIP8004_ENABLED`` — both must be explicitly on.
 """
-from agents.task.constants import eip8004_payment_feedback_enabled
+from core.config_policy import eip8004_payment_feedback_enabled
 
 
 def test_off_by_default(monkeypatch):

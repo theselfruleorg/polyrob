@@ -156,7 +156,7 @@ class TestOptionalToolInitOrderVisibility:
         """Guard against a regression back to the frozen constant: the source of
         initialize_tools must call get_tool_init_order(), not iterate TOOL_INIT_ORDER."""
         import inspect
-        import core.initialization as init_mod
+        import polyrob.app.initialization as init_mod
 
         src = inspect.getsource(init_mod.initialize_tools)
         assert "get_tool_init_order()" in src

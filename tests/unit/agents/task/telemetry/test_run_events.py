@@ -5,7 +5,6 @@ approval_resolved) must:
 - carry their payloads through the formatter registry (never the generic
   fallback),
 - join tool spans via ``call_id`` (also added to tool_execution),
-- be gated by ``RUN_EVENTS_ENABLED`` at the emit helpers, and
 - render on every surface (the no-dark-kinds contract: CLI normalize typed,
   webview summarize branch, formatter registered).
 """
@@ -165,7 +164,6 @@ def _fake_controller():
 
 
 def test_capture_tool_started_emits(monkeypatch):
-    monkeypatch.delenv("RUN_EVENTS_ENABLED", raising=False)
     ctl = _fake_controller()
     ctl._capture_tool_started(
         action_name="navigate", tool_name="browser", params={"url": "u"},
@@ -178,17 +176,7 @@ def test_capture_tool_started_emits(monkeypatch):
     )
 
 
-def test_capture_tool_started_gated_off(monkeypatch):
-    monkeypatch.setenv("RUN_EVENTS_ENABLED", "false")
-    ctl = _fake_controller()
-    ctl._capture_tool_started(
-        action_name="navigate", tool_name="browser", params={}, call_id=None,
-    )
-    ctl.orchestrator.telemetry_manager.capture_tool_started.assert_not_called()
-
-
 def test_capture_tool_started_never_raises_without_orchestrator(monkeypatch):
-    monkeypatch.delenv("RUN_EVENTS_ENABLED", raising=False)
     from tools.controller.execution import ExecutionMixin
 
     ctl = SimpleNamespace(orchestrator=None, logger=MagicMock())
@@ -246,8 +234,7 @@ def test_dummy_telemetry_manager_swallows_any_capture():
 
 
 def test_emit_retry_wait_helper(monkeypatch):
-    """error_recovery._emit_retry_wait builds a RetryWaitEvent (flag-gated)."""
-    monkeypatch.delenv("RUN_EVENTS_ENABLED", raising=False)
+    """error_recovery._emit_retry_wait builds a RetryWaitEvent."""
     from agents.task.agent.core.error_recovery import ErrorRecoveryMixin
     from agents.task.telemetry.views import RetryWaitEvent
 
@@ -263,8 +250,3 @@ def test_emit_retry_wait_helper(monkeypatch):
     assert isinstance(event, RetryWaitEvent)
     assert (event.reason, event.delay_sec, event.provider, event.attempt) == (
         "rate_limit", 8.0, "anthropic", 2)
-
-    monkeypatch.setenv("RUN_EVENTS_ENABLED", "0")
-    agent.telemetry_manager.reset_mock()
-    agent._emit_retry_wait("rate_limit", 8.0)
-    agent.telemetry_manager.capture_event.assert_not_called()

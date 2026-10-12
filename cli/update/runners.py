@@ -15,7 +15,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Tuple
 
 from cli.update.detect import EDITABLE_GIT, GIT, InstallContext
 from cli.update.engine import UpdateRunners
@@ -30,7 +30,7 @@ CaptureFn = Callable[[List[str], Optional[Path]], str]
 #: These three are load-bearing, not decoration: the brand mark is the invoice
 #: card's header when the instance has no avatar, and the two DejaVu faces are
 #: what keep an invoice card from rendering in PIL's default bitmap font. Pinned
-#: alongside `tests/test_shipped_assets_ratchet.py`, which enforces the same
+#: alongside `ops/tests/test_shipped_assets_ratchet.py`, which enforces the same
 #: files at the declaration level.
 #: ⚠️ `sys.exit(...) if missing else None`, NOT `raise ... if missing else None`
 #: — the latter parses as `raise (X if missing else None)` and raises None,
@@ -98,6 +98,7 @@ def build_runners(
     capture: Optional[CaptureFn] = None,
     extras: Optional[List[str]] = None,
     packs: Optional[List[str]] = None,
+    restore_to: Optional[Tuple[str, str]] = None,
 ) -> Optional[UpdateRunners]:
     """Build real runners for a self-updatable git/editable install, else ``None``.
 
@@ -111,6 +112,12 @@ def build_runners(
     would pull unreviewed HEAD — neither is what a release update means. ``target_ref``
     is ``None`` only for the explicit ``--channel git`` branch-tracking mode, which keeps
     the ``git pull --ff-only`` fast-forward.
+
+    ``restore_to=(sha, branch)`` (077): runners whose ``rollback_code`` returns the
+    checkout to a commit an EARLIER process moved away from — the boot step's
+    rollback of an update whose new code never started. ``state`` carries the
+    ``old_sha``/``old_branch`` an ``install()`` recorded, so that later process
+    knows where to go back to.
     """
     if install_ctx.method not in (GIT, EDITABLE_GIT) or not install_ctx.repo_root:
         return None
@@ -180,6 +187,10 @@ def build_runners(
     old_branch = None
     mutated = False
     pip_attempted = False
+    if restore_to is not None:
+        old_sha, old_branch = restore_to
+        mutated = pip_attempted = True
+    state: dict = {}
 
     def install() -> None:
         nonlocal old_sha, old_branch, mutated, pip_attempted
@@ -191,6 +202,7 @@ def build_runners(
             raise RuntimeError("checkout has local changes; commit or stash them before updating")
         old_sha = _capture(["git", "rev-parse", "HEAD"], repo)
         old_branch = _capture(["git", "rev-parse", "--abbrev-ref", "HEAD"], repo)
+        state.update(old_sha=old_sha, old_branch=old_branch)
         if target_ref:
             # Tag-pinned release update: fetch the new tags and move (detached) HEAD to
             # the released tag. Works whether HEAD was detached (prod) or on a branch.
@@ -217,7 +229,7 @@ def build_runners(
         # extra — a bare `import core, cli.polyrob` passed happily on an install
         # that had lost one of them.
         _run([py, "-I", "-c", "import core, core.avatar, cli.polyrob, modules.llm.llm_factory, tools.filesystem, "
-                              "modules.memory.task, modules.cards.cards, utils.gif_utils, "
+                              "modules.memory.task, modules.cards.cards, agents.task.gif_utils, "
                               "tools.document_parser, core.lazy_deps"], repo)
         # …and the runtime ASSETS must have landed with it. An import-only check
         # passes happily on an install that lost a package-data glob: the
@@ -241,4 +253,4 @@ def build_runners(
             _pip_install()
 
     return UpdateRunners(install=install, migrate=migrate,
-                         verify=verify, rollback_code=rollback_code)
+                         verify=verify, rollback_code=rollback_code, state=state)

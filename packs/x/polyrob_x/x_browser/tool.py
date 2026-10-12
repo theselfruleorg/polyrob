@@ -20,7 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from core.config import BotConfig
 from polyrob_x.write_budget import reserve_write
 from tools.base_tool import BaseTool
-from tools.controller.types import ActionResult
+from agents.task.loop_types.controller_types import ActionResult
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +119,7 @@ def _proof(rail: str, **facts) -> str:
     into an error, and a silent empty line loses nothing the post already said.
     """
     try:
-        from core.rails.verification import verification_line
+        from tools.rails.verification import verification_line
         return verification_line(rail, **facts)
     except Exception:
         return ""
@@ -127,15 +127,8 @@ def _proof(rail: str, **facts) -> str:
 
 def _leaf_or_forged(execution_context) -> bool:
     """True for a delegated/leaf/forged turn — never let one drive X."""
-    if execution_context is None:
-        return True
-    if getattr(execution_context, "is_sub_agent", False):
-        return True
-    if getattr(execution_context, "role", "leaf") != "orchestrator":
-        return True
-    md = getattr(execution_context, "metadata", None) or {}
-    from core.security.forged_turns import FORGED_TURN_KINDS
-    return md.get("turn_kind") in FORGED_TURN_KINDS
+    from polyrob.sdk import is_leaf_or_forged   # W5: the ONE owner-turn definition
+    return is_leaf_or_forged(execution_context)
 
 
 class XBrowserTool(BaseTool):
@@ -244,7 +237,7 @@ class XBrowserTool(BaseTool):
                 include_in_memory=True)
         finally:
             await self._run_release(release)
-        # 057 WS-E: the proof rule rides with the receipt (core/rails/verification.py).
+        # 057 WS-E: the proof rule rides with the receipt (tools/rails/verification.py).
         return ActionResult(
             extracted_content=f"posted to X: {url}\n{_proof('x_post', url=url)}",
             include_in_memory=True)

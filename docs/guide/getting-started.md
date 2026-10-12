@@ -338,7 +338,8 @@ the autonomy loops alive:
 
 ```bash
 polyrob service install    # systemd user unit (Linux) or launchd agent (macOS)
-polyrob service status     # installed? running? which surfaces would start?
+polyrob service status     # running? which version? anything waiting for a restart?
+polyrob service restart    # finish the current work, restart, report the version
 polyrob service uninstall  # stop and remove it; your data is untouched
 ```
 
@@ -349,6 +350,11 @@ profile, if one is active) explicitly, because a systemd user unit inherits noth
 from your shell.
 
 The installer offers this at the end when the wizard configured a chat surface.
+
+From your chat, `/restart` and `/update` do the same (owner-only, confirmed with a
+button) and answer "back online on <version>" when the service is back. How a
+restart waits for the current work, and running it as root on a server:
+[operate-the-service.md](operate-the-service.md).
 
 ---
 
@@ -387,7 +393,10 @@ that method and exits non-zero rather than pretending — `pipx upgrade polyrob`
 pipx install, for example. Schema migrations run on the next start either way. Every
 `--apply` takes a WAL-safe snapshot first, and `--rollback` needs one of those (or a
 boot migration's) to exist; what a snapshot covers and what `--rollback` restores are
-in [upgrading.md](upgrading.md#the-safety-net). Options in full:
+in [upgrading.md](upgrading.md#the-safety-net). With the background service
+running, `--apply` goes through it: the service finishes its work, restarts and
+applies the update as it starts, then reports — the same as `/update` in chat
+([operate-the-service.md](operate-the-service.md)). Options in full:
 [cli.md](cli.md#polyrob-update).
 
 ---

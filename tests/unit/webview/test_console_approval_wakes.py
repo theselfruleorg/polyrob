@@ -6,7 +6,7 @@ tool call from the console, the deciding process holds NO ``task_agent`` that ow
 the asking session — and ``deliver_self_wake`` refuses a remote session by design.
 
 The honest shape (``tools/controller/approval_queue.py::decide_tool_approval`` +
-``core/wake_queue.py`` + the ``core/autonomy_runtime.py`` wake-drain tick):
+``core/wake_queue.py`` + the ``polyrob/app/autonomy_runtime.py`` wake-drain tick):
   * a cross-process approval writes a DURABLE wake row for the owning process;
   * a same-process approval (the agent owns the session, resident here) wakes it
     in-process, no durable row;
@@ -157,7 +157,7 @@ async def test_same_process_owner_wakes_in_process_no_durable_row(board):
 async def test_the_owning_process_tick_drains_and_delivers_the_wake(board, tmp_path):
     """End-to-end: a cross-process approval enqueues a row; the OWNING process's
     wake-drain tick claims it and delivers it in-process via deliver_self_wake."""
-    from core.autonomy_runtime import _build_wake_drain_ticker
+    from polyrob.app.autonomy_runtime import _build_wake_drain_ticker
     ask = _tool_ask(board, session_id="sD")
     decide_tool_approval(board, tap_display_id(ask.id), user_id="u1",
                          approved=True, task_agent=None)
@@ -177,7 +177,7 @@ async def test_an_undeliverable_wake_is_dropped_after_the_attempt_cap(board, tmp
     """A wake that never delivers (self-wake off / session gone / paused) is
     retried then DROPPED — the grant is durable, so a lost nudge is safe. It is
     never retried forever."""
-    from core.autonomy_runtime import _build_wake_drain_ticker
+    from polyrob.app.autonomy_runtime import _build_wake_drain_ticker
     from core.wake_queue import WAKE_MAX_ATTEMPTS
 
     class _NeverDelivers(_Agent):

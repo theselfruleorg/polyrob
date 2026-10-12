@@ -391,7 +391,7 @@ async def apply_settlement(subscription_id: str, request_id: str, *, db=None) ->
         # the SHARED bot.db connection for every other x402/credits/
         # user_profiles write forever (no more auto-commit) until process
         # restart. `except (asyncio.CancelledError, Exception)` (mirrors
-        # core/tickers.py + core/autonomy_runtime.py's own idiom) still
+        # core/tickers.py + polyrob/app/autonomy_runtime.py's own idiom) still
         # rolls back and re-raises — cancellation is never swallowed, it
         # just no longer bypasses cleanup.
         await transaction.rollback()

@@ -29,7 +29,7 @@ def test_compute_tools_follow_the_flags_not_only_the_posture(monkeypatch):
     monkeypatch.setenv("CODE_EXEC_ENABLED", "false")
     monkeypatch.setenv("SHELL_TOOLS_ENABLED", "false")
     monkeypatch.setenv("CODING_TOOLS_ENABLED", "true")
-    monkeypatch.setattr("agents.task.constants.compute_posture", lambda: 1)
+    monkeypatch.setattr("core.config_policy.compute_posture", lambda: 1)
     tools = td.with_compute_tools(["filesystem", "task"])
     assert "coding" in tools
     assert "code_execution" not in tools and "shell" not in tools
@@ -40,7 +40,7 @@ def test_compute_tools_all_on_when_flags_on(monkeypatch):
     monkeypatch.setenv("CODE_EXEC_ENABLED", "true")
     monkeypatch.setenv("SHELL_TOOLS_ENABLED", "true")
     monkeypatch.setenv("CODING_TOOLS_ENABLED", "true")
-    monkeypatch.setattr("agents.task.constants.compute_posture", lambda: 1)
+    monkeypatch.setattr("core.config_policy.compute_posture", lambda: 1)
     tools = td.with_compute_tools(["filesystem"])
     assert {"code_execution", "shell", "coding"} <= set(tools)
 
@@ -49,7 +49,7 @@ def test_posture_zero_adds_nothing(monkeypatch):
     from agents.task import tool_defaults as td
     monkeypatch.setenv("CODE_EXEC_ENABLED", "true")
     monkeypatch.setenv("SHELL_TOOLS_ENABLED", "true")
-    monkeypatch.setattr("agents.task.constants.compute_posture", lambda: 0)
+    monkeypatch.setattr("core.config_policy.compute_posture", lambda: 0)
     assert td.with_compute_tools(["filesystem"]) == ["filesystem"]
 
 
@@ -88,7 +88,7 @@ def test_default_goal_tools_use_the_effective_set(monkeypatch):
     monkeypatch.setenv("STABLE_AUTONOMOUS_TOOLSET", "false")  # legacy drop; default freezes
     monkeypatch.delenv("EMAIL_PROVIDER", raising=False)
     monkeypatch.delenv("AGENTMAIL_API_KEY", raising=False)
-    monkeypatch.setattr("agents.task.constants.full_autonomy_enabled", lambda: True)
+    monkeypatch.setattr("core.config_policy.full_autonomy_enabled", lambda: True)
     _reject_smtp()
     try:
         assert "email" not in d.default_goal_tools()

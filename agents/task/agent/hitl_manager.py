@@ -12,7 +12,7 @@ from collections import deque
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 
-# Stream scrubbing is mandatory; the legacy STREAM_BRAIN_SCRUB toggle is ignored.
+# Stream scrubbing is mandatory; there is no toggle.
 
 
 class HITLManager:

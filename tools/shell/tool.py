@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from tools.base_tool import BaseTool
 from tools.code_exec.limits import dev_exec_max_timeout_sec
-from tools.controller.types import ActionResult
+from agents.task.loop_types.controller_types import ActionResult
 from tools.shell.state import ShellState
 from tools.shell.discipline import background_nudge
 from tools.shell.process_registry import get_process_registry

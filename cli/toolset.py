@@ -37,7 +37,7 @@ def resolve_tool_list(
     from core.packs.loader import load_packs
     load_packs()
     from agents.task.tool_defaults import cli_default_tools, resolve_toolset
-    from core.bootstrap import cli_unavailable_tools
+    from core.cli_tool_tables import cli_unavailable_tools
 
     notes: list[str] = []
 

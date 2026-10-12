@@ -20,6 +20,8 @@ signs inside the SDK; the handoff is the pinned site.
 import ast
 import pathlib
 
+from tests.support.repo_index import repo_index
+
 REPO = pathlib.Path(__file__).resolve().parents[4]
 ROOTS = ("core", "modules", "agents", "tools", "api", "cli", "surfaces",
          "webview", "cron", "packs")
@@ -83,9 +85,9 @@ ALLOWED = {
         "feeds the sweeper only (TREASURY_SWEEPER_ENABLED)"),
     # -- EVM money verbs: tx_guard.authorize --------------------------------
     ("tools/defi/trade_tool.py", "DefiTradeTool._run_guarded", "sign_and_send"): _TX_GUARD,
-    ("tools/defi/trade_tool.py", "DefiTradeTool.transfer", "sign_and_send"): _TX_GUARD,
-    ("tools/defi/trade_tool.py", "DefiTradeTool.wrap", "sign_and_send"): _TX_GUARD,
-    ("tools/defi/trade_tool.py", "DefiTradeTool.unwrap", "sign_and_send"): _TX_GUARD,
+    ("tools/defi/transfer_verb.py", "perform_transfer", "sign_and_send"): _TX_GUARD,
+    ("tools/defi/wrap_verb.py", "perform_wrap", "sign_and_send"): _TX_GUARD,
+    ("tools/defi/wrap_verb.py", "perform_unwrap", "sign_and_send"): _TX_GUARD,
     ("tools/defi/call_verb.py", "perform_call", "sign_and_send"): _TX_GUARD,
     ("tools/defi/deploy_verb.py", "_perform_deploy", "sign_and_send"): (
         _TX_GUARD + "; refuses without a measured gas figure"),
@@ -94,17 +96,23 @@ ALLOWED = {
     ("tools/defi/bridge_evm_leg.py", "EvmOriginLeg.send", "sign_and_send"): (
         "bridge EVM origin: prepare() ran tx_guard; perform_bridge holds the owner "
         "queue above the ceiling and re-checks gate.check inside gate.reserve()"),
+    ("tools/defi/bridge_evm_leg.py", "EvmTokenOriginLeg.send", "sign_and_send"): (
+        "pinned-USDC bridge origin: the exact approve ran tx_guard in prepare() (lane "
+        "held by perform_bridge inside gate.reserve()); the deposit runs tx_guard "
+        "again after the approval lands, before it is signed"),
+    ("tools/defi/bridge_evm_leg.py", "EvmTokenOriginLeg._revoke", "sign_and_send"): (
+        _TX_GUARD + "; approve(depository, 0) after a refused/failed deposit"),
     ("tools/launchpad/execute.py", "guarded_send", "sign_and_send"): _TX_GUARD,
     ("tools/agent_nft/guarded.py", "guarded_call", "sign_and_send"): _TX_GUARD,
     ("tools/agent_nft/reveal.py", "run", "sign_and_send"): _TX_GUARD,
     ("tools/dapp_browser/bridge.py", "WalletBridge._attempt", "sign_and_send"): (
         _TX_GUARD + "; page value declared as the only outflow, session budget"),
     # -- SVM money verbs ---------------------------------------------------
-    ("tools/defi/trade_tool.py", "DefiTradeTool._solana_send", "sign_transaction"): (
+    ("tools/defi/solana_rail_adapters.py", "SolanaRailMixin._solana_send", "sign_transaction"): (
         "the SVM wrapper; callers are pinned below"),
-    ("tools/defi/trade_tool.py", "DefiTradeTool._solana_send", "send_raw"): (
+    ("tools/defi/solana_rail_adapters.py", "SolanaRailMixin._solana_send", "send_raw"): (
         "the SVM wrapper; callers are pinned below"),
-    ("tools/defi/trade_tool.py", "DefiTradeTool.solana_swap", "_solana_send"): (
+    ("tools/defi/solana_swap_verb.py", "_broadcast", "_solana_send"): (
         "after _solana_turn_gate, simulation deltas and gate.check"),
     ("tools/defi/solana_send_verb.py", "perform_solana_transfer", "_solana_send"): (
         "after _solana_turn_refusal (the _solana_turn_gate mirror), simulation and gate.check"),
@@ -129,7 +137,7 @@ ALLOWED = {
 
 
 def _sites(path: pathlib.Path):
-    tree = ast.parse(path.read_text(errors="ignore"))
+    tree = repo_index().tree(path, errors="ignore")
     out = set()
 
     def visit(node, stack):

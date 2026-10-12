@@ -41,10 +41,10 @@ def test_dynamic_default_is_posture_aware(home, monkeypatch):
     assert val is False and src.startswith("default(")
     monkeypatch.setenv("POLYROB_LOCAL", "1")
     val, src = display_effective("autonomy.self_wake", "u1", home)
-    assert val is False and "autonomy=off" in src
+    assert val is False and "no bundle" in src
     monkeypatch.setenv("AUTONOMY_ENABLED", "1")
     val, src = display_effective("autonomy.self_wake", "u1", home)
-    assert val is True and "autonomy=ON" in src
+    assert val is True and "POLYROB_LOCAL + AUTONOMY_ENABLED" in src
 
 
 def test_pure_pref_key_shows_static_default(home):
@@ -72,9 +72,13 @@ def test_env_still_beats_builtin(home, monkeypatch):
 def test_every_env_backed_pref_key_is_catalog_registered():
     # The honest-default fallback resolves through core.flags — every
     # PREF_SCHEMA env_flag must therefore be a documented catalog row.
+    from core.config_policy.members import MEMBER_FLAGS
     from core.flags import REGISTRY
+    # D7: a posture member (SELF_WAKE_ENABLED, …) resolves through the member
+    # resolver instead of a catalog row.
     missing = [s.env_flag for s in PREF_SCHEMA.values()
-               if s.env_flag and s.env_flag not in REGISTRY]
+               if s.env_flag and s.env_flag not in REGISTRY
+               and s.env_flag not in MEMBER_FLAGS]
     assert not missing, f"pref env_flags absent from flags catalog: {missing}"
 
 

@@ -7,8 +7,11 @@ gated and logged:
   maintenance proposals only; they never install packages or edit live code;
 - ``self_env_read_source`` — reads bounded, install-tree-confined source with
   secrets/config hard-denied;
-- ``self_env_restart_service`` / ``self_env_git_pull`` — refuse and direct the
-  owner to the trusted update supervisor.
+- ``self_env_restart_service`` — after the owner approves the call, asks the
+  running service for a drained restart (077, ``core.lifecycle``); the service
+  finishes its work, exits 75 and its supervisor starts it again;
+- ``self_env_git_pull`` — refuses and directs the owner to ``/update`` (the
+  trusted update path: snapshot, migrate, verify, rollback).
 
 Gated by ``compute_posture_allows(ctx, 2)`` AND (via the Controller's posture-2
 approval wiring, WS-6) an owner approval decision. Registered only at
@@ -24,10 +27,11 @@ from core.env import bool_env as _bool_env
 def self_env_enabled() -> bool:
     """Whether the `self_env` tool is registered (reachable at posture>=2).
 
-    An explicit ``SELF_ENV_ENABLED`` always wins (e.g. force-off at a raised posture).
+    A ``POLYROB_OVERRIDES=SELF_ENV_ENABLED=false`` entry wins (force-off at a raised
+    posture).
     """
-    from core.config_policy import posture_flag
-    return posture_flag("SELF_ENV_ENABLED", 2)
+    from core.config_policy import member_flag
+    return member_flag("SELF_ENV_ENABLED")
 
 
 def register_self_env_tool(force: bool = False) -> bool:

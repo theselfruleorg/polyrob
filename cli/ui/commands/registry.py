@@ -118,7 +118,7 @@ Handler = Callable[[CommandContext], HandlerResult]
 
 
 #: The ten grouped-``/help`` sections (043 A13/A24), in render order — the
-#: specification is ``docs/design/040/cli/help-grouped-80.txt``. A
+#: specification is the interface design's grouped-help mockup. A
 #: ``Command.group`` outside this tuple (an ad-hoc test registry that never
 #: sets ``group=``, e.g.) still renders — appended after these ten, in
 #: first-seen order — so a command can never silently vanish from ``/help``.

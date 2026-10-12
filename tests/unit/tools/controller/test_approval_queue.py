@@ -11,7 +11,7 @@ import pytest
 
 from agents.task.goals.board import ASK_OPEN, GoalBoard
 from tools.controller.approval_queue import OwnerQueueApprover, compute_request_hash
-from tools.controller.execution_context import ActionExecutionContext
+from agents.task.loop_types.execution_context import ActionExecutionContext
 
 
 def _ctx(user_id="u1", session_id="s1", **kwargs):
@@ -434,7 +434,7 @@ async def test_an_ask_from_a_goal_run_names_the_goal_it_blocks(
         provider, board, autonomous_goal_turn, monkeypatch):
     from agents.task.goals.board import STATUS_READY
     goal = board.create(user_id="u1", title="bridge to robinhood", status=STATUS_READY)
-    monkeypatch.setattr("agents.task.goals.autonomy_marker.goal_for_session",
+    monkeypatch.setattr("core.autonomy_marker.goal_for_session",
                         lambda sid: goal.id)
 
     await provider.request("defi_trade_bridge", {"usd": 91.37}, _goal_ctx())
@@ -452,7 +452,7 @@ async def test_approving_the_ask_flips_the_blocked_goal_back_to_ready(
     board.record_failure(goal.id, error="agent declared BLOCKED: needs owner approval",
         claim_token=board.get(goal.id).claim_token)
     board.update_status(goal.id, "blocked")
-    monkeypatch.setattr("agents.task.goals.autonomy_marker.goal_for_session",
+    monkeypatch.setattr("core.autonomy_marker.goal_for_session",
                         lambda sid: goal.id)
 
     await provider.request("defi_trade_bridge", {"usd": 91.37}, _goal_ctx())
@@ -483,13 +483,13 @@ async def test_a_missing_goal_mapping_still_creates_the_ask(
     that was never created is the dead end this all exists to close."""
     def _boom(sid):
         raise RuntimeError("marker gone")
-    monkeypatch.setattr("agents.task.goals.autonomy_marker.goal_for_session", _boom)
+    monkeypatch.setattr("core.autonomy_marker.goal_for_session", _boom)
     assert await provider.request("defi_trade_bridge", {"usd": 5}, _goal_ctx()) is False
     assert len(board.asks(user_id="u1", status=ASK_OPEN)) == 1
 
 
 def test_the_marker_remembers_which_goal_a_session_runs():
-    from agents.task.goals import autonomy_marker as am
+    from core import autonomy_marker as am
     am.mark_autonomous("sess-1", "goal-abc")
     assert am.is_autonomous("sess-1") is True
     assert am.goal_for_session("sess-1") == "goal-abc"
@@ -511,14 +511,14 @@ async def test_re_asking_widens_the_goal_list_on_an_EXISTING_ask(
     goal = board.create(user_id="u1", title="bridge", status=STATUS_READY)
 
     # First ask: no goal mapping (e.g. raised before 039, or by a cron run).
-    monkeypatch.setattr("agents.task.goals.autonomy_marker.goal_for_session",
+    monkeypatch.setattr("core.autonomy_marker.goal_for_session",
                         lambda sid: None)
     await provider.request("defi_trade_bridge", {"usd": 91.37}, _goal_ctx())
     ask = board.asks(user_id="u1", status=ASK_OPEN)[0]
     assert ask.payload.get("blocks_goal_ids") == []
 
     # Same request, now from a run that knows its goal: the SAME ask is reused.
-    monkeypatch.setattr("agents.task.goals.autonomy_marker.goal_for_session",
+    monkeypatch.setattr("core.autonomy_marker.goal_for_session",
                         lambda sid: goal.id)
     await provider.request("defi_trade_bridge", {"usd": 91.37}, _goal_ctx())
     asks = board.asks(user_id="u1", status=ASK_OPEN)
@@ -725,7 +725,7 @@ def _cron_store(tmp_path):
 @pytest.mark.asyncio
 async def test_an_ask_from_a_cron_run_names_its_job(
         provider, board, autonomous_goal_turn, monkeypatch):
-    from agents.task.goals import autonomy_marker as am
+    from core import autonomy_marker as am
     am.mark_autonomous("s-cron", None, cron_job_id="job-buyback")
     await provider.request("defi_trade_swap", {"amount_in": 0.04},
                            _goal_ctx(session_id="s-cron"))
@@ -794,7 +794,7 @@ async def test_rejecting_a_cron_ask_leaves_the_job_alone(board, tmp_path):
 
 
 def test_the_marker_remembers_which_cron_job_a_session_runs():
-    from agents.task.goals import autonomy_marker as am
+    from core import autonomy_marker as am
     am.mark_autonomous("s-c1", None, cron_job_id="job-1")
     am.mark_autonomous("s-g1", "goal-1")
     assert am.cron_job_for_session("s-c1") == "job-1"

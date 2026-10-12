@@ -11,8 +11,8 @@ import types
 import pytest
 
 import tools.controller.financial_claim_gate as gate
-from core.rails import financial_claims as fc
-from core.rails.financial_claims import (
+from tools.rails import financial_claims as fc
+from tools.rails.financial_claims import (
     RECEIVE, SPEND, RecordsRead, SettledRecord, detect_claim, verify_claim,
 )
 
@@ -247,7 +247,10 @@ def test_every_text_bearing_outbound_verb_is_gated():
             words = set(model.model_fields) & _TEXT_FIELDS
             if not words:
                 continue
-            covered = set(gate.OUTBOUND_TEXT_FIELDS.get(name, ()))
+            # The EMITTED name (W4): x_browser's x_post emits x_browser_x_post;
+            # the bare method name hid a gate keyed on a name nothing emits.
+            from core.action_names import namespaced_action_name
+            covered = set(gate.OUTBOUND_TEXT_FIELDS.get(namespaced_action_name(tid, name), ()))
             if not words <= covered:
                 missing.append(f"{name}: {sorted(words - covered)}")
     assert not missing, f"outbound verbs not covered by the 022 gate: {missing}"

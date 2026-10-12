@@ -5,8 +5,8 @@ from core.config import AgentConfig, ServerConfig, BotConfig
 PLATFORM_FIELDS = [
     "enable_auth", "jwt_secret_key", "bypass_payment_for_admins",
     "enable_credit_system", "deposit_monitor_enabled", "deposit_check_interval",
-    "sweep_interval", "min_sweep_usd",
-    "master_seed", "ethereum_rpc_url", "sepolia_rpc_url", "polygon_rpc_url",
+    "sweep_interval",
+    "ethereum_rpc_url", "sepolia_rpc_url", "polygon_rpc_url",
     "base_rpc_url", "arbitrum_rpc_url", "treasury_address",
     "x402_enabled", "x402_facilitator_url",
     "collabland_api_key", "collabland_api_url", "collabland_rules", "collabland_id",

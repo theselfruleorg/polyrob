@@ -10,7 +10,6 @@ monkeypatches keep working.
 import logging
 from typing import Optional
 
-from core.security.forged_turns import FORGED_TURN_KINDS as _FORGED_TURN_KINDS
 
 logger = logging.getLogger(__name__)
 
@@ -18,81 +17,26 @@ logger = logging.getLogger(__name__)
 def _is_forged_or_autonomous_turn(execution_context, controller_self):
 	"""C7/W2/SK-F10: a turn that must NEVER auto-activate or promote its own content.
 
-	True for a sub-agent / leaf turn (delegated worker, background-review reviewer),
-	an autonomous goal/cron/planner-spawned session, OR a forged self-wake /
-	async-delegation-result re-entry into the MAIN agent.
-
-	SK-F10: a self-wake or delegation-result re-entry resolves to
-	role='orchestrator', is_sub_agent=False — the SAME shape as a genuine owner
-	turn — so without a turn-kind signal it could auto-activate a skill (review
-	off) or self-promote its own pending draft. The run loop stamps
-	`execution_context.metadata["turn_kind"]` from the orchestrator's
-	`_forged_turn_kind` marker (set when a drained HITL message is
-	kind="self_wake"/"delegation_result", cleared on a genuine drained turn) —
-	see `agents/task/agent/core/user_ingress.py::_drain_user_messages` and
-	`agents/task/agent/core/step_execution.py::_build_execution_context`.
+	True for a sub-agent / leaf turn, a forged self-wake / delegation-result
+	re-entry, a room-bound (group) turn, or an autonomous goal/cron/planner run.
+	The rule lives in ``core.security.owner_turn.is_forged_or_autonomous`` (W5:
+	ONE owner-turn definition); this name stays because callers and tests reach
+	it here. Fail CLOSED on a probe fault.
 	"""
-	is_sub = bool(getattr(execution_context, 'is_sub_agent', False)
-	              or getattr(controller_self, '_is_sub_agent', False))
-	# H7: default to the least-privileged role when unset (treat as forged).
-	role = getattr(execution_context, 'role', 'leaf')
-	if is_sub or role == 'leaf':
-		return True
-	metadata = getattr(execution_context, 'metadata', None) or {}
-	# 044 T5: a room-bound (group) turn is forged too — whoever spoke, it must
-	# never auto-activate/promote content the way a genuine owner turn can.
-	if metadata.get('turn_kind') in _FORGED_TURN_KINDS or metadata.get('turn_kind') == 'group':
-		return True
-	try:
-		from agents.task.goals.autonomy_marker import is_autonomous
-		sid = (getattr(execution_context, 'session_id', None)
-		       or getattr(controller_self, 'session_id', ''))
-		return bool(is_autonomous(sid))
-	except Exception:
-		# MH1: fail CLOSED — an autonomy-marker probe that raises must be treated
-		# as forged (the least-privileged assumption), mirroring the fail-closed
-		# role/turn_kind defaults above. Returning False here would let a
-		# forged/autonomous turn slip past every gate keyed on this predicate
-		# (owner_queue approval, writable-skills, message/self_context promotion).
-		logger.debug(
-			"_is_forged_or_autonomous_turn: autonomy-marker probe raised — "
-			"treating as forged (fail-closed)", exc_info=True)
-		return True
+	from core.security.owner_turn import is_forged_or_autonomous
+	return is_forged_or_autonomous(execution_context, controller_self)
 
 
 def _is_autonomous_goal_turn(execution_context, controller_self):
 	"""True ONLY for a goal/cron-dispatched turn on the MAIN agent.
 
-	Deliberately STRICTER than :func:`_is_forged_or_autonomous_turn`, which lumps
-	every non-genuine turn together. `core/wallet/tx_guard.py` injects this as
-	``autonomous_ok_fn`` to tell the one origin the owner armed for unattended
-	treasury work apart from the origins that must NEVER sign: a leaf/sub-agent
-	(a delegated worker can be steered by whatever it was handed), a self-wake,
-	and a delegation-result re-entry (both re-enter the main agent wearing a
-	genuine turn's shape, which is exactly why SK-F10 stamps `turn_kind`).
-
-	Every uncertainty answers False, so an unprovable turn keeps the refusal.
+	Deliberately STRICTER than :func:`_is_forged_or_autonomous_turn`;
+	``core/wallet/tx_guard.py`` injects this as ``autonomous_ok_fn``. The rule
+	lives in ``core.security.owner_turn.is_autonomous_goal_turn`` (W5). Every
+	uncertainty answers False.
 	"""
-	if bool(getattr(execution_context, 'is_sub_agent', False)
-	        or getattr(controller_self, '_is_sub_agent', False)):
-		return False
-	# An unset role is treated as 'leaf' everywhere else; keep that here, so a
-	# context that cannot prove it is the orchestrator does not get to sign.
-	if getattr(execution_context, 'role', 'leaf') != 'orchestrator':
-		return False
-	metadata = getattr(execution_context, 'metadata', None) or {}
-	if metadata.get('turn_kind') in _FORGED_TURN_KINDS:
-		return False
-	try:
-		from agents.task.goals.autonomy_marker import is_autonomous
-		sid = (getattr(execution_context, 'session_id', None)
-		       or getattr(controller_self, 'session_id', ''))
-		return bool(is_autonomous(sid))
-	except Exception:
-		logger.debug(
-			"_is_autonomous_goal_turn: autonomy-marker probe raised — answering "
-			"False (fail-closed)", exc_info=True)
-		return False
+	from core.security.owner_turn import is_autonomous_goal_turn
+	return is_autonomous_goal_turn(execution_context, controller_self)
 
 
 def _autonomous_message_refusal(execution_context, controller_self):
@@ -132,12 +76,12 @@ def _autonomous_message_refusal(execution_context, controller_self):
 			return None
 	except Exception:
 		pass
-	from tools.controller.types import ActionResult
+	from agents.task.loop_types.controller_types import ActionResult
 	return ActionResult(
 		extracted_content=(
 			"message: not permitted for forged/autonomous turns "
 			"(owner must be in the loop; the owner can set "
-			"MESSAGE_AUTONOMOUS_ALLOWLISTED=true to permit autonomous sends "
+			"POLYROB_OVERRIDES=MESSAGE_AUTONOMOUS_ALLOWLISTED=true to permit autonomous sends "
 			"to owner-ALLOWLISTED targets only)"),
 		include_in_memory=True)
 
@@ -195,7 +139,7 @@ def _autonomous_owner_resend_cooldown_refusal(
 
 	def _refusal():
 		_record_cooldown_suppression(event_log, user_id, surface, body)
-		from tools.controller.types import ActionResult
+		from agents.task.loop_types.controller_types import ActionResult
 		hours = cooldown / 3600
 		repeat = " This exact text" if body else " An autonomous message"
 		return ActionResult(
@@ -300,7 +244,7 @@ def _message_action_result(res: dict, surface: str, target: str, text: str) -> "
 	Success now carries a bounded preview of the sent text; failure now sets a real
 	`error` so it can no longer be mistaken for a success in the ledger.
 	"""
-	from tools.controller.types import ActionResult
+	from agents.task.loop_types.controller_types import ActionResult
 
 	note = f" [{res['note']}]" if res.get('note') else ""
 	if 'posts' in res:  # 0008: action=posts — what I posted, by ledger row
@@ -335,7 +279,7 @@ def _message_action_result(res: dict, surface: str, target: str, text: str) -> "
 		preview = (text or "")[:_MESSAGE_TEXT_PREVIEW_CHARS]
 		if len(text or "") > _MESSAGE_TEXT_PREVIEW_CHARS:
 			preview += "…"
-		# 057 WS-E: the per-rail proof rule, rendered from core/rails/verification.py
+		# 057 WS-E: the per-rail proof rule, rendered from tools/rails/verification.py
 		# and carried BY the result — so "did that land?" is answered here instead
 		# of costing a turn to look up (and get wrong).
 		proof = f"\n{res['verification']}" if res.get('verification') else ""

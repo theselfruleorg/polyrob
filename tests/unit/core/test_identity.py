@@ -19,6 +19,6 @@ async def test_cli_container_registers_local_identity(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     with patch("modules.llm.llm_manager.LLMManager._initialize", AsyncMock()):
-        from core.bootstrap import build_cli_container
+        from polyrob.app.bootstrap import build_cli_container
         c = await build_cli_container()
     assert c.get_service("identity").resolve() == "local"

@@ -15,6 +15,32 @@ This module is intentionally dependency-light and lives in ``core/`` (NOT on the
 action-registration import path), so it carries no ``from __future__ import
 annotations`` landmine. ``POLYROB_DATA_DIR`` is read via ``os.getenv`` only —
 never ``BotConfig.get`` (which is a getattr that silently ignores the env).
+
+The resolver set (W8, 2026-10-10) — three axes, one function each; everything
+else here is a thin delegator kept because call sites and tests name it:
+
+- **Data home** (where the sidecar DBs, identity docs and prefs live):
+  :func:`resolve_data_home` — ``POLYROB_DATA_DIR`` else ``<polyrob_home>/data``.
+  :func:`effective_data_home` applies the server default (``/var/lib/polyrob``)
+  when a headless process left the env unset; :func:`resolve_runtime_paths` is the
+  rule both share. Delegators: :func:`prefs_home_dir` (identity axis),
+  ``core.runtime_config.get_data_root``, ``polyrob.app.bootstrap.
+  _resolve_cli_data_home``. An OWNER/ADMIN CLI verb uses
+  ``cli._admin_home.admin_data_dir`` instead — it adopts the DEPLOYED home.
+- **Explicit dir or home**: :func:`data_dir_or_home` (a caller-held
+  ``config.data_dir``) and :func:`container_data_home` (the same, read off a
+  container). ⚠️ On a server ``BotConfig.data_dir`` is ``<data_home>/data``, one
+  level BELOW the data home (see :func:`prefs_home_dir`).
+- **Session artifact tree**: :func:`resolve_session_data_root` — ``DATA_ROOT`` >
+  ``<POLYROB_DATA_DIR>/sessions`` > :data:`_LEGACY_SESSIONS_DEFAULT`.
+
+One store, one path: :func:`store_db_path` joins a ``core.db_manifest`` registry
+name onto a home; :func:`goals_db_path`, :func:`cron_db_path`,
+:func:`correspondents_db_path`, :func:`surfaces_db_path`,
+:func:`session_registry_db_path` and :func:`memory_db_path` name the busy ones.
+:func:`data_home_db_path` (``prefer_container``) and :func:`sidecar_db_path` are
+the two read-both/write-new rules for a store that historically lived elsewhere.
+``tests/test_path_ratchet.py`` forbids a new open-coded ``"<name>.db"`` join.
 """
 
 import os
@@ -151,7 +177,7 @@ def resolve_data_home() -> Path:
     ``pages``/``activity`` via ``webgate.data_dir()``, ``polyrob owner``,
     ``polyrob surface``): ``POLYROB_DATA_DIR`` wins, else converge on the
     CLI/agent home (``<polyrob_home>/data``). This function is the SSOT for that rule:
-    ``core.bootstrap._resolve_cli_data_home`` (build_cli_container) and
+    ``polyrob.app.bootstrap._resolve_cli_data_home`` (build_cli_container) and
     ``core.runtime_config.get_data_root`` both delegate here, so admin verbs and
     the running daemons always read the SAME files (``POLYROB_PROJECT_DIR`` moves
     only the workspace, never the data home). The server-only
@@ -290,7 +316,7 @@ def data_home_db_path(name: str, *, env_key: Optional[str] = None,
     if data_dir:
         return os.path.join(str(data_dir), name)
     canonical = os.path.join(str(resolve_data_home()), name)
-    if prefer_container and not os.path.exists(canonical):
+    if prefer_container:
         try:
             from core.container import DependencyContainer
             cfg = DependencyContainer.get_instance().get_service("config")
@@ -299,10 +325,29 @@ def data_home_db_path(name: str, *, env_key: Optional[str] = None,
                 legacy = os.path.join(str(cfg_dir), name)
                 if os.path.exists(legacy) and \
                         os.path.abspath(legacy) != os.path.abspath(canonical):
-                    return legacy
+                    if not os.path.exists(canonical):
+                        return legacy
+                    _warn_split_store(canonical, legacy)
         except Exception:
             pass
     return canonical
+
+
+_warned_split_stores: set = set()
+
+
+def _warn_split_store(canonical: str, legacy: str) -> None:
+    """Name a store that exists at BOTH the manifest path and the legacy
+    container path: the manifest one is read, the other is left untouched (once
+    per pair per process). The operator merges or removes the legacy file."""
+    key = (canonical, legacy)
+    if key in _warned_split_stores:
+        return
+    _warned_split_stores.add(key)
+    import logging
+    logging.getLogger(__name__).warning(
+        "two copies of %s: using %s; %s is no longer read (merge or remove it)",
+        os.path.basename(canonical), canonical, legacy)
 
 
 def prefs_home_dir() -> str:
@@ -328,23 +373,49 @@ def prefs_home_dir() -> str:
     return str(resolve_data_home())
 
 
-def goals_db_path(data_dir: Optional[str] = None) -> str:
-    """Absolute path to the goal-board DB (``goals.db``).
+def store_db_path(name: str, data_dir: Optional[str] = None) -> str:
+    """``<data_dir or data home>/<name>`` for a store registered in
+    ``core.db_manifest`` — the ONE join every open-coded ``"<name>.db"`` became.
 
-    One helper for the four sites that re-joined ``{data_dir}/goals.db`` with their own
-    home resolution + relative ``"data"`` fallback (cli/commands/goals.py,
-    tools/goal_tools.py, cron/digest.py, tools/controller/approval_queue.py). Pass an
-    explicit *data_dir* (e.g. the CLI's ``get_data_root()``) to pin it; omit it to use
-    the data home.
-    """
+    Raises ``KeyError`` for an unregistered name: a new store is one registry row
+    first (backup, guard and this join all derive from it)."""
+    from core.db_manifest import is_registered
+    if not is_registered(name):
+        raise KeyError(f"{name} is not in core.db_manifest.DB_REGISTRY")
+    return os.path.join(data_dir_or_home(data_dir), name)
+
+
+def goals_db_path(data_dir: Optional[str] = None) -> str:
+    """Absolute path to the goal-board DB (``goals.db``). Pass an explicit
+    *data_dir* (e.g. a container's ``config.data_dir``) to pin it; omit it to use
+    the data home."""
     return os.path.join(data_dir_or_home(data_dir), "goals.db")
 
 
 def cron_db_path(data_dir: Optional[str] = None) -> str:
-    """Absolute path to the cron job store (``cron.db``) — the ``goals_db_path`` twin
-    for the scheduler's DB (tools/cronjob_tools.py + the operator ``seed_*`` scripts).
-    """
+    """Absolute path to the cron job store (``cron.db``)."""
     return os.path.join(data_dir_or_home(data_dir), "cron.db")
+
+
+def correspondents_db_path(data_dir: Optional[str] = None) -> str:
+    """Absolute path to the correspondent registry (``correspondents.db``)."""
+    return os.path.join(data_dir_or_home(data_dir), "correspondents.db")
+
+
+def surfaces_db_path(data_dir: Optional[str] = None) -> str:
+    """Absolute path to the outbound allowlist / group roles DB (``surfaces.db``)."""
+    return os.path.join(data_dir_or_home(data_dir), "surfaces.db")
+
+
+def session_registry_db_path(data_dir: Optional[str] = None) -> str:
+    """Absolute path to the sqlite session registry (``session_registry.db``)."""
+    return os.path.join(data_dir_or_home(data_dir), "session_registry.db")
+
+
+def memory_db_path(data_dir: Optional[str] = None) -> str:
+    """Absolute path to the memory store (``memory.db``) —
+    ``modules.memory.backend_factory`` opens exactly this."""
+    return os.path.join(data_dir_or_home(data_dir), "memory.db")
 
 
 def sidecar_db_path(name: str) -> Path:

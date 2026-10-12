@@ -64,13 +64,6 @@ def test_empty_and_anonymous_lines_are_not_recorded(container, tmp_path):
     assert not os.path.exists(tmp_path / ot.DB_NAME)
 
 
-def test_flag_off_records_nothing(container, tmp_path, monkeypatch):
-    monkeypatch.setenv("OWNER_THREAD_ENABLED", "false")
-    assert not ot.record_owner_out(container, "u1", "x" * 20, via="telegram", session_id="s", source="x")
-    assert not os.path.exists(tmp_path / ot.DB_NAME)
-    assert ot.owner_thread_inject() is False
-
-
 def test_identical_line_within_window_is_one_row(container):
     now = time.time()
     ot.record_owner_out(container, "u1", "same text", via="telegram", session_id="a", source="reply", now=now)

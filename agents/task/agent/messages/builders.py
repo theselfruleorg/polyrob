@@ -71,12 +71,8 @@ class MessageBuildersMixin:
 		# stops landing in message_history.json. A stale state message left queued by
 		# a failed call (restore_ephemeral_on_failure re-queues it) is dropped first:
 		# one state message per request, always the current one.
-		from agents.task.constants import state_message_ephemeral
-		if state_message_ephemeral():
-			self.drop_queued_state_messages()
-			self.push_ephemeral_message(message)
-		else:
-			self._add_message_with_tokens(message)
+		self.drop_queued_state_messages()
+		self.push_ephemeral_message(message)
 
 	def _results_already_in_tool_messages(self, result: Optional[List['ActionResult']]) -> bool:
 		"""F14: did the previous step commit THESE results as ToolMessages?

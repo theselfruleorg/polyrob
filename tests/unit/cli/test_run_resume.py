@@ -48,7 +48,7 @@ def test_run_resume_unknown_session_errors(monkeypatch, resolved_provider):
     async def _fake_build(**kwargs):
         return container
 
-    monkeypatch.setattr("core.bootstrap.build_cli_container", _fake_build)
+    monkeypatch.setattr("polyrob.app.bootstrap.build_cli_container", _fake_build)
     monkeypatch.setattr("cli.keys.preflight_or_onboard", lambda **k: True)
 
     res = CliRunner().invoke(run_mod.run, ["--resume", "no-such-session"])
@@ -87,7 +87,7 @@ def test_run_resume_recreates_and_runs(monkeypatch, resolved_provider):
     async def _fake_build(**kwargs):
         return container
 
-    monkeypatch.setattr("core.bootstrap.build_cli_container", _fake_build)
+    monkeypatch.setattr("polyrob.app.bootstrap.build_cli_container", _fake_build)
     monkeypatch.setattr("cli.keys.preflight_or_onboard", lambda **k: True)
 
     res = CliRunner().invoke(run_mod.run, ["--resume", "sess-abc", "--plain"])

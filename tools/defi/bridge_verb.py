@@ -61,7 +61,7 @@ def _refuse_non_owner_turn(execution_context) -> Optional[str]:
     (``core.money.authorize.authorize_spend``).
     """
     from core.money.authorize import SpendIntent, authorize_spend
-    verdict = authorize_spend(SpendIntent(what="bridge", pause=False), execution_context)
+    verdict = authorize_spend(SpendIntent.verb_gate("bridge"), execution_context)
     return verdict.reason if verdict.refused else None
 
 
@@ -124,7 +124,7 @@ def _refuse_paused(execution_context=None) -> Optional[str]:
     # chat) is the owner acting — the pause bounds only the agent's own work.
     from tools.controller.turn_origin import (
         _is_autonomous_goal_turn, _is_forged_or_autonomous_turn)
-    verdict = authorize_spend(SpendIntent(principal=False, leaf=False, entry=True),
+    verdict = authorize_spend(SpendIntent.pause_recheck(entry=True),
                               execution_context, forged_fn=_is_forged_or_autonomous_turn,
                               autonomous_ok_fn=_is_autonomous_goal_turn)
     return verdict.reason if verdict.refused else None
@@ -259,36 +259,72 @@ def resolve_dest_currency(token_out: str, chain_name: Optional[str]) -> tuple:
     `native`/empty -> the native sentinel. Otherwise the token must resolve
     through the pinned registry row for the DESTINATION chain.
     """
-    from tools.defi.providers.relay_bridge import NATIVE_EVM
-    want = (token_out or NATIVE).strip().lower()
-    if want in ("", NATIVE):
-        return NATIVE_EVM, "native"
-
+    from tools.defi.providers.relay_bridge import NATIVE_EVM, NATIVE_SVM
     from core.wallet import chains as _chains
     row = _chains.get(chain_name or "")
+    svm = row is not None and getattr(row, "family", "evm") == "svm"
+    want = (token_out or NATIVE).strip().lower()
+    if want in ("", NATIVE):
+        return (NATIVE_SVM if svm else NATIVE_EVM), "native"
+
     if row is None:
         raise ValueError(f"chain {chain_name!r} is not in the pinned registry, so "
                          f"no token can be resolved on it")
     pinned = {}
-    if row.wrapped_native:
+    # On an SVM chain wrapped SOL is not offered: it arrives as a separate token
+    # account, and native SOL is the same asset. The lookup key is lower-cased;
+    # the value returned is the registry's exact (case-sensitive) base58 mint.
+    if row.wrapped_native and not svm:
         pinned["weth"] = pinned[f"w{(row.native_symbol or 'eth').lower()}"] = \
             row.wrapped_native
         pinned[str(row.wrapped_native).lower()] = row.wrapped_native
     if row.usdc:
         pinned["usdc"] = row.usdc
         pinned[str(row.usdc).lower()] = row.usdc
+    addresses = {str(v).lower() for v in pinned.values()}
 
     got = pinned.get(want)
     if got is None:
-        allowed = sorted({k for k in pinned if not k.startswith("0x")} | {NATIVE})
+        allowed = sorted({k for k in pinned if k not in addresses} | {NATIVE})
         raise ValueError(
             f"{token_out!r} is not a pinned asset on {chain_name}. A bridge may "
             f"only deliver an asset this wallet has verified on-chain — allowed "
             f"here: {', '.join(allowed)}. (Every address in the chain registry "
             f"was checked with eth_getCode plus symbol/decimals reads; a "
             f"model-supplied address was not.)")
-    label = want if not want.startswith("0x") else got
+    label = got if want in addresses else want
     return got, label
+
+
+def resolve_origin_token(token_in: str, chain_name: str, svm: bool) -> tuple:
+    """``(token_address | None, decimals | None)`` for the bridge ORIGIN asset.
+
+    ``native`` -> ``(None, None)``. Otherwise ONLY the chain's PINNED ``usdc``
+    (by name or its exact registry address). Any other token is refused: on
+    EVM it needs an allowance to a third party, and the one allowance this verb
+    grants is an exact amount to the pinned Relay depository for pinned USDC.
+    """
+    want = (token_in or NATIVE).strip()
+    if want.lower() in ("", NATIVE):
+        return None, None
+    from core.wallet import chains as _chains
+    row = _chains.get(chain_name)
+    usdc = getattr(row, "usdc", None) if row is not None else None
+    if not usdc or want.lower() not in ("usdc", str(usdc).lower()):
+        raise ValueError(
+            f"{token_in!r} cannot be a bridge origin on {chain_name}. The origin is "
+            f"the native asset, or 'usdc' where the chain pins one"
+            f"{'' if usdc else ' (this chain pins none)'}.")
+    if svm:
+        from core.wallet.solana_onchain import mint_decimals
+        decimals = mint_decimals(usdc)
+    else:
+        from core.wallet.tokens import get_token_identity
+        decimals = get_token_identity(chain_name, usdc).decimals
+    if decimals is None or not 0 < int(decimals) <= 36:
+        raise ValueError(f"could not read the decimals of {chain_name} USDC ({usdc}); "
+                         f"an unknown denomination misprices the order")
+    return usdc, int(decimals)
 
 
 def _resolve_endpoint(chain: str, tool) -> tuple:
@@ -355,13 +391,6 @@ async def perform_bridge(tool, params, execution_context=None):
         if refusal:
             return tool._ar(error=refusal)
 
-    if (params.token_in or NATIVE).lower() != NATIVE:
-        return tool._ar(error=(
-            "the bridge ORIGIN must be the chain's native asset. An ERC-20 origin "
-            "needs an allowance leg whose spender is a third party's address; "
-            "that is its own change with its own approval. The DESTINATION may be "
-            "a pinned token — receiving one grants nobody anything."))
-
     try:
         origin_id, sender, dec_in, svm_origin = _resolve_endpoint(params.from_chain, tool)
         dest_id, recipient, _dec_out, svm_dest = _resolve_endpoint(params.to_chain, tool)
@@ -375,19 +404,28 @@ async def perform_bridge(tool, params, execution_context=None):
         if refusal:
             return tool._ar(error=refusal)
 
-    dest_name = bridge_guard.chain_name_for_id(dest_id)
+    try:
+        origin_token, _tok_dec = resolve_origin_token(
+            params.token_in, (params.from_chain or "").strip().lower(), svm_origin)
+    except ValueError as exc:
+        return tool._ar(error=str(exc))
+    if origin_token:
+        dec_in = _tok_dec
+
+    if svm_origin and svm_dest:
+        return tool._ar(error=(
+            "origin and destination are both Solana — that is a transfer or a "
+            "swap (`solana_transfer` / `solana_swap`), not a bridge."))
+
+    # An SVM destination is named through the provider's registered alias (the
+    # registry has no EIP-155 id for it); phase 2 then reads lamports or the
+    # SPL balance over the Solana RPC (`bridge_guard.arrival_reader`).
+    dest_name = bridge_guard.arrival_chain_name(dest_id)
     try:
         dest_currency, dest_label = resolve_dest_currency(
             params.token_out, dest_name)
     except ValueError as exc:
         return tool._ar(error=str(exc))
-
-    if svm_dest:
-        return tool._ar(error=(
-            "bridging INTO Solana is not supported yet: phase 2 measures the "
-            "arrival with an EVM `eth_getBalance` read, and asserting an SVM "
-            "arrival needs its own reader. Refusing rather than trusting the "
-            "provider's status field for the arrival."))
 
     wallet = tool._get_wallet()
     gate = getattr(wallet, "policy", None)
@@ -409,11 +447,16 @@ async def perform_bridge(tool, params, execution_context=None):
     try:
         quote = await _asyncio.to_thread(provider.quote,
             origin_chain_id=origin_id, dest_chain_id=dest_id,
-            origin_currency=NATIVE_SVM if svm_origin else NATIVE_EVM,
+            origin_currency=origin_token or (NATIVE_SVM if svm_origin else NATIVE_EVM),
             dest_currency=dest_currency,
             amount_in_raw=amount_in_raw, sender=sender, recipient=recipient)
     except RelayError as exc:
         return tool._ar(error=f"no bridge route: {exc}")
+
+    if origin_token and int(quote.decimals_in) != int(dec_in):
+        return tool._ar(error=(
+            f"no bridge route: Relay states {quote.decimals_in} decimals for the "
+            f"origin USDC, the chain says {dec_in} — the amount would be mispriced"))
 
     header = describe_quote(quote)
     if dest_label != "native":
@@ -431,6 +474,7 @@ async def perform_bridge(tool, params, execution_context=None):
     from tools.defi.bridge_price import quote_refusal
     economic_refusal = await _asyncio.to_thread(
         quote_refusal, tool, quote, origin=params.from_chain.strip().lower(),
+        origin_token=origin_token,
         destination=dest_name)
     if economic_refusal:
         header += f"  independent value check: {economic_refusal}\n"
@@ -446,6 +490,7 @@ async def perform_bridge(tool, params, execution_context=None):
     raw_tx = None
     signer = None
     prepared = None
+    evm_leg = None
     svm_usd = None
     idem = _idempotency_key(
         origin_id=origin_id, dest_id=dest_id, dest_currency=dest_currency,
@@ -496,7 +541,8 @@ async def perform_bridge(tool, params, execution_context=None):
         # deliberately excludes (a SWAP calling it is an anomaly). Widened HERE,
         # per-call, from a PINNED constant — never from the quote we are vetting.
         deltas = await _asyncio.to_thread(tool._solana_simulate, raw_tx=raw_tx,
-                                        owner=sender, mints=(), extra_allowed=RELAY_PROGRAM_IDS)
+                                        owner=sender, mints=((origin_token,) if origin_token else ()),
+                                        extra_allowed=RELAY_PROGRAM_IDS)
         if deltas is None or not deltas.ok:
             reason = getattr(deltas, "reason", "no result") if deltas else "no result"
             return tool._ar(content=header + (
@@ -508,10 +554,22 @@ async def perform_bridge(tool, params, execution_context=None):
                 f"  guard: REFUSED — this transaction changes AUTHORITY over "
                 f"your accounts ({list(deltas.authority_grants)}). A bridge "
                 f"grants nothing.\n  RESULT: NOT SENT."))
-        if any(delta < 0 for delta in (deltas.token_deltas or {}).values()):
+        if origin_token:
+            from tools.defi.bridge_token_origin import svm_token_origin_value
+            from tools.defi.spl_deploy_verb import _price_sol
+            svm_usd, why, note = await _asyncio.to_thread(
+                svm_token_origin_value, tool, deltas, origin_token, amount_in_raw, dec_in,
+                price_sol=_price_sol)
+            if why:
+                return tool._ar(content=header + f"  guard: REFUSED — {why}\n  RESULT: NOT SENT.")
+            if quote.amount_in_usd is not None:
+                svm_usd = max(svm_usd, round(float(quote.amount_in_usd), 2))
+            header += note + f"  valued:    ${svm_usd:,.2f} (measured outflow, pinned price)\n"
+        elif any(delta < 0 for delta in (deltas.token_deltas or {}).values()):
             return tool._ar(content=header + (
                 "  guard: REFUSED — undeclared token outflow in a native bridge.\n"
                 "  RESULT: NOT SENT."))
+    if svm_origin and not origin_token:
         outflow = -int(deltas.native_delta or 0)
         if outflow <= 0:
             return tool._ar(content=header + (
@@ -558,7 +616,7 @@ async def perform_bridge(tool, params, execution_context=None):
         if quote.amount_in_usd is not None:
             svm_usd = max(svm_usd, round(float(quote.amount_in_usd), 2))
         header += f"  valued:    ${svm_usd:,.2f} (measured outflow, pinned price)\n"
-    else:
+    if not svm_origin:
         # EVM ORIGIN (039 B2). The twin of the branch above, in its own module.
         # What was missing was never the broadcast rail — it has moved value
         # since 023 — but a way to DECLARE a native-value send to `tx_guard`,
@@ -577,14 +635,23 @@ async def perform_bridge(tool, params, execution_context=None):
             evm_signer = wallet.operational_signer()
         except Exception as exc:
             return tool._ar(error=f"no EVM signer: {exc}")
-        evm_leg = EvmOriginLeg(chain=(params.from_chain or "").strip().lower(),
-                               signer=evm_signer)
+        if origin_token:
+            # Pinned-USDC origin: an EXACT approve to the pinned depository,
+            # then the guarded deposit (`bridge_evm_leg.EvmTokenOriginLeg`).
+            from tools.defi.bridge_evm_leg import EvmTokenOriginLeg
+            evm_leg = EvmTokenOriginLeg(chain=(params.from_chain or "").strip().lower(),
+                                        signer=evm_signer, token=origin_token)
+            _leg_extra = {"approve_spender": getattr(quote, "approve_spender", None)}
+        else:
+            evm_leg = EvmOriginLeg(chain=(params.from_chain or "").strip().lower(),
+                                   signer=evm_signer)
+            _leg_extra = {}
         prepared = await _asyncio.to_thread(
             evm_leg.prepare,
             tx_data=quote.tx_data, origin_chain_id=origin_id,
             amount_in_raw=amount_in_raw, amount_usd=quote.amount_in_usd,
             gate=gate, execution_context=execution_context, tool=tool,
-            idempotency_key=idem)
+            idempotency_key=idem, **_leg_extra)
         header += prepared.header
         if not prepared.ok:
             # `prepared.header` ALREADY carries the guard verdict — appending
@@ -658,7 +725,7 @@ async def perform_bridge(tool, params, execution_context=None):
     # `currency_out`. Measuring the native balance for an ERC-20 arrival would
     # watch a number that cannot move and report a real delivery as `in_flight`
     # forever.
-    measure = bridge_guard.arrival_reader(quote.currency_out)
+    measure = bridge_guard.arrival_reader(quote.currency_out, dest_name)
     balance_before = await _asyncio.to_thread(measure, recipient, dest_name)
     if balance_before is None:
         return tool._ar(content=header + (
@@ -722,7 +789,7 @@ async def perform_bridge(tool, params, execution_context=None):
                 tx_data=quote.tx_data, origin_chain_id=origin_id,
                 amount_in_raw=amount_in_raw, amount_usd=quote.amount_in_usd,
                 gate=gate, execution_context=execution_context, tool=tool,
-                idempotency_key=idem)
+                idempotency_key=idem, **_leg_extra)
             if not prepared.ok:
                 return tool._ar(content=header + "  re-check after approval:\n"
                                 + prepared.header + "  RESULT: NOT SENT.")
@@ -768,7 +835,14 @@ async def perform_bridge(tool, params, execution_context=None):
                 f"  RESULT: NOT SENT — nothing was broadcast."))
         if prepared is not None:
             from tools.defi.bridge_evm_leg import EvmOriginLeg
-            _sent = await _asyncio.to_thread(EvmOriginLeg.send, prepared)
+            if origin_token:
+                # The deposit is simulated inside `send` (after the approval
+                # lands); an owner_queue verdict there is the approval already
+                # granted above, or the owner's own turn — never a fresh ask.
+                evm_leg.owner_cleared = bool(_needs_owner) or owner_direct
+                _sent = await _asyncio.to_thread(evm_leg.send, prepared)
+            else:
+                _sent = await _asyncio.to_thread(EvmOriginLeg.send, prepared)
             if _sent.state == "unknown":
                 # It may have left: parked in flight, so the arrival watcher
                 # measures the destination — never FAILED, never "not sent".
@@ -863,6 +937,10 @@ async def perform_bridge(tool, params, execution_context=None):
         origin = {"confirmed": "confirmed", "reverted": "reverted"}.get(
             _out.state, "unknown")
         detail = _out.detail
+        if origin == "reverted" and hasattr(evm_leg, "revoke_after_revert"):
+            _revoked = await _asyncio.to_thread(evm_leg.revoke_after_revert, prepared)
+            if _revoked:
+                detail = f"{detail}; {_revoked}"
     else:
         from core.wallet.solana_rail import confirmation_outcome
         try:
@@ -912,7 +990,9 @@ async def perform_bridge(tool, params, execution_context=None):
         bridge_guard.await_arrival,
         provider=provider, request_id=quote.request_id, recipient=recipient,
         chain_name=dest_name, min_out_raw=quote.min_out_raw,
-        balance_before=balance_before, read_balance=measure)
+        balance_before=balance_before, read_balance=measure,
+        prove=bridge_guard.arrival_prover(quote.request_id, recipient,
+                                          quote.currency_out, dest_name))
 
     bridge_guard.settle(bid, state=outcome.state, detail=outcome.detail,
                         tx_ref=signature, balance_after=outcome.balance_after)

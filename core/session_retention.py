@@ -28,6 +28,7 @@ sweep that can be aimed by a symlink is an arbitrary-delete primitive.
 """
 from __future__ import annotations
 
+from core.runtime_paths import goals_db_path, session_registry_db_path
 import json
 import logging
 import os
@@ -97,7 +98,7 @@ def _live_goal_sessions(data_dir: str) -> Set[str]:
 
     placeholders = ",".join("?" for _ in TERMINAL_GOAL_STATUSES)
     try:
-        rows = _rows(os.path.join(data_dir, "goals.db"),
+        rows = _rows(goals_db_path(data_dir),
                      "SELECT session_id, payload FROM goals "
                      f"WHERE status NOT IN ({placeholders})",
                      tuple(TERMINAL_GOAL_STATUSES))
@@ -132,7 +133,7 @@ def _registered_sessions(data_dir: str) -> Set[str]:
     from core.status_snapshot import _rows
 
     try:
-        rows = _rows(os.path.join(data_dir, "session_registry.db"),
+        rows = _rows(session_registry_db_path(data_dir),
                      "SELECT session_id FROM active_sessions")
     except FileNotFoundError:
         return set()

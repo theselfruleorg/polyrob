@@ -9,7 +9,7 @@ from agents.task.goals.board import ASK_OPEN, GoalBoard
 from core.surfaces.tappable import parse_tappable
 from tools.controller import approval_queue as aq
 from tools.controller import grant_card
-from tools.controller.execution_context import ActionExecutionContext
+from agents.task.loop_types.execution_context import ActionExecutionContext
 
 
 @pytest.mark.asyncio

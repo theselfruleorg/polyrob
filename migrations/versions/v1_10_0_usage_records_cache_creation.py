@@ -14,9 +14,9 @@ same whether that happened or not.
 
 This migration adds the real column. It mirrors
 `modules/database/auth_tables.py::create_tables` (the inline creator, which
-self-heals the SAME column onto a pre-existing table on every boot) and
-`modules/database/schema.sql` -- all three must agree, and
-`tests/unit/migrations/test_inline_schema_at_head.py` enforces that.
+self-heals the SAME column onto a pre-existing table on every boot) -- the two
+must agree, and `tests/unit/migrations/test_inline_schema_at_head.py` enforces
+that. (The unloaded `schema.sql` mirror was deleted 2026-10-10.)
 
 Created: 2026-09-22
 """

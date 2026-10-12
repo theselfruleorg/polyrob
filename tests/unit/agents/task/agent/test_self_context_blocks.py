@@ -3,8 +3,7 @@
 Before: awareness + SOUL + owner facts + contract + SELF doc were ONE message
 (``"\\n\\n".join``). The owner's rules could not be capped, dated or reported
 apart from an operator-frozen identity doc. Now each non-empty block is its own
-SELF_CONTEXT foundation message; ``SELF_CONTEXT_COMBINED=true`` re-joins them
-byte-identically.
+SELF_CONTEXT foundation message.
 """
 
 import json
@@ -46,7 +45,6 @@ def test_block_names_are_declared_in_wire_order():
 
 
 def test_unwelded_default_one_message_per_nonempty_block(monkeypatch):
-	monkeypatch.delenv("SELF_CONTEXT_COMBINED", raising=False)
 	mm = _mm()
 	mm.set_self_context_blocks(BLOCKS)
 	got = _self_ctx(mm.get_messages_for_llm(consume_ephemeral=False))
@@ -59,19 +57,7 @@ def test_unwelded_default_one_message_per_nonempty_block(monkeypatch):
 	assert mm.get_total_tokens() >= mm._self_context_blocks_tokens
 
 
-def test_combined_flag_is_byte_identical_to_the_pre_060_join(monkeypatch):
-	monkeypatch.setenv("SELF_CONTEXT_COMBINED", "true")
-	mm = _mm()
-	mm.set_self_context_blocks(BLOCKS)
-	legacy = "\n\n".join(p for _n, p in BLOCKS if p)
-	got = _self_ctx(mm.get_messages_for_llm(consume_ephemeral=False))
-	assert len(got) == 1
-	assert got[0].content == make_control_message(legacy, MessageOrigin.SELF_CONTEXT).content
-	assert mm._self_context_blocks is None
-
-
 def test_the_two_slots_never_coexist(monkeypatch):
-	monkeypatch.delenv("SELF_CONTEXT_COMBINED", raising=False)
 	mm = _mm()
 	mm.set_self_context_blocks(BLOCKS)
 	mm.set_self_context_message("joined")
@@ -81,7 +67,6 @@ def test_the_two_slots_never_coexist(monkeypatch):
 
 
 def test_all_empty_is_inert(monkeypatch):
-	monkeypatch.delenv("SELF_CONTEXT_COMBINED", raising=False)
 	mm = _mm()
 	mm.set_self_context_blocks((("soul", ""), ("owner_rules", "  ")))
 	assert not _self_ctx(mm.get_messages_for_llm(consume_ephemeral=False))
@@ -89,7 +74,6 @@ def test_all_empty_is_inert(monkeypatch):
 
 
 def test_replay_round_trips_the_blocks(monkeypatch):
-	monkeypatch.delenv("SELF_CONTEXT_COMBINED", raising=False)
 	a = _mm()
 	a.set_self_context_blocks(BLOCKS)
 	blob = json.loads(json.dumps(capture_foundation(a)))
@@ -104,7 +88,6 @@ def test_replay_round_trips_the_blocks(monkeypatch):
 def test_a_pre_060_blob_replays_the_weld_and_clears_live_blocks(monkeypatch):
 	"""An F13 blob written before 060 has no blocks key: it is still whole, and
 	its combined message must not stack on the freshly rendered blocks."""
-	monkeypatch.delenv("SELF_CONTEXT_COMBINED", raising=False)
 	old = _mm()
 	old.set_self_context_message("the old weld")
 	blob = json.loads(json.dumps(capture_foundation(old)))

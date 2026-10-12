@@ -334,6 +334,10 @@ def _refuse_agent_child_owner_verb() -> None:
 
 def main():
     """Entry point for [project.scripts]."""
+    # D6: `import core` no longer configures the root logger; the process
+    # entry point does (bootstrap_local re-levels the console to ERROR later).
+    from core.logging import setup_logging
+    setup_logging(log_level="INFO")
     _register_pack_policies()
     _refuse_agent_child_owner_verb()
     cli()

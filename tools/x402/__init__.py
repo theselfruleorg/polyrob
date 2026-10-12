@@ -1,9 +1,10 @@
 """Agent x402 paying tool package (gated; default OFF)."""
 import os
+from core.env import bool_env
 
 
 def x402_client_enabled() -> bool:
-    return os.getenv("X402_CLIENT_ENABLED", "false").lower() == "true"
+    return bool_env("X402_CLIENT_ENABLED", False)
 
 
 def register_x402_tool(force: bool = False) -> bool:

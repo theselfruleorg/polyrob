@@ -222,7 +222,7 @@ def test_statusbar_shows_thinking_and_approval():
 
 
 def test_statusbar_falls_back_to_last_tool_without_span_events():
-    """RUN_EVENTS_ENABLED=off / old feeds: the legacy last-tool segment stands."""
+    """Old feeds: the legacy last-tool segment stands."""
     state = SessionState()
     state.lifecycle.begin_turn()
     state.update(normalize(_exec_dict(call_id=None)))

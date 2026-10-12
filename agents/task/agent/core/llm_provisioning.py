@@ -195,8 +195,8 @@ class LLMProvisioningMixin:
 
     def _provision_compaction_llm(self) -> Optional[Any]:
         """A5/A1: cheap aux model used ONLY for `llm_compact_history`. Thin wrapper over
-        _provision_aux_llm('compaction') — preserves the COMPACTION_MODEL / COMPACTION_AUTO_AUX
-        knobs and all existing callers. Inert by default (None => main model)."""
+        _provision_aux_llm('compaction') — honours AUX_MODEL_COMPACTION / COMPACTION_AUTO_AUX
+        and keeps all existing callers. Inert by default (None => main model)."""
         return self._provision_aux_llm("compaction")
 
     def _reconcile_native_tools(self, provider: str) -> bool:

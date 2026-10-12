@@ -88,7 +88,7 @@ async def maybe_escalate_blocked(task_agent: Any, goal: Any) -> bool:
         from agents.task.goals.board import STATUS_BLOCKED
         if getattr(goal, "status", None) != STATUS_BLOCKED:
             return False
-        from agents.task.constants import AutonomyConfig
+        from core.config_policy import AutonomyConfig
         if not AutonomyConfig.goal_blocker_escalation():
             return False
         container = getattr(task_agent, "container", None)
@@ -125,7 +125,7 @@ async def maybe_escalate_empty_pipeline(task_agent: Any, *,
     either way.
     """
     try:
-        from agents.task.constants import AutonomyConfig
+        from core.config_policy import AutonomyConfig
         if not AutonomyConfig.goal_blocker_escalation():
             return False
         if planner_summary and "queue healthy" in planner_summary.lower():

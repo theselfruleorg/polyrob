@@ -13,7 +13,7 @@ import re
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-PACKAGES = ("agents", "api", "cli", "core", "cron", "modules", "surfaces", "tools", "webview", "utils",
+PACKAGES = ("agents", "api", "cli", "core", "polyrob", "cron", "modules", "surfaces", "tools", "webview", "utils",
             "packs")
 # A real call has a receiver (`pw.chromium.launch(`); prose in a docstring or
 # comment writes `playwright.chromium.launch(env=…)` too, so require a code line

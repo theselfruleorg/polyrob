@@ -129,7 +129,7 @@ class CronScheduler:
     def set_yield_hook(self, hook) -> None:
         """056 WS5: ``async hook(job) -> list[goal_id]`` — the goal dispatcher's
         `yield_for_rail`, called when a MONEY job is due while a board goal holds
-        the process. Wired by core/autonomy_runtime.py; None = never yield."""
+        the process. Wired by polyrob/app/autonomy_runtime.py; None = never yield."""
         self._yield_hook = hook
 
     async def _maybe_yield_for_money(self, now: datetime) -> List[str]:
@@ -175,6 +175,11 @@ class CronScheduler:
             return TickResult(skipped_locked=True)
         yielded: List[str] = []
         try:
+            from core.lifecycle import draining
+            if draining():
+                # 077: this process is draining for a restart — start nothing
+                # new; due jobs stay due for the restarted process.
+                return TickResult(skipped_busy=True)
             if is_interactive_busy():
                 # A human mid-turn (REPL / owner chat) or a goal run holds the shared
                 # workspace. 056 WS5: a due PRE-EMPTING job may pre-empt a GOAL (never

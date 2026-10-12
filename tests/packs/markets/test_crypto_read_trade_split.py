@@ -9,11 +9,15 @@ import types
 import pytest
 
 from polyrob_markets.polymarket.service import (
-    PolymarketTool, PolymarketDataTool, PM_READ_ACTIONS,
+    PolymarketTool, PolymarketDataTool, pm_read_actions,
 )
 from polyrob_markets.hyperliquid.service import (
-    HyperliquidTool, HyperliquidDataTool, HL_READ_ACTIONS,
+    HyperliquidTool, HyperliquidDataTool, hl_read_actions,
 )
+
+# W4: the read sets are the *_data tools' policy rows (pack.toml).
+PM_READ_ACTIONS = pm_read_actions()
+HL_READ_ACTIONS = hl_read_actions()
 
 PM_TRADE = {"place_limit_order", "place_market_order", "cancel_order",
             "cancel_all_orders", "get_balance"}

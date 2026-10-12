@@ -7,7 +7,6 @@ and 09-18 rules. Now a line an update drops moves under ``## Superseded``, dated
 the ACTIVE part, and the cap counts only the active part.
 """
 
-import pytest
 
 from core.doc_claims import (SUPERSEDED_HEADING, SUPERSEDED_MAX_CHARS,
                              active_rule_lines, carry_superseded,
@@ -18,11 +17,6 @@ from core.owner_doc_writer import OwnerDocWriter
 from core.self_evolution import summarize_doc_change
 
 OLD = "# Owner rules\n\n- No public bug-fix reports.\n- Post daily at 15:30.\n"
-
-
-@pytest.fixture(autouse=True)
-def _armed(monkeypatch):
-	monkeypatch.delenv("OWNER_RULES_SUPERSEDE", raising=False)
 
 
 def test_a_replaced_line_is_superseded_with_date_and_successor():
@@ -94,14 +88,6 @@ def test_cap_counts_only_the_active_rules(tmp_path):
 	assert res.ok, res.errors
 	assert len(w.read("u1")) > OWNER_DOC_MAX_CHARS
 	assert load_owner_doc(tmp_path, "u1") == "- a short rule"
-
-
-def test_flag_off_restores_the_flat_doc(tmp_path, monkeypatch):
-	monkeypatch.setenv("OWNER_RULES_SUPERSEDE", "false")
-	w = OwnerDocWriter(tmp_path)
-	w.propose(OLD, user_id="u1", created_by="user", pending=False)
-	w.propose(OLD.replace("15:30", "16:00"), user_id="u1", created_by="user", pending=False)
-	assert SUPERSEDED_HEADING not in w.read("u1")
 
 
 def test_forged_author_is_still_quarantined(tmp_path):

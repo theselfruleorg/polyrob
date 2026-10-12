@@ -28,7 +28,7 @@ def _router_client():
 
 
 def _reload_server(monkeypatch, multitenant=False):
-    monkeypatch.setenv("WEBGATE_MULTITENANT", "true" if multitenant else "false")
+    monkeypatch.setenv("POLYROB_POSTURE", "multitenant" if multitenant else "local")
     monkeypatch.setenv("ENV", "development")
     import webview.server as server
     return importlib.reload(server)
@@ -312,7 +312,7 @@ def test_doctor_endpoint_reuses_doctor_report(monkeypatch):
     assert "provider" in body and "model" in body
 
 
-def test_doctor_endpoint_matches_real_report():
+def test_doctor_endpoint_matches_real_report(tmp_path):
     """Without mocking, the endpoint returns the SAME content doctor_report produces.
 
     The endpoint resolves in server-process context (POLYROB_LOCAL absent means
@@ -328,9 +328,9 @@ def test_doctor_endpoint_matches_real_report():
     direct = doctor_report(dict(os.environ), local_absent_means_on=False)
     if body["checks"] != direct:  # pytest truncates the repr; keep the whole diff
         import json as _json
-        with open("/tmp/iface-audit/doctor_diff.json", "w") as fh:
-            _json.dump({"endpoint": body["checks"], "direct": direct}, fh, indent=1)
-    assert body["checks"] == direct
+        diff = tmp_path / "doctor_diff.json"
+        diff.write_text(_json.dumps({"endpoint": body["checks"], "direct": direct}, indent=1))
+        pytest.fail(f"endpoint checks != doctor_report (full diff: {diff})")
 
 
 # --------------------------------------------------------------------------- #

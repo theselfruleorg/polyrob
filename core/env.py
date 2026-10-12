@@ -109,7 +109,7 @@ def is_production_env(resolved: Optional[str] = None) -> bool:
 
     The repo has four names for one fact: ``ENVIRONMENT`` (what prod's
     ``/etc/polyrob/polyrob.env`` sets), ``POLYROB_ENV``, ``CONFIG_ENV``/``ENV``
-    (``core.bootstrap.load_env``'s ``resolved``), and the ``PRODUCTION`` bool.
+    (``polyrob.app.bootstrap.load_env``'s ``resolved``), and the ``PRODUCTION`` bool.
     A boot refusal keyed on only one of them silently passes on the others.
     """
     names = [resolved, os.getenv("ENVIRONMENT"), os.getenv("POLYROB_ENV"),

@@ -49,16 +49,6 @@ def test_goal_create_rejects_malformed_checks(tmp_path):
     assert board.list(user_id="u1") == [], "invalid checks must not produce an unchecked goal"
 
 
-def test_seed_goal_check_arg_parses():
-    import pytest
-    # scripts/ is private-tree tooling and never ships to the public repo.
-    pytest.importorskip("scripts.seed_goal")
-    from scripts.seed_goal import parse_check
-    assert parse_check("artifact_glob:*.md") == {"type": "artifact_glob", "pattern": "*.md"}
-    assert parse_check("http_ok:https://example.com/x") == {
-        "type": "http_ok", "url": "https://example.com/x"}
-
-
 def test_planner_prompt_encourages_checks(tmp_path):
     from agents.task.goals.board import GoalBoard
     from agents.task.goals.planner import build_planner_prompt

@@ -73,7 +73,7 @@ from core.exceptions import (
 # PIL Image imported locally in save_screenshot() method where needed
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from tools.browser.views import BrowserStateHistory, BrowserState
+from agents.task.loop_types.browser_views import BrowserStateHistory, BrowserState
 from agents.task.agent.message_manager.service import MessageManager
 from agents.task.agent.prompts import SystemPrompt, AgentMessagePrompt
 from agents.task.agent.views import (
@@ -86,7 +86,7 @@ from agents.task.agent.views import (
     AgentStepInfo,
     ActionResult,
 )
-from tools.dom.views import DOMElementNode, SelectorMap
+from agents.task.loop_types.dom_views import DOMElementNode, SelectorMap
 from agents.task.telemetry.views import (
     HumanApprovalRequestedEvent,
     HumanApprovalDecisionEvent,
@@ -259,12 +259,9 @@ def _last_compaction_savings(manager: Any) -> Optional[float]:
 def _emit_compaction_event(agent: Any, event_name: str, mode: str, **fields: Any) -> None:
 	"""019 P1: emit a compaction_started/compaction_finished feed span event.
 
-	Fail-open, flag-gated — a telemetry failure must never affect compaction.
+	Fail-open — a telemetry failure must never affect compaction.
 	"""
 	try:
-		from core.config_policy import AutonomyConfig
-		if not AutonomyConfig.run_events_enabled():
-			return
 		from agents.task.telemetry.views import (
 			CompactionFinishedEvent,
 			CompactionStartedEvent,
@@ -533,7 +530,7 @@ class StepMixin:
 					# this comment promised was actually an uncaught crash of the whole
 					# run, skipping the H-MEM save and the graceful error path.
 					from agents.task.agent.views import BrowserState
-					from tools.dom.views import DOMElementNode
+					from agents.task.loop_types.dom_views import DOMElementNode
 					state = BrowserState(
 						url="",
 						title="No Browser",
@@ -549,7 +546,7 @@ class StepMixin:
 				self.logger.debug("No browser context available - running without browser state")
 				# Create a minimal state object for non-browser tasks
 				from agents.task.agent.views import BrowserState
-				from tools.dom.views import DOMElementNode, SelectorMap
+				from agents.task.loop_types.dom_views import DOMElementNode, SelectorMap
 				# BrowserState requires element_tree and selector_map from DOMState
 				# Create a minimal DOMElementNode instance
 				minimal_element = DOMElementNode(
@@ -571,7 +568,7 @@ class StepMixin:
 			self.logger.error(f"Unexpected error in state setup: {str(e)}", exc_info=True)
 			# Create minimal state as fallback
 			from agents.task.agent.views import BrowserState
-			from tools.dom.views import DOMElementNode, SelectorMap
+			from agents.task.loop_types.dom_views import DOMElementNode, SelectorMap
 			# Create a minimal DOMElementNode for no-browser state
 			empty_element = DOMElementNode(
 				tag_name="html",

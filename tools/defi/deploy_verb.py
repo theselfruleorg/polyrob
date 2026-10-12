@@ -40,7 +40,7 @@ def _refuse_non_owner_turn(execution_context, verb: str) -> Optional[str]:
     ONE shape for every money verb: the kernel's leaf + principal steps
     (``core.money.authorize.authorize_spend``)."""
     from core.money.authorize import SpendIntent, authorize_spend
-    verdict = authorize_spend(SpendIntent(what=verb, pause=False), execution_context)
+    verdict = authorize_spend(SpendIntent.verb_gate(verb), execution_context)
     return verdict.reason if verdict.refused else None
 
 
@@ -55,7 +55,7 @@ def _refuse_paused(*, entry: bool = False, execution_context=None) -> Optional[s
     # A genuine owner turn is the owner acting; the pause bounds the agent only.
     from tools.controller.turn_origin import (
         _is_autonomous_goal_turn, _is_forged_or_autonomous_turn)
-    verdict = authorize_spend(SpendIntent(principal=False, leaf=False, entry=entry),
+    verdict = authorize_spend(SpendIntent.pause_recheck(entry=entry),
                               execution_context, forged_fn=_is_forged_or_autonomous_turn,
                               autonomous_ok_fn=_is_autonomous_goal_turn)
     return verdict.reason if verdict.refused else None

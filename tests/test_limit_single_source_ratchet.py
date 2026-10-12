@@ -15,6 +15,8 @@ stores with no sync: the agent's per-tx/daily caps and the signer's
 import pathlib
 import re
 
+from tests.support.repo_index import repo_index
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 #: flag -> the files allowed to name it (outside tests/), each with its reason.
@@ -53,6 +55,8 @@ def _py_files():
         rel = p.relative_to(ROOT)
         if rel.parts and rel.parts[0] in _SKIP_DIRS:
             continue
+        if rel.parts[:2] == ("ops", "tests"):  # the private tests moved there
+            continue
         if any(part.startswith(".") or part in ("site-packages", "__pycache__")
                for part in rel.parts):
             continue
@@ -84,7 +88,7 @@ def test_money_cap_flags_have_one_reader():
         if rel in _GENERATED:
             continue
         try:
-            text = path.read_text(encoding="utf-8")
+            text = repo_index().text(path)
         except (OSError, UnicodeDecodeError):
             continue
         for flag in set(pattern.findall(text)):

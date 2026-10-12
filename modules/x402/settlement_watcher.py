@@ -3,7 +3,7 @@
 is never silently dropped either (G-22).
 
 A small ticker (same shape as the cron/goal tickers, wired through
-``core/autonomy_runtime.start_autonomy``) that each tick:
+``polyrob/app/autonomy_runtime.start_autonomy``) that each tick:
 
 0. (Task 11, Phase 2, gated ``X402_SETTLE_ONCHAIN_DETECT`` — default OFF, ON under
    effective AUTONOMY_MODE=autonomous) scans

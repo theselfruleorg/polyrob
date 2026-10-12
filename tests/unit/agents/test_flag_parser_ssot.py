@@ -14,14 +14,6 @@ def test_untrusted_wrap_off_values(monkeypatch):
     assert C.UNTRUSTED_TOOL_RESULT_WRAP is False
 
 
-def test_progressive_disclosure_access_time(monkeypatch):
-    importlib.reload(C)
-    monkeypatch.setenv("SKILL_PROGRESSIVE_DISCLOSURE", "off")
-    assert C.skill_progressive_disclosure() is False
-    monkeypatch.setenv("SKILL_PROGRESSIVE_DISCLOSURE", "yes")
-    assert C.skill_progressive_disclosure() is True
-
-
 def test_decoy_constants_removed():
     importlib.reload(C)
     assert not hasattr(C, "MEMORY_PREFETCH_CADENCE")   # live gate is memory_prefetch_cadence()

@@ -33,7 +33,7 @@ def _ok(cmd, **_kw):
 @pytest.fixture
 def local_on(monkeypatch):
     monkeypatch.setenv("POLYROB_LOCAL", "1")
-    monkeypatch.delenv("LAZY_DEPS_ENABLED", raising=False)
+    monkeypatch.delenv("LAZY_DEPS_MODE", raising=False)
     monkeypatch.delenv("ROB_LOCAL", raising=False)
 
 
@@ -45,18 +45,18 @@ def missing(monkeypatch):
 
 # --- the gate ----------------------------------------------------------------- #
 
-def test_mode_defaults_to_trusted_and_the_old_boolean_still_maps(monkeypatch):
-    """066 P1: ``LAZY_DEPS_MODE`` (default ``trusted``) replaces the 058 boolean.
-    ``LAZY_DEPS_ENABLED`` still maps (true -> trusted, false -> off); the new
-    flag wins; an unknown value fails closed to ``off``."""
+def test_mode_defaults_to_trusted_and_the_old_boolean_is_not_read(monkeypatch):
+    """066 P1: ``LAZY_DEPS_MODE`` (default ``trusted``) replaced the 058 boolean;
+    ``LAZY_DEPS_ENABLED`` is retired and no longer read; an unknown value fails
+    closed to ``off``."""
     for name in ("LAZY_DEPS_ENABLED", "LAZY_DEPS_MODE", "POLYROB_LOCAL", "ROB_LOCAL"):
         monkeypatch.delenv(name, raising=False)
     assert ld.lazy_mode() == "trusted" and lazy_installs_enabled() is True
-    monkeypatch.setenv("LAZY_DEPS_ENABLED", "off")
-    assert ld.lazy_mode() == "off" and lazy_installs_enabled() is False
-    monkeypatch.setenv("LAZY_DEPS_ENABLED", "true")
+    monkeypatch.setenv("LAZY_DEPS_ENABLED", "off")   # retired: ignored
     assert ld.lazy_mode() == "trusted"
-    monkeypatch.setenv("LAZY_DEPS_MODE", "legacy")   # the new flag wins
+    monkeypatch.setenv("LAZY_DEPS_MODE", "off")
+    assert ld.lazy_mode() == "off" and lazy_installs_enabled() is False
+    monkeypatch.setenv("LAZY_DEPS_MODE", "legacy")
     assert ld.lazy_mode() == "legacy"
     monkeypatch.setenv("LAZY_DEPS_MODE", "yolo")
     assert ld.lazy_mode() == "off"
@@ -70,13 +70,13 @@ def legacy(monkeypatch):
 
 def test_disabled_refuses_with_the_extra_named(monkeypatch, missing):
     """The refusal a SERVER sees. It must name the extra, because on a server the
-    remedy is editing PROD_EXTRAS, not running pip."""
-    monkeypatch.setenv("LAZY_DEPS_ENABLED", "false")
+    remedy is adding the extra to the deploy's install set, not running pip."""
+    monkeypatch.setenv("LAZY_DEPS_MODE", "off")
     calls = []
     monkeypatch.setattr(ld, "_run_installer", lambda cmd, **kw: calls.append(cmd) or _ok(cmd))
     with pytest.raises(FeatureUnavailable) as exc:
         ensure("provider.gemini", prompt=False)
-    assert "polyrob[gemini]" in str(exc.value) and "PROD_EXTRAS" in str(exc.value)
+    assert "polyrob[gemini]" in str(exc.value) and "extras your deploy installs" in str(exc.value)
     assert calls == []  # never reached pip
 
 
@@ -230,10 +230,10 @@ def test_is_available_never_installs(monkeypatch):
 # --- the remedy --------------------------------------------------------------- #
 
 def test_remedy_names_the_extra_and_on_a_server_prod_extras(monkeypatch):
-    monkeypatch.setenv("LAZY_DEPS_ENABLED", "false")
+    monkeypatch.setenv("LAZY_DEPS_MODE", "off")
     r = remedy("provider.gemini")
-    assert "pip install 'polyrob[gemini]'" in r and "PROD_EXTRAS" in r
-    monkeypatch.setenv("LAZY_DEPS_ENABLED", "true")
+    assert "pip install 'polyrob[gemini]'" in r and "extras your deploy installs" in r
+    monkeypatch.setenv("LAZY_DEPS_MODE", "trusted")
     assert "PROD_EXTRAS" not in remedy("provider.gemini")
 
 

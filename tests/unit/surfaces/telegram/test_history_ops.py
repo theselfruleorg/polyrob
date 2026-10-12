@@ -30,7 +30,5 @@ def test_transcript_newest_last_with_rails(tmp_path):
     assert "no lines in the last 1h" not in history_reply("12345", str(tmp_path), ["1h"])
 
 
-def test_owner_only_and_flag_off(tmp_path, monkeypatch):
+def test_owner_only(tmp_path):
     assert "Only the owner" in history_reply(None, str(tmp_path), [])
-    monkeypatch.setenv("OWNER_THREAD_ENABLED", "off")
-    assert "OWNER_THREAD_ENABLED" in history_reply("12345", str(tmp_path), [])

@@ -62,7 +62,7 @@ def resolve_user_mcp_service(container: Any = None) -> Optional[Any]:
 
     None is a real answer, not an error: the store is registered only when
     ``MCP_ENABLED`` is on and a database exists
-    (``core.initialization.initialize_user_mcp_service``).
+    (``polyrob.app.initialization.initialize_user_mcp_service``).
     """
     try:
         if container is None:
@@ -77,7 +77,7 @@ def resolve_user_mcp_service(container: Any = None) -> Optional[Any]:
 
 def _no_store_message() -> str:
     return ("The MCP server store is not available on this deployment, so there "
-            "is nowhere to save a server. It needs MCP_ENABLED=true and a "
+            "is nowhere to save a server. It needs POLYROB_OVERRIDES=MCP_ENABLED=true and a "
             "database. Nothing was changed.")
 
 

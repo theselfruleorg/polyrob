@@ -50,7 +50,7 @@ def _pm(tmp_path):
 
 
 def test_write_file_routes_to_execution_context_tenant(_pm):
-    from tools.controller.execution_context import ActionExecutionContext
+    from agents.task.loop_types.execution_context import ActionExecutionContext
     from tools.controller.views import WriteFileAction
 
     tool = _fs_tool_stale_user()

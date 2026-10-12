@@ -3,52 +3,25 @@
 """Core module containing base components and initialization logic."""
 
 # Import standard logging before any local imports
-import logging
+import logging as _std_logging  # `logging` below is rebound to core.logging
 
 # Import logging utilities first
 from .logging import setup_logging, get_component_logger
 
-# Initialize root logger with our custom formatting
-setup_logging(log_level='INFO')
-logger = get_component_logger(__name__)
+# D6 (2026-10-10): importing core never configures the ROOT logger. A library
+# import must leave an embedder's logging alone; each process entry point
+# (cli.polyrob.main, api.server_boot.run_server, webview.server, the signer,
+# polyrob.app.bootstrap) calls setup_logging() itself.
+logger = _std_logging.getLogger(__name__)
 
 # Lightweight imports (no heavy deps)
 from .base_component import BaseComponent
 from .config import BotConfig
 from .container import DependencyContainer
-from utils.rate_limit_manager import RateLimitManager
+# W7: the composition root (Bot, initialize_*/cleanup_*) lives in polyrob.app, and
+# this package no longer re-exports RateLimitManager (utils) or the module
+# metadata (modules) — importing core pulls no upper tier.
 
-
-def __getattr__(name):
-    """Lazy-load heavy modules (bot, initialization) on first access."""
-    if name == 'Bot':
-        from .bot import Bot
-        globals()['Bot'] = Bot
-        return Bot
-    if name in (
-        'initialize_core', 'initialize_modules', 'initialize_tools',
-        'initialize_managers', 'initialize_agents', 'cleanup_core', 'cleanup_tools',
-    ):
-        from .initialization import (
-            initialize_core, initialize_modules, initialize_tools,
-            initialize_managers, initialize_agents, cleanup_core, cleanup_tools,
-        )
-        globals().update({
-            'initialize_core': initialize_core,
-            'initialize_modules': initialize_modules,
-            'initialize_tools': initialize_tools,
-            'initialize_managers': initialize_managers,
-            'initialize_agents': initialize_agents,
-            'cleanup_core': cleanup_core,
-            'cleanup_tools': cleanup_tools,
-        })
-        return globals()[name]
-    if name in ('MODULE_METADATA', 'MODULE_INIT_ORDER'):
-        from modules import MODULE_METADATA, MODULE_INIT_ORDER
-        globals()['MODULE_METADATA'] = MODULE_METADATA
-        globals()['MODULE_INIT_ORDER'] = MODULE_INIT_ORDER
-        return globals()[name]
-    raise AttributeError(f"module 'core' has no attribute {name!r}")
 
 # Core bot functionality - explicit imports from exceptions
 from .exceptions import (
@@ -104,56 +77,16 @@ from .exceptions import (
     SessionStateError,
 )
 
-# Core components in one place with clear dependencies
-CORE_COMPONENTS = {
-    'config': {
-        'class': BotConfig,
-        'description': 'Configuration',
-        'required': True,
-        'dependencies': {
-            'required': [],
-            'optional': []
-        }
-    },
-    'rate_limit_manager': {
-        'class': RateLimitManager,
-        'description': 'Rate limiting',
-        'required': True,
-        'dependencies': {
-            'required': ['config'],
-            'optional': []
-        }
-    },
-}
-
 # Export core components
 __all__ = [
     # Base components
     'BaseComponent',
-    'Bot',
     'BotConfig',
     'DependencyContainer',
-    
-    # Core managers 
-    'RateLimitManager',
-    
-    # Initialization
-    'initialize_core',
-    'initialize_modules',
-    'initialize_tools',
-    'initialize_managers',
-    'initialize_agents',
-    'cleanup_core',
-    'cleanup_tools',
-    
+
     # Logging
     'setup_logging',
     'get_component_logger',
-
-    # Component metadata
-    'CORE_COMPONENTS',
-    'MODULE_METADATA',
-    'MODULE_INIT_ORDER'
 ]
 
 # Version info

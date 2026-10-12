@@ -26,6 +26,8 @@ import ast
 import re
 from pathlib import Path
 
+from tests.support.repo_index import repo_index
+
 import pytest
 
 REPO = Path(__file__).resolve().parents[3]
@@ -183,7 +185,7 @@ def is_dangerous_identifier(raw: str) -> bool:
 # ever gets added there, it starts covered rather than silently exempt.
 # No directory is excluded: nothing here is vendored or generated code.
 _SCAN_DIRS = (
-    "tools", "core", "modules", "agents", "api", "surfaces", "cli",
+    "tools", "core", "polyrob", "modules", "agents", "api", "surfaces", "cli",
     "webview", "migrations", "scripts", "deployment", "cron", "utils",
 )
 
@@ -207,11 +209,11 @@ def _logging_fstrings(path: Path):
     used unconditionally rather than only when a line-count check trips.
     """
     try:
-        source = path.read_text(encoding="utf-8")
-        tree = ast.parse(source)
+        source = repo_index().text(path)
+        nodes = repo_index().nodes(path)
     except (SyntaxError, UnicodeDecodeError):
         return
-    for node in ast.walk(tree):
+    for node in nodes:
         if not isinstance(node, ast.Call):
             continue
         fn = node.func

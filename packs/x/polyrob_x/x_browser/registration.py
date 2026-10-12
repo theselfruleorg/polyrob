@@ -9,8 +9,8 @@ from __future__ import annotations
 
 def x_browser_enabled() -> bool:
     """Whether the browser-based X tool is registered. Default OFF."""
-    from core.config_policy.policy import _bool_env
-    return _bool_env("X_BROWSER_ENABLED", False)
+    from polyrob.sdk import bool_env
+    return bool_env("X_BROWSER_ENABLED", False)
 
 
 def register_x_browser_tool(force: bool = False) -> bool:

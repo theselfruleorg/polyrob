@@ -21,7 +21,7 @@ from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from tools.controller.types import ActionResult
+from agents.task.loop_types.controller_types import ActionResult
 
 logger = logging.getLogger(__name__)
 

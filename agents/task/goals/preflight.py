@@ -17,6 +17,7 @@ cron store must never stop dispatch, only stop this extra refusal.
 """
 from __future__ import annotations
 
+from core.runtime_paths import cron_db_path
 import logging
 import os
 import time
@@ -105,7 +106,7 @@ def next_preempting_rail(data_dir: str, now: datetime) -> Optional[Tuple[str, da
     Read-only over ``<data_dir>/cron.db`` via ``core.sqlite_util`` (the layering
     ratchet forbids agents -> cron), mirroring ``dispatcher.imminent_cron_job``.
     An absent or unreadable store answers None: fail-open, dispatch."""
-    db_path = os.path.join(data_dir, "cron.db")
+    db_path = cron_db_path(data_dir)
     if not os.path.exists(db_path):
         return None
     try:

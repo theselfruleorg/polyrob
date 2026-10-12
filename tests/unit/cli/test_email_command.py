@@ -27,7 +27,7 @@ def test_email_exits_cleanly_when_no_creds(monkeypatch):
     async def _fake_build(**kwargs):
         return fake_container
 
-    monkeypatch.setattr("core.bootstrap.build_cli_container", _fake_build)
+    monkeypatch.setattr("polyrob.app.bootstrap.build_cli_container", _fake_build)
     monkeypatch.setattr("cli.keys.preflight_or_onboard", lambda **k: True)
 
     res = CliRunner().invoke(email_mod.email, [])
@@ -74,14 +74,14 @@ def test_email_starts_and_stops_outbound_dispatcher(monkeypatch):
         async def stop(self):
             return None
 
-    monkeypatch.setattr("core.bootstrap.build_cli_container", _fake_build)
+    monkeypatch.setattr("polyrob.app.bootstrap.build_cli_container", _fake_build)
     monkeypatch.setattr("cli.keys.preflight_or_onboard", lambda **k: True)
     monkeypatch.setattr("core.surfaces.bootstrap.install_surface_bus", lambda *a, **k: None)
     monkeypatch.setattr("tools.email_tool.EmailTool", lambda *a, **k: MagicMock())
     monkeypatch.setattr("surfaces.email.harness.build_email_harness",
                         lambda *a, **k: _FakeHarness())
     # Skip the autonomy runtime — not under test here.
-    monkeypatch.setattr("agents.task.constants.local_mode_enabled", lambda: False)
+    monkeypatch.setattr("core.config_policy.local_mode_enabled", lambda: False)
 
     res = CliRunner().invoke(email_mod.email, ["--poll", "1"])
 

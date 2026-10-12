@@ -81,4 +81,4 @@ def test_doctor_flags_report_shows_mode_resolution(monkeypatch):
     lines = flags_report({"POLYROB_LOCAL": "1", "AUTONOMY_MODE": "autonomous",
                           "POLYROB_OWNER_USER_ID": "owner-uid"})
     row = next(ln for ln in lines if ln.strip().startswith("X402_INVOICE_ENABLED "))
-    assert "True" in row and "mode:autonomous" in row
+    assert "True" in row and "AUTONOMY_MODE=autonomous" in row

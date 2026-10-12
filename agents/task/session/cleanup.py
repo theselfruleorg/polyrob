@@ -286,7 +286,7 @@ class SessionCleanupMixin:
             # skip them here to avoid a double-recorded episode for the same run.
             # Fail-open: a memory error must NEVER block session teardown.
             try:
-                from agents.task.goals.autonomy_marker import is_autonomous
+                from core.autonomy_marker import is_autonomous
                 from core.surfaces.room_policy import is_public_session
                 _episode_session_id = getattr(self, "session_id", None)
                 # 044 C5: a PUBLIC (room) session writes NO episode. The episodic
@@ -314,7 +314,7 @@ class SessionCleanupMixin:
                         # the flag-off path byte-identical: summary stays None).
                         _summary = None
                         try:
-                            from agents.task.constants import AutonomyConfig
+                            from core.config_policy import AutonomyConfig
                             if AutonomyConfig.continuity_bridge_enabled():
                                 _summary = _derive_closing_chat_summary(self)
                         except Exception:
@@ -538,7 +538,7 @@ class SessionCleanupMixin:
                 # built fresh (not cached, not in self.llm_clients) by
                 # _provision_aux_llm(isolated=True) for compaction/reflection, so nothing
                 # else closes them — their httpx connection pools would leak per session
-                # whenever COMPACTION_MODEL / AUX_* / REFLECTION_LLM_ENABLED is set.
+                # whenever AUX_* / REFLECTION_LLM_ENABLED is set.
                 for agent_id, agent in list(self.agents.items()):
                     for owner, attr in (
                         (getattr(agent, 'message_manager', None), 'aux_llm'),

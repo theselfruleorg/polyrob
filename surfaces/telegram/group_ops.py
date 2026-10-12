@@ -518,7 +518,7 @@ def _rail_check_fn():
 
     ⚠️ `offer()` checked only its own flag and the room, so an instance with
     X402_INVOICE_ENABLED off — whose settlement watcher therefore never starts
-    (`core/autonomy_runtime.py`) — would mint offers, take real money and settle
+    (`polyrob/app/autonomy_runtime.py`) — would mint offers, take real money and settle
     nothing, forever. Returns a REASON string (refuse) or None (ready).
     """
     def check(asset) -> Optional[str]:

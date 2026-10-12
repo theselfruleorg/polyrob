@@ -38,9 +38,9 @@ class GeminiClient(LLMClient):
         # Model and API configuration
         llm_config = config.get_llm_config()
         gemini_config = llm_config.get('gemini', {})
-        
-        # Default to gemini-2.5-flash (latest stable as of Nov 2025)
-        self.model_type = gemini_config.get('model', 'gemini-2.5-flash')
+        # Default: the operator pin / registry default (get_default_model)
+        from modules.llm.llm_client_registry import get_default_model
+        self.model_type = gemini_config.get('model') or get_default_model('gemini')
         
         # API key priority: 1) gemini config, 2) GEMINI_API_KEY env, 3) GOOGLE_API_KEY env
         self.api_key = (

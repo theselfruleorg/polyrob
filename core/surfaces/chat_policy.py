@@ -10,7 +10,7 @@ preference (``core/prefs.py``'s ``CHAT_PREF_SCHEMA`` + ``validate_pref``) —
 one validator, one vocabulary, one error sentence. What differs is only WHERE
 the value is stored and WHO reads it.
 
-``chat.mode`` replaces the ``GROUP_REQUIRE_MENTION`` gate. Being ADDRESSED (an
+``chat.mode`` is the one group gate. Being ADDRESSED (an
 @mention, a reply to the agent, or a ``chat.wake_words`` hit) is required at
 every rung but ``active`` — the owner is NOT exempt:
 
@@ -20,9 +20,6 @@ every rung but ``active`` — the owner is NOT exempt:
                           admin only.
 - ``off``               — never answer, not even the owner (he changes the mode
                           from a seat, not by shouting into the room).
-
-``GROUP_REQUIRE_MENTION=false`` is honoured for one release as an alias for
-``chat.mode=active``.
 
 Pure core: ``core.prefs`` at module top (both core), nothing from
 agents/surfaces/tools.
@@ -120,12 +117,6 @@ class ChatPolicy:
         mode = (os.getenv("GROUP_DEFAULT_MODE") or "mention").strip().lower()
         if mode not in MODES:
             mode = "mention"
-        # One-release alias: GROUP_REQUIRE_MENTION=false meant "respond to
-        # everything in an allowlisted room", which is exactly `active`.
-        from core.env import bool_env
-        if (bool_env("GROUP_REQUIRE_MENTION", True) is False
-                and not (os.getenv("GROUP_DEFAULT_MODE") or "").strip()):
-            mode = "active"
         return cls(mode=mode)
 
     def replace(self, **kw) -> "ChatPolicy":

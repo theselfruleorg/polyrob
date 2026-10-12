@@ -18,9 +18,9 @@ from agents.task.agent.core.result_processing import _mark_results_committed
 from agents.task.agent.message_manager.service import MessageManager
 from agents.task.agent.prompts import SystemPrompt
 from agents.task.agent.views import AgentStepInfo
-from tools.browser.views import BrowserState
-from tools.controller.types import ActionResult
-from tools.dom.views import DOMElementNode
+from agents.task.loop_types.browser_views import BrowserState
+from agents.task.loop_types.controller_types import ActionResult
+from agents.task.loop_types.dom_views import DOMElementNode
 
 from tests.support.prefix_cache import serialize_messages
 

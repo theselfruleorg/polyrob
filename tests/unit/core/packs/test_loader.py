@@ -108,7 +108,10 @@ def test_a_third_party_pack_loads_only_when_named(scratch, tmp_path, monkeypatch
         assert "third-party" in rec.reason
 
 
-def test_a_third_party_pack_is_refused_under_custody(scratch, tmp_path, monkeypatch):
+def test_a_third_party_pack_is_refused_under_custody_when_the_owner_says_refuse(
+        scratch, tmp_path, monkeypatch):
+    """D1 (2026-10-10): the refusal is the owner's SECURITY_SETTINGS row."""
+    monkeypatch.setenv("SECURITY_SETTINGS", "packs_under_custody=refuse")
     write_pack(tmp_path, monkeypatch, "tp", _toml("tp", tier="third-party"),
                "raise RuntimeError('third-party code ran')\n")
     from importlib.metadata import EntryPoint
@@ -124,9 +127,11 @@ def test_a_third_party_pack_is_refused_under_custody(scratch, tmp_path, monkeypa
 
 
 def test_custody_rule_refuses_remote_signer_even_without_local_secrets(monkeypatch):
+    """With the owner's packs_under_custody=refuse (D1: a setting, not a default)."""
     from core.packs import loader
     import core.security.custody_env as ce
     import core.security.host_execution as he
+    monkeypatch.setenv("SECURITY_SETTINGS", "packs_under_custody=refuse")
     monkeypatch.setenv("WALLET_SIGNER", "local")
     monkeypatch.setattr(he, "wallet_custody_enabled", lambda: False)
     assert loader.custody_refusal() is None

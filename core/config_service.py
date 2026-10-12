@@ -99,9 +99,10 @@ class SetResult:
 
 def known_keys() -> list:
     """Every describable key, prefs first then flags (for completers/pickers)."""
+    from core.config_policy.members import MEMBER_FLAGS
     from core.flags import REGISTRY
     from core.prefs import PREF_SCHEMA
-    return list(PREF_SCHEMA.keys()) + list(REGISTRY.keys())
+    return list(PREF_SCHEMA.keys()) + list(REGISTRY.keys()) + sorted(MEMBER_FLAGS)
 
 
 def describe(key: str, *, user_id: Optional[str] = None,
@@ -113,6 +114,9 @@ def describe(key: str, *, user_id: Optional[str] = None,
     from core.flags import flag_for
     if flag_for(key) is not None:
         return _describe_flag(key, include_chain)
+    from core.config_policy.members import is_member
+    if is_member(key):
+        return _describe_member(key, include_chain)
     raise KeyError(key)
 
 
@@ -140,9 +144,12 @@ def _describe_pref(key: str, user_id, home_dir, include_chain: bool) -> SettingI
         except Exception:
             logger.debug("config_service: preference rung unreadable for %s", key, exc_info=True)
         if spec.env_flag:
-            raw = os.environ.get(spec.env_flag)
+            from core.config_policy.members import OVERRIDES_ENV, flag_raw, is_member
+            raw = flag_raw(spec.env_flag)
             if raw is not None and raw.strip() != "":
-                rungs.append(Source(raw, f"env:{spec.env_flag}"))
+                label = (f"env:{OVERRIDES_ENV}" if is_member(spec.env_flag)
+                         else f"env:{spec.env_flag}")
+                rungs.append(Source(raw, label))
         builtin = _builtin_default(spec)
         if builtin is not None:
             rungs.append(Source(builtin[0], builtin[1]))
@@ -192,6 +199,33 @@ def _describe_flag(key: str, include_chain: bool) -> SettingInfo:
         effective=resolved.value, source=resolved.source,
         applies=_flag_applies(key), sensitivity="flag",
         enforcement="enforced", secret=secret, chain=chain,
+    )
+
+
+def _describe_member(key: str, include_chain: bool) -> SettingInfo:
+    """A posture member (D7): no env row of its own. The bundle sets it; the
+    ``POLYROB_OVERRIDES`` line changes it."""
+    from core.config_policy.members import (OVERRIDES_ENV, bundle_default, member_flag,
+                                            member_raw, member_source)
+    try:
+        from core.flags_catalog import DERIVED_FROM
+        bundles = ", ".join(DERIVED_FROM.get(key, ())) or "a posture bundle"
+    except Exception:
+        bundles = "a posture bundle"
+    chain = ()
+    if include_chain:
+        rungs = []
+        raw = member_raw(key)
+        if raw is not None:
+            rungs.append(Source(raw, f"env:{OVERRIDES_ENV}"))
+        rungs.append(Source(bundle_default(key), "bundle default"))
+        chain = tuple(rungs)
+    return SettingInfo(
+        key=key, namespace="flag", kind="bool", group="Posture bundles",
+        description=(f"posture member — its bundle sets it ({bundles}); change only this "
+                     f"member with {OVERRIDES_ENV}={key}=true|false"),
+        effective=member_flag(key), source=member_source(key), applies="restart",
+        sensitivity="flag", enforcement="enforced", secret=False, chain=chain,
     )
 
 
@@ -281,144 +315,32 @@ def search(query: str, *, user_id: Optional[str] = None, home_dir=None,
 # set_value
 # ---------------------------------------------------------------------------
 
-# 024 §2.6/§7.5: flags that select WHERE the agent's inference goes or WHERE
-# its credentials live are credential-equivalent — a compromised/spoofed owner
-# console must not be able to redirect them. Writable from the local CLI/REPL
-# only; the webview PATCH surface refuses them even at local/own_ops posture.
-CONSOLE_UNWRITABLE_FLAGS = frozenset({
-    "LLM_CUSTOM_PROVIDERS",
-    "POLYROB_AUTH_STORE",
-    "LLM_AUTH_STORE_ENABLED",
-    "LLM_CREDENTIAL_BORROW",
-    # 025: turning memory scopes OFF releases every quarantine at once.
-    "MEMORY_SCOPES_ENABLED",
-})
+# Console writability (S8, 024 §2.6, WEB-4) is a per-flag CLASS, declared in
+# the Access column of docs/CONFIGURATION.md and generated into
+# ``core.flags_catalog.ACCESS`` (2026-10-10). It used to be derived from the
+# SPELLING of a name (segments, prefixes, suffixes, catalog-group words), so a
+# new flag's protection depended on what it happened to be called.
+#
+#   console — the owner may write it from a remote surface (console, Telegram,
+#             the API) as well as the local CLI;
+#   file    — operator env file / local CLI only: it binds the owner, a money
+#             bound, approval, posture or trust, a guard, a tool set, or where
+#             data, code, inference or money goes. A remote write lands in
+#             ./.polyrob/.env, which OUTRANKS /etc/polyrob/polyrob.env on the
+#             next restart, so these would hand the instance over;
+#   secret  — file, and the value is masked.
+#
+# An UNKNOWN flag-shaped name is refused (fail closed); a typed preference key
+# (``budget.wallet_daily_usd``) is not a flag and has its own trust ladder.
+# Pinned by tests/unit/core/test_console_unwritable_flags.py.
 
-# S8 (agent + wallet security evaluation, 2026-09-14). The set above named four
-# flags; the write it guards is far wider. A remote flag write lands in
-# ``./.polyrob/.env``, which ``polyrob.service`` loads AFTER
-# ``/etc/polyrob/polyrob.env`` — so it OUTRANKS the operator's own env file on
-# the next restart. Four families can therefore hand the instance over, and are
-# refused on every non-local surface:
-#
-#   owner binding  — who the agent obeys (POLYROB_OWNER_*/BOT_OWNER_*/
-#                    TELEGRAM_OWNER_ID/ALLOWED_*/*ALLOWLIST*/pairing)
-#   money bounds   — the caps, venues and endpoints the spend guard measures
-#                    against (WALLET/USD/CAP/RPC/TREASURY segments, X402_*MAX*)
-#   approval       — whether a money verb needs an owner tap at all (APPROVAL)
-#   posture/trust  — POLYROB_LOCAL, AUTONOMY_MODE, *_POSTURE, the console's own
-#                    gating (WEBGATE_*/WEBVIEW_READ_ONLY/WEBVIEW_AUTH_ENABLED)
-#                    and the host-reach surface (CODE_EXEC_*/SHELL/SELF_ENV)
-#
-# …plus every secret-shaped flag (``is_secret_flag`` — the wallet master seed
-# lives there). Matching is by NAME SEGMENT (split on ``_``), so a cap added
-# tomorrow is covered without editing this file; over-blocking is the deliberate
-# bias (the remedy — the local CLI — is one command and is named in the refusal).
-# Known collateral: ALLOWED_REASONING_TURNS, OWNER_DIGEST_ENABLED and friends are
-# ordinary knobs caught by the ALLOWED_/OWNER rules. Pinned by
-# tests/unit/core/test_console_unwritable_flags.py.
-_UNWRITABLE_SEGMENTS = frozenset({
-    "OWNER", "PAIRING",                       # owner binding / identity
-    "WALLET", "USD", "CAP", "RPC", "TREASURY",  # money bounds + endpoints
-    "APPROVAL",                               # approval policy
-    "POSTURE",                                # trust posture ladders
-    "GUARD", "POLICY", "TRUST", "UNTRUSTED", "EGRESS", "SANDBOX",
-    "HOST", "COMMAND", "SIGNER", "ENV", "DATA", "DOMAIN",
-})
-_UNWRITABLE_PREFIXES = (
-    "WEBGATE_", "CODE_EXEC_", "ALLOWED_", "SHELL_", "DEFI_", "MCP_",
-    "BROWSER_", "TOKEN_", "CORS_", "SKILLS_", "SELF_", "UNTRUSTED_",
-)
-_UNWRITABLE_EXACT = frozenset({
-    "POLYROB_LOCAL", "POLYROB_LOCAL_OWNER", "AUTONOMY_MODE",
-    "WEBVIEW_READ_ONLY", "WEBVIEW_AUTH_ENABLED", "WEBVIEW_HOST",
-    "WEBVIEW_ALLOW_LOCAL_POSTURE",
-    "DELEGATE_BLOCKED_TOOLS", "SELF_ENV_ENABLED", "SHELL_TOOLS_ENABLED",
-    "ADMIN_WALLETS", "OUTBOUND_POLICY", "X402_PAYMENT_RECIPIENT",
-    # 067 P2: which pack CODE runs in this process (host reach).
-    "POLYROB_PACKS", "POLYROB_PACKS_DISABLED",
-})
-# WEB-4 (2026-10-07 review): the name families above still left security and
-# trust knobs console-writable (WEB_FETCH_ALLOW_PRIVATE_URLS,
-# HISTORY_SECRET_SCRUB, CORRESPONDENT_ACCESS_ENABLED, X402_TRUSTED_PROXIES,
-# X402_PAYMENT_ADDRESS, X402_FACILITATOR_URL, POLYROB_TOOL_DENYLIST,
-# FS_REALPATH_CONFINE, …). Three more rules, all derived — none names one flag:
-#
-#   catalog group — every flag the catalog files under a money group (the
-#                   wallet / x402 / DeFi / trading / self-update sections of
-#                   docs/CONFIGURATION.md) is operator-file-only;
-#   trust words   — a name segment that switches a guard (ALLOW, PRIVATE,
-#                   SCRUB, DENYLIST, CONFINE, PROXIES, …) or a tool exposure set
-#                   (TOOLS, TOOLSET, IDS, RIG);
-#   where-to      — a name that ENDS in a location (_URL, _PATH, _DIR, _FILE,
-#                   _ROOT, _HOME, _IMAGE, _SCRIPT, …): where data, code or
-#                   traffic goes.
-_UNWRITABLE_GROUP_WORDS = ("wallet", "x402", "defi", "trading", "polyrob update")
-_TRUST_SEGMENTS = frozenset({
-    "ALLOW", "PRIVATE", "UNSIGNED", "SCRUB", "SCRUBBER", "SECRET", "REDACT",
-    "DENYLIST", "CONFINE", "REALPATH", "PROXIES", "PROXY", "FORWARDED",
-    "FACILITATOR", "CORRESPONDENT", "TRADE", "TRADING", "INSTALL", "THREAT",
-    "PRIVILEGE", "SANITIZE", "PROTECT", "STRICT", "GATE", "SKIP", "REQUIRE",
-    "PROVENANCE", "ENFORCED", "SECURITY", "AUTH", "OAUTH", "OAUTH2", "LOGIN",
-    "SMTP", "IMAP", "GMAIL", "PHONE", "ADMIN", "OUTBOUND", "TOOLS", "TOOLSET",
-    "IDS", "RIG", "HALT", "PROFILE", "PROFILES", "DEPS",
-})
-_LOCATION_SUFFIXES = (
-    "_URL", "_URI", "_PATH", "_DIR", "_FILE", "_ROOT", "_HOME", "_IMAGE",
-    "_BINARY", "_SCRIPT", "_REPO", "_PYPI", "_GATEWAY", "_CLIENT_ID", "_APP_ID",
-    "_ADDRESS", "_DOMAINS", "_TREE", "_MANIFEST", "_PROVIDER", "_TRANSPORT",
-    "_API_BASE", "_CONFIG", "_ACCOUNT", "_EMAIL",
-)
-_LOCATION_EXACT = frozenset({
-    "ROB_LOCAL", "POLYROB_IN_DOCKER", "PRODUCTION", "ENVIRONMENT",
-    "GROUP_CHAT_ENABLED", "GROUP_DEFAULT_MODE", "SINGULAR_CHAT_ENABLED",
-    "APP_SERVICE_ENABLED",
-})
-#: The selector flags a model change rides on stay owner-writable: they pick a
-#: registered provider, never an endpoint or a credential.
-_WRITABLE_PROVIDER_SELECTORS = frozenset({
-    "DEFAULT_PROVIDER", "CHAT_PROVIDER", "AUX_PROVIDER", "COMPACTION_PROVIDER",
-})
-#: Ordinary operational knobs a WEB-4 trust word or group caught by accident
-#: (IMAP, GATE, REQUIRE, OUTBOUND): a poll interval, a cron cost gate, the
-#: step parser's strictness and the send retry queue. None of them picks an
-#: owner, a bound, a guard, a tool set or a destination, so the owner console
-#: keeps them.
-_WRITABLE_OPERATIONAL = frozenset({
-    "EMAIL_IMAP_POLL_SEC", "WAKE_CHANGE_GATE", "REQUIRE_SCHEMA_KEYS",
-    "OUTBOUND_QUEUE_ENABLED",
-    # Natural-work sweep 2026-10-08: ordinary settings a catalog group (billing,
-    # DeFi), a trust word (SCRUB, TOOLS, TOOLSET) or the _URL suffix caught. An
-    # outage notice, provider failover, a notice hold, the console footer links,
-    # display scrubbing (the stream scrub is always on) and the prompt-cache
-    # shape of the tool list: none picks an owner, a bound, a guard, which tools
-    # a run may use, or where data or money goes.
-    "LLM_OUTAGE_NOTICE", "BILLING_FAILOVER_ENABLED", "TX_NOTIFY_SENT_HOLD_SEC",
-    "POLYROB_SUPPORT_URL", "POLYROB_BRAND_URL", "POLYROB_ORG_URL",
-    "POLYROB_TERMS_URL", "POLYROB_PRIVACY_URL",
-    "THINK_SCRUBBER_ENABLED", "STREAM_BRAIN_SCRUB",
-    "ANTHROPIC_DEFERRED_TOOLS", "STABLE_AUTONOMOUS_TOOLSET",
-})
 #: A SAFETY stop: a remote surface may raise it (halt), never lower it — the
 #: resume path is the owner pause record (`/resume`), not an env edit.
 _RAISE_ONLY_FLAGS = frozenset({"AUTONOMY_HALT"})
 
-
-def _in_unwritable_group(name: str) -> bool:
-    try:
-        from core.flags import flag_for
-        flag = flag_for(name)
-    except Exception:         # pragma: no cover — fail CLOSED on a broken import
-        return True
-    if flag is None:
-        return False
-    group = str(flag.group or "").lower()
-    return any(word in group for word in _UNWRITABLE_GROUP_WORDS)
-
-
 # Flag names only (UPPER_SNAKE). A typed preference key (``budget.wallet_daily_usd``)
 # reads money-shaped but has its OWN trust ladder (guarded ⇒ queued for owner
-# review) and must never be swallowed by this denylist.
+# review) and must never be swallowed by this rule.
 _FLAG_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 
@@ -429,33 +351,14 @@ def is_console_unwritable(key: str) -> bool:
     the local CLI (`polyrob config set`) is the only writer. Never raises.
     """
     name = str(key or "")
-    if name in CONSOLE_UNWRITABLE_FLAGS:
-        return True
     if not _FLAG_NAME_RE.match(name):
         return False          # a pref key / anything non-flag-shaped
-    if name in _UNWRITABLE_EXACT or name.startswith(_UNWRITABLE_PREFIXES):
-        return True
-    segments = set(name.split("_"))
-    if segments & _UNWRITABLE_SEGMENTS:
-        return True
-    if "ALLOWLIST" in name or "ALLOWLISTED" in name:
-        return True
-    if name.startswith("X402_"):
-        return True
-    if name in _WRITABLE_OPERATIONAL:
-        return False
-    if segments & _TRUST_SEGMENTS or name in _LOCATION_EXACT:
-        return True
-    if (name.endswith(_LOCATION_SUFFIXES)
-            and name not in _WRITABLE_PROVIDER_SELECTORS):
-        return True
-    if _in_unwritable_group(name):
-        return True
     try:
-        from core.flags import is_secret_flag
-        return bool(is_secret_flag(name))
+        from core.flags import access_class
+        cls = access_class(name)
     except Exception:         # pragma: no cover — fail CLOSED on a broken import
         return True
+    return cls != "console"   # file, secret, or unknown (None) ⇒ refused
 
 
 def remote_write_refused(key: str, value) -> bool:
@@ -475,20 +378,61 @@ def remote_write_refused(key: str, value) -> bool:
 
 def closest_key(key: str) -> Optional[str]:
     """Closest documented key across BOTH namespaces (prefs + catalog flags)."""
-    import difflib
-    try:
-        from core.prefs import PREF_SCHEMA, catalog_names
-        names = list(PREF_SCHEMA.keys()) + list(catalog_names())
-    except Exception:
-        return None
-    hits = difflib.get_close_matches(str(key or ""), names, n=1)
+    hits = _suggest(key, n=1)
     return hits[0] if hits else None
+
+
+def _suggest(key: str, n: int = 3) -> list:
+    from core.key_suggest import suggest_keys
+    try:
+        names = known_keys()
+    except Exception:
+        return []
+    return suggest_keys(str(key or ""), names, n=n)
+
+
+def unknown_key_message(key: str) -> str:
+    """The ONE refusal for an unknown setting: names up to three close keys."""
+    hits = _suggest(key)
+    if not hits:
+        return f"unknown setting: {key} — not a documented flag or preference"
+    tail = hits[0] if len(hits) == 1 else f"{', '.join(hits[:-1])} or {hits[-1]}"
+    return f"unknown setting: {key} (did you mean {tail}?)"
 
 
 def set_value(key: str, value: str, *, scope: Optional[str] = None,
               user_id: Optional[str] = None, home_dir=None,
               confirm: bool = False, surface: str = "local",
               allow_unknown: bool = False, live: bool = False) -> SetResult:
+    """Route one write to the owning store (:func:`_route_write`). Never raises.
+
+    077: a write that applies only at the next start is recorded as WAITING
+    (``core.lifecycle.record_pending`` — ``/status``, ``polyrob doctor`` and
+    ``polyrob service status`` show it until the service restarts), and the
+    reply names the restart that applies it when a service is running.
+    """
+    res = _route_write(key, value, scope=scope, user_id=user_id, home_dir=home_dir,
+                       confirm=confirm, surface=surface, allow_unknown=allow_unknown,
+                       live=live)
+    if not (res.ok and str(res.applies or "").startswith("restart")):
+        return res
+    try:
+        from core import lifecycle
+        lifecycle.record_pending(key, scope or "global")
+        hint = lifecycle.restart_hint(surface)
+    except Exception:  # noqa: BLE001 — a hint never fails a completed write
+        logger.debug("config_service: pending-restart record skipped", exc_info=True)
+        hint = ""
+    if not hint:
+        return res
+    from dataclasses import replace
+    return replace(res, message=f"{res.message}\n{hint}", notes=(*res.notes, hint))
+
+
+def _route_write(key: str, value: str, *, scope: Optional[str] = None,
+                 user_id: Optional[str] = None, home_dir=None,
+                 confirm: bool = False, surface: str = "local",
+                 allow_unknown: bool = False, live: bool = False) -> SetResult:
     """Route one write to the owning store. Never raises.
 
     scope: ``user`` (preferences.toml — required for pref keys) or ``global``
@@ -537,6 +481,9 @@ def set_value(key: str, value: str, *, scope: Optional[str] = None,
         return _set_pref(key, value, user_id, home_dir, confirm)
     if scope == "project":
         return SetResult(False, "refused", project_scope_refusal(key))
+    from core.config_policy.members import is_member
+    if is_member(key):
+        return _set_member(key, value, scope or "global", surface=surface, live=live)
     from core.flags import REGISTRY, pattern_flag_for
     if key in REGISTRY or pattern_flag_for(key) is not None:
         return _set_flag(key, value, scope or "global", surface=surface, live=live)
@@ -560,17 +507,13 @@ def _is_secret_shaped(key: str) -> bool:
 
 
 def _write_env(path: Path, key: str, value: str, scope: str) -> Optional[str]:
-    """The ONE env-file write (0600) + project gitignore housekeeping.
-    Returns an error string, or None on success."""
+    """The ONE env-file write (0600). Returns an error string, or None on success.
+
+    There is no project-file write: :func:`set_value` refuses ``scope="project"``
+    before any writer runs, and :func:`_env_path` refuses it again."""
     try:
         from core.env_file import upsert_env_var
         upsert_env_var(path, key, str(value), secure=True)
-        if scope == "project":
-            try:
-                from core.gitignore import ensure_polyrob_gitignored
-                ensure_polyrob_gitignored(Path.cwd(), require_git_repo=True)
-            except Exception:
-                logger.debug("gitignore guard failed (non-fatal)", exc_info=True)
     except Exception as e:
         return f"write failed: {e}"
     return None
@@ -580,7 +523,7 @@ def _set_raw(key: str, value: str, scope: str, *, forced: bool) -> SetResult:
     """An uncataloged KEY from the local surface: ``--force`` or a secret."""
     if scope == "user":
         return SetResult(False, "refused",
-                         f"'{key}' is an env key — scope must be project or global")
+                         f"'{key}' is an env key — scope must be global")
     from core.env_file import env_write_error
     write_err = env_write_error(key, str(value))
     if write_err:
@@ -628,7 +571,7 @@ def _set_flag(key: str, value: str, scope: str, *, surface: str = "local",
                          f"unknown key: {key} — not a documented flag or preference")
     if scope == "user":
         return SetResult(False, "refused",
-                         f"'{key}' is an env flag — scope must be project or global")
+                         f"'{key}' is an env flag — scope must be global")
     # A secret-shaped NAME (``core.secrets.is_secret_key`` — e.g. *_TOKENS) is
     # never shape-validated: the refusal would echo the value back.
     if not (is_secret_flag(key) or _is_secret_shaped(key)):
@@ -677,6 +620,49 @@ def _set_flag(key: str, value: str, scope: str, *, surface: str = "local",
                      notes=notes, live=applied_live)
 
 
+def _set_member(key: str, value: str, scope: str, *, surface: str = "local",
+                live: bool = False) -> SetResult:
+    """D7: a posture member is written as its entry in the ``POLYROB_OVERRIDES``
+    line of the same env file (a stale direct line of the member is removed).
+    ``POLYROB_OVERRIDES`` is Access ``file``, so a remote surface never gets here."""
+    from core.config_policy.live_apply import live_apply_allowed
+    from core.config_policy.members import OVERRIDES_ENV, with_override
+    from core.env import _EXPLICIT_TRUE, _FALSEY
+    if scope == "user":
+        return SetResult(False, "refused",
+                         f"'{key}' is an env flag — scope must be global")
+    low = str(value or "").strip().lower()
+    if not (low in _EXPLICIT_TRUE or (low and low in _FALSEY)):
+        return SetResult(False, "invalid",
+                         f"{key} is a posture member and expects true or false; got {value!r}")
+    path = _env_path(scope)
+    try:
+        from core.env_file import read_env_file
+        current = read_env_file(path).get(OVERRIDES_ENV, "")
+    except Exception as e:
+        return SetResult(False, "invalid", f"cannot read {path}: {e}")
+    res = _set_flag(OVERRIDES_ENV, with_override(current, key, value), scope,
+                    surface=surface, live=False)
+    if not res.ok:
+        return res
+    try:
+        from core.env_file import remove_env_var
+        remove_env_var(path, key, secure=True)
+    except Exception:
+        logger.debug("config_service: stale member line not removed for %s", key, exc_info=True)
+    applied_live = False
+    applies = res.applies
+    if live and surface == "local" and live_apply_allowed(key):
+        os.environ[OVERRIDES_ENV] = with_override(os.environ.get(OVERRIDES_ENV), key, value)
+        applied_live, applies = True, "live"
+    effect = ("applies: live in this session + persisted for the next start"
+              if applied_live else "takes effect: restart")
+    word = "true" if low in _EXPLICIT_TRUE else "false"
+    return SetResult(True, "written",
+                     f"set {key}={word} as {OVERRIDES_ENV} entry in {path} ({effect})",
+                     store=res.store, applies=applies, notes=res.notes, live=applied_live)
+
+
 def home_env_path() -> Path:
     """The env file the local CLI READS — and so the only one it writes.
 
@@ -704,8 +690,12 @@ def project_scope_refusal(key: str = "") -> str:
 
 
 def _env_path(scope: str) -> Path:
+    """The env file a ``user``/``global`` write lands in: :func:`home_env_path`.
+
+    ``project`` has no file: polyrob does not load ``./.polyrob/.env``, so a
+    write there would configure nothing (:func:`project_scope_refusal`)."""
     if scope == "project":
-        return legacy_project_env_path()
+        raise ValueError(project_scope_refusal())
     return home_env_path()
 
 
@@ -727,7 +717,7 @@ def post_write_notes(key: str, value: str, scope: str, *,
     notes: list = []
     try:
         from core.env_file import read_env_file
-        project_path = _env_path("project")
+        project_path = legacy_project_env_path()
         global_path = _env_path("global")
         glob_vals = read_env_file(global_path)
         # A project checkout is untrusted input: ``core.paths.env_file_candidates``

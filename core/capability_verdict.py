@@ -80,8 +80,8 @@ def _turn_is_forged(ctx: Any) -> bool:
         return True
     if getattr(ctx, "role", None) == "leaf":
         return True
-    meta = getattr(ctx, "metadata", None) or {}
-    return meta.get("turn_kind") in ("self_wake", "delegation_result")
+    from core.security.owner_turn import forged_kind
+    return bool(forged_kind(ctx))
 
 
 def resolve_verdict(tool_id: str, verb: str, ctx: Any, *,

@@ -49,7 +49,10 @@ def test_path_outside_root_is_refused(tmp_path, no_git):
 
 
 def test_wallet_custody_refuses_host_git(tmp_path, monkeypatch, no_git):
+    # Owner decision D1 (2026-10-10): host git runs under custody by default; the
+    # owner's host_exec_under_custody=refuse row (or the isolation floor) refuses.
     monkeypatch.setenv("AGENT_WALLET_ENABLED", "true")
+    monkeypatch.setenv("SECURITY_SETTINGS", "host_exec_under_custody=refuse")
     out = preprocess_context_references("@diff", root=str(tmp_path))
     assert "host execution refused" in out
     assert no_git == []

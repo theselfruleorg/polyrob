@@ -61,7 +61,7 @@ async def test_run_code_action_reports_failure(monkeypatch):
 # --- native-schema parity (the seam the provider-checklist warns about) ------
 
 def _action_for_run_code():
-    from tools.controller.registry.views import RegisteredAction
+    from agents.task.loop_types.registry_views import RegisteredAction
     return RegisteredAction(
         name="run_code",
         description="Execute code",

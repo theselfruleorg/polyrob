@@ -37,8 +37,10 @@ def main(argv=None) -> int:
     parser.add_argument("command", choices=("serve", "check"))
     parser.add_argument("--config", default="/etc/polyrob/signer.toml")
     args = parser.parse_args(argv)
-    logging.basicConfig(level=logging.INFO,
-                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    # D6: `import core` no longer configures the root logger; this entry does
+    # (same sinks + secret-scrubbing filter the import used to install).
+    from core.logging import setup_logging
+    setup_logging(log_level="INFO")
     from core.signer.caps import SignerConfigError, load_signer_config
     from core.signer import runtime
     try:

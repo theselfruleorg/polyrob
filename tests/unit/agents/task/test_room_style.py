@@ -50,7 +50,6 @@ def _owner_env(monkeypatch):
     monkeypatch.setenv("POLYROB_OWNER_USER_ID", _OWNER)
     monkeypatch.setenv("POLYROB_INSTANCE_ID", "polyrob")
     monkeypatch.delenv("GROUP_DEFAULT_MODE", raising=False)
-    monkeypatch.delenv("GROUP_REQUIRE_MENTION", raising=False)
 
 
 def _set(tmp_path, key, value, chat_id="-100"):

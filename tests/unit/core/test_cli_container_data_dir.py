@@ -12,7 +12,7 @@ def test_cli_container_data_dir_under_rob_source():
     needs a real LLM key and network) to keep this test fast and dependency-free.
     The assertion is the load-bearing part — the source must contain the assignment.
     """
-    import core.bootstrap as bootstrap
+    import polyrob.app.bootstrap as bootstrap
     src = inspect.getsource(bootstrap.build_cli_container)
     # The fix must contain both the assignment target and rob_dir reference
     assert "config.data_dir" in src, (
@@ -25,7 +25,7 @@ def test_cli_container_data_dir_under_rob_source():
 
 def test_cli_container_data_dir_assignment_is_str_rob_dir():
     """Parse the AST of build_cli_container and confirm config.data_dir = str(rob_dir) is present."""
-    import core.bootstrap as bootstrap
+    import polyrob.app.bootstrap as bootstrap
     src = inspect.getsource(bootstrap.build_cli_container)
     # Dedent (inspect may return indented source for nested functions)
     import textwrap

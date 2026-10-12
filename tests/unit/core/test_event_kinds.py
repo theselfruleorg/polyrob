@@ -32,7 +32,9 @@ def _tracked_py():
     out = subprocess.run(["git", "ls-files", "*.py"], cwd=REPO,
                          capture_output=True, text=True, check=True).stdout
     return [REPO / line for line in out.splitlines()
-            if line and not line.startswith(("tests/", "dist/", "datagen/"))]
+            # ops/tests/ = the private tests moved out of tests/ (D10): test
+            # code, not a producer (its pack-state .record("marketprobe")).
+            if line and not line.startswith(("tests/", "ops/tests/", "dist/", "datagen/"))]
 
 
 def test_every_produced_kind_is_known():

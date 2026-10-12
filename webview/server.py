@@ -63,13 +63,13 @@ import sys
 # Import PathManager for session paths
 from agents.task.path import pm
 
+from core.logging import entrypoint_logger  # D6: this module is the console entry
 from core.version import get_version
 from webview import pack_console, posture_routes, template_globals
 from webview.socket_limits import forget, join_allowed, limit_key, refusal  # 070 W0.17
 from webview.error_page import StarletteHTTPException, error_response  # 070 W0.18
 
-logger = logging.getLogger("webview.server")
-logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+logger = entrypoint_logger("webview.server")
 
 FEED_DEFAULT_LIMIT = max(1, int(os.environ.get('WEBVIEW_FEED_DEFAULT_LIMIT', '500')))
 FEED_MAX_LIMIT = max(1, int(os.environ.get('WEBVIEW_FEED_MAX_LIMIT', '2000')))
@@ -228,7 +228,7 @@ def _workspace_mode_kwargs() -> dict:
     """Extra get_path_manager kwargs so the webview browses the SAME workspace
     root the agent writes to (QW-3, assessment 2026-07-19 §3.3).
 
-    With POLYROB_PROJECT_DIR set the agent process (core/bootstrap) puts pm()
+    With POLYROB_PROJECT_DIR set the agent process (polyrob/app/bootstrap) puts pm()
     into project-root mode — every session's workspace IS the project dir. The
     webview runs in its own process and never took that mode, so its file
     browser resolved the EMPTY per-session default. Gate: single-tenant
@@ -293,7 +293,7 @@ async def startup_event():
     try:
         from core.container import DependencyContainer
         from core.config import BotConfig
-        from core.initialization import initialize_core
+        from polyrob.app.initialization import initialize_core
 
         # Create config first (required for container initialization)
         config = BotConfig()
@@ -2893,12 +2893,12 @@ async def _startup_late_services():
                 logger.warning(f"   - SIWE Auth: {siwe_auth is not None}")
                 logger.warning(f"   - Identity Mapper: {identity_mapper is not None}")
 
-            # E2: periodic nonce-expiry sweep — SIWE (and auth_nonces) only
-            # exists in the multitenant posture.
+            # E2: periodic nonce-expiry sweep — SIWE/auth_nonces exist only multitenant.
             if webgate.is_multitenant():
                 try:
                     if siwe_auth:
-                        asyncio.create_task(_nonce_sweep_loop(siwe_auth))
+                        from core.async_bridge import spawn_retained
+                        spawn_retained(_nonce_sweep_loop(siwe_auth))
                         logger.info("✅ Nonce expiry sweep started (5min interval)")
                 except Exception as e:
                     logger.warning(f"⚠️ Could not start nonce sweep: {e}")

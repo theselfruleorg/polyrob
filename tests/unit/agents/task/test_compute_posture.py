@@ -17,7 +17,7 @@ import pytest
 
 import agents.task.constants as c
 from core.instance import DEFAULT_INSTANCE_ID, resolve_owner_user_id
-from tools.controller.execution_context import ActionExecutionContext
+from agents.task.loop_types.execution_context import ActionExecutionContext
 
 
 @pytest.fixture(autouse=True)

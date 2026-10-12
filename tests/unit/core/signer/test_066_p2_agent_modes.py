@@ -221,10 +221,14 @@ def test_shadow_respects_the_confirmed_signer_cap(make_rig, shadow):
     assert not _authorize(intent, tx, _gate()).allowed
 
 
-def test_shadow_with_no_confirmed_signer_caps_refuses_authorization(rig, shadow):
+def test_shadow_with_no_confirmed_signer_caps_uses_the_local_caps(rig, shadow):
+    """D5 (owner, 2026-10-10): shadow signs locally, so a signer that never
+    answered falls back to the agent's own caps (with an owner notice) instead
+    of clamping every cap to $0. A REMOTE signer still holds at $0
+    (tests/unit/core/wallet/test_signer_envelope.py)."""
     signer = shadow(rig.service, down=True)
     intent, tx = native_intent(), native_tx()
-    assert not _authorize(intent, tx, _gate()).allowed
+    assert _authorize(intent, tx, _gate()).allowed
 
 
 def test_shadow_flags_a_send_that_skipped_the_guard(rig, shadow):
@@ -265,21 +269,24 @@ def test_the_shadow_factory_wraps_only_the_evm_signers(signer_home, monkeypatch)
 
 # -- 066 §5.6: host execution ----------------------------------------------------------
 
-def test_host_execution_relaxes_only_when_remote_is_active_and_verified(signer_home, monkeypatch):
+def test_host_execution_follows_the_owner_setting_in_every_mode(signer_home, monkeypatch):
+    """D1 (2026-10-10): no blanket custody refusal in any signer mode; the
+    owner's SECURITY_SETTINGS row decides, and a readable key is the floor."""
     from core.security import custody_env
+    from core.security import process_hardening as ph
     from core.security.host_execution import host_execution_refusal
-    from core.signer import remote as remote_mod
+    monkeypatch.setattr(ph, "hardening_state", lambda: ph.HardeningResult(ph.STATE_HELD, "t"))
+    monkeypatch.delenv("SECURITY_SETTINGS", raising=False)
     monkeypatch.setenv("AGENT_WALLET_ENABLED", "true")
-    assert host_execution_refusal()                           # local custody: refused
-    monkeypatch.setenv("WALLET_SIGNER", "remote")
-    assert host_execution_refusal()                           # remote but not verified
-    remote_mod._set_verified(True, "test")
-    assert host_execution_refusal()                           # same-UID children can use the signer
-    monkeypatch.setenv("AGENT_WALLET_MASTER_SEED", SEED)
-    assert host_execution_refusal()                           # a key is back in the env
-    monkeypatch.delenv("AGENT_WALLET_MASTER_SEED")
-    monkeypatch.setenv("WALLET_SIGNER", "shadow")
-    assert host_execution_refusal()                           # shadow keeps the key: refused
+    for mode in ("local", "remote", "shadow"):
+        monkeypatch.setenv("WALLET_SIGNER", mode)
+        assert host_execution_refusal() is None, mode
+        monkeypatch.setenv("SECURITY_SETTINGS", "host_exec_under_custody=refuse")
+        assert host_execution_refusal(), mode
+        monkeypatch.delenv("SECURITY_SETTINGS")
+    monkeypatch.setenv("AGENT_WALLET_MASTER_SEED", SEED)     # a key in this process ...
+    monkeypatch.setattr(ph, "hardening_state", lambda: ph.HardeningResult(ph.STATE_FAILED, "t"))
+    assert "could read" in (host_execution_refusal() or "")  # ... a child could read: floor
     custody_env._reset_for_tests()
 
 

@@ -8,7 +8,7 @@ over Telegram's 4096-char limit, and calls bot.send_message.
 Streaming: default is the Surface ABC's buffered path (partials buffer, one send() on
 finalize). With owner preference `stream.telegram` enabled, stream() opens one message
 and live-edits it in place via editMessageText as deltas arrive, flood-throttled
-(TELEGRAM_STREAM_EDIT_INTERVAL_SEC) and RetryAfter-aware (the minimal rate limiter).
+(core.surfaces.config.TELEGRAM_STREAM_EDIT_INTERVAL_SEC) and RetryAfter-aware (the minimal rate limiter).
 
 Formatting: the agent writes markdown; core.surfaces.rendering converts it to the HTML
 subset Telegram renders (parse_mode="HTML"). Every send goes through send_text(), which
@@ -457,9 +457,9 @@ class TelegramSurface(Surface):
         retry_after = getattr(e, "retry_after", None)
         if retry_after is not None:
             try:
-                import asyncio
+                from core.async_bridge import spawn_retained
                 from surfaces.telegram.rate_limit import get_telegram_rate_limiter
-                asyncio.ensure_future(
+                spawn_retained(
                     get_telegram_rate_limiter().record_penalty(int(target), float(retry_after), op)
                 )
             except Exception:

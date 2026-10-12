@@ -50,7 +50,7 @@ def test_dashboard_multitenant_flag_still_maps_to_posture_2():
     runner = CliRunner()
     with patch("uvicorn.run"), patch("webbrowser.open"):
         runner.invoke(dashboard, ["--multitenant", "--no-browser"])
-    assert os.environ.get("WEBGATE_MULTITENANT") == "true"
+    assert os.environ.get("POLYROB_POSTURE") == "multitenant"
 
 
 def test_dashboard_host_0000_without_posture_derives_own_ops():

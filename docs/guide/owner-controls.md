@@ -111,6 +111,17 @@ it, and `/resume` clears them. A pause set in the environment
 (`AUTONOMY_HALT=true`) needs an env edit and a restart, and the reply tells you
 so.
 
+## Restart and update from chat
+
+`/restart` restarts the background service once its current work is done
+(`/restart now` cuts it); `/update` updates it to the latest release, rolls back
+on any failure, and restarts. Both show a quote with a Confirm button, both are
+owner-only and refused in a group room, and the service answers in the chat you
+asked from when it is back: `✅ Back online on 1.4.0 (abc1234)`. A setting that
+waits for a restart is listed in `/status` with `/restart` as its remedy. The
+whole story, and the shell and root equivalents:
+[operate-the-service.md](operate-the-service.md).
+
 ## How to verify
 
 - `/status` (Telegram), `polyrob autonomy status`, `polyrob doctor` and the
@@ -393,6 +404,8 @@ Every one of these is refused from inside a group chat and answered in your
 private chat, like the rest of the money and control verbs.
 
 ## See also
+
+- [operate-the-service.md](operate-the-service.md) — restart and update, from chat or a shell
 
 - [configuration.md §1](configuration.md#1-the-six-axes) — the six axes, and §6 the autonomy dial
 - [cli.md](cli.md#polyrob-owner) — every `polyrob owner` verb

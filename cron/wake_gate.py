@@ -26,6 +26,7 @@ swallowed.
 """
 from __future__ import annotations
 
+from core.runtime_paths import cron_db_path, goals_db_path
 import hashlib
 import logging
 import os
@@ -95,7 +96,7 @@ class WakeGateStore:
 def _goal_board_cursor(user_id: str, data_dir: str) -> str:
     """MAX(goal_events.id) for the tenant + goal counts by status — bumps on every
     goal/ask/objective mutation (goal_events is AUTOINCREMENT)."""
-    db = os.path.join(data_dir, "goals.db")
+    db = goals_db_path(data_dir)
     if not os.path.exists(db):
         return "goals:none"
     return _neutral_on_missing_table(lambda: _goal_board_read(user_id, db), "goals:none")
@@ -121,7 +122,7 @@ def _goal_board_read(user_id: str, db: str) -> str:
 def _cron_cursor(user_id: str, data_dir: str, exclude_job_id: Optional[str]) -> str:
     """Newest last_run_at across the tenant's OTHER cron jobs (another job having
     run is observable change for a review tick)."""
-    db = os.path.join(data_dir, "cron.db")
+    db = cron_db_path(data_dir)
     if not os.path.exists(db):
         return "cron:none"
 
@@ -267,7 +268,7 @@ def should_skip_wake(job: Any, *, data_dir: str) -> bool:
     try:
         if not gate_applies(job):
             return False
-        store = WakeGateStore(os.path.join(data_dir, "cron.db"))
+        store = WakeGateStore(cron_db_path(data_dir))
         baseline = store.get(job.id)
         if not baseline or not baseline.get("ok"):
             return False
@@ -287,7 +288,7 @@ def record_wake_outcome(job: Any, *, data_dir: str, ok: bool) -> None:
     try:
         if not gate_applies(job):
             return
-        store = WakeGateStore(os.path.join(data_dir, "cron.db"))
+        store = WakeGateStore(cron_db_path(data_dir))
         fp = compute_wake_fingerprint(
             job.user_id, data_dir=data_dir, exclude_job_id=getattr(job, "id", None)
         )

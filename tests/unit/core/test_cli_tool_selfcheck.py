@@ -5,7 +5,7 @@ service. This drift (allowlisted but not service-registered) caused the twitter 
 outages on 2026-07-01.
 """
 import inspect
-import core.bootstrap as bootstrap
+import polyrob.app.bootstrap as bootstrap
 
 
 def test_register_cli_tools_has_capability_self_check():

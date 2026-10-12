@@ -4,7 +4,7 @@ Closes parity gap G4 (2026-07-12 UI-surface review): cron jobs could not be
 created or cancelled from any human surface — REPL ``/cron``, webview
 ``/autonomy`` and Telegram ``/status`` are read-only, so scheduling was
 agent-tool-only. This group rides the SAME ``cron.service.CronService`` +
-``cron.db`` the lifespan ticker (``core/autonomy_runtime.py``) and the webview
+``cron.db`` the lifespan ticker (``polyrob/app/autonomy_runtime.py``) and the webview
 ``/api/webgate/cron`` endpoint use, at the ADMIN data home
 (``cli/_admin_home.py::admin_data_dir`` — the 031 rule, which adopts the
 DEPLOYED home when the shell declares none) — a job scheduled here is exactly
@@ -23,7 +23,7 @@ from cli._admin_home import as_root_option
 
 
 def _service(*, write: "bool | None" = None):
-    from core.bootstrap import setup_project_path, setup_sqlite_compat
+    from polyrob.app.bootstrap import setup_project_path, setup_sqlite_compat
     from core.runtime_paths import cron_db_path
     from cron.jobs import CronJobStore
     from cron.service import CronService

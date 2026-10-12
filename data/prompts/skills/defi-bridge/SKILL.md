@@ -21,14 +21,12 @@ opportunity. Until 2026-09-11 there was no answer to that and you correctly said
 so. **There is now: `defi_trade.bridge`.** If you are working from a memory that
 "there is no bridge verb", that memory is stale — it was true, it is not now.
 
-**What it does.** Sends the **NATIVE asset** of the origin chain — SOL on solana,
-ETH on an EVM chain — through Relay. **Both origins work**: solana → EVM, and
-EVM → EVM (Base → Robinhood included). Measured: SOL → Robinhood ~1s at −0.88%;
-Base → Robinhood ~1s at −0.05%.
-
-**Bridging INTO Solana is refused.** The destination must be an EVM chain: the
-arrival proof measures an EVM balance, and a Solana destination is not
-supported yet. Do not try EVM → solana, and do not tell the owner it works.
+**What it does.** Sends the origin chain's **NATIVE asset** (SOL / ETH), or its
+**PINNED USDC** (`token_in="usdc"`), through Relay. **Every direction works**: solana → EVM,
+EVM → EVM (Base → Robinhood included), and EVM → solana (native SOL or `usdc`;
+the arrival is measured in lamports / the SPL balance). Measured: SOL → Robinhood
+~1s at −0.88%; Base → Robinhood ~1s at −0.05%; Robinhood ETH → Solana USDC quoted
+at −0.3%. solana → solana is not a bridge: use `solana_swap` / `solana_transfer`.
 
 The **destination** asset may be native OR a token **pinned in the chain
 registry** — `weth` / `usdc` where that chain has one:
@@ -38,12 +36,18 @@ defi_trade.bridge(from_chain="base", to_chain="robinhood", amount=0.036)
 defi_trade.bridge(from_chain="base", to_chain="robinhood", amount=0.036,
                   token_out="weth")
     # dry_run defaults TRUE — quotes, asserts and simulates, broadcasts nothing
+defi_trade.bridge(from_chain="robinhood", to_chain="solana", amount=0.1,
+                  token_out="usdc")             # ETH in, USDC on Solana
+defi_trade.bridge(from_chain="base", to_chain="solana", amount=50,
+                  token_in="usdc", token_out="usdc")   # USDC to USDC
 ```
 
 An **arbitrary token address is refused**, and that is not a bug to work around:
 every address in the registry was verified on-chain, a supplied one was not. The
-ORIGIN is still native-only — an ERC-20 origin needs an approve step whose
-spender is a third party's address.
+ORIGIN is native or the chain's pinned `usdc` (`amount` is then in dollars). On an
+EVM chain a usdc origin first approves EXACTLY the amount to the pinned Relay
+depository, then deposits; a refused deposit revokes that approval. Any other
+origin token is refused. Robinhood pins no USDC, so its origin is ETH.
 
 ⚠️ **On Robinhood, prefer `native`.** ETH there is gas AND the asset that routes
 straight into a position with no allowance, so `token_out="weth"` costs you more
@@ -102,7 +106,9 @@ success nor failure.
 An UNREADABLE destination balance is **unknown, never zero** — a dead RPC
 returning 0 looks exactly like funds that never arrived, and only one of those is
 an incident. Arrival is proven by MEASURING the destination balance, so "the
-quote said it would arrive" is not arrival.
+quote said it would arrive" is not arrival. INTO Solana the proof is stricter: the
+wallet also trades there, so only the delivering transaction's own balance change
+for this wallet counts — a swap fill during the wait never passes as the bridge.
 
 **When to bridge at all.** Rarely. Gas and slippage make it a real cost, so it is
 not a move you make to chase one ticket — bridge when the imbalance is

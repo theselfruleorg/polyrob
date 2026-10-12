@@ -7,8 +7,8 @@ import os
 if TYPE_CHECKING:
 	from playwright.async_api import Page
 
-from tools.dom.history_tree_processor.view import Coordinates
-from tools.dom.views import (
+from agents.task.loop_types.dom_history_view import Coordinates
+from agents.task.loop_types.dom_views import (
 	CoordinateSet,
 	DOMBaseNode,
 	DOMElementNode,

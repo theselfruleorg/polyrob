@@ -41,7 +41,7 @@ def own_ops_client(monkeypatch):
 @pytest.fixture
 def multitenant_client(monkeypatch):
     monkeypatch.setenv("POLYROB_POSTURE", "multitenant")
-    monkeypatch.setenv("WEBGATE_MULTITENANT", "true")
+    monkeypatch.setenv("POLYROB_POSTURE", "multitenant")
     import webview.webgate as wg
     importlib.reload(wg)
     import webview.server as srv

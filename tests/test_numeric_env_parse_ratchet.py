@@ -11,10 +11,12 @@ sites migrate, never raise it.
 import pathlib
 import re
 
+from tests.support.repo_index import repo_index
+
 # 65 (2026-07-18, narrow pattern) → 93 (2026-08-09): the widened pattern newly
 # counts the `environ.get`/`env.get` shapes it used to miss. Shrink-only, as ever.
 # 93 → 78 (2026-10-06): x402 invoice caps + code-exec limits moved to resolvers.
-_BASELINE = 78
+_BASELINE = 51  # 2026-10-10: 78 -> 76 -> 51 (61 tuning knobs became module constants); tightness test below.
 _SKIP = {"tests", ".git", "node_modules", ".venv", "venv", "__pycache__",
          "deployment", "docs", "scripts",
          # generated build artifacts (a stale wheel tree double-counts every
@@ -26,7 +28,7 @@ _SKIP = {"tests", ".git", "node_modules", ".venv", "venv", "__pycache__",
 _PAT = re.compile(r"(?:int|float)\(\s*(?:os\.)?(?:getenv|environ\.get|env\.get)\(")
 
 
-def test_raw_numeric_env_parse_count_never_grows():
+def _count():
     repo = pathlib.Path(__file__).resolve().parents[1]
     count = 0
     offenders = {}
@@ -35,13 +37,26 @@ def test_raw_numeric_env_parse_count_never_grows():
         if _SKIP.intersection(rel.parts):
             continue
         try:
-            hits = len(_PAT.findall(p.read_text(errors="ignore")))
+            hits = len(_PAT.findall(repo_index().text(p, errors="ignore")))
         except OSError:
             continue
         if hits:
             count += hits
             offenders[str(rel)] = hits
+    return count, offenders
+
+
+def test_raw_numeric_env_parse_count_never_grows():
+    count, offenders = _count()
     assert count <= _BASELINE, (
         f"raw int()/float()(os.getenv(...)) sites grew to {count} "
         f"(baseline {_BASELINE}). Use core.env.int_env/float_env instead. "
         f"Offenders: {offenders}")
+
+
+def test_baseline_tracks_actual():
+    """Tightness: a migration that forgets to lower _BASELINE stops the ratchet."""
+    count, offenders = _count()
+    assert count >= _BASELINE, (
+        f"raw numeric env parses fell to {count}; lower _BASELINE ({_BASELINE}) "
+        f"to {count}.")

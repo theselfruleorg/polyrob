@@ -1,4 +1,19 @@
-"""Host execution cannot share a trust domain with signing credentials."""
+"""Host execution beside signing credentials (owner decision D1, 2026-10-10).
+
+The agent uses the wallet AND keeps full host capabilities: git, MCP stdio, lazy
+installs, coding snapshots/LSP, self_env and the host shell run under wallet
+custody in every signer mode. The key is protected by ISOLATION, not by refusing
+the tool: the seed leaves ``os.environ`` at load (``custody_env``), the process
+is non-dumpable (``process_hardening``), and every host child gets an
+allowlisted env with no custody secret.
+
+Two things still refuse:
+
+* the floor row ``key_isolation_gap`` — this process holds a key and the
+  non-dumpable hardening did not hold, so a same-UID child could read it;
+* the owner's ``SECURITY_SETTINGS`` row ``host_exec_under_custody=refuse``
+  (``core.security.settings``).
+"""
 from core.env import bool_env
 from core.security.custody_env import holds_custody_secret
 
@@ -18,37 +33,44 @@ def wallet_custody_enabled() -> bool:
     return holds_custody_secret()
 
 
-def signer_holds_the_keys() -> bool:
-    """066 §5.6: True only when ``WALLET_SIGNER=remote`` is ACTIVE AND VERIFIED.
+def custody_isolation_gap():
+    """Why a same-UID host child could read this process's wallet key now, or None.
 
-    Active = the flag says ``remote``. Verified = this process built its
-    ``RemoteWallet``, got the signer's identity and it matched the wallet of
-    record, AND this process holds no custody secret (env or held copy). Any
-    doubt answers False, which keeps the custody refusal.
-    """
+    None when this process holds no key (remote mode, a public-only unit) or the
+    exec-time env is closed (``held`` on Linux, ``unsupported`` elsewhere). Never
+    names the secret. Fail-closed: an error is a gap."""
     try:
-        from core.signer import MODE_REMOTE, signer_mode
-        if signer_mode() != MODE_REMOTE:
-            return False
         from core.security.custody_env import holds_custody_secret
-        if holds_custody_secret():
-            return False
-        from core.signer.remote import remote_verified
-        return remote_verified()
-    except Exception:
-        return False
+        if not holds_custody_secret():
+            return None
+        from core.security import process_hardening as ph
+        state = ph.hardening_state()
+        if state.state == ph.STATE_NOT_APPLIED:
+            state = ph.harden_custody_process()
+        if state.state in (ph.STATE_HELD, ph.STATE_UNSUPPORTED):
+            return None
+        return ("this process holds a wallet key and a same-UID child could read it "
+                f"({state.detail})")
+    except Exception as e:  # pragma: no cover - defensive
+        return f"key isolation could not be checked ({type(e).__name__})"
 
 
 def host_execution_refusal():
-    # The signer authenticates the peer UID. A host child shares that UID and
-    # can forge approval provenance over the socket even without holding a key.
+    """None when a host child (git, MCP stdio, an install, LSP, a snapshot, the
+    host shell) may run now; else the refusal. No custody and no remote signer:
+    always None. Under custody: the isolation floor, then the owner's row."""
     from core.signer import MODE_REMOTE, signer_mode
-    if signer_mode() == MODE_REMOTE:
-        return ("host execution refused while remote wallet signing is available; "
-                "use a sandbox without access to the signer socket")
-    if wallet_custody_enabled():
-        return ("host execution refused while wallet custody is enabled; "
-                "use a sandbox backend or a separate development instance without signing credentials")
+    if signer_mode() != MODE_REMOTE and not wallet_custody_enabled():
+        return None
+    gap = custody_isolation_gap()
+    if gap:
+        return (f"host execution refused under wallet custody: {gap}. Restart the agent "
+                "unit; its startup log names why the hardening failed")
+    from core.security import settings
+    if settings.value("host_exec_under_custody") == "refuse":
+        return ("host execution refused under wallet custody or remote signing: "
+                + settings.refusal_note("host_exec_under_custody")
+                + "; use a sandbox backend")
     return None
 
 
@@ -76,7 +98,8 @@ def host_shell_refusal(execution_context):
       1. ``compute_posture_allows(ctx, 3)`` — posture 3, owner tenant, orchestrator,
          not a sub-agent, not a forged turn;
       2. ``POLYROB_LOCAL`` — a single-user box, never a server;
-      3. :func:`host_execution_refusal` is None — no signing key in this process;
+      3. :func:`host_execution_refusal` is None — key isolation holds and the
+         owner's ``host_exec_under_custody`` row allows it;
       4. the turn came from a foreground terminal seat (:func:`host_seat_allowed`).
     Fail-closed: any fault refuses.
     """

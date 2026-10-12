@@ -180,9 +180,8 @@ The DDL below drifts easily (columns/indices have been added since this was
 first written), so this section is a pointer + prose summary rather than an
 inline copy — **the authoritative schema is
 [`modules/database/x402_tables.py`](../database/x402_tables.py)**
-(`X402Tables.create_tables()`), mirrored in
-[`modules/database/schema.sql`](../database/schema.sql). Trust the code
-anchor over this prose if they ever disagree.
+(`X402Tables.create_tables()`). Trust the code anchor over this prose if
+they ever disagree.
 
 ### x402_payment_requests
 

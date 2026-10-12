@@ -95,7 +95,13 @@ CONFIRMABLE_VERBS = frozenset({
     "/send", "/swap", "/bridge", "/pay", "/claim", "/launch", "/deploy",
     "/nft", "/identity", "/writeoff", "/unquarantine", "/wallet",
     "/adopt",  # 2026-10-08: not money, but the same quote -> owner confirm shape
+    "/restart", "/update",  # 077: restart / update the agent, quote -> owner confirm
 })
+
+#: Confirmable verbs whose BARE form already quotes (``/restart`` → "To restart:
+#: /restart go"). Every other verb needs at least one typed word before its
+#: quote is carded — a bare money verb prints usage, never a quote.
+BARE_CONFIRMABLE_VERBS = frozenset({"/restart", "/update"})
 
 #: A card tap token: ``/card_<10 hex>_<act>``. Acts: ``ok`` (confirm), ``no``
 #: (cancel), ``re`` (refresh / quote), ``1``–``6`` (pick an option).
@@ -611,7 +617,8 @@ def confirm_line_in(verb: str, typed_args: List[str], text: str) -> Optional[Lis
     example or a placeholder (``<max_usd>``) never matches, so a card is only
     ever made from the verb's own confirm line for the quote just shown."""
     typed = [a for a in typed_args if a]
-    if not typed or executes(typed):
+    bare_ok = verb in BARE_CONFIRMABLE_VERBS
+    if (not typed and not bare_ok) or executes(typed):
         return None
     found: Optional[List[str]] = None
     distinct: set = set()
@@ -620,7 +627,8 @@ def confirm_line_in(verb: str, typed_args: List[str], text: str) -> Optional[Lis
         if idx < 0:
             continue
         words = raw[idx:].strip().rstrip(".").strip("`").split()
-        if len(words) < 3 or words[0] != verb or words[-1].lower() != "go":
+        if (len(words) < (2 if bare_ok else 3) or words[0] != verb
+                or words[-1].lower() != "go"):
             continue
         args = words[1:-1]
         if len(args) < len(typed):
@@ -723,7 +731,8 @@ def newest_quote_for(user_id: str, verb: str, args: List[str], *, since: float =
 def proposal_card(user_id: str, verb: str, args: List[str], *, why: str = "",
                   session_id: Optional[str] = None,
                   st: Optional[CardStore] = None) -> Card:
-    """An agent-proposed money action. Raises ValueError on a bad shape."""
+    """An agent-proposed owner action (money, ``/adopt``, ``/restart``,
+    ``/update``). Raises ValueError on a bad shape."""
     verb = (verb or "").strip().lower()
     if not verb.startswith("/"):
         verb = "/" + verb
@@ -731,12 +740,12 @@ def proposal_card(user_id: str, verb: str, args: List[str], *, why: str = "",
         raise ValueError(f"{verb} is not a verb a card can carry "
                          f"({', '.join(sorted(CONFIRMABLE_VERBS))})")
     args = [str(a) for a in (args or []) if str(a).strip()]
-    if not args:
+    if not args and verb not in BARE_CONFIRMABLE_VERBS:
         raise ValueError("a proposal needs the verb's arguments")
     if executes(args) or any(a.lower().startswith("id=") for a in args):
         raise ValueError("a proposal never carries `go` (or a payment id) — the owner "
                          "confirms the quote")
-    first = args[0].lower()
+    first = args[0].lower() if args else ""
     shape = _PROPOSAL_SUBCOMMANDS.get(verb)
     if shape is not None and first not in shape:
         raise ValueError(f"{verb} proposals are only: {' | '.join(sorted(shape))}")

@@ -162,9 +162,9 @@ class RunLoopMixin:
 			Returns:
 				List of history items
 			"""
-			# Log a truncated version of the task to avoid verbose logging
-			truncated_task = self.task[:50] + "..." if len(self.task) > 50 else self.task
-			self.logger.info(f'Running agent for task: {truncated_task}')
+			# B1: the "Running agent for ..." line is logged after the first drain
+			# below — a chat turn runs for its newest owner message, not for the
+			# session's FIRST task (which stays in self.task for days).
 			
 			# Track start time for metrics
 			start_time = time.time()
@@ -317,6 +317,11 @@ class RunLoopMixin:
 				# This enables continuous chat - when agent restarts after completion,
 				# it picks up messages that were queued while it was idle
 				initial_messages = await self._drain_user_messages()
+				from agents.task.agent.core.user_ingress import latest_turn_text
+				_subject = latest_turn_text(initial_messages)
+				_label, _subject = ("turn", _subject) if _subject else ("task", self.task or "")
+				self.logger.info(f'Running agent for {_label}: '
+				                 f'{_subject[:50] + "..." if len(_subject) > 50 else _subject}')
 				self.logger.info(f"Checked for queued messages at start: found {len(initial_messages)} messages")
 				if initial_messages:
 					self.logger.info(f"Processing {len(initial_messages)} queued messages:")
@@ -540,7 +545,7 @@ class RunLoopMixin:
 						# like the VALIDATE_OUTPUT precedent immediately below. Gated
 						# AutonomyConfig.verify_before_done() (env VERIFY_BEFORE_DONE, default
 						# off, ON under POLYROB_LOCAL) — off is byte-identical to legacy.
-						from agents.task.constants import AutonomyConfig
+						from core.config_policy import AutonomyConfig
 						from agents.task.runtime.edit_verify import (
 							edited_since_last_test, verify_nudge_applies)
 						# F2: name the REAL action (``coding_run_tests``, built by the one
@@ -616,7 +621,7 @@ class RunLoopMixin:
 					# T2-08: an autonomous (goal/cron) session is exempt — status
 					# narration during a mission is not a greeting loop. Fail-open False.
 					try:
-						from agents.task.goals.autonomy_marker import is_autonomous
+						from core.autonomy_marker import is_autonomous
 						_is_autonomous_run = is_autonomous(self.session_id)
 					except Exception:
 						_is_autonomous_run = False

@@ -33,9 +33,12 @@ def test_fallback_names_both_candidates_with_caveat():
 
 
 def test_steps_never_git_pull_in_the_rsync_target():
-    """A deployed /opt/polyrob has no .git; the path is the on-box deployer."""
+    """A deployed /opt/polyrob has no .git; the path is the deployment's own
+    updater, run from its source checkout (named generically: a public install
+    has no scripts/)."""
     steps = _systemd_manual_steps(["polyrob.service"])
-    assert "scripts/deploy_prod.sh" in steps
+    assert "deployment's own update from its source checkout" in steps
+    assert "scripts/" not in steps
     assert "git pull --ff-only && pip install ." not in steps
 
 

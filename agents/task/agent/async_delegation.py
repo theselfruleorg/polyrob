@@ -188,12 +188,9 @@ class AsyncDelegationRegistry:
         """019 P1: emit delegation_dispatched/delegation_completed feed events.
 
         Uses the manager-free ``emit_feed_event`` seam (the registry holds no
-        telemetry handle). Fail-open, flag-gated.
+        telemetry handle). Fail-open.
         """
         try:
-            from core.config_policy import AutonomyConfig
-            if not AutonomyConfig.run_events_enabled():
-                return
             from agents.task.telemetry.service import emit_feed_event
             from agents.task.telemetry.views import (
                 DelegationCompletedEvent,

@@ -87,7 +87,7 @@ def test_marker_shape():
 def test_session_class_wrapper_uses_the_marker(monkeypatch):
     from agents.task import session_class
 
-    from agents.task.goals import autonomy_marker
+    from core import autonomy_marker
 
     monkeypatch.delenv("ANTHROPIC_CACHE_TTL", raising=False)
     monkeypatch.setattr(autonomy_marker, "is_autonomous", lambda sid: False)
@@ -105,7 +105,7 @@ def test_session_class_cache_ttl_fails_open_to_interactive(monkeypatch):
     """The cache TTL is a BUDGET reading: an unreadable marker means the chat
     window (1h), not the autonomous one — only security gates fail closed."""
     from agents.task import session_class
-    from agents.task.goals import autonomy_marker
+    from core import autonomy_marker
 
     def _boom(sid):
         raise RuntimeError("marker unreadable")

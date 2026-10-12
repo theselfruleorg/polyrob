@@ -167,8 +167,8 @@ def test_approve_all_uses_the_shared_decider():
     """The contract, read from the source: a second implementation of "decide
     everything" is the bug, not the loop's details."""
     import inspect
-    from surfaces.telegram import harness
-    src = inspect.getsource(harness._handle_owner_admin)
+    from surfaces.telegram import approval_ops  # W9: the /approve handler's home
+    src = inspect.getsource(approval_ops.decide_verb)
     assert "decide_all_pending" in src
     # the private loop is gone
     assert "for it in list(pending.items):" not in src

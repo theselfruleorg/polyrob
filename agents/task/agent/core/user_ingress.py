@@ -80,24 +80,11 @@ def _update_forged_turn_marker(orchestrator, messages: List[Dict[str, Any]]) -> 
     # AGT-17: a room ADMIN's addressed line rides kind="comment" too, but an admin
     # is not the owner driving — it never clears the taint.
     if any(m.get("kind") in _TAINT_CLEARING_KINDS and _owner_spoke(m) for m in messages):
-        try:
-            orchestrator._clear_correspondent_taint()
-        except Exception:
-            pass
-        # AGT-1: the owner is speaking again — the read taint of the last turn
-        # (a page, a mail it read) no longer speaks for this one.
-        try:
-            from core.security.read_taint import clear as _clear_read_taint
-            _clear_read_taint(orchestrator)
-        except Exception:
-            pass
-        # The owner is driving again: a money refusal earlier in this session
-        # no longer holds its public rails (core/security/refusal_taint.py).
-        try:
-            from core.security.refusal_taint import clear as _clear_refusal_taint
-            _clear_refusal_taint(getattr(orchestrator, "session_id", "") or "")
-        except Exception:
-            pass
+        # AGT-1 + the refusal taint: the owner is speaking again — the read taint
+        # of the last turn and a money refusal earlier in this run no longer
+        # speak for this one. W5: the ONE clear point for all three taints.
+        from core.security.taints import clear_on_owner_turn
+        clear_on_owner_turn(orchestrator)
 
     # CR-L22: a FORWARDED body (Telegram stamps ``metadata.forwarded``) is a
     # third party's words inside an owner message. It re-taints AFTER the clear
@@ -129,6 +116,18 @@ def _update_forged_turn_marker(orchestrator, messages: List[Dict[str, Any]]) -> 
                 get_reentry_budget().reset(sid)
         except Exception:
             pass
+
+
+def latest_turn_text(messages: List[Dict[str, Any]]) -> Optional[str]:
+    """B1: the newest GENUINE message text of a drained batch — the recall subject
+    for this turn (``MemoryPrefetchMixin._build_recall_query``). None for an empty
+    or forged batch, so a self-wake keeps the last real subject."""
+    for m in reversed(messages or []):
+        if m.get("kind") in _TAINT_CLEARING_KINDS:
+            text = str(m.get("text") or "").strip()
+            if text:
+                return text
+    return None
 
 
 def _update_turn_reply_to(orchestrator, messages: List[Dict[str, Any]]) -> None:
@@ -194,6 +193,12 @@ def _stamp_delegation_deliveries(agent, messages: List[Dict[str, Any]]) -> None:
 class UserIngressMixin:
     """User-message queueing, approval shims, and TODO status for Agent."""
 
+    def set_turn_input(self, text: str) -> None:
+        """Conversational turn input: append the user's message as an ordinary trailing
+        turn (R4), distinct from inject_user_guidance's position-1 task-directive
+        framing. (Folded in from the one-method ``TurnInputMixin``, W9.)"""
+        self.message_manager.append_user_turn(text)
+
     async def receive_user_message(self, text: str, kind: str = "comment", metadata: Optional[dict] = None) -> None:
         """Queue user message for injection in next step."""
         if metadata is None:
@@ -208,6 +213,11 @@ class UserIngressMixin:
             if messages are present, for use by inject_user_guidance().
         """
         messages = await self.hitl_manager.drain_user_messages()
+
+        # B1: the turn's own words drive memory recall, not the session's first task.
+        _turn_text = latest_turn_text(messages)
+        if _turn_text:
+            self._recall_turn_text = _turn_text
 
         # SK-F10: recompute the forged-turn marker on the orchestrator from this
         # batch's kinds, fail-open (never let this break message delivery).

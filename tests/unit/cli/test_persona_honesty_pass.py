@@ -38,7 +38,7 @@ def test_personality_gate_default_text_matches_the_seam():
 
 @pytest.mark.parametrize("local,expected", [("1", True), ("false", False)])
 def test_personality_gate_seam_is_local_mode(monkeypatch, local, expected):
-    from agents.task.constants import task_personality_block_enabled
+    from core.config_policy import task_personality_block_enabled
 
     monkeypatch.delenv("TASK_PERSONALITY_BLOCK", raising=False)
     monkeypatch.setenv("POLYROB_LOCAL", local)

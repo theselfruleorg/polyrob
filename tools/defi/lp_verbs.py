@@ -298,7 +298,7 @@ async def _perform(tool, p, ctx, verb):
     if not liquidity_enabled():
         return tool._ar(error=f'liquidity writes are off; set {FLAG}=true. Nothing was broadcast.')
     # 067 P1b: the kernel's leaf + principal steps first, as before.
-    verdict = authorize_spend(SpendIntent(what=verb, pause=False), ctx)
+    verdict = authorize_spend(SpendIntent.verb_gate(verb), ctx)
     err = (verdict.reason if verdict.refused else None) or _unsupported_chain(p.chain)
     if err:
         return tool._ar(error=err)
@@ -311,7 +311,7 @@ async def _perform(tool, p, ctx, verb):
     # CR-L21: a deposit OPENS a position, so the scoped trade_entry pause binds
     # it; a removal or a fee collection is an exit and stays available.
     entry = verb == 'lp_add'
-    pause_only = SpendIntent(principal=False, leaf=False, entry=entry)
+    pause_only = SpendIntent.pause_recheck(entry=entry)
     from tools.controller.turn_origin import (
         _is_autonomous_goal_turn, _is_forged_or_autonomous_turn)
     verdict = authorize_spend(pause_only, ctx, forged_fn=_is_forged_or_autonomous_turn,

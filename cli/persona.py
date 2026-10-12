@@ -30,7 +30,7 @@ def resolve_cli_persona(user_id: Optional[str] = None, home_dir=None) -> str:
     if not user_id:
         return resolve_persona_sync()
     try:
-        from agents.task.constants import task_personality_block_enabled
+        from core.config_policy import task_personality_block_enabled
         if not task_personality_block_enabled():
             return ""
         import os
@@ -91,7 +91,7 @@ def cli_gate_on(env=None) -> bool:
     """
     import os
 
-    from agents.task.constants import _FALSEY
+    from core.config_policy import _FALSEY
     env = os.environ if env is None else env
     explicit = (env.get("TASK_PERSONALITY_BLOCK") or "").strip()
     if explicit:
@@ -144,7 +144,7 @@ def describe_active_persona(user_id: Optional[str] = None, home_dir=None,
     info = {"gate": False, "kind": "off", "name": "", "source": "", "path": None}
     if gate is None:
         try:
-            from agents.task.constants import task_personality_block_enabled
+            from core.config_policy import task_personality_block_enabled
             gate = task_personality_block_enabled()
         except Exception:
             return info

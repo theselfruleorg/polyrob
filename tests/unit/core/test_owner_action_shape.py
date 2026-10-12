@@ -170,10 +170,10 @@ def test_the_pending_notice_passes_its_own_checker():
 def test_the_status_remedy_passes_its_own_checker():
     import inspect
 
-    from core import status_snapshot
+    from core import status_work  # W9: the approvals section's home
     from core.owner_remedy import unknown_owner_actions
 
-    src = inspect.getsource(status_snapshot)
+    src = inspect.getsource(status_work)
     assert 'remedy="/pending · /approve_all · /reject_all"' in src
     assert unknown_owner_actions("/pending · /approve_all · /reject_all") == []
 

@@ -29,10 +29,10 @@ class OpenAIClient(LLMClient):
         """Initialize the client."""
         super().__init__(config=config, name=name)
         self._client = None
-        
         # Model and API configuration
         openai_config = config.get_llm_config()['openai']
-        self.model_type = openai_config.get('model', 'gpt-5')
+        from modules.llm.llm_client_registry import get_default_model
+        self.model_type = openai_config.get('model') or get_default_model('openai')
         self.api_key = openai_config.get('api_key')
         self.organization = openai_config.get('organization')
         self.base_url = openai_config.get('base_url')

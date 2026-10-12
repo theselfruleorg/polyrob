@@ -18,8 +18,8 @@ import pytest
 def gate(monkeypatch, tmp_path):
     from core import interactive_gate as g
     monkeypatch.setenv("POLYROB_WORKSPACE_LOCK_DIR", str(tmp_path / "locks"))
+    monkeypatch.setenv("POLYROB_HOME", str(tmp_path / "home"))
     monkeypatch.delenv("CLI_WORKSPACE_LOCK", raising=False)
-    monkeypatch.delenv("INTERACTIVE_GATE_MARKER", raising=False)
     g._busy_depth = 0
     return g
 
@@ -56,7 +56,7 @@ def test_stale_marker_from_a_dead_pid_reads_as_none(gate, tmp_path):
 def test_owner_turn_never_refuses_when_lock_is_held(gate, tmp_path):
     """Another process holding the workspace lock must not block the owner: the
     turn proceeds without the lock (fail-open for the human, logged)."""
-    from agents.task.utils import SafeFileLock
+    from core.file_lock import SafeFileLock
     lp = gate._workspace_lock_path()
     os.makedirs(os.path.dirname(lp), exist_ok=True)
     held = SafeFileLock(lp, timeout=1)
@@ -119,7 +119,6 @@ def test_marker_lives_under_data_dir_even_when_the_workspace_lock_dir_is_set(mon
     monkeypatch.setenv("POLYROB_WORKSPACE_LOCK_DIR", str(tmp_path / "project" / ".polyrob"))
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.delenv("CLI_WORKSPACE_LOCK", raising=False)
-    monkeypatch.delenv("INTERACTIVE_GATE_MARKER", raising=False)
     assert g.turn_marker_path() == str(tmp_path / "data" / "locks" / "turn.active")
     assert g._workspace_lock_path() == str(tmp_path / "project" / ".polyrob" / "workspace.turn.lock")
     g._busy_depth = 0
@@ -130,10 +129,60 @@ def test_marker_lives_under_data_dir_even_when_the_workspace_lock_dir_is_set(mon
     assert not os.path.exists(tmp_path / "data" / "locks" / "turn.active")
 
 
-def test_marker_falls_back_to_the_lock_dir_without_a_data_dir(monkeypatch, tmp_path):
+def test_marker_follows_the_data_home_without_a_data_dir(monkeypatch, tmp_path):
+    """077 F8: no POLYROB_DATA_DIR (the `polyrob service` user unit) — the marker
+    resolves from the DATA HOME (<POLYROB_HOME>/data/locks), never from the lock
+    dir (<WorkingDirectory>/.polyrob), so `polyrob update --apply` — which has no
+    lock dir — reads the same file the gateway writes."""
     from core import interactive_gate as g
-    monkeypatch.setenv("POLYROB_WORKSPACE_LOCK_DIR", str(tmp_path / "locks"))
+    monkeypatch.setenv("POLYROB_WORKSPACE_LOCK_DIR", str(tmp_path / "cwd" / ".polyrob"))
+    monkeypatch.setenv("POLYROB_HOME", str(tmp_path / "home"))
     monkeypatch.delenv("POLYROB_DATA_DIR", raising=False)
     monkeypatch.delenv("CLI_WORKSPACE_LOCK", raising=False)
-    monkeypatch.delenv("INTERACTIVE_GATE_MARKER", raising=False)
-    assert g.turn_marker_path() == str(tmp_path / "locks" / "turn.active")
+    from core.runtime_paths import resolve_data_home
+    # (conftest points the local data home at the test's cwd; the RULE is what
+    # this pins: the data home, not the lock dir.)
+    assert g.turn_marker_path() == str(resolve_data_home() / "locks" / "turn.active")
+    assert not g.turn_marker_path().startswith(str(tmp_path / "cwd"))
+
+
+def test_no_marker_without_a_lock_dir_or_a_data_dir(monkeypatch, tmp_path):
+    from core import interactive_gate as g
+    monkeypatch.delenv("POLYROB_WORKSPACE_LOCK_DIR", raising=False)
+    monkeypatch.delenv("POLYROB_DATA_DIR", raising=False)
+    assert g.turn_marker_path() is None
+
+
+def test_writer_and_updater_agree_in_every_install_shape(monkeypatch, tmp_path):
+    """077 F8 ratchet: the gateway (lock dir set by build_cli_container) writes a
+    marker that `polyrob update`'s waiter (no lock dir) reads, in the prod shape
+    (POLYROB_DATA_DIR) and the self-host shape (POLYROB_HOME only)."""
+    from core import interactive_gate as g
+    from cli.update.agent_state import observe
+    from core.runtime_paths import resolve_data_home
+    monkeypatch.delenv("CLI_WORKSPACE_LOCK", raising=False)
+    for shape in ("prod", "selfhost"):
+        monkeypatch.setenv("POLYROB_HOME", str(tmp_path / shape / "home"))
+        if shape == "prod":
+            monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / shape / "data"))
+        else:
+            monkeypatch.delenv("POLYROB_DATA_DIR", raising=False)
+        # The gateway process.
+        monkeypatch.setenv("POLYROB_WORKSPACE_LOCK_DIR", str(tmp_path / shape / "cwd" / ".polyrob"))
+        g._busy_depth = 0
+        with g.owner_turn(kind="owner_chat", session_id="s1"):
+            # The updater process: no lock dir.
+            monkeypatch.delenv("POLYROB_WORKSPACE_LOCK_DIR", raising=False)
+            act = observe(resolve_data_home())
+            assert any("live human turn" in r for r in act.reasons), (shape, act.reasons)
+            monkeypatch.setenv("POLYROB_WORKSPACE_LOCK_DIR", str(tmp_path / shape / "cwd" / ".polyrob"))
+
+
+def test_a_turn_never_clears_another_processs_marker(gate):
+    """077 review: one marker per data home — a second process's live turn that
+    rewrote it must not read as idle when this turn ends."""
+    import json
+    with gate.owner_turn(kind="owner_chat", session_id="s1"):
+        with open(gate.turn_marker_path(), "w") as f:
+            json.dump({"pid": os.getppid(), "kind": "owner_chat"}, f)
+    assert os.path.exists(gate.turn_marker_path())

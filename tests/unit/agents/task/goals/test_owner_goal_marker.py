@@ -5,7 +5,7 @@ authored or unstamped goal is never recorded (AGT-14 stays closed), and money
 tools stay explicit-grant-only."""
 import asyncio
 
-from agents.task.goals import autonomy_marker as am
+from core import autonomy_marker as am
 from agents.task.goals.board import Goal
 from agents.task.goals.dispatcher import GoalDispatcher, _owner_authored_goal
 

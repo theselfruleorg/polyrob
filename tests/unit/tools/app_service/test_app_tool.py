@@ -105,7 +105,7 @@ def test_changed_config_returns_to_pending(tmp_path, owner_ctx, app_env, green_o
 
 @pytest.mark.parametrize("kind", ["leaf", "sub", "forged", "other_tenant"])
 def test_provenance_denials(tmp_path, owner_ctx, app_env, green_orch, kind):
-    from tools.controller.execution_context import ActionExecutionContext
+    from agents.task.loop_types.execution_context import ActionExecutionContext
     tool = make_tool(tmp_path, orch=green_orch)
     if kind == "leaf":
         ctx = ActionExecutionContext(session_id="s", user_id="owner-1", role="leaf")

@@ -173,7 +173,7 @@ service run overrides it, down to the room's read-only toolset.
 The dispatcher claims `ready` goals each tick, up to `GOAL_MAX_CONCURRENT`
 (default 2).
 
-`GOAL_FAIR_DISPATCH` (default **on**) round-robins the ready queue by
+The dispatcher round-robins the ready queue by
 objective: it walks the same priority-ordered window but takes at most one goal
 per objective per pass, until the tick's slots are full. Priority still decides
 who is served *first* within a pass; it no longer decides who is served *at
@@ -190,8 +190,7 @@ On the planner side, code picks *which* objective is served next — fewest
 in-flight children first, then oldest activity — and the model still writes the
 goals. Its three numeric limits are derived from the number of active
 objectives rather than hardcoded, so a sixteen-objective board is allowed more
-ready goals than a two-objective one. `GOAL_PLANNER_SCALING=false` is the single
-revert for that whole half, the way `GOAL_FAIR_DISPATCH=false` is for dispatch.
+ready goals than a two-objective one.
 
 ### Knobs as the objective count grows
 
@@ -367,7 +366,7 @@ waiting for a mention. That is a cron job bound to the room, created with
 | A goal sits in `ready` forever | `polyrob autonomy status` — master switch, posture, and whether a pause is active. |
 | "the goal board is durable, but no dispatcher will pick goals up" | `AUTONOMY_ENABLED`/`GOALS_ENABLED` is off. `polyrob autonomy on`. |
 | Goals run but you never hear about them | `goals.notify_on_done`, and `AUTONOMY_POSTURE` — `silent` means autonomous work is not reported. |
-| One objective eats every slot | `polyrob doctor --flags --search GOAL_FAIR_DISPATCH`; raise `GOAL_MAX_CONCURRENT` if the slots are genuinely too few. |
+| One objective eats every slot | `polyrob doctor --flags --search GOAL_PER_OBJECTIVE_CAP`; raise `GOAL_MAX_CONCURRENT` if the slots are genuinely too few. |
 | The agent keeps asking for the same thing | `polyrob owner asks`, then `polyrob owner fulfill <id>`. |
 | Everything stopped at once | a pause is in force: `polyrob autonomy status`, then `polyrob autonomy resume`. |
 

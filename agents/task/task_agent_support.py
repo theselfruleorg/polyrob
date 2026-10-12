@@ -34,7 +34,7 @@ MAX_SESSIONS_PER_USER = 10
 #: (AU-F3.1). asyncio only holds a WEAK reference to a task created via
 #: ``asyncio.create_task`` -- without this, the task object can be garbage-collected
 #: mid-run (a well-known asyncio footgun), silently dropping the self-wake dispatch.
-#: Mirrors ``core/autonomy_runtime.py::_BACKGROUND_TASKS``. Self-cleans via
+#: Mirrors ``polyrob/app/autonomy_runtime.py::_BACKGROUND_TASKS``. Self-cleans via
 #: ``add_done_callback``.
 _SELF_WAKE_TASKS: set = set()
 #: Strong refs to other fire-and-forget tasks (background run_session resumes,
@@ -75,6 +75,9 @@ class SessionRequest:
     #: 068 G2: the run's declared buy target (``core.wallet.buy_target``), normalized
     #: by the cron runner / goal dispatcher from ``payload.target_token``.
     money_target: Optional[Dict[str, str]] = None
+    #: B1: the run's own text for memory recall (the cron job / goal text, minus
+    #: the overlays the runner prepends to ``task``). None = recall from ``task``.
+    recall_seed: Optional[str] = None
 
     def __post_init__(self):
         if self.tools is None:
@@ -95,12 +98,13 @@ def _resolve_chat_runtime(env=None):
     provider never inherits SessionRequest's gpt-5 default.
     """
     import os as _os
-    from core.runtime_config import resolve_runtime_config
+    from core.runtime_config import (operator_model_pin, operator_provider_pin,
+                                     resolve_runtime_config)
     from modules.llm.llm_client_registry import get_default_model
 
     env = _os.environ if env is None else env
-    pinned_provider = env.get("CHAT_PROVIDER") or env.get("DEFAULT_PROVIDER")
-    pinned_model = env.get("CHAT_MODEL") or env.get("DEFAULT_MODEL")
+    pinned_provider = operator_provider_pin(env)
+    pinned_model = operator_model_pin(env)
     provider, model = resolve_runtime_config(
         None,
         None,

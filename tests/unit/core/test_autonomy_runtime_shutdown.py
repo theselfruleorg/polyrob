@@ -7,12 +7,11 @@ and three `stop-sigterm timed out -> Killing` in 7 d (prod, 2026-09-19) because
 the grace window was waiting on an LLM call that would not answer inside it.
 """
 import asyncio
-import re
 from pathlib import Path
 
 import pytest
 
-from core.autonomy_runtime import AutonomyHandles
+from polyrob.app.autonomy_runtime import AutonomyHandles
 
 REPO = Path(__file__).resolve().parents[3]
 
@@ -135,7 +134,7 @@ async def test_goal_runs_are_held_and_each_gets_a_terminal_event(monkeypatch):
 @pytest.mark.asyncio
 async def test_a_hanging_hold_cannot_hang_shutdown():
     disp = FakeDispatcher([], hangs=True)
-    import core.autonomy_runtime as ar
+    import polyrob.app.autonomy_runtime as ar
     grace = ar._STOP_GRACE_SEC
     ar._STOP_GRACE_SEC = 0.05
     try:
@@ -157,17 +156,6 @@ async def test_every_limb_is_fail_open():
 
     h = _handles(sched=Exploding(), dispatcher=ExplodingDispatcher())
     await h.drain_inflight()          # must not raise: shutdown proceeds
-
-
-@pytest.mark.asyncio
-async def test_the_flag_reverts_the_drain(monkeypatch):
-    monkeypatch.setenv("AUTONOMY_SHUTDOWN_DRAIN", "off")
-    task = asyncio.create_task(asyncio.sleep(3600))
-    sched = FakeSched(task)
-    disp = FakeDispatcher(["g1"])
-    await _handles(sched=sched, dispatcher=disp).drain_inflight()
-    assert FakeSched.events == [] and disp.calls == []
-    task.cancel()
 
 
 @pytest.mark.asyncio
@@ -196,32 +184,6 @@ async def test_no_loops_is_a_no_op():
     await AutonomyHandles().drain_inflight()
 
 
-def test_the_unit_allows_the_drain_to_finish():
-    unit = REPO / "deployment/polyrob.service"
-    # `deployment/` is owner-infra and does not ship in the public package, where a
-    # bare `pytest` still collects this file. An absent file is 'not this
-    # tree's concern', never a failure.
-    if not unit.exists():
-        pytest.skip("deployment sources absent (public package)")
-    svc = unit.read_text()
-    m = re.search(r"^TimeoutStopSec=(\d+)\s*$", svc, re.M)
-    assert m and int(m.group(1)) >= 90, "a 60s stop timeout forced 3 kills in 7 d"
-
-
-def test_the_deploy_reports_an_unclean_shutdown():
-    script = REPO / "scripts/deploy_prod.sh"
-    # `scripts/` is owner-infra and does not ship in the public package, where a
-    # bare `pytest` still collects this file. An absent file is 'not this
-    # tree's concern', never a failure.
-    if not script.exists():
-        pytest.skip("deploy scripts absent (public package)")
-    sh = script.read_text()
-    assert "stop-sigterm timed out" in sh
-    assert "QUIESCE_TS=" in sh, "the window must start BEFORE deploy_stop_units"
-    # Non-fatal: the code being deployed is not what timed out.
-    assert "WARN: the previous instance did NOT stop cleanly" in sh
-
-
 # --- the drain is duck-typed; pin the real shapes it reaches for -----------
 # `core` may not import `cron.*`/`agents.*`, so the drain reads attributes by
 # name. A rename there would turn it into a silent no-op — the failure mode a
@@ -248,5 +210,5 @@ def test_cut_by_restart_is_the_vocabulary_the_ledger_already_renders():
     second one nobody renders."""
     src = (REPO / "cron/jobs.py").read_text()
     assert '"cut_by_restart"' in src
-    status = (REPO / "core/status_snapshot.py").read_text()
+    status = (REPO / "core/status_loops.py").read_text()  # W9: the loops section
     assert "cut_by_restart" in status

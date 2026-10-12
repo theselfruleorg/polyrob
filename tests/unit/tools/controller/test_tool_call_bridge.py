@@ -32,7 +32,7 @@ def _register_late(controller, name="late_echo", record=None):
     @controller.registry.action("A late action registered after the freeze",
                                 param_model=_LateAction)
     async def late_echo(params: _LateAction, execution_context=None):
-        from tools.controller.types import ActionResult
+        from agents.task.loop_types.controller_types import ActionResult
         if record is not None:
             record.append(params.text)
         return ActionResult(extracted_content=params.text * params.times,
@@ -211,7 +211,7 @@ def _register_money_verb(controller):
     """Register an action the wallet-authority hook classifies as a money verb."""
     @controller.registry.action("A money verb", param_model=_MoneyParams)
     async def defi_trade(params: _MoneyParams, execution_context=None):
-        from tools.controller.types import ActionResult
+        from agents.task.loop_types.controller_types import ActionResult
         return ActionResult(extracted_content="TRADED", include_in_memory=True)
 
 

@@ -40,10 +40,7 @@ def history_reply(user_id: Optional[str], data_dir: str, args: List[str],
         return "Only the owner can read our conversation."
     limit, hours = _parse([str(a) for a in (args or []) if str(a).strip()])
     try:
-        from core.surfaces.owner_thread import (owner_thread_enabled, render_transcript,
-                                                thread_recent)
-        if not owner_thread_enabled():
-            return "The owner thread is off (OWNER_THREAD_ENABLED) — nothing is recorded."
+        from core.surfaces.owner_thread import render_transcript, thread_recent
         rows = thread_recent(container, str(user_id), limit=limit, hours=hours,
                              data_dir=data_dir)
     except Exception as exc:

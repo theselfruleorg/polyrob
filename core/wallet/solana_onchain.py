@@ -69,14 +69,104 @@ def lamports_to_sol(lamports: Optional[int]) -> Optional[float]:
 
 def native_balance(address: str, *, rpc: Optional[Callable] = None) -> Optional[float]:
     """SOL balance, or ``None`` when it cannot be read. ``0.0`` is a real zero."""
+    return lamports_to_sol(native_balance_raw(address, rpc=rpc))
+
+
+def native_balance_raw(address: str, *, rpc: Optional[Callable] = None) -> Optional[int]:
+    """SOL balance in LAMPORTS, or ``None`` when it cannot be read."""
     call = rpc or _rpc
     try:
         res = call("getBalance", [address])
+        value = (res or {}).get("value")
+        return None if value is None else int(value)
     except Exception as exc:
         logger.debug("solana: getBalance failed for %s (%s)", address, exc)
         return None
-    value = (res or {}).get("value")
-    return None if value is None else lamports_to_sol(int(value))
+
+
+def token_balance_raw(address: str, mint: str, *,
+                      rpc: Optional[Callable] = None) -> Optional[int]:
+    """One classic-SPL balance in RAW units, SUMMED over every account the
+    owner holds for ``mint``: ``0`` when the read succeeded and the owner holds
+    none, ``None`` when the read failed or any account did not parse (an
+    unparsed account could be the one holding the mint — unknown, not zero)."""
+    call = rpc or _rpc
+    try:
+        res = call("getTokenAccountsByOwner",
+                   [address, {"mint": mint}, {"encoding": "jsonParsed"}])
+    except Exception as exc:
+        logger.debug("solana: token balance read failed for %s (%s)", address, exc)
+        return None
+    total = 0
+    for entry in ((res or {}).get("value") or []):
+        try:
+            info = entry["account"]["data"]["parsed"]["info"]
+            if info["mint"] != mint:
+                return None
+            total += int(info["tokenAmount"]["amount"])
+        except (KeyError, TypeError, ValueError):
+            return None
+    return total
+
+
+def tx_inflow(signature: str, owner: str, mint: Optional[str] = None, *,
+              rpc: Optional[Callable] = None) -> Optional[int]:
+    """What ONE confirmed transaction paid ``owner``, in raw units: lamports
+    when ``mint`` is None, else the summed classic-SPL balance change of the
+    accounts ``owner`` owns for ``mint``. ``None`` when the transaction cannot
+    be read, failed on-chain, or does not name ``owner`` at all.
+
+    This is the exact arrival proof for a bridge INTO Solana: a balance rise
+    cannot say whose rise it is when the same wallet trades, but the delivering
+    transaction's own pre/post balances can.
+    """
+    call = rpc or _rpc
+    try:
+        tx = call("getTransaction", [signature, {
+            "encoding": "jsonParsed", "commitment": "confirmed",
+            "maxSupportedTransactionVersion": 0}])
+    except Exception as exc:
+        logger.debug("solana: getTransaction failed for %s (%s)", signature, exc)
+        return None
+    if not isinstance(tx, dict):
+        return None
+    meta = tx.get("meta") or {}
+    if meta.get("err") is not None:
+        return None
+    try:
+        if mint is None:
+            keys = tx["transaction"]["message"]["accountKeys"]
+            names = [k.get("pubkey") if isinstance(k, dict) else k for k in keys]
+            if owner not in names:
+                return None
+            i = names.index(owner)
+            return int(meta["postBalances"][i]) - int(meta["preBalances"][i])
+
+        def _sum(rows) -> int:
+            return sum(int(r["uiTokenAmount"]["amount"]) for r in (rows or [])
+                       if r.get("owner") == owner and r.get("mint") == mint
+                       and r.get("programId", SPL_TOKEN_PROGRAM) == SPL_TOKEN_PROGRAM)
+        post = meta.get("postTokenBalances")
+        pre = meta.get("preTokenBalances")
+        if post is None or pre is None:
+            return None
+        return _sum(post) - _sum(pre)
+    except (KeyError, TypeError, ValueError, IndexError):
+        return None
+
+
+def mint_decimals(mint: str, *, rpc: Optional[Callable] = None) -> Optional[int]:
+    """The mint's own ``decimals`` as the chain reports it, or ``None``."""
+    call = rpc or _rpc
+    try:
+        res = call("getAccountInfo", [mint, {"encoding": "jsonParsed"}])
+        info = res["value"]["data"]["parsed"]["info"]
+        if res["value"].get("owner") != SPL_TOKEN_PROGRAM:
+            return None
+        return int(info["decimals"])
+    except Exception as exc:
+        logger.debug("solana: mint decimals read failed for %s (%s)", mint, exc)
+        return None
 
 
 def token_balances(address: str, *,

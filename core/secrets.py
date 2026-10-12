@@ -2,7 +2,7 @@
 
 Reused by cli config show, core.config_service, and the webview config router.
 
-NOTE: this is distinct from core/bootstrap._is_secret_key, which is a *backfill
+NOTE: this is distinct from polyrob/app/bootstrap._is_secret_key, which is a *backfill
 selector* (a narrow allowlist of names we import from config/.env.production) —
 a different question; do not conflate them.
 

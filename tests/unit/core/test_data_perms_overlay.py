@@ -83,7 +83,7 @@ def test_top_level_file_named_pylibs_is_still_audited(home):
 
 def test_remedy_uses_custody_aware_deploy_ownership_pass(home):
     report = audit_data_perms(str(home), group=_group())
-    assert "deploy ownership pass" in report.remedy
-    assert "scripts/deploy_when_idle.sh" in report.remedy
+    assert "data-ownership pass" in report.remedy
+    assert "scripts/" not in report.remedy  # a public install has no scripts/
     assert "chmod -R" not in report.remedy
     assert "chgrp -R" not in report.remedy

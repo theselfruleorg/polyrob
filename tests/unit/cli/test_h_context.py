@@ -265,14 +265,8 @@ def test_ephemerals_get_their_own_row(mm_with_history):
     assert "ephemerals" in out
 
 
-def test_schema_slot_is_omitted_when_the_gauge_suppresses_it(mm_with_history, monkeypatch):
+def test_schema_slot_is_rendered(mm_with_history):
     from cli.ui.commands.h_context import render_context_breakdown
 
     mm_with_history.set_tool_schema_tokens(7_512)
-    monkeypatch.delenv("CTX_COUNT_TOOL_SCHEMAS", raising=False)
     assert "tool schemas" in render_context_breakdown(mm_with_history)
-
-    monkeypatch.setenv("CTX_COUNT_TOOL_SCHEMAS", "false")
-    assert "tool schemas" not in render_context_breakdown(mm_with_history), (
-        "/context must not render a slot the gauge suppresses"
-    )

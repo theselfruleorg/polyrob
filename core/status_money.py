@@ -485,7 +485,7 @@ def _money_slot(ctx) -> Section:
 # Late-bound through the snapshot module: a test that patches
 # ``core.status_snapshot._creations_section`` patches the slot too.
 register_status_section(
-    "wallet", lambda ctx: _ss._guarded("wallet", _ss._wallet_section, ctx.data_dir),
+    "wallet", lambda ctx: _ss._guarded("wallet", _wallet_section, ctx.data_dir),
     tenant=False)
 register_status_section("money", _money_slot, tenant=False)
 register_status_section(

@@ -3,7 +3,7 @@
 The registry mechanics: all-or-nothing registration that refuses a duplicate or
 a mis-owned row, the predicate query, the reserved set. The parity of the rows
 against the emitted action names lives in test_action_name_parity.py; the
-decision-level parity is the golden (tests/test_policy_decisions_golden.py).
+decision-level parity is the golden (ops/tests/test_policy_decisions_golden.py).
 """
 import pytest
 

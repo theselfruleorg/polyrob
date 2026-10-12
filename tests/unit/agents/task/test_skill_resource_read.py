@@ -155,7 +155,6 @@ def _bare_controller():
 
 @pytest.mark.asyncio
 async def test_read_skill_resource_action_returns_wrapped_content(tmp_path, monkeypatch):
-    monkeypatch.setenv("SKILL_PROGRESSIVE_DISCLOSURE", "true")
     d = _skill(tmp_path)
     fake_manager = _fake_skill_manager(tmp_path)
     monkeypatch.setattr(
@@ -178,7 +177,6 @@ async def test_read_skill_resource_action_returns_wrapped_content(tmp_path, monk
 
 @pytest.mark.asyncio
 async def test_read_skill_resource_action_refuses_unloaded_skill(tmp_path, monkeypatch):
-    monkeypatch.setenv("SKILL_PROGRESSIVE_DISCLOSURE", "true")
     fake_manager = _fake_skill_manager(tmp_path)
     monkeypatch.setattr(
         "agents.task.agent.skill_manager.get_skill_manager", lambda: fake_manager
@@ -199,7 +197,6 @@ async def test_read_skill_resource_action_refuses_unloaded_skill(tmp_path, monke
 @pytest.mark.asyncio
 async def test_read_skill_resource_action_never_executes_scripts(tmp_path, monkeypatch):
     """A loaded skill's scripts/*.sh must be returned as inert TEXT, never run."""
-    monkeypatch.setenv("SKILL_PROGRESSIVE_DISCLOSURE", "true")
     d = _skill(tmp_path)
     marker = tmp_path / "SHOULD_NOT_EXIST.txt"
     (d / "scripts" / "run.sh").write_text(f"#!/bin/sh\ntouch {marker}\n")

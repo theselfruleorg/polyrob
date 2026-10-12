@@ -161,7 +161,15 @@ unit per process you need:
 > unit (or a launchd agent on macOS) that runs `polyrob gateway` — every enabled
 > surface from one unit, no root, no unit file to author. The table below is for
 > a SERVER, where each surface is its own system unit under its own hardened
-> identity. Do not use both on one box.
+> identity. Do not use both on one box. Start, stop, restart, update — from a
+> shell, from your chat, or as root on a box whose service runs as another user:
+> [operate-the-service.md](operate-the-service.md).
+
+Every agent unit in `deployment/` carries the restart contract: `RestartForceExitStatus=75`
+and `SuccessExitStatus=75`. A `/restart` from chat makes the agent finish its live work
+and exit with 75; systemd starts it again and the agent reports back in that chat. A
+`systemctl stop` or `restart` also lets a live turn finish first (up to 60 seconds,
+inside `TimeoutStopSec`).
 
 | Process | Command | What it is |
 |---|---|---|
@@ -380,6 +388,11 @@ created by `--apply` and by the boot-time migration, so an install that has only
 updated through its package manager has nothing to roll back to yet. What the snapshot
 covers, and why `--rollback` restores data but not code:
 [upgrading.md](upgrading.md#the-safety-net).
+
+With `polyrob service` running, `--apply` (or `/update` from chat) goes through the
+service: it finishes its work, restarts, applies the update before it starts anything,
+and reports back — rolling back if a step fails or the new version does not start.
+See [operate-the-service.md](operate-the-service.md).
 
 ---
 

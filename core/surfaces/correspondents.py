@@ -504,18 +504,10 @@ class CorrespondentRegistry:
             return dict(rows[0])
         # A4 (2026-07-13 review): >1 active bindings. CROSS-tenant ambiguity stays
         # unroutable — guessing the tenant would leak a reply into the wrong
-        # account. SAME-tenant: route to the most recently active binding (default
-        # ON, CORRESPONDENT_RESOLVE_LATEST=false restores the legacy deny) — the
+        # account. SAME-tenant: route to the most recently active binding — the
         # old None starved every session after the first, silently.
         tenants = {r["user_id"] for r in rows}
         if len(tenants) > 1:
-            return None
-        try:
-            from core.surfaces.config import SurfaceConfig
-            latest_ok = SurfaceConfig.correspondent_resolve_latest()
-        except Exception:
-            latest_ok = True
-        if not latest_ok:
             return None
         best = max(rows, key=lambda r: r["updated_at"])
         logger.info(

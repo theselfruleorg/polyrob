@@ -24,7 +24,7 @@ def test_bare_wallet_view_friendly_when_enabled_without_seed(monkeypatch):
     # No env-file bootstrap here — pin the seed as genuinely absent (a real
     # ~/.polyrob/.env on a dev box must not backfill it now that the group
     # callback loads env, C2).
-    monkeypatch.setattr("core.bootstrap.load_env", lambda *a, **k: None)
+    monkeypatch.setattr("polyrob.app.bootstrap.load_env", lambda *a, **k: None)
     monkeypatch.setenv("AGENT_WALLET_ENABLED", "true")
     monkeypatch.delenv("AGENT_WALLET_MASTER_SEED", raising=False)
     runner = CliRunner()
@@ -50,7 +50,7 @@ def test_bare_wallet_view_bootstraps_local_env(monkeypatch):
         monkeypatch.setenv("AGENT_WALLET_ENABLED", "true")
         monkeypatch.setenv("AGENT_WALLET_MASTER_SEED", "w" * 40)
 
-    monkeypatch.setattr("core.bootstrap.load_env", _fake_load_env)
+    monkeypatch.setattr("polyrob.app.bootstrap.load_env", _fake_load_env)
     runner = CliRunner()
     result = runner.invoke(wallet_cmd, ["--no-balances"])
     assert result.exit_code == 0, result.output
@@ -116,7 +116,7 @@ def test_bare_wallet_view_friendly_on_invalid_bip44_seed(monkeypatch):
     must show a friendly message, not dump a raw traceback."""
     import pytest
     pytest.importorskip("eth_account")
-    monkeypatch.setattr("core.bootstrap.load_env", lambda *a, **k: None)
+    monkeypatch.setattr("polyrob.app.bootstrap.load_env", lambda *a, **k: None)
     monkeypatch.setenv("AGENT_WALLET_ENABLED", "true")
     monkeypatch.setenv("AGENT_WALLET_MASTER_SEED", "w" * 48)
     monkeypatch.setenv("AGENT_WALLET_DERIVATION", "bip44")
@@ -134,7 +134,7 @@ def test_bare_wallet_view_shows_derivation(monkeypatch, tmp_path):
     # `resolve_scheme` takes that env override first, and this junk 40-char
     # seed then dies as "not a valid BIP-39 mnemonic". (meta.json, the other
     # scheme source, is already isolated by _isolate_wallet_audit_sink.)
-    monkeypatch.setattr("core.bootstrap.load_env", lambda *a, **k: None)
+    monkeypatch.setattr("polyrob.app.bootstrap.load_env", lambda *a, **k: None)
     monkeypatch.delenv("AGENT_WALLET_DERIVATION", raising=False)
     monkeypatch.setenv("AGENT_WALLET_ENABLED", "true")
     monkeypatch.setenv("AGENT_WALLET_MASTER_SEED", "w" * 40)
@@ -148,7 +148,7 @@ def test_bare_wallet_view_disabled_with_bad_cap_says_not_enabled(monkeypatch):
     """M12: a DISABLED wallet + a malformed numeric cap env must say 'not enabled'
     (NOT 'ENABLED but seed missing'), and NAME the malformed key — the config
     raise happens before enabled/seed are read, so both were previously lies."""
-    monkeypatch.setattr("core.bootstrap.load_env", lambda *a, **k: None)
+    monkeypatch.setattr("polyrob.app.bootstrap.load_env", lambda *a, **k: None)
     monkeypatch.delenv("AGENT_WALLET_ENABLED", raising=False)
     monkeypatch.delenv("AGENT_WALLET_MASTER_SEED", raising=False)
     monkeypatch.setenv("AGENT_WALLET_MAX_PER_TX_USD", "abc")
@@ -163,7 +163,7 @@ def test_bare_wallet_view_disabled_with_bad_cap_says_not_enabled(monkeypatch):
 def test_bare_wallet_view_enabled_with_bad_cap_names_key(monkeypatch):
     """M12: an ENABLED wallet with a malformed cap env names the offending key in
     the config-error branch, not a bare ValueError blamed on the seed."""
-    monkeypatch.setattr("core.bootstrap.load_env", lambda *a, **k: None)
+    monkeypatch.setattr("polyrob.app.bootstrap.load_env", lambda *a, **k: None)
     monkeypatch.setenv("AGENT_WALLET_ENABLED", "true")
     monkeypatch.setenv("AGENT_WALLET_MASTER_SEED", "w" * 40)
     monkeypatch.setenv("AGENT_WALLET_MAX_PER_TX_USD", "abc")
@@ -178,7 +178,7 @@ def test_bare_wallet_view_shows_the_default_daily_cap(monkeypatch):
     """H3 (2026-08-22): WALLET_DAILY_CAP_USD unset used to mean UNLIMITED; it
     now means the finite $100/24h default, so the bare view's default posture
     shows a real daily budget, not the unlimited warning."""
-    monkeypatch.setattr("core.bootstrap.load_env", lambda *a, **k: None)
+    monkeypatch.setattr("polyrob.app.bootstrap.load_env", lambda *a, **k: None)
     monkeypatch.setenv("AGENT_WALLET_ENABLED", "true")
     monkeypatch.setenv("AGENT_WALLET_MASTER_SEED", "x" * 40)
     monkeypatch.setenv("AGENT_WALLET_DERIVATION", "legacy")  # PBKDF2 — always derives
@@ -195,7 +195,7 @@ def test_bare_wallet_view_annotates_unlimited_daily_when_explicitly_disabled(mon
     UNLIMITED, with the set-cap hint — but only when the operator has
     EXPLICITLY disabled the aggregate cap (H3, 2026-08-22: unset alone is no
     longer "no cap", it's the finite default — see the sibling test above)."""
-    monkeypatch.setattr("core.bootstrap.load_env", lambda *a, **k: None)
+    monkeypatch.setattr("polyrob.app.bootstrap.load_env", lambda *a, **k: None)
     monkeypatch.setenv("AGENT_WALLET_ENABLED", "true")
     monkeypatch.setenv("AGENT_WALLET_MASTER_SEED", "x" * 40)
     monkeypatch.setenv("AGENT_WALLET_DERIVATION", "legacy")  # PBKDF2 — always derives

@@ -71,7 +71,7 @@ from core.exceptions import (
 # PIL Image imported locally in save_screenshot() method where needed
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from tools.browser.views import BrowserStateHistory, BrowserState
+from agents.task.loop_types.browser_views import BrowserStateHistory, BrowserState
 from agents.task.agent.message_manager.service import MessageManager
 from agents.task.agent.core.llm_runner import LLMRunnerMixin
 from agents.task.agent.core.memory_writer import MemoryWriterMixin
@@ -85,11 +85,11 @@ from agents.task.agent.core.history_io import HistoryIOMixin
 from agents.task.agent.core.logging_io import LoggingIOMixin
 from agents.task.agent.core.safety_lifecycle import SafetyLifecycleMixin
 from agents.task.agent.core.user_ingress import UserIngressMixin
+from agents.task.agent.core.run_state import LLMCallState, StepResultState, owned
 from agents.task.agent.core.llm_provisioning import LLMProvisioningMixin
 from agents.task.agent.core.model_swap import ModelSwapMixin
 from agents.task.agent.core.model_introspection import ModelIntrospectionMixin
 from agents.task.agent.core.loop_detection import LoopDetectionMixin
-from agents.task.agent.core.turn_input import TurnInputMixin
 from agents.task.agent.core.resources import ResourceMixin
 from agents.task.agent.core.session_metadata import SessionMetadataMixin
 from agents.task.agent.core.error_recovery import ErrorRecoveryMixin
@@ -246,7 +246,13 @@ _AGENT_DEP_KEYS = frozenset({
 })
 
 
-class Agent(AgentConstructionMixin, RunLoopMixin, StepMixin, StepExecutionMixin, StepTelemetryMixin, ResultProcessingMixin, LLMRunnerMixin, NextActionInternalMixin, ErrorRecoveryMixin, OutputValidationMixin, MemoryWriterMixin, ToolResultOffloadMixin, MemoryPrefetchMixin, OwnerThreadInjectMixin, LiveHealthMixin, BackgroundReviewMixin, HistoryIOMixin, LoggingIOMixin, SafetyLifecycleMixin, UserIngressMixin, TurnInputMixin, LLMProvisioningMixin, ModelSwapMixin, ModelIntrospectionMixin, LoopDetectionMixin, ResourceMixin, SessionMetadataMixin):
+class Agent(AgentConstructionMixin, RunLoopMixin, StepMixin, StepExecutionMixin, StepTelemetryMixin, ResultProcessingMixin, LLMRunnerMixin, NextActionInternalMixin, ErrorRecoveryMixin, OutputValidationMixin, MemoryWriterMixin, ToolResultOffloadMixin, MemoryPrefetchMixin, OwnerThreadInjectMixin, LiveHealthMixin, BackgroundReviewMixin, HistoryIOMixin, LoggingIOMixin, SafetyLifecycleMixin, UserIngressMixin, LLMProvisioningMixin, ModelSwapMixin, ModelIntrospectionMixin, LoopDetectionMixin, ResourceMixin, SessionMetadataMixin):
+	# W9: step/result and LLM-call state are OWNED objects (core/run_state.py) built at
+	# construction; these descriptors keep the old attribute names working.
+	_last_result = owned("step_state", "last_result", StepResultState)
+	_llm_call_in_progress = owned("llm_call", "in_progress", LLMCallState)
+	_llm_call_start_time = owned("llm_call", "start_time", LLMCallState)
+
 	@classmethod
 	def from_params(cls, **kwargs) -> "Agent":
 		"""Build an Agent from the legacy flat keyword arguments.

@@ -345,7 +345,7 @@ def _h_toolset(ctx: CommandContext) -> None:
     active tool set is unchanged.
     """
     from agents.task.tool_defaults import TOOLSETS, resolve_toolset
-    from core.bootstrap import cli_unavailable_tools
+    from core.cli_tool_tables import cli_unavailable_tools
 
     args = ctx.args
     console = ctx.console()
@@ -835,7 +835,7 @@ def _session_info_rows(ctx: CommandContext) -> list:
 
     autonomy_on = False
     try:
-        from agents.task.constants import autonomy_enabled
+        from core.config_policy import autonomy_enabled
 
         autonomy_on = bool(autonomy_enabled())
     except Exception:
@@ -1000,8 +1000,9 @@ def _resolve_feed_dir(ctx: CommandContext, session_id: str) -> Optional[Path]:
     Candidates, in order:
       1. ``pm().get_feed_dir(session_id, user_id)`` — but this CREATES an empty
          dir as a side effect, so it only WINS when it contains feed files.
-      2. CLI-store layout: ``./.polyrob/sessions/**/<session_id>/feed``.
-      3. CLI-store flat layout: ``./.polyrob/sessions/<session_id>/feed``.
+
+    (The ``./.polyrob/sessions`` globs are gone: polyrob no longer reads the
+    project data home, and a cloned directory could supply a feed — W8.)
 
     We return the first candidate that contains ``[0-9]*_*.json`` files; if none
     has files we return the first existing dir (so the caller can report
@@ -1023,13 +1024,6 @@ def _resolve_feed_dir(ctx: CommandContext, session_id: str) -> Optional[Path]:
         _candidate = _pm.data_root / clean_uid / clean_id / "feed"
         if _candidate.is_dir():
             candidates.append(_candidate)
-    except Exception:
-        pass
-
-    try:
-        root = Path.cwd() / ".polyrob" / "sessions"
-        candidates.extend(root.glob(f"*/{session_id}/feed"))
-        candidates.append(root / session_id / "feed")
     except Exception:
         pass
 
@@ -1588,6 +1582,17 @@ def build_default_registry() -> CommandRegistry:
         "halt", h_halt,
         "Alias of /pause — pause everything now",
         group="control", **help_kwargs("halt"),
+    ))
+    from cli.ui.commands.h_lifecycle import h_restart, h_update
+    reg.register(Command(
+        "restart", h_restart,
+        "Restart the background service once its current work is done (077)",
+        usage="[now]", group="control", **help_kwargs("restart"),
+    ))
+    reg.register(Command(
+        "update", h_update,
+        "Update the background service to the latest release, then report back",
+        usage="[pre]", group="control", **help_kwargs("update"),
     ))
     reg.register(Command(
         "resume", _h_resume_autonomy,

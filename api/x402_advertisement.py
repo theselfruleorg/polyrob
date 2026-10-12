@@ -7,7 +7,7 @@ Three facts that were hardcoded in two places each and wrong in both:
   A payer who sent USDT or ETH on the strength of that list paid an address
   nothing would ever match to their request.
 * **B23** — ``credits.enabled: True``. Credits exist only when the account
-  system is on AND the credit system is on (``core/initialization.py`` registers
+  system is on AND the credit system is on (``polyrob/app/initialization.py`` registers
   ``balance_manager`` under both). Advertised unconditionally, the card told a
   caller to buy credits on an instance with no ledger.
 * **B41** — ``resolve_treasury_address()`` reaches into the agent wallet and

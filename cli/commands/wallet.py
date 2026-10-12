@@ -138,12 +138,12 @@ def _parse_cap_arg(kind: str, raw: str) -> str:
 def wallet_cmd(ctx: click.Context, as_json: bool, no_balances: bool):
     """Show the agent wallet: addresses, balances, network, caps, operational venue."""
     # C2 (2026-07-15): bootstrap the local env BEFORE any subcommand reads the wallet.
-    # `wallet init` writes AGENT_WALLET_ENABLED/MASTER_SEED to ~/.polyrob/.env; without
+    # `wallet init` writes AGENT_WALLET_ENABLED/AGENT_WALLET_MASTER_SEED to ~/.polyrob/.env; without
     # this the bare view (and set-cap) never read that file, so they report "not
     # enabled" for a wallet `doctor` (which does load env) confirms. Mirrors owner.py
     # (unconditional in the group callback so every wallet subcommand sees file-set
     # config); export/init also load it themselves (override=False → harmless double).
-    from core.bootstrap import load_env
+    from polyrob.app.bootstrap import load_env
     try:
         load_env(local_mode=True)
     except Exception:
@@ -419,10 +419,10 @@ def _set_cap_pref(kind: str, usd: float, *, yes: bool) -> None:
         f"no restart.", fg="green"))
     click.echo(f"Effective {label} now: {shown}")
     if effective is not None and abs(float(effective) - float(usd)) > 1e-9:
-        from core.wallet.signer_envelope import UNANSWERED_TEXT, signer_unanswered
+        from core.wallet.signer_envelope import signer_unanswered, unanswered_text
         bound = _signer_bound(kind, tenant, home_dir)
         if signer_unanswered():
-            click.echo(click.style("  ⚠ " + UNANSWERED_TEXT, fg="yellow"))
+            click.echo(click.style("  ⚠ " + unanswered_text(), fg="yellow"))
         elif bound is not None:
             from core.wallet.signer_envelope import bound_text
             click.echo(click.style("  ⚠ " + bound_text(bound), fg="yellow"))
@@ -465,7 +465,7 @@ def run_wallet_init_flow(*, mnemonic, raw_seed, home, assume_yes, data_dir=None)
     - mnemonic=... -> import an existing mnemonic (bip44 scheme)
     - raw_seed=... -> import a legacy raw seed (legacy scheme — migrating an
                       older install keeps its addresses)
-    Writes AGENT_WALLET_ENABLED/MASTER_SEED to <home>/.env (chmod 600) and
+    Writes AGENT_WALLET_ENABLED/AGENT_WALLET_MASTER_SEED to <home>/.env (chmod 600) and
     records the derivation scheme write-once. Refuses if a seed is already set.
     """
     import os
@@ -596,7 +596,7 @@ def wallet_export_cmd(venue):
     to the agent — this command exists only on the operator CLI.
     """
     import os, sys
-    from core.bootstrap import load_env
+    from polyrob.app.bootstrap import load_env
     try:
         load_env(local_mode=True)
     except Exception:
@@ -708,7 +708,7 @@ def wallet_init_cmd(mnemonic, raw_seed, yes, data_dir_opt, home_dir_opt):
     keeping it off the shell history and `ps` output (M14).
     """
     from pathlib import Path as _P
-    from core.bootstrap import load_env
+    from polyrob.app.bootstrap import load_env
     try:
         load_env(local_mode=True)  # see file-based seeds before deciding "already set"
     except Exception:
@@ -1112,14 +1112,15 @@ def wallet_bridges(user_id):
                    "assertion pass that sends nothing.")
 @click.option("--yes", is_flag=True, default=False,
               help="Skip the typed confirmation (for a non-interactive owner run).")
+@click.option("--token-in", default="native", show_default=True,
+              help="Origin: 'native' (SOL/ETH) or 'usdc' (the chain's PINNED USDC).")
 @click.option("--token-out", default="native", show_default=True,
               help="Destination asset: 'native', or a token PINNED in the chain "
                    "registry ('weth'/'usdc' where that chain has one). An "
-                   "arbitrary address is refused. ⚠️ v1 bridges NATIVE→NATIVE: "
-                   "anything else is refused by the verb, not silently swapped.")
+                   "arbitrary address is refused, not silently swapped.")
 @as_root_option
-def wallet_bridge(from_chain, to_chain, amount, execute, yes, token_out):
-    """Bridge NATIVE value between chains: polyrob wallet bridge solana robinhood 0.5
+def wallet_bridge(from_chain, to_chain, amount, execute, yes, token_in, token_out):
+    """Bridge value between chains: polyrob wallet bridge robinhood solana 0.1 --token-out usdc
 
     THE OWNER SEAT, and since 2026-09-12 not the only one — a bridge runs on
     CAPS, NOT TAPS: under DEFI_AUTONOMOUS_MAX_USD the agent may run one itself
@@ -1137,16 +1138,16 @@ def wallet_bridge(from_chain, to_chain, amount, execute, yes, token_out):
     from tools.defi.trade_tool import BridgeParams, DefiTradeTool
 
     params = BridgeParams(from_chain=from_chain, to_chain=to_chain, amount=amount,
-                          token_out=token_out, dry_run=not execute)
+                          token_in=token_in, token_out=token_out, dry_run=not execute)
     tool = DefiTradeTool()
     # C63: the confirmation below said "bridge N native from -> to" regardless
     # of --token-out, so an operator who asked for usdc on the far side typed
     # "yes" to a sentence describing a different transaction.
-    _asset = (token_out or "native").strip().lower()
+    _asset, _origin = ((t or "native").strip().lower() for t in (token_out, token_in))
 
     if execute and not yes:
         click.echo(click.style(
-            f"About to bridge {amount} native {from_chain} -> {_asset} on "
+            f"About to bridge {amount} {_origin} {from_chain} -> {_asset} on "
             f"{to_chain}. This moves real funds and cannot be undone.",
             fg="yellow"))
         click.confirm("Proceed?", abort=True)
@@ -1190,9 +1191,8 @@ def _owner_ctx():
     the 033 tenantless-``wallet_spend`` defect (a confident ``$0.00`` over 114
     real rows) in a new place. Off a deployed box the two are identical.
     """
-    from types import SimpleNamespace
-    return SimpleNamespace(user_id=_admin_tenant(), role="owner", is_sub_agent=False,
-                           metadata={})
+    from core.security.turn_facts import owner_seat_context
+    return owner_seat_context(_admin_tenant(), seat="cli")
 
 
 def _echo_result(result, *, what: str):

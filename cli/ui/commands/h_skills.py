@@ -6,7 +6,7 @@ CLI group over the install pipeline (Tasks 19-21): ``list``/``install``/
 ``approve``/``remove``/``info``. All subcommand logic is delegated to the shared
 library functions in ``cli.commands.skill_install`` — no duplicated logic between
 the CLI and the REPL. ``install``/``approve`` are gated on the local operator
-(``agents.task.constants.local_mode_enabled``); Task 23 hardens the library layer
+(``core.config_policy.local_mode_enabled``); Task 23 hardens the library layer
 itself, this is just the REPL-side UX gate.
 
 Kept in its own module (the god-file split convention — new behavior gets its
@@ -102,7 +102,7 @@ def _require_local_operator(ctx: CommandContext, action: str) -> bool:
     UX refusal so a non-local (multi-tenant/remote) session gets an honest
     message instead of silently installing/activating content."""
     try:
-        from agents.task.constants import local_mode_enabled
+        from core.config_policy import local_mode_enabled
 
         if local_mode_enabled():
             return True

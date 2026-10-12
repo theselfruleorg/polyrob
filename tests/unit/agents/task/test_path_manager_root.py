@@ -47,3 +47,22 @@ def test_is_project_root_workspace_false_when_flag_without_root(tmp_path):
     # so the accessor must report False (honest effective signal).
     pm = PathManager(data_root=str(tmp_path / "d"), workspace_is_project_root=True)
     assert pm.is_project_root_workspace is False
+
+
+def test_workspace_subdir_follows_the_project_root(tmp_path):
+    """A file made for the "workspace" lands where the file tools look.
+
+    Prod 2026-10-09: a run with the project folder as its workspace offloaded a
+    472k-char tool result via create_file_path(sid, "workspace", ...) into the
+    session dir, then filesystem_read_file (rooted at get_workspace_dir = the
+    project folder) could not find it -- 50 "File not found: content_*" in 7 days.
+    """
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    pm = PathManager(data_root=str(tmp_path / "data"),
+                     workspace_is_project_root=True, project_root=str(proj))
+    assert pm.get_subdir("s1", "workspace", "rob") == pm.get_workspace_dir("s1", "rob")
+    f = pm.create_file_path("s1", "workspace", "content_1_ab.json", user_id="rob")
+    assert f.parent == proj.resolve()
+    # other session subdirs still live under the data root
+    assert str(pm.get_subdir("s1", "feed", "rob")).startswith(str((tmp_path / "data").resolve()))

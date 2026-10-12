@@ -260,7 +260,7 @@ class A2ATaskHandler:
         # Filesystem refs are refused (no trusted session workspace here); only @url
         # expands, behind the SSRF guard. Fails soft — never breaks task creation.
         if text:
-            from agents.task.constants import AutonomyConfig
+            from core.config_policy import AutonomyConfig
             if AutonomyConfig.context_references_enabled():
                 try:
                     from agents.task.agent.messages.context_references import (

@@ -116,7 +116,7 @@ async def _reconcile(row: Dict[str, Any], *, container, provider, reader, notify
     from core.wallet import bridge_guard, tx_notify
 
     bid = row.get("id")
-    chain_name = bridge_guard.chain_name_for_id(int(row.get("dest_chain_id") or 0))
+    chain_name = bridge_guard.arrival_chain_name(int(row.get("dest_chain_id") or 0))
     # ⚠️ The explorer link belongs to the ORIGIN, because `tx_ref` on this row IS
     # the origin transaction (`bridge_guard.settle` records the SEND). Linking it
     # to `chain_name`, the DESTINATION, would put a Solana base58 signature
@@ -133,8 +133,32 @@ async def _reconcile(row: Dict[str, Any], *, container, provider, reader, notify
     age = float(now()) - float(row.get("created_at") or 0.0)
 
     delta = None
-    if chain_name and recipient and before is not None:
-        measure = reader or bridge_guard.arrival_reader(row.get("currency_out"))
+    prove = (bridge_guard.arrival_prover(str(row.get("request_id") or ""), recipient,
+                                         row.get("currency_out"), chain_name)
+             if (chain_name and recipient) else None)
+    if prove is not None:
+        # SVM: the wallet also trades here, so only the delivering
+        # transaction's own balance change proves the arrival (bridge_guard).
+        state, status_detail = provider.status(str(row.get("request_id") or ""))
+        proven = prove() if state == "success" else None
+        if proven is not None and proven >= min_out > 0:
+            detail = (f"arrived on a later pass: proven +{proven} raw by the "
+                      f"delivering transaction on {chain_name} (floor {min_out})")
+            bridge_guard.settle(bid, state=bridge_guard.STATE_ARRIVED,
+                                detail=detail, db_path=db_path)
+            result.arrived += 1
+            await notify(container, user_id, tx_notify.TxNotice(
+                verb="bridge", route=route, chain=origin_name,
+                tx_ref=row.get("tx_ref"),
+                extra_refs=(bid,), state=tx_notify.STATE_ARRIVED,
+                usd=row.get("amount_usd"),
+                measured=f"+{proven} raw on {chain_name}",
+                detail=f"resolved by the watcher after {int(age)}s",
+                ledger_recorded=True))
+            return
+    elif chain_name and recipient and before is not None:
+        measure = reader or bridge_guard.arrival_reader(row.get("currency_out"),
+                                                        chain_name)
         after = measure(recipient, chain_name)
         if after is None:
             # UNKNOWN, never zero: a dead RPC reporting 0 is indistinguishable
@@ -159,7 +183,8 @@ async def _reconcile(row: Dict[str, Any], *, container, provider, reader, notify
                     ledger_recorded=True))
                 return
 
-    state, status_detail = provider.status(str(row.get("request_id") or ""))
+    if prove is None:
+        state, status_detail = provider.status(str(row.get("request_id") or ""))
     if state == "failure" and (delta is None or delta < min_out):
         # The one case that can be called failed: the provider says refunded or
         # expired AND no inflow was measured at the destination.

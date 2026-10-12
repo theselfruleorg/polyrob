@@ -32,7 +32,7 @@ from core.app_service.registry import (
     default_app_services_db,
 )
 from tools.base_tool import BaseTool
-from tools.controller.types import ActionResult
+from agents.task.loop_types.controller_types import ActionResult
 from tools.hf_deploy.digest import tested_tree_digest
 
 logger = logging.getLogger(__name__)

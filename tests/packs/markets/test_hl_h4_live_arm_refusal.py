@@ -45,6 +45,9 @@ def _wallet_tool(monkeypatch):
     wf.reset_agent_wallet_cache()
     monkeypatch.setattr("polyrob_markets.hyperliquid.service.Exchange", _FakeExchange, raising=False)
     monkeypatch.setattr("polyrob_markets.hyperliquid.service.HAS_SDK", True, raising=False)
+    # _has_sdk() is lazy: pin it as loaded or the first call re-imports the
+    # real SDK over the patched Exchange.
+    monkeypatch.setattr("polyrob_markets.hyperliquid.service._SDK_LOADED", True)
     tool = HyperliquidTool(config=types.SimpleNamespace(), container=None)
     tool._user_id = "agent"
     monkeypatch.setattr(tool, "_get_info_client", lambda: _async(object()))

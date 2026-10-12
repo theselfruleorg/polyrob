@@ -27,6 +27,7 @@ caller reports it separately (``process_guard.server_process_alive``).
 """
 from __future__ import annotations
 
+from core.runtime_paths import cron_db_path, goals_db_path
 import os
 import time
 from dataclasses import dataclass, field
@@ -67,29 +68,71 @@ def _count(db: Path, sql: str, params: tuple = ()) -> Optional[int]:
         con.close()
 
 
+def _marker_candidates(data_home: Path) -> List[Path]:
+    """Where a live turn marker may sit, primary first.
+
+    077 F8: before the marker followed the data home, a gateway with no
+    POLYROB_DATA_DIR wrote it beside its workspace LOCK — ``<WorkingDirectory>/
+    .polyrob/turn.active``, which for the ``polyrob service`` user unit
+    (WorkingDirectory=$HOME) is ``~/.polyrob/turn.active``. An update run against
+    a gateway still on that older code must see its turn there too.
+    """
+    out = [data_home / "locks" / "turn.active"]
+    if (os.environ.get("POLYROB_DATA_DIR") or "").strip():
+        # A data-dir install (prod) always wrote the marker under it.
+        return out
+    try:
+        from core.paths import polyrob_home
+        out.append(Path(polyrob_home()) / "turn.active")
+    except Exception:
+        pass
+    out.append(Path.home() / ".polyrob" / "turn.active")
+    seen, uniq = set(), []
+    for p in out:
+        if str(p) not in seen:
+            seen.add(str(p))
+            uniq.append(p)
+    return uniq
+
+
+def _read_marker_file(mp: Path):
+    """``(marker, None)`` for a live marker, ``(None, None)`` for none/dead, or
+    ``(None, reason)`` for one that cannot be parsed (treated as a live turn)."""
+    if not mp.exists():
+        return None, None
+    import json
+    try:
+        m = json.loads(mp.read_text(encoding="utf-8"))
+        pid = int(m.get("pid") or 0)
+        # A marker with no positive pid is not a turn (the shell reader's
+        # `[ "$pid" -gt 0 ]`); os.kill(0, 0) would signal OUR OWN process
+        # group and succeed, reading as a phantom live turn.
+        if pid <= 0:
+            return None, None
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return None, None
+    except PermissionError:
+        return m, None  # alive, owned by another user
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None, "a live turn marker that cannot be parsed (treated as a live turn)"
+    return m, None
+
+
 def _turn_reason(data_home: Path) -> Optional[str]:
     from core.interactive_gate import read_turn_marker
     m = read_turn_marker()
     if not m:
-        # read_turn_marker resolves the path from the env; also honour the
-        # explicit home so a test / an admin call is not env-dependent.
-        mp = data_home / "locks" / "turn.active"
-        if not mp.exists():
+        # read_turn_marker resolves the path from the env; an updater process has
+        # no lock dir, so also read the explicit home (and the pre-077 location).
+        for mp in _marker_candidates(Path(data_home)):
+            m, bad = _read_marker_file(mp)
+            if bad:
+                return bad
+            if m:
+                break
+        if not m:
             return None
-        import json
-        try:
-            m = json.loads(mp.read_text(encoding="utf-8"))
-            pid = int(m.get("pid") or 0)
-            # A marker with no positive pid is not a turn (the shell reader's
-            # `[ "$pid" -gt 0 ]`); os.kill(0, 0) would signal OUR OWN process
-            # group and succeed, reading as a phantom live turn.
-            if pid <= 0:
-                return None
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return None
-        except (OSError, ValueError, TypeError):
-            return "a live turn marker that cannot be parsed (treated as a live turn)"
     kind = str(m.get("kind") or "turn")
     sid = str(m.get("session_id") or "")[:12]
     # The writer (core.interactive_gate._write_turn_marker) stamps ``started``;
@@ -99,8 +142,12 @@ def _turn_reason(data_home: Path) -> Optional[str]:
     return f"a live human turn ({kind}{', session ' + sid if sid else ''}{age})"
 
 
-def observe(data_home: Path, *, cron_imminent_sec: int = DEFAULT_CRON_IMMINENT_SEC) -> AgentActivity:
-    """One read of every busy signal."""
+def observe(data_home: Path, *,
+            cron_imminent_sec: Optional[int] = DEFAULT_CRON_IMMINENT_SEC) -> AgentActivity:
+    """One read of every busy signal.
+
+    ``cron_imminent_sec=None`` drops the "due soon" signal: a draining process
+    (077) starts no new job, so a due one would keep it busy for ever."""
     data_home = Path(data_home)
     act = AgentActivity()
 
@@ -108,7 +155,7 @@ def observe(data_home: Path, *, cron_imminent_sec: int = DEFAULT_CRON_IMMINENT_S
     if reason:
         act.reasons.append(reason)
 
-    goals = data_home / "goals.db"
+    goals = Path(goals_db_path(str(data_home)))
     if goals.exists():
         try:
             n = _count(goals, "SELECT count(*) FROM goals WHERE status IN ('running','claimed')")
@@ -117,17 +164,20 @@ def observe(data_home: Path, *, cron_imminent_sec: int = DEFAULT_CRON_IMMINENT_S
         except Exception as e:
             act.unreadable.append(f"goals.db ({type(e).__name__}: {e})")
 
-    cron = data_home / "cron.db"
+    cron = Path(cron_db_path(str(data_home)))
     if cron.exists():
         try:
             n = _count(cron, "SELECT count(*) FROM cron_jobs WHERE status = 'running'")
             if n:
                 act.reasons.append(f"{n} cron job(s) running")
-            horizon = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(time.time() + cron_imminent_sec))
-            n = _count(cron, "SELECT count(*) FROM cron_jobs WHERE status = 'scheduled' AND enabled = 1 "
-                             "AND next_run_at IS NOT NULL AND next_run_at <= ?", (horizon,))
-            if n:
-                act.reasons.append(f"{n} cron job(s) due within {cron_imminent_sec} s")
+            if cron_imminent_sec is not None:
+                horizon = time.strftime("%Y-%m-%dT%H:%M:%S",
+                                        time.gmtime(time.time() + cron_imminent_sec))
+                n = _count(cron, "SELECT count(*) FROM cron_jobs WHERE status = 'scheduled' "
+                                 "AND enabled = 1 AND next_run_at IS NOT NULL AND next_run_at <= ?",
+                           (horizon,))
+                if n:
+                    act.reasons.append(f"{n} cron job(s) due within {cron_imminent_sec} s")
         except Exception as e:
             act.unreadable.append(f"cron.db ({type(e).__name__}: {e})")
 

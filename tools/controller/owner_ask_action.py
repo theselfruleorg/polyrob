@@ -44,7 +44,7 @@ def _user(controller, execution_context) -> str:
 def _rail(session_id: str) -> tuple:
     """``(rail_id, kind)`` for the calling session, or ``("", "")``."""
     try:
-        from agents.task.goals.autonomy_marker import cron_job_for_session, goal_for_session
+        from core.autonomy_marker import cron_job_for_session, goal_for_session
         job = cron_job_for_session(session_id)
         if job:
             return f"cron:{job}", "cron"
@@ -150,7 +150,7 @@ def autonomous_wait_refusal(controller, session_id: str):
     owner's reply lands in a chat session). Return the structured refusal the
     tool rig uses, or None when the session is interactive."""
     try:
-        from agents.task.goals.autonomy_marker import is_autonomous
+        from core.autonomy_marker import is_autonomous
         if not is_autonomous(session_id):
             return None
     except Exception:

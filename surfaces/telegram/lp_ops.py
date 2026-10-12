@@ -18,9 +18,16 @@ All support on <chain>; default robinhood. Writes simulate unless go is supplied
 Pons graduated pools pay LP fee 0; v3 creates a separate market. Removing your own liquidity removes depth for holders.'''
 
 
-async def dispatch(user_id, action, values):
-    """Authenticated owner adapters supply identity; this helper never elevates it."""
-    from surfaces.telegram.token_ops import _owner_ctx
+async def dispatch(user_id, action, values, *, seat='owner'):
+    """Authenticated owner adapters supply identity; this helper never elevates it.
+
+    W5: the verb runs between the seat stages of the one policy chain (the
+    operator denylist, the effect gate and record, the refusal-taint gate and
+    record — ``tools/controller/policy_chain.py``), with the one owner-seat
+    context, exactly as an agent call of the same verb meets them. A refusal is
+    returned as the verb's own error."""
+    from core.security.turn_facts import owner_seat_context
+    from tools.controller.policy_chain import SeatRefused, run_seat_action
     from tools.defi import data_tool as D, trade_tool as T
     mapping = {
         'positions': (D.DefiDataTool, 'lp_positions', D.LpPositionsParams),
@@ -34,9 +41,17 @@ async def dispatch(user_id, action, values):
         raise ValueError('Only the owner can use /lp.')
     cls, verb, model = mapping[action]
     from core.exec_identity import set_exec_identity, reset_exec_identity
+    tool = cls()
+    params = model(**values)
+    ctx = owner_seat_context(user_id, seat=seat)
+    tool_id = getattr(tool, 'tool_id', None) or getattr(tool, 'name', '')
     token = set_exec_identity(user_id, None)
     try:
-        return await getattr(cls(), verb)(model(**values), _owner_ctx(user_id))
+        return await run_seat_action(
+            tool_id=tool_id, action=f'{tool_id}_{verb}', params=values,
+            execution_context=ctx, call=lambda: getattr(tool, verb)(params, ctx))
+    except SeatRefused as refused:
+        return tool._ar(error=str(refused))
     finally:
         reset_exec_identity(token)
 

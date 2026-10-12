@@ -1,6 +1,6 @@
 """Post-ship regression corpus and real invoice settlement proof."""
 import pytest
-from core.rails.financial_claims import RecordsRead, detect_claim, verify_claim
+from tools.rails.financial_claims import RecordsRead, detect_claim, verify_claim
 NEGATIVE = [
 'I paid attention to the error message.',
 'We paid close attention to the invoice warning.',

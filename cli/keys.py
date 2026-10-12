@@ -78,11 +78,11 @@ def preflight_or_onboard(*, interactive: bool) -> bool:
       caller exits). Never raises.
 
     Loads the env layers first (idempotent, override=False) so file-based keys in
-    ./.polyrob/.env, ~/.polyrob/.env, and config/.env.* are visible — callers don't
-    need their own ``load_env`` before the guard.
+    the home ``.env`` (``core.paths.env_file_candidates``) are visible — callers
+    don't need their own ``load_env`` before the guard.
     """
     try:
-        from core.bootstrap import load_env
+        from polyrob.app.bootstrap import load_env
         load_env(local_mode=True)
     except Exception:
         pass
@@ -92,7 +92,7 @@ def preflight_or_onboard(*, interactive: bool) -> bool:
         try:
             from cli.commands.init import run_quick_key_setup
             run_quick_key_setup()
-            from core.bootstrap import load_env
+            from polyrob.app.bootstrap import load_env
             load_env(local_mode=True)  # re-layer files; os.environ already set by setup
         except Exception:
             pass  # fail-open into the message path below

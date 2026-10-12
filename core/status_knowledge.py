@@ -28,6 +28,7 @@ bytes follow from them.
 """
 from __future__ import annotations
 
+from core.runtime_paths import memory_db_path
 import os
 import time
 from typing import Any, Callable, Dict, List, Optional
@@ -70,7 +71,7 @@ def _why(exc: BaseException) -> str:
 
 def _memory_db(data_dir: str) -> str:
     """The memory home, resolved exactly as ``backend_factory`` resolves it."""
-    return os.path.join(data_dir_or_home(data_dir), "memory.db")
+    return memory_db_path(data_dir_or_home(data_dir))
 
 
 def _sidecar(data_dir: str, name: str) -> str:

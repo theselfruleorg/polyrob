@@ -134,7 +134,7 @@ def test_rail_a_ask_id_rides_the_row(tmp_path):
 
 
 def test_rail_a_stamps_the_rail_id_of_an_autonomous_session(tmp_path):
-    from agents.task.goals.autonomy_marker import mark_autonomous
+    from core.autonomy_marker import mark_autonomous
     mark_autonomous("cron-sess-9", None, cron_job_id="job9")
     ev = _EvLog()
     c = _Container(tmp_path, {"telegram_sink": _SinkEx()})
@@ -183,7 +183,7 @@ def test_turn_latch_records_interactive_reply_with_seat_via(tmp_path):
 
 
 def test_turn_latch_skips_rooms_and_autonomous_sessions(tmp_path):
-    from agents.task.goals.autonomy_marker import mark_autonomous
+    from core.autonomy_marker import mark_autonomous
     from core.surfaces.turn_reply import mark_reply_published
     c = _Container(tmp_path, {})
     mark_reply_published(_Orch(c, public=True), "a room answer")
@@ -272,7 +272,7 @@ def test_telegram_owner_line_records_mid_reply_to_and_skips_rooms_and_readonly_c
 
 
 def test_message_tool_owner_branch_records_only_autonomous_sends(tmp_path):
-    from agents.task.goals.autonomy_marker import mark_autonomous
+    from core.autonomy_marker import mark_autonomous
     from tools.controller.message_send import _is_autonomous_session
     mark_autonomous("s-auto-2", "goal2")
     assert _is_autonomous_session("s-auto-2") is True

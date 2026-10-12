@@ -5,17 +5,15 @@ ahead of the whole conversation (retrieval.py). Because it changes every step, i
 broke the cacheable prefix: every message after it (skills tail + all conversation)
 was re-priced each step.
 
-With HMEM_TAIL_PLACEMENT on, the H-MEM block is relocated to a dynamic SUFFIX after
-the conversation, so the stable foundation + growing conversation form a cacheable
-prefix and only the small H-MEM suffix is reprocessed. Legacy (off) is byte-identical
-to before. The system message must stay messages[0] either way; H-MEM content must
-still reach the model in both modes.
+The H-MEM block now rides a dynamic SUFFIX after the conversation, so the stable
+foundation + growing conversation form a cacheable prefix and only the small H-MEM
+suffix is reprocessed. The system message must stay messages[0]; H-MEM content must
+still reach the model.
 """
 from unittest.mock import MagicMock
 
 import agents.task.agent.service  # noqa: F401 (import order)
 from agents.task.agent.message_manager.service import MessageManager
-from agents.task.agent.messages import retrieval as R
 from agents.task.agent.prompts import SystemPrompt
 from modules.llm.messages import SystemMessage
 
@@ -47,19 +45,7 @@ def _index_of(msgs, marker):
     return -1
 
 
-def test_legacy_places_hmem_before_conversation(monkeypatch):
-    monkeypatch.setattr(R, "hmem_tail_placement", lambda: False)
-    mm = _mm()
-    mm.add_human_message("CONVO_MARKER turn")
-    msgs = mm.get_messages_for_llm()
-    hmem_i = _index_of(msgs, "HMEM_MARKER")
-    convo_i = _index_of(msgs, "CONVO_MARKER")
-    assert hmem_i != -1 and convo_i != -1
-    assert hmem_i < convo_i  # H-MEM is in the foundation, ahead of conversation
-
-
-def test_tail_placement_puts_hmem_after_conversation(monkeypatch):
-    monkeypatch.setattr(R, "hmem_tail_placement", lambda: True)
+def test_tail_placement_puts_hmem_after_conversation():
     mm = _mm()
     mm.add_human_message("CONVO_MARKER turn")
     msgs = mm.get_messages_for_llm()
@@ -69,24 +55,9 @@ def test_tail_placement_puts_hmem_after_conversation(monkeypatch):
     assert hmem_i > convo_i  # H-MEM relocated to the dynamic suffix
 
 
-def test_system_message_first_in_both_modes(monkeypatch):
-    for mode in (False, True):
-        monkeypatch.setattr(R, "hmem_tail_placement", lambda: mode)
-        mm = _mm()
-        mm.add_human_message("hello")
-        msgs = mm.get_messages_for_llm()
-        assert isinstance(msgs[0], SystemMessage)
-        assert _index_of(msgs, "HMEM_MARKER") != -1  # H-MEM still present
-
-
-def test_tail_placement_defaults_on_everywhere(monkeypatch):
-    """T1-09 (2026-07-06 review): default flipped ON after the local soak — in the
-    foundation prefix the per-step H-MEM block broke the server prompt cache every
-    step. Explicit HMEM_TAIL_PLACEMENT=false still restores legacy placement."""
-    from agents.task import constants as C
-
-    monkeypatch.delenv("HMEM_TAIL_PLACEMENT", raising=False)
-    monkeypatch.delenv("POLYROB_LOCAL", raising=False)  # server posture
-    assert C.hmem_tail_placement() is True
-    monkeypatch.setenv("HMEM_TAIL_PLACEMENT", "false")
-    assert C.hmem_tail_placement() is False
+def test_system_message_first():
+    mm = _mm()
+    mm.add_human_message("hello")
+    msgs = mm.get_messages_for_llm()
+    assert isinstance(msgs[0], SystemMessage)
+    assert _index_of(msgs, "HMEM_MARKER") != -1  # H-MEM still present

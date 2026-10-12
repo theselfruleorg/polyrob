@@ -11,7 +11,7 @@ flag the goal tool's self-mutation guard consumes). All three coexist.
 PURE function — no container, no SessionManager instance needed to test it.
 """
 from agents.task.agent.session import SessionManager, resolve_creator
-from agents.task.goals.autonomy_marker import is_autonomous, mark_autonomous
+from core.autonomy_marker import is_autonomous, mark_autonomous
 
 
 def _sm(tmp_path):
@@ -69,7 +69,7 @@ def test_creator_and_mark_autonomous_coexist(tmp_path):
         assert sm.get_session_info(sid)["creator"] == "goal"
         assert is_autonomous(sid) is True
     finally:
-        from agents.task.goals import autonomy_marker
+        from core import autonomy_marker
         autonomy_marker._SESSIONS.pop(sid, None)
 
 

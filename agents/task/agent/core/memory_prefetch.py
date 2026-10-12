@@ -11,16 +11,58 @@ Fail-open throughout — a memory backend hiccup never breaks the agent loop.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Optional
 
 from modules.llm.messages import BaseMessage
-from agents.task.constants import memory_prefetch_cadence
+from core.config_policy import memory_prefetch_cadence
 
 logger = logging.getLogger(__name__)
 
+# B1 (2026-10-11): one recall injected ~25,000 chars (5 rows of up to 4,000 + 8 KB
+# chunks) on step 1 and every cadence step, and chat context sat above its
+# compaction target. The injection is bounded HERE, for every provider.
+#: Max chars of one recalled entry (a memory row or a KB chunk).
+RECALL_ENTRY_MAX_CHARS = 1500
+#: Max chars of the cross-session memory section.
+RECALL_MEMORY_MAX_CHARS = 6000
+#: Max chars of the knowledge-base section, and how many chunks it asks for.
+RECALL_KB_MAX_CHARS = 3000
+RECALL_KB_LIMIT = 4
+
+_MEM_ENTRY = re.compile(r"\n(?=- )")                 # "- [day] content" bullets
+_KB_ENTRY = re.compile(r"\n(?=\[[^\]\n]+ #\d+\] )")  # "[source #idx] content"
+
+
+def _budget(text: str, splitter, cap: int, seen: Optional[set]) -> str:
+    """Clip each entry, drop entries ``seen`` already holds, stop at ``cap``.
+
+    ``seen`` (the run's injected entries) is updated with what is kept, so a
+    later cadence step never re-injects a line the run already got."""
+    out, used = [], 0
+    for entry in splitter.split(text):
+        entry = entry.strip()
+        if not entry:
+            continue
+        key = " ".join(entry.split())
+        if seen is not None and key in seen:
+            continue
+        if len(entry) > RECALL_ENTRY_MAX_CHARS:
+            entry = entry[:RECALL_ENTRY_MAX_CHARS - 1] + "…"
+        if out and used + len(entry) + 1 > cap:
+            break
+        if not out and len(entry) > cap:
+            entry = entry[:cap - 1] + "…"
+        out.append(entry)
+        used += len(entry) + 1
+        if seen is not None:
+            seen.add(key)
+    return "\n".join(out)
+
 
 async def build_prefetch_message(query: str, *, session_id: str,
-                                 user_id: Optional[str] = None) -> Optional[BaseMessage]:
+                                 user_id: Optional[str] = None,
+                                 seen: Optional[set] = None) -> Optional[BaseMessage]:
     """Prefetch memory for ``query`` and wrap it as a MEMORY control message.
 
     Returns None when there is nothing to inject (Null provider, empty recall, or any
@@ -42,10 +84,8 @@ async def build_prefetch_message(query: str, *, session_id: str,
         logger.debug("memory prefetch skipped: %s", e)
         return None
 
-    if recalled:
-        recalled = recalled.strip() or ""
-    else:
-        recalled = ""
+    recalled = _budget((recalled or "").strip(), _MEM_ENTRY,
+                       RECALL_MEMORY_MAX_CHARS, seen)
 
     # T4-02: keep the RAW recall for the observability preview — the event must
     # show what was recalled, not the untrusted-wrap envelope around it.
@@ -69,7 +109,7 @@ async def build_prefetch_message(query: str, *, session_id: str,
     kb_recalled = ""
     raw_kb = ""
     try:
-        from agents.task.constants import AutonomyConfig
+        from core.config_policy import AutonomyConfig
         if AutonomyConfig.kb_auto_prefetch():
             try:
                 from modules.memory.registry import kb_search
@@ -78,9 +118,12 @@ async def build_prefetch_message(query: str, *, session_id: str,
                 # this was hardcoded. Operators point it at their collection via env.
                 import os
                 _kb_collection = os.getenv("KB_PREFETCH_COLLECTION", "default").strip() or "default"
-                kb_result = await kb_search(query, user_id=user_id, collection=_kb_collection)
-                if kb_result and kb_result.strip():
-                    kb_recalled = kb_result.strip()
+                kb_result = await kb_search(query, user_id=user_id, collection=_kb_collection,
+                                            limit=RECALL_KB_LIMIT)
+                kb_result = _budget((kb_result or "").strip(), _KB_ENTRY,
+                                    RECALL_KB_MAX_CHARS, seen)
+                if kb_result:
+                    kb_recalled = kb_result
                     raw_kb = kb_recalled
                     try:
                         from agents.task.constants import UNTRUSTED_TOOL_RESULT_WRAP
@@ -140,11 +183,22 @@ class MemoryPrefetchMixin:
     def _build_recall_query(self) -> str:
         """Build the memory-recall query from the live turn, not just the static task.
 
-        Combines the task with the current brain-state ``Next`` (the agent's stated
-        next intent) so recall tracks what the agent is actually doing now (P0-1).
-        Fail-open: falls back to the task string alone on any error.
+        Combines the turn's subject with the current brain-state ``Next`` (the
+        agent's stated next intent) so recall tracks what the agent is actually
+        doing now (P0-1). Fail-open: falls back to the task string alone.
+
+        B1 (2026-10-11) — the subject, first that is set:
+        - ``_recall_turn_text``: the latest genuine owner message (set at the
+          drain). A long-lived chat session keeps ``self.task`` = its FIRST
+          message, so every later turn recalled for that first message.
+        - ``orchestrator._recall_seed``: the run's own text, minted by the cron
+          runner / goal dispatcher. A cron task OPENS with the owner-rules
+          overlay, so 85% of cron recalls searched the overlay's words.
+        - ``self.task``.
         """
-        task = getattr(self, "task", "") or ""
+        task = (getattr(self, "_recall_turn_text", None)
+                or getattr(getattr(self, "orchestrator", None), "_recall_seed", None)
+                or getattr(self, "task", "") or "")
         try:
             # Real attribute set in next_action_internal.py:646; field name is
             # next_goal (AgentBrain, views.py:39).  The old names (state.current_brain,
@@ -190,7 +244,7 @@ class MemoryPrefetchMixin:
             # cadence — recalling once at step 1 (where the brain enrichment is
             # empty) left long missions memory-blind. Fail-open to non-autonomous.
             try:
-                from agents.task.goals.autonomy_marker import is_autonomous
+                from core.autonomy_marker import is_autonomous
                 _autonomous = is_autonomous(self.session_id)
             except Exception:
                 _autonomous = False
@@ -198,10 +252,15 @@ class MemoryPrefetchMixin:
             should = (n_steps == 1) or (cadence > 0 and n_steps > 0 and n_steps % cadence == 0)
             if not should:
                 return
+            # B1: entries this run already got are not injected again; a run
+            # (one chat turn, one cron/goal run) starts at step 1 with a fresh set.
+            if n_steps == 1 or not isinstance(getattr(self, "_recall_seen", None), set):
+                self._recall_seen = set()
             msg = await build_prefetch_message(
                 self._build_recall_query(),
                 session_id=self.session_id,
                 user_id=getattr(self, "user_id", None),
+                seen=self._recall_seen,
             )
             if msg is not None:
                 self.message_manager.push_ephemeral_message(msg)
@@ -246,7 +305,7 @@ class MemoryPrefetchMixin:
             from agents.task.session_class import correspondent_facing
             if correspondent_facing(getattr(self, "orchestrator", None)):
                 return  # H16: output goes to a correspondent — no owner-tenant state
-            from agents.task.goals.autonomy_marker import is_autonomous
+            from core.autonomy_marker import is_autonomous
             if is_autonomous(self.session_id):
                 return
             from agents.task.agent.core.episodic_digest import build_activity_digest
@@ -288,7 +347,7 @@ class MemoryPrefetchMixin:
             from agents.task.session_class import correspondent_facing
             if correspondent_facing(getattr(self, "orchestrator", None)):
                 return  # H16: output goes to a correspondent — no owner-tenant state
-            from agents.task.goals.autonomy_marker import is_autonomous
+            from core.autonomy_marker import is_autonomous
             if not is_autonomous(self.session_id):
                 return  # chat sessions use _maybe_inject_episodic_digest instead
             from agents.task.agent.core.episodic_digest import build_mission_continuity
@@ -332,10 +391,10 @@ class MemoryPrefetchMixin:
             from agents.task.session_class import correspondent_facing
             if correspondent_facing(getattr(self, "orchestrator", None)):
                 return  # H16: output goes to a correspondent — no owner-tenant state
-            from agents.task.goals.autonomy_marker import is_autonomous
+            from core.autonomy_marker import is_autonomous
             if is_autonomous(self.session_id):
                 return
-            from agents.task.constants import AutonomyConfig
+            from core.config_policy import AutonomyConfig
             if not AutonomyConfig.continuity_bridge_enabled():
                 return
 

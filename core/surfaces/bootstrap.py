@@ -11,6 +11,7 @@ call reuses the already-installed router so live surface subscriptions are never
 dropped. Fail-open: any construction error logs and returns False rather than
 breaking startup.
 """
+from core.runtime_paths import correspondents_db_path, surfaces_db_path
 import logging
 
 logger = logging.getLogger(__name__)
@@ -40,9 +41,7 @@ def _ensure_owner_thread(container, db_path: str) -> None:
         if container.get_service("owner_thread") is not None:
             return
         import os as _os
-        from core.surfaces.owner_thread import DB_NAME, OwnerThreadStore, owner_thread_enabled
-        if not owner_thread_enabled():
-            return
+        from core.surfaces.owner_thread import DB_NAME, OwnerThreadStore
         path = _os.path.join(_os.path.dirname(db_path) or ".", DB_NAME)
         container.register_service("owner_thread", OwnerThreadStore(path))
         logger.info("surface bus: owner thread installed (%s)", path)
@@ -97,7 +96,7 @@ def _ensure_correspondent_registry(container, db_path: str) -> None:
         data_dir = _os.path.dirname(db_path) or "."
         container.register_service(
             "correspondent_registry",
-            CorrespondentRegistry(_os.path.join(data_dir, "correspondents.db")),
+            CorrespondentRegistry(correspondents_db_path(data_dir)),
         )
         logger.info("surface bus: correspondent registry installed (central, WS-B2)")
     except Exception as e:
@@ -201,7 +200,7 @@ def install_surface_bus(container, db_path: str = None) -> bool:
         import os as _os
         from core.runtime_paths import data_dir_or_home
         data_dir = data_dir_or_home(getattr(getattr(container, "config", None), "data_dir", None))
-        db_path = _os.path.join(data_dir, "surfaces.db")
+        db_path = surfaces_db_path(data_dir)
 
     # Idempotent: never clobber a live router (it holds surface subscriptions).
     existing = container.get_service("message_router")

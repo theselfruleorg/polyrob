@@ -39,8 +39,7 @@ def _group_inbound(text, *, user, surface="discord", chat="chan-1",
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch, tmp_path):
     for k in ("POLYROB_REQUIRE_PAIRING", "POLYROB_LOCAL",
-              "CORRESPONDENT_ACCESS_ENABLED", "GROUP_REQUIRE_MENTION",
-              "GROUP_DEFAULT_MODE"):
+              "CORRESPONDENT_ACCESS_ENABLED", "GROUP_DEFAULT_MODE"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("SESSION_RESET_MODE", "none")
     monkeypatch.setenv("GROUP_CHAT_ENABLED", "true")
@@ -128,9 +127,9 @@ async def test_a_blocked_member_is_denied_before_the_mode(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_require_mention_false_alias_means_active(tmp_path, monkeypatch):
-    """No policy file at all: the legacy env still decides, one release long."""
-    monkeypatch.setenv("GROUP_REQUIRE_MENTION", "false")
+async def test_group_default_mode_active_answers_unaddressed(tmp_path, monkeypatch):
+    """No policy file at all: GROUP_DEFAULT_MODE decides."""
+    monkeypatch.setenv("GROUP_DEFAULT_MODE", "active")
     c = _container(tmp_path)
     d = await route_inbound(c, _group_inbound("just talking", user="u1",
                                               mentions_bot=False))

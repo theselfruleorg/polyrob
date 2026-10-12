@@ -20,7 +20,7 @@ import pytest
 
 
 def _reload_server(monkeypatch, **env):
-    monkeypatch.setenv("WEBGATE_MULTITENANT", "false")
+    monkeypatch.delenv("WEBGATE_MULTITENANT", raising=False)
     monkeypatch.setenv("ENV", "development")
     monkeypatch.delenv("CORS_ALLOW_ORIGINS", raising=False)
     monkeypatch.delenv("WEBGATE_PORT", raising=False)

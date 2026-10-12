@@ -14,7 +14,7 @@ def test_owner_data_dir_default_matches_daemon(tmp_path, monkeypatch):
     monkeypatch.delenv("POLYROB_PROJECT_DIR", raising=False)
     monkeypatch.chdir(tmp_path)
     from cli.commands.owner import _data_dir
-    from core.bootstrap import _resolve_cli_data_home
+    from polyrob.app.bootstrap import _resolve_cli_data_home
     dd = _data_dir()
     assert dd != "data"
     assert dd.endswith(".polyrob")

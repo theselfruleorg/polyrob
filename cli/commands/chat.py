@@ -133,7 +133,7 @@ async def _conversation_loop(
                 # /toolset and /persona work. The redirect becomes the next turn's input.
                 _outcome = TurnOutcome.CANCELLED
                 try:
-                    from agents.task.constants import AutonomyConfig
+                    from core.config_policy import AutonomyConfig
                     _redirect_enabled = AutonomyConfig.interrupt_redirect_enabled()
                 except Exception:
                     _redirect_enabled = False
@@ -260,15 +260,15 @@ async def _run_persistent_app(
     completer=None,
     background_poll=None,
 ):
-    """Run the persistent bottom-anchored Application loop (POLYROB_PERSISTENT_INPUT).
+    """Run the persistent bottom-anchored Application loop.
 
     One long-lived Application; each turn runs as a background task while the
     input + status region stay pinned + live. Content prints above via
     patch_stdout's run_in_terminal. The turn control flow is the unit-tested
     ``persistent_loop`` module; this is the thin Application glue.
 
-    NOTE: this is the DEFAULT REPL path on a TTY (POLYROB_PERSISTENT_INPUT default ON;
-    set it to 0/off to force the legacy ephemeral prompt). The print routing
+    NOTE: this is THE REPL path on a cursor-capable TTY (non-TTY / ``--plain`` use the
+    ephemeral prompt). The print routing
     (run_in_terminal above the region) is the key thing to verify on a real terminal.
     """
     from prompt_toolkit.patch_stdout import patch_stdout
@@ -418,7 +418,7 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
     if lifecycle_ref is None:
         lifecycle_ref = {}
     import logging as _logging
-    from core.bootstrap import build_cli_container, load_env, setup_project_path, setup_sqlite_compat
+    from polyrob.app.bootstrap import build_cli_container, load_env, setup_project_path, setup_sqlite_compat
 
     # Bug E: a TRANSIENT 'starting…' notice — erased once the container is built
     # so it doesn't linger at the top of the transcript (Claude-Code clean head).
@@ -643,7 +643,7 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
     # (the pref branch only fires when toolset is None), and every branch prunes
     # through cli_unavailable_tools — the REPL's old inline copy had drifted and
     # skipped the prune on the explicit-toolset branch.
-    from agents.task.constants import local_mode_enabled
+    from core.config_policy import local_mode_enabled
     from cli.toolset import resolve_tool_list
     repl_tools, _tool_notes = resolve_tool_list(
         None, toolset, user_id=user_id, home_dir=_data_home,
@@ -652,7 +652,7 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
     for _note in _tool_notes:
         click.echo(click.style(_note, fg="yellow"), err=True)
     if local_mode_enabled():
-        from agents.task.constants import AutonomyConfig
+        from core.config_policy import AutonomyConfig
         from tools.cronjob_tools import cron_enabled
         if AutonomyConfig.goals_enabled() and container.has_service("goal"):
             repl_tools.append("goal")
@@ -784,9 +784,9 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
         # gated + fail-open; stopped in the finally below. Fail-open: a problem here
         # must never break the interactive session.
         try:
-            from agents.task.constants import local_mode_enabled
+            from core.config_policy import local_mode_enabled
             if local_mode_enabled():
-                from core.autonomy_runtime import start_autonomy
+                from polyrob.app.autonomy_runtime import start_autonomy
                 _data_dir = data_dir_or_home(getattr(container.config, "data_dir", None))
                 # 026 P5.2: the handle is held by the live controller so REPL
                 # `/autonomy on|off` can start/stop the SAME runtime, no restart.
@@ -858,7 +858,7 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
             except Exception:
                 _memory_backend = ""
             try:
-                from agents.task.constants import autonomy_enabled as _ae
+                from core.config_policy import autonomy_enabled as _ae
                 _autonomy_on = _ae()
             except Exception:
                 _autonomy_on = None
@@ -943,13 +943,12 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
             orchestrator=orchestrator,
         )
 
-        # D5: persistent bottom-anchored input (POLYROB_PERSISTENT_INPUT, default ON).
-        # A long-lived Application keeps the input + status pinned at the bottom
-        # and live during a turn. Set the flag to 0/off to fall through to the legacy
-        # ephemeral prompt_async path.
-        from cli.ui.app import persistent_input_enabled as _persistent_enabled
+        # D5: persistent bottom-anchored input. A long-lived Application keeps the
+        # input + status pinned at the bottom and live during a turn. Non-TTY /
+        # --plain (or a build/start failure) fall through to the ephemeral
+        # prompt_async path.
         from cli.ui.theme import supports_cursor_ui
-        if _persistent_enabled() and supports_cursor_ui() and not plain:
+        if supports_cursor_ui() and not plain:
             try:
                 from cli.ui.commands import build_completer, default_registry
 

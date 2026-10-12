@@ -5,8 +5,8 @@ non-MCP) the positional pairing in _add_tool_messages attaches a result to the
 wrong tool_call_id.
 """
 import pytest
-from tools.controller.registry.views import ActionModel
-from tools.controller.types import ActionResult
+from agents.task.loop_types.registry_views import ActionModel
+from agents.task.loop_types.controller_types import ActionResult
 from agents.task.agent.core.result_processing import _pair_results_to_calls
 
 

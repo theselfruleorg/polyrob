@@ -264,3 +264,45 @@ def test_a_read_still_never_CREATES_the_store(tmp_path):
     assert bridge_guard.open_bridges_all(db_path=missing) == []
     assert bridge_guard.open_bridges("owner", db_path=missing) == []
     assert not os.path.exists(missing)
+
+
+def test_a_solana_destination_is_measured_by_the_watcher(monkeypatch):
+    """A bridge INTO Solana stores Relay's pseudo chain id. The watcher names it
+    through the provider's alias and reads lamports, never `eth_getBalance`."""
+    import asyncio
+    from core.wallet import bridge_guard, bridge_status, bridge_watcher
+
+    bridge_status.register_chain_alias(792703809, "solana")
+    settled = {}
+    row = {"id": "b1", "user_id": "owner", "dest_chain_id": 792703809,
+           "origin_chain_id": 8453, "recipient": "So1anaRecipient111111111111111111111111111",
+           "currency_out": "11111111111111111111111111111111",
+           "balance_before": "100", "min_out_raw": "50", "created_at": 0.0,
+           "request_id": "0xreq", "tx_ref": "0xabc"}
+    monkeypatch.setattr(bridge_guard, "open_bridges_all", lambda **k: [row])
+    monkeypatch.setattr(bridge_guard, "settle",
+                        lambda bid, **k: settled.update(k, bid=bid))
+    monkeypatch.setattr("core.wallet.solana_onchain.native_balance_raw",
+                        lambda addr, **k: 200)
+    monkeypatch.setattr(bridge_guard, "native_balance_raw",
+                        lambda *a: (_ for _ in ()).throw(AssertionError("EVM read")))
+
+    async def _notify(*a, **k):
+        return None
+    class _Ok:
+        def status(self, rid):
+            return "success", "filled"
+    monkeypatch.setattr(bridge_status, "read_out_txs", lambda rid: ["5igSig"])
+    monkeypatch.setattr("core.wallet.solana_onchain.tx_inflow",
+                        lambda sig, owner, mint=None, **k: 100)
+    res = asyncio.run(bridge_watcher.tick(provider=_Ok(), notify=_notify,
+                                          now=lambda: 10.0))
+    assert res.arrived == 1
+    assert settled["state"] == bridge_guard.STATE_ARRIVED
+
+    # A balance rise with no delivering transaction (a lab swap fill) is not one.
+    settled.clear()
+    monkeypatch.setattr(bridge_status, "read_out_txs", lambda rid: [])
+    res = asyncio.run(bridge_watcher.tick(provider=_Ok(), notify=_notify,
+                                          now=lambda: 10.0))
+    assert res.arrived == 0 and not settled

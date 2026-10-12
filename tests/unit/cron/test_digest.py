@@ -246,7 +246,7 @@ async def test_run_digest_fail_open_on_compose_error(monkeypatch):
 
 
 def test_owner_digest_flag(monkeypatch):
-    from agents.task.constants import AutonomyConfig
+    from core.config_policy import AutonomyConfig
     monkeypatch.delenv("OWNER_DIGEST_ENABLED", raising=False)
     assert AutonomyConfig.owner_digest_enabled() is False
     monkeypatch.setenv("OWNER_DIGEST_ENABLED", "true")

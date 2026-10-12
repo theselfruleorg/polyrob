@@ -28,7 +28,7 @@ def test_stream_seeding_paused_env_flag(monkeypatch):
 
 def test_owner_pause_streams_and_resume_toggle_the_file(tmp_path, monkeypatch):
     monkeypatch.setattr("core.runtime_paths.resolve_data_home", lambda: tmp_path)
-    monkeypatch.setattr("core.bootstrap.load_env", lambda *a, **k: None)
+    monkeypatch.setattr("polyrob.app.bootstrap.load_env", lambda *a, **k: None)
     from cli.commands.owner import owner
     runner = CliRunner()
 
@@ -48,7 +48,7 @@ def test_owner_pause_streams_and_resume_toggle_the_file(tmp_path, monkeypatch):
 
 def test_resume_streams_reports_no_file_case(tmp_path, monkeypatch):
     monkeypatch.setattr("core.runtime_paths.resolve_data_home", lambda: tmp_path)
-    monkeypatch.setattr("core.bootstrap.load_env", lambda *a, **k: None)
+    monkeypatch.setattr("polyrob.app.bootstrap.load_env", lambda *a, **k: None)
     from cli.commands.owner import owner
     runner = CliRunner()
     r = runner.invoke(owner, ["resume-streams"])

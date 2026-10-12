@@ -591,7 +591,7 @@ def init_cmd(
         except Exception as exc:
             click.echo(f"Warning: could not scaffold the character: {exc}", err=True)
 
-    # The session tree the CLI container uses (core.bootstrap._resolve_cli_data_home
+    # The session tree the CLI container uses (polyrob.app.bootstrap._resolve_cli_data_home
     # -> resolve_data_home): never cwd/.polyrob, which polyrob no longer loads.
     from core.runtime_paths import resolve_data_home
     sessions = resolve_data_home() / "sessions"
@@ -634,7 +634,7 @@ def init_cmd(
     # whose key lives in the shell env or a project-level file.
     import os as _os
     try:
-        from core.bootstrap import load_env
+        from polyrob.app.bootstrap import load_env
         load_env(local_mode=True)
         merged_env = dict(_os.environ)
     except Exception:

@@ -18,7 +18,7 @@ def _autonomy_snapshot(user_id: str, data_dir: str = "data") -> dict:
     path-concerns landmine). Fail-open: a poll error degrades to zero counts
     instead of raising into the REPL.
     """
-    from agents.task.constants import AutonomyConfig, autonomy_enabled, local_mode_enabled
+    from core.config_policy import AutonomyConfig, autonomy_enabled, local_mode_enabled
     from cli.ui.autonomy_poll import read_autonomy_snapshot
     from core.config_policy.policy import autonomy_mode_display, autonomy_posture
 
@@ -39,19 +39,19 @@ def _autonomy_snapshot(user_id: str, data_dir: str = "data") -> dict:
             return None
 
     def _sandbox_reap_gate():
-        from core.autonomy_runtime import _sandbox_reap_enabled
+        from polyrob.app.autonomy_runtime import _sandbox_reap_enabled
         return _sandbox_reap_enabled()
 
     def _surface_gc_gate():
-        from core.autonomy_runtime import _surface_gc_enabled
+        from polyrob.app.autonomy_runtime import _surface_gc_enabled
         return _surface_gc_enabled()
 
     def _quiet_release_gate():
-        from core.autonomy_runtime import _quiet_release_enabled
+        from polyrob.app.autonomy_runtime import _quiet_release_enabled
         return _quiet_release_enabled()
 
     def _settlement_gate():
-        from core.autonomy_runtime import _x402_invoicing_enabled
+        from polyrob.app.autonomy_runtime import _x402_invoicing_enabled
         return _x402_invoicing_enabled()
 
     def _bridges_gate():

@@ -51,3 +51,51 @@ def read_status(request_id: str) -> Tuple[str, str]:
     except Exception as exc:
         logger.debug("bridge status read failed", exc_info=True)
         return "unknown", f"status read failed: {type(exc).__name__}: {exc}"
+
+
+#: ``{provider chain id: registry chain name}`` for a chain the registry has no
+#: EIP-155 id for (Solana's row carries ``chain_id=0``). The provider owns its
+#: pseudo id; it registers the mapping here so core can name a bridge
+#: DESTINATION without importing ``tools`` and without a second copy of the id.
+_CHAIN_ALIASES: dict = {}
+
+
+def register_chain_alias(provider_chain_id: int, registry_name: str) -> None:
+    _CHAIN_ALIASES[int(provider_chain_id)] = str(registry_name)
+
+
+def chain_alias(provider_chain_id) -> Optional[str]:
+    try:
+        return _CHAIN_ALIASES.get(int(provider_chain_id))
+    except (TypeError, ValueError):
+        return None
+
+
+def provider_chain_id(registry_name: str) -> Optional[int]:
+    """The reverse of :func:`chain_alias`: the provider id a bridge row stores
+    for an alias-only chain (Solana), or None."""
+    return next((cid for cid, name in _CHAIN_ALIASES.items()
+                 if name == registry_name), None)
+
+
+#: ``(request_id) -> [destination tx hash, ...] | None``. Registered by the
+#: provider; used only where an arrival is proven from the delivering
+#: transaction itself (an SVM destination, where the wallet also trades).
+_OUT_TX_READER: Optional[Callable[[str], Optional[list]]] = None
+
+
+def register_out_tx_reader(reader: Callable[[str], Optional[list]]) -> None:
+    global _OUT_TX_READER
+    _OUT_TX_READER = reader
+
+
+def read_out_txs(request_id: str) -> Optional[list]:
+    """Destination hashes, or None when no reader is registered or it failed."""
+    reader = _OUT_TX_READER
+    if reader is None:
+        return None
+    try:
+        return reader(str(request_id))
+    except Exception:
+        logger.debug("bridge out-tx read failed", exc_info=True)
+        return None

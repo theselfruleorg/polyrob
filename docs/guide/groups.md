@@ -142,9 +142,7 @@ A mute (`/mute here 2h`) or a `chat.quiet_hours` window temporarily demotes the 
 `listen`, whatever `chat.mode` says, while it lasts.
 
 `GROUP_DEFAULT_MODE` (default `mention`) sets the mode for a room with no
-per-chat overlay. `GROUP_REQUIRE_MENTION=false` is honoured for one release as an
-alias for `chat.mode=active`; an explicit `chat.mode` or `GROUP_DEFAULT_MODE`
-always wins.
+per-chat overlay; an explicit `chat.mode` always wins.
 
 ---
 
@@ -278,7 +276,7 @@ in his DM:
 `/nft` `/dapp` `/identity` `/writeoff` `/unquarantine` `/dev` `/pause` `/halt`
 `/resume` `/approve` `/reject` `/allow` `/deny` `/config` `/prefs` `/mcp` `/apps`
 `/invoices` `/settle` `/cron` `/goal` `/fulfill` `/rail` `/contacts` `/thread`
-`/why` — do these in the private chat. A verb that a pack contributes is refused
+`/why` `/restart` `/update` — do these in the private chat. A verb that a pack contributes is refused
 too, unless the pack declares it safe for a room.
 
 Still reachable from a room, answered in the owner's DM: `/status` `/help` `/groups`

@@ -75,7 +75,7 @@ def dynamic_flag_default(name: str) -> Optional[tuple]:
         # resolved value, labeled as DERIVED (mode/posture raise it), so
         # "why is autonomy on/off?" has an answer in `doctor --flags`.
         return autonomy_enabled(), "default(mode/posture-derived)"
-    if name in ("POLYROB_LOCAL", "ROB_LOCAL"):
+    if name == "POLYROB_LOCAL":
         return local_mode_enabled(), "default(process)"
     if name in _LOCAL_DERIVED_EXTRAS:
         # local-mode-derived defaults that live OUTSIDE _SAFE_LOCAL_FLAGS

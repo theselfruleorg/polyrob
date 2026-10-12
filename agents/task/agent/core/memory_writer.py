@@ -20,7 +20,6 @@ from typing import Any, Callable, Dict, List, Optional, Type, TypeVar, Union, Tu
 from collections import deque  # ADDED: Import deque for bounded collections
 from agents.task.agent.tool_call_tracker import ToolCallTracker  # Robust tool call ID tracking
 
-from dotenv import load_dotenv
 
 from core.context_fences import has_control_fence, strip_control_fences
 

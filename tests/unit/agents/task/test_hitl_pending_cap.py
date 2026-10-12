@@ -24,7 +24,6 @@ class _TinyOrch(HITLIngressMixin):
 
 
 def test_pending_queue_raises_when_full(monkeypatch):
-    monkeypatch.setenv("MAX_QUEUED_MESSAGES", "10")
     o = _TinyOrch()
     # Already at cap, no agent created yet.
     o._pending_messages = [("x", "delegation_result", {})] * 10
@@ -34,7 +33,6 @@ def test_pending_queue_raises_when_full(monkeypatch):
 
 
 def test_pending_queue_accepts_below_cap(monkeypatch):
-    monkeypatch.setenv("MAX_QUEUED_MESSAGES", "10")
     o = _TinyOrch()
     asyncio.run(o.submit_user_message(agent_id=None, text="hi", kind="delegation_result"))
     assert len(o._pending_messages) == 1

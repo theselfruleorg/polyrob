@@ -330,26 +330,8 @@ def make_prompt_reader(session: "PromptSession") -> Callable[[], Any]:
 
 
 # ---------------------------------------------------------------------------
-# Persistent bottom-anchored Application (D4/D5 — gated POLYROB_PERSISTENT_INPUT)
+# Persistent bottom-anchored Application (D4/D5 — the default on a cursor TTY)
 # ---------------------------------------------------------------------------
-
-
-def persistent_input_enabled() -> bool:
-    """True when the persistent bottom-anchored input is active (default ON).
-
-    The persistent ``Application`` keeps the input box PINNED at the bottom and
-    LIVE during a turn (status/spinner repaint, tool output scrolls above) — the
-    Claude-Code / opencode experience. It is the default for an interactive TTY;
-    set ``POLYROB_PERSISTENT_INPUT=0`` (or ``off``/``false``/``no``) to force the
-    legacy ephemeral ``prompt_async`` path. Non-TTY / ``--plain`` always use the
-    legacy path regardless (the caller gates on ``is_tty`` + ``not plain``), and a
-    build/start failure fails open to it too.
-    """
-    import os
-
-    return os.environ.get("POLYROB_PERSISTENT_INPUT", "1").strip().lower() not in (
-        "0", "false", "no", "off", "",
-    )
 
 
 def build_app(

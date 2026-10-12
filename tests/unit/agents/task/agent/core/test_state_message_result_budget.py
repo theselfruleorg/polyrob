@@ -12,7 +12,7 @@ the SAME cap when it is on; cap off ⇒ the legacy char limit, byte-identical.
 from unittest.mock import patch
 
 from agents.task.agent.prompts import AgentMessagePrompt
-from tools.controller.types import ActionResult
+from agents.task.loop_types.controller_types import ActionResult
 
 
 class _Tree:

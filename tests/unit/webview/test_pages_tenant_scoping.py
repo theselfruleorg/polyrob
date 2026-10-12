@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture
 def multitenant_pages_client(monkeypatch):
-    monkeypatch.setenv("WEBGATE_MULTITENANT", "true")
+    monkeypatch.setenv("POLYROB_POSTURE", "multitenant")
     monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
     import webview.webgate as wg
     importlib.reload(wg)
@@ -166,7 +166,7 @@ def test_effective_user_id_local_owner_fallback_for_non_multitenant(monkeypatch)
     assert pages._effective_user_id(_FakeRequest()) == wg.local_owner_id()
 
     # restore multitenant module state for any subsequent tests in this file
-    monkeypatch.setenv("WEBGATE_MULTITENANT", "true")
+    monkeypatch.setenv("POLYROB_POSTURE", "multitenant")
     monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
     importlib.reload(wg)
     importlib.reload(pages)

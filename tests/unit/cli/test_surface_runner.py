@@ -27,9 +27,9 @@ def _patch_bootstrap(monkeypatch, data_dir="/tmp/polyrob-instanceX"):
     async def _fake_build(**kwargs):
         return fake_container
 
-    monkeypatch.setattr("core.bootstrap.build_cli_container", _fake_build)
-    monkeypatch.setattr("core.bootstrap.setup_project_path", lambda: None)
-    monkeypatch.setattr("core.bootstrap.setup_sqlite_compat", lambda: None)
+    monkeypatch.setattr("polyrob.app.bootstrap.build_cli_container", _fake_build)
+    monkeypatch.setattr("polyrob.app.bootstrap.setup_project_path", lambda: None)
+    monkeypatch.setattr("polyrob.app.bootstrap.setup_sqlite_compat", lambda: None)
     monkeypatch.setattr("cli.keys.preflight_or_onboard", lambda **k: True)
     monkeypatch.setattr("core.surfaces.bootstrap.install_surface_bus", lambda c: None)
     return fake_container
@@ -72,8 +72,8 @@ async def test_run_surface_data_dir_env_defaults_and_teardown_order(monkeypatch)
         started.update(kwargs)
         return handles
 
-    monkeypatch.setattr("agents.task.constants.local_mode_enabled", lambda: True)
-    monkeypatch.setattr("core.autonomy_runtime.start_autonomy", _start_autonomy)
+    monkeypatch.setattr("core.config_policy.local_mode_enabled", lambda: True)
+    monkeypatch.setattr("polyrob.app.autonomy_runtime.start_autonomy", _start_autonomy)
 
     seen = {}
     harness = _Harness(calls)
@@ -112,7 +112,7 @@ async def test_run_surface_preflight_runs_before_bus_install(monkeypatch):
     order = []
     monkeypatch.setattr("core.surfaces.bootstrap.install_surface_bus",
                         lambda c: order.append("bus"))
-    monkeypatch.setattr("agents.task.constants.local_mode_enabled", lambda: False)
+    monkeypatch.setattr("core.config_policy.local_mode_enabled", lambda: False)
 
     harness = _Harness(order)
 
@@ -138,8 +138,8 @@ async def test_run_surface_autonomy_precheck_false_skips_start(monkeypatch):
 
     _patch_bootstrap(monkeypatch)
     started = []
-    monkeypatch.setattr("agents.task.constants.local_mode_enabled", lambda: True)
-    monkeypatch.setattr("core.autonomy_runtime.start_autonomy",
+    monkeypatch.setattr("core.config_policy.local_mode_enabled", lambda: True)
+    monkeypatch.setattr("polyrob.app.autonomy_runtime.start_autonomy",
                         lambda **k: started.append(k) or MagicMock())
 
     harness = _Harness([])
@@ -172,7 +172,7 @@ async def test_run_surface_build_harness_failure_propagates_without_teardown(mon
     container.get_service.side_effect = (
         lambda name: dispatcher if name == "outbound_dispatcher" else None)
     container.get_service.return_value = None
-    monkeypatch.setattr("agents.task.constants.local_mode_enabled", lambda: False)
+    monkeypatch.setattr("core.config_policy.local_mode_enabled", lambda: False)
 
     class _Stop(Exception):
         pass
@@ -199,7 +199,7 @@ async def test_run_surface_guarded_harness_stop_swallows_errors(monkeypatch):
     from cli.commands._surface_runner import SurfaceJob, run_surface
 
     _patch_bootstrap(monkeypatch)
-    monkeypatch.setattr("agents.task.constants.local_mode_enabled", lambda: False)
+    monkeypatch.setattr("core.config_policy.local_mode_enabled", lambda: False)
 
     class _ExplodingHarness:
         async def run(self):

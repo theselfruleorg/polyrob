@@ -44,8 +44,8 @@ def test_the_pack_is_loaded_and_owns_its_rows():
 def test_every_emitted_action_has_a_row_naming_its_own_tool():
     from core.packs import state
     from core.verb_policy import policy_for
-    from polyrob_markets.hyperliquid.service import HL_READ_ACTIONS, HyperliquidTool
-    from polyrob_markets.polymarket.service import PM_READ_ACTIONS, PolymarketTool
+    from polyrob_markets.hyperliquid.service import HyperliquidTool, hl_read_actions
+    from polyrob_markets.polymarket.service import PolymarketTool, pm_read_actions
 
     def actions(cls):   # the decorated BaseTool actions (what get_actions() emits)
         return {a for a in dir(cls) if hasattr(getattr(cls, a, None), "_description")}
@@ -53,9 +53,9 @@ def test_every_emitted_action_has_a_row_naming_its_own_tool():
     seen = 0
     # The *_data tools emit exactly their READ sets (get_actions filters to them).
     for tool_id, emitted in (("polymarket", actions(PolymarketTool)),
-                             ("polymarket_data", PM_READ_ACTIONS),
+                             ("polymarket_data", pm_read_actions()),
                              ("hyperliquid", actions(HyperliquidTool)),
-                             ("hyperliquid_data", HL_READ_ACTIONS)):
+                             ("hyperliquid_data", hl_read_actions())):
         for action in emitted:
             name = f"{tool_id}_{action}"
             assert state.action_refusal(tool_id, name) is None, name
@@ -138,7 +138,7 @@ print(json.dumps({
 
 
 def test_disabled_pack_drops_out_and_is_named():
-    env = {**os.environ, "POLYROB_PACKS_DISABLED": "markets", "POLYROB_ENV_KEY_BACKFILL": "0",
+    env = {**os.environ, "POLYROB_PACKS_DISABLED": "markets",
            "AUTONOMY_MODE": "autonomous"}
     env.pop("POLYROB_PACKS", None)
     out = subprocess.run([sys.executable, "-c", _DISABLED], cwd=str(REPO), env=env,

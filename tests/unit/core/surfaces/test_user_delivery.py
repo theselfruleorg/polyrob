@@ -225,7 +225,7 @@ def _orch(container, user_id="u1", message_router=None, chat_session_key=None):
 
 def test_autonomous_send_routes_to_own_principal(monkeypatch):
     from core.surfaces.user_delivery import maybe_deliver_autonomous_send
-    from agents.task.goals.autonomy_marker import mark_autonomous, _SESSIONS
+    from core.autonomy_marker import mark_autonomous, _SESSIONS
     _SESSIONS.clear()
     mark_autonomous("sess-goal")
     sink, ev = _Sink(), _EvLog()
@@ -242,7 +242,7 @@ def test_interactive_send_with_live_mirror_is_not_routed():
     """A daemon-resident chat session with a bound router already gets its
     reply delivered by the mirror — routing here too would double-send."""
     from core.surfaces.user_delivery import maybe_deliver_autonomous_send
-    from agents.task.goals.autonomy_marker import _SESSIONS
+    from core.autonomy_marker import _SESSIONS
     _SESSIONS.clear()
     sink, ev = _Sink(), _EvLog()
     c = _Container({"telegram_sink": sink})
@@ -261,7 +261,7 @@ def test_interactive_send_with_no_live_mirror_routes_via_fallback():
     silently dropped despite send_message reporting success. It must now
     route through the same durable rail an autonomous session uses."""
     from core.surfaces.user_delivery import maybe_deliver_autonomous_send
-    from agents.task.goals.autonomy_marker import _SESSIONS
+    from core.autonomy_marker import _SESSIONS
     _SESSIONS.clear()
     sink, ev = _Sink(), _EvLog()
     c = _Container({"telegram_sink": sink})
@@ -274,7 +274,7 @@ def test_interactive_send_with_no_live_mirror_routes_via_fallback():
 def test_flag_off_disables_routing(monkeypatch):
     monkeypatch.setenv("SEND_MESSAGE_USER_DELIVERY", "false")
     from core.surfaces.user_delivery import maybe_deliver_autonomous_send
-    from agents.task.goals.autonomy_marker import mark_autonomous, _SESSIONS
+    from core.autonomy_marker import mark_autonomous, _SESSIONS
     _SESSIONS.clear()
     mark_autonomous("sess-goal")
     sink, ev = _Sink(), _EvLog()
@@ -289,7 +289,7 @@ def test_flag_off_disables_routing(monkeypatch):
 def test_routing_fail_open(monkeypatch):
     """A crash inside the rail must never fail the send_message action."""
     from core.surfaces.user_delivery import maybe_deliver_autonomous_send
-    from agents.task.goals.autonomy_marker import mark_autonomous, _SESSIONS
+    from core.autonomy_marker import mark_autonomous, _SESSIONS
     _SESSIONS.clear()
     mark_autonomous("sess-goal")
 
@@ -517,7 +517,7 @@ def test_a_room_session_never_mirrors_to_the_owner_dm():
     through the `has_live_mirror and not is_autonomous` carve-out: every public
     answer was ALSO pushed into the owner's private chat, spending his daily
     delivery budget on a message he had already read in the room."""
-    from agents.task.goals.autonomy_marker import _SESSIONS, mark_autonomous
+    from core.autonomy_marker import _SESSIONS, mark_autonomous
     from core.surfaces.user_delivery import maybe_deliver_autonomous_send
     _SESSIONS.clear()
     mark_autonomous("sess-room")
@@ -536,7 +536,7 @@ def test_a_room_session_never_mirrors_to_the_owner_dm():
 def test_a_private_autonomous_send_still_reaches_the_owner():
     """Polarity guard: the carve-out this narrows exists for a goal/cron run with
     no surface of its own, and that must keep working."""
-    from agents.task.goals.autonomy_marker import _SESSIONS, mark_autonomous
+    from core.autonomy_marker import _SESSIONS, mark_autonomous
     from core.surfaces.user_delivery import maybe_deliver_autonomous_send
     _SESSIONS.clear()
     mark_autonomous("sess-goal")
@@ -557,7 +557,7 @@ def test_terminal_attached_send_is_not_routed():
     rate limit the model was told its answer was NOT delivered and re-sent."""
     from core.surfaces.binding import bind_terminal_surface
     from core.surfaces.user_delivery import maybe_deliver_autonomous_send
-    from agents.task.goals.autonomy_marker import _SESSIONS
+    from core.autonomy_marker import _SESSIONS
     _SESSIONS.clear()
     sink, ev = _Sink(), _EvLog()
     c = _Container({"telegram_sink": sink})
@@ -575,7 +575,7 @@ def test_terminal_attached_autonomous_session_still_routes():
     keeps the durable rail."""
     from core.surfaces.binding import bind_terminal_surface
     from core.surfaces.user_delivery import maybe_deliver_autonomous_send
-    from agents.task.goals.autonomy_marker import mark_autonomous, _SESSIONS
+    from core.autonomy_marker import mark_autonomous, _SESSIONS
     _SESSIONS.clear()
     mark_autonomous("sess-goal")
     sink, ev = _Sink(), _EvLog()

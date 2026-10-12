@@ -118,7 +118,7 @@ def build_review_prompt(digest: str = "") -> str:
     (framed as untrusted DATA — tool results carry third-party text) when given."""
     prompt = _REVIEW_PROMPT
     try:
-        from agents.task.constants import AutonomyConfig
+        from core.config_policy import AutonomyConfig
         if AutonomyConfig.self_context_writable():
             prompt += _SELF_CONTEXT_REVIEW_ADDENDUM
     except Exception:
@@ -149,7 +149,7 @@ def effective_background_review_enabled(user_id, home_dir) -> bool:
     (018 P0.2; this key was DEAD: settable/displayed but the mixin read the env
     directly). No pref file present => byte-identical to
     ``AutonomyConfig.background_review_enabled()``. Fail-open to the env value."""
-    from agents.task.constants import AutonomyConfig
+    from core.config_policy import AutonomyConfig
     from core.prefs import effective_autonomy_switch
     return effective_autonomy_switch("autonomy.background_review",
                                      AutonomyConfig.background_review_enabled(),
@@ -162,7 +162,7 @@ class BackgroundReviewMixin:
     def _bg_review_should_fire(self, turn_was_productive: bool) -> bool:
         """Pure decision: increment the productive-turn counter and report whether the
         interval has elapsed. Resets the counter when it fires."""
-        from agents.task.constants import AutonomyConfig
+        from core.config_policy import AutonomyConfig
         if not effective_background_review_enabled(
                 getattr(self, "user_id", None), _prefs_home_dir()):
             return False
@@ -182,7 +182,7 @@ class BackgroundReviewMixin:
         # skills. Autonomous sessions never fork the inline reviewer; verified
         # outcomes can earn distillation via a post-judge mechanism later.
         try:
-            from agents.task.goals.autonomy_marker import is_autonomous
+            from core.autonomy_marker import is_autonomous
             if is_autonomous(getattr(self, "session_id", None)):
                 return False
         except Exception:
@@ -218,7 +218,7 @@ class BackgroundReviewMixin:
     async def _run_background_review(self) -> None:
         """Run the reviewer sub-agent on the aux model. Fail-open."""
         try:
-            from agents.task.constants import AutonomyConfig
+            from core.config_policy import AutonomyConfig
             manager = self.orchestrator.get_sub_agent_manager() if self.orchestrator else None
             if manager is None:
                 return

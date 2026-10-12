@@ -9,7 +9,6 @@ import pytest
 def seeded(tmp_path, monkeypatch):
     db = tmp_path / "telemetry_events.db"
     monkeypatch.setenv("TELEMETRY_EVENT_LOG_PATH", str(db))
-    monkeypatch.setenv("SECURITY_EVENT_LOG_ENABLED", "true")
     monkeypatch.setenv("TELEMETRY_EVENT_LOG_ENABLED", "true")
     import core.event_log as el
     el._INSTANCES.clear()
@@ -86,7 +85,6 @@ def _fresh_log(tmp_path, monkeypatch):
     — the ranking tests below need exact, hand-picked totals."""
     db = tmp_path / "telemetry_events.db"
     monkeypatch.setenv("TELEMETRY_EVENT_LOG_PATH", str(db))
-    monkeypatch.setenv("SECURITY_EVENT_LOG_ENABLED", "true")
     monkeypatch.setenv("TELEMETRY_EVENT_LOG_ENABLED", "true")
     import core.event_log as el
     el._INSTANCES.clear()

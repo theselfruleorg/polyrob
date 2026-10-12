@@ -4,6 +4,7 @@ Default: **sqlite** (cross-session FTS recall is ON by default; P0-1). Set
 MEMORY_BACKEND=none/off/'' to fall back to NullMemoryProvider. Recall is tenant-scoped
 (P0-0) and empty-user_id I/O is refused by default (MEMORY_REQUIRE_USER_ID, UP-03), so
 default-on is multi-tenant-safe. Call once during agent/container construction."""
+from core.runtime_paths import memory_db_path
 import logging
 import os
 from typing import Optional
@@ -48,7 +49,7 @@ def maybe_register_memory_backend(*, data_dir: Optional[str] = None,
         return existing
     # WS-3: an omitted data_dir resolves to the data home, never a relative "data".
     from core.runtime_paths import data_dir_or_home
-    db_path = os.path.join(data_dir_or_home(data_dir), "memory.db")
+    db_path = memory_db_path(data_dir_or_home(data_dir))
     if backend == "local_vector":
         from modules.memory.local_vector_memory_provider import LocalVectorMemoryProvider, _vec_available
         # 058 T1.5: apsw/sqlite-vec/numpy are the [memory-vector] extra. On a

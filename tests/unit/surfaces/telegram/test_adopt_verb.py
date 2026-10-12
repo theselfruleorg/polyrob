@@ -201,7 +201,7 @@ def test_a_skill_edited_after_adoption_unadopts_the_job(home, skill_home):
 async def test_the_cron_runner_runs_a_lapsed_adoption_as_the_agents(home, skill_home):
     """The runner reads the bound digest on every run: the X-post / moderation
     standing authority is not recorded for a job whose skill changed."""
-    from agents.task.goals import autonomy_marker as am
+    from core import autonomy_marker as am
     from cron.runner import make_agent_runner
     job = _agent_job(home, skills=["evil-doctrine"])
     fp = fingerprint("cron", _svc(home).store.get(job.id))

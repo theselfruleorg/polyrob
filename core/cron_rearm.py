@@ -8,6 +8,7 @@ cron turn — a self-wake into the finished run is a forged turn the money guard
 refuses). The schema is the cron store's; this module only knows the one
 UPDATE and never creates the database.
 """
+from core.runtime_paths import cron_db_path
 from datetime import datetime
 from typing import Optional
 
@@ -34,7 +35,7 @@ def cron_db_beside(sibling_db_path: Optional[str]) -> Optional[str]:
     import os
     if not sibling_db_path:
         return None
-    path = os.path.join(os.path.dirname(os.path.abspath(sibling_db_path)), "cron.db")
+    path = cron_db_path(os.path.dirname(os.path.abspath(sibling_db_path)))
     return path if os.path.exists(path) else None
 
 

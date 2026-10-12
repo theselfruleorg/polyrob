@@ -20,7 +20,10 @@ CORE_VERB_ROWS = {
         # room_denied (044): a room turn may never call it, whoever spoke: deferred execution,
         # cross-session recall, owner state, outbound to other targets, money-adjacent reads,
         # self-modification, control.
-        "message": dict(effect="comms", correspondent_blocked=True, room_denied=True),
+        # W4: outbound/text_fields/output are the ONE source of the outbound lists
+        # (financial_claim_gate, approval_queue, evidence, refusal_taint_gate).
+        "message": dict(effect="comms", correspondent_blocked=True, room_denied=True,
+                        outbound="text", text_fields=("text",), output=True),
         "skill_manage": dict(effect="self", correspondent_blocked=True, room_denied=True),
         "self_context_manage": dict(effect="self", correspondent_blocked=True, room_denied=True),
         # owner.md: the richest PII target in the process plus a write path; its own forged-turn
@@ -37,7 +40,7 @@ CORE_VERB_ROWS = {
         "load_tool": dict(effect="self", correspondent_blocked=True, room_denied=True),
         # The owner lane: core/surfaces/user_delivery.py records send_message and done as
         # user_delivery. Classifying them again would double every owner reply.
-        "send_message": dict(effect="none"),
+        "send_message": dict(effect="none", outbound="text", text_fields=("text",)),
         "done": dict(effect="none"),
         # effect=none from here to room_read in this group: internal or read-only.
         # Delegation (delegate_task/subtask/parallel_subtasks), identity and self-evolution
@@ -113,18 +116,18 @@ CORE_VERB_ROWS = {
     "code_execution": {
         # P1-4: ⚠️ NAMESPACED. The method run_code registers as code_execution_run_code; the
         # bare name matched nothing, so tool-id resolution was the single point of failure.
-        "code_execution_run_code": dict(effect="code", correspondent_blocked=True),
+        "code_execution_run_code": dict(effect="code", correspondent_blocked=True, output=True),
     },
     "coding": {
         # Workspace-local file edits; only running the tests executes code.
-        "coding_apply_patch": dict(effect="none"),
-        "coding_create_file": dict(effect="none"),
+        "coding_apply_patch": dict(effect="none", output=True),
+        "coding_create_file": dict(effect="none", output=True),
         "coding_delete_file": dict(effect="none"),
         "coding_grep": dict(effect="none"),
         "coding_move_file": dict(effect="none"),
         "coding_restore": dict(effect="none"),
         "coding_snapshots": dict(effect="none"),
-        "coding_str_replace": dict(effect="none"),
+        "coding_str_replace": dict(effect="none", output=True),
         "coding_run_tests": dict(effect="code"),
     },
     "cronjob": {
@@ -161,10 +164,20 @@ CORE_VERB_ROWS = {
         "defi_data_nft_holdings": dict(correspondent_blocked=True, room_denied=True),
         "defi_data_lp_positions": dict(correspondent_blocked=True, room_denied=True),
         "defi_data_reconcile": dict(correspondent_blocked=True, room_denied=True),
-        "defi_data_wallet_holdings": dict(correspondent_blocked=True, room_denied=True),
+        # read_job: an EXPLICIT address is public chain data (the param is required, so it
+        # never defaults to the operator wallet); a read job is scheduled only by the owner or
+        # the agent (cronjob is correspondent- and room-blocked).
+        "defi_data_wallet_holdings": dict(correspondent_blocked=True, room_denied=True,
+                                          read_job=True),
         "defi_data_wallet_activity": dict(correspondent_blocked=True, room_denied=True),
         # 071 W3: the rail book — sizes, cost basis and P&L of the OPERATOR's own positions.
         "defi_data_positions": dict(correspondent_blocked=True, room_denied=True),
+        # 071 §3.9: $0 watches a cron read job may run. PUBLIC reads only: the own-wallet
+        # reads above (portfolio, positions, reconcile) stay off it, because a read job runs
+        # with no turn context and the owner gate cannot tell who scheduled it.
+        "defi_data_pool_metrics": dict(read_job=True),
+        "defi_data_price": dict(read_job=True),
+        "defi_data_token_info": dict(read_job=True),
     },
     "defi_trade": {
         # Every defi_trade verb signs a transaction: it moves value, pays gas, or grants/revokes
@@ -313,15 +326,16 @@ CORE_VERB_ROWS = {
             effect="money", lane="owner_always", side="spend", approval_owner="hook",
             correspondent_blocked=True,
         ),
+        # Permanent public writes through an NFT account: their words are claim-gated.
         "agent_nft_bind_identity": dict(
             effect="money", lane="owner_always", side="spend", simulatable=True, approval_owner="hook",
-            correspondent_blocked=True,
+            correspondent_blocked=True, outbound="text", text_fields=("agent_uri",),
         ),
         # 050: fee-only writes. A journal anchor and a bind cost only the fee (held to
         # max_spend_usd); revoke_all only RETIRES standing approvals.
         "agent_nft_journal": dict(
             effect="money", lane="defi", side="spend", simulatable=True, approval_owner="hook",
-            correspondent_blocked=True,
+            correspondent_blocked=True, outbound="text", text_fields=("text",),
         ),
         "agent_nft_revoke_all": dict(
             effect="money", lane="defi", side="spend", simulatable=True, approval_owner="hook",
@@ -338,13 +352,17 @@ CORE_VERB_ROWS = {
     "email": {
         # room_denied on every verb: outbound to anywhere but this room, or the
         # owner's mailbox (its contents and its organisation).
-        "email_send": dict(effect="comms", room_denied=True),
+        # outbound="write" + late_send: a late owner approval sends the approved mail once.
+        "email_send": dict(effect="comms", room_denied=True, outbound="write",
+                           text_fields=("subject", "body", "html"), late_send=True),
         # The agent's own inbox (activation links / codes): a read, but of the agent's
         # private mailbox, so the agent_status disclosure class.
         "email_read_machine_mail": dict(effect="none", correspondent_blocked=True,
                                         room_denied=True),
-        "email_reply": dict(effect="comms", room_denied=True),
-        "email_forward": dict(effect="comms", room_denied=True),
+        "email_reply": dict(effect="comms", room_denied=True, outbound="write",
+                            text_fields=("body", "html"), late_send=True),
+        "email_forward": dict(effect="comms", room_denied=True, outbound="write",
+                              text_fields=("note",), late_send=True),
         # Reads of the agent's own mailbox (read-only select, BODY.PEEK) and a
         # save into the session workspace: no external write.
         "email_list": dict(effect="none", correspondent_blocked=True, room_denied=True),
@@ -356,6 +374,10 @@ CORE_VERB_ROWS = {
         "email_mark": dict(effect="comms", room_denied=True, correspondent_blocked=True),
         "email_move": dict(effect="comms", room_denied=True, correspondent_blocked=True),
         "email_delete": dict(effect="comms", room_denied=True, correspondent_blocked=True),
+    },
+    "filesystem": {
+        # W4: a written file is produced output even outside the workspace scan.
+        "filesystem_write_file": dict(output=True),
     },
     "git": {
         # Local repository work is not public; only a push reaches a public address.
@@ -381,14 +403,15 @@ CORE_VERB_ROWS = {
         "github_actions_runs": dict(effect="none"),
         "github_issue_list": dict(effect="none"),
         "github_pr_view": dict(effect="none"),
-        "github_issue_create": dict(effect="public", correspondent_blocked=True),
+        # outbound="text": words to the world (the refusal-taint gate holds them).
+        "github_issue_create": dict(effect="public", correspondent_blocked=True, outbound="text"),
         "github_merge_pr": dict(
             effect="public", approval=("recommended",), correspondent_blocked=True,
         ),
         "github_open_pr": dict(
             effect="public", approval=("recommended",), correspondent_blocked=True,
         ),
-        "github_pr_comment": dict(effect="public", correspondent_blocked=True),
+        "github_pr_comment": dict(effect="public", correspondent_blocked=True, outbound="text"),
     },
     "goal": {
         # room_denied, deferred execution: a later owner-tenant run would execute what a
@@ -413,7 +436,7 @@ CORE_VERB_ROWS = {
         # is by NAME.
         "knowledge_kb_remove": dict(correspondent_blocked=True),
         "knowledge_kb_search": dict(correspondent_blocked=True),
-        "knowledge_kb_ingest": dict(correspondent_blocked=True),
+        "knowledge_kb_ingest": dict(correspondent_blocked=True, output=True),
         "knowledge_kb_list": dict(correspondent_blocked=True),
     },
     "launchpad": {
@@ -469,7 +492,7 @@ CORE_VERB_ROWS = {
     },
     "publish": {
         "publish_list": dict(effect="none"),
-        "publish": dict(effect="public"),
+        "publish": dict(effect="public", outbound="text"),
         "publish_unpublish": dict(effect="public"),
     },
     "self_env": {
@@ -515,7 +538,7 @@ CORE_VERB_ROWS = {
         # pre-approval in every mode (fail-safe: a new hook verb defaults to spend).
         "x402_invoice_x402_request": dict(
             effect="money", side="receive", approval=("recommended",), approval_owner="hook",
-            correspondent_blocked=True, room_denied=True,
+            correspondent_blocked=True, room_denied=True, output=True,
         ),
     },
     "x402_pay": {

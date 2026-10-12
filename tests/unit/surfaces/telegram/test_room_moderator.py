@@ -125,6 +125,6 @@ def test_the_settlement_watcher_builder_attaches_the_container():
     whoever wires the watcher' and NOBODY did."""
     import inspect
 
-    from core import autonomy_runtime
+    from polyrob.app import autonomy_runtime
     src = inspect.getsource(autonomy_runtime._build_settlement_watcher)
     assert "_room_container" in src

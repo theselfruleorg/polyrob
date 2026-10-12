@@ -44,7 +44,7 @@ def captured(monkeypatch):
     import modules.memory.episodic as episodic
     monkeypatch.setattr(episodic, "finalize_episode", _finalize)
     monkeypatch.setattr(episodic, "collect_provenance", _provenance)
-    monkeypatch.setattr("agents.task.goals.autonomy_marker.is_autonomous",
+    monkeypatch.setattr("core.autonomy_marker.is_autonomous",
                         lambda _sid: False)
     return calls
 

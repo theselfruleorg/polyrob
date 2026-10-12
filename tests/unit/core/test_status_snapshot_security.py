@@ -8,7 +8,6 @@ import pytest
 def _seed(tmp_path, monkeypatch, n_inbound=3, n_denied=2):
     db = tmp_path / "telemetry_events.db"
     monkeypatch.setenv("TELEMETRY_EVENT_LOG_PATH", str(db))
-    monkeypatch.setenv("SECURITY_EVENT_LOG_ENABLED", "true")
     monkeypatch.setenv("TELEMETRY_EVENT_LOG_ENABLED", "true")
     import core.event_log as el
     el._INSTANCES.clear()

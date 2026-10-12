@@ -12,7 +12,7 @@ import asyncio
 import inspect
 import types
 
-import core.bootstrap as bootstrap
+import polyrob.app.bootstrap as bootstrap
 import cli.commands.chat as chat
 
 

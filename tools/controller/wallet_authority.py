@@ -9,7 +9,7 @@ lane this hook must not refuse.
 from core.money.authorize import SpendIntent, authorize_spend
 from core.money.classify import money_action, money_tool
 
-_PRINCIPAL_ONLY = SpendIntent(leaf=False, turn=False, pause=False)
+_PRINCIPAL_ONLY = SpendIntent.principal_only()
 
 
 def make_wallet_authority_hook(controller):

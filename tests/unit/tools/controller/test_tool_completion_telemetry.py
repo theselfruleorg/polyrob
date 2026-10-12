@@ -16,7 +16,7 @@ import pytest
 
 import agents.task.agent.service  # noqa: F401 — avoid controller<->orchestrator import cycle
 from tools.controller.service import Controller
-from tools.controller.types import ActionResult
+from agents.task.loop_types.controller_types import ActionResult
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 

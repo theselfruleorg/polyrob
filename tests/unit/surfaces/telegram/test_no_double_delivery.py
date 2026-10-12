@@ -58,6 +58,7 @@ def test_run_and_deliver_holds_the_workspace_for_the_turn(monkeypatch, tmp_path)
     both afterwards."""
     from core import interactive_gate as g
     monkeypatch.setenv("POLYROB_WORKSPACE_LOCK_DIR", str(tmp_path / "locks"))
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))  # the turn marker stays per-test
     g._busy_depth = 0
     seen = {}
 

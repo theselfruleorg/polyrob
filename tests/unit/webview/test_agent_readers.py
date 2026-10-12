@@ -140,8 +140,8 @@ def test_flags_search_marks_guarded_and_secret_keys():
 
 
 def test_flags_ordinary_knob_is_not_guarded():
-    body = mod._flags_body("GOALS_ENABLED", "")
-    row = next(f for f in body["flags"] if f["name"] == "GOALS_ENABLED")
+    body = mod._flags_body("TOOL_AVAILABILITY_HINT", "")
+    row = next(f for f in body["flags"] if f["name"] == "TOOL_AVAILABILITY_HINT")
     assert row["guarded"] is False
 
 

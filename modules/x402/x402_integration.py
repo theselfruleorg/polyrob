@@ -16,6 +16,7 @@ POLYROB's integration layer handles:
 """
 
 import os
+from core.env import bool_env
 import time
 import json
 import logging
@@ -563,15 +564,15 @@ def receive_rail_summary() -> str:
         parts.append("on-chain detect ON"
                      if x402_settle_onchain_detect_enabled() else "on-chain detect OFF")
 
-        http_on = os.environ.get("X402_ENABLED", "false").lower() == "true"
+        http_on = bool_env("X402_ENABLED", False)
         base_url = (os.environ.get("A2A_BASE_URL") or "").strip().rstrip("/")
         if http_on and base_url:
             parts.append(f"HTTP endpoint {base_url}")
         else:
             parts.append("no HTTP endpoint (not needed to get paid — invoice + "
                          "on-chain detect is the whole rail; standing one up is "
-                         "owner-only work, run by the owner from a full repo "
-                         "checkout: `scripts/setup_x402_endpoint.sh`)")
+                         "owner-only work, done once as root on the box: "
+                         "docs/guide/payments.md, \"a machine-callable HTTPS endpoint\")")
         return "receive rail: " + " · ".join(parts)
     except Exception:
         return ""
@@ -598,7 +599,7 @@ def get_x402_config() -> Dict[str, Any]:
         - enabled: Whether x402 is enabled
     """
     return {
-        "enabled": os.environ.get("X402_ENABLED", "false").lower() == "true",
+        "enabled": bool_env("X402_ENABLED", False),
         "pay_to": resolve_treasury_address(),
         "network": x402_network(),
         "cdp_key_id": os.environ.get("CDP_API_KEY_ID", ""),

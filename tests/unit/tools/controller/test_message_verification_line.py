@@ -10,7 +10,7 @@ import asyncio
 import os
 import tempfile
 
-from core.rails.verification import verification_line
+from tools.rails.verification import verification_line
 from core.surfaces.outbound_allowlist import OutboundAllowlist
 from tools.controller.message_send import perform_message_send
 from tools.controller.turn_origin import _message_action_result

@@ -19,6 +19,7 @@ flags via ``os.environ``/``core.env.bool_env`` (never ``BotConfig.get``);
 everything fail-open — a missing DB / unreadable file degrades to silence,
 never a 500 or a crashed watcher.
 """
+from core.runtime_paths import goals_db_path
 import asyncio
 import itertools
 import json
@@ -46,6 +47,8 @@ router = APIRouter()
 _SUPPRESSED_FEED_KINDS = {"streaming_output"}
 
 _PAYLOAD_CAP_BYTES = 16000
+#: Internal tuning (not env-driven): seconds between tail polls.
+WEBVIEW_ACTIVITY_TAIL_SEC = 2.0
 
 
 def _snip(value: Any, n: int = 100) -> str:
@@ -80,7 +83,7 @@ def _goal_title(goal_id: Any) -> Optional[str]:
     if cached is not None:
         _GOAL_TITLE_CACHE.move_to_end(gid)
         return cached
-    db_path = os.path.join(_data_dir(), "goals.db")
+    db_path = goals_db_path(_data_dir())
     try:
         con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=1.0)
         try:
@@ -468,15 +471,13 @@ def _sessions_data_root() -> Optional[str]:
 
 def activity_db_sources() -> List[Tuple[str, SqliteTail]]:
     """The three SQLite tails feeding the system half of the stream."""
-    root = _sessions_data_root()
-    tel = (
-        os.path.join(root, "telemetry_events.db")
-        if root
-        else os.path.join(_data_dir(), "telemetry_events.db")
-    )
+    # The ONE telemetry location (override > legacy file under the session root >
+    # the relocated sidecar) — an open-coded join tailed a stale file after the move.
+    from core.event_log import telemetry_db_path
+    tel = telemetry_db_path(_sessions_data_root() or _data_dir())
     return [
         ("telemetry", SqliteTail(tel, "telemetry_events")),
-        ("goal", goal_events_tail(os.path.join(_data_dir(), "goals.db"))),
+        ("goal", goal_events_tail(goals_db_path(_data_dir()))),
         ("skill", SqliteTail(os.path.join(_data_dir(), "skill_usage.db"), "skill_install_audit")),
     ]
 
@@ -573,10 +574,7 @@ class ActivityHub:
                 logger.debug(f"activity emit failed: {exc}")
 
     async def _tail_loop(self) -> None:
-        try:
-            interval = float(os.environ.get("WEBVIEW_ACTIVITY_TAIL_SEC", "2.0") or 2.0)
-        except (TypeError, ValueError):
-            interval = 2.0
+        interval = WEBVIEW_ACTIVITY_TAIL_SEC
         while True:
             try:
                 for source, tail in self._sources:

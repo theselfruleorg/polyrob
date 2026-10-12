@@ -1,7 +1,7 @@
 """Regression: the single-user webgate must NOT require JWT_SECRET_KEY.
 
 Caught live during doc-03 P1/P2 verify — `startup_event` hard-raised
-"JWT_SECRET_KEY not configured" even when WEBGATE_MULTITENANT is OFF (the default
+"JWT_SECRET_KEY not configured" even when the posture is not multitenant (the default
 single-user primitive, which has no auth at all), blocking the loopback webgate.
 
 These tests drive the JWT-checking startup handler with the heavy collaborators
@@ -33,7 +33,7 @@ def _stub_core(monkeypatch):
     """No-op the heavy startup collaborators so we test only the JWT branch."""
     import core.container
     import core.config
-    import core.initialization
+    import polyrob.app.initialization
 
     monkeypatch.setattr(core.container.DependencyContainer, "get_instance",
                         classmethod(lambda cls, *a, **k: MagicMock()), raising=False)
@@ -42,11 +42,11 @@ def _stub_core(monkeypatch):
     async def _noop_init(*a, **k):
         return None
 
-    monkeypatch.setattr(core.initialization, "initialize_core", _noop_init)
+    monkeypatch.setattr(polyrob.app.initialization, "initialize_core", _noop_init)
 
 
 def test_single_user_startup_requires_jwt(monkeypatch, _stub_core):
-    """WEBGATE_MULTITENANT OFF + no JWT → startup must not raise on JWT."""
+    """Posture not multitenant + no JWT → startup must not raise on JWT."""
     monkeypatch.delenv("WEBGATE_MULTITENANT", raising=False)  # default = single-user
     monkeypatch.delenv("JWT_SECRET_KEY", raising=False)
     with pytest.raises(RuntimeError, match="JWT_SECRET_KEY"):
@@ -54,14 +54,14 @@ def test_single_user_startup_requires_jwt(monkeypatch, _stub_core):
 
 
 def test_multitenant_startup_still_requires_jwt(monkeypatch, _stub_core):
-    """WEBGATE_MULTITENANT ON + no JWT → startup still raises (layer-on-top intact).
+    """POLYROB_POSTURE=multitenant + no JWT → startup still raises (layer-on-top intact).
 
     The writable-console preconditions are satisfied here so the branch under
     test is the JWT one: since 043 W7/W8 a writable NON-local console also
     refuses to boot with no bound owner or an unshared session registry, and
     that refusal runs first (see test_owner_bound_at_boot.py and
     test_writable_requires_sqlite_registry.py)."""
-    monkeypatch.setenv("WEBGATE_MULTITENANT", "true")
+    monkeypatch.setenv("POLYROB_POSTURE", "multitenant")
     monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u-owner")
     monkeypatch.setenv("SESSION_REGISTRY_BACKEND", "sqlite")
     monkeypatch.delenv("JWT_SECRET_KEY", raising=False)

@@ -8,7 +8,7 @@ autonomous session must count as forged.
 from types import SimpleNamespace
 
 from tools.controller.action_registration import _is_forged_or_autonomous_turn
-from agents.task.goals.autonomy_marker import mark_autonomous
+from core.autonomy_marker import mark_autonomous
 
 
 def _ctx(role="orchestrator", is_sub=False, session_id="s"):
@@ -42,6 +42,6 @@ def test_autonomy_marker_probe_exception_is_forged(monkeypatch):
     def _boom(_sid):
         raise RuntimeError("autonomy-marker store exploded")
 
-    monkeypatch.setattr("agents.task.goals.autonomy_marker.is_autonomous", _boom)
+    monkeypatch.setattr("core.autonomy_marker.is_autonomous", _boom)
     # A plain orchestrator turn (not leaf/sub/forged-kind) reaches the marker leg.
     assert _is_forged_or_autonomous_turn(_ctx(session_id="plain-session"), None) is True

@@ -66,7 +66,8 @@ def test_every_resolved_flag_is_a_real_catalog_row():
     from core.tool_capabilities import ids_with
     from core.tool_catalog import enable_flag_for
 
-    known = {row[0] for row in CATALOG}
+    from core.config_policy.members import MEMBER_FLAGS
+    known = {row[0] for row in CATALOG} | set(MEMBER_FLAGS)   # D7 members are real
     for tool_id in sorted(ids_with("high_impact") | ids_with("money")):
         flag = enable_flag_for(tool_id)
         if flag:

@@ -37,23 +37,14 @@ def test_openrouter_strategy(model, expected):
     assert openrouter_cache_strategy(model) == expected
 
 
-def test_apply_noop_when_passthrough_disabled(monkeypatch):
-    monkeypatch.setenv("OPENROUTER_PROMPT_CACHE", "false")
-    msgs = [{"role": "system", "content": "big stable prefix"}]
-    out = apply_openrouter_cache_control(msgs, "anthropic/claude-opus-4")
-    assert out[0]["content"] == "big stable prefix"  # unchanged (string)
-
-
 def test_apply_marks_system_by_default(monkeypatch):
     """2026-09-22 harness/cache review F5: the passthrough is on by default."""
-    monkeypatch.delenv("OPENROUTER_PROMPT_CACHE", raising=False)
     msgs = [{"role": "system", "content": "big stable prefix"}]
     out = apply_openrouter_cache_control(msgs, "anthropic/claude-opus-4")
     assert out[0]["content"][-1]["cache_control"]["type"] == "ephemeral"
 
 
 def test_apply_adds_breakpoint_when_enabled(monkeypatch):
-    monkeypatch.setenv("OPENROUTER_PROMPT_CACHE", "true")
     monkeypatch.setenv("LLM_PROMPT_CACHE", "1")
     msgs = [{"role": "system", "content": "big stable prefix"},
             {"role": "user", "content": "hi"}]
@@ -65,14 +56,12 @@ def test_apply_adds_breakpoint_when_enabled(monkeypatch):
 
 
 def test_apply_noop_for_automatic_models(monkeypatch):
-    monkeypatch.setenv("OPENROUTER_PROMPT_CACHE", "true")
     msgs = [{"role": "system", "content": "prefix"}]
     out = apply_openrouter_cache_control(msgs, "openai/gpt-5.5")
     assert out[0]["content"] == "prefix"  # automatic caching -> no request change
 
 
 def test_apply_noop_when_globally_disabled(monkeypatch):
-    monkeypatch.setenv("OPENROUTER_PROMPT_CACHE", "true")
     monkeypatch.setenv("LLM_PROMPT_CACHE", "0")
     msgs = [{"role": "system", "content": "prefix"}]
     out = apply_openrouter_cache_control(msgs, "anthropic/claude-opus-4")

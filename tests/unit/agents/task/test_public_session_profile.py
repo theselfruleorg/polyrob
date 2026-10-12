@@ -130,7 +130,7 @@ def test_autonomous_continuity_behavioural_public_vs_private(monkeypatch):
     import agents.task.agent.core.episodic_digest as episodic_digest
     monkeypatch.setattr(episodic_digest, "build_mission_continuity",
                         AsyncMock(return_value=sentinel))
-    monkeypatch.setattr("agents.task.goals.autonomy_marker.is_autonomous",
+    monkeypatch.setattr("core.autonomy_marker.is_autonomous",
                         lambda _sid: True)
 
     public_agent = _FakeAgent(public=True)

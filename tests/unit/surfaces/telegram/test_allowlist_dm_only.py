@@ -21,5 +21,5 @@ def test_rooms_skip_raw_allowlist():
 
 def test_handle_update_source_checks_scope():
     import inspect
-    src = inspect.getsource(harness.TelegramHarness.handle_update)
+    src = inspect.getsource(harness.TelegramHarness._gate_raw_update)  # W9 phase 1
     assert "raw_allowlist_applies(update)" in src

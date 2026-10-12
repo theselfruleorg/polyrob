@@ -3,7 +3,7 @@
 P0.1 the custody process is non-dumpable (prctl), P0.2 the key material leaves
 ``os.environ`` once the wallet config loads, P0.3 the Playwright driver gets a
 scrubbed env. P0.4 (ledger 0600) is run in
-tests/unit/deployment/test_deploy_wallet_ledger_perms.py.
+ops/tests/deployment/test_deploy_wallet_ledger_perms.py.
 """
 import ast
 import inspect
@@ -105,7 +105,7 @@ def test_a_later_env_load_cannot_put_the_seed_back(custody):
     assert "AGENT_WALLET_MASTER_SEED" not in os.environ
     assert custody_env.custody_secret("AGENT_WALLET_MASTER_SEED") == SEED
     # and load_env runs that repop (the hook is wired, not only defined)
-    from core import bootstrap
+    from polyrob.app import bootstrap
     assert "repop_after_env_load()" in inspect.getsource(bootstrap.load_env)
 
 
@@ -114,27 +114,6 @@ def test_doctor_sees_a_loaded_seed(custody):
     load_wallet_config()
     env = custody_env.custody_environ()
     assert env["AGENT_WALLET_MASTER_SEED"] == SEED
-
-
-def test_derived_addresses_are_unchanged_by_the_pop(custody, tmp_path):
-    """The wallet_continuity derivation (an env MAPPING, before any pop) and the
-    runtime wallet (process env, after the pop) name the same address."""
-    pytest.importorskip("eth_account")
-    scripts_dir = __import__("pathlib").Path(__file__).resolve().parents[3] / "scripts"
-    if not (scripts_dir / "wallet_continuity.py").exists():
-        pytest.skip("scripts/wallet_continuity.py is private tooling")
-    sys.path.insert(0, str(scripts_dir))
-    try:
-        import wallet_continuity
-    finally:
-        sys.path.pop(0)
-    from core.wallet.agent_wallet import AgentWallet
-    from core.wallet.config import load_wallet_config
-    before, _ = wallet_continuity.derive_addresses(dict(os.environ), tmp_path)
-    after = AgentWallet(load_wallet_config()).address
-    assert "AGENT_WALLET_MASTER_SEED" not in os.environ
-    again = AgentWallet(load_wallet_config()).address
-    assert before == after == again
 
 
 # --- P0.1: prctl ------------------------------------------------------------ #

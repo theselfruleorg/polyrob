@@ -1347,7 +1347,7 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
     # Models ROB has no native client for (OpenRouter's real value). Pricing +
     # specs verified against the live OpenRouter models API on 2026-06-24
     # (GET https://openrouter.ai/api/v1/models). Pinned in
-    # tests/unit/modules/llm/test_openrouter_pricing_verified_2026_06_24.py.
+    # tests/unit/modules/llm/test_openrouter_pricing_verified.py.
     # ========================================
 
     # --- Frontier agentic / coding ---

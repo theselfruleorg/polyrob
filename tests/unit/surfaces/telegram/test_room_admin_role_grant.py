@@ -130,8 +130,12 @@ def test_the_harness_forwards_role_before_the_owner_gate():
     not forwarded first, so `role` must be in the pre-gate set or the carve-out
     above is unreachable from a real Telegram message."""
     import inspect
-    from surfaces.telegram import harness
-    src = inspect.getsource(harness._handle_owner_admin)
+    from surfaces.telegram import admin_verbs, harness
+    # W9: the pre-gate forward lives in `admin_verbs.pre_gate_reply`, and the
+    # harness calls it before the owner gate.
+    outer = inspect.getsource(harness._handle_owner_admin)
+    assert outer.index("pre_gate_reply(") < outer.index("_is_admin_owner(user_id)")
+    src = inspect.getsource(admin_verbs.pre_gate_reply)
     assert '"mode", "tail", "role"' in src, (
         "the pre-gate forward must include `role`, or an admin's `blocked` "
         "grant never reaches group_ops")

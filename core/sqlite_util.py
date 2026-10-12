@@ -53,13 +53,23 @@ def wal_connect(db_path: str, timeout: float = _BUSY_TIMEOUT_S) -> sqlite3.Conne
     return conn
 
 
-def init_schema(db_path: str, script: str, *, mkdir: bool = False) -> None:
+def init_schema(db_path: str, script: str, *, mkdir: bool = False,
+                version: Optional[int] = None,
+                columns: Optional[dict] = None) -> None:
     """Run a ``CREATE … IF NOT EXISTS`` script once over a WAL connection.
 
     The open/executescript/commit/close four-liner every sidecar store's
     ``_init_schema`` carried by hand. ``mkdir=True`` creates the parent
     directory first (the fail-open stores that keep a ``_ready`` flag).
     Raises on failure; the caller decides whether that is fatal.
+
+    *columns* (``{table: ((name, decl), …)}``) adds the columns a pre-existing
+    table lacks (:func:`ensure_columns`) — the additive migration a
+    ``CREATE IF NOT EXISTS`` never performs. *version* raises ``PRAGMA
+    user_version`` to that number (never lowers it). It is opt-in: some stores
+    already use ``user_version`` as their own one-shot-migration marker
+    (correspondents, conversations, dead_targets), and a stamp from here would
+    make them skip that migration.
     """
     import os
     if mkdir:
@@ -68,6 +78,10 @@ def init_schema(db_path: str, script: str, *, mkdir: bool = False) -> None:
     conn = wal_connect(db_path)
     try:
         conn.executescript(script)
+        for table, cols in (columns or {}).items():
+            ensure_columns(conn, table, cols)
+        if version is not None:
+            set_user_version(conn, version)
         conn.commit()
     finally:
         conn.close()
@@ -83,6 +97,47 @@ def init_schema(db_path: str, script: str, *, mkdir: bool = False) -> None:
         # an operator's and is left.
         from core.data_perms import apply_birth_mode
         apply_birth_mode(db_path)
+
+
+def ensure_columns(conn: sqlite3.Connection, table: str, columns) -> list:
+    """Add each ``(name, decl)`` column *table* lacks; return the names added.
+
+    The ONE idempotent additive migration (W8): read ``PRAGMA table_info``,
+    ``ALTER TABLE … ADD COLUMN`` only what is missing, and treat a concurrent
+    process's duplicate-column error as already-migrated (the only error
+    swallowed). The caller owns the transaction/commit.
+    """
+    _ident(table)
+    have = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    added = []
+    for name, decl in columns:
+        _ident(name)
+        if name in have:
+            continue
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+        except sqlite3.OperationalError as exc:
+            if "duplicate column" not in str(exc).lower():
+                raise
+            continue
+        have.add(name)
+        added.append(name)
+    return added
+
+
+def set_user_version(conn: sqlite3.Connection, version: int) -> int:
+    """Raise ``PRAGMA user_version`` to *version* (never lower it); return it."""
+    current = int(conn.execute("PRAGMA user_version").fetchone()[0])
+    target = int(version)
+    if target > current:
+        conn.execute(f"PRAGMA user_version = {target}")
+        return target
+    return current
+
+
+def _ident(name: str) -> None:
+    if not name.replace("_", "").isalnum():
+        raise ValueError(f"not a plain SQL identifier: {name!r}")
 
 
 def execute_retry(db_path: str, sql: str, params: tuple = (), *, fetch: Optional[str] = None):

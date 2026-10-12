@@ -8,7 +8,7 @@ improvements, making it easy to tune behavior without code changes.
 import os
 from typing import Optional
 
-from core.env import bool_env as _bool_env, int_env as _int_env
+from core.env import bool_env as _bool_env
 
 
 def resolve_base64_strip_mode(raw: Optional[str]) -> dict:
@@ -46,14 +46,14 @@ class RobustParseConfig:
     # history. Genuine messages now use head+tail middle-elision (keep the ask AND
     # its closing detail) at a defensible default; forged messages skip the per-
     # message cut entirely (they are bounded at their source, e.g. format_self_wake).
-    MAX_USER_GUIDANCE_TOKENS: int = int(os.getenv("MAX_USER_GUIDANCE_TOKENS", "3000"))
-    MAX_USER_MESSAGES_PER_STEP: int = int(os.getenv("MAX_USER_MESSAGES_PER_STEP", "3"))
-    USER_MESSAGE_TRUNCATE_LENGTH: int = int(os.getenv("USER_MESSAGE_TRUNCATE_LENGTH", "4000"))
-    USER_MESSAGE_KEEP_TAIL: int = int(os.getenv("USER_MESSAGE_KEEP_TAIL", "500"))
+    MAX_USER_GUIDANCE_TOKENS: int = 3000
+    MAX_USER_MESSAGES_PER_STEP: int = 3
+    USER_MESSAGE_TRUNCATE_LENGTH: int = 4000
+    USER_MESSAGE_KEEP_TAIL: int = 500
     # Ceiling for a forged (pre-wrapped) message body; large enough that a bounded
     # self-wake / delegation payload passes untouched, with its closing delimiter intact.
-    FORGED_MESSAGE_MAX_CHARS: int = int(os.getenv("FORGED_MESSAGE_MAX_CHARS", "16000"))
-    FORGED_MESSAGE_KEEP_TAIL: int = int(os.getenv("FORGED_MESSAGE_KEEP_TAIL", "3000"))
+    FORGED_MESSAGE_MAX_CHARS: int = 16000
+    FORGED_MESSAGE_KEEP_TAIL: int = 3000
     
     # ActionResult content limits - Coordinated with tool limits
     # MAX_EXTRACTED_CONTENT_LENGTH: Target limit for tool outputs (browser, etc) - not currently enforced
@@ -73,32 +73,32 @@ class RobustParseConfig:
     # 0 disables either check. The offloaded content is never lost — it is a workspace file
     # the model reads back with read_file, named in the pointer.
     MAX_EXTRACTED_CONTENT_LENGTH: int = int(os.getenv("MAX_EXTRACTED_CONTENT_LENGTH", "500000"))  # 500K chars - browser won't hit this
-    MAX_EXTRACTED_CONTENT_SIZE: int = _int_env("MAX_EXTRACTED_CONTENT_SIZE", 100000)  # 100K chars ~ 25K tokens, per result
-    MAX_EXTRACTED_CONTENT_TURN_SIZE: int = _int_env("MAX_EXTRACTED_CONTENT_TURN_SIZE", 200000)  # 200K chars ~ 50K tokens, per turn
-    LARGE_CONTENT_PREVIEW_LENGTH: int = int(os.getenv("LARGE_CONTENT_PREVIEW_LENGTH", "15000"))  # 15K preview - better context when offloaded
+    MAX_EXTRACTED_CONTENT_SIZE: int = 100000  # 100K chars ~ 25K tokens, per result
+    MAX_EXTRACTED_CONTENT_TURN_SIZE: int = 200000  # 200K chars ~ 50K tokens, per turn
+    LARGE_CONTENT_PREVIEW_LENGTH: int = 15000  # 15K preview - better context when offloaded
     
     # PHASE 2 FIX (Nov 4, 2025): Separate error truncation limits
     # Errors should be shorter (don't need full stack traces), successes can be longer
-    MAX_ERROR_LENGTH: int = int(os.getenv("MAX_ERROR_LENGTH", "2000"))  # 2K for errors (up from 400)
-    MAX_SUCCESS_LENGTH: int = int(os.getenv("MAX_SUCCESS_LENGTH", "100000"))  # 100K for successes (explicit limit)
+    MAX_ERROR_LENGTH: int = 2000  # 2K for errors (up from 400)
+    MAX_SUCCESS_LENGTH: int = 100000  # 100K for successes (explicit limit)
     
     # Retry configuration - Balanced for reliability
     ENABLE_JSON_TEMPLATE_RETRY: bool = _bool_env("ENABLE_JSON_TEMPLATE_RETRY", True)
     MAX_PARSE_RETRIES: int = int(os.getenv("MAX_PARSE_RETRIES", "3"))  # Increased for reliability
 
     # Backoff configuration - Quick but reliable
-    BASE_RETRY_DELAY: int = int(os.getenv("BASE_RETRY_DELAY", "1"))  # Quick first retry
-    MAX_RETRY_DELAY: int = int(os.getenv("MAX_RETRY_DELAY", "5"))  # Capped at 5 seconds
-    BACKOFF_MULTIPLIER: float = float(os.getenv("BACKOFF_MULTIPLIER", "1.5"))  # Moderate backoff
+    BASE_RETRY_DELAY: int = 1  # Quick first retry
+    MAX_RETRY_DELAY: int = 5  # Capped at 5 seconds
+    BACKOFF_MULTIPLIER: float = 1.5  # Moderate backoff
     
     # NEW: Context safety configuration - CRITICAL ADDITION
     ENABLE_CONTEXT_OVERFLOW_GUARD: bool = _bool_env("ENABLE_CONTEXT_OVERFLOW_GUARD", True)
-    CONTEXT_OVERFLOW_THRESHOLD: float = float(os.getenv("CONTEXT_OVERFLOW_THRESHOLD", "0.90"))  # 90% of context window - maximize usage
+    CONTEXT_OVERFLOW_THRESHOLD: float = 0.90  # 90% of context window - maximize usage
     # F19: the denominator of last resort. Only reached when there is no live
     # MessageManager AND the model registry does not know the id — a registry gap.
     # Deliberately small so the guard fires early rather than late.
     UNKNOWN_MODEL_CONTEXT_WINDOW: int = 8192
-    SAFETY_MARGIN_PERCENT: float = float(os.getenv("SAFETY_MARGIN_PERCENT", "0.05"))  # 5% safety margin - minimal to maximize context
+    SAFETY_MARGIN_PERCENT: float = 0.05  # 5% safety margin - minimal to maximize context
 
     # (Dead reads deleted 2026-08-27, 030 WS-F2 — no consumer anywhere in the
     # tree: ENABLE_MEMORY_OPTIMIZATION, ENABLE_ENHANCED_ERROR_RECOVERY,
@@ -123,7 +123,7 @@ class RobustParseConfig:
 
     # NEW: Recalibration settings
     FORCE_RECALIBRATE_AFTER_LARGE_ACTIONS: bool = _bool_env("FORCE_RECALIBRATE_AFTER_LARGE_ACTIONS", True)
-    LARGE_ACTION_THRESHOLD: int = int(os.getenv("LARGE_ACTION_THRESHOLD", "500"))  # Chars that trigger recalibration
+    LARGE_ACTION_THRESHOLD: int = 500  # Chars that trigger recalibration
 
     # File offloading - ENABLED for non-browser large content (Nov 6, 2025)
     # NOTE (030 WS-F2): the LIVE offload path is result_offload.py, keyed on

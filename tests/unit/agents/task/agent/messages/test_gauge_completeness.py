@@ -56,20 +56,11 @@ def test_token_stats_base_includes_new_blocks():
 
 # --- P4: tool-schema tokens (the `tools` param) ------------------------------
 
-def test_tool_schema_tokens_included_by_default(monkeypatch):
-    monkeypatch.delenv("CTX_COUNT_TOOL_SCHEMAS", raising=False)
+def test_tool_schema_tokens_included_by_default():
     mm = _mm()
     base = mm.get_actual_token_count()
     mm.set_tool_schema_tokens(1234)
     assert mm.get_actual_token_count() == base + 1234
-
-
-def test_tool_schema_tokens_flag_off_restores_legacy(monkeypatch):
-    monkeypatch.setenv("CTX_COUNT_TOOL_SCHEMAS", "false")
-    mm = _mm()
-    base = mm.get_actual_token_count()
-    mm.set_tool_schema_tokens(1234)
-    assert mm.get_actual_token_count() == base
 
 
 def test_tool_schema_tokens_never_negative_or_stale():

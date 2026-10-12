@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from tools.code_exec.backend import ExecutionBackendError
-from tools.code_exec.backends._proc import run_group
+from polyrob.sdk import run_group
 from tools.code_exec.backends.remote_sandbox import RemoteSandboxBackend, session_slug
 
 logger = logging.getLogger(__name__)

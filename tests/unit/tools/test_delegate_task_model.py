@@ -14,7 +14,7 @@ from pydantic import ValidationError
 import agents.task.agent.service  # noqa: F401 — avoid controller<->orchestrator import cycle
 from tools.controller.service import Controller
 from tools.controller.registry.service import Registry
-from tools.controller.execution_context import ActionExecutionContext
+from agents.task.loop_types.execution_context import ActionExecutionContext
 from tools.controller.views import DelegateTaskAction, SubtaskAction
 
 

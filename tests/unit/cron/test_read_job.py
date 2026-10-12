@@ -64,7 +64,7 @@ def test_only_allowlisted_reads_on_non_money_tools():
         assert tool not in set(ids_with("high_impact")), verb
         if verb in _AUDIENCE_GATED_ONLY:
             row = CORE_VERB_ROWS[tool][f"{tool}_{action}"]
-            assert set(row) <= {"correspondent_blocked", "room_denied"}, verb
+            assert set(row) <= {"correspondent_blocked", "room_denied", "read_job"}, verb
             continue
         assert not is_high_impact(f"{tool}_{action}"), verb
 

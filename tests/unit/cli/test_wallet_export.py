@@ -23,7 +23,7 @@ def _seeded(monkeypatch):
     # AGENT_WALLET_* both before and after so nothing leaks across test files
     # in the same pytest session (run_wallet_init_flow-style env mutation
     # elsewhere in this suite doesn't apply here, but be consistent/defensive).
-    monkeypatch.setattr("core.bootstrap.load_env", lambda *a, **k: None)
+    monkeypatch.setattr("polyrob.app.bootstrap.load_env", lambda *a, **k: None)
     monkeypatch.delenv("AGENT_WALLET_MASTER_SEED", raising=False)
     monkeypatch.delenv("AGENT_WALLET_ENABLED", raising=False)
     # A leaked AGENT_WALLET_DERIVATION=bip44 (H1 pin, set by init-flow tests that

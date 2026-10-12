@@ -103,12 +103,9 @@ def _turn_tainted(controller, execution_context) -> bool:
     """True when this turn has read third-party text (a room ledger, a page, a
     mail) or a correspondent's message. Fail toward tainted on a fault."""
     try:
-        meta = getattr(execution_context, "metadata", None) or {}
-        if isinstance(meta, dict) and meta.get("untrusted_read"):
-            return True
-        orch = getattr(controller, "orchestrator", None)
-        return bool(getattr(orch, "_untrusted_read", False) is True
-                    or getattr(orch, "_correspondent_tainted", False) is True)
+        from core.security.taints import orchestrator_turn_tainted, turn_tainted
+        return bool(turn_tainted(execution_context)
+                    or orchestrator_turn_tainted(getattr(controller, "orchestrator", None)))
     except Exception:
         return True
 
@@ -136,7 +133,7 @@ async def _moderation_authority(controller, execution_context, chat_id: str, ver
     - An untainted owner turn is the owner's own instruction.
     """
     if autonomous:
-        from agents.task.goals.autonomy_marker import owner_job_task_for_session
+        from core.autonomy_marker import owner_job_task_for_session
         task = owner_job_task_for_session(getattr(execution_context, "session_id", None))
         if task and _job_names_room(task, chat_id, title):
             return None

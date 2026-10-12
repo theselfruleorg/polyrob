@@ -53,11 +53,8 @@ def _migrate_effect_column(db_path: str) -> None:
     upgrade adds the column here. Old rows read ``effect=''``."""
     conn = wal_connect(db_path)
     try:
-        cols = {r[1] for r in conn.execute(
-            "PRAGMA table_info(telemetry_events)").fetchall()}
-        if "effect" not in cols:
-            conn.execute("ALTER TABLE telemetry_events "
-                         "ADD COLUMN effect TEXT NOT NULL DEFAULT ''")
+        from core.sqlite_util import ensure_columns
+        ensure_columns(conn, "telemetry_events", (("effect", "TEXT NOT NULL DEFAULT ''"),))
         conn.execute("CREATE INDEX IF NOT EXISTS idx_te_effect "
                      "ON telemetry_events(effect)")
         conn.commit()

@@ -513,12 +513,9 @@ class SubAgentManager:
     ) -> None:
         """019 P1: emit subagent_started/subagent_finished into the PARENT feed.
 
-        Fail-open, flag-gated — telemetry must never affect the delegation.
+        Fail-open — telemetry must never affect the delegation.
         """
         try:
-            from core.config_policy import AutonomyConfig
-            if not AutonomyConfig.run_events_enabled():
-                return
             telemetry = getattr(self.orchestrator, 'telemetry_manager', None)
             if not telemetry:
                 return

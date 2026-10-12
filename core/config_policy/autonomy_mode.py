@@ -128,8 +128,8 @@ def autonomy_mode_display() -> str:
 
 def _mode_capability_default(flag_name: str) -> bool:
     """Default for a mode-governed capability flag: ON under effective autonomous
-    mode, else OFF. Explicit per-flag env ALWAYS wins at the call site (this is only
-    the default argument to _bool_env/bool_env)."""
+    mode, else OFF. Read a member through ``core.config_policy.members.member_flag``
+    (a POLYROB_OVERRIDES entry wins there); this is only the bundle half."""
     return full_autonomy_enabled() and flag_name in _MODE_CAPABILITY_FLAGS
 
 

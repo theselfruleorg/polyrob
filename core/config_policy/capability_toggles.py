@@ -36,15 +36,15 @@ def code_exec_enabled() -> bool:
 def shell_tools_enabled() -> bool:
     """`SHELL_TOOLS_ENABLED` — defaults ON at AGENT_COMPUTE_POSTURE>=1, an explicit
     env always wins. Core-tier home (056 WS4); `tools.shell` delegates here."""
-    from core.config_policy._env import posture_flag
-    return posture_flag("SHELL_TOOLS_ENABLED", 1)
+    from core.config_policy.members import member_flag
+    return member_flag("SHELL_TOOLS_ENABLED")
 
 
 def coding_tools_enabled() -> bool:
     """`CODING_TOOLS_ENABLED` — explicit env wins, else ON under POLYROB_LOCAL
     (the safe group). Core-tier home (056 WS4); `tools.coding` delegates here."""
-    from core.config_policy._env import safe_local_flag
-    return safe_local_flag("CODING_TOOLS_ENABLED")
+    from core.config_policy.members import member_flag
+    return member_flag("CODING_TOOLS_ENABLED")
 
 
 def email_provider(env=None) -> str:
@@ -69,7 +69,8 @@ def message_tool_enabled() -> bool:
     registered. Default OFF; ON under POLYROB_LOCAL (single-user CLI) via the
     _SAFE_LOCAL_FLAGS group. An explicit MESSAGE_TOOL_ENABLED always wins.
     """
-    return _bool_env("MESSAGE_TOOL_ENABLED", _safe_autonomy_default("MESSAGE_TOOL_ENABLED"))
+    from core.config_policy.members import member_flag
+    return member_flag("MESSAGE_TOOL_ENABLED")
 
 
 def message_autonomous_allowlisted() -> bool:
@@ -84,8 +85,8 @@ def message_autonomous_allowlisted() -> bool:
     Proposal 013 (T2): ON under effective AUTONOMY_MODE=autonomous (single-owner
     instance) via _mode_capability_default; an explicit env always wins.
     """
-    return _bool_env("MESSAGE_AUTONOMOUS_ALLOWLISTED",
-                      _mode_capability_default("MESSAGE_AUTONOMOUS_ALLOWLISTED"))
+    from core.config_policy.members import member_flag
+    return member_flag("MESSAGE_AUTONOMOUS_ALLOWLISTED")
 
 
 def owner_message_cooldown_seconds() -> int:
@@ -118,8 +119,8 @@ def tool_progressive_disclosure() -> bool:
     for leaves, and correspondent-taint/posture/approval gates apply unchanged —
     loading only registers schemas (tools/tool_disclosure.py).
     """
-    return _bool_env("TOOL_PROGRESSIVE_DISCLOSURE",
-                      _safe_autonomy_default("TOOL_PROGRESSIVE_DISCLOSURE"))
+    from core.config_policy.members import member_flag
+    return member_flag("TOOL_PROGRESSIVE_DISCLOSURE")
 
 
 def autonomous_tool_disclosure() -> bool:
@@ -148,7 +149,8 @@ def prefs_tool_enabled() -> bool:
     is the independent SSOT for whether preferences.toml is consulted at all —
     this only controls whether the agent can call the tool to read/change one).
     """
-    return _bool_env("PREFS_TOOL_ENABLED", _safe_autonomy_default("PREFS_TOOL_ENABLED"))
+    from core.config_policy.members import member_flag
+    return member_flag("PREFS_TOOL_ENABLED")
 
 
 def invoice_card_enabled() -> bool:
@@ -172,16 +174,11 @@ def invoice_card_enabled() -> bool:
 
     ⚠️ The x402 enablement is recomputed HERE rather than imported from
     `modules.x402.invoicing` (its SSOT): `core` may not import `modules`, and
-    the layering ratchet reads imports statically. `core/autonomy_runtime.py`
+    the layering ratchet reads imports statically. `polyrob/app/autonomy_runtime.py`
     duplicates the same guarded-OR for the same reason.
     """
-    try:
-        x402_on = _bool_env("X402_INVOICE_ENABLED",
-                            _mode_capability_default("X402_INVOICE_ENABLED"))
-    except Exception:
-        x402_on = False
-    return _bool_env("INVOICE_CARD_ENABLED",
-                     _safe_autonomy_default("INVOICE_CARD_ENABLED") or x402_on)
+    from core.config_policy.members import member_flag
+    return member_flag("INVOICE_CARD_ENABLED")
 
 
 def room_action_card_enabled() -> bool:
@@ -216,7 +213,7 @@ def eip8004_payment_feedback_enabled() -> bool:
     rest of the EIP-8004 module about whether ERC-8004 itself is on. Default
     OFF (both must be explicitly enabled).
     """
-    if os.environ.get("EIP8004_ENABLED", "false").lower() != "true":
+    if not _bool_env("EIP8004_ENABLED", False):
         return False
     return _bool_env("EIP8004_PAYMENT_FEEDBACK", False)
 
@@ -260,23 +257,6 @@ def memory_prefetch_cadence(autonomous: bool = False) -> int:
     """
     return _int_env("MEMORY_PREFETCH_CADENCE",
                     3 if (local_mode_enabled() or autonomous) else 0)
-
-
-def hmem_tail_placement() -> bool:
-    """Whether in-session hierarchical memory is placed as a dynamic SUFFIX after the
-    conversation (Phase 0.1) instead of in the foundation ahead of it.
-
-    The H-MEM block changes every step; in the foundation prefix it invalidated the
-    prompt cache for everything after it (skills tail + all conversation) on every
-    step. As a tail suffix, the stable foundation + growing conversation form a
-    cacheable prefix and only the small H-MEM suffix is reprocessed.
-
-    Resolved at access time. Default ON everywhere (T1-09, 2026-07-06): it soaked
-    locally since 2026-06 with no regressions, while the OFF server default broke the
-    server prompt cache every step. Explicit ``HMEM_TAIL_PLACEMENT=false`` restores
-    the legacy foundation placement.
-    """
-    return _bool_env("HMEM_TAIL_PLACEMENT", True)
 
 
 def ticker_idle_backoff_enabled() -> bool:
@@ -400,15 +380,6 @@ def defi_trade_enabled() -> bool:
     return bool_env("DEFI_TRADE_ENABLED", False)
 
 
-def tool_usage_telemetry() -> bool:
-    """``TOOL_USAGE_TELEMETRY`` (058 T4.1) — emit one ``tool_invoked`` event per
-    tool action into the durable event log. Default ON; OFF is byte-identical to
-    before the event existed. Volume: a few rows per LLM call, same sqlite log
-    as ``usage``."""
-    from core.env import bool_env
-    return bool_env("TOOL_USAGE_TELEMETRY", True)
-
-
 #: 066 P1: the three lazy-install modes. ``trusted`` = hashed closures into a
 #: read-only overlay (the installer unit on a provisioned server, in process
 #: locally); ``legacy`` = the 058 pip-into-this-venv path; ``off`` = refuse.
@@ -418,9 +389,7 @@ LAZY_DEPS_MODES = ("off", "trusted", "legacy")
 def lazy_deps_mode() -> str:
     """``LAZY_DEPS_MODE`` (066 P1) = ``off|trusted|legacy``, default ``trusted``.
 
-    Back-compat: with no ``LAZY_DEPS_MODE``, the old boolean ``LAZY_DEPS_ENABLED``
-    maps ``true`` -> ``trusted`` and ``false`` -> ``off``. An unknown value is
-    ``off`` (fail closed) and logs once."""
+    An unknown value is ``off`` (fail closed) and logs once."""
     import os
     raw = (os.environ.get("LAZY_DEPS_MODE") or "").strip().lower()
     if raw:
@@ -430,9 +399,6 @@ def lazy_deps_mode() -> str:
         logging.getLogger(__name__).warning(
             "LAZY_DEPS_MODE=%r is not one of %s; lazy installs are OFF", raw, "|".join(LAZY_DEPS_MODES))
         return "off"
-    if (os.environ.get("LAZY_DEPS_ENABLED") or "").strip():
-        from core.env import bool_env
-        return "trusted" if bool_env("LAZY_DEPS_ENABLED", False) else "off"
     return "trusted"
 
 

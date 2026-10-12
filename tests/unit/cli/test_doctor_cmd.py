@@ -86,30 +86,6 @@ def test_doctor_report_shows_resolved_env():
     assert any("resolved env: production" in ln for ln in lines)
 
 
-def test_doctor_command_sees_production_only_key(tmp_path, monkeypatch):
-    # Criterion #3: `polyrob doctor` loads env like the REPL, so a key that lives only
-    # in config/.env.production is reported present (via the local-mode backfill).
-    for k in (
-        "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
-        "DEEPSEEK_API_KEY", "OPENROUTER_API_KEY", "NVIDIA_API_KEY",
-        "CONFIG_ENV", "ENV",
-    ):
-        monkeypatch.delenv(k, raising=False)
-    (tmp_path / "config").mkdir()
-    (tmp_path / "config" / ".env.production").write_text("OPENROUTER_API_KEY=sk-or-doc\n")
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
-    # The suite-wide operator-env sandbox (tests/conftest.py) disables the
-    # backfill; this test exercises exactly that mechanism (against ITS OWN
-    # fake config/.env.production above), so opt back in explicitly.
-    monkeypatch.setenv("POLYROB_ENV_KEY_BACKFILL", "1")
-    monkeypatch.chdir(tmp_path)
-    res = CliRunner().invoke(doctor, ["--full"])
-    assert res.exit_code == 0, res.output
-    assert "openrouter: present" in res.output
-
-
 def test_doctor_malformed_env_key_names_the_unset_remedy():
     # "present but unusable — malformed" is a diagnosis with no verb: the fix
     # (remove the bad value) must be named right on the line, now that

@@ -26,7 +26,7 @@ import inspect
 import logging
 from typing import Any, Callable, List, Optional, Tuple
 
-from tools.controller.types import ActionResult
+from agents.task.loop_types.controller_types import ActionResult
 
 # A registered hook entry is normalised to ``(callable, fail_mode)``.
 HookEntry = Tuple[Callable, str]

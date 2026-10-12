@@ -76,14 +76,19 @@ def run_coroutine_sync(coro: "Coroutine[Any, Any, Any]", timeout: Optional[float
     return _bridge.run(coro, timeout=timeout)
 
 
-def spawn_retained(coro, registry: set):
+#: The registry of a spawn whose caller never drains its tasks on shutdown.
+_RETAINED: set = set()
+
+
+def spawn_retained(coro, registry: Optional[set] = None):
     """Schedule *coro* fire-and-forget WITH a strong reference held in
     *registry* until it finishes, so the loop cannot GC it mid-run. The
     task-set idiom three session spawners (the HTTP API, A2A, the TaskAgent
     support mixin) each carried by hand; each keeps its own registry so it
-    can still drain it on shutdown."""
-    import asyncio
+    can still drain it on shutdown. No *registry*: the module's own set (a
+    one-off spawn nobody drains). Needs a running loop, as create_task does."""
     task = asyncio.create_task(coro)
+    registry = _RETAINED if registry is None else registry
     registry.add(task)
     task.add_done_callback(registry.discard)
     return task

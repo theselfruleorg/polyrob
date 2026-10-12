@@ -24,7 +24,7 @@ from typing import Any, List, Optional
 from pydantic import BaseModel, Field
 
 from tools.base_tool import BaseTool
-from tools.controller.types import ActionResult
+from agents.task.loop_types.controller_types import ActionResult
 
 
 class PublishParams(BaseModel):

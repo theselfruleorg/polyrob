@@ -15,6 +15,15 @@ import re
 from typing import Optional
 from api.auth_constants import is_admin_role, is_admin_wallet
 from core.token_denylist import OWNER_COOKIE_TTL_SECONDS
+from api.dependencies import optional_container, require_service
+
+#: The 503 detail when the account system is off (B19/B2: name the remedy).
+_SIGNIN_OFF = ("Wallet sign-in is not enabled on this instance. "
+               "Set ENABLE_AUTH=true (and configure a database) to turn "
+               "on the account system, then restart.")
+_KEYS_OFF = (" not enabled on this instance. "
+                  "Set ENABLE_AUTH=true (and configure a database) to turn "
+                  "on the account + API-key system, then restart.")
 
 logger = logging.getLogger(__name__)
 
@@ -135,27 +144,15 @@ async def get_nonce(request: NonceRequest, http_request: Request = None):
 
     import os
 
-    from api.dependencies import optional_container
-
     _nonce_rate_refusal(http_request)
 
-    # B19 (revalidation): resolve the container through the tolerant seam —
-    # `DependencyContainer.get_instance()` RAISES on a process whose lifespan
-    # never ran, so the honest 503 below was unreachable and the caller got a
-    # 500 traceback on exactly the instance the message is written for.
-    container = optional_container()
-    siwe_auth = container.get_service('siwe_authenticator') if container else None
-
-    if not siwe_auth:
-        # B19: a wallet login on an instance with the account system OFF is a
-        # CONFIGURATION state, not a server fault — 500 told the caller to
-        # retry something that can never succeed.
-        raise HTTPException(
-            status_code=503,
-            detail=("Wallet sign-in is not enabled on this instance. "
-                    "Set ENABLE_AUTH=true (and configure a database) to turn "
-                    "on the account system, then restart."),
-        )
+    # B19 (revalidation): require_service resolves the container through the
+    # tolerant seam (an uninitialized process is 503, not a 500 traceback).
+    # A wallet login on an instance with the account system OFF is a
+    # CONFIGURATION state, not a server fault — 500 told the caller to retry
+    # something that can never succeed.
+    siwe_auth = require_service("siwe_authenticator", missing=_SIGNIN_OFF,
+                                unavailable=_SIGNIN_OFF)
 
     # The ONE reader of the SIWE domain: /verify requires the same value back.
     from modules.auth.siwe_auth import configured_siwe_domain
@@ -177,25 +174,11 @@ async def get_nonce(request: NonceRequest, http_request: Request = None):
 async def verify_signature(request: VerifyRequest):
     """Verify wallet signature and return JWT with HTTP-only cookie."""
 
-    from api.dependencies import optional_container
-
-    # B19 (revalidation): see /nonce — the container accessor raises on an
-    # uninitialized process, so it is resolved through the tolerant seam and
-    # the 503 below is reachable.
-    container = optional_container()
-    siwe_auth = container.get_service('siwe_authenticator') if container else None
-    identity_mapper = container.get_service('identity_mapper') if container else None
-    db = container.get_service('database_manager') if container else None
-
-    if not siwe_auth or not identity_mapper or not db:
-        # B19: the twin of /nonce — a disabled account system is 503 with the
-        # remedy, never a 500 that invites a retry.
-        raise HTTPException(
-            status_code=503,
-            detail=("Wallet sign-in is not enabled on this instance. "
-                    "Set ENABLE_AUTH=true (and configure a database) to turn "
-                    "on the account system, then restart."),
-        )
+    # B19 (revalidation): the twin of /nonce — a disabled account system is 503 with the
+    # remedy, never a 500 that invites a retry.
+    siwe_auth, identity_mapper, db = (
+        require_service(name, missing=_SIGNIN_OFF, unavailable=_SIGNIN_OFF)
+        for name in ("siwe_authenticator", "identity_mapper", "database_manager"))
 
     # Verify signature
     is_valid = await siwe_auth.verify_signature(
@@ -239,7 +222,7 @@ async def verify_signature(request: VerifyRequest):
             logger.warning(f"Failed to write admin-wallet audit trail: {audit_exc}")
 
     # Create JWT
-    jwt_secret = container.config.jwt_secret_key
+    jwt_secret = optional_container().config.jwt_secret_key   # up: require_service passed
     if not jwt_secret:
         raise HTTPException(status_code=500, detail="JWT not configured")
 
@@ -332,8 +315,6 @@ async def get_current_user(request: Request):
     user_id = getattr(request.state, 'user_id', None)
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
-
-    from api.dependencies import optional_container
 
     container = optional_container()
     tier_manager = container.get_service('tier_manager') if container else None
@@ -430,21 +411,12 @@ async def create_api_key(request: Request, key_request: CreateAPIKeyRequest):
     user_id = await get_user_strict(request)
     _refuse_api_key_identity(request)
 
-    from api.dependencies import optional_container
-    container = optional_container()
-    api_key_manager = container.get_service('api_key_manager') if container else None
-
-    if not api_key_manager:
-        # B2: name the remedy. The key manager is registered only under
-        # ENABLE_AUTH (core/initialization.py::initialize_auth_services), which
-        # is OFF by default — so "unavailable" on a fresh install is a
-        # configuration fact, not a fault.
-        raise HTTPException(
-            status_code=503,
-            detail=("API key minting is not enabled on this instance. "
-                    "Set ENABLE_AUTH=true (and configure a database) to turn "
-                    "on the account + API-key system, then restart."),
-        )
+    # B2: name the remedy. The key manager is registered only under
+    # ENABLE_AUTH (polyrob/app/initialization.py::initialize_auth_services), which
+    # is OFF by default — so "unavailable" on a fresh install is a
+    # configuration fact, not a fault.
+    _off = "API key minting is" + _KEYS_OFF
+    api_key_manager = require_service("api_key_manager", missing=_off, unavailable=_off)
 
     try:
         result = await api_key_manager.generate_api_key(
@@ -468,19 +440,11 @@ async def list_api_keys(request: Request):
     # B45 (revalidation): the SAME strict gate `create_api_key` uses. Listing
     # and revoking are tenant operations; a null / placeholder identity must
     # not reach another tenant's key rows.
-    from api.dependencies import get_user_strict, optional_container
+    from api.dependencies import get_user_strict
     user_id = await get_user_strict(request)
 
-    container = optional_container()
-    api_key_manager = container.get_service('api_key_manager') if container else None
-
-    if not api_key_manager:
-        raise HTTPException(
-            status_code=503,
-            detail=("API keys are not enabled on this instance. "
-                    "Set ENABLE_AUTH=true (and configure a database) to turn "
-                    "on the account + API-key system, then restart."),
-        )
+    _off = "API keys are" + _KEYS_OFF
+    api_key_manager = require_service("api_key_manager", missing=_off, unavailable=_off)
 
     keys = await api_key_manager.list_user_keys(user_id)
     return [APIKeyInfo(**k) for k in keys]
@@ -495,20 +459,12 @@ async def revoke_api_key(request: Request, key_prefix: str):
         key_prefix: The key prefix (e.g., "rob_abc123")
     """
     # B45 (revalidation): same strict gate as create/list — see above.
-    from api.dependencies import get_user_strict, optional_container
+    from api.dependencies import get_user_strict
     user_id = await get_user_strict(request)
     _refuse_api_key_identity(request)
 
-    container = optional_container()
-    api_key_manager = container.get_service('api_key_manager') if container else None
-
-    if not api_key_manager:
-        raise HTTPException(
-            status_code=503,
-            detail=("API keys are not enabled on this instance. "
-                    "Set ENABLE_AUTH=true (and configure a database) to turn "
-                    "on the account + API-key system, then restart."),
-        )
+    _off = "API keys are" + _KEYS_OFF
+    api_key_manager = require_service("api_key_manager", missing=_off, unavailable=_off)
 
     success = await api_key_manager.revoke_key(user_id, key_prefix)
     if success:

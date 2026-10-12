@@ -10,7 +10,8 @@ Read job — ``payload.read_verb``::
 The runner calls the verb in-process ($0 — no session, no LLM turn), records
 the outcome as a ``cron_run`` event, and delivers the text through the cron
 delivery rail when ``deliver_on`` says so (an ``ALERT`` line in the result is
-an alert; an error is an alert). Only verbs in ``READ_VERBS`` may run: each is
+an alert; an error is an alert). Only verbs in ``READ_VERBS`` (the ``read_job``
+rows of the verb-policy table) may run: each is
 a read on a tool the capability table does not mark ``money`` or
 ``high_impact`` (pinned by ``tests/unit/cron/test_read_job.py``).
 
@@ -27,25 +28,43 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+from core.lazy_views import lazy_module_getattr, view
+
 logger = logging.getLogger(__name__)
 
-#: verb -> (module, tool class, action, params class). Reads only.
-READ_VERBS: Dict[str, Tuple[str, str, str, str]] = {
-    "defi_data.pool_metrics": ("tools.defi.data_tool", "DefiDataTool", "pool_metrics",
-                               "PoolMetricsParams"),
-    # 071 §3.9: $0 watches. PUBLIC reads only. The own-wallet reads (portfolio,
-    # positions, reconcile) are deliberately NOT listed: a read job runs with no
-    # turn context, so the owner gate cannot tell who scheduled it. The result
-    # is delivered to the job's own target (the owner's chat by default).
-    "defi_data.price": ("tools.defi.data_tool", "DefiDataTool", "price", "TokenRefParams"),
-    "defi_data.token_info": ("tools.defi.data_tool", "DefiDataTool", "token_info",
-                             "TokenRefParams"),
-    # An EXPLICIT address is public chain data (WalletHoldingsParams.address is
-    # required, so it never defaults to the operator wallet), and only the owner
-    # or the agent can schedule a job (cronjob is correspondent- and room-blocked).
-    "defi_data.wallet_holdings": ("tools.defi.data_tool", "DefiDataTool", "wallet_holdings",
-                                  "WalletHoldingsParams"),
+#: tool id -> (module, tool class): where a read job's verb lives. The VERBS are
+#: the ``read_job`` rows of the verb-policy table (W4; 071 §3.9 $0 watches —
+#: PUBLIC reads only, the reason per verb beside its row).
+_READ_JOB_TOOLS: Dict[str, Tuple[str, str]] = {
+    "defi_data": ("tools.defi.data_tool", "DefiDataTool"),
 }
+
+
+def _build_read_verbs() -> Dict[str, Tuple[str, str, str, str]]:
+    """verb -> (module, tool class, action, params class), from the rows."""
+    import importlib
+    from core.action_names import bare_action_name
+    from core.verb_policy import ordered_ids_where, policy_for
+    out = {}
+    for name in ordered_ids_where(read_job=True):
+        tool = policy_for(name).tool
+        if tool not in _READ_JOB_TOOLS:   # a row with no locator here cannot run
+            continue
+        module, cls = _READ_JOB_TOOLS[tool]
+        action = bare_action_name(tool, name)
+        model = getattr(getattr(importlib.import_module(module), cls), action)._param_model
+        out[f"{tool}.{action}"] = (module, cls, action, model.__name__)
+    return dict(sorted(out.items()))
+
+
+#: verb -> (module, tool class, action, params class): built on first read.
+__getattr__ = lazy_module_getattr(__name__, {"READ_VERBS": _build_read_verbs})
+
+
+def _read_verbs() -> Dict[str, Tuple[str, str, str, str]]:
+    return view(__name__, "READ_VERBS")
+
+
 DELIVER_ON = ("alert", "always", "never")
 MAX_WINDOWS = 8
 
@@ -125,9 +144,9 @@ def validate_read_verb(spec: Any) -> Dict[str, Any]:
     if not isinstance(spec, dict):
         raise ReadJobError("read_verb must be an object {verb, params, deliver_on}")
     verb = str(spec.get("verb") or "")
-    if verb not in READ_VERBS:
+    if verb not in _read_verbs():
         raise ReadJobError(f"read_verb {verb!r} is not a deterministic read verb; "
-                           f"allowed: {', '.join(sorted(READ_VERBS))}")
+                           f"allowed: {', '.join(sorted(_read_verbs()))}")
     deliver_on = str(spec.get("deliver_on") or "alert")
     if deliver_on not in DELIVER_ON:
         raise ReadJobError(f"deliver_on must be one of {', '.join(DELIVER_ON)}")
@@ -202,7 +221,7 @@ def alert_lines(alert: Optional[Dict[str, Any]], metadata: Any) -> List[str]:
 
 def _load(verb: str):
     import importlib
-    module, cls, _action, model = READ_VERBS[verb]
+    module, cls, _action, model = _read_verbs()[verb]
     mod = importlib.import_module(module)
     return getattr(mod, cls), getattr(mod, model)
 
@@ -213,7 +232,7 @@ async def call_read_verb(spec: Dict[str, Any], *, tool_factory=None) -> Tuple[bo
         spec = validate_read_verb(spec)
         cls, model = _load(spec["verb"])
         tool = (tool_factory or cls)()
-        action = READ_VERBS[spec["verb"]][2]
+        action = _read_verbs()[spec["verb"]][2]
         result = await getattr(tool, action)(model(**spec["params"]))
     except Exception as exc:
         return False, f"read job error: {exc}"

@@ -494,11 +494,11 @@ async def perform_message_send(*, router, allowlist, owner_targets, user_id,
     # 057 WS-E: the proof rule travels WITH the receipt. Without it the agent
     # went looking for its own channel post to "confirm" a send Telegram will
     # never echo back, and then reported a delivered post as unconfirmed.
-    # Rendered from the ONE table (core/rails/verification.py); an unknown rail
+    # Rendered from the ONE table (tools/rails/verification.py); an unknown rail
     # renders nothing rather than inventing a rule.
     if ok:
         try:
-            from core.rails.verification import rail_for_message, verification_line
+            from tools.rails.verification import rail_for_message, verification_line
             _rail = rail_for_message(surface, is_room=bool(room))
             _line = verification_line(_rail) if _rail else ""
             if _line:
@@ -619,7 +619,7 @@ def prepare_message_targets(container, user_id: str, surface, target) -> tuple:
 
 def _is_autonomous_session(session_id: Optional[str]) -> bool:
 	try:
-		from agents.task.goals.autonomy_marker import is_autonomous
+		from core.autonomy_marker import is_autonomous
 		return is_autonomous(session_id)
 	except Exception:
 		return False

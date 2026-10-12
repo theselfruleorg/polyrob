@@ -11,7 +11,7 @@ Two defects this pins:
 """
 import pathlib
 
-from core.rails.verification import VERIFICATION
+from tools.rails.verification import VERIFICATION
 
 SKILL = (pathlib.Path(__file__).resolve().parents[3]  # 067 P3b: the X pack's skill
          / "packs" / "x" / "polyrob_x" / "skills" / "x-engagement" / "SKILL.md")
@@ -46,7 +46,7 @@ def test_a_proof_per_rail_section_cites_the_table():
     text = _text()
     assert "## Proof per rail" in text
     assert "docs/guide/rails-verification.md" in text
-    assert "core/rails/verification.py" in text
+    assert "tools/rails/verification.py" in text
 
 
 def test_the_section_names_every_rail_the_agent_can_write_to():

@@ -8,7 +8,7 @@ import pytest
 def owner_ctx(monkeypatch):
     """An owner-tenant orchestrator turn (no posture needed — the app tool states
     the three publish clauses directly)."""
-    from tools.controller.execution_context import ActionExecutionContext
+    from agents.task.loop_types.execution_context import ActionExecutionContext
     monkeypatch.setenv("POLYROB_OWNER_USER_ID", "owner-1")
     return ActionExecutionContext(session_id="sess-app", user_id="owner-1",
                                   role="orchestrator", is_sub_agent=False)

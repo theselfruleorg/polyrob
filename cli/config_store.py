@@ -213,7 +213,8 @@ def resolve_provider_model(cli_provider, cli_model, *, available_keys=None):
     ``core.runtime_config.resolve_runtime_config`` (the SSOT both surfaces share).
     Returns (provider, model); model may be None (caller fills from registry).
     """
-    from core.runtime_config import resolve_runtime_config
+    from core.runtime_config import (operator_model_pin, operator_provider_pin,
+                                     resolve_runtime_config)
 
     if available_keys is None:
         # Only count a key as "available" if its VALUE is well-formed (mirrors
@@ -239,8 +240,8 @@ def resolve_provider_model(cli_provider, cli_model, *, available_keys=None):
     # over DEFAULT_*. This is where `polyrob init` persists its chosen default (to
     # ~/.polyrob/.env), so run/chat/doctor must read it here — the same env the
     # chat_once path reads (task_agent_lite). Without this the wizard's choice is dead.
-    pinned_provider = os.environ.get("CHAT_PROVIDER") or os.environ.get("DEFAULT_PROVIDER")
-    pinned_model = os.environ.get("CHAT_MODEL") or os.environ.get("DEFAULT_MODEL")
+    pinned_provider = operator_provider_pin()
+    pinned_model = operator_model_pin()
     provider, model = resolve_runtime_config(
         cli_provider,
         cli_model,

@@ -1,7 +1,7 @@
 """The console's vocabulary, in English.
 
 Rules this file is held to by ``tests/unit/webview/test_copy_layer_ratchet.py``,
-from ``docs/design/040/README.md`` rule 3 and the 043 copy decisions:
+from rule 3 of the 040 interface design and the 043 copy decisions:
 
 * **No shouting.** No ALL-CAPS label. ``MODEL``, ``TOOLS``, ``VISION`` and
   ``AGENTS`` are the current product's own tells.

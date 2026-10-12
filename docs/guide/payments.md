@@ -418,8 +418,8 @@ A pending invoice completes by any of:
    verify+settle).
 3. **On-chain USDC detection** — gated `X402_SETTLE_ONCHAIN_DETECT` (mainnet +
    treasury). ⚠️ **Silently inert unless `X402_INVOICE_ENABLED` is also on** — the
-   settlement watcher only starts when the autonomy runtime sees `X402_INVOICE_ENABLED=true`
-   (`core/autonomy_runtime.py`); `X402_SETTLE_ONCHAIN_DETECT=true` on its own starts no
+   settlement watcher only starts when the autonomy runtime sees `X402_INVOICE_ENABLED` on
+   (`polyrob/app/autonomy_runtime.py`); `X402_SETTLE_ONCHAIN_DETECT` on its own starts no
    ticker and detects nothing. The settlement watcher (`modules/x402/settlement_watcher.py`,
    running on the autonomy-runtime ticker every `X402_SETTLEMENT_WATCH_INTERVAL_SEC`, default 60s)
    scans treasury USDC `Transfer` logs (`modules/x402/onchain_probe.py`), keeps a
@@ -665,7 +665,7 @@ With `EIP8004_PAYMENT_FEEDBACK` (default OFF), a settled invoice becomes a
 feedback offer is raised from inside the settlement watcher's settle path
 (`SettlementWatcher._maybe_offer_payment_feedback`), and — same as
 `X402_SETTLE_ONCHAIN_DETECT` above — the watcher itself only runs when
-`X402_INVOICE_ENABLED=true`; `EIP8004_PAYMENT_FEEDBACK=true` alone offers nothing.
+`X402_INVOICE_ENABLED` is on; `EIP8004_PAYMENT_FEEDBACK=true` alone offers nothing.
 On settlement of a correspondent-linked invoice the agent
 offers the payer a `ProofOfPayment`-backed feedback **authorization** (it never submits
 feedback on the payer's behalf). `submit_feedback` verifies the proof against the ledger
@@ -823,7 +823,7 @@ verbs in the first five rows and nothing else.
 | `set_agent_uri` | Republish that registration file; mints nothing — §8 | `EIP8004_REGISTER_ENABLED` |
 | `solana_swap` | Swap SPL tokens via Jupiter on Solana — its own mirrored guard stack, §10.3 | `SOLANA_TRADE_ENABLED` |
 | `solana_transfer` | Send SOL (`token='native'`) or an SPL token by mint on Solana. The recipient's token account is created if missing and its rent counts toward `max_spend_usd`; the simulated deltas must match the send exactly, and Token-2022 transfer fees or hooks are refused | `SOLANA_TRADE_ENABLED` |
-| `bridge` | Move native value between chains through Relay, proven by measured arrival — §10.5 | `DEFI_BRIDGE_ENABLED` |
+| `bridge` | Move native value or pinned USDC between chains through Relay, proven by measured arrival — §10.5 | `DEFI_BRIDGE_ENABLED` |
 | `nft_transfer` | Send one NFT. Always owner-approved — §10.6 | `NFT_TOOLS_ENABLED` |
 | `nft_revoke_approval` | Clear a standing collection approval | `NFT_TOOLS_ENABLED` |
 | `deploy_token` / `deploy_contract` | Deploy the pinned fixed-supply token, or your own compiled init code — §10.7 | `DEFI_DEPLOY_ENABLED` |
@@ -1079,13 +1079,16 @@ shows the same list, the positions the rail tracks, and the same buttons.
 ### 10.5 Bridging between chains (`DEFI_BRIDGE_ENABLED`, default OFF)
 
 `defi_trade.bridge` is the one cross-chain move, routed through **Relay.link** directly.
-The owner seat is the CLI:
+The owner seats are the CLI and the `/bridge` chat verb:
 
 ```bash
 polyrob wallet bridge solana robinhood 0.5            # quote + full assertion pass
 polyrob wallet bridge base robinhood 0.01 --execute   # sign and broadcast
+polyrob wallet bridge base solana 50 --token-in usdc --token-out usdc   # pinned USDC in and out
 polyrob wallet bridges                                # rows not yet proven to arrive
 ```
+
+In chat: `/bridge <from> <to> <amount> [from usdc] [as <asset>] [go]`.
 
 A bridge runs on **caps, not taps**: it tiers exactly like a swap — under
 `DEFI_AUTONOMOUS_MAX_USD` the agent may run one and report, above it the durable owner
@@ -1106,11 +1109,13 @@ same ledger every other verb counts.
 A re-sent bridge pays twice, so the row stays an open question handed to you rather than
 an error to dismiss.
 
-The origin must be **native** (an ERC-20 origin adds an allowance leg to a third party's
-spender, which is its own decision). The destination may be native or a token pinned in
-the chain registry; an arbitrary destination address is refused. Solana and EVM origins
-both work; bridging *into* Solana refuses, because phase 2 measures the arrival with an
-EVM balance read.
+The origin is **native** or the origin chain's **pinned USDC** (`token_in="usdc"`; on an
+EVM chain the verb approves exactly the amount to the pinned Relay depository and revokes
+the approval if the deposit is refused). Any other origin token is refused. The destination
+may be native or a token pinned in the chain registry; an arbitrary destination address is
+refused. Every direction works, Solana included. Into Solana, the arrival is proven by the
+delivering transaction's own balance change for your wallet, so a trade during the wait
+never counts as the bridge. Solana → Solana is not a bridge (use a swap or a transfer).
 
 `BRIDGE_WATCHER_ENABLED` (follows `DEFI_BRIDGE_ENABLED`) is the reconciliation ticker.
 Every pass re-measures the destination, re-reads the route status, settles rows that
@@ -1343,10 +1348,10 @@ process. With the wallet on, the treasury auto-fills (`X402_TREASURY_FROM_WALLET
 ```bash
 AGENT_WALLET_ENABLED=true
 AGENT_WALLET_MASTER_SEED=<secret>       # or run `polyrob wallet init`
-X402_INVOICE_ENABLED=true
-X402_SETTLE_ONCHAIN_DETECT=true         # X402_INVOICE_AMOUNT_JITTER is forced on with it
+# posture members ride ONE line; X402_SETTLE_ONCHAIN_DETECT forces X402_INVOICE_AMOUNT_JITTER on,
+# INVOICE_CARD_ENABLED attaches branded QR cards
+POLYROB_OVERRIDES=X402_INVOICE_ENABLED=true,X402_SETTLE_ONCHAIN_DETECT=true,INVOICE_CARD_ENABLED=true
 X402_DEFAULT_CHAIN=base-sepolia         # testnet first; flip to base after the dry run
-INVOICE_CARD_ENABLED=true               # branded QR cards
 PAYMENT_APPROVAL_MODE=approve           # tap to approve outward money
 ```
 
@@ -1435,8 +1440,8 @@ Reaching a capability and arming it are different decisions — this flag also p
 but no host tool, and `launchpad`/`dapp_browser` stay behind their own
 switches.
 
-**What you will be told.** `TX_NOTIFY_ENABLED` (default **on**) sends you **two**
-messages per broadcast: a BROADCAST notice the moment the transaction is accepted (verb,
+**What you will be told.** The agent always sends you **two**
+messages per broadcast (the old `TX_NOTIFY_ENABLED` switch is retired): a BROADCAST notice the moment the transaction is accepted (verb,
 chain, amounts, USD value, tx hash, the lane that allowed it, the daily-cap headroom it
 consumed) and a SETTLED notice with the measured outcome — confirmed, reverted, arrived
 or in flight. It is deliberately not stopped by the owner pause: a report about funds
@@ -1466,7 +1471,7 @@ anchor. Four groups cover this page:
   wallet, ERC-8004 identity.
 - [Crypto trading (Polymarket / Hyperliquid)](../CONFIGURATION.md#crypto-trading-polymarket--hyperliquid) —
   the venue tools and their per-venue caps.
-- [Posture ↔ billing (C9)](../CONFIGURATION.md#posture--billing-c9) — which of the above
+- [Posture ↔ billing](../CONFIGURATION.md#posture--billing) — which of the above
   a deployment posture turns on for you.
 
 On a running box the resolved value and where it came from are one command away:

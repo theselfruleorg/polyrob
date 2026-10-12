@@ -1073,7 +1073,7 @@ def _rail_for_session(session_id: Optional[str]) -> tuple:
     if not session_id:
         return "", ""
     try:
-        from agents.task.goals.autonomy_marker import cron_job_for_session, goal_for_session
+        from core.autonomy_marker import cron_job_for_session, goal_for_session
         job = cron_job_for_session(session_id)
         if job:
             return f"cron:{job}", ""
@@ -1115,7 +1115,7 @@ def record_interactive_reply(orchestrator: Any, text: str) -> None:
         if is_public_session(orchestrator):
             return
         session_id = str(getattr(orchestrator, "session_id", "") or "")
-        from agents.task.goals.autonomy_marker import is_autonomous
+        from core.autonomy_marker import is_autonomous
         if is_autonomous(session_id):
             return
         from core.surfaces.binding import terminal_attached
@@ -1270,7 +1270,7 @@ async def maybe_deliver_autonomous_send(orchestrator: Any, session_id: str, text
         from core.surfaces.room_policy import is_public_session
         if is_public_session(orchestrator):
             return None
-        from agents.task.goals.autonomy_marker import is_autonomous
+        from core.autonomy_marker import is_autonomous
         from core.surfaces.binding import terminal_attached
         has_live_mirror = bool(
             getattr(orchestrator, "_message_router", None)

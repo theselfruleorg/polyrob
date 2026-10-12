@@ -33,7 +33,7 @@ def test_env_unset_converges_on_cli_home(monkeypatch, tmp_path):
 def test_matches_bootstrap_resolution(monkeypatch, tmp_path):
     """The seam must agree with what build_cli_container actually uses, so the
     CLI admin verbs and the running daemons read the SAME sidecar DBs."""
-    from core.bootstrap import _resolve_cli_data_home
+    from polyrob.app.bootstrap import _resolve_cli_data_home
     from core.runtime_paths import resolve_data_home
 
     monkeypatch.delenv("POLYROB_DATA_DIR", raising=False)
@@ -47,7 +47,7 @@ def test_three_resolvers_agree_across_env_cases(monkeypatch, tmp_path):
     """resolve_data_home / bootstrap._resolve_cli_data_home / runtime_config.
     get_data_root are ONE rule (bootstrap and get_data_root delegate here).
     POLYROB_PROJECT_DIR moves only the WORKSPACE placement — never the data home."""
-    from core.bootstrap import _resolve_cli_data_home
+    from polyrob.app.bootstrap import _resolve_cli_data_home
     from core.runtime_config import get_data_root
     from core.runtime_paths import resolve_data_home
 

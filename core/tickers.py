@@ -79,7 +79,7 @@ class IntervalTicker:
 
 def emit_loop_heartbeats(entries, *, source: str = "supervisor") -> None:
     """Record one ``autonomy_tick`` per ``(name, task)`` — the ONE liveness
-    emitter (2026-08-28: ``core.autonomy_runtime.AutonomyHandles``, which the
+    emitter (2026-08-28: ``polyrob.app.autonomy_runtime.AutonomyHandles``, which the
     API lifespan / REPL / Telegram surface actually use, never emitted; prod had
     zero heartbeats in 16k telemetry rows). Also prunes the log to its retention
     window. Fail-open."""

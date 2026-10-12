@@ -35,7 +35,11 @@ def test_agent_config_none_does_not_crash(monkeypatch):
 
 
 def test_memory_flags_still_coerced(monkeypatch):
-    # The 5 previously-covered memory flags must keep working (no regression).
+    # The 5 H-MEM kill switches are internal now (no alias, not env-bound), so an
+    # env "none" leaves them at their default; a default-ON env-bound bool still
+    # coerces "none" to False.
     monkeypatch.setenv("HIERARCHICAL_MEMORY_ENABLED", "none")
+    monkeypatch.setenv("ENABLE_CREDIT_SYSTEM", "none")
     cfg = ServerConfig()
-    assert cfg.HIERARCHICAL_MEMORY_ENABLED is False
+    assert cfg.HIERARCHICAL_MEMORY_ENABLED is True
+    assert cfg.enable_credit_system is False

@@ -54,7 +54,7 @@ def is_valid_mnemonic(text: str) -> bool:
 
 
 def derive_deposit_key(master_seed: str, user_id: str) -> bytes:
-    """The per-user DEPOSIT key (``PAYMENT_MASTER_SEED``/``MASTER_SEED``).
+    """The per-user DEPOSIT key (``PAYMENT_MASTER_SEED``).
 
     The ONE derivation, shared by ``modules.payments.wallet_generator`` (the
     agent-side generator in ``WALLET_SIGNER=local``) and ``polyrob-signer``

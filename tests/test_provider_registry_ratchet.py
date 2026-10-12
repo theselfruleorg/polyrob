@@ -19,7 +19,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-SCAN_DIRS = ["agents", "api", "cli", "core", "cron", "modules", "surfaces",
+SCAN_DIRS = ["agents", "api", "cli", "core", "polyrob", "cron", "modules", "surfaces",
              "tools", "utils", "webview"]
 CANONICAL = "modules/llm/provider_spec.py"
 

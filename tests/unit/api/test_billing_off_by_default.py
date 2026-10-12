@@ -8,8 +8,8 @@ isn't silently lost): the brief assumed ``BotConfig.enable_credit_system``
 defaults ``False``. It does not — it has defaulted ``True`` since
 2025-11-13 (commit ``72cf279d``, long before Workstream C existed), so that
 assertion would fail immediately, not "pass as a lock-in". Tracing the real
-code path (``core/initialization.py::initialize_auth_services``, called
-unconditionally from ``core/bot.py``) shows ``enable_credit_system`` is
+code path (``polyrob/app/initialization.py::initialize_auth_services``, called
+unconditionally from ``polyrob/app/bot.py``) shows ``enable_credit_system`` is
 inert by default: the function checks ``container.config.enable_auth``
 FIRST and returns immediately when it is ``False`` — never reaching the
 ``enable_credit_system`` branch that would register
@@ -29,7 +29,7 @@ from core.config import BotConfig
 def test_auth_system_defaults_off():
     """The real own-ops billing off-switch: ENABLE_AUTH defaults False, so
     initialize_auth_services() never registers any billing service (see
-    core/initialization.py's early-return on `not container.config.enable_auth`).
+    polyrob/app/initialization.py's early-return on `not container.config.enable_auth`).
     """
     config = BotConfig()
     assert config.enable_auth is False, (
@@ -45,7 +45,7 @@ def test_auth_services_not_registered_when_auth_disabled():
     the deposit monitor — i.e. no billing service ever reaches the container
     for an own-ops deployment that never opts into ENABLE_AUTH.
     """
-    from core.initialization import initialize_auth_services
+    from polyrob.app.initialization import initialize_auth_services
 
     class _StubContainer:
         """Minimal stand-in — initialize_auth_services only touches

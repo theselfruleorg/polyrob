@@ -68,7 +68,7 @@ def test_python_dash_m_migrate_status_is_read_only_without_a_database(tmp_path):
 
 
 def test_build_cli_container_runs_boot_migrations():
-    import core.bootstrap as bootstrap
+    import polyrob.app.bootstrap as bootstrap
 
     src = inspect.getsource(bootstrap.build_cli_container)
     assert "run_boot_migrations" in src, (

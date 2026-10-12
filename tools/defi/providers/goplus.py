@@ -391,9 +391,9 @@ def parse_holders(payload: Optional[Dict[str, Any]]) -> HolderReport:
 def _fetch(url: str, address: str, timeout: float):
     """``(status_code, payload)`` for one screener call, shared by ``screen``
     and ``holders`` (071 R8: ``token_info`` asked the SAME endpoint twice for
-    the same token). Only a 200 answer is cached (60 s, ``core.intel.cache``);
+    the same token). Only a 200 answer is cached (60 s, ``tools.intel.cache``);
     a failure is never cached, so an outage cannot outlive itself."""
-    from core.intel.cache import cache_for
+    from tools.intel.cache import cache_for
     cache = cache_for("screen")
     key = ("goplus", url, address if not str(address).startswith("0x")
            else str(address).lower())

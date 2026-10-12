@@ -13,7 +13,7 @@ def test_hf_deploy_registers_gate_and_reconciler():
 
 
 def test_no_registration_means_no_sweep_and_gate_off(monkeypatch):
-    import core.autonomy_runtime as rt
+    import polyrob.app.autonomy_runtime as rt
     from agents.task.goals import dispatcher
 
     monkeypatch.setattr(tool_gates, "_GATES", {})
@@ -31,7 +31,7 @@ def test_no_registration_means_no_sweep_and_gate_off(monkeypatch):
 
 
 def test_registered_gate_but_no_reconciler_is_a_quiet_noop(monkeypatch):
-    import core.autonomy_runtime as rt
+    import polyrob.app.autonomy_runtime as rt
 
     monkeypatch.setattr(tool_gates, "_GATES", {"hf_deploy": lambda: True})
     monkeypatch.setattr(boot_reconcilers, "_RECONCILERS", {})

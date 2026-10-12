@@ -46,11 +46,14 @@ def posture() -> str:
 
     Resolution order:
       1. Explicit POLYROB_POSTURE (case-insensitive) — wins outright.
-      2. WEBGATE_MULTITENANT=true (back-compat) -> "multitenant".
-      3. Derive from an explicit WEBGATE_HOST/WEBVIEW_HOST override: loopback -> "local",
+      2. Derive from an explicit WEBGATE_HOST/WEBVIEW_HOST override: loopback -> "local",
          anything else -> "own_ops".
-      4. No explicit host override and WEBGATE_MULTITENANT is not truthy -> "local"
-         (today's default: loopback with owner login).
+      3. No explicit host override -> "local" (today's default: loopback with
+         owner login).
+
+    The retired alias WEBGATE_MULTITENANT=true (1.4) is no longer read: set
+    alone, it REFUSES (``RetiredFlagError``) instead of silently landing a
+    multitenant deploy on a single-owner posture.
 
     An explicit POLYROB_POSTURE that doesn't match one of the valid values (a typo,
     e.g. "own-ops") is NOT silently ignored (B1-LOW): it logs a warning naming the
@@ -69,8 +72,8 @@ def posture() -> str:
             explicit_raw, _POSTURES,
         )
 
-    if bool_env("WEBGATE_MULTITENANT", False):
-        return "multitenant"
+    from core.config_policy.retired_flags import refuse_retired_alias
+    refuse_retired_alias("WEBGATE_MULTITENANT")
 
     host = _explicit_host_override()
     if host is not None:
@@ -332,7 +335,7 @@ def owner_is_bound(env: Optional[Dict[str, str]] = None) -> bool:
     """Whether an owner was actually CHOSEN, rather than defaulted to.
 
     ``resolve_owner_principal(default_to_instance=False)`` is the strict
-    resolution (``POLYROB_OWNER_USER_ID`` / ``BOT_OWNER_USER_ID`` / the first
+    resolution (``POLYROB_OWNER_USER_ID`` / the first
     ``SURFACE_SUPER_ADMIN_USER_IDS`` entry). ``POLYROB_LOCAL_OWNER`` counts too:
     it is THIS module's own owner override, ranked between an explicit owner and
     the local tenant in ``resolve_owner_user_id``, so an operator who named the

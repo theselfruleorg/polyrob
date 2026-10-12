@@ -155,9 +155,8 @@ def _connect(path: str, *, create: bool):
     if create:
         # W1: migration-safe — a pre-W1 store gains the source column on its
         # first WRITE (a reader never alters; it selects a default instead).
-        if "source" not in _columns(conn):
-            conn.execute("ALTER TABLE token_pins ADD COLUMN source TEXT NOT NULL "
-                         "DEFAULT 'owner_pin'")
+        sqlite_util.ensure_columns(
+            conn, "token_pins", (("source", "TEXT NOT NULL DEFAULT 'owner_pin'"),))
         conn.execute(_REJECTIONS_SCHEMA)
     return conn
 

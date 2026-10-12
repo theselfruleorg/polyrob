@@ -8,7 +8,6 @@ import pytest
 def tele_db(tmp_path, monkeypatch):
     p = tmp_path / "telemetry_events.db"
     monkeypatch.setenv("TELEMETRY_EVENT_LOG_PATH", str(p))
-    monkeypatch.setenv("SECURITY_EVENT_LOG_ENABLED", "true")
     monkeypatch.setenv("TELEMETRY_EVENT_LOG_ENABLED", "true")
     import core.event_log as el
     el._INSTANCES.clear()
@@ -58,13 +57,6 @@ def test_recording_is_fail_open(tele_db, monkeypatch):
 
     monkeypatch.setattr(refusals, "_log", _boom)
     refusals.record_refusal("approval_denied", tool="x")  # must not raise
-
-
-def test_flag_off_writes_nothing(tele_db, monkeypatch):
-    monkeypatch.setenv("SECURITY_EVENT_LOG_ENABLED", "off")
-    from core.security.refusals import record_refusal
-    record_refusal("money_gate", tool="swap")
-    assert _rows(tele_db) == []
 
 
 # --- the two silent refusals wired in the 045 fix wave -----------------------

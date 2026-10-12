@@ -110,7 +110,7 @@ async def test_digest_and_bridge_fire_once_per_session_not_per_turn():
         "agents.task.agent.core.memory_prefetch.build_prefetch_message",
         new=AsyncMock(return_value=None),
     ) as prefetch_mock, patch(
-        "agents.task.constants.AutonomyConfig.continuity_bridge_enabled",
+        "core.config_policy.AutonomyConfig.continuity_bridge_enabled",
         return_value=True,
     ):
         # Turn 1 — fresh session.
@@ -162,7 +162,7 @@ async def test_early_exit_before_step_leaves_bootstrap_undone_then_next_turn_inj
         "agents.task.agent.core.memory_prefetch.build_prefetch_message",
         new=AsyncMock(return_value=None),
     ) as prefetch_mock, patch(
-        "agents.task.constants.AutonomyConfig.continuity_bridge_enabled",
+        "core.config_policy.AutonomyConfig.continuity_bridge_enabled",
         return_value=True,
     ):
         # Turn 1 — cancelled before step() ever runs.

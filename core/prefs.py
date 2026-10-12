@@ -14,11 +14,12 @@ Schema invariant: NO secret-typed keys, ever (credentials stay in env files).
 """
 from __future__ import annotations
 
-import difflib
 import logging
 import math
 import re
 from dataclasses import dataclass
+from core.config_policy.members import flag_raw, member_display_default  # noqa: I001
+from core.key_suggest import did_you_mean, flag_hint
 
 logger = logging.getLogger(__name__)
 
@@ -529,9 +530,7 @@ def validate_pref(key: str, value: object) -> tuple[bool, object, str]:
     """
     spec = _spec_for(key)
     if spec is None:
-        pool = list(PREF_SCHEMA.keys()) + list(CHAT_PREF_SCHEMA.keys())
-        hint = difflib.get_close_matches(key, pool, n=1)
-        suffix = f" (did you mean {hint[0]}?)" if hint else ""
+        suffix = did_you_mean(key, list(PREF_SCHEMA.keys()) + list(CHAT_PREF_SCHEMA.keys()))
         return False, None, f"unknown preference key: {key}{suffix}"
     return _coerce(spec, value)
 
@@ -721,7 +720,8 @@ def unknown_pref_error(key: str, value: object = None) -> str:
     if refusal:
         return refusal
     _ok, _coerced, err = validate_pref(key, value)
-    return err or f"unknown preference key: {key}"
+    return (err or f"unknown preference key: {key}") + flag_hint(
+        key, err or "", list(PREF_SCHEMA) + list(CHAT_PREF_SCHEMA), catalog_names())
 
 
 def _threat_scan_pref_value(key: str, value: object) -> tuple[bool, str]:
@@ -999,14 +999,13 @@ def _builtin_default(spec: PrefSpec) -> Optional[tuple]:
     Historically ``display_effective`` fell back to ``(None, "default")`` for
     every unconfigured key, rendering the /config panel as a wall of ``None``
     even though each enforcement site has a real operational default. This
-    helper surfaces that default: env-backed keys resolve through the flags
-    catalog (posture/local-aware via ``dynamic_flag_default`` — same machinery
-    as ``doctor --flags``), pure prefs carry :attr:`PrefSpec.default_display`.
-    Returns ``None`` when no operational default exists (legacy display).
-
-    Never feeds the resolver — merge semantics are byte-identical; a failure
-    here degrades to the legacy ``None`` display (fail-open).
+    helper surfaces that default: a posture member through its resolver, other
+    env keys through the flags catalog (``dynamic_flag_default``, as ``doctor
+    --flags``), pure prefs via :attr:`PrefSpec.default_display`. ``None`` = no
+    operational default. Display-only and fail-open (legacy ``None``).
     """
+    if (member_default := member_display_default(spec.env_flag)) is not None:
+        return member_default
     if spec.env_flag:
         try:
             from core.config_policy.flag_defaults import dynamic_flag_default
@@ -1070,7 +1069,7 @@ def display_effective(key: str, user_id: Optional[str], home_dir: Path | str,
     spec = PREF_SCHEMA.get(key)
     if spec is None:
         return None, "unknown"
-    raw_env = os.environ.get(spec.env_flag) if spec.env_flag else None
+    raw_env = flag_raw(spec.env_flag) if spec.env_flag else None
     if raw_env is not None:
         ok, parsed, _err = validate_pref(key, raw_env)
         env_value = parsed if ok else raw_env
@@ -1225,7 +1224,8 @@ def check_env_files(paths: list[Path]) -> list[str]:
         value = merged[key]
         hit = catalog_lookup(key)
         if hit is None:
-            hint = difflib.get_close_matches(key, names, n=1)
+            from core.key_suggest import suggest_keys
+            hint = suggest_keys(key, names, n=1)
             if hint:
                 findings.append(f"{key}: possible typo (did you mean {hint[0]}?)")
             else:
@@ -1356,7 +1356,7 @@ def _min_merge_noop(key: str, coerced: object) -> Optional[str]:
     spec = PREF_SCHEMA.get(key)
     if spec is None or spec.merge != "min" or not spec.env_flag:
         return None
-    raw_env = os.environ.get(spec.env_flag)
+    raw_env = flag_raw(spec.env_flag)
     if raw_env is None:
         return None
     ok, env_value, _err = validate_pref(key, raw_env)

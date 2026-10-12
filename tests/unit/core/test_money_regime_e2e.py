@@ -13,7 +13,7 @@ import types
 
 import pytest
 
-from agents.task.goals import autonomy_marker
+from core import autonomy_marker
 from agents.task.goals.board import GoalBoard
 from core.config_policy.money_regime import (
     REGIME_ARMED, REGIME_AUTONOMOUS, REGIME_SUPERVISED, money_regime,

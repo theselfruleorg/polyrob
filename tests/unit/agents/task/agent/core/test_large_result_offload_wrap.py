@@ -15,7 +15,7 @@ import logging
 from pathlib import Path
 
 from agents.task.agent.core.result_offload import ToolResultOffloadMixin
-from tools.controller.types import ActionResult
+from agents.task.loop_types.controller_types import ActionResult
 
 
 def _agent(controller=None):

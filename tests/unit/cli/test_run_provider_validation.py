@@ -13,7 +13,7 @@ def _output(res):
 
 
 def test_run_unknown_provider_names_known_set(monkeypatch):
-    monkeypatch.setattr("core.bootstrap.load_env", lambda **k: None)
+    monkeypatch.setattr("polyrob.app.bootstrap.load_env", lambda **k: None)
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-" + "a" * 32)
 
     from cli.commands.run import run
@@ -30,7 +30,7 @@ def test_run_known_provider_passes_validation(monkeypatch):
     """A valid provider must get PAST the validation. The bootstrap-suppression
     hook (which runs after it) is patched to raise, so the test stops there —
     either way no 'Unknown provider' refusal may appear."""
-    monkeypatch.setattr("core.bootstrap.load_env", lambda **k: None)
+    monkeypatch.setattr("polyrob.app.bootstrap.load_env", lambda **k: None)
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-" + "a" * 32)
 
     def _boom(*a, **k):

@@ -51,9 +51,6 @@ deployment/
 scripts/
 tests/
 
-# The Fly image needs its own bin/ (deployment/ stays excluded otherwise).
-!deployment/fly/bin/
-
 # Build contexts may contain nested projects with the same sensitive stores.
 **/.git
 **/.env

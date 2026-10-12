@@ -691,9 +691,16 @@ class PathManager:
         Returns:
             Path to the subdirectory
         """
+        # "workspace" is whatever get_workspace_dir says it is: in project-root
+        # mode that is the project folder, and the file tools are rooted there.
+        # Prod 2026-10-09: offloaded tool results went to <session>/workspace
+        # while filesystem_read_file looked in the project folder (50 misses/7d).
+        if subdir_name == "workspace":
+            return self.get_workspace_dir(session_id, user_id)
+
         # Get session root
         session_root = self.get_session_root(session_id, user_id)
-        
+
         # Create the subdirectory path
         subdir = (session_root / subdir_name).resolve(strict=False)
         
@@ -824,7 +831,7 @@ class PathManager:
             lock_file = str(path.parent / f"{path.name}.lock")
             
             # Acquire lock
-            from agents.task.utils import get_safe_file_lock
+            from core.file_lock import get_safe_file_lock
             with get_safe_file_lock(lock_file):
                 # Create directory with lock
                 os.makedirs(path, exist_ok=True)
@@ -1057,15 +1064,8 @@ class PathManager:
             # B2/C3: get_workspace_dir ignores session_id in project-root mode, so a
             # <project>/.polyrob/todo.md is shared by EVERY session/sub-agent/parallel
             # `rob`. Session-scope it under the per-session tree (sibling to
-            # feed/logs/screenshots, already gitignored). CLI_TODO_SESSION_SCOPED=off
-            # restores the legacy single shared <project>/.polyrob/todo.md.
-            if os.getenv("CLI_TODO_SESSION_SCOPED", "true").strip().lower() not in (
-                "0", "false", "off", "no"
-            ):
-                session_root = self.get_session_root(clean_id, user_id)
-                os.makedirs(session_root, exist_ok=True)
-                return session_root / "todo.md"
-            dot_rob = workspace_dir / ".polyrob"
-            os.makedirs(dot_rob, exist_ok=True)
-            return dot_rob / "todo.md"
+            # feed/logs/screenshots, already gitignored).
+            session_root = self.get_session_root(clean_id, user_id)
+            os.makedirs(session_root, exist_ok=True)
+            return session_root / "todo.md"
         return workspace_dir / "todo.md"

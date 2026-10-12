@@ -120,7 +120,10 @@ DEFAULT_MODELS = {
 def get_default_model(provider: str) -> str:
     """Get the default model for a provider.
 
-    A per-provider env override ``POLYROB_<PROVIDER>_MODEL`` wins when set — so a
+    The operator's model pin (``CHAT_MODEL``/``DEFAULT_MODEL``) wins for the PINNED
+    provider (``core.runtime_config.operator_model_for``) — chat, cron, goals, the
+    planner and the clients all read the default here, so one setting reaches every
+    run. Otherwise a per-provider env override ``POLYROB_<PROVIDER>_MODEL`` wins when set — so a
     deploy (esp. the headless ``polyrob telegram`` path, which otherwise has no
     model knob) can pin/swap the model with just an env change + restart, no code
     change or redeploy. Unset → the hardcoded ``DEFAULT_MODELS`` policy default
@@ -133,6 +136,13 @@ def get_default_model(provider: str) -> str:
         Default model name for the provider
     """
     import os
+    try:
+        from core.runtime_config import operator_model_for
+        pinned = operator_model_for(provider)
+    except Exception:
+        pinned = None
+    if pinned:
+        return pinned
     # Hyphenated provider names (zai-coding) map to underscores — a POSIX env
     # name can't contain '-' (UX assessment 2026-08-07, Q11).
     env_name = f"POLYROB_{provider.upper().replace('-', '_')}_MODEL"

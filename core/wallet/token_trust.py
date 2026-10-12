@@ -38,11 +38,12 @@ SOURCE_WORDS = {
 }
 
 
-def owner_seat_ctx(user_id: str) -> SimpleNamespace:
+def owner_seat_ctx(user_id: str, seat: str = "owner") -> SimpleNamespace:
     """The execution context of an owner seat verb (Telegram, the REPL, the
-    console, the CLI): the owner at the top of a turn, never a re-entry."""
-    return SimpleNamespace(user_id=str(user_id or ""), role="orchestrator",
-                           is_sub_agent=False, metadata={"turn_kind": "owner_seat"})
+    console, the CLI): the owner at the top of a turn, never a re-entry.
+    W5: the ONE constructor is ``core.security.turn_facts.owner_seat_context``."""
+    from core.security.turn_facts import owner_seat_context
+    return owner_seat_context(user_id, seat=seat)
 
 
 def _refusal(ctx: Any, verb: str) -> Optional[str]:

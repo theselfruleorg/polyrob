@@ -19,15 +19,22 @@ MONEY_VERBS: tuple = (
     Verb("/invoices", "money", "What I have billed and who owes me"),
     Verb("/settle", "money", "Mark an invoice paid"),
     Verb("/trade", "money", "Start a run that carries the money verb"),
-    Verb("/bridge", "money", "Move native value from one chain to another"),
-    Verb("/launch", "money", "Launch a token on the launchpad"),
-    Verb("/deploy", "money", "Deploy a fixed-supply token"),
-    Verb("/lp", "money", "Liquidity positions: inspect, quote, add, remove, or collect fees"),
-    Verb("/claim", "money", "Collect the creator fees a launchpad already owes me"),
-    Verb("/nft", "money", "Collectibles I hold: look, trust a collection, send one, or revoke an approval"),
+    Verb("/bridge", "money", "Move native value from one chain to another",
+         background="Bridge"),
+    Verb("/launch", "money", "Launch a token on the launchpad",
+         background="Launch"),
+    Verb("/deploy", "money", "Deploy a fixed-supply token",
+         background="Deploy"),
+    Verb("/lp", "money", "Liquidity positions: inspect, quote, add, remove, or collect fees",
+         background="Liquidity move"),
+    Verb("/claim", "money", "Collect the creator fees a launchpad already owes me",
+         background="Claim"),
+    Verb("/nft", "money", "Collectibles I hold: look, trust a collection, send one, or revoke an approval",
+         background="NFT transaction"),
     Verb("/dapp", "money", "Web pages my wallet is connected to, and how to cut one off"),
     Verb("/paid", "money", "Paid room actions: status, pricing, and offers"),
-    Verb("/pay", "money", "Pay for one x402 resource, up to a price you name"),
+    Verb("/pay", "money", "Pay for one x402 resource, up to a price you name",
+         background="Payment"),
 )
 
 #: 044 I10: the two money verbs a group room may run — `/paid` configures THAT
@@ -53,14 +60,16 @@ HOLDINGS_VERBS: tuple = (
 #: tap). The per-tx and daily caps bind it and are shown first.
 SEND_VERBS: tuple = (
     Verb("/send", "money",
-         "Send native value or a token to an address: a quote, then `go`"),
+         "Send native value or a token to an address: a quote, then `go`",
+         background="Send"),
 )
 
 #: 2026-09-27: the most common money action had no verb on any seat — only
 #: agent prose through /trade. Same quote → card → confirm shape as /send.
 SWAP_VERBS: tuple = (
     Verb("/swap", "money",
-         "Swap one token for another: a quote with the minimum you receive, then confirm"),
+         "Swap one token for another: a quote with the minimum you receive, then confirm",
+         background="Swap"),
 )
 
 register_verbs(

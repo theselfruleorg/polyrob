@@ -15,7 +15,7 @@ def test_autonomy_halted_false_at_defaults(tmp_path, monkeypatch):
     monkeypatch.delenv("POLYROB_DATA_DIR", raising=False)
     monkeypatch.delenv("DATA_ROOT", raising=False)
     monkeypatch.setattr("core.runtime_paths.resolve_data_home", lambda: tmp_path)
-    from agents.task.constants import AutonomyConfig
+    from core.config_policy import AutonomyConfig
     assert AutonomyConfig.autonomy_halted() is False
 
 
@@ -35,12 +35,12 @@ def test_autonomy_halted_fails_closed_on_probe_exception(tmp_path, monkeypatch):
         return real_exists(p)
 
     monkeypatch.setattr(os.path, "exists", _boom)
-    from agents.task.constants import AutonomyConfig
+    from core.config_policy import AutonomyConfig
     assert AutonomyConfig.autonomy_halted() is True  # fail CLOSED
 
 
 def test_autonomy_halted_env_flag_still_wins(monkeypatch):
     """The explicit env lever is unchanged and short-circuits before any file probe."""
     monkeypatch.setenv("AUTONOMY_HALT", "true")
-    from agents.task.constants import AutonomyConfig
+    from core.config_policy import AutonomyConfig
     assert AutonomyConfig.autonomy_halted() is True

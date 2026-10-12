@@ -95,7 +95,7 @@ def test_no_literal_surface_id_list_in_touch_points(rel):
 
 
 #: Runtime tiers the repo-wide scan covers (tests and scripts may name surfaces).
-_RUNTIME_TIERS = ("core", "modules", "agents", "tools", "api", "cli", "surfaces",
+_RUNTIME_TIERS = ("core", "polyrob", "modules", "agents", "tools", "api", "cli", "surfaces",
                   "webview", "cron")
 
 
@@ -183,6 +183,10 @@ def fake_surface(tmp_path, monkeypatch):
     import sys
 
     import surfaces
+    # cli.polyrob folds the catalog's surface commands into its module-level
+    # _LAZY_SUBCOMMANDS at FIRST import; import it before the fake row exists so a
+    # first import here cannot leak `fakesurf` into later tests (xdist order).
+    import cli.polyrob  # noqa: F401
     pkg = tmp_path / "fakesurf"
     pkg.mkdir()
     (pkg / "__init__.py").write_text("")

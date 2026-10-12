@@ -12,7 +12,7 @@
 //   * it lists EXACTLY `dispatcher._COMMANDS` minus `/task` and `/new`. Here
 //     that is asserted against the committed artifact (verbs.en.json); the
 //     artifact-vs-source equality is a Python contract test
-//     (tests/unit/webview/test_verbs_json.py).
+//     (ops/tests/webview/test_verbs_json.py).
 //
 // The verb DATA is read from the real generated artifact, so this suite also
 // proves the artifact is loadable and shaped the way the palette expects.

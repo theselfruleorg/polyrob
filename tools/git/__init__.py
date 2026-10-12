@@ -11,8 +11,8 @@ from core.env import bool_env as _bool_env
 
 
 def git_enabled() -> bool:
-    from core.config_policy import safe_local_flag
-    return safe_local_flag("GIT_TOOLS_ENABLED")
+    from core.config_policy import member_flag
+    return member_flag("GIT_TOOLS_ENABLED")
 
 
 def register_git_tool(force: bool = False) -> bool:

@@ -44,9 +44,8 @@ class CircuitStore:
         try:
             conn.execute(self._CREATE)
             # OB12 additive migration: a pre-existing table gains the column.
-            cols = {r[1] for r in conn.execute("PRAGMA table_info(surface_state)")}
-            if "auto_open_at" not in cols:
-                conn.execute("ALTER TABLE surface_state ADD COLUMN auto_open_at REAL")
+            from core.sqlite_util import ensure_columns
+            ensure_columns(conn, "surface_state", (("auto_open_at", "REAL"),))
             conn.commit()
         finally:
             conn.close()

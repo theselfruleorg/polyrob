@@ -49,7 +49,7 @@ def test_spend_money_tools_excluded_from_every_self_goal_grant(monkeypatch):
     for mode_on in (False, True):
         monkeypatch.setattr("core.config_policy.full_autonomy_enabled",
                             lambda: mode_on, raising=False)
-        monkeypatch.setattr("agents.task.constants.full_autonomy_enabled",
+        monkeypatch.setattr("core.config_policy.full_autonomy_enabled",
                             lambda: mode_on, raising=False)
         assert not (spend & set(allowed_self_goal_tools())), mode_on
         assert not (spend & set(default_goal_tools())), mode_on

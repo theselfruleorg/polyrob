@@ -7,9 +7,9 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _no_real_env_load(monkeypatch):
-    # preflight_or_onboard calls core.bootstrap.load_env — stub it so tests don't
+    # preflight_or_onboard calls polyrob.app.bootstrap.load_env — stub it so tests don't
     # mutate os.environ from the dev machine's config files.
-    import core.bootstrap as bootstrap
+    import polyrob.app.bootstrap as bootstrap
     monkeypatch.setattr(bootstrap, "load_env", lambda *a, **k: "development")
 
 

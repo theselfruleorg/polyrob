@@ -8,12 +8,13 @@ is testable without a live container.
 import contextlib
 import importlib.util
 import os
+from core.env import parse_bool
 import sys
 from pathlib import Path
 
 import click
 
-from agents.task.constants import _FALSEY
+from core.config_policy import _FALSEY
 from cli.config_store import resolve_provider_model
 from core.path_safety import is_within_root
 from core.runtime_paths import resolve_runtime_paths
@@ -74,8 +75,8 @@ def optional_extras_line(rob_local: bool = False) -> str:
     probe module imports.
 
     067 P0.2: the mode is the one the runtime resolves (``lazy_deps_mode()``,
-    default ``trusted`` on the CLI AND on a server), not a re-derivation from the
-    legacy ``LAZY_DEPS_ENABLED`` boolean. ``rob_local`` is kept for the caller's
+    default ``trusted`` on the CLI AND on a server), not a re-derivation from a
+    second boolean. ``rob_local`` is kept for the caller's
     signature; the mode no longer depends on it."""
     from core.config_policy.capability_toggles import lazy_deps_mode
     from core.optional_extras import MODULES_FOR_EXTRA, extra_available
@@ -418,7 +419,7 @@ def _display_env_path(path) -> str:
 def env_file_layers(env: dict, local_mode: bool = True) -> list:
     """``(display_path, parsed_values)`` per EXISTING env file, precedence order.
 
-    Parsed with dotenv for parity with ``core.bootstrap.load_env`` (quote
+    Parsed with dotenv for parity with ``polyrob.app.bootstrap.load_env`` (quote
     handling — the naive ``read_env_file`` parser would misreport a quoted
     value as a process-env override). Read once per report.
     """
@@ -674,7 +675,7 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
     # not pure over `env`), same as every other autonomy-gated resolver in the
     # codebase; doctor is always invoked against the real process env.
     try:
-        from agents.task.constants import autonomy_mode_display
+        from core.config_policy import autonomy_mode_display
         lines.append(f"autonomy mode: {autonomy_mode_display()}")
     except Exception:
         lines.append("autonomy mode: unknown")
@@ -711,7 +712,7 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
     # installs. Say so plainly + what autonomy would add, so a new user knows the
     # agent is interactive-only until they opt in (live process env, like the mode).
     try:
-        from agents.task.constants import autonomy_enabled as _auton
+        from core.config_policy import autonomy_enabled as _auton
         _on = _auton()
         lines.append(f"autonomy: {'ON' if _on else 'OFF'} (AUTONOMY_ENABLED)")
         if not _on:
@@ -869,7 +870,7 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
     # self-provision — so the absent case names the owner runbook instead of
     # leaving "we need an endpoint" as an unclosable ask. Tier-1 receive
     # (invoice + on-chain detect) needs none of this; say so in the same line.
-    _x402_http_on = str(env.get("X402_ENABLED", "")).strip().lower() == "true"
+    _x402_http_on = parse_bool(env.get("X402_ENABLED"), False)
     _base_url = (env.get("A2A_BASE_URL") or "").strip().rstrip("/")
     if _x402_http_on and _base_url:
         lines.append(f"x402 endpoint: {_base_url} (machine-callable 402 surface)")
@@ -878,10 +879,9 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
                      "advertises a guessed host; set A2A_BASE_URL to the public URL")
     else:
         lines.append("x402 endpoint: not configured (optional — invoices are "
-                     "unaffected; for a machine-callable 402 URL run "
-                     "`X402_HOST=<host> bash scripts/setup_x402_endpoint.sh` as "
-                     "root from a full repo checkout — the install tree has no "
-                     "deployment/ templates)")
+                     "unaffected; for a machine-callable 402 URL the owner stands "
+                     "up the serving side once, as root — see docs/guide/payments.md, "
+                     "\"a machine-callable HTTPS endpoint\")")
 
     # A2A agent-card + OpenAI-compat /v1 reachability (043 A31): both live on the
     # API server, never this process — report the configured state honestly (a
@@ -926,6 +926,10 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
     lines.append(x_oauth2_doctor_line(env))
     lines.append(schema_status_line(env))
     lines.append(live_activity_line())
+    # 1.4: a retired env name still set — FAIL for an identity/money alias the
+    # runtime now refuses, WARN for a line that is merely ignored.
+    from core.config_policy.retired_flags import retired_flag_lines
+    lines.extend(retired_flag_lines(env))
 
     # Skill-library compliance (Task 4) — strict agentskills.io frontmatter check,
     # same validator `polyrob skills validate` and CI's library-invariant test use.
@@ -1268,7 +1272,6 @@ def flags_report(env: dict, local_absent_means_on: bool = True, *,
     resolve_as_local = (
         local_absent_means_on
         and env.get("POLYROB_LOCAL") is None
-        and env.get("ROB_LOCAL") is None
     )
     lines: list[str] = [f"POLYROB doctor — resolved flags ({len(env)} env vars set)"]
     if resolve_as_local:
@@ -1317,6 +1320,12 @@ def flags_report(env: dict, local_absent_means_on: bool = True, *,
             else:
                 lines.append(f"  {r.name} = {r.value}  [{r.source}]")
             matched += 1
+        from cli._doctor_members import member_flag_lines
+        m_lines, m_hidden = member_flag_lines(env, group_needle, search_needle,
+                                               changed, show_all)
+        lines.extend(m_lines)
+        matched += max(0, len(m_lines) - 1)
+        hidden += m_hidden
     finally:
         if resolve_as_local:
             os.environ.pop("POLYROB_LOCAL", None)
@@ -1400,7 +1409,7 @@ def doctor(show_flags: bool, flag_all: bool, flag_group: str | None,
     # Load env the same way the REPL does (./.polyrob, ~/.polyrob, root .env, config/.env.*
     # + the local-mode key backfill) so doctor reports the keys `rob` actually sees,
     # not just the bare process environment.
-    from core.bootstrap import load_env, setup_project_path, setup_sqlite_compat
+    from polyrob.app.bootstrap import load_env, setup_project_path, setup_sqlite_compat
     setup_project_path()
     setup_sqlite_compat()
     load_env(local_mode=True)

@@ -14,7 +14,7 @@ pytest.importorskip("polyrob_x")
 import asyncio
 import pathlib
 
-import core.bootstrap as bootstrap
+import polyrob.app.bootstrap as bootstrap
 
 _TWITTER_TOOL = pathlib.Path(__file__).resolve().parents[3] / "packs" / "x" / "polyrob_x" / "twitter_tool.py"
 

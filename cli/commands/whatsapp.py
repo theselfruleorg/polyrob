@@ -103,6 +103,7 @@ async def _run_whatsapp(port: int, verbose: bool) -> None:
                           guard_harness_stop=True)
 
     await run_surface(
+        surface_id="whatsapp",
         extra_env={"WHATSAPP_SURFACE_ENABLED": "true"},
         verbose=verbose,
         preflight=_check_creds,

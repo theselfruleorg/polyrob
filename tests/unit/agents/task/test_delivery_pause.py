@@ -119,7 +119,6 @@ async def test_correspondent_data_never_reruns_a_finished_task(home, monkeypatch
 
 @pytest.mark.asyncio
 async def test_conversation_resume_is_held_while_paused(home, monkeypatch):
-    monkeypatch.setenv("CONVERSATION_RESUME_ENABLED", "true")
     from core import autonomy_control as ac
     ac.pause(str(home), via="test")
     agent = _agent(home)
@@ -130,7 +129,7 @@ async def test_conversation_resume_is_held_while_paused(home, monkeypatch):
 @pytest.mark.asyncio
 async def test_delegation_wake_kick_is_held_for_autonomous_sessions_while_paused(home, monkeypatch):
     from core import autonomy_control as ac
-    from agents.task.goals.autonomy_marker import mark_autonomous
+    from core.autonomy_marker import mark_autonomous
     from agents.task_agent_lite import TaskAgent
     agent = TaskAgent.__new__(TaskAgent)
     ran = []

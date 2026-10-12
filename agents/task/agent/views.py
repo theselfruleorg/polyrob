@@ -10,15 +10,15 @@ from typing import Any, Dict, List, Optional, Type, Union
 from core.exceptions import RateLimitError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model, model_validator
 
-from tools.browser.views import BrowserState, BrowserStateHistory, TabInfo
-from tools.controller.registry.views import ActionModel
-from tools.controller.types import ActionResult  # Canonical location for ActionResult
-from tools.dom.history_tree_processor.service import (
+from agents.task.loop_types.browser_views import BrowserState, BrowserStateHistory, TabInfo
+from agents.task.loop_types.registry_views import ActionModel
+from agents.task.loop_types.controller_types import ActionResult  # Canonical location for ActionResult
+from agents.task.loop_types.dom_history_service import (
 	DOMElementNode,
 	DOMHistoryElement,
 	HistoryTreeProcessor,
 )
-from tools.dom.views import SelectorMap
+from agents.task.loop_types.dom_views import SelectorMap
 from agents.task.path import pm
 
 

@@ -1,5 +1,5 @@
 import pytest
-from agents.task.agent.core.turn_input import TurnInputMixin
+from agents.task.agent.core.user_ingress import UserIngressMixin
 
 
 class _MM:
@@ -7,7 +7,7 @@ class _MM:
     def append_user_turn(self, text): self.appended.append(text)
 
 
-class _Agent(TurnInputMixin):
+class _Agent(UserIngressMixin):
     def __init__(self): self.message_manager = _MM()
 
 

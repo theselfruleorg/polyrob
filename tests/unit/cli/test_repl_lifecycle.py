@@ -62,9 +62,9 @@ async def test_repl_create_session_limit_renders_block(monkeypatch, capsys, tmp_
     from core.exceptions import AgentError
 
     # Stub the bootstrap so no real container is built.
-    monkeypatch.setattr("core.bootstrap.setup_project_path", lambda: None)
-    monkeypatch.setattr("core.bootstrap.setup_sqlite_compat", lambda: None)
-    monkeypatch.setattr("core.bootstrap.load_env", lambda **k: None)
+    monkeypatch.setattr("polyrob.app.bootstrap.setup_project_path", lambda: None)
+    monkeypatch.setattr("polyrob.app.bootstrap.setup_sqlite_compat", lambda: None)
+    monkeypatch.setattr("polyrob.app.bootstrap.load_env", lambda **k: None)
 
     task_agent = MagicMock()
     task_agent.create_session = AsyncMock(
@@ -78,7 +78,7 @@ async def test_repl_create_session_limit_renders_block(monkeypatch, capsys, tmp_
     async def _fake_build(**k):
         return container
 
-    monkeypatch.setattr("core.bootstrap.build_cli_container", _fake_build)
+    monkeypatch.setattr("polyrob.app.bootstrap.build_cli_container", _fake_build)
     # Ensure the onboarding-hint short-circuit does not fire — must be a usable-length
     # key (>=20 chars) now that the gating oracle rejects too-short/placeholder keys.
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-" + "a" * 30)

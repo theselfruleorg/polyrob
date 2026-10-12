@@ -1,6 +1,6 @@
 # Agents Package - AI Agent System
 
-_Last reviewed: 2026-06-30. For the authoritative architecture see ../AGENTS.md; for env flags see ../docs/CONFIGURATION.md._
+_Last reviewed: 2026-10-10. Architecture overview: ../docs/guide/architecture.md; env flags: ../docs/CONFIGURATION.md._
 
 ## Overview
 
@@ -15,7 +15,7 @@ system and the system-prompt support used by the Task agent.
 - **Single front-door agent**: one Task agent core serves both task automation and chat
 - **Mixin composition over god-files**: the four large classes (`Agent`, `SessionOrchestrator`,
   `MessageManager`, `Controller`) each compose focused mixins rather than growing one file; new
-  behavior gets its own mixin/module (see ../AGENTS.md "Decomposition note")
+  behavior gets its own mixin/module (`tests/test_file_size_ratchet.py` freezes the large files)
 - **Personality-driven**: a `Character` system feeds personality/style into the system prompt
 - **Provider flexibility**: multiple LLM providers with intelligent fallback (native LLM layer)
 - **Preserve LLM content, never synthesize**: brain state is extracted from preserved content
@@ -100,7 +100,7 @@ agents/
     │   │   ├── curator.py          # Skill curator (stale/archive/reactivate)
     │   │   ├── secret_guard.py / safety_lifecycle.py / project_context.py
     │   │   ├── history_io.py / logging_io.py / session_metadata.py / resources.py
-    │   │   ├── turn_input.py / user_ingress.py / next_action_internal.py
+    │   │   ├── user_ingress.py / next_action_internal.py
     │   │   └── model_introspection.py
     │   │
     │   ├── messages/               # MessageManager concern mixins
@@ -231,7 +231,7 @@ class Agent(AgentConstructionMixin, RunLoopMixin, StepMixin, StepExecutionMixin,
             NextActionInternalMixin, ErrorRecoveryMixin, OutputValidationMixin,
             MemoryWriterMixin, MemoryPrefetchMixin, BackgroundReviewMixin,
             HistoryIOMixin, LoggingIOMixin, SafetyLifecycleMixin, UserIngressMixin,
-            TurnInputMixin, LLMProvisioningMixin, ModelIntrospectionMixin,
+            LLMProvisioningMixin, ModelIntrospectionMixin,
             LoopDetectionMixin, ResourceMixin, SessionMetadataMixin):
     ...
 ```
@@ -241,15 +241,15 @@ Construction uses two dataclasses — `Agent.__init__(self, config: AgentConfig,
 `pause()` / `resume()` / `cancel()` methods on `Agent`; execution is the run loop plus per-step
 phases.
 
-**Run loop** — `RunLoopMixin.run(max_steps=100, _continue_session=False)` (`core/run_loop.py`)
+**Run loop** — `RunLoopMixin.run(max_steps=100, _continue_session=False)` (`task/agent/core/run_loop.py`)
 drives the session, returning an `AgentHistoryList`. It calls `step()` repeatedly until the agent is
 done, an error halts it, or a guard (conversational-exit, loop-detection, max-steps) fires.
 
-**Step phases** — a single step (`StepMixin._step_impl`, `core/step.py`) is split into phases:
+**Step phases** — a single step (`StepMixin._step_impl`, `task/agent/core/step.py`) is split into phases:
 `_prepare_step` → `_call_llm` → `_validate_and_intervene` → `_execute_actions` →
 `_process_action_results` → `_record_step` → `_finalize_step`. `_execute_actions` lives in
-`StepExecutionMixin` (`core/step_execution.py`); `_process_action_results` in `ResultProcessingMixin`
-(`core/result_processing.py`).
+`StepExecutionMixin` (`task/agent/core/step_execution.py`); `_process_action_results` in `ResultProcessingMixin`
+(`task/agent/core/result_processing.py`).
 
 **Tool-call flow** (native tools): LLM returns `tool_calls` → `ToolCallBuilder.normalize_tool_call()`
 (format only) → `ToolCallTracker.register_tool_calls()` (ID tracking, single source of truth) →
@@ -299,8 +299,8 @@ analytics (`service.py`, `manager.py`, `formatters.py`, `sequence.py`, `views.py
 - `task/runtime/run_as_session.py` — `run_task_as_session()`, the shared entrypoint used by the
   cron and goal executors to run a one-off task as a full session.
 
-These tickers are wired by the shared autonomy runtime (`core/autonomy_runtime.py`), not directly by
-this package; see ../AGENTS.md "Shared autonomy runtime".
+These tickers are wired by the shared autonomy runtime (`polyrob/app/autonomy_runtime.py`), not directly by
+this package.
 
 ## Personality System (`personality/`)
 
@@ -410,7 +410,7 @@ character = await character_manager.load_character("researcher")
 
 ### Agent / core development
 1. **Add a mixin, don't grow a god-file**: new `Agent` / `SessionOrchestrator` / `MessageManager` /
-   `Controller` behavior gets its own mixin module (see ../AGENTS.md "Decomposition note").
+   `Controller` behavior gets its own mixin module; the file-size ratchet fails a file that grows past its ceiling.
 2. **Preserve LLM content**: extract brain state from preserved content; never synthesize it.
 3. **Single source of truth**: tool-call IDs go through `ToolCallTracker`, sessions through
    `SessionRegistry`.

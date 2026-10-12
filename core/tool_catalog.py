@@ -216,7 +216,10 @@ def enable_flag_for(tool_id: str) -> Optional[str]:
         return _FLAG_OVERRIDES[tool_id]
     try:
         from core.flags_catalog import CATALOG
-        known = {row[0] for row in CATALOG}
+        from core.config_policy.members import MEMBER_FLAGS
+        # A posture member (D7) has no catalog row but IS a real flag: `config
+        # set` writes it into the POLYROB_OVERRIDES line.
+        known = {row[0] for row in CATALOG} | set(MEMBER_FLAGS)
     except Exception:
         return None
     stem = str(tool_id).upper().strip()

@@ -108,11 +108,10 @@ _ADDED_COLUMNS = (("venue", "TEXT"), ("idempotency_key", "TEXT"), ("x402_auth", 
 def _migrate_columns(db):
     """Add the 068 columns to an intact legacy table (writers only; additive)."""
     have = {row[1] for row in db.execute("PRAGMA table_info(submissions)")}
-    missing = [(name, kind) for name, kind in _ADDED_COLUMNS if name not in have]
-    if missing:
+    if any(name not in have for name, _kind in _ADDED_COLUMNS):
+        from core.sqlite_util import ensure_columns
         with db:
-            for name, kind in missing:
-                db.execute(f"ALTER TABLE submissions ADD COLUMN {name} {kind}")
+            ensure_columns(db, "submissions", _ADDED_COLUMNS)
 
 
 @contextmanager

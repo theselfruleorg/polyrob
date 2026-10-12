@@ -133,7 +133,7 @@ def _patch_rig(monkeypatch, tmp_path):
         return _fake_container()
 
     monkeypatch.setattr("cli.keys.preflight_or_onboard", _preflight)
-    monkeypatch.setattr("core.bootstrap.build_cli_container", _fake_build)
+    monkeypatch.setattr("polyrob.app.bootstrap.build_cli_container", _fake_build)
     fake_pm = MagicMock()
     fake_pm.data_root = tmp_path
     monkeypatch.setattr("agents.task.path.pm", lambda: fake_pm)

@@ -412,8 +412,7 @@ class X402Tables:
             # endpoint/method/response_status/accessed_at + two indices).
             # Nothing ever INSERTed into it or read from it — verified dead
             # DDL, not an unwired feature with a concrete consumer — so it was
-            # removed rather than wired to reduce schema surface. Mirrored in
-            # modules/database/schema.sql.
+            # removed rather than wired to reduce schema surface.
 
             # On-chain settlement-scan checkpoint (Task 11, Phase 2): one row
             # per treasury address, tracking the last fully-scanned USDC

@@ -5,7 +5,7 @@ from typing import List, Optional
 from modules.llm.messages import HumanMessage, SystemMessage
 
 from agents.task.agent.views import ActionResult, AgentBrain, AgentStepInfo
-from tools.browser.views import BrowserState
+from agents.task.loop_types.browser_views import BrowserState
 
 
 def _anysite_guidance_block() -> str:
@@ -467,7 +467,7 @@ When you write the `memory` field, think about future keyword retrieval:
 
 Later, when you need startup sources, recall finds "TechCrunch lists" by matching those words."""
 		try:
-			from agents.task.constants import AutonomyConfig
+			from core.config_policy import AutonomyConfig
 			episodic_on = AutonomyConfig.episodic_memory_enabled()
 		except Exception:
 			episodic_on = False
@@ -1145,15 +1145,12 @@ Paths relative to workspace root (NO 'workspace/' prefix):
 
 		Static (no per-step interpolation) so the system prompt stays cache-stable.
 		"""
-		from core.env import bool_env
-		# F8 (063 WS-4): under TOOL_CATALOG_TAIL_UPDATES the catalog is a stable
-		# foundation baseline plus tail deltas, so the model has to be told which
-		# of the two wins. Gated with the same flag so the flag-off prompt stays
-		# byte-identical; still static per process, so the prefix stays cacheable.
+		# F8 (063 WS-4): the catalog is a stable foundation baseline plus tail
+		# deltas, so the model has to be told which of the two wins. Static, so
+		# the prefix stays cacheable.
 		catalog_update_line = (
 			'   A later <tool-catalog-update> wins over the opening catalog for the\n'
-			'   tools it names.\n'
-			if bool_env('TOOL_CATALOG_TAIL_UPDATES', True) else '')
+			'   tools it names.\n')
 		# F11: the <tool-catalog> block is pinned only under tool disclosure
 		# (agents.task.session_class.tool_disclosure_enabled); without it the
 		# model is told about <tool-availability> instead.
@@ -1307,7 +1304,7 @@ Paths relative to workspace root (NO 'workspace/' prefix):
 			                      f"{self._get_communication_contract_content()}\n"
 			                      f"</communication-contract>\n")
 		try:
-			from agents.task.constants import _bool_env
+			from core.config_policy import _bool_env
 			_precedence_on = _bool_env("SOURCE_PRECEDENCE_PROMPT", True)
 		except Exception:
 			_precedence_on = True

@@ -126,7 +126,7 @@ def test_the_pending_page_is_gone(monkeypatch):
     The Inbox is the review queue; ``GET /api/webgate/pending`` (tested above)
     is untouched.
     """
-    monkeypatch.setenv("WEBGATE_MULTITENANT", "false")
+    monkeypatch.delenv("WEBGATE_MULTITENANT", raising=False)
     monkeypatch.setenv("ENV", "development")
     import webview.server as server
     server = importlib.reload(server)

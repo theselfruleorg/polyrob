@@ -207,7 +207,7 @@ def test_untrusted_namespaces_are_a_view_of_the_rows():
 def test_cli_tables_are_views_of_the_rows():
     import importlib
 
-    from core import bootstrap as bs
+    from polyrob.app import bootstrap as bs
     from core.tool_capabilities import descriptor_id, ids_where, row_field
     assert bs._CLI_INCOMPATIBLE == set(ids_where("cli", "incompatible"))
     assert bs._CLI_STATIC_TOOLS == {descriptor_id(t) for t in ids_where("cli", "static")}

@@ -75,7 +75,7 @@ def test_cron_add_says_when_no_ticker_will_run_it(env, monkeypatch):
     # D41/D72: the note names what the owner can DO from the chat he is in —
     # a chat verb, never a server command he cannot reach from a phone.
     assert "scheduler is switched off" in out
-    assert "/config set CRON_ENABLED true" in out
+    assert "polyrob config set CRON_ENABLED true" in out   # D7: a host verb
     assert "polyrob autonomy" not in out
 
 

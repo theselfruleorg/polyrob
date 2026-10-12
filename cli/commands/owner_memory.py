@@ -12,6 +12,7 @@ Server-side verbs only: no agent-callable action reaches promotion or purge.
 Stores resolve through ``cli/_admin_home.admin_data_dir`` (the deployed home)
 and the tenant through ``core.admin_data_home.admin_owner_principal``.
 """
+from core.runtime_paths import memory_db_path
 import json
 import os
 import time
@@ -24,7 +25,7 @@ from cli._admin_home import as_root_option
 def _store(write: bool):
     from cli._admin_home import admin_data_dir
     from modules.memory.sqlite_memory_provider import SqliteMemoryProvider
-    db = os.path.join(admin_data_dir(write=write), "memory.db")
+    db = memory_db_path(admin_data_dir(write=write))
     if not os.path.exists(db):
         return None, db
     return SqliteMemoryProvider(db), db

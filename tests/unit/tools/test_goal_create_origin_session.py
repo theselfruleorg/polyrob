@@ -32,21 +32,21 @@ def _create(tool, ctx, title):
 
 
 def test_genuine_owner_turn_is_stamped(tmp_path, monkeypatch):
-    monkeypatch.setattr("agents.task.goals.autonomy_marker.is_autonomous",
+    monkeypatch.setattr("core.autonomy_marker.is_autonomous",
                         lambda sid: False, raising=False)
     g = _create(_tool(tmp_path), _Ctx("chat-1"), "owner asked for this")
     assert g.payload.get("origin_session_id") == "chat-1"
 
 
 def test_autonomous_planner_session_is_not_an_origin(tmp_path, monkeypatch):
-    monkeypatch.setattr("agents.task.goals.autonomy_marker.is_autonomous",
+    monkeypatch.setattr("core.autonomy_marker.is_autonomous",
                         lambda sid: sid == "planner-1", raising=False)
     g = _create(_tool(tmp_path), _Ctx("planner-1"), "planner queued this")
     assert "origin_session_id" not in g.payload
 
 
 def test_forged_reentry_and_leaf_turns_are_not_origins(tmp_path, monkeypatch):
-    monkeypatch.setattr("agents.task.goals.autonomy_marker.is_autonomous",
+    monkeypatch.setattr("core.autonomy_marker.is_autonomous",
                         lambda sid: False, raising=False)
     tool = _tool(tmp_path)
     g = _create(tool, _Ctx("chat-2", metadata={"turn_kind": "self_wake"}), "from a self-wake")

@@ -24,11 +24,12 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 # deployment/, migrations/ (not agent-runtime config surface). packs/ ships in
 # the wheel, so a pack's env read needs a catalog row too.
 SOURCE_DIRS = (
-    "core", "modules", "tools", "agents", "cli", "webview",
+    "core", "polyrob", "modules", "tools", "agents", "cli", "webview",
     "surfaces", "cron", "api", "utils", "packs",
 )
 
-# The env-read idioms POLYROB uses. Assignment writes (os.environ["X"] = ...)
+# The env-read idioms POLYROB uses (``env_value("X")`` is the remote-sandbox
+# packs' reader, tools/code_exec/backends/remote_sandbox.py). Assignment writes (os.environ["X"] = ...)
 # are excluded by the negative lookahead ("==" comparisons still count as reads).
 READ_RE = re.compile(
     r"""(?:
@@ -36,6 +37,7 @@ READ_RE = re.compile(
       | os\.environ\.get\(\s*['"](?P<g2>[A-Za-z_][A-Za-z0-9_]*)['"]
       | os\.environ\[\s*['"](?P<g3>[A-Za-z_][A-Za-z0-9_]*)['"]\s*\](?!\s*=[^=])
       | \b\w*(?:bool|int|float)_env\(\s*['"](?P<g4>[A-Za-z_][A-Za-z0-9_]*)['"]
+      | \b\w*env_value\(\s*['"](?P<g5>[A-Za-z_][A-Za-z0-9_]*)['"]
     )""",
     re.VERBOSE,
 )
@@ -57,6 +59,8 @@ ALLOWLIST = {
     "XDG_CONFIG_HOME",   # the freedesktop config root — where a systemd --user
                          # unit lives (cli/commands/service.py). An OS path, not
                          # a POLYROB setting.
+    "INVOCATION_ID",     # set by systemd for every unit: "a supervisor restarts me" (077)
+    "XPC_SERVICE_NAME",  # set by launchd to the job label: the same fact on macOS (077)
 }
 
 
@@ -151,10 +155,10 @@ def test_newly_cataloged_secrets_are_masked():
         assert is_secret_flag(name), f"{name} would print UNMASKED in doctor --flags"
 
 
-def test_owner_surfaces_alias_registered():
-    # Both the canonical and legacy spellings resolve (030 WS-B1 rail config).
+def test_owner_surface_registered_and_alias_retired():
+    # OWNER_SURFACES (the plural alias) was retired in 1.4.
     assert "OWNER_SURFACE" in REGISTRY
-    assert "OWNER_SURFACES" in REGISTRY
+    assert "OWNER_SURFACES" not in REGISTRY
 
 
 def test_enum_flags_consult_enum_ssot_for_kind():
@@ -177,3 +181,28 @@ def test_enum_flags_consult_enum_ssot_for_kind():
     assert r.value == "0"  # bare token from the doc cell, not "`0`"
     r = resolve_flag("AUTONOMY_MODE", {})
     assert r.value == "supervised"
+
+
+def test_every_env_bound_settings_field_is_cataloged():
+    """The pydantic ``BaseSettings`` reader (core/config.py) is the second env
+    idiom: a field with an ``alias`` is read from the env and from ``.env``.
+    Since 2026-10-10 a field WITHOUT an alias is not env-bound at all (the
+    alias-only sources), so the alias set is exactly the env surface."""
+    from core.config import ServerConfig
+
+    bound = {f.alias for f in ServerConfig.model_fields.values() if f.alias}
+    assert len(bound) > 50, "no aliased fields found — the introspection broke"
+    missing = sorted(n for n in bound
+                     if n not in REGISTRY and pattern_flag_for(n) is None)
+    assert not missing, (
+        f"ServerConfig fields read from the env but absent from the flag catalog: "
+        f"{missing}. Add a docs/CONFIGURATION.md row (+ both generators) or drop "
+        "the alias so the field stops being env-bound."
+    )
+
+
+def test_unaliased_settings_field_is_not_env_bound(monkeypatch):
+    from core.config import ServerConfig
+
+    monkeypatch.setenv("CACHE_SIZE", "7")
+    assert ServerConfig().cache_size == 1000

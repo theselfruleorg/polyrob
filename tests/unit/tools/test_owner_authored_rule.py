@@ -148,7 +148,7 @@ def test_cron_edit_keeps_owner_authorship_and_cancel_follows_the_rule(tmp_path):
 
 
 def test_an_autonomous_run_may_cancel_its_own_agent_job(tmp_path):
-    from agents.task.goals.autonomy_marker import mark_autonomous
+    from core.autonomy_marker import mark_autonomous
     mark_autonomous("s-cron-own", None, cron_job_id="j1")
     t = _cron(tmp_path)
     job = t._cron_service.schedule(task="agent watch", schedule_spec="1h", user_id="rob",
@@ -162,7 +162,7 @@ def test_an_autonomous_run_may_cancel_its_own_agent_job(tmp_path):
 # --- session class --------------------------------------------------------------
 
 def test_budget_class_fails_open_but_security_reading_fails_closed(monkeypatch):
-    import agents.task.goals.autonomy_marker as marker
+    import core.autonomy_marker as marker
     from agents.task.session_class import budget_class_autonomous, is_autonomous_session
 
     def _boom(_sid):

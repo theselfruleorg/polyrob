@@ -11,18 +11,21 @@ AST scan over the committed production trees (``git ls-files`` so another
 session's uncommitted files cannot flap it).
 """
 import ast
-import subprocess
 from pathlib import Path
 
+from tests.support.repo_index import repo_index
+
 REPO = Path(__file__).resolve().parent.parent
-TREES = ("agents", "tools", "cli", "surfaces", "core", "cron", "api", "webview",
+TREES = ("agents", "tools", "cli", "surfaces", "core", "polyrob", "cron", "api", "webview",
          "modules", "scripts")
 BOARD_FILE = "agents/task/goals/board.py"
+# The GoalBoard store mixins (W9 split) are the board too: their ``self.create(`` counts.
+BOARD_FILES = (BOARD_FILE, "agents/task/goals/board_asks.py", "agents/task/goals/board_deps.py",
+               "agents/task/goals/board_objectives.py", "agents/task/goals/board_planner.py")
 
 
 def _tracked():
-    out = subprocess.run(["git", "ls-files", "*.py"], cwd=REPO, capture_output=True,
-                         text=True, check=True).stdout.splitlines()
+    out = [p for p in repo_index().tracked() if p.endswith(".py")]
     return [p for p in out if p.split("/", 1)[0] in TREES and "/tests/" not in p
             and "node_modules" not in p]
 
@@ -43,13 +46,12 @@ def _create_sites():
         path = REPO / rel
         if not path.exists():
             continue
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=rel)
-        for node in ast.walk(tree):
+        for node in repo_index().nodes(path):
             if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                     and node.func.attr == "create"):
                 continue
             recv = _receiver(node.func.value).lower()
-            is_board = "board" in recv or (rel == BOARD_FILE and recv == "self")
+            is_board = "board" in recv or (rel in BOARD_FILES and recv == "self")
             if is_board:
                 sites.append((rel, node.lineno, {k.arg for k in node.keywords}))
     return sites

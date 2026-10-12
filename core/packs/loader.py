@@ -48,7 +48,8 @@ GROUP = "polyrob.packs"
 
 # A manifest's self-declared tier cannot grant the custody exemption. These
 # are the core-reviewed distribution/entry-point identities: the first-party
-# rows of the pack index (core/packs/index.json, 067 P7 — the ONE source).
+# packs the polyrob distribution itself declares (core.packs.index, W11 — built
+# at runtime from its polyrob.packs entry points; the ONE source).
 # Artifact authenticity remains the trusted installer's job.
 _FIRST_PARTY = _index.first_party_identities()
 
@@ -366,13 +367,19 @@ def enabled_set(recs: Iterable["state.PackRecord"]) -> Tuple[Set[str], Dict[str,
 
 
 def custody_refusal() -> Optional[str]:
-    """Apply the host-code boundary to packs, including remote signer access."""
-    from core.security.host_execution import host_execution_refusal
-    if host_execution_refusal() is None:
+    """None when a third-party code pack may load (D1, 2026-10-10: the default,
+    in every signer mode); else the refusal of the owner's ``SECURITY_SETTINGS``
+    row ``packs_under_custody=refuse``. A pack runs inside this process, and it
+    loads only when the owner named it in ``POLYROB_PACKS``."""
+    from core.security import settings
+    if settings.value("packs_under_custody") != "refuse":
+        return None
+    from core.security.host_execution import wallet_custody_enabled
+    from core.signer import MODE_REMOTE, signer_mode
+    if signer_mode() != MODE_REMOTE and not wallet_custody_enabled():
         return None
     return ("third-party code packs are refused while wallet custody or remote signing "
-            "is enabled; run the pack in a separate instance and Python environment "
-            "without signing credentials or access to the signer socket")
+            "is enabled: " + settings.refusal_note("packs_under_custody"))
 
 
 def load_packs() -> None:
@@ -516,7 +523,7 @@ def rematerialize_tools() -> None:
     CLI container, each ``register_cli_tools``): a self-gating registrar (e.g.
     the X pack's ``x_browser``, X_BROWSER_ENABLED) whose flag was off at
     phase 2 materializes its descriptor once the flag is on — as the core
-    optional registrars do (``core.bootstrap._materialize_cli_optional_descriptors``).
+    optional registrars do (``polyrob.app.bootstrap._materialize_cli_optional_descriptors``).
     Registrars are idempotent; a failure is logged, never raised."""
     for rec in state.loaded():
         for tool in rec.spec.tools:

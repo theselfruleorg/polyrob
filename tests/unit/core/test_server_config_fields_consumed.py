@@ -21,7 +21,7 @@ from core.config import ServerConfig
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 SOURCE_DIRS = (
-    "core", "modules", "tools", "agents", "cli", "webview",
+    "core", "polyrob", "modules", "tools", "agents", "cli", "webview",
     "surfaces", "cron", "api", "utils",
     "packs",  # 067 P3: first-party packs read core config (perplexity_api_key)
 )
@@ -51,7 +51,6 @@ ALLOWLIST = {
     "twitter_chat_passphrase": "get_twitter_config",
     "mcp_servers_config": "_build_mcp_config_from_env (runs in __init__)",
     "services_ocr_temp_dir": "_ensure_directories (runs in __init__) creates it",
-    "embedding_dimension": "get_embedding_config",
     # a dynamic getattr(config, f"{chain}_rpc_url") in the private ops script
     # scripts/diagnose_payment_issue.py (scripts/ does not ship).
     "polygon_rpc_url": "scripts/diagnose_payment_issue.py",

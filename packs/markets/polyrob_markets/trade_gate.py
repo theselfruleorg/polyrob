@@ -108,8 +108,8 @@ def trade_turn_refusal(execution_context, tool_self, *, risk_reducing: bool = Fa
         from core.wallet.authority import turn_refusal
         return turn_refusal(None)
     try:
-        from tools.controller.action_registration import _is_forged_or_autonomous_turn
-        forged = _is_forged_or_autonomous_turn(execution_context, tool_self)
+        from polyrob.sdk import is_forged_or_autonomous_turn
+        forged = is_forged_or_autonomous_turn(execution_context, tool_self)
     except Exception:
         forged = True  # cannot prove the turn is genuine → refuse
     if forged:

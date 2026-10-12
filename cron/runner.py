@@ -12,6 +12,7 @@ Two pieces:
 """
 from __future__ import annotations
 
+from core.runtime_paths import cron_db_path
 import asyncio
 import logging
 import os
@@ -408,7 +409,7 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
         # 019 P2: owner notice at run START (posture-gated default; the one
         # delivery rail dedups/caps). Fail-open.
         try:
-            from agents.task.constants import AutonomyConfig as _StartCfg
+            from core.config_policy import AutonomyConfig as _StartCfg
             if _StartCfg.autonomy_start_notice():
                 from core.self_evolution import push_owner_message
                 # priority="low" to match the goal dispatcher's start ping
@@ -462,6 +463,9 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
             "max_steps": payload.get("max_steps", 20),
             "temperature": 0.0,
             "cron": True,
+            # B1: recall searches the job's OWN text — never the overlay or the
+            # rail answers prepended to `task` above.
+            "recall_seed": job.task,
         }
         # 025: a job's memory scope is cron:<job_id>, regime payload.memory_regime >
         # AUTONOMY_MEMORY_REGIME. {} while scopes are OFF. Cron never promotes: it has
@@ -532,7 +536,7 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
                 try:
                     from core.config_policy.rigs import is_owner_authored
                     if is_owner_authored(payload):
-                        from agents.task.goals.autonomy_marker import note_owner_job
+                        from core.autonomy_marker import note_owner_job
                         note_owner_job(job.id, job.task)
                 except Exception:
                     logger.warning("cron: could not record job %s provenance", job.id,
@@ -711,7 +715,7 @@ def build_cron_ticker(
     from cron.jobs import CronJobStore
     from cron.scheduler import CronScheduler
 
-    store = CronJobStore(os.path.join(data_dir, "cron.db"))
+    store = CronJobStore(cron_db_path(data_dir))
     runner = make_agent_runner(task_agent, data_dir=data_dir)
     scheduler = CronScheduler(
         store, runner, lock_path=os.path.join(data_dir, "cron.tick.lock")

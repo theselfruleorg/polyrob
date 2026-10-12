@@ -14,25 +14,25 @@ from collections import Counter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-_TIERS = ("core", "modules", "agents", "tools", "api", "cli", "surfaces", "webview", "cron",
+_TIERS = ("core", "polyrob", "modules", "agents", "tools", "api", "cli", "surfaces", "webview", "cron",
           "packs")
 _IDIOM = re.compile(r"\b[Ss]et [A-Z][A-Z0-9_]{3,}=(?:true|1)\b")
 
 #: file -> the number of legacy literals it may still carry (shrink-only).
 ALLOWED = {
-    "api/auth_endpoints.py": 5,
-    "core/initialization.py": 2,
+    "api/auth_endpoints.py": 2,
+    "polyrob/app/initialization.py": 2,
     "core/llm_auth/flows/registry.py": 1,
     "tools/browser/browser.py": 1,
     "tools/controller/delegation.py": 1,
-    "tools/defi/data_tool.py": 2,
+    "tools/defi/data_reconcile.py": 1,  # W9: moved out of data_tool.py with reconcile
+    "tools/defi/data_tool.py": 1,
     "tools/defi/spl_deploy_verb.py": 1,
     "tools/defi/trade_tool.py": 3,
     "tools/filesystem.py": 1,
     "tools/mcp/self_install.py": 1,
     "tools/x402/service.py": 2,
     "cli/commands/whatsapp.py": 1,
-    "packs/x/polyrob_x/twitter_tool.py": 1,
 }
 
 

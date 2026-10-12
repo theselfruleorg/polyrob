@@ -56,7 +56,7 @@ def _stubs(monkeypatch):
     monkeypatch.setattr(cont, "build_bridge_message", AsyncMock(return_value=sentinel))
     monkeypatch.setattr(live_health, "build_live_health_text", lambda *a, **k: "HEALTH")
     monkeypatch.delenv("LIVE_HEALTH_CONTEXT", raising=False)
-    from agents.task.constants import AutonomyConfig
+    from core.config_policy import AutonomyConfig
     monkeypatch.setattr(AutonomyConfig, "continuity_bridge_enabled",
                         staticmethod(lambda: True))
     return sentinel
@@ -74,7 +74,7 @@ _CHAT_INJECTORS = [
 @pytest.mark.parametrize("kw", [{"created": True}, {"tainted": True}],
                          ids=["created", "tainted"])
 def test_chat_injectors_skip_correspondent_facing(_stubs, monkeypatch, fn, kw):
-    monkeypatch.setattr("agents.task.goals.autonomy_marker.is_autonomous",
+    monkeypatch.setattr("core.autonomy_marker.is_autonomous",
                         lambda _sid: False)
     agent = _Agent(**kw)
     asyncio.run(fn(agent))
@@ -83,7 +83,7 @@ def test_chat_injectors_skip_correspondent_facing(_stubs, monkeypatch, fn, kw):
 
 @pytest.mark.parametrize("fn", _CHAT_INJECTORS, ids=lambda f: f.__name__)
 def test_chat_injectors_fire_for_owner(_stubs, monkeypatch, fn):
-    monkeypatch.setattr("agents.task.goals.autonomy_marker.is_autonomous",
+    monkeypatch.setattr("core.autonomy_marker.is_autonomous",
                         lambda _sid: False)
     agent = _Agent()
     asyncio.run(fn(agent))
@@ -91,7 +91,7 @@ def test_chat_injectors_fire_for_owner(_stubs, monkeypatch, fn):
 
 
 def test_autonomous_continuity_skips_correspondent_facing(_stubs, monkeypatch):
-    monkeypatch.setattr("agents.task.goals.autonomy_marker.is_autonomous",
+    monkeypatch.setattr("core.autonomy_marker.is_autonomous",
                         lambda _sid: True)
     fn = memory_prefetch.MemoryPrefetchMixin._maybe_inject_autonomous_continuity
     tainted = _Agent(tainted=True)

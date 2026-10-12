@@ -86,7 +86,6 @@ from core.config_policy.capability_toggles import (  # noqa: F401
     defi_trade_enabled,
     eip8004_payment_feedback_enabled,
     email_provider,
-    hmem_tail_placement,
     invoice_card_enabled,
     room_action_card_enabled,
     memory_backend_default,

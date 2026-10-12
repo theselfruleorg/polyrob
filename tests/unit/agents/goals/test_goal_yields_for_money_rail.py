@@ -39,6 +39,7 @@ def test_is_money_job_reads_payload_priority():
 async def test_money_job_yields_a_running_goal_then_runs(tmp_path, monkeypatch):
     monkeypatch.setenv("GOAL_YIELD_FOR_MONEY_RAIL", "true")
     monkeypatch.setenv("POLYROB_WORKSPACE_LOCK_DIR", str(tmp_path / "locks"))
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))  # the turn marker stays per-test
     from core import interactive_gate as g
     g._busy_depth = 0
     g.mark_busy()  # a goal run holds the process (no human turn marker)
@@ -68,6 +69,7 @@ async def test_money_job_yields_a_running_goal_then_runs(tmp_path, monkeypatch):
 async def test_ops_job_does_not_yield_and_still_skips_busy(tmp_path, monkeypatch):
     monkeypatch.setenv("GOAL_YIELD_FOR_MONEY_RAIL", "true")
     monkeypatch.setenv("POLYROB_WORKSPACE_LOCK_DIR", str(tmp_path / "locks"))
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))  # the turn marker stays per-test
     from core import interactive_gate as g
     g._busy_depth = 0
     g.mark_busy()
@@ -93,6 +95,7 @@ async def test_ops_job_does_not_yield_and_still_skips_busy(tmp_path, monkeypatch
 async def test_a_human_turn_is_never_yielded(tmp_path, monkeypatch):
     monkeypatch.setenv("GOAL_YIELD_FOR_MONEY_RAIL", "true")
     monkeypatch.setenv("POLYROB_WORKSPACE_LOCK_DIR", str(tmp_path / "locks"))
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))  # the turn marker stays per-test
     from core import interactive_gate as g
     g._busy_depth = 0
     store = CronJobStore(str(tmp_path / "cron.db"))

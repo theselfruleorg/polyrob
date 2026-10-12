@@ -39,14 +39,14 @@ async def test_telegram_starts_and_stops_autonomy_under_local_mode():
     handles = MagicMock(name="autonomy_handles")
     handles.stop = MagicMock(return_value=_awaitable(None))
 
-    with patch("core.bootstrap.build_cli_container", return_value=container), \
-         patch("core.bootstrap.setup_project_path"), \
-         patch("core.bootstrap.setup_sqlite_compat"), \
+    with patch("polyrob.app.bootstrap.build_cli_container", return_value=container), \
+         patch("polyrob.app.bootstrap.setup_project_path"), \
+         patch("polyrob.app.bootstrap.setup_sqlite_compat"), \
          patch("cli.keys.preflight_or_onboard", return_value=True), \
          patch("core.surfaces.bootstrap.install_surface_bus"), \
          patch("surfaces.telegram.harness.build_telegram_harness", return_value=harness), \
-         patch("agents.task.constants.local_mode_enabled", return_value=True), \
-         patch("core.autonomy_runtime.start_autonomy", return_value=handles) as start_mock:
+         patch("core.config_policy.local_mode_enabled", return_value=True), \
+         patch("polyrob.app.autonomy_runtime.start_autonomy", return_value=handles) as start_mock:
         await tg._run_telegram("dummy-token", verbose=True)
 
     # autonomy started with the container's data_dir, and stopped on shutdown

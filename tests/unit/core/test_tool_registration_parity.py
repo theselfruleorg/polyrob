@@ -22,21 +22,21 @@ import pytest
 from tools import TOOL_COMPONENTS  # noqa: F401  (import for side effect)
 from tools.descriptors import get_tool_init_order
 
-from core.bootstrap import register_cli_tools, _CLI_REGISTERABLE_TOOLS, cli_unavailable_tools
+from polyrob.app.bootstrap import register_cli_tools, _CLI_REGISTERABLE_TOOLS, cli_unavailable_tools
 
 
 # Tools that legitimately CANNOT run in the lightweight CLI container — they need the
 # heavy server container (MCP clients, or paid-API creds baked into server config).
-# Hardcoded independently of core.bootstrap._CLI_INCOMPATIBLE so a change to that
+# Hardcoded independently of polyrob.app.bootstrap._CLI_INCOMPATIBLE so a change to that
 # (security-relevant) exclusion set has to be reconciled here too.
 # "email" was moved OUT (2026-07-14): EmailTool's __init__ has no heavy-server
-# dependency (see the matching note in core/bootstrap.py).
+# dependency (see the matching note in polyrob/app/bootstrap.py).
 # "browser"/"browser_manager" moved OUT (2026-07-19): the actual Chromium/playwright
 # launch was already lazy; browser_manager just needed a special-case constructor call
-# (BaseComponent, not BaseTool shape) — see the matching note in core/bootstrap.py.
+# (BaseComponent, not BaseTool shape) — see the matching note in polyrob/app/bootstrap.py.
 # "mcp" was moved OUT (2026-07-20, S3): MCPTool's __init__ is config parsing only —
 # server connections live in the deferred initialize() (see the matching note in
-# core/bootstrap.py); registration is MCP_ENABLED-gated via _cli_extra_gate.
+# polyrob/app/bootstrap.py); registration is MCP_ENABLED-gated via _cli_extra_gate.
 SERVER_ONLY = {
     "perplexity",
     "collabland", "alchemy",

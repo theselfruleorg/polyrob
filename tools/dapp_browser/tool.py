@@ -124,7 +124,8 @@ class DappBrowserTool(WalletHolderMixin, BaseTool):
             orch = resolve_orchestrator(lambda: self.container, session_id)
             if orch is None:
                 return True
-            return bool(getattr(orch, "_correspondent_tainted", False))
+            from core.security.taints import correspondent_tainted
+            return correspondent_tainted(orch)
         return _probe
 
     def _turn_kind_probe_for(self, execution_context):

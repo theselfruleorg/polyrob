@@ -128,6 +128,5 @@ auth, not your own capability.
   docs — reference credentials by environment-variable NAME only.
 - **Write to the owner's rules doc or preferences files directly** — those
   changes only happen through the `preferences` / `contract_propose` /
-  `owner_doc_manage` seams (applied at once on a genuine owner turn when
-  `OWNER_RULES_IMMEDIATE` is on, else queued in `/pending`), never as a
-  filesystem edit.
+  `owner_doc_manage` seams (a rules-doc write is always queued in
+  `/pending` for the owner to activate), never as a filesystem edit.

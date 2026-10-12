@@ -42,9 +42,8 @@ def _render(result, *, retry_hint: Optional[str]) -> str:
 
 def _owner_ctx(user_id: str):
     """A genuine owner chat turn — the same seat the CLI is, from a phone."""
-    from types import SimpleNamespace
-    return SimpleNamespace(user_id=user_id, role="owner", is_sub_agent=False,
-                           metadata={})
+    from core.security.turn_facts import owner_seat_context
+    return owner_seat_context(user_id, seat="telegram")
 
 
 def _positive(raw: str) -> Optional[float]:

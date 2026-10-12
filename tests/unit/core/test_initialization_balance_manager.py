@@ -5,7 +5,7 @@ RPC URL. It must be bound (to None) before the conditional block that uses it.
 """
 import inspect
 
-import core.initialization as init
+import polyrob.app.initialization as init
 
 
 def test_balance_manager_bound_before_use():

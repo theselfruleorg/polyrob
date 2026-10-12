@@ -99,7 +99,7 @@ def resident_session_ids(task_agent) -> List[str]:
     shrink-only, so new behaviour belongs in a module rather than that class.
     And the private-attribute access this needs is legitimate *inside the module
     that owns the registry concept* — it is exactly the seam this file exists to
-    be, whereas the same reach from ``core/autonomy_runtime`` would not be.
+    be, whereas the same reach from ``polyrob/app/autonomy_runtime`` would not be.
 
     Returns an empty list if the agent has no registry. Callers that treat
     "empty" as "every session is gone" MUST distinguish that from a genuine

@@ -5,9 +5,8 @@ Bug: the catalog call capped at ``max_skills=20`` while the builtin library has 
 rules and every authored skill defaults to priority 6 (the cut band) — a cut skill
 was never in ``_session_skills`` and ``load_skill`` resolved ONLY from
 ``_session_skills``, so cut skills were undiscoverable AND unloadable. Separately,
-with ``SKILL_PROGRESSIVE_DISCLOSURE=false`` (eager full-body injection, no
-``load_skill`` call), usage was never bumped, so the curator archived actively-used
-authored skills as "never used."
+an eager-injected (pinned) skill has no ``load_skill`` call, so its usage was never
+bumped and the curator archived actively-used authored skills as "never used."
 """
 import json
 import logging
@@ -104,7 +103,6 @@ async def _call_load_skill(c, skill_id):
 
 @pytest.mark.asyncio
 async def test_load_skill_disk_fallback_on_session_miss(monkeypatch, tmp_path):
-    monkeypatch.setenv("SKILL_PROGRESSIVE_DISCLOSURE", "true")
     sm = _make_manager(tmp_path, {"web-scraping": {"priority": 6}},
                        {"web-scraping": "# Web Scraping\n\nBody instructions."})
     monkeypatch.setattr("agents.task.agent.skill_manager.get_skill_manager", lambda: sm)
@@ -126,7 +124,6 @@ async def test_load_skill_fallback_bump_uses_resolved_id_not_raw(monkeypatch, tm
     resolved and loaded, not the raw (possibly quote/whitespace-padded) params.skill_id
     — otherwise curator usage metrics fragment across two different keys for the
     same skill."""
-    monkeypatch.setenv("SKILL_PROGRESSIVE_DISCLOSURE", "true")
     sm = _make_manager(tmp_path, {"web-scraping": {"priority": 6}},
                        {"web-scraping": "# Web Scraping\n\nBody instructions."})
     monkeypatch.setattr("agents.task.agent.skill_manager.get_skill_manager", lambda: sm)
@@ -148,7 +145,6 @@ async def test_load_skill_fallback_bump_uses_resolved_id_not_raw(monkeypatch, tm
 
 @pytest.mark.asyncio
 async def test_load_skill_unknown_id_still_errors(monkeypatch, tmp_path):
-    monkeypatch.setenv("SKILL_PROGRESSIVE_DISCLOSURE", "true")
     sm = _make_manager(tmp_path, {}, {})
     monkeypatch.setattr("agents.task.agent.skill_manager.get_skill_manager", lambda: sm)
 
@@ -165,7 +161,6 @@ async def test_load_skill_fallback_rejects_path_traversal_id(monkeypatch, tmp_pa
     """SK-F1 (CRITICAL): the disk fallback must not let a crafted skill_id escape
     the requesting tenant's directory. A skill_id containing '..' could otherwise
     join into `user_<other-uid>/<skill_id>` and read another tenant's content."""
-    monkeypatch.setenv("SKILL_PROGRESSIVE_DISCLOSURE", "true")
     sm = _make_manager(tmp_path, {}, {})
     monkeypatch.setattr("agents.task.agent.skill_manager.get_skill_manager", lambda: sm)
 
@@ -191,7 +186,6 @@ async def test_load_skill_fallback_rejects_absolute_path_id(monkeypatch, tmp_pat
     """SK-F1: an absolute-path-shaped skill_id must also be rejected, not joined
     straight through (pathlib's `/` operator lets an absolute right-hand side
     override the left-hand base entirely)."""
-    monkeypatch.setenv("SKILL_PROGRESSIVE_DISCLOSURE", "true")
     sm = _make_manager(tmp_path, {}, {})
     monkeypatch.setattr("agents.task.agent.skill_manager.get_skill_manager", lambda: sm)
 
@@ -212,7 +206,6 @@ async def test_load_skill_fallback_rejects_absolute_path_id(monkeypatch, tmp_pat
 async def test_load_skill_pending_draft_not_loadable_via_fallback(monkeypatch, tmp_path):
     """A `.pending/` quarantined draft lives at a different path than the active
     user-skill path _load_skill_content resolves — the fallback must NOT surface it."""
-    monkeypatch.setenv("SKILL_PROGRESSIVE_DISCLOSURE", "true")
     sm = _make_manager(tmp_path, {}, {})
     monkeypatch.setattr("agents.task.agent.skill_manager.get_skill_manager", lambda: sm)
 

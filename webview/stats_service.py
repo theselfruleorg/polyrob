@@ -11,7 +11,7 @@ one, on the socket path the transcript actually renders.
 Pricing itself is NOT here. ``modules/credits/cost_utils.py`` is the one
 calculator; these two functions are the thin, lazily-imported wrappers the
 console calls (a module-level import of ``modules.credits`` pulls in
-``core.bot`` and closes an import cycle).
+``polyrob.app.bot`` and closes an import cycle).
 """
 from __future__ import annotations
 
@@ -26,9 +26,9 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 # NOTE: We use lazy imports inside functions to avoid circular imports
-# The stats_service runs in webview context which doesn't need core/bot/etc.
+# The stats_service runs in webview context which doesn't need polyrob/app/bot/etc.
 # Importing modules.credits.cost_utils at module level triggers a circular import chain:
-#   modules -> modules.base_module -> core.base_component -> core -> core.bot ...
+#   modules -> modules.base_module -> core.base_component -> core -> polyrob.app.bot ...
 
 
 def _get_cost_utils():

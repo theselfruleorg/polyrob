@@ -14,8 +14,10 @@ families must therefore never be writable from a remote surface:
 …plus every secret-shaped flag (`is_secret_flag`), which includes the wallet
 master seed.
 
-The families are pinned by ENUMERATING the flags catalog, not by listing names,
-so a `WALLET_*_USD` cap added tomorrow is covered without editing this file.
+Since 2026-10-10 the runtime reads each flag's CLASS from the Access column of
+docs/CONFIGURATION.md (`core.flags_catalog.ACCESS`), never a name token. The
+family predicates below are a LINT over that column: a `WALLET_*_USD` cap added
+tomorrow and classed `console` by mistake fails here.
 """
 import pytest
 
@@ -52,7 +54,7 @@ def _posture_trust(n):
     return (n.startswith(("WEBGATE_", "CODE_EXEC_"))
             or "POSTURE" in _segs(n)
             or n in {"POLYROB_LOCAL", "POLYROB_LOCAL_OWNER", "AUTONOMY_MODE",
-                     "WEBVIEW_READ_ONLY", "WEBVIEW_AUTH_ENABLED", "WEBVIEW_HOST",
+                     "WEBVIEW_READ_ONLY", "WEBVIEW_HOST",
                      "DELEGATE_BLOCKED_TOOLS", "SELF_ENV_ENABLED",
                      "SHELL_TOOLS_ENABLED"})
 
@@ -69,15 +71,15 @@ FAMILIES = {
 # refused even if the family predicates above are later loosened.
 REVIEW_NAMED = (
     "ALLOWED_TELEGRAM_USER_IDS", "POLYROB_OWNER_TELEGRAM_ID", "TELEGRAM_OWNER_ID",
-    "POLYROB_OWNER_EMAIL", "BOT_OWNER_EMAIL", "POLYROB_REQUIRE_PAIRING",
+    "POLYROB_OWNER_EMAIL", "POLYROB_REQUIRE_PAIRING",
     "WALLET_DAILY_CAP_USD", "DEFI_AUTONOMOUS_MAX_USD", "X402_INVOICE_MAX_USD",
     "X402_INVOICE_DAILY_MAX", "AGENT_WALLET_MASTER_SEED", "AGENT_WALLET_NETWORK",
     "DEFI_SOLANA_RPC", "DEFI_EVM_RPC_BASE", "BASE_RPC_URL",
     "PAYMENT_APPROVAL_MODE", "APPROVAL_PROVIDER", "APPROVAL_REQUIRED_TOOLS",
     "DEFAULT_APPROVAL_REQUIRED_TOOLS", "TWITTER_REQUIRE_APPROVAL",
     "POLYROB_LOCAL", "AUTONOMY_MODE", "AUTONOMY_POSTURE", "AGENT_COMPUTE_POSTURE",
-    "POLYROB_POSTURE", "WEBVIEW_READ_ONLY", "WEBVIEW_AUTH_ENABLED",
-    "WEBGATE_MULTITENANT", "WEBGATE_HOST", "DELEGATE_BLOCKED_TOOLS",
+    "POLYROB_POSTURE", "WEBVIEW_READ_ONLY",
+    "WEBGATE_HOST", "DELEGATE_BLOCKED_TOOLS",
     "CODE_EXEC_ENABLED", "CODE_EXEC_BACKEND", "SELF_ENV_ENABLED",
     "SHELL_TOOLS_ENABLED",
 )
@@ -106,9 +108,44 @@ def test_set_value_refuses_them_on_a_remote_surface(key):
     assert "local CLI" in res.message, key
 
 
+# 024 §2.6/§7.5: where inference goes or where credentials live.
+CREDENTIAL_SURFACE = ("LLM_CUSTOM_PROVIDERS", "POLYROB_AUTH_STORE",
+                      "LLM_AUTH_STORE_ENABLED", "LLM_CREDENTIAL_BORROW",
+                      "MEMORY_SCOPES_ENABLED")
+
+
 def test_legacy_credential_set_is_still_covered():
-    for key in sorted(config_service.CONSOLE_UNWRITABLE_FLAGS):
+    for key in CREDENTIAL_SURFACE:
         assert is_console_unwritable(key), key
+
+
+def test_every_catalog_row_declares_an_access_class():
+    from core.flags_catalog import ACCESS
+    names = {n for n, *_ in CATALOG}
+    assert set(ACCESS) == names
+    assert set(ACCESS.values()) <= {"console", "file", "secret"}
+
+
+def test_class_comes_from_the_catalog_not_the_name(monkeypatch):
+    """A flag's protection is its declared class: flipping the catalog entry
+    flips the answer, whatever the name says."""
+    from core import flags_catalog
+    monkeypatch.setitem(flags_catalog.ACCESS, "WALLET_DAILY_CAP_USD", "console")
+    assert not is_console_unwritable("WALLET_DAILY_CAP_USD")
+    monkeypatch.setitem(flags_catalog.ACCESS, "GOALS_ENABLED", "file")
+    assert is_console_unwritable("GOALS_ENABLED")
+    monkeypatch.setitem(flags_catalog.ACCESS, "GOALS_ENABLED", "secret")
+    assert is_secret_flag("GOALS_ENABLED")
+
+
+def test_unknown_flag_shaped_key_fails_closed():
+    assert is_console_unwritable("SOME_FLAG_NOBODY_DOCUMENTED")
+
+
+def test_pattern_rows_carry_their_class():
+    assert is_console_unwritable("OWNER_TELEGRAM_ID")          # OWNER_<SURFACE>_ID
+    assert is_secret_flag("DEFI_EVM_RPC_ARBITRUM")             # DEFI_EVM_RPC_<CHAIN>
+    assert not is_console_unwritable("POLYROB_OPENROUTER_MODEL")
 
 
 def test_local_surface_still_writes_them(monkeypatch):
@@ -119,23 +156,30 @@ def test_local_surface_still_writes_them(monkeypatch):
     assert config_service.set_value("WALLET_DAILY_CAP_USD", "5") is sentinel
 
 
-@pytest.mark.parametrize("key", ["GOALS_ENABLED", "CURATOR_INTERVAL_HOURS",
+@pytest.mark.parametrize("key", ["TOOL_AVAILABILITY_HINT", "CURATOR_INTERVAL_HOURS",
                                  "WEBVIEW_FEED_DEFAULT_LIMIT",
                                  "LLM_MAX_OUTPUT_TOKENS", "CHAT_PATH_LINKS",
                                  # caught by a WEB-4 trust word by accident
-                                 "EMAIL_IMAP_POLL_SEC", "WAKE_CHANGE_GATE",
+                                 "EMAIL_IMAP_POLL_SEC",
                                  "REQUIRE_SCHEMA_KEYS", "OUTBOUND_QUEUE_ENABLED",
                                  # natural-work sweep 2026-10-08
                                  "LLM_OUTAGE_NOTICE", "BILLING_FAILOVER_ENABLED",
                                  "TX_NOTIFY_SENT_HOLD_SEC", "POLYROB_SUPPORT_URL",
                                  "POLYROB_BRAND_URL", "POLYROB_ORG_URL",
                                  "POLYROB_TERMS_URL", "POLYROB_PRIVACY_URL",
-                                 "THINK_SCRUBBER_ENABLED", "STREAM_BRAIN_SCRUB",
+                                 "THINK_SCRUBBER_ENABLED",
                                  "ANTHROPIC_DEFERRED_TOOLS", "STABLE_AUTONOMOUS_TOOLSET"])
 def test_ordinary_flags_stay_console_writable(key):
     """Over-blocking has a cost too — the console's config page is a real owner
     seat. An ordinary operational knob must stay writable."""
     assert not is_console_unwritable(key), key
+
+
+@pytest.mark.parametrize("key", ["GOALS_ENABLED", "WAKE_CHANGE_GATE", "POLYROB_OVERRIDES"])
+def test_posture_members_and_their_override_line_are_file_only(key):
+    """D7 (owner decision 2026-10-10): a posture member changes only through
+    POLYROB_OVERRIDES, which is Access `file` — never a console write."""
+    assert is_console_unwritable(key), key
 
 
 @pytest.mark.parametrize("key", ["goals.daily_quota", "budget.wallet_daily_usd",

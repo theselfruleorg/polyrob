@@ -9,9 +9,10 @@ that must survive a process restart, which in-memory `delegate_task` cannot. Job
 are persisted in SQLite (`data/cron.db`, WAL + jittered retry) and executed by a
 ticker that is safe under multiple workers via a file-based tick lock.
 
-Off by default: nothing ticks unless `CRON_ENABLED=true`. It is wired into both the
+Off by default: nothing ticks unless `CRON_ENABLED` is on
+(`polyrob config set CRON_ENABLED true`, or `AUTONOMY_POSTURE=full`). It is wired into both the
 API lifespan and the local CLI through the shared autonomy runtime
-(`core/autonomy_runtime.py::start_autonomy`), alongside the goal board and curator.
+(`polyrob/app/autonomy_runtime.py::start_autonomy`), alongside the goal board and curator.
 
 ## Package structure
 
@@ -72,7 +73,7 @@ cron/
 ## Related
 
 - Agent-facing tool surface: `tools/cronjob_tools.py`
-  (`cronjob_schedule` / `list` / `cancel`), registered only when `CRON_ENABLED=true`.
+  (`cronjob_schedule` / `list` / `cancel`), registered only when `CRON_ENABLED` is on.
 - Durable cross-session **goal board** (reuses this package's `TickLock` pattern):
   `agents/task/goals/` + `agents/task/goals/dispatcher.py`.
-- Shared lifecycle: `core/autonomy_runtime.py`.
+- Shared lifecycle: `polyrob/app/autonomy_runtime.py`.

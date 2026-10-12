@@ -44,13 +44,12 @@ class LoopDetectionConfig:
 class MemoryConfig:
     """Memory optimization settings for AutoV2 - Optimized for performance"""
     MAX_SCREENSHOTS_IN_GIF = 10  # Reduced to prevent OOM
-    MAX_HISTORY_SIZE = _core_int_env('MAX_MEMORY_CACHE_SIZE', 30)  # Configurable via env
-    SCREENSHOT_JPEG_QUALITY = _core_int_env('SCREENSHOT_JPEG_QUALITY', 70)  # Configurable
+    MAX_HISTORY_SIZE = 30  # internal tuning (was the MAX_MEMORY_CACHE_SIZE env knob)
+    SCREENSHOT_JPEG_QUALITY = 70
     ENABLE_GIF_CREATION = _core_bool_env('ENABLE_GIF_CREATION', False)  # Disabled by default
     CLEAR_SCREENSHOTS_AFTER_GIF = True  # Remove base64 data after GIF creation
     MAX_SCREENSHOT_SIZE_MB = 3  # Reduced max size per screenshot
-    # UNIFIED: Single source from environment, default 50
-    CLEANUP_INTERVAL = _core_int_env('MEMORY_CLEANUP_INTERVAL', 50)  # Clean every N operations
+    CLEANUP_INTERVAL = 50  # Clean every N operations
 
 # History and Message Management
 MAX_HISTORY_SIZE = 30  # Maximum number of messages to keep in history
@@ -113,12 +112,12 @@ COMPACTION_AUX_MODEL_MAP = {
 # Alias: the generalized router reuses the same cheap-model map for all aux tasks.
 AUX_MODEL_MAP = COMPACTION_AUX_MODEL_MAP
 
-# Per-task explicit override env var names. Compaction keeps its legacy knob.
+# Per-task explicit override env var names (the slot names, AUX_MODEL_<SLOT>).
 # UP-10 2.1: only `compaction` (live) and `judge` (wired into output validation,
 # default-off/fail-open) remain. `planner`/`vision` had zero call sites and were
 # removed as dead config surface.
 _AUX_TASK_ENV = {
-    "compaction": "COMPACTION_MODEL",
+    "compaction": "AUX_MODEL_COMPACTION",
     "judge": "AUX_MODEL_JUDGE",
 }
 
@@ -148,7 +147,7 @@ def _resolve_aux_model_with_origin(task, provider=None):
 def resolve_aux_model(task, provider=None):
     """Which model should aux `task` use? (None => use the main model.)
 
-    Precedence: 1) per-task explicit env (e.g. AUX_MODEL_JUDGE / COMPACTION_MODEL);
+    Precedence: 1) per-task explicit env (AUX_MODEL_JUDGE / AUX_MODEL_COMPACTION);
     2) provider cheap-map default when AUX_AUTO=true (or, for compaction only, the
     legacy COMPACTION_AUTO_AUX=true); 3) None.
     """
@@ -180,8 +179,8 @@ def resolve_aux_chain(task, provider=None):
     Empty list => caller uses the main model (unchanged runtime contract).
 
     Env per slot (<SLOT> = task.upper()):
-      AUX_MODEL_<SLOT>    primary model    (legacy: COMPACTION_MODEL / AUX_MODEL_JUDGE)
-      AUX_PROVIDER_<SLOT> primary provider (legacy: COMPACTION_PROVIDER / AUX_PROVIDER)
+      AUX_MODEL_<SLOT>    primary model
+      AUX_PROVIDER_<SLOT> primary provider
       AUX_FALLBACK_<SLOT> comma list of provider/model (or bare model) candidates
 
     `reflection` inherits compaction's config (model AND provider, as a pair) when
@@ -192,9 +191,8 @@ def resolve_aux_chain(task, provider=None):
 
     Provider precedence for reflection specifically:
       1) AUX_PROVIDER_REFLECTION (explicit reflection override)
-      2) compaction's provider (AUX_PROVIDER_COMPACTION or legacy COMPACTION_PROVIDER)
-         — ONLY when reflection's model was itself inherited from compaction
-      3) AUX_PROVIDER (generic aux fallback)
+      2) AUX_PROVIDER_COMPACTION — ONLY when reflection's model was itself
+         inherited from compaction
     """
     if task not in _AUX_SLOTS:
         # Fixed slot set by design (the 3 real aux call sites) — an unknown task
@@ -207,8 +205,8 @@ def resolve_aux_chain(task, provider=None):
         # Reflection is NOT in _AUX_TASK_ENV, so resolve_aux_model("reflection", ...)'s
         # only possible effect is the global-AUX_AUTO cheap-map early-exit — which
         # would pre-empt the compaction inheritance below and drop the paired
-        # COMPACTION_PROVIDER (pre-B5, reflection reused _provision_compaction_llm
-        # wholesale, so AUX_AUTO + COMPACTION_PROVIDER resolved as a pair). Go
+        # AUX_PROVIDER_COMPACTION (pre-B5, reflection reused _provision_compaction_llm
+        # wholesale, so AUX_AUTO + the compaction provider resolved as a pair). Go
         # straight from own-env to the compaction branch, which itself honors
         # AUX_AUTO/COMPACTION_AUTO_AUX via resolve_aux_model("compaction", ...).
         primary_model = os.getenv("AUX_MODEL_REFLECTION", "")
@@ -227,14 +225,8 @@ def resolve_aux_chain(task, provider=None):
         return []
 
     primary_provider = os.getenv(f"AUX_PROVIDER_{slot}") or None
-    if task == "compaction":
-        primary_provider = primary_provider or os.getenv("COMPACTION_PROVIDER") or None
-    elif task == "reflection":
-        if not primary_provider and inherited_from_compaction:
-            primary_provider = os.getenv("AUX_PROVIDER_COMPACTION") or os.getenv("COMPACTION_PROVIDER") or None
-        primary_provider = primary_provider or os.getenv("AUX_PROVIDER") or None
-    else:
-        primary_provider = primary_provider or os.getenv("AUX_PROVIDER") or None
+    if task == "reflection" and not primary_provider and inherited_from_compaction:
+        primary_provider = os.getenv("AUX_PROVIDER_COMPACTION") or None
 
     # A cheap-map model must stay on the SESSION's provider. Without this the
     # candidate carries provider=None, and `_create_llm_from_config_async` then
@@ -323,10 +315,10 @@ class TimeoutConfig:
     # ========== TOOL EXECUTION TIMEOUTS ==========
     # These are applied in controller/service.py multi_act()
     TOOL_TIMEOUTS = {
-        'mcp': _core_int_env('MCP_TIMEOUT_SECONDS', 180),       # MCP: network/subprocess latency
-        'browser': _core_int_env('BROWSER_TIMEOUT_SECONDS', 120),   # Browser: page loads, DOM operations
-        'filesystem': _core_int_env('FILESYSTEM_TIMEOUT_SECONDS', 30),  # Filesystem: fast local I/O
-        'polymarket': _core_int_env('POLYMARKET_TIMEOUT_SECONDS', 60),  # Polymarket API
+        'mcp': 180,  # MCP: network/subprocess latency
+        'browser': 120,  # Browser: page loads, DOM operations
+        'filesystem': 30,  # Filesystem: fast local I/O
+        'polymarket': 60,  # Polymarket API
         # Publishing evaluation 2026-09-05 (Wave 1): the build tools' own foreground
         # ceiling (SHELL_MAX_TIMEOUT_SEC, default 600 since 073 W3) never fired on prod — this
         # 'default' 60 s cap killed every install/build first (tool_timeout x15).
@@ -367,19 +359,13 @@ class TimeoutConfig:
 
     @classmethod
     def get_sub_agent_timeout(cls) -> int:
-        """Sub-agent timeout in seconds (from BotConfig)."""
-        config = cls._get_config()
-        if config:
-            return config.sub_agent_timeout
-        return _core_int_env('SUB_AGENT_TIMEOUT_SECONDS', 600)
+        """Sub-agent timeout in seconds (internal tuning constant)."""
+        return cls.SUB_AGENT_TIMEOUT
 
     @classmethod
     def get_parallel_subtasks_timeout(cls) -> int:
-        """Parallel subtasks timeout in seconds (from BotConfig)."""
-        config = cls._get_config()
-        if config:
-            return config.parallel_subtasks_timeout
-        return _core_int_env('PARALLEL_SUBTASKS_TIMEOUT_SECONDS', 900)
+        """Parallel subtasks timeout in seconds (internal tuning constant)."""
+        return cls.PARALLEL_SUBTASKS_TIMEOUT
 
     @classmethod
     def get_max_concurrent_sub_agents(cls) -> int:
@@ -643,19 +629,6 @@ COMPACTION_EMERGENCY_PCT = 95   # the non-LLM prune; the overflow safety net
 # immediately, paying a cold prefix for a cut that had not yet earned it.
 COMPACTION_COOLDOWN_STEPS = _core_int_env('COMPACTION_COOLDOWN_STEPS', 8)
 
-# F11 warm summariser (DSH region.ts:532-563). The compaction summariser used to
-# send a LONE HumanMessage carrying the conversation as TEXT — a completely cold
-# request, even when it went to the session's own model, so the middle was re-read
-# at full price. When no distinct aux model is configured, send
-# [foundation + the messages being summarised + ONE trailing instruction] instead:
-# the leading bytes are the ones the provider just cached for the step request, and
-# only the instruction is cold. A DIFFERENT model cannot hit that prefix, so an
-# aux model always keeps the old shape. `false` = the old shape everywhere.
-def compaction_warm_prefix() -> bool:
-	"""``COMPACTION_WARM_PREFIX`` (default ON) — read per call, not frozen."""
-	return _core_bool_env('COMPACTION_WARM_PREFIX', True)
-
-
 # F11 progress rule: the cooldown is a floor, not a wall. A compaction
 # that ACTUALLY cut this fraction of the context has earned the right to run again
 # inside the window; one that did not must wait it out. Reuses the savings ratio
@@ -663,53 +636,25 @@ def compaction_warm_prefix() -> bool:
 # so there is one number, not a second measurement.
 COMPACTION_PROGRESS_FLOOR = 0.05
 
-# F16(ii) — the per-step state message is EPHEMERAL.
-# It used to be appended into `history` and then spliced back out mid-deque by
-# `remove_last_state_message()` on every step, which rebuilt the whole deque and
-# colded every cached byte behind the splice point. The one-shot ephemeral rail
-# already rides the tail of exactly one `get_messages_for_llm()` call and never
-# enters durable history, so the browser screenshot stops landing in
-# message_history.json too. `false` restores the append+splice, byte-identical.
-def state_message_ephemeral() -> bool:
-	"""``STATE_MESSAGE_EPHEMERAL`` (default ON) — read per call, not frozen."""
-	return _core_bool_env('STATE_MESSAGE_EPHEMERAL', True)
-
-
 # Compaction payload tuning (Reference-parity context upgrade, 2026-06).
 # These govern HOW the LLM compaction summarizes, not WHEN it fires (the >=85/95 %
 # ladder in agent/core/step.py owns the trigger). Previously the summary input
 # was silently truncated to the last 50 messages, each clipped to 500 chars, with
 # tool results dropped entirely -> the summary lost most of what it claimed to keep.
-COMPACTION_KEEP_RECENT = _core_int_env('COMPACTION_KEEP_RECENT', 10)  # min recent msgs kept verbatim
-COMPACTION_TAIL_TOKEN_RATIO = _core_float_env('COMPACTION_TAIL_TOKEN_RATIO', 0.20)  # C3: tail kept by token budget too
-COMPACTION_PER_MSG_CHARS = _core_int_env('COMPACTION_PER_MSG_CHARS', 3000)  # A2: per-message head+tail budget into summarizer
-COMPACTION_TOOL_RESULT_CHARS = _core_int_env('COMPACTION_TOOL_RESULT_CHARS', 2000)  # A2: tool-result budget (was: dropped)
-COMPACTION_MAX_SUMMARY_TOKENS = _core_int_env('COMPACTION_MAX_SUMMARY_TOKENS', 12000)  # A3: ceiling for summary budget
-COMPACTION_MIN_SUMMARY_TOKENS = _core_int_env('COMPACTION_MIN_SUMMARY_TOKENS', 2000)  # A3: floor for summary budget
-COMPACTION_MIN_SAVINGS_PCT = _core_float_env('COMPACTION_MIN_SAVINGS_PCT', 10.0)  # B4: anti-thrash back-off threshold
+COMPACTION_KEEP_RECENT = 10  # min recent msgs kept verbatim
+COMPACTION_TAIL_TOKEN_RATIO = 0.20  # C3: tail kept by token budget too
+COMPACTION_PER_MSG_CHARS = 3000  # A2: per-message head+tail budget into summarizer
+COMPACTION_TOOL_RESULT_CHARS = 2000  # A2: tool-result budget (was: dropped)
+COMPACTION_MAX_SUMMARY_TOKENS = 12000  # A3: ceiling for summary budget
+COMPACTION_MIN_SUMMARY_TOKENS = 2000  # A3: floor for summary budget
+COMPACTION_MIN_SAVINGS_PCT = 10.0  # B4: anti-thrash back-off threshold
 COMPACTION_CHECKPOINT = _core_bool_env('COMPACTION_CHECKPOINT', True)  # C2: dump pre-compaction trajectory
-# A5: route the (expensive, repeated) summarization call to a cheaper auxiliary model.
-# Empty -> use the main model (backward-compatible). Format: "provider:model" or "model".
-COMPACTION_AUX_MODEL = os.getenv('COMPACTION_AUX_MODEL', '')
-
 # Bounded tool-free reasoning turns (flow-efficiency D1-a, the seed resolution).
 # POLYROB forces >=1 function call every step. This allows a SMALL number of tool-free
 # "planning" turns to be treated as legitimate (gentle nudge) rather than a hard
 # error on the very first empty response. The 3-consecutive thinking-loop
 # escalation remains the hard backstop, so the loop bound is unchanged.
 ALLOWED_REASONING_TURNS = _core_int_env('ALLOWED_REASONING_TURNS', 1)
-
-# S-1: progressive skill disclosure. When ON (the DEFAULT — see the function below),
-# only a compact <skill-catalog> (ids + one-line descriptions, ~0.15k) is injected and
-# the agent pulls a skill's full body on demand via the load_skill(skill_id) tool. When
-# OFF, skills are eager-injected full-body as a pinned user message (~3.2k tok).
-def skill_progressive_disclosure() -> bool:
-    """Access-time gate (mirrors skill_catalog_include_all). Default ON.
-
-    Falsey-set SSOT (`core.env.bool_env`): only none/off/false/0/no/'' disable.
-    Access-time read (not an import-bound constant) so an env override always wins.
-    """
-    return _core_bool_env('SKILL_PROGRESSIVE_DISCLOSURE', True)
 
 # NOTE: the catalog-include-all policy is the access-time `skill_catalog_include_all()`
 # function below (defaults ON). A dead module-level constant that defaulted to 'false'

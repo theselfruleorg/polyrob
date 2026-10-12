@@ -174,7 +174,7 @@ def test_flag_default_off(monkeypatch):
     monkeypatch.delenv("GOAL_BLOCKER_ESCALATION", raising=False)
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
     monkeypatch.delenv("AUTONOMY_POSTURE", raising=False)
-    from agents.task.constants import AutonomyConfig
+    from core.config_policy import AutonomyConfig
     assert AutonomyConfig.goal_blocker_escalation() is False
 
 

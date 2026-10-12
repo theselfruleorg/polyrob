@@ -124,7 +124,7 @@ def test_verify_smoke_imports(tmp_path):
     r = build_runners(ctx, python="/py", run=run, capture=capture)
     r.verify()
     assert (["/py", "-I", "-c", "import core, core.avatar, cli.polyrob, modules.llm.llm_factory, tools.filesystem, "
-                          "modules.memory.task, modules.cards.cards, utils.gif_utils, "
+                          "modules.memory.task, modules.cards.cards, agents.task.gif_utils, "
                           "tools.document_parser, core.lazy_deps"], str(tmp_path)) in calls
 
 

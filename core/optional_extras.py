@@ -12,7 +12,38 @@ import importlib.util
 import re
 from typing import Iterable, Optional
 
-# import-name (top-level module) -> extra name in pyproject.toml
+#: import name (top-level module) -> its distribution, where the two differ
+#: beyond ``_`` -> ``-`` (W11). THE mapping between the two name spaces: the
+#: extras drift test (tests/unit/core/test_extras_spec_drift.py) and the
+#: import-vs-declared test (tests/test_imports_declared.py) read it.
+IMPORT_TO_DIST: dict[str, str] = {
+    "PIL": "pillow",
+    "bs4": "beautifulsoup4",
+    "chat_xdk": "chatxdk",
+    "docx": "python-docx",
+    "dotenv": "python-dotenv",
+    "google": "google-generativeai",
+    "hyperliquid": "hyperliquid-python-sdk",
+    "jwt": "pyjwt",
+    "magic": "python-magic",
+    "argon2": "argon2-cffi",
+    "socketio": "python-socketio",
+    "multipart": "python-multipart",
+    "yaml": "pyyaml",
+    "anysite": "anysite-cli",
+}
+
+
+def dist_for_module(module: str) -> str:
+    """The distribution name (PEP 503) that provides top-level import *module*."""
+    top = module.split(".")[0]
+    return IMPORT_TO_DIST.get(top, top).lower().replace("_", "-")
+
+
+# import-name (top-level module) -> extra name in pyproject.toml. Hand-kept (the
+# point is to name an extra whose module is ABSENT, so it cannot be read from
+# the installed packages); tests/unit/core/test_extras_spec_drift.py pins every
+# row to the extra in pyproject.toml that declares the distribution.
 EXTRA_FOR_MODULE: dict[str, str] = {
     "playwright": "browser",
     "fastapi": "server",
@@ -26,6 +57,8 @@ EXTRA_FOR_MODULE: dict[str, str] = {
     "sentence_transformers": "memory-vector",
     "web3": "crypto",
     "eth_account": "crypto",
+    "eth_utils": "crypto",
+    "eth_abi": "crypto",
     "x402": "crypto",
     "hyperliquid": "crypto",
     "aiogram": "telegram",

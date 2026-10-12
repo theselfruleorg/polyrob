@@ -14,7 +14,7 @@ import pytest
 
 from agents.task.goals.board import Goal, STATUS_BLOCKED, STATUS_READY
 from agents.task.goals.dispatcher import GoalDispatcher
-from tools.controller.types import ActionResult
+from agents.task.loop_types.controller_types import ActionResult
 
 
 # ---------------------------------------------------------------------------
@@ -59,7 +59,7 @@ def test_run_task_to_outcome_marks_autonomous_before_construction():
     """The marker must be visible DURING create_session (agent/prompt build),
     not only after — the contract block gates on it at prompt-build time."""
     from agents.task.runtime.run_as_session import run_task_to_outcome
-    from agents.task.goals.autonomy_marker import is_autonomous, _SESSIONS
+    from core.autonomy_marker import is_autonomous, _SESSIONS
     _SESSIONS.clear()
     seen = {}
 

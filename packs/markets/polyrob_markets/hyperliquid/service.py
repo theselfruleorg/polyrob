@@ -1872,18 +1872,15 @@ class HyperliquidTool(UserCredentialCacheMixin, BaseTool):
 # READ / TRADE SPLIT (additive)
 # =============================================================================
 
-# Wallet-free read actions. All are public /info reads (market data + account state by
-# the MASTER address) plus the read-only agent_status. Trading actions stay on the gated
-# 'hyperliquid' tool.
-HL_READ_ACTIONS = frozenset({
-    "get_perpetual_markets", "get_spot_markets", "get_current_price", "get_all_mids",
-    "get_orderbook", "get_funding_rate", "get_account_state", "get_spot_balances",
-    "get_open_orders", "get_fills", "agent_status",
-})
+# Wallet-free read actions (public /info reads by the MASTER address + agent_status):
+# W4 — the bare names of the hyperliquid_data rows in pack.toml. Trading stays on 'hyperliquid'.
+def hl_read_actions():
+    from polyrob.sdk import action_ids_where as ids, bare_action_name as bare
+    return frozenset(bare("hyperliquid_data", n) for n in ids(tool="hyperliquid_data"))
 
 
 class HyperliquidDataTool(HyperliquidTool):
-    """Read-only Hyperliquid tool (no signing, delegatable). Exposes only HL_READ_ACTIONS;
+    """Read-only Hyperliquid tool (no signing, delegatable). Exposes only hl_read_actions();
     trade actions are filtered at registration, advertisement, and execution."""
 
     tool_id = "hyperliquid_data"
@@ -1891,13 +1888,15 @@ class HyperliquidDataTool(HyperliquidTool):
     description = "Hyperliquid perps/spot — read-only market data & account state (no signing)"
 
     def get_actions(self) -> Dict[str, Any]:
-        return {k: v for k, v in super().get_actions().items() if k in HL_READ_ACTIONS}
+        reads = hl_read_actions()
+        return {k: v for k, v in super().get_actions().items() if k in reads}
 
     def get_available_tools(self) -> List[Dict[str, Any]]:
-        return [t for t in super().get_available_tools() if t.get("name") in HL_READ_ACTIONS]
+        reads = hl_read_actions()
+        return [t for t in super().get_available_tools() if t.get("name") in reads]
 
     async def execute_action(self, tool_name: str, arguments: Dict[str, Any]) -> ExecutionResult:
-        if tool_name not in HL_READ_ACTIONS:
+        if tool_name not in hl_read_actions():
             return ExecutionResult(
                 success=False,
                 error=f"'{tool_name}' is a trade action; use the gated 'hyperliquid' tool. "

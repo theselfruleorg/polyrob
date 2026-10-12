@@ -16,8 +16,9 @@ def test_botconfig_sub_agents_enabled_defaults_true():
 def test_conservative_caps_unchanged():
     assert BotConfig.model_fields["max_sub_agent_depth"].default == 1
     assert BotConfig.model_fields["max_concurrent_sub_agents"].default == 3
-    assert BotConfig.model_fields["sub_agent_timeout"].default == 600
-    assert BotConfig.model_fields["parallel_subtasks_timeout"].default == 900
+    # The timeouts are TimeoutConfig constants (internal tuning, not env-bound).
+    assert TimeoutConfig.SUB_AGENT_TIMEOUT == 600
+    assert TimeoutConfig.PARALLEL_SUBTASKS_TIMEOUT == 900
 
 
 def test_legacy_constant_reflects_on():

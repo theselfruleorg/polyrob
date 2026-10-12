@@ -20,7 +20,6 @@ def test_empty_and_anon_refused(tmp_path):
 
 
 def test_agent_propose_requires_review_lands_pending(tmp_path, monkeypatch):
-    monkeypatch.setenv("CONTRACT_DOC_REQUIRE_REVIEW", "true")
     w = ContractWriter(tmp_path)
     res = w.propose("Never spend more than $5 without asking.", user_id="u1", created_by="agent")
     assert res.ok and res.pending
@@ -45,7 +44,6 @@ def test_identity_subversion_rejected(tmp_path):
 
 
 def test_forged_author_always_pending_even_review_off(tmp_path, monkeypatch):
-    monkeypatch.setenv("CONTRACT_DOC_REQUIRE_REVIEW", "false")
     w = ContractWriter(tmp_path)
     res = w.propose("Never post to social media autonomously.", user_id="u1",
                     created_by="background_review")
@@ -54,7 +52,6 @@ def test_forged_author_always_pending_even_review_off(tmp_path, monkeypatch):
 
 
 def test_forged_author_cannot_patch_active(tmp_path, monkeypatch):
-    monkeypatch.setenv("CONTRACT_DOC_REQUIRE_REVIEW", "false")
     w = ContractWriter(tmp_path)
     w.propose("Rule: always be terse.", user_id="u1", created_by="user", pending=False)
     res = w.patch(user_id="u1", old_string="terse", new_string="verbose",

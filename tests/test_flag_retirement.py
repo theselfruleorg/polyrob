@@ -35,7 +35,8 @@ def test_no_flag_outlives_its_retirement():
 
 def test_markers_are_well_formed_and_name_real_rows():
     names = {row[0] for row in CATALOG}
-    assert RETIRE_AFTER, "no retirement markers parsed — generator or doc broke"
+    # Empty is legitimate (every marker retired, as after 1.4); the generator's
+    # marker parsing is pinned by test_marker_parser_reads_both_forms below.
     bad = {n: m for n, m in RETIRE_AFTER.items()
            if not _MARK_RE.match(m) or n not in names}
     assert not bad, f"malformed marker or unknown flag: {bad}"

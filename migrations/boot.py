@@ -1,7 +1,9 @@
 """Idempotent, fail-open schema migration at process start (C3).
 
-The live boot path creates the base schema inline (``modules/database/connection.py``)
-at HEAD, so the semver migration framework was never engaged — meaning a NEW migration
+The live boot path creates the base schema inline — the component table classes
+(``modules/database/auth_tables.py``, ``x402_tables.py``, ``user_profiles.py``, …; the
+old ``connection.py`` initializers were deleted, see the note there) — at HEAD, so the
+semver migration framework was never engaged — meaning a NEW migration
 (e.g. a 0.5.0 ``ADD COLUMN``) would never auto-apply and the app would hit
 ``no such column`` at runtime on an upgraded DB. This runs pending migrations once at
 boot:

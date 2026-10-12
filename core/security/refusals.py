@@ -43,8 +43,7 @@ def record_refusal(reason: str, *, tool: str = "", user_id: str = "",
     try:
         from core.event_log import event_log_enabled
         from core.event_kinds import TOOL_DENIED
-        from core.security_flags import security_event_log_enabled
-        if not (security_event_log_enabled() and event_log_enabled()):
+        if not event_log_enabled():
             return
         _log().record(TOOL_DENIED, user_id=str(user_id or ""),
                       session_id=str(session_id or ""), source="gate",

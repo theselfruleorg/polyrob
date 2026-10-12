@@ -66,7 +66,6 @@ cli/
 └── ui/                   # REPL rendering + input
     ├── app.py            #   prompt_toolkit PromptSession + bottom toolbar
     ├── persistent_loop.py#   bottom-anchored persistent-input loop
-    │                     #     (gated POLYROB_PERSISTENT_INPUT)
     ├── rich_renderer.py  #   Rich inline-scrollback renderer (the pixel owner)
     ├── blocks.py         #   pure RenderEvent → Rich renderable builders
     ├── activity.py       #   the single transient "working…" indicator
@@ -110,5 +109,5 @@ cli/
 ## Related
 
 - Surface contract: `core/surfaces/surface.py`
-- Autonomy tickers started by the REPL under local mode: `core/autonomy_runtime.py`
+- Autonomy tickers started by the REPL under local mode: `polyrob/app/autonomy_runtime.py`
 - Network chat surfaces: [`../surfaces/`](../surfaces/README.md)

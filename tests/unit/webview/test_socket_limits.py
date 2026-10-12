@@ -8,15 +8,18 @@ from webview import server, socket_limits as sl
 
 
 def test_one_count_per_sid():
+    # A fresh sid: _counted is module state, and other tests join "sid-a"
+    # without a disconnect (it stays counted for the rest of the worker).
+    sid = f"sid-{uuid.uuid4().hex}"
     calls = []
     check = lambda: calls.append(1) or True  # noqa: E731
-    assert sl.join_allowed("sid-a", check) is True
-    assert sl.join_allowed("sid-a", check) is True
+    assert sl.join_allowed(sid, check) is True
+    assert sl.join_allowed(sid, check) is True
     assert len(calls) == 1
-    sl.forget("sid-a")
-    assert sl.join_allowed("sid-a", check) is True
+    sl.forget(sid)
+    assert sl.join_allowed(sid, check) is True
     assert len(calls) == 2
-    sl.forget("sid-a")
+    sl.forget(sid)
 
 
 def test_key_is_owner_when_known():

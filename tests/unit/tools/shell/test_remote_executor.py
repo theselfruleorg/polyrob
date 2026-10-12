@@ -17,7 +17,7 @@ import core.config_policy as cp
 import core.security.host_execution as he
 from tools.code_exec import pack_backends
 from tools.code_exec.backends._proc import run_group
-from tools.controller.execution_context import ActionExecutionContext
+from agents.task.loop_types.execution_context import ActionExecutionContext
 from tools.shell import backend_pool
 from tools.shell.executor import DockerShellExecutor
 from tools.shell.executor_protocol import (NotAShellExecutor, ShellExecutor, is_shell_executor,
@@ -293,9 +293,12 @@ async def test_ssh_on_a_server_needs_the_sandbox_attestation(monkeypatch, tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_local_custody_also_needs_a_sandbox(monkeypatch, tmp_path):
+async def test_local_custody_needs_a_sandbox_when_host_execution_is_refused(monkeypatch, tmp_path):
+    """D1 (2026-10-10): custody alone no longer refuses; a refused host rule
+    (the isolation floor or the owner's host_exec_under_custody=refuse) does."""
     monkeypatch.setattr(cp, "local_mode_enabled", lambda: True)
     monkeypatch.setattr(he, "wallet_custody_enabled", lambda: True)
+    monkeypatch.setattr(he, "host_execution_refusal", lambda: "refused by the owner's row")
     monkeypatch.setenv("SHELL_BACKEND", "ssh")
     monkeypatch.setenv("CODE_EXEC_SSH_HOST", "box")
     with pytest.raises(backend_pool.ShellBackendUnavailable):

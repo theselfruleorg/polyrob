@@ -4,7 +4,7 @@
   context (inside the untrusted frame) and recorded into the store;
 - E6/A6: a reply whose originating session is dead is NOT silently dropped — a
   replacement session is created, the registry + conversation re-point to it, and
-  the reply is delivered there (gated CONVERSATION_RESUME_ENABLED, default ON).
+  the reply is delivered there.
 """
 import os
 import tempfile
@@ -95,7 +95,6 @@ async def test_context_prepended_and_inbound_recorded(monkeypatch):
 @pytest.mark.asyncio
 async def test_dead_session_resumes_into_new_session(monkeypatch):
     monkeypatch.setenv("CORRESPONDENT_ACCESS_ENABLED", "true")
-    monkeypatch.delenv("CONVERSATION_RESUME_ENABLED", raising=False)
     tmp = tempfile.mkdtemp()
     store = ConversationStore(os.path.join(tmp, "conv.db"))
     store.record_outbound("t1", "email", "john@acme.com", "old outreach",
@@ -122,23 +121,6 @@ async def test_dead_session_resumes_into_new_session(monkeypatch):
     import asyncio
     await asyncio.sleep(0)  # let the detached run task start
     assert ta.run_calls == [("t1", "new-sess")]
-
-
-@pytest.mark.asyncio
-async def test_dead_session_drops_when_resume_disabled(monkeypatch):
-    monkeypatch.setenv("CORRESPONDENT_ACCESS_ENABLED", "true")
-    monkeypatch.setenv("CONVERSATION_RESUME_ENABLED", "false")
-    tmp = tempfile.mkdtemp()
-    reg = CorrespondentRegistry(os.path.join(tmp, "corr.db"))
-    reg.seed(surface="email", address="john@acme.com", session_id="dead-sess",
-             user_id="t1", require_approval=False)
-    created = []
-    ta = _task_agent(infos={}, container=_Container(correspondent_registry=reg),
-                     orch_map={}, created=created)
-    ok = await ta.deliver_correspondent_data(
-        "dead-sess", "john@acme.com", "hello?", surface="email")
-    assert ok is False
-    assert created == []
 
 
 @pytest.mark.asyncio

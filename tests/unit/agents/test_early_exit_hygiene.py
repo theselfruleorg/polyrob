@@ -106,10 +106,9 @@ async def test_planning_turn_early_return_removes_state_message():
     """(a) _validate_and_intervene -> False must clean up the state message
     it just added, same as the other early-exit paths.
 
-    F16(ii): under `STATE_MESSAGE_EPHEMERAL` (default ON) the verb is a no-op —
-    the state message never entered history, so the invariant it protects ("no
-    state message is ever in history") holds by construction. The call site is
-    still required for the flag-OFF path, and that is what this pins."""
+    F16(ii): the verb is a no-op — the state message never enters history, so
+    the invariant it protects ("no state message is ever in history") holds by
+    construction. The call site stays; this pins it."""
     a = _build_agent(validate=False)
     await a._step_impl()
 

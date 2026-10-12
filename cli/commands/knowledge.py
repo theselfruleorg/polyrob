@@ -20,7 +20,7 @@ import click
 
 
 def _bootstrap() -> None:
-    from core.bootstrap import load_env, setup_project_path, setup_sqlite_compat
+    from polyrob.app.bootstrap import load_env, setup_project_path, setup_sqlite_compat
     setup_project_path()
     setup_sqlite_compat()
     load_env(local_mode=True)
@@ -39,14 +39,12 @@ async def _resolve_provider_and_data_dir():
     """
     import logging as _logging
     embedder = None
+    # W8: the owner-verb seam — on a deployed box the DEPLOYED home, not the
+    # shell's; an unreadable deployed home refuses instead of exporting another.
+    from cli._admin_home import admin_data_dir
+    data_dir = admin_data_dir(write=False)
     try:
-        from core.bootstrap import _resolve_cli_data_home
-        data_dir = str(_resolve_cli_data_home()[0])
-    except Exception:
-        from core.runtime_paths import resolve_data_home
-        data_dir = str(resolve_data_home())
-    try:
-        from core.bootstrap import build_cli_container
+        from polyrob.app.bootstrap import build_cli_container
         _logging.disable(_logging.CRITICAL)
         try:
             container = await build_cli_container(log_level="ERROR")

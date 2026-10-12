@@ -1,7 +1,7 @@
 """I-9: webview/CLI data-home convergence.
 
 Locally (``POLYROB_DATA_DIR`` unset) the CLI/agent resolves its data home to
-``cwd/.polyrob`` (``core.bootstrap._resolve_cli_data_home``), but
+``cwd/.polyrob`` (``polyrob.app.bootstrap._resolve_cli_data_home``), but
 ``webview.pages._data_dir``/``webview.activity._data_dir`` fell back to the
 unrelated ``./data`` — so a local ``rob`` session writes goals/cron/memory to
 one place while the webview console reads from another, empty, one.
@@ -33,7 +33,7 @@ def test_env_set_wins(monkeypatch, modname):
 
 
 # --------------------------------------------------------------------------- #
-# POLYROB_DATA_DIR unset, core.bootstrap importable -> converges on the CLI's
+# POLYROB_DATA_DIR unset, polyrob.app.bootstrap importable -> converges on the CLI's
 # own resolution (cwd/.polyrob), not the stale ./data default.
 # --------------------------------------------------------------------------- #
 
@@ -45,7 +45,7 @@ def test_env_unset_converges_on_cli_data_home(monkeypatch, tmp_path, modname):
     monkeypatch.delenv("POLYROB_PROJECT_DIR", raising=False)
     monkeypatch.chdir(tmp_path)
 
-    from core.bootstrap import _resolve_cli_data_home
+    from polyrob.app.bootstrap import _resolve_cli_data_home
     expected_home, _ws_is_project_root, _project_root = _resolve_cli_data_home()
 
     assert mod._data_dir() == str(expected_home)
@@ -86,7 +86,7 @@ def test_webview_delegates_to_the_shared_core_seam(monkeypatch, tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# core.bootstrap unimportable (standalone webview deploy) -> legacy fallback,
+# polyrob.app.bootstrap unimportable (standalone webview deploy) -> legacy fallback,
 # never raises.
 # --------------------------------------------------------------------------- #
 

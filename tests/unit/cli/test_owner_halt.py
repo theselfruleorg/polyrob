@@ -13,7 +13,7 @@ def test_autonomy_halted_reads_resolved_data_home(tmp_path, monkeypatch):
     monkeypatch.delenv("POLYROB_DATA_DIR", raising=False)
     monkeypatch.delenv("DATA_ROOT", raising=False)
     monkeypatch.setattr("core.runtime_paths.resolve_data_home", lambda: tmp_path)
-    from agents.task.constants import AutonomyConfig
+    from core.config_policy import AutonomyConfig
     assert AutonomyConfig.autonomy_halted() is False
     (tmp_path / "AUTONOMY_HALT").write_text("")
     assert AutonomyConfig.autonomy_halted() is True
@@ -21,7 +21,7 @@ def test_autonomy_halted_reads_resolved_data_home(tmp_path, monkeypatch):
 
 def test_owner_halt_and_resume_toggle_the_file(tmp_path, monkeypatch):
     monkeypatch.setattr("core.runtime_paths.resolve_data_home", lambda: tmp_path)
-    monkeypatch.setattr("core.bootstrap.load_env", lambda *a, **k: None)
+    monkeypatch.setattr("polyrob.app.bootstrap.load_env", lambda *a, **k: None)
     from cli.commands.owner import owner
     runner = CliRunner()
 

@@ -26,7 +26,7 @@ def _patch_gateway_bootstrap(monkeypatch, data_dir="/tmp/polyrob-instanceX"):
     async def _fake_build(**kwargs):
         return fake_container
 
-    monkeypatch.setattr("core.bootstrap.build_cli_container", _fake_build)
+    monkeypatch.setattr("polyrob.app.bootstrap.build_cli_container", _fake_build)
     monkeypatch.setattr("cli.keys.preflight_or_onboard", lambda **k: True)
     monkeypatch.setattr("core.surfaces.bootstrap.install_surface_bus", lambda c: None)
     monkeypatch.setattr("core.surfaces.transcription.log_transcription_readiness", lambda c: None)
@@ -370,7 +370,7 @@ def test_idle_when_empty_waits_before_building_the_container(monkeypatch):
     async def _build(**k):
         built.append(1)
 
-    monkeypatch.setattr("core.bootstrap.build_cli_container", _build)
+    monkeypatch.setattr("polyrob.app.bootstrap.build_cli_container", _build)
     waited = []
 
     async def _wait(self):
@@ -390,7 +390,7 @@ def test_no_autonomy_never_starts_the_loops(monkeypatch):
     monkeypatch.setenv("POLYROB_LOCAL", "1")
     monkeypatch.setenv("DISCORD_BOT_TOKEN", "d-tok")
     started = []
-    monkeypatch.setattr("core.autonomy_runtime.start_autonomy",
+    monkeypatch.setattr("polyrob.app.autonomy_runtime.start_autonomy",
                         lambda **k: started.append(1))
     monkeypatch.setattr("surfaces.discord.harness.build_discord_harness",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("stop")))

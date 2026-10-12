@@ -77,7 +77,7 @@ async def test_limit_order_denied_over_ceiling(monkeypatch):
 async def test_limit_order_refused_for_forged_turn(monkeypatch):
     """H11: a forged self-wake / delegation-result / leaf / autonomous turn must not
     place a live order — the trade methods must consult turn origin like x402 does."""
-    from tools.controller.execution_context import ActionExecutionContext
+    from agents.task.loop_types.execution_context import ActionExecutionContext
     gate = PolicyGate(max_per_tx_usd=10_000.0)
     tool, ex = _tool(monkeypatch, gate)
     ctx = ActionExecutionContext()
@@ -140,7 +140,7 @@ async def test_limit_order_refused_while_halted(monkeypatch):
 async def test_cancel_order_refused_for_forged_turn(monkeypatch):
     """H11: mutating verbs beyond place_* (cancel/update_leverage/approve/revoke) are also
     gated — a forged/leaf turn cannot mutate the owner's live orders."""
-    from tools.controller.execution_context import ActionExecutionContext
+    from agents.task.loop_types.execution_context import ActionExecutionContext
     gate = PolicyGate(max_per_tx_usd=10_000.0)
     tool, ex = _tool(monkeypatch, gate)
     ctx = ActionExecutionContext()

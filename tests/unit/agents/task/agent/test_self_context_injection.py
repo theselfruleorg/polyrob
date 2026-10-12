@@ -3,7 +3,6 @@ user message (like skills), NOT embedded in the system prompt — so the system
 prompt stays stable/cacheable and the identity reads as a distinct block.
 """
 from unittest.mock import MagicMock
-import pytest
 
 import agents.task.agent.service  # noqa: F401 (import order)
 from agents.task.agent.message_manager.service import MessageManager
@@ -93,12 +92,10 @@ def test_self_context_loaded_from_disk_appears_in_foundation(tmp_path):
     assert "I am ROB, operator-authored." in _text(blocks[0])
 
 
-@pytest.mark.parametrize("combined", ["true", "false"])
-def test_live_correspondent_turn_hides_already_pinned_owner_documents(monkeypatch, combined):
+def test_live_correspondent_turn_hides_already_pinned_owner_documents():
     from types import SimpleNamespace
     from agents.task.session_class import may_write_owner_memory
     from agents.task.agent.messages.foundation_replay import capture_foundation, replay_foundation
-    monkeypatch.setenv("SELF_CONTEXT_COMBINED", combined)
     mm = _mm()
     orch = SimpleNamespace(_correspondent_tainted=False, _public_session=False)
     mm._owner_context_allowed = lambda: may_write_owner_memory(orch)

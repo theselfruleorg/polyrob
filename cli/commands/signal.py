@@ -58,6 +58,7 @@ async def _run_signal(daemon_opt, account_opt, verbose: bool):
         return SurfaceJob(harness=harness, run=harness.run, announce=_announce)
 
     await run_surface(
+        surface_id="signal",
         extra_env={"SIGNAL_SURFACE_ENABLED": "true"},
         verbose=verbose,
         resolve_credentials=lambda: resolve_signal_config(daemon_opt, account_opt),

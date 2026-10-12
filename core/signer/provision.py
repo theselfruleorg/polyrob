@@ -24,7 +24,7 @@ class ProvisionError(RuntimeError):
 
 
 def parse_env_file(path: str) -> Dict[str, str]:
-    """The env file as the units see it (parse parity with ``core.bootstrap.load_env``)."""
+    """The env file as the units see it (parse parity with ``polyrob.app.bootstrap.load_env``)."""
     from dotenv import dotenv_values
     if not os.path.isfile(path):
         raise ProvisionError(f"{path} does not exist")

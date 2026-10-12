@@ -8,6 +8,7 @@ before its no-key preflight could even print (UX assessment 2026-08-07, B1).
 """
 
 import os
+from core.env import bool_env
 from typing import Optional
 
 # The ASGI app target uvicorn launches (factory function).
@@ -15,15 +16,15 @@ APP_TARGET = "api.app:get_app"
 
 
 def _load_env():
-    """Pre-load env files via the ONE layering SSOT (core.bootstrap.load_env).
+    """Pre-load env files via the ONE layering SSOT (polyrob.app.bootstrap.load_env).
 
     This used to be a fourth, divergent loader (ENV-only, single file
     ``config/.env.{ENV}`` XOR root ``.env``, no CONFIG_ENV, no layering). The
-    app it launches runs ``core.bootstrap.load_env`` in its lifespan anyway,
+    app it launches runs ``polyrob.app.bootstrap.load_env`` in its lifespan anyway,
     so a divergent pre-load could only disagree with what the app then sees;
     it exists at all so ``UVICORN_*``/``LOG_LEVEL`` below read file values.
     """
-    from core.bootstrap import load_env
+    from polyrob.app.bootstrap import load_env
 
     resolved = load_env()
     print(f"Loaded environment (env: {resolved})")
@@ -90,6 +91,10 @@ def run_server(host=None, port=None, workers=None, *, reload=None, log_level=Non
 
     import uvicorn
 
+    # D6: the process entry point configures the root logger, not `import core`.
+    from core.logging import setup_logging
+    setup_logging(log_level="INFO")
+
     # Load environment
     _load_env()
 
@@ -108,7 +113,7 @@ def run_server(host=None, port=None, workers=None, *, reload=None, log_level=Non
         port = int(os.environ.get("UVICORN_PORT", "9000"))
     workers = resolve_workers(workers)
     if reload is None:
-        reload = os.environ.get("UVICORN_RELOAD", "false").lower() == "true"
+        reload = bool_env("UVICORN_RELOAD", False)
     if log_level is None:
         log_level = os.environ.get("LOG_LEVEL", "info").lower()
 

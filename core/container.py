@@ -188,13 +188,15 @@ class DependencyContainer:
         self.logger.info("Container cleanup completed")
 
     def register_manager(self, name: str, manager: Any) -> None:
-        """Register a manager instance."""
-        from core.initialization import MANAGER_METADATA
+        """Register a manager instance.
 
-        metadata = MANAGER_METADATA.get(name, {})
-        is_optional = metadata.get('optional', False)
-        
-        if name in self._managers and not is_optional:
+        Every manager is non-optional (no manager declares otherwise). This used to
+        read an always-empty ``MANAGER_METADATA`` from the composition root, which
+        made the DI kernel import the whole wiring layer.
+        """
+        is_optional = False
+
+        if name in self._managers:
             self.logger.warning(f"Overwriting existing manager: {name}")
         
         self._managers[name] = manager

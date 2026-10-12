@@ -16,7 +16,7 @@ import pytest
 import agents.task.constants as c
 from tools.shell.tool import ShellTool, ShellRunParams
 from tools.shell.process_registry import ProcessRegistry
-from tools.controller.execution_context import ActionExecutionContext
+from agents.task.loop_types.execution_context import ActionExecutionContext
 
 
 @pytest.fixture(autouse=True)

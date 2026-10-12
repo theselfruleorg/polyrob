@@ -36,6 +36,6 @@ def test_planner_vision_rows_removed(monkeypatch):
 
 
 def test_compaction_back_compat(monkeypatch):
-    # COMPACTION_MODEL must still win for the compaction task (legacy knob).
-    monkeypatch.setenv("COMPACTION_MODEL", "gpt-5-mini")
+    # AUX_MODEL_COMPACTION wins for the compaction task.
+    monkeypatch.setenv("AUX_MODEL_COMPACTION", "gpt-5-mini")
     assert resolve_aux_model("compaction", provider="openai") == "gpt-5-mini"

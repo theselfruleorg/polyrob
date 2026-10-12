@@ -161,7 +161,7 @@ def test_construction_no_longer_eagerly_provisions_judge():
 
     src = inspect.getsource(construction.AgentConstructionMixin.__init__)
     assert 'self._provision_aux_llm("judge")' not in src
-    assert "self._judge_llm = None" in src
+    assert "self._judge_llm = None" in inspect.getsource(construction.AgentConstructionMixin._init_aux_models)
 
 
 @pytest.mark.asyncio

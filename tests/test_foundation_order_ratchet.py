@@ -57,11 +57,6 @@ def test_no_volatile_block_in_cached_prefix():
 	assert FL.HMEM_LAYER.tier == FL.VOLATILE and not FL.HMEM_LAYER.cached
 
 
-def test_default_hmem_rides_the_tail(monkeypatch):
-	monkeypatch.delenv("HMEM_TAIL_PLACEMENT", raising=False)
-	assert FL.hmem_placement() == "tail"
-
-
 def test_system_prompt_is_first_and_keys_unique():
 	assert FL.FOUNDATION_LAYERS[0].attr == "_system_message"
 	keys = [layer.key for layer in FL.FOUNDATION_LAYERS]
@@ -110,8 +105,7 @@ def _manager_with_every_block():
 	return mm
 
 
-def test_both_assemblies_share_the_table_order(monkeypatch):
-	monkeypatch.setenv("HMEM_TAIL_PLACEMENT", "true")
+def test_both_assemblies_share_the_table_order():
 	mm = _manager_with_every_block()
 	expected = FL.foundation_messages(mm)
 	# the two self-context layers are alternatives (060 WS-1): one is empty.

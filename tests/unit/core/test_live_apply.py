@@ -35,9 +35,9 @@ def test_no_live_member_is_money_approval_or_ingress_shaped():
 def _iso(monkeypatch, tmp_path, *keys):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("POLYROB_HOME", str(tmp_path / "home"))
-    for k in keys:
+    for k in keys + ("POLYROB_OVERRIDES",):
         # setenv first so monkeypatch RESTORES the var: a live write sets
-        # os.environ directly.
+        # os.environ directly (a posture member: its POLYROB_OVERRIDES entry).
         monkeypatch.setenv(k, "")
         monkeypatch.delenv(k)
 
@@ -46,7 +46,7 @@ def test_live_write_sets_the_process_env(monkeypatch, tmp_path):
     _iso(monkeypatch, tmp_path, "GOALS_ENABLED")
     res = set_value("GOALS_ENABLED", "true", scope="global", surface="local", live=True)
     assert res.ok and res.live and res.applies == "live"
-    assert os.environ["GOALS_ENABLED"] == "true"
+    assert os.environ["POLYROB_OVERRIDES"] == "GOALS_ENABLED=true"
     assert "live in this session" in res.message
 
 

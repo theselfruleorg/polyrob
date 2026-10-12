@@ -8,9 +8,10 @@ from core.env import bool_env as _bool_env
 
 
 def github_enabled() -> bool:
-    """Default OFF; ON under ``AGENT_BUILDER_MODE=build|ship`` (032); explicit env wins."""
-    from core.config_policy.builder_mode import _builder_capability_default
-    return _bool_env("GITHUB_TOOL_ENABLED", _builder_capability_default("GITHUB_TOOL_ENABLED"))
+    """Default OFF; ON under ``AGENT_BUILDER_MODE=build|ship`` (032); a
+    ``POLYROB_OVERRIDES`` entry wins."""
+    from core.config_policy.members import member_flag
+    return member_flag("GITHUB_TOOL_ENABLED")
 
 
 def register_github_tool(force: bool = False) -> bool:

@@ -195,7 +195,7 @@ async def run_task_to_outcome(
     - ``run_session(user_id, session_id)`` → str result or refusal string
 
     *autonomous* marks the created session (goal/cron/planner-spawned) in the
-    in-process autonomy registry (``agents.task.goals.autonomy_marker``) so
+    in-process autonomy registry (``core.autonomy_marker``) so
     the goal tool can refuse objective mutations from that session later.
 
     *goal_id* records WHICH goal the session is running, when there is one (a
@@ -236,7 +236,7 @@ async def run_task_to_outcome(
             task_agent, str(resume_sid), user_id=user_id, note=resume_note)
         if resumed:
             if autonomous:
-                from agents.task.goals.autonomy_marker import mark_autonomous
+                from core.autonomy_marker import mark_autonomous
                 mark_autonomous(resumed, goal_id, cron_job_id=cron_job_id)
             # Emitted only when the resume REALLY happened, so `/status work` can
             # render `yielded xN / resumed xM` from facts rather than intent.
@@ -294,7 +294,7 @@ async def run_task_to_outcome(
         except Exception:
             pre_sid = None
     if autonomous and pre_sid:
-        from agents.task.goals.autonomy_marker import mark_autonomous
+        from core.autonomy_marker import mark_autonomous
         mark_autonomous(pre_sid, goal_id, cron_job_id=cron_job_id)
 
     kwargs = {"session_id": pre_sid} if pre_sid else {}
@@ -307,7 +307,7 @@ async def run_task_to_outcome(
     if not session_id:
         return RunOutcome(session_id=None)
     if autonomous:
-        from agents.task.goals.autonomy_marker import mark_autonomous
+        from core.autonomy_marker import mark_autonomous
         mark_autonomous(session_id, goal_id, cron_job_id=cron_job_id)
     outcome = await _run_session_to_outcome(
         task_agent, session_id, user_id=user_id, autonomous=autonomous)

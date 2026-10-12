@@ -7,7 +7,7 @@ Two layers under test:
 2. The first-step wiring (`MemoryPrefetchMixin._maybe_inject_episodic_digest`,
    composed into `Agent` and invoked from `_prepare_step`): fires exactly once, on
    step 1, for a chat/owner session, and NEVER fires when the session has been
-   marked autonomous (`agents.task.goals.autonomy_marker.mark_autonomous`) — this is
+   marked autonomous (`core.autonomy_marker.mark_autonomous`) — this is
    the reliability property the brief calls out: `mark_autonomous(session_id)` runs
    AFTER `create_session()` but BEFORE `run_session()`, so Agent CONSTRUCTION time is
    too early to read the marker reliably; the first step of the run loop (this test)
@@ -22,7 +22,7 @@ from modules.memory.sqlite_memory_provider import SqliteMemoryProvider
 import modules.memory.registry as reg
 from agents.task.agent.core.episodic_digest import build_activity_digest  # new (Step 3)
 from agents.task.agent.core import memory_prefetch as mp
-from agents.task.goals.autonomy_marker import mark_autonomous
+from core.autonomy_marker import mark_autonomous
 
 
 @pytest.fixture

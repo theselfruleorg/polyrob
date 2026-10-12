@@ -1,7 +1,7 @@
 """Declarative multi-stream seeding.
 
 A "stream" is one standing objective plus the recurring cycle of goals that
-serves it. ``scripts/seed_trading_cycle.py`` proved the pattern and hardcoded it:
+serves it. The retired ``seed_trading_cycle.py`` script proved the pattern and hardcoded it:
 one objective, three bodies, one toolset, one cadence carried by its own systemd
 timer. Ten streams under that pattern means ten scripts and ten timers.
 

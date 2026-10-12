@@ -1,7 +1,7 @@
 """Route mount-gate tests: single-user (flag OFF) vs multitenant (flag ON).
 
 webview/server.py builds the FastAPI app + registers routes/routers at IMPORT
-time, and reads WEBGATE_MULTITENANT at that point. So to exercise both modes
+time, and reads POLYROB_POSTURE at that point. So to exercise both modes
 faithfully we set the env var and ``importlib.reload`` the module, then drive the
 inner FastAPI sub-app (`server._fastapi`) with a TestClient. The public ASGI app
 (`server.app`) is the Socket.IO wrapper around `_fastapi`.
@@ -14,7 +14,7 @@ from tests.unit.webview.owner_session import owner_headers
 
 
 def _reload_server(monkeypatch, multitenant: bool):
-    monkeypatch.setenv("WEBGATE_MULTITENANT", "true" if multitenant else "false")
+    monkeypatch.setenv("POLYROB_POSTURE", "multitenant" if multitenant else "local")
     # Keep auth middleware out of the way for plain reachability checks.
     monkeypatch.setenv("ENV", "development")
     import webview.server as server

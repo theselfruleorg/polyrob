@@ -6,8 +6,8 @@ and every TEXT seat renders from here — the REPL's ``/inbox`` and ``/book``,
 Telegram's, and ``polyrob wallet book``. One renderer, so the terminal and the
 phone cannot start describing the same list differently.
 
-The shape is ``docs/design/040/cli/inbox-80.txt`` (three states) and
-``money-book-80.txt`` / ``money-disagree-80.txt``. **Eighty columns**, because
+The shape is the interface design's 80-column inbox mockup (three states) and
+its money-book / money-disagree mockups. **Eighty columns**, because
 that is the width a terminal is, and because a line that wraps is a line a
 person re-reads.
 

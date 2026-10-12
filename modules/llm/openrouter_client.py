@@ -690,7 +690,7 @@ class OpenRouterClient(LLMClient):
             max_tokens_value = self._adjust_max_tokens(messages, max_tokens)
 
             # P1-3: mark the stable system prefix cacheable for breakpoint-style models
-            # (Anthropic/Gemini via OpenRouter). No-op unless OPENROUTER_PROMPT_CACHE is on.
+            # (Anthropic/Gemini via OpenRouter). No-op unless prompt caching is on.
             from modules.llm.cache_hints import apply_openrouter_cache_control
             formatted_messages = apply_openrouter_cache_control(formatted_messages, self.model_type)
 
@@ -716,7 +716,7 @@ class OpenRouterClient(LLMClient):
 
                 if tools:
                     # UP-08: extend the cache breakpoint over the tools block for
-                    # breakpoint-style models (no-op unless OPENROUTER_PROMPT_CACHE on).
+                    # breakpoint-style models (no-op unless prompt caching is on).
                     from modules.llm.cache_hints import apply_openrouter_tools_cache_control
                     tools = apply_openrouter_tools_cache_control(tools, self.model_type)
                     request_params['tools'] = tools

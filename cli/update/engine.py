@@ -17,7 +17,7 @@ Invariants (never violated):
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 from cli.update.context import UpdateContext
@@ -31,6 +31,9 @@ class UpdateRunners:
     migrate: Callable[[], None]         # apply DB migrations
     verify: Callable[[], None]          # smoke-check the new install (raise if broken)
     rollback_code: Callable[[], None]   # revert code to the previous version
+    #: What ``install`` recorded (``old_sha``/``old_branch``) — 077's boot step
+    #: keeps it to roll back new code that never starts.
+    state: dict = field(default_factory=dict)
 
 
 @dataclass

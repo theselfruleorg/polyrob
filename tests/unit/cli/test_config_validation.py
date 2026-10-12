@@ -27,6 +27,9 @@ def _home_env(tmp_path, monkeypatch):
     """Every write lands in the home .env — the only env file the CLI loads
     (``./.polyrob/.env`` is never read, so ``--project`` is refused)."""
     monkeypatch.setenv("POLYROB_HOME", str(tmp_path / "home"))
+    # A dev box's real ~/.rob would otherwise be copied into the tmp home by
+    # the CLI boot's one-time ~/.rob -> POLYROB_HOME migration.
+    monkeypatch.setenv("HOME", str(tmp_path / "user"))
 
 
 def test_project_scope_is_refused_and_writes_nothing(tmp_path, monkeypatch):
@@ -189,7 +192,7 @@ def test_allowlisted_legacy_key_writes_without_force(tmp_path, monkeypatch):
 
 def test_allowlisted_legacy_provider_keys_write_without_force(tmp_path, monkeypatch):
     # DEFAULT_PROVIDER / CHAT_MODEL / CHAT_PROVIDER have difflib close matches
-    # (AUX_PROVIDER / HITL_MODE); their catalog rows (owner-UX P1 T10) must be
+    # (e.g. HITL_MODE); their catalog rows (owner-UX P1 T10) must be
     # checked BEFORE the closest-match rejection so they still write clean.
     monkeypatch.chdir(tmp_path)
     for key in ("DEFAULT_PROVIDER", "CHAT_MODEL", "CHAT_PROVIDER"):

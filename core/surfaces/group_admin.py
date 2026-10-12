@@ -22,6 +22,7 @@ seats render through, just in the tier that owns the machinery it writes to.
 """
 from __future__ import annotations
 
+from core.runtime_paths import surfaces_db_path
 import logging
 import os
 import re
@@ -60,7 +61,7 @@ def is_room_allowed(container: Any, surface: str, chat_id: Any) -> bool:
 
 
 def _surfaces_db(container: Any) -> str:
-    return os.path.join(_data_dir(container), "surfaces.db")
+    return surfaces_db_path(_data_dir(container))
 
 
 def _service(container: Any, name: str) -> Optional[Any]:

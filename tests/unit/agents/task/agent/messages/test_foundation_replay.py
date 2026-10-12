@@ -180,17 +180,6 @@ def test_partial_foundation_never_mixes_saved_and_live_slots(tmp_data_root, miss
     assert serialize_messages(after.get_messages_for_llm(consume_ephemeral=False)) == fresh
 
 
-def test_flag_off_rebuilds_always(tmp_data_root, monkeypatch):
-    _dress(_mm()).save_to_disk(SESSION, USER)
-    monkeypatch.setenv("FOUNDATION_REPLAY", "false")
-
-    after = _dress(_mm(), suffix=" FRESH")
-    fresh = serialize_messages(after.get_messages_for_llm(consume_ephemeral=False))
-    after.load_from_disk(SESSION, USER)
-    assert serialize_messages(
-        after.get_messages_for_llm(consume_ephemeral=False)) == fresh
-
-
 # ---------------------------------------------------------------------------
 # The tool emit order.
 # ---------------------------------------------------------------------------

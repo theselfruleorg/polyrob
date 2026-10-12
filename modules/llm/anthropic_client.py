@@ -16,7 +16,8 @@ from modules.llm.anthropic_sampling import clamp_thinking as _clamp_thinking, ro
 from modules.llm.deferred_tools import (  # F9: Anthropic native deferred tools
     call_with_deferral_retry, deferred_tools_enabled, prepare_deferred_tools, stream_with_deferral_retry)
 from modules.llm.token_counter import count_messages_tokens
-from core.exceptions import LLMError, LLMRateLimitError, LLMAuthenticationError, LLMContextLengthError, LLMInvalidRequestError, LLMConnectionError, ServiceError
+from modules.llm.credit_errors import raise_if_credit_refusal  # D3: 1113 = no balance
+from core.exceptions import LLMError, LLMPermanentError, LLMRateLimitError, LLMAuthenticationError, LLMContextLengthError, LLMInvalidRequestError, LLMConnectionError, ServiceError
 from core.config import BotConfig
 import os
 
@@ -132,7 +133,7 @@ class AnthropicClient(LLMClient):
         self._client = None
         
         # Model and API configuration
-        self.model_type = config.get_llm_config()['anthropic'].get('model', get_default_model('anthropic'))
+        self.model_type = config.get_llm_config()['anthropic'].get('model') or get_default_model('anthropic')
         self.api_key = config.get_llm_config()['anthropic']['api_key']
         self.last_response = None  # Store the last response for token usage reporting
         
@@ -600,6 +601,7 @@ class AnthropicClient(LLMClient):
             # Re-raise LLM errors as-is
             raise
         except Exception as e:
+            raise_if_credit_refusal(self._PROVIDER_LABEL, e, self.logger)
             # Wrap other exceptions using core.exceptions pattern
             self.logger.error(f"generate_agent_response failed: {str(e)}", exc_info=True)
             raise LLMError(f"Failed to generate agent response: {str(e)}")
@@ -734,26 +736,21 @@ class AnthropicClient(LLMClient):
             
             # Capture telemetry with actual timing and usage data
             self._extract_usage_and_capture_telemetry(start_time, success, None, kwargs.get('metadata'))
-                
             return response_text
-            
         except anthropic.APIError as e:
             success = False
             error_message = str(e)
             self.logger.error(f"{self._PROVIDER_LABEL} API error: {e}")
-            
             # Capture telemetry for failed requests too
             self._extract_usage_and_capture_telemetry(start_time, success, error_message, kwargs.get('metadata'))
-            
+            raise_if_credit_refusal(self._PROVIDER_LABEL, e)
             raise ServiceError(f"{self._PROVIDER_LABEL} API error: {e}")
         except Exception as e:
             success = False
             error_message = str(e)
             self.logger.error(f"Error generating response from {self._PROVIDER_LABEL}: {e}")
-            
             # Capture telemetry for failed requests too
             self._extract_usage_and_capture_telemetry(start_time, success, error_message, kwargs.get('metadata'))
-            
             raise ServiceError(f"Error generating response from {self._PROVIDER_LABEL}: {e}")
 
     async def generate_response(
@@ -804,6 +801,8 @@ class AnthropicClient(LLMClient):
             
             return response
             
+        except LLMPermanentError:
+            raise  # a credit refusal keeps its "NO BALANCE" type (credit_errors.py)
         except Exception as e:
             self.logger.error(f"Failed to generate response: {e}")
             raise ServiceError(f"Failed to generate response: {e}")
@@ -821,16 +820,16 @@ class AnthropicClient(LLMClient):
                 raise LLMConnectionError(f"No response from {self._PROVIDER_LABEL} API")
             self.logger.debug(f"{self._PROVIDER_LABEL} API connection validated successfully")
         except Exception as e:
+            raise_if_credit_refusal(self._PROVIDER_LABEL, e, self.logger)
             self.logger.error(f"Failed to validate {self._PROVIDER_LABEL} connection: {e}")
             raise ServiceError(f"Failed to validate {self._PROVIDER_LABEL} connection: {e}")
 
     async def _cleanup_client(self) -> None:
         """Clean up Anthropic client."""
         try:
-            if hasattr(self, '_client'):
-                # Just set it to None for garbage collection
-                self._client = None
-                self.logger.debug(f"{self._PROVIDER_LABEL} client resources released")
+            client, self._client = getattr(self, '_client', None), None
+            if client is not None and hasattr(client, 'close'):
+                await client.close()  # close the httpx pool, not just drop it
         except Exception as e:
             self.logger.error(f"Error cleaning up {self._PROVIDER_LABEL} client: {e}")
 

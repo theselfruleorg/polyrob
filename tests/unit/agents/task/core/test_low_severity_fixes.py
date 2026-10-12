@@ -102,7 +102,7 @@ def test_browser_state_failure_yields_a_minimal_state_not_none():
     src = inspect.getsource(step)
     idx = src.find("Error getting browser state")
     assert idx > 0, "browser-state handler not found — test needs updating"
-    block = src[idx:idx + 900]
+    block = src[idx:idx + 1000]
     assert "state = None" not in block, (
         "the browser-state handler still assigns None; downstream "
         "AgentMessagePrompt.get_user_message dereferences state.screenshot "

@@ -90,7 +90,7 @@ async def test_a_failed_write_records_nothing(_pm, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_write_file_stamps_artifact_id_on_the_result(_pm, monkeypatch):
-    from tools.controller.types import ActionResult
+    from agents.task.loop_types.controller_types import ActionResult
 
     monkeypatch.setattr(FileSystem, "ensure_initialized", lambda self: _noop(), raising=False)
     t = _fs_tool()

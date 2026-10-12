@@ -127,6 +127,27 @@ it is used for signing; disabling a pack cannot undo installed Python hooks.
 Third-party skills (markdown) and MCP servers are
 not code packs and stay allowed.
 
+## Import only from `polyrob.sdk`
+
+A pack reaches the host through one module, `polyrob.sdk`. It exports the
+public, stable names a pack needs: the pack contract (`PackSpec`,
+`ToolContribution`, `StatusSection`, `BaseTool`, `ToolDescriptor`,
+`register_optional_tool`, `ActionResult`), the owner-turn and taint predicates
+(`is_genuine_owner_turn`, `turn_tainted`, `run_seat_action`), the flag readers
+(`bool_env`, `int_env`, `member_flag`), the cron delivery hooks, and the chat
+surface parts (`BaseHarness`, `TextSink`, `run_surface`). `dir(polyrob.sdk)`
+lists all of them.
+
+```python
+from polyrob.sdk import BaseTool, ActionResult, member_flag
+```
+
+Each name resolves when you use it, so the import loads no host module. Any
+other host module, and every private (`_name`) host name, can change in any
+release without notice. `tests/test_pack_sdk_facade.py` refuses a private host
+import in a pack and holds the first-party packs' remaining direct host imports
+to a list that only gets shorter.
+
 ## The kill list
 
 The kill list names pack versions that must not run (for example a release that

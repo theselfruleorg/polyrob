@@ -7,7 +7,7 @@ tax + distraction. Fail-open.
 
 NOTE on `kind not in ("chat",)`: goal/cron sessions are excluded by the CALLER (the
 first-step wiring in `memory_prefetch.py::MemoryPrefetchMixin._maybe_inject_episodic_digest`
-resolves `kind` via `agents.task.goals.autonomy_marker.is_autonomous(session_id)` and only
+resolves `kind` via `core.autonomy_marker.is_autonomous(session_id)` and only
 ever passes `kind="chat"` here after confirming the session is not autonomous — see that
 module's docstring for why this can't be decided at Agent-construction time). This function
 re-checks `kind` itself so it is also safe to call directly (as the tests below do) with an
@@ -26,7 +26,7 @@ async def build_activity_digest(*, user_id: Optional[str], kind: str,
                                 is_sub_agent: bool, window_hours: int = 24,
                                 limit: int = 10):
     try:
-        from agents.task.constants import AutonomyConfig
+        from core.config_policy import AutonomyConfig
         if not AutonomyConfig.episodic_digest_inject():
             return None
         if is_sub_agent or kind not in ("chat",):        # owner/chat sessions only
@@ -79,7 +79,7 @@ async def build_mission_continuity(*, user_id: Optional[str], window_hours: int 
     already-surfaced episodes — a tick genuinely needs to see everything it did.
     """
     try:
-        from agents.task.constants import AutonomyConfig
+        from core.config_policy import AutonomyConfig
         if not AutonomyConfig.autonomous_continuity_bridge():
             return None
         from modules.memory.registry import memory_recall_episodes

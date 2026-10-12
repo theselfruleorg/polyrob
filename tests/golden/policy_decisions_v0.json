@@ -22116,7 +22116,7 @@
    "GATED_TOOL_REGISTRY": [
     "CODING_TOOLS_ENABLED",
     "disabled",
-    "owner sets CODING_TOOLS_ENABLED=true"
+    "owner sets POLYROB_OVERRIDES=CODING_TOOLS_ENABLED=true"
    ],
    "HIGH_IMPACT_TOOL_IDS": true,
    "TOOL_GATE_FLAGS": "CODING_TOOLS_ENABLED",
@@ -22239,7 +22239,7 @@
    "GATED_TOOL_REGISTRY": [
     "CRON_ENABLED (AUTONOMY_POSTURE>=full)",
     "disabled",
-    "owner raises AUTONOMY_POSTURE or sets CRON_ENABLED=true"
+    "owner raises AUTONOMY_POSTURE or sets POLYROB_OVERRIDES=CRON_ENABLED=true"
    ],
    "HIGH_IMPACT_TOOL_IDS": true,
    "TOOL_GATE_FLAGS": "CRON_ENABLED",
@@ -22807,7 +22807,7 @@
    "GATED_TOOL_REGISTRY": [
     "GOALS_ENABLED",
     "disabled",
-    "owner sets GOALS_ENABLED=true"
+    "owner sets POLYROB_OVERRIDES=GOALS_ENABLED=true"
    ],
    "HIGH_IMPACT_TOOL_IDS": true,
    "TOOL_GATE_FLAGS": "GOALS_ENABLED",
@@ -22998,7 +22998,7 @@
    "GATED_TOOL_REGISTRY": [
     "KB_ENABLED",
     "disabled",
-    "owner sets KB_ENABLED=true"
+    "owner sets POLYROB_OVERRIDES=KB_ENABLED=true"
    ],
    "HIGH_IMPACT_TOOL_IDS": false,
    "TOOL_GATE_FLAGS": "KB_ENABLED",
@@ -23110,7 +23110,7 @@
    "GATED_TOOL_REGISTRY": [
     "MCP_ENABLED + config/mcp_config.json",
     "disabled",
-    "owner sets MCP_ENABLED=true and configures servers"
+    "owner sets POLYROB_OVERRIDES=MCP_ENABLED=true and configures servers"
    ],
    "HIGH_IMPACT_TOOL_IDS": true,
    "TOOL_GATE_FLAGS": "MCP_ENABLED",
@@ -23796,7 +23796,7 @@
    "GATED_TOOL_REGISTRY": [
     "TWITTER_ENABLED",
     "disabled",
-    "owner configures X user credentials; TWITTER_ENABLED=true unlocks writes"
+    "owner configures X user credentials; POLYROB_OVERRIDES=TWITTER_ENABLED=true unlocks writes"
    ],
    "HIGH_IMPACT_TOOL_IDS": true,
    "TOOL_GATE_FLAGS": null,
@@ -24034,7 +24034,7 @@
    "GATED_TOOL_REGISTRY": [
     "X402_INVOICE_ENABLED",
     "disabled",
-    "owner sets X402_INVOICE_ENABLED=true (auto-ON in autonomous mode)"
+    "owner sets POLYROB_OVERRIDES=X402_INVOICE_ENABLED=true (auto-ON in autonomous mode)"
    ],
    "HIGH_IMPACT_TOOL_IDS": true,
    "TOOL_GATE_FLAGS": "X402_INVOICE_ENABLED",

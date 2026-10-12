@@ -156,7 +156,7 @@ def create_snapshot(
         n += 1
     snap_dir.mkdir(parents=True)
     # M2 (2026-07-15): the snapshot holds raw copies of config (`.env.production`
-    # → MASTER_SEED) and dirs (`wallet/` → meta.json/audit.jsonl). chmod 0700 so
+    # → PAYMENT_MASTER_SEED) and dirs (`wallet/` → meta.json/audit.jsonl). chmod 0700 so
     # no other local-box user/process can read it off disk — independent of (and
     # complementary to) the credential-name guard in secret_guard.py, which stops
     # the AGENT's own file tools, not other OS principals.

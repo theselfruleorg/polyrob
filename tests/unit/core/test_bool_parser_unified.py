@@ -28,9 +28,14 @@ def test_coerce_memory_flag_removed():
     assert not hasattr(cfg, "_coerce_memory_flag")
 
 def test_memory_flag_behavior_preserved(monkeypatch):
+    # The H-MEM kill switches are internal (no alias): the env no longer reaches
+    # them. A default-ON bool that IS env-bound still parses a falsey token.
     monkeypatch.setenv("HIERARCHICAL_MEMORY_ENABLED", "off")
+    monkeypatch.setenv("ENABLE_CREDIT_SYSTEM", "off")
     from core.config import BotConfig
-    assert BotConfig().HIERARCHICAL_MEMORY_ENABLED is False
+    cfg = BotConfig()
+    assert cfg.HIERARCHICAL_MEMORY_ENABLED is True
+    assert cfg.enable_credit_system is False
 
 
 # --- SA-08: the two confirmed-divergent bool parsers now use the core.env SSOT ---
@@ -39,8 +44,9 @@ def test_mcp_enabled_parses_identically_in_eip8004_and_config(monkeypatch):
     """MCP_ENABLED=1 must be True in BOTH core/config (pydantic bool) and the eip8004
     agent-card registration — the old `== "true"` made =1 disagree (card said disabled
     while MCP was running)."""
-    monkeypatch.setenv("MCP_ENABLED", "1")
-    assert env.bool_env("MCP_ENABLED", False) is True
+    monkeypatch.setenv("MCP_ENABLED", "1")   # D7: routed into POLYROB_OVERRIDES
+    from core.config_policy.members import member_flag
+    assert member_flag("MCP_ENABLED") is True
     from core.config import BotConfig
     assert BotConfig().mcp_enabled is True
     # the eip8004 MCP_ENABLED read must not reintroduce the ad-hoc comparison
@@ -48,7 +54,7 @@ def test_mcp_enabled_parses_identically_in_eip8004_and_config(monkeypatch):
     import modules.eip8004.registration as reg
     src = inspect.getsource(reg)
     assert 'os.environ.get("MCP_ENABLED", "false").lower() == "true"' not in src
-    assert 'bool_env("MCP_ENABLED"' in src
+    assert 'member_flag("MCP_ENABLED")' in src   # D7: the one member resolver
 
 def test_auto_agent_init_uses_ssot_parser():
     import inspect

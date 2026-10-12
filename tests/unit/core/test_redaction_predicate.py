@@ -1,12 +1,12 @@
 """Behavioral tests for the display-redaction secret-name predicate.
 
 Tests that core.secrets.is_secret_key correctly identifies secret names
-for redaction purposes. A separate concern from core.bootstrap._is_secret_key,
+for redaction purposes. A separate concern from polyrob.app.bootstrap._is_secret_key,
 which is a narrow backfill selector.
 """
 from core.secrets import is_secret_key
 import cli.commands.config as cfg
-import core.bootstrap as boot
+import polyrob.app.bootstrap as boot
 
 
 def test_known_secret_names_redacted():

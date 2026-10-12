@@ -43,7 +43,7 @@ _warned_missing_character = False
 
 def _gate_on() -> bool:
     try:
-        from agents.task.constants import task_personality_block_enabled
+        from core.config_policy import task_personality_block_enabled
         return task_personality_block_enabled()
     except Exception:
         return False

@@ -24,7 +24,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from tools.base_tool import ToolStatus
-from tools.controller.execution_context import ActionExecutionContext
+from agents.task.loop_types.execution_context import ActionExecutionContext
 from polyrob_x.twitter_tool import (
     TwitterTool,
     TwitterPostAction,

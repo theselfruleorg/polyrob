@@ -24,9 +24,9 @@ def test_session_cancel_restores_logging_disable_to_notset():
         return fake_container
 
     logging.disable(logging.NOTSET)  # clean baseline
-    with patch("core.bootstrap.build_cli_container", _fake_build), \
-         patch("core.bootstrap.setup_project_path", lambda: None), \
-         patch("core.bootstrap.setup_sqlite_compat", lambda: None), \
+    with patch("polyrob.app.bootstrap.build_cli_container", _fake_build), \
+         patch("polyrob.app.bootstrap.setup_project_path", lambda: None), \
+         patch("polyrob.app.bootstrap.setup_sqlite_compat", lambda: None), \
          patch("cli.keys.preflight_or_onboard", lambda **k: True), \
          patch("cli.commands._session_control.control_live_session", new_callable=AsyncMock):
         asyncio.run(sess._session_cancel("sess-1"))

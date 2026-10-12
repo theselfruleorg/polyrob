@@ -16,7 +16,7 @@ def home(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_transition_hook_holds_dispatcher_and_cancels_cron(home):
     from core import autonomy_control as ac
-    from core.autonomy_runtime import AutonomyHandles
+    from polyrob.app.autonomy_runtime import AutonomyHandles
     calls = []
 
     class FakeDispatcher:
@@ -57,8 +57,8 @@ async def test_transition_hook_holds_dispatcher_and_cancels_cron(home):
 @pytest.mark.asyncio
 async def test_transition_hook_cancels_autonomous_session_delegations(home):
     from core import autonomy_control as ac
-    from core.autonomy_runtime import AutonomyHandles
-    from agents.task.goals.autonomy_marker import mark_autonomous
+    from polyrob.app.autonomy_runtime import AutonomyHandles
+    from core.autonomy_marker import mark_autonomous
 
     class Reg:
         def __init__(self):
@@ -116,7 +116,7 @@ def test_cold_start_requeue_runs_even_while_paused(home):
     _p.wait()
     b.claim(g.id, f"goal-dispatch-{_p.pid}", ttl_seconds=60)
     ac.pause(str(home), via="test")
-    from core.autonomy_runtime import _requeue_on_boot
+    from polyrob.app.autonomy_runtime import _requeue_on_boot
     assert _requeue_on_boot(b) == 1
     assert b.get(g.id).status == "ready" and b.get(g.id).consecutive_failures == 0
     assert ac.allows("dispatch", str(home)).allowed is False
@@ -128,7 +128,7 @@ async def test_pause_watcher_reconciles_a_pause_written_by_another_process(home,
     ANOTHER process: no transition hook fires here, so the watcher must see the
     edge and cancel this process's in-flight work."""
     from core import autonomy_control as ac
-    from core.autonomy_runtime import AutonomyHandles
+    from polyrob.app.autonomy_runtime import AutonomyHandles
     calls = []
 
     class FakeDispatcher:
@@ -157,7 +157,7 @@ async def test_pause_watcher_reconciles_a_pause_written_by_another_process(home,
 def test_start_autonomy_registers_the_hook_and_logs_a_paused_start(home, monkeypatch, caplog):
     import logging
     from core import autonomy_control as ac
-    from core import autonomy_runtime as ar
+    from polyrob.app import autonomy_runtime as ar
     for name in ("_cron_enabled", "_goals_enabled", "_curator_enabled", "_surface_gc_enabled",
                  "_quiet_release_enabled", "_x402_invoicing_enabled"):
         monkeypatch.setattr(ar, name, lambda: False)
@@ -168,7 +168,7 @@ def test_start_autonomy_registers_the_hook_and_logs_a_paused_start(home, monkeyp
     monkeypatch.setattr(ar, "_schedule_hf_deploy_reconcile", lambda: None)
     ac.pause(str(home), via="test")
     try:
-        with caplog.at_level(logging.WARNING, logger="core.autonomy_runtime"):
+        with caplog.at_level(logging.WARNING, logger="polyrob.app.autonomy_runtime"):
             async def _run():
                 h = ar.start_autonomy(task_agent=object(), data_dir=str(home))
                 registered = h.on_pause_transition in ac._TRANSITION_HOOKS

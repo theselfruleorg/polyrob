@@ -14,7 +14,7 @@ AgentBrain.
 import pytest
 from pydantic import ValidationError
 
-from tools.controller.registry.views import ActionModel
+from agents.task.loop_types.registry_views import ActionModel
 from agents.task.agent.views import AgentOutput, AgentBrain
 
 # The runtime uses self.AgentOutput = AgentOutput.type_with_custom_actions(self.ActionModel)

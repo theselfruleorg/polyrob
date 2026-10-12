@@ -72,13 +72,17 @@ class GitCloneParams(BaseModel):
     depth: Optional[int] = Field(None, description="Shallow-clone depth")
 
 
+#: Internal tuning (not env-driven): per-git-command timeout in seconds.
+GIT_TOOL_TIMEOUT_SEC = 120.0
+
+
 class GitTool(BaseTool):
     """Structured git over the confined workspace root. Gated by GIT_TOOLS_ENABLED."""
 
     def __init__(self, name: str = "git", config=None, container=None):
         super().__init__(name=name, config=config, container=container)
         self._root_override = None
-        self._timeout = float(os.getenv("GIT_TOOL_TIMEOUT_SEC", "120"))
+        self._timeout = GIT_TOOL_TIMEOUT_SEC
 
     # --- root + confinement --------------------------------------------------
 
@@ -105,12 +109,12 @@ class GitTool(BaseTool):
 
     @staticmethod
     def _ok(content):
-        from tools.controller.types import ActionResult
+        from agents.task.loop_types.controller_types import ActionResult
         return ActionResult(extracted_content=content)
 
     @staticmethod
     def _err(msg):
-        from tools.controller.types import ActionResult
+        from agents.task.loop_types.controller_types import ActionResult
         return ActionResult(error=msg)
 
     @staticmethod

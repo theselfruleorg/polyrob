@@ -425,18 +425,18 @@ class TaskAgentLifecycleMixin:
             raise AgentError("Credit verification is unavailable; retry before starting a paid session.") from e
     def is_autonomous_session(self, session_id: str) -> bool:
         """031: is *session_id* an autonomous run (goal/cron/planner) rather than
-        an owner-driven chat session? Read by ``core.autonomy_runtime`` on the
+        an owner-driven chat session? Read by ``polyrob.app.autonomy_runtime`` on the
         pause edge (duck-typed — core may not import agents.*) so a pause cancels
         a goal run's background delegations and never the owner's own."""
-        from agents.task.goals.autonomy_marker import is_autonomous
+        from core.autonomy_marker import is_autonomous
         return is_autonomous(session_id)
 
     def cancel_autonomous_delegations(self, reason: str) -> int:
         """031: cancel the running background delegations of every RESIDENT
         autonomous session (never the owner's own chat). Called by
-        ``core.autonomy_runtime`` on the paused edge (duck-typed). Returns the
+        ``polyrob.app.autonomy_runtime`` on the paused edge (duck-typed). Returns the
         number cancelled; fail-open per session."""
-        from agents.task.goals.autonomy_marker import is_autonomous
+        from core.autonomy_marker import is_autonomous
         n = 0
         registry = getattr(self, "_registry", None)
         lister = getattr(registry, "session_ids", None)

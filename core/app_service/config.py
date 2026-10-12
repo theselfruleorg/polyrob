@@ -3,7 +3,8 @@ import os
 import re
 from typing import Any, Mapping, Optional, Tuple
 
-from core.config_policy.builder_mode import _builder_capability_default, base_domain, cert_dir_for
+from core.config_policy.builder_mode import base_domain, cert_dir_for
+from core.config_policy.members import member_flag
 from core.env import bool_env, float_env, int_env
 
 RESERVED_SLUGS = frozenset({"www", "api", "apps", "console", "pub", "mail", "admin", "status",
@@ -14,12 +15,11 @@ EGRESS_MODES = ("none", "allowlist", "open")
 def app_service_enabled() -> bool:
     """Register the ``app_service`` tool + arm the supervisor. Default OFF; ON under
     effective ``AGENT_BUILDER_MODE=ship``; NOT flipped by POLYROB_LOCAL."""
-    return bool_env("APP_SERVICE_ENABLED", _builder_capability_default("APP_SERVICE_ENABLED"))
+    return member_flag("APP_SERVICE_ENABLED")
 
 
 def app_service_allow_public() -> bool:
-    return bool_env("APP_SERVICE_ALLOW_PUBLIC",
-                    _builder_capability_default("APP_SERVICE_ALLOW_PUBLIC"))
+    return member_flag("APP_SERVICE_ALLOW_PUBLIC")
 
 
 def app_service_base_domain() -> str:

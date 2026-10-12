@@ -9,7 +9,7 @@ user-context creds (the SAME ``TWITTER_*`` env vars the twitter tool uses) and
 replies via ``POST /2/dm_conversations/with/:participant_id/messages``.
 
 Rate-limit reality (pay-per-use tier, docs.x.com 2026-07): DM reads are
-15 req/15 min per user, so the poll interval defaults to 90s (``X_DM_POLL_SEC``)
+15 req/15 min per user, so the poll interval is 90s (``X_DM_POLL_SEC`` in surface/harness.py)
 — faster polling just burns the window and gets 429s. Sends are 15/15 min +
 1,440/24 h. X access tiers can return incomplete DM history even with valid
 user-context auth. For a UI-authoritative fallback, capture a login with
@@ -57,17 +57,17 @@ def x(verbose: bool):
 
 
 async def _run_x(verbose: bool):
-    from cli.commands._surface_runner import SurfaceJob, run_surface
+    from polyrob.sdk import SurfaceJob, run_surface
 
     async def _build(ctx):
-        from polyrob_x.surface.harness import build_x_harness
+        from polyrob_x.surface.harness import X_DM_POLL_SEC, build_x_harness
         harness = build_x_harness(ctx.container, ctx.task_agent,
                                   data_dir=ctx.data_dir)
 
         async def _announce():
             from core.remedy import flag_command
             click.echo(click.style("x dm bot online", fg="green")
-                       + f" — polling dm_events every {os.getenv('X_DM_POLL_SEC', '90')}s…")
+                       + f" — polling dm_events every {X_DM_POLL_SEC}s…")
             click.echo(click.style(
                 "OBSOLETE: X no longer delivers new DMs to dm_events (they go to "
                 "encrypted X Chat); this poller will see no new inbound.",

@@ -12,8 +12,8 @@ this bug class hides.
 
 Legitimate (allowlisted) non-flag uses:
   - ``POLYROB_*`` — every renamed framework flag.
-  - ``ROB_LOCAL`` — the one intentionally-kept deprecated alias (``is_local()`` still
-    accepts it); comments/docs naming it to explain the alias are legitimate.
+  - ``ROB_LOCAL`` — the retired (1.4) alias of ``POLYROB_LOCAL``; the retired-flag
+    table, doctor and test env scrubs still name it so a stale env line is reported.
   - ``ROB_TO_A2A_STATE`` / ``A2A_TO_ROB_STATE`` — a2a module-global dicts, not env vars.
   - ``CLI_TODO_DOT_ROB`` — a project-dir-name toggle (token contains ROB, not a ROB_ flag).
   - ``_ROB_KEY_RE`` — the instance ``rob_`` API-key redaction regex (instance-level).
@@ -34,9 +34,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 # A line passes if it contains ANY of these substrings.
 ALLOWLIST = (
     "POLYROB_",
-    # ROB_LOCAL is the ONE intentionally-kept deprecated alias — is_local() reads
-    # `_bool_env("POLYROB_LOCAL") or _bool_env("ROB_LOCAL")` (agents/task/constants.py),
-    # so comments/docs that name it (to explain the alias) are legitimate, not stray.
+    # ROB_LOCAL is the retired (1.4) alias of POLYROB_LOCAL — nothing reads it, but
+    # core/config_policy/retired_flags.py, doctor and test env scrubs still name it.
     "ROB_LOCAL",
     "ROB_TO_A2A_STATE",
     "A2A_TO_ROB_STATE",

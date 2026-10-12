@@ -101,6 +101,20 @@ def test_from_project_copies_identity_not_dbs(env, tmp_path):
     assert (d / "identity" / "rob" / "user_owner" / "self.md").exists()
 
 
+@pytest.mark.parametrize("line", ["BOT_INSTANCE_ID=rob", "BOT_OWNER_USER_ID=rob"])
+def test_from_project_refuses_a_retired_identity_alias(env, tmp_path, line):
+    # 1.4: a legacy project that pins only BOT_INSTANCE_ID / BOT_OWNER_USER_ID
+    # is refused before the profile exists, naming the rename.
+    import click
+    proj = tmp_path / "legacy"
+    (proj / ".polyrob").mkdir(parents=True)
+    (proj / ".polyrob" / ".env").write_text(line + "\n")
+    with pytest.raises(click.ClickException, match="POLYROB_"):
+        create_profile("rob", from_project=str(proj))
+    from core.profiles import profiles_root
+    assert not (profiles_root() / "rob").exists()
+
+
 def test_from_project_include_data_copies_dbs(env, tmp_path):
     proj = tmp_path / "legacy"
     d = proj / ".polyrob"

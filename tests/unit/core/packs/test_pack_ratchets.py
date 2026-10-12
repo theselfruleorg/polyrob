@@ -15,7 +15,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[4]
 SIGNER_FILES = sorted((REPO / "core" / "signer").glob("*.py")) + [
     REPO / "tools" / "defi" / "signer_entry.py"]
-SOURCE_DIRS = ("core", "modules", "agents", "tools", "api", "cli", "surfaces", "webview",
+SOURCE_DIRS = ("core", "polyrob", "modules", "agents", "tools", "api", "cli", "surfaces", "webview",
                "cron", "utils")
 #: (file, package). Shrink-only: 050's agent_nft surface predates the loader (WS-B moves it).
 #: 069 v4 renamed the package; the second row is its legacy-name fallback (drop it when the

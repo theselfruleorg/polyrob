@@ -391,7 +391,7 @@ class SkillManager(SkillWriterMixin):
         if not orphans:
             return
         try:
-            from agents.task.constants import local_mode_enabled
+            from core.config_policy import local_mode_enabled
             severe = local_mode_enabled()
         except Exception:
             severe = False
@@ -1286,8 +1286,7 @@ class SkillManager(SkillWriterMixin):
             if len(skill.content) > SOFT_INJECT_WARN_CHARS:
                 logger.warning(
                     "skill '%s' body is %d chars (> %d recommended inject size) - "
-                    "injecting in full anyway; consider SKILL_PROGRESSIVE_DISCLOSURE "
-                    "or trimming the skill",
+                    "injecting in full anyway; consider trimming the skill",
                     skill.skill_id, len(skill.content), SOFT_INJECT_WARN_CHARS,
                 )
             sections.append(f'<skill id="{skill.skill_id}">')

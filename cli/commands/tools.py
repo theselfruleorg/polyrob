@@ -5,7 +5,7 @@ here" — which has TWO halves: the tool's own flag, and whether the process the
 are standing in can register it at all. C27: this showed only the first, so a
 server-only tool read ``enabled`` on a box whose CLI container has never been
 able to build it. The CLI availability half is derived from the ONE seam
-(``core.bootstrap.cli_unavailable_tools``, over ``_CLI_REGISTERABLE_TOOLS``),
+(``polyrob.app.bootstrap.cli_unavailable_tools``, over ``_CLI_REGISTERABLE_TOOLS``),
 never a second list.
 """
 
@@ -38,7 +38,7 @@ def _cli_availability(tool_ids) -> dict:
     the row says so instead of claiming a capability nobody checked.
     """
     try:
-        from core.bootstrap import cli_unavailable_tools
+        from core.cli_tool_tables import cli_unavailable_tools
         missing = set(cli_unavailable_tools(list(tool_ids)))
     except Exception as exc:
         reason = f"unknown ({type(exc).__name__}: {exc})"

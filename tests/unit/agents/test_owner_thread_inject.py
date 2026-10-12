@@ -159,7 +159,7 @@ def test_rooms_sub_agents_and_flag_off_get_nothing(container, monkeypatch):
 
 
 def test_autonomous_run_gets_its_rail_slice_only(container):
-    from agents.task.goals.autonomy_marker import mark_autonomous
+    from core.autonomy_marker import mark_autonomous
     mark_autonomous("run-2", None, cron_job_id="exit")
     ot.record_owner_out(container, "12345", "exit rail: A or B?", via="telegram", session_id="run-1",
                         source="agent_send", mid="10", rail_id="cron:exit", now=time.time() - 60)

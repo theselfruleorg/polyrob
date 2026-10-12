@@ -59,6 +59,9 @@ ARRIVAL_POLL_SEC = 5.0
 #: is compared against a quote field, and 0x-hex folds case.
 _NATIVE_EVM = "0x0000000000000000000000000000000000000000"
 
+#: Relay's native-SOL sentinel (the System program id). base58: exact match.
+_NATIVE_SVM = "11111111111111111111111111111111"
+
 STATE_PENDING = "pending"
 STATE_ARRIVED = "arrived"
 STATE_IN_FLIGHT = "in_flight"
@@ -102,21 +105,10 @@ def bridges_db_path() -> str:
 
 
 def _init(db_path: str) -> None:
-    from core.sqlite_util import wal_connect
-    conn = wal_connect(db_path)
-    try:
-        conn.executescript(_SCHEMA)
-        # Rows written before the column existed. ALTER is not idempotent, so the
-        # duplicate-column error is the expected outcome on every run but the
-        # first — and it is the ONLY error swallowed here.
-        try:
-            conn.execute("ALTER TABLE bridges ADD COLUMN escalated_at REAL")
-        except Exception as exc:
-            if "duplicate column" not in str(exc).lower():
-                raise
-        conn.commit()
-    finally:
-        conn.close()
+    # Rows written before ``escalated_at`` existed gain it in place
+    # (``ensure_columns``: only a duplicate-column race is swallowed).
+    from core.sqlite_util import init_schema
+    init_schema(db_path, _SCHEMA, columns={"bridges": (("escalated_at", "REAL"),)})
 
 
 @dataclass(frozen=True)
@@ -167,7 +159,14 @@ def assert_phase1(*, quote, expected_recipient: str, declared_amount_raw: int,
     if row is None:
         return Phase1Verdict(False, (
             f"REFUSED: chain {dest_chain_name!r} is not in the registry."))
-    if int(getattr(row, "chain_id", -1)) != int(quote.dest_chain_id):
+    if getattr(row, "family", "evm") == "svm":
+        # The registry has no EIP-155 id for an SVM chain (`chain_id=0`); the
+        # provider's pseudo id is matched through the alias it registered.
+        if arrival_chain_name(quote.dest_chain_id) != dest_chain_name:
+            return Phase1Verdict(False, (
+                f"REFUSED: the order targets chain id {quote.dest_chain_id}, "
+                f"which does not resolve to {dest_chain_name!r}."))
+    elif int(getattr(row, "chain_id", -1)) != int(quote.dest_chain_id):
         return Phase1Verdict(False, (
             f"REFUSED: registry chain {dest_chain_name!r} is id "
             f"{getattr(row, 'chain_id', None)}, but the order targets "
@@ -204,6 +203,17 @@ def chain_name_for_id(chain_id: Optional[int]) -> Optional[str]:
         if row is not None and int(getattr(row, "chain_id", -1)) == wanted:
             return name
     return None
+
+
+def arrival_chain_name(chain_id) -> Optional[str]:
+    """The registry name of a bridge DESTINATION id: a registry id, or a
+    provider pseudo id the provider registered (``bridge_status.chain_alias``,
+    Solana). Origins keep :func:`chain_name_for_id` — see its note."""
+    name = chain_name_for_id(chain_id)
+    if name:
+        return name
+    from core.wallet import bridge_status
+    return bridge_status.chain_alias(chain_id)
 
 
 def record_pending(*, user_id: str, quote, amount_usd: Optional[float],
@@ -457,14 +467,25 @@ def token_balance_raw(address: str, chain_name: str, token: str) -> Optional[int
         return None
 
 
-def arrival_reader(currency_out: Optional[str]) -> Callable:
-    """The balance reader that matches what is ARRIVING.
+def arrival_reader(currency_out: Optional[str],
+                   chain_name: Optional[str] = None) -> Callable:
+    """The balance reader that matches what is ARRIVING, and WHERE.
 
     Phase 2's whole claim is "we measured it land". Measuring the NATIVE balance
     for an ERC-20 arrival would measure a number that cannot move and report a
     real delivery as `in_flight` forever — so the asset decides the reader, and
     the choice is made from the quote's own `currency_out`, not from a flag.
+    An SVM destination reads lamports or a classic-SPL balance over the Solana
+    RPC; ``eth_getBalance`` there would read nothing at all.
     """
+    from core.wallet import chains as _chains
+    row = _chains.get(chain_name or "") if chain_name else None
+    if row is not None and getattr(row, "family", "evm") == "svm":
+        from core.wallet import solana_onchain
+        if not currency_out or str(currency_out) == _NATIVE_SVM:
+            return lambda address, _chain: solana_onchain.native_balance_raw(address)
+        mint = str(currency_out)
+        return lambda address, _chain: solana_onchain.token_balance_raw(address, mint)
     if not currency_out or str(currency_out).lower() == _NATIVE_EVM:
         return native_balance_raw
 
@@ -490,6 +511,38 @@ def native_balance_raw(address: str, chain_name: str) -> Optional[int]:
         return None
 
 
+def arrival_prover(request_id: str, recipient: str, currency_out: Optional[str],
+                   chain_name: Optional[str]) -> Optional[Callable[[], Optional[int]]]:
+    """For an SVM destination, a ``() -> raw inflow | None`` that measures what
+    the DELIVERING transactions paid ``recipient``; None for an EVM chain.
+
+    Why only SVM: the same Solana wallet runs the trading lab, so a balance
+    rise during the window can be a swap fill rather than the bridge. Relay's
+    destination hashes are only pointers — each is read on-chain and only its
+    own pre/post balance change for our account counts.
+    """
+    from core.wallet import chains as _chains
+    row = _chains.get(chain_name or "") if chain_name else None
+    if row is None or getattr(row, "family", "evm") != "svm":
+        return None
+    mint = (None if not currency_out or str(currency_out) == _NATIVE_SVM
+            else str(currency_out))
+
+    def _prove() -> Optional[int]:
+        from core.wallet import bridge_status, solana_onchain
+        hashes = bridge_status.read_out_txs(request_id)
+        if not hashes:
+            return None
+        total = 0
+        for h in hashes:
+            got = solana_onchain.tx_inflow(h, recipient, mint)
+            if got is None:
+                return None
+            total += got
+        return total
+    return _prove
+
+
 @dataclass(frozen=True)
 class ArrivalOutcome:
     state: str            # arrived | in_flight | failed
@@ -504,7 +557,8 @@ def await_arrival(*, provider, request_id: str, recipient: str, chain_name: str,
                   poll_sec: float = ARRIVAL_POLL_SEC,
                   now: Callable[[], float] = time.time,
                   sleep: Callable[[float], None] = time.sleep,
-                  read_balance: Optional[Callable[[str, str], Optional[int]]] = None
+                  read_balance: Optional[Callable[[str, str], Optional[int]]] = None,
+                  prove: Optional[Callable[[], Optional[int]]] = None
                   ) -> ArrivalOutcome:
     """Phase 2. Poll until the destination balance clears the floor, or give up
     honestly.
@@ -522,7 +576,7 @@ def await_arrival(*, provider, request_id: str, recipient: str, chain_name: str,
 
     while True:
         after = reader(recipient, chain_name)
-        if after is not None and balance_before is not None:
+        if prove is None and after is not None and balance_before is not None:
             delta = int(after) - int(balance_before)
             if delta >= int(min_out_raw):
                 return ArrivalOutcome(
@@ -532,6 +586,16 @@ def await_arrival(*, provider, request_id: str, recipient: str, chain_name: str,
 
         state, detail = provider.status(request_id)
         last_detail = detail or state
+        if prove is not None and state == "success":
+            # SVM: the delivering transaction's own balance change is the
+            # proof; a wallet-balance rise is not (the lab trades here).
+            proven = prove()
+            if proven is not None and proven >= int(min_out_raw):
+                return ArrivalOutcome(
+                    STATE_ARRIVED,
+                    f"proven +{proven} raw by the delivering transaction on "
+                    f"{chain_name} (floor {min_out_raw})",
+                    balance_after=after, measured_delta=proven)
         if state == "failure":
             provider_failed = True
             break

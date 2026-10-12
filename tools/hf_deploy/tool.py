@@ -32,7 +32,7 @@ from typing import Any, Dict, Optional
 from pydantic import BaseModel, Field
 
 from tools.base_tool import BaseTool
-from tools.controller.types import ActionResult
+from agents.task.loop_types.controller_types import ActionResult
 from tools.hf_deploy.broker import BrokerError, HFSpacesBroker
 from tools.hf_deploy.digest import tested_tree_digest
 from tools.hf_deploy import hf_deploy_daily_max, hf_deploy_min_interval_sec

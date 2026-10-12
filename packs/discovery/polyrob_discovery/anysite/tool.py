@@ -130,12 +130,12 @@ class AnysiteTool(BaseTool):
 
     @staticmethod
     def _ok(content):
-        from tools.controller.types import ActionResult
+        from agents.task.loop_types.controller_types import ActionResult
         return ActionResult(extracted_content=content)
 
     @staticmethod
     def _err(msg):
-        from tools.controller.types import ActionResult
+        from agents.task.loop_types.controller_types import ActionResult
         return ActionResult(error=msg)
 
     def _prepare(self):
@@ -238,7 +238,7 @@ def register_anysite_tool(force: bool = False) -> bool:
     """Phase-2 registrar (``polyrob_discovery.pack``): the descriptor and class
     that ``tools/descriptors.py`` / ``tools/__init__.py`` used to hold statically.
     Registered unconditionally, as before; the CLI container additionally
-    requires the live gate (``anysite_cli_enabled``, ``core.bootstrap``)."""
+    requires the live gate (``anysite_cli_enabled``, ``polyrob.app.bootstrap``)."""
     from tools.descriptors import ToolCategory, ToolDescriptor, register_optional_tool
     return register_optional_tool(
         "anysite", AnysiteTool,

@@ -25,7 +25,7 @@ def _clear_autonomy_marker():
     session autonomous in a module-global registry; without cleanup that
     leaks into later tests reusing the same session_id."""
     yield
-    from agents.task.goals import autonomy_marker
+    from core import autonomy_marker
     autonomy_marker._SESSIONS.clear()
 
 

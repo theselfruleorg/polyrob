@@ -70,11 +70,9 @@ class OutboundDeliveryQueue:
             conn.execute(_SCHEMA)
             # 030 L4 additive migration: a pre-media queue DB gains the column on
             # open. CREATE IF NOT EXISTS never alters an existing table.
-            cols = {r[1] for r in conn.execute("PRAGMA table_info(outbound_queue)")}
-            if "media" not in cols:
-                conn.execute("ALTER TABLE outbound_queue ADD COLUMN media TEXT")
-            if "claim_token" not in cols:   # OB6 lease
-                conn.execute("ALTER TABLE outbound_queue ADD COLUMN claim_token TEXT")
+            # OB6: claim_token is the delivery lease.
+            from core.sqlite_util import ensure_columns
+            ensure_columns(conn, "outbound_queue", (("media", "TEXT"), ("claim_token", "TEXT")))
             conn.commit()
         finally:
             conn.close()

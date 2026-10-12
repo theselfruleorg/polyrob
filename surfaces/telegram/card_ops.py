@@ -102,7 +102,7 @@ def carded(user_id: str, cmd: str, text: str, reply: Any) -> Any:
     args = (text or "").split()[1:]
     if not args and cmd in cards.FORM_VERBS:
         return builder_reply(user_id, cmd, reply)
-    if not args or cards.executes(args):
+    if (not args and cmd not in cards.BARE_CONFIRMABLE_VERBS) or cards.executes(args):
         return reply
     new_text, card = cards.quote_card(user_id, cmd, args, reply)
     if card is None:

@@ -6,8 +6,8 @@ writes into `<data_home>/defi_tokens.db` for real. That was observed: a test
 fixture address (0x1111…1111) turned up in the live cache and then in a live
 `portfolio` scan set.
 
-Mirrors the existing precedent in tests/conftest.py, which forces
-AUTONOMY_STATE_DURABLE=off so unit runs never touch the real autonomy DB.
+Mirrors the existing precedent in tests/conftest.py, which keeps unit runs
+off the real autonomy DB (``_isolate_autonomy_state_store``).
 """
 import pytest
 
@@ -49,7 +49,7 @@ def _no_indexer_network(monkeypatch):
         monkeypatch.setattr(f"{module}._get", _blocked, raising=False)
     # 071 W1: quotes and screener answers are cached (20 s / 60 s). A value a
     # previous test stubbed must never answer this one.
-    from core.intel.cache import clear_all
+    from tools.intel.cache import clear_all
     clear_all()
     # 071: the address classifier and the Solana display enumeration probe
     # the chain; blocked here they read as UNKNOWN, which every caller treats as

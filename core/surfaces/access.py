@@ -30,6 +30,7 @@ Pure decision function; no surface/transport imports. Reads ``POLYROB_LOCAL`` di
 """
 from __future__ import annotations
 
+from core.runtime_paths import surfaces_db_path
 import logging
 import os
 from enum import Enum
@@ -134,21 +135,6 @@ def _is_owner_or_paired(container: Any, uid: str, env: Mapping[str, str],
     return False
 
 
-def _group_chat_mode_default() -> bool:
-    """Default for GROUP_CHAT_ENABLED when it is unset in the resolved env source:
-    ON under effective autonomous mode (core.config_policy._mode_capability_default),
-    else OFF — same guarded pattern as core/config.py's MCP consumer seam
-    (013 T2 review fix, Finding 1). Without this, `resolve_access_tier` re-derived the
-    flag from raw env and disagreed with `SurfaceConfig.group_chat_enabled()` (which the
-    dispatcher already checks before reaching here), leaving group ingress DENIED under
-    autonomous mode with the env unset. Fail-closed: any import/call fault -> False."""
-    try:
-        return _mode_capability_default("GROUP_CHAT_ENABLED")
-    except Exception as e:
-        logger.debug("group-chat mode-default check failed (fail-closed to off): %s", e)
-        return False
-
-
 def _is_owner_principal(uid: str, env: Mapping[str, str]) -> bool:
     """True only for the BOUND owner principal — no pairing, no local bypass.
 
@@ -205,7 +191,7 @@ def _chat_role(container: Any, surface: str, chat_id: str, member_id: str) -> st
             from core.surfaces.group_roles import GroupRoles
             cfg = getattr(container, "config", None) if container else None
             data_dir = data_dir_or_home(getattr(cfg, "data_dir", None))
-            store = GroupRoles(os.path.join(data_dir, "surfaces.db"))
+            store = GroupRoles(surfaces_db_path(data_dir))
         return store.role(surface, chat_id, member_id, is_owner=False)
     except Exception as e:
         key = f"{surface}:{chat_id}"
@@ -268,14 +254,15 @@ def resolve_access_tier(
         # else in an allowed chat becomes GROUP_MEMBER (their messages are
         # mention-gated DATA at the dispatcher — never a command/steer turn).
         if chat_type != "dm":
-            raw_group = src.get("GROUP_CHAT_ENABLED", "")
-            if raw_group is None or not str(raw_group).strip():
-                # Unset -> the mode-governed default (explicit env, even falsey,
-                # always wins over the default; only the unset case moves).
-                group_on = _group_chat_mode_default()
-            else:
-                from core.env import parse_bool
-                group_on = parse_bool(raw_group, False)
+            # A posture member (D7): the POLYROB_OVERRIDES entry of the resolved
+            # env source wins, else the mode-governed default. A direct
+            # GROUP_CHAT_ENABLED line is ignored.
+            try:
+                from core.config_policy.members import member_flag
+                group_on = member_flag("GROUP_CHAT_ENABLED", src)
+            except Exception as e:  # fail-closed
+                logger.debug("group-chat member resolve failed (closed): %s", e)
+                group_on = False
             if not group_on:
                 return AccessTier.DENIED
             chat_id = str(getattr(source, "chat_id", "") or "")

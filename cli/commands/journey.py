@@ -20,7 +20,7 @@ def journey(since: str, user: Optional[str]) -> None:
     from cli.commands._bootstrap import ensure_env_loaded
     ensure_env_loaded()
     from cli._admin_home import admin_data_dir
-    from core.bootstrap import setup_project_path, setup_sqlite_compat
+    from polyrob.app.bootstrap import setup_project_path, setup_sqlite_compat
     from core.identity import resolve_identity
     from cli.ui.commands.h_journey import render_journey
 

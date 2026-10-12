@@ -73,7 +73,7 @@ def test_mcp_enabled_default_on_under_autonomous(monkeypatch):
     itself. Hermetic — no real servers."""
     _enable_full(monkeypatch)
     monkeypatch.delenv("MCP_ENABLED", raising=False)
-    from agents.task.constants import _mode_capability_default
+    from core.config_policy import _mode_capability_default
     assert _mode_capability_default("MCP_ENABLED") is True
 
     from modules.eip8004.registration import build_registration_file

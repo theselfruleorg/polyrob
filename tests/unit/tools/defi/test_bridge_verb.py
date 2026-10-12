@@ -133,19 +133,15 @@ def test_a_pause_probe_failure_fails_closed(monkeypatch):
     assert "failing closed" in r.error
 
 
-def test_an_erc20_ORIGIN_is_refused(monkeypatch):
-    """The origin restriction is load-bearing: an ERC-20 origin adds an approve
-    step whose spender is a third party's address."""
-    monkeypatch.setenv(bv.FLAG, "true")
-    monkeypatch.setattr("tools.controller.turn_origin._is_forged_or_autonomous_turn",
-                        lambda ctx, _: False)
-    monkeypatch.setattr("core.config_policy.AutonomyConfig.autonomy_halted",
-                        staticmethod(lambda: False))
-    monkeypatch.setattr("core.autonomy_control.allows",
-                        lambda kind: SimpleNamespace(allowed=True, reason="ok"))
-    r = _run(bv.perform_bridge(_Tool(), _params(token_in="usdc"), SimpleNamespace(user_id="owner")))
-    assert "ORIGIN must be the chain's native asset" in r.error
-    assert "allowance leg" in r.error
+def test_an_unpinned_ORIGIN_token_is_refused():
+    """Only the chain's PINNED usdc may be an origin: any other token would need
+    an allowance to a spender nobody vetted."""
+    import pytest as _pytest
+    with _pytest.raises(ValueError, match="cannot be a bridge origin"):
+        bv.resolve_origin_token("0x4200000000000000000000000000000000000006", "base", False)
+    with _pytest.raises(ValueError, match="pins none"):
+        bv.resolve_origin_token("usdc", "robinhood", False)
+    assert bv.resolve_origin_token("native", "base", False) == (None, None)
 
 
 def test_an_erc20_DESTINATION_is_allowed_but_only_from_the_pinned_registry():
@@ -283,7 +279,7 @@ def test_the_cli_reads_the_real_ActionResult_field():
     complete bridge report on the first prod run."""
     import inspect
 
-    from tools.controller.types import ActionResult
+    from agents.task.loop_types.controller_types import ActionResult
     assert not hasattr(ActionResult(extracted_content="x"), "content")
 
     from cli.commands import wallet

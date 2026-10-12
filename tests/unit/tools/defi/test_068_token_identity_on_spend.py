@@ -120,8 +120,8 @@ def test_the_ceiling_is_the_top_degen_ticket():
 
 def test_swap_consults_the_gate_before_broadcast():
     import inspect
-    from tools.defi.trade_tool import DefiTradeTool
-    src = inspect.getsource(DefiTradeTool.swap)
+    from tools.defi.swap_verb import perform_swap  # W9: the verb body moved
+    src = inspect.getsource(perform_swap)
     assert src.index("buy_identity_refusal") < src.index("_run_guarded")
     assert "asset=" in src  # G5: the audit row names the pair
 

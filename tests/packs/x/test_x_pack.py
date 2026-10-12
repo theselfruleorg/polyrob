@@ -103,7 +103,7 @@ print(json.dumps({
 
 
 def test_disabled_pack_drops_out_and_is_named():
-    env = {**os.environ, "POLYROB_PACKS_DISABLED": "x", "POLYROB_ENV_KEY_BACKFILL": "0",
+    env = {**os.environ, "POLYROB_PACKS_DISABLED": "x",
            "AUTONOMY_MODE": "autonomous", "X_BROWSER_ENABLED": "true"}
     env.pop("POLYROB_PACKS", None)
     out = subprocess.run([sys.executable, "-c", _DISABLED], cwd=str(REPO), env=env,

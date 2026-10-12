@@ -12,8 +12,8 @@ it deploys anything. An unsigned or mismatched row is sent back to ``pending``
 Where the key lives:
 
 * prod (``/etc/polyrob`` exists): ``/etc/polyrob/app_approval.key``, created by
-  root (``deployment/hardening/install-service-identities.sh`` or the supervisor
-  on first tick) mode 0640, group ``polyrob-seat`` — the identities that host an
+  root (the service-identity provisioning or the supervisor on first tick)
+  mode 0640, group ``polyrob-seat`` — the identities that host an
   owner seat (Telegram in ``polyrob-agent``, the console in ``polyrob-web``).
   ``polyrob-email`` and anything else in ``polyrob-data`` cannot read it.
 * dev / a single-identity install: ``<dir of app_services.db>/app_approval.key``

@@ -26,8 +26,20 @@ import tools.controller.approval_queue  # noqa: F401 — pre-import so its modul
 # lazy `import tools.controller.approval_queue` would (on a cold import) re-run that
 # registration AFTER the monkeypatch and clobber the test's spy provider back to
 # the real OwnerQueueApprover.
-from tools.controller.types import ActionResult
-from tools.controller.execution_context import ActionExecutionContext
+from agents.task.loop_types.controller_types import ActionResult
+from agents.task.loop_types.execution_context import ActionExecutionContext
+
+
+@pytest.fixture(autouse=True)
+def _known_session_owner(monkeypatch):
+    """The controller doubles below never create session "s1" on disk, so every
+    hook that resolved its session root fell into PathManager's unknown-session
+    retry (agents/task/path.py: 3 x time.sleep(0.1)) — 300 ms per verb, 70 s for
+    this file. Discovery is not under test here: answer it with the owner the
+    doubles declare."""
+    from agents.task.path import PathManager
+    monkeypatch.setattr(PathManager, "_discover_user_for_session",
+                        lambda self, session_id: "u1")
 
 
 def _make_controller(tmp_path, user_id="u1", tainted=False):
@@ -443,7 +455,7 @@ def test_leaf_turn_denied_by_owner_queue_itself(tmp_path, monkeypatch):
     (tools/controller/approval_queue.py) without ever creating a durable ask."""
     from agents.task.goals.board import ASK_OPEN, GoalBoard
     from tools.controller.approval_queue import OwnerQueueApprover
-    from tools.controller.execution_context import ActionExecutionContext
+    from agents.task.loop_types.execution_context import ActionExecutionContext
 
     board = GoalBoard(str(tmp_path / "goals.db"))
     provider = OwnerQueueApprover(board=board)
@@ -469,7 +481,7 @@ def test_leaf_turn_denied_by_owner_queue_itself(tmp_path, monkeypatch):
 def test_taint_probe_true_denies_without_creating_ask_or_notifying(tmp_path, monkeypatch):
     from agents.task.goals.board import ASK_OPEN, GoalBoard
     from tools.controller.approval_queue import OwnerQueueApprover
-    from tools.controller.execution_context import ActionExecutionContext
+    from agents.task.loop_types.execution_context import ActionExecutionContext
 
     notified = []
 
@@ -496,7 +508,7 @@ def test_taint_probe_raising_fails_closed(tmp_path):
     clean, so deny rather than fail-open into creating an ask."""
     from agents.task.goals.board import ASK_OPEN, GoalBoard
     from tools.controller.approval_queue import OwnerQueueApprover
-    from tools.controller.execution_context import ActionExecutionContext
+    from agents.task.loop_types.execution_context import ActionExecutionContext
 
     def _boom():
         raise RuntimeError("probe exploded")
@@ -517,7 +529,7 @@ def test_taint_probe_false_creates_ask_as_before(tmp_path, monkeypatch):
     still created exactly as before, and an owner decision still resolves it."""
     from agents.task.goals.board import ASK_OPEN, GoalBoard
     from tools.controller.approval_queue import OwnerQueueApprover
-    from tools.controller.execution_context import ActionExecutionContext
+    from agents.task.loop_types.execution_context import ActionExecutionContext
 
     async def _fake_notify(container, user_id, text):
         pass
@@ -562,7 +574,7 @@ def test_owner_queue_wiring_denies_when_orchestrator_tainted(tmp_path, monkeypat
         "tools.controller.approval_queue._push_owner_notification", _fake_notify)
 
     from agents.task.goals.board import ASK_OPEN, GoalBoard
-    from tools.controller.execution_context import ActionExecutionContext
+    from agents.task.loop_types.execution_context import ActionExecutionContext
 
     c = _make_controller(tmp_path, tainted=True)
     ctx = ActionExecutionContext(

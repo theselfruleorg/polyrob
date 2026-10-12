@@ -18,7 +18,7 @@ from tools.self_env.tool import (
     SelfEnvTool, InstallDepParams, ReadSourceParams, PatchSourceParams,
     RestartParams, GitPullParams,
 )
-from tools.controller.execution_context import ActionExecutionContext
+from agents.task.loop_types.execution_context import ActionExecutionContext
 
 
 @pytest.fixture(autouse=True)
@@ -260,11 +260,31 @@ async def test_git_pull_requires_trusted_updater(monkeypatch, tmp_path):
 # --- restart_service -------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_restart_service_requires_trusted_supervisor(monkeypatch, tmp_path):
+async def test_restart_service_refuses_without_a_supervised_service(monkeypatch, tmp_path):
     _posture(monkeypatch, "2")
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "data"))
     t = _tool(tmp_path)
     res = await t.self_env_restart_service(RestartParams(), execution_context=_owner_ctx())
-    assert res.error and "trusted supervisor" in res.error.lower()
+    assert res.error and "nothing would start it again" in res.error
+
+
+@pytest.mark.asyncio
+async def test_restart_service_writes_the_drained_restart_request(monkeypatch, tmp_path):
+    """077: the call runs only after the owner approved it (always_queued); it then
+    asks the running service for a drained restart — it restarts nothing itself."""
+    from core import lifecycle as lc
+    _posture(monkeypatch, "2")
+    home = tmp_path / "data"
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(home))
+    monkeypatch.setenv("INVOCATION_ID", "unit")
+    lc.record_boot(data_home=home)
+    t = _tool(tmp_path)
+    res = await t.self_env_restart_service(RestartParams(reason="new MCP server"),
+                                           execution_context=_owner_ctx())
+    assert not res.error and "Do not say it restarted" in res.extracted_content
+    req = lc.read_request(data_home=home)
+    assert req.kind == lc.KIND_RESTART and req.reason == "new MCP server"
+    assert req.origin["surface"] == "agent"
 
 
 # --- audit events ----------------------------------------------------------------

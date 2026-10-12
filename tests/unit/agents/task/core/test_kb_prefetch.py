@@ -45,7 +45,7 @@ async def test_kb_off_no_kb_call():
     kb_sentinel = AsyncMock(side_effect=AssertionError("kb_search must not be called when KB is OFF"))
 
     with (
-        patch("agents.task.constants.AutonomyConfig.kb_auto_prefetch", return_value=False),
+        patch("core.config_policy.AutonomyConfig.kb_auto_prefetch", return_value=False),
         patch("modules.memory.registry.memory_prefetch", new=AsyncMock(return_value=MEMORY_CONTENT)),
         patch("modules.memory.registry.kb_search", new=kb_sentinel),
         patch("agents.task.constants.UNTRUSTED_TOOL_RESULT_WRAP", True),
@@ -66,7 +66,7 @@ async def test_kb_off_no_kb_call():
 async def test_kb_off_returns_none_when_memory_empty():
     """When KB OFF and memory is empty, returns None (unchanged)."""
     with (
-        patch("agents.task.constants.AutonomyConfig.kb_auto_prefetch", return_value=False),
+        patch("core.config_policy.AutonomyConfig.kb_auto_prefetch", return_value=False),
         patch("modules.memory.registry.memory_prefetch", new=AsyncMock(return_value="")),
     ):
         from agents.task.agent.core.memory_prefetch import build_prefetch_message
@@ -83,7 +83,7 @@ async def test_kb_off_returns_none_when_memory_empty():
 async def test_kb_on_both_sections_present():
     """KB ON + both recall sources populated → one message with two labelled sections."""
     with (
-        patch("agents.task.constants.AutonomyConfig.kb_auto_prefetch", return_value=True),
+        patch("core.config_policy.AutonomyConfig.kb_auto_prefetch", return_value=True),
         patch("modules.memory.registry.memory_prefetch", new=AsyncMock(return_value=MEMORY_CONTENT)),
         patch("modules.memory.registry.kb_search", new=AsyncMock(return_value=KB_CONTENT)),
         patch("agents.task.constants.UNTRUSTED_TOOL_RESULT_WRAP", True),
@@ -110,7 +110,7 @@ async def test_kb_on_both_sections_present():
 async def test_kb_on_memory_wrapped_cross_session():
     """With UNTRUSTED_TOOL_RESULT_WRAP ON, memory is wrapped with cross_session_memory source."""
     with (
-        patch("agents.task.constants.AutonomyConfig.kb_auto_prefetch", return_value=True),
+        patch("core.config_policy.AutonomyConfig.kb_auto_prefetch", return_value=True),
         patch("modules.memory.registry.memory_prefetch", new=AsyncMock(return_value=MEMORY_CONTENT)),
         patch("modules.memory.registry.kb_search", new=AsyncMock(return_value=KB_CONTENT)),
         patch("agents.task.constants.UNTRUSTED_TOOL_RESULT_WRAP", True),
@@ -130,7 +130,7 @@ async def test_kb_on_memory_wrapped_cross_session():
 async def test_kb_on_kb_raises_fail_open():
     """kb_search raising must not break the memory branch — memory-only result returned."""
     with (
-        patch("agents.task.constants.AutonomyConfig.kb_auto_prefetch", return_value=True),
+        patch("core.config_policy.AutonomyConfig.kb_auto_prefetch", return_value=True),
         patch("modules.memory.registry.memory_prefetch", new=AsyncMock(return_value=MEMORY_CONTENT)),
         patch("modules.memory.registry.kb_search", new=AsyncMock(side_effect=RuntimeError("KB exploded"))),
         patch("agents.task.constants.UNTRUSTED_TOOL_RESULT_WRAP", True),
@@ -155,7 +155,7 @@ async def test_kb_on_kb_raises_fail_open():
 async def test_kb_on_only_kb_content():
     """KB ON + memory empty + KB populated → KB section returned (no memory section header)."""
     with (
-        patch("agents.task.constants.AutonomyConfig.kb_auto_prefetch", return_value=True),
+        patch("core.config_policy.AutonomyConfig.kb_auto_prefetch", return_value=True),
         patch("modules.memory.registry.memory_prefetch", new=AsyncMock(return_value="")),
         patch("modules.memory.registry.kb_search", new=AsyncMock(return_value=KB_CONTENT)),
         patch("agents.task.constants.UNTRUSTED_TOOL_RESULT_WRAP", True),
@@ -181,7 +181,7 @@ async def test_kb_on_only_kb_content():
 async def test_kb_on_both_empty_returns_none():
     """KB ON + both memory and KB empty → returns None."""
     with (
-        patch("agents.task.constants.AutonomyConfig.kb_auto_prefetch", return_value=True),
+        patch("core.config_policy.AutonomyConfig.kb_auto_prefetch", return_value=True),
         patch("modules.memory.registry.memory_prefetch", new=AsyncMock(return_value="")),
         patch("modules.memory.registry.kb_search", new=AsyncMock(return_value="")),
         patch("agents.task.constants.UNTRUSTED_TOOL_RESULT_WRAP", True),
@@ -202,7 +202,7 @@ def test_kb_auto_prefetch_default_off_without_local():
     env.pop("POLYROB_LOCAL", None)
     env.pop("KB_AUTO_PREFETCH", None)
     with patch.dict(os.environ, env, clear=True):
-        from agents.task.constants import AutonomyConfig
+        from core.config_policy import AutonomyConfig
         assert AutonomyConfig.kb_auto_prefetch() is False
 
 
@@ -212,15 +212,15 @@ def test_kb_auto_prefetch_on_with_local():
     env["POLYROB_LOCAL"] = "true"
     env.pop("KB_AUTO_PREFETCH", None)
     with patch.dict(os.environ, env, clear=True):
-        from agents.task.constants import AutonomyConfig
+        from core.config_policy import AutonomyConfig
         assert AutonomyConfig.kb_auto_prefetch() is True
 
 
 def test_kb_auto_prefetch_explicit_env_wins():
-    """An explicit KB_AUTO_PREFETCH=true wins even without POLYROB_LOCAL."""
+    """A POLYROB_OVERRIDES entry wins even without POLYROB_LOCAL (D7)."""
     env = {k: v for k, v in os.environ.items() if k not in ("POLYROB_LOCAL", "KB_AUTO_PREFETCH")}
     env.pop("POLYROB_LOCAL", None)
-    env["KB_AUTO_PREFETCH"] = "true"
+    env["POLYROB_OVERRIDES"] = "KB_AUTO_PREFETCH=true"
     with patch.dict(os.environ, env, clear=True):
-        from agents.task.constants import AutonomyConfig
+        from core.config_policy import AutonomyConfig
         assert AutonomyConfig.kb_auto_prefetch() is True

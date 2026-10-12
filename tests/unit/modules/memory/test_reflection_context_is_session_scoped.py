@@ -1,7 +1,7 @@
 """Reflection's aux model and billing identity must be per-session, not per-process.
 
 `TaskContextManager` is registered as a container SINGLETON
-(core/initialization.py, ServiceScope.SINGLETON) and every SessionOrchestrator is
+(polyrob/app/initialization.py, ServiceScope.SINGLETON) and every SessionOrchestrator is
 handed the same container, so ONE instance serves every session in the process.
 Agent construction used to assign `reflection_llm` / `reflection_meter_ctx` straight
 onto that instance, making them last-writer-wins: the second tenant to construct an
@@ -17,10 +17,9 @@ from modules.memory.task.task_context_manager import TaskContextManager
 
 
 @pytest.fixture
-def tcm(monkeypatch):
+def tcm():
     from core.config import BotConfig
 
-    monkeypatch.setenv("AUTONOMY_STATE_DURABLE", "off")
     return TaskContextManager(name="test-tcm", config=BotConfig())
 
 

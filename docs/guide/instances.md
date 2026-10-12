@@ -38,7 +38,7 @@ instance ID determines:
 
 **The instance ID is not the owner tenant.** Memory rows, goals, invoices and
 preferences are written under an owner *tenant*, and that is resolved on its own
-axis: `POLYROB_OWNER_USER_ID` (or `BOT_OWNER_USER_ID`), else `POLYROB_LOCAL_OWNER`,
+axis: `POLYROB_OWNER_USER_ID` (the retired `BOT_OWNER_USER_ID` refuses to start), else `POLYROB_LOCAL_OWNER`,
 else the single-user tenant `local` — never the instance id. Naming an instance
 therefore moves nothing a session wrote. If your install predates this and stored
 rows under the instance id as a tenant, bind that value back with

@@ -55,7 +55,6 @@ def _add_findings(mgr, session_id, n):
 
 def test_close_triggers_reflection_below_step_threshold_when_enabled(monkeypatch):
     monkeypatch.setenv("REFLECTION_ON_SESSION_CLOSE", "true")
-    monkeypatch.setenv("REFLECTION_SESSION_CLOSE_THRESHOLD", "5")
     mgr = _make_manager({})
     mgr.create_session(session_id="s1", task="t")
     _add_findings(mgr, "s1", 6)  # below the per-step threshold of 25
@@ -76,7 +75,6 @@ def test_close_no_reflection_when_flag_off(monkeypatch):
 
 def test_close_no_reflection_below_min_findings(monkeypatch):
     monkeypatch.setenv("REFLECTION_ON_SESSION_CLOSE", "true")
-    monkeypatch.setenv("REFLECTION_SESSION_CLOSE_THRESHOLD", "5")
     mgr = _make_manager({})
     mgr.create_session(session_id="s3", task="t")
     _add_findings(mgr, "s3", 2)  # fewer than the close threshold -> no cost

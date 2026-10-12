@@ -3,29 +3,83 @@ on:
   pull_request:
   push:
     branches: [main]
+    # A markdown-only push (notes, logs) runs no suite; code and generated files still do.
+    paths-ignore: ['**.md']
+# A newer push to the same ref cancels the older run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 # Least privilege: no job writes to the repository.
 permissions:
   contents: read
 jobs:
-  test:
+  static:
+    # W10: the source-tree ratchets (tests/test_*ratchet*.py + the event-kind
+    # contract) read files and parse ASTs; they need no extras, no browser and no
+    # xdist (one process shares tests/support/repo_index.py's parse cache).
+    # test_effect_classification_ratchet imports the twitter pack, so it runs in
+    # the `rest` shard below instead.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
-        with: { python-version: "3.11" }
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: pyproject.toml }
+      - run: pip install -e ".[dev]"
+      # STATIC: the same one-liner names the set in the `test` job, which skips it.
+      - run: |
+          STATIC="$(ls tests/test_*ratchet*.py | grep -v test_effect_classification_ratchet) tests/test_event_kind_contract.py"
+          pytest -q -p no:cacheprovider --timeout=600 $STATIC
+  test:
+    # W10: the suite in five shards, each in parallel (pytest-xdist, one worker
+    # per CPU, a whole file per worker so module fixtures stay together). The
+    # `rest` shard is everything the other shards and `static` do not name, so a
+    # new test directory can never fall outside CI. `slow` = the modules that
+    # spawn a process/browser/container (tests/conftest.py marks them by rule);
+    # the other shards skip them.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [core, tools, agents, rest, slow]
+    steps:
+      # The [all] extras (torch-sized wheels) overflow the runner's free disk
+      # ("No space left on device"); drop the preinstalled SDKs the suite never uses.
+      - run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h /
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: pyproject.toml }
       # The suite imports the full package (browser/server/etc.) at collection
       # time and uses pytest-asyncio, so install the documented dev setup
       # (README "Contributing": pip install -e ".[dev,all]"). A bare
       # `pip install -e .` fails collection on missing playwright/fastapi.
-      - run: pip install -e ".[dev,all]"
       # 067 (one install): the first-party packs ship inside polyrob — the
-      # editable install above provides them; [all] carries their SDK extras.
+      # editable install provides them; [all] carries their SDK extras.
+      - run: pip install -e ".[dev,all]"
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('requirements.lock') }}
       # The browser tests launch real headless chromium via playwright.
       - run: python -m playwright install --with-deps chromium
-      # -p no:randomly: the blessed deterministic invocation. pytest-randomly
-      # (a [dev] extra) otherwise shuffles test order per run, and a handful of
-      # order-dependent tests turn CI into a coin flip.
-      - run: pytest -q -p no:randomly
+      - name: pytest (${{ matrix.shard }})
+        env: { SHARD: "${{ matrix.shard }}" }
+        run: |
+          # STATIC: the same one-liner as the `static` job, which runs this set.
+          STATIC="$(ls tests/test_*ratchet*.py | grep -v test_effect_classification_ratchet) tests/test_event_kind_contract.py"
+          OWN="tests/unit/core tests/unit/tools tests/unit/modules tests/unit/agents tests/unit/surfaces tests/unit/cli"
+          ign() { for p in "$@"; do printf -- '--ignore=%s ' "$p"; done; }
+          # Everything outside the named shards and the static job; ops/tests
+          # exists only in the private tree.
+          REST="tests $( [ -d ops/tests ] && echo ops/tests ) $(ign $STATIC)"
+          case "$SHARD" in
+            core)   ARGS="tests/unit/core" ;;
+            tools)  ARGS="tests/unit/tools tests/unit/modules" ;;
+            agents) ARGS="tests/unit/agents tests/unit/surfaces tests/unit/cli" ;;
+            rest)   ARGS="$REST $(ign $OWN)" ;;
+            slow)   ARGS="$REST" ;;
+          esac
+          if [ "$SHARD" = slow ]; then MARK="slow"; else MARK="not slow"; fi
+          pytest -q -p no:cacheprovider -n auto --dist loadfile --timeout=600 -m "$MARK" $ARGS
   base-install:
     # The `test` job installs [dev,all], so it can never catch a dependency that
     # moved to an extra but is still imported on the default agent path. This one
@@ -40,10 +94,10 @@ jobs:
         env: { POLYROB_DATA_DIR: /tmp/polyrob-ci }
         run: |
           python - <<'PY'
-          # build_cli_container is async (core/bootstrap.py) — IMPORTED, not called:
+          # build_cli_container is async (polyrob/app/bootstrap.py) — IMPORTED, not called:
           # running it needs a data home, a provider key and a loop, none of which
           # belong in an import smoke test.
-          from core.bootstrap import build_cli_container
+          from polyrob.app.bootstrap import build_cli_container
           from agents.task.constants import BASE_DEFAULT_TOOLS
           from modules.memory.task import TaskContextManager
           from tools.filesystem import FileSystem
@@ -51,7 +105,7 @@ jobs:
           # the 058 surfaces whose dependency moved to an extra: each must IMPORT
           # bare and refuse with the extra named, never traceback
           import tools.document_parser, tools.filesystem_pdf, modules.cards.cards
-          import utils.gif_utils, core.optional_extras, cli.update.extras
+          import agents.task.gif_utils, core.optional_extras, cli.update.extras
           from core.lazy_deps import remedy
           assert "polyrob[docs]" in remedy("docs.pdf")
           print("base import OK:", BASE_DEFAULT_TOOLS)
@@ -65,22 +119,23 @@ jobs:
           python - <<'PY'
           # The lean-core proof: every core module imports bare, and the
           # first-party packs (shipped inside polyrob, 067 one install) load with
-          # their SDK extras named, never a traceback. NEEDS_EXTRA is SHRINK-ONLY: the
-          # modules that import a crypto-extra dependency at module level today
-          # (P5 moves the wallet code to the wallet pack and deletes rows here).
-          import importlib, pkgutil
+          # their SDK extras named, never a traceback. W11: nothing here is a hand
+          # list — NEEDS_EXTRA is DERIVED from the modules' unguarded module-level
+          # imports (tests/install/needs_extra.py over core.optional_extras), the
+          # first-party packs from pyproject's polyrob.packs entry points, and the
+          # packs that must name an extra from their pack.toml tool `requires`.
+          import importlib, pkgutil, tomllib
           from importlib.metadata import entry_points
           import core
-          # Phase 1 BEFORE the walk: importing core.bootstrap builds the capability
+          from tests.install.needs_extra import modules_needing_extras
+          # Phase 1 BEFORE the walk: importing polyrob.app.bootstrap builds the capability
           # views, and a pack row registered after that is refused (067 P2).
           from core.packs.loader import load_packs, register_policies
           register_policies()
           eps = {e.name: e.dist.metadata["Name"] for e in entry_points(group="polyrob.packs")}
-          assert eps == {p: "polyrob" for p in ("daytona", "discovery", "markets", "modal", "singularity", "vercel_sandbox", "x")}, eps
-          NEEDS_EXTRA = {
-              "core.signer.remote", "core.wallet.agent_wallet", "core.wallet.erc6551",
-              "core.wallet.factory", "core.wallet.signer",
-          }
+          declared = tomllib.load(open("pyproject.toml", "rb"))["project"]["entry-points"]["polyrob.packs"]
+          assert eps == {p: "polyrob" for p in declared}, eps
+          NEEDS_EXTRA = set(modules_needing_extras("."))
           bad, stale = {}, set(NEEDS_EXTRA)
           for m in pkgutil.walk_packages(core.__path__, "core."):
               try:
@@ -90,15 +145,17 @@ jobs:
                       bad[m.name] = str(exc)
                   stale.discard(m.name)
           assert not bad, bad
-          assert not stale, f"imports bare now — delete from NEEDS_EXTRA: {sorted(stale)}"
+          assert not stale, f"imports bare now, but the derivation says it needs an extra: {sorted(stale)}"
           from core.packs import state
           load_packs()
           assert not state.discovery_error(), state.discovery_error()
           recs = {r.id: r for r in state.records()}
           assert set(recs) == set(eps) and all(r.status == state.LOADED for r in recs.values()), \
               [r.line() for r in recs.values()]
-          assert all(recs[p].needs for p in ("discovery", "markets", "x")), [r.line() for r in recs.values()]
-          assert "polyrob[twitter]" in recs["x"].line(), recs["x"].line()
+          sdk_packs = [r for r in recs.values() if any(t.requires for t in r.manifest.tools)]
+          assert sdk_packs, "no first-party pack declares an SDK requirement"
+          for r in sdk_packs:
+              assert r.needs and f"polyrob[{r.manifest.extra}]" in r.line(), r.line()
           print("bare install OK:", state.summary_line())
           PY
   prod-extras:
@@ -133,7 +190,10 @@ jobs:
           curl -sSfL -o gitleaks.tgz https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz
           echo "9991e0b2903da4c8f6122b5c3186448b927a5da4deef1fe45271c3793f4ee29c  gitleaks.tgz" | sha256sum -c -
           tar -xzf gitleaks.tgz gitleaks
-          ./gitleaks git --no-banner --redact --config .gitleaks.toml \
+          # Findings already in history (redacted, reviewed; the credentials are rotated
+          # out of band) live in the private baseline; only a NEW leak fails the job.
+          BASE=""; [ -f .gitleaks-baseline.json ] && BASE="--baseline-path .gitleaks-baseline.json"
+          ./gitleaks git --no-banner --redact --config .gitleaks.toml $BASE \
             --report-format json --report-path /tmp/gitleaks.json . || {
             jq 'map({RuleID, File, StartLine, Commit})' /tmp/gitleaks.json
             exit 1

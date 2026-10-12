@@ -564,6 +564,7 @@ echo "  polyrob                 talk to the agent"
 printf '  polyrob %-15s re-run the wizard (keys, model, surfaces)\n' "${WIZARD}"
 echo "  polyrob doctor          check the install and name what is missing"
 has_verb service   && echo "  polyrob service status  the background service"
+has_verb service   && echo "  /restart, /update       restart or update it from your chat"
 echo "  polyrob update          update in place"
 has_verb uninstall && echo "  polyrob uninstall       remove it again"
 cat <<'NEXT'

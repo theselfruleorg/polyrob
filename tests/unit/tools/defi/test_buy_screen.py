@@ -38,3 +38,17 @@ def test_unknown_route_ceiling_applies_without_identity_exemption():
     assert buy_screen.unchecked_route_refusal("UNAVAILABLE", 6)
     assert buy_screen.unchecked_route_refusal("UNAVAILABLE", 5) is None
     assert buy_screen.unchecked_route_refusal("AGREES", 6) is None
+
+
+def test_a_trusted_token_with_no_price_source_is_not_ticket_capped():
+    # Prod 2026-10-10 12:25Z: the owner's buyback of the instance's own launch
+    # (PNL on robinhood, where no price source covers the chain) was refused at
+    # $5 on every run. The owner approved lifting the ticket for a TRUSTED
+    # token whose route is UNAVAILABLE; the per-tx ceiling, slippage and the
+    # route floor still bound it.
+    assert buy_screen.unchecked_route_refusal("UNAVAILABLE", 144, trusted=True) is None
+
+
+def test_trust_never_lifts_a_disagreeing_route_or_an_untrusted_token():
+    assert buy_screen.unchecked_route_refusal("DISAGREES", 144, trusted=True)
+    assert buy_screen.unchecked_route_refusal("UNAVAILABLE", 144, trusted=False)

@@ -5,8 +5,8 @@
  * actions, and the receipt the turn's Stop and Steer sit on. It REPLACES the
  * legacy `/static/js/chat.js` + `/static/js/session.js` binding that chat-open.js
  * used to import — the 14k-line god-file rendered inside the new shell — with one
- * module that reads the same feed and draws the mockup (docs/design/040/web/
- * chat-running.html) using only classes app.css already carries.
+ * module that reads the same feed and draws the interface design's
+ * running-chat mockup using only classes app.css already carries.
  *
  * Three rules it keeps:
  *

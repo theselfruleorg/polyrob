@@ -99,7 +99,6 @@ def _build_agent(*, registry, orch_map, gate):
 
 @pytest.mark.asyncio
 async def test_concurrent_resume_is_single_flight(monkeypatch):
-    monkeypatch.delenv("CONVERSATION_RESUME_ENABLED", raising=False)
     gate = asyncio.Event()
     registry = _CorrespondentRegistry(user_id="t1", session_id="dead-sess")
     orch_map = {}
@@ -143,7 +142,6 @@ async def test_concurrent_resume_is_single_flight(monkeypatch):
 async def test_single_caller_unchanged(monkeypatch):
     """Regression guard: a lone resume (no race) behaves exactly as before —
     one create_session, one rebind, delivered into the new session."""
-    monkeypatch.delenv("CONVERSATION_RESUME_ENABLED", raising=False)
     gate = asyncio.Event()
     gate.set()  # no gating needed for the single-caller case
     registry = _CorrespondentRegistry(user_id="t1", session_id="dead-sess")

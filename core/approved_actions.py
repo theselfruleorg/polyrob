@@ -4,7 +4,7 @@ A wake row whose ``metadata.kind`` names a registered runner is not a session
 wake: it is ONE action the owner approved after the run that asked had stopped
 waiting (an X post, a DM, a mail — ``tools.controller.approval_queue.
 run_approved_outbound``). The runner lives in the tools tier and registers
-itself here, so ``core.autonomy_runtime`` (the drain) never imports ``tools``.
+itself here, so ``polyrob.app.autonomy_runtime`` (the drain) never imports ``tools``.
 
 A runner is ``async (metadata, user_id, task_agent) -> bool``: True when the row
 is finished, False to retry it on a later tick.

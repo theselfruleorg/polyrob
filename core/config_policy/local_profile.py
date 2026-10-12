@@ -14,8 +14,9 @@ from core.config_policy._env import _bool_env
 # knowledge base, RAG, project-context, messaging, prefs, invoice card, tool
 # catalog) default ON as a group, so a terminal user gets them without setting ~10
 # env vars. Multi-tenant server entry (main.py / uvicorn) never sets POLYROB_LOCAL,
-# so its defaults are unchanged. An explicit per-flag value (e.g. KB_ENABLED=off)
-# still wins — only the *default* moves.
+# so its defaults are unchanged. D7 (2026-10-10): the bundle is the ONLY source of
+# its members; one POLYROB_OVERRIDES entry (e.g. KB_ENABLED=off) changes a single
+# member, and a direct KB_ENABLED line is ignored (core/config_policy/members.py).
 #
 # NOTE (0.9.0): this set is the INTERACTIVE bucket ONLY. The self-directed AUTONOMY
 # loops (self-wake, goal board + planner, curator, background-review, episodic
@@ -97,11 +98,9 @@ _AUTONOMY_LOCAL_FLAGS = frozenset({
 def local_mode_enabled() -> bool:
     """True when running as the single-user terminal-native agent.
 
-    Canonical flag: ``POLYROB_LOCAL``. ``ROB_LOCAL`` is accepted as a deprecated
-    back-compat alias (older docs/scripts referenced it) — either being truthy
-    enables local mode, so a doc that still says ``ROB_LOCAL`` isn't a silent no-op.
+    Flag: ``POLYROB_LOCAL``.
     """
-    return _bool_env("POLYROB_LOCAL", False) or _bool_env("ROB_LOCAL", False)
+    return _bool_env("POLYROB_LOCAL", False)
 
 
 def _safe_autonomy_default(flag_name: str) -> bool:

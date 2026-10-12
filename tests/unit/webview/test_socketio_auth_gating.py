@@ -38,7 +38,7 @@ async def close_socket_monitors(monkeypatch):
 
 
 def _reload_server(monkeypatch, multitenant: bool):
-    monkeypatch.setenv("WEBGATE_MULTITENANT", "true" if multitenant else "false")
+    monkeypatch.setenv("POLYROB_POSTURE", "multitenant" if multitenant else "local")
     monkeypatch.setenv("ENV", "development")
     import webview.server as server
     return importlib.reload(server)
@@ -46,7 +46,7 @@ def _reload_server(monkeypatch, multitenant: bool):
 
 def _reload_server_own_ops(monkeypatch):
     """own_ops posture: public host, owner-login (cookie) gated. Posture comes
-    from the explicit POLYROB_POSTURE override (WEBGATE_MULTITENANT unset)."""
+    from the explicit POLYROB_POSTURE override."""
     monkeypatch.delenv("WEBGATE_MULTITENANT", raising=False)
     monkeypatch.setenv("POLYROB_POSTURE", "own_ops")
     monkeypatch.setenv("POLYROB_OWNER_USER_ID", "owner-1")

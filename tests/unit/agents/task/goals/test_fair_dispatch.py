@@ -119,7 +119,6 @@ async def test_dispatch_spreads_slots_across_objectives(board, monkeypatch):
     monkeypatch.setenv("GOALS_ENABLED", "true")
     monkeypatch.setenv("GOAL_MAX_CONCURRENT", "2")
     monkeypatch.setenv("GOAL_COMPLETION_JUDGE", "false")
-    monkeypatch.setenv("GOAL_FAIR_DISPATCH", "true")
     monkeypatch.setenv("GOAL_PLANNER_ENABLED", "false")
 
     hot = board.create_objective(user_id="u1", title="hot", force=True)
@@ -135,29 +134,7 @@ async def test_dispatch_spreads_slots_across_objectives(board, monkeypatch):
     assert {g.parent_id for g in claimed} == {hot.id, cold.id}
 
 
-@pytest.mark.asyncio
-async def test_dispatch_flag_off_restores_global_order(board, monkeypatch):
-    monkeypatch.setenv("GOALS_ENABLED", "true")
-    monkeypatch.setenv("GOAL_MAX_CONCURRENT", "2")
-    monkeypatch.setenv("GOAL_COMPLETION_JUDGE", "false")
-    monkeypatch.setenv("GOAL_FAIR_DISPATCH", "false")
-    monkeypatch.setenv("GOAL_PLANNER_ENABLED", "false")
-
-    hot = board.create_objective(user_id="u1", title="hot", force=True)
-    cold = board.create_objective(user_id="u1", title="cold", force=True)
-    for i in range(3):
-        board.create(user_id="u1", title=f"hot {i}", parent_id=hot.id, priority=9, force=True)
-    board.create(user_id="u1", title="cold 0", parent_id=cold.id, priority=1, force=True)
-
-    d = GoalDispatcher(board, _FakeAgent())
-    assert await d.dispatch_once() == 2
-    claimed = [g for g in board.list(user_id="u1", limit=100)
-               if g.kind == "goal" and g.status == "running"]
-    assert {g.parent_id for g in claimed} == {hot.id}
-
-
 def test_ready_for_dispatch_falls_back_when_fair_path_raises(board, monkeypatch):
-    monkeypatch.setenv("GOAL_FAIR_DISPATCH", "true")
     a = board.create_objective(user_id="u1", title="A", force=True)
     board.create(user_id="u1", title="a1", parent_id=a.id, force=True)
 
@@ -174,7 +151,6 @@ def test_ready_for_dispatch_skips_the_in_flight_count_when_no_cap_is_set(board,
     """`ready_fair` consults `in_flight` ONLY when a cap is set, so with the
     default `GOAL_PER_OBJECTIVE_CAP=0` the GROUP BY was running every tick for a
     value nothing read."""
-    monkeypatch.setenv("GOAL_FAIR_DISPATCH", "true")
     monkeypatch.delenv("GOAL_PER_OBJECTIVE_CAP", raising=False)
     a = board.create_objective(user_id="u1", title="A", force=True)
     board.create(user_id="u1", title="a1", parent_id=a.id, force=True)
@@ -197,10 +173,11 @@ def test_ready_for_dispatch_skips_the_in_flight_count_when_no_cap_is_set(board,
 
 
 @pytest.mark.asyncio
-async def test_maybe_plan_thinness_gate_reverts_with_goal_planner_scaling(board,
-                                                                         monkeypatch):
-    """`GOAL_PLANNER_MIN_READY` can no longer restore the legacy floor on its own
-    — the scaled value is a `max()` of it. `GOAL_PLANNER_SCALING=false` must."""
+async def test_maybe_plan_thinness_gate_scales_with_the_objective_count(board,
+                                                                        monkeypatch):
+    """The thinness gate is `max(GOAL_PLANNER_MIN_READY, min(objectives, ceiling))`,
+    so 3 ready goals over the flat floor of 2 still fire the planner when 8
+    objectives stand."""
     import asyncio
 
     monkeypatch.setenv("GOAL_PLANNER_ENABLED", "true")
@@ -220,14 +197,8 @@ async def test_maybe_plan_thinness_gate_reverts_with_goal_planner_scaling(board,
 
     monkeypatch.setattr(d, "_run_planner", _fake_planner)
 
-    # 3 ready goals: OVER the legacy flat floor of 2, UNDER the derived floor
+    # 3 ready goals: OVER the flat floor of 2, UNDER the derived floor
     # of 8 (one per standing objective).
-    monkeypatch.setenv("GOAL_PLANNER_SCALING", "false")
-    await d._maybe_plan(headroom_after=0)
-    await asyncio.sleep(0)
-    assert fired == [], "the legacy flat GOAL_PLANNER_MIN_READY gate did not apply"
-
-    monkeypatch.setenv("GOAL_PLANNER_SCALING", "true")
     await d._maybe_plan(headroom_after=0)
     await asyncio.sleep(0)
     assert fired == ["u1"], "the derived thinness gate did not fire"

@@ -6,6 +6,8 @@ moment a whole list (goals / cron / sessions) could not be read. A seat that
 renders ``count`` without ``partial`` states a number it did not measure — the
 confident zero this module exists to refuse (043 A37).
 """
+
+from core.runtime_paths import cron_db_path, goals_db_path, session_registry_db_path
 def _iso_ts(raw) -> "float | None":
     """An epoch float from an ISO text (cron's ``last_run_at``) or None."""
     if raw in (None, ""):
@@ -37,7 +39,7 @@ def build_live_status(user_id: str, data_dir: str, sessions_root: str) -> dict:
                  "user_id": user_id}
     unreadable: dict = {}
     try:
-        rows = _rows(os.path.join(data_dir, "goals.db"),
+        rows = _rows(goals_db_path(data_dir),
                      "SELECT id, title, started_at, session_id FROM goals "
                      "WHERE status='running' AND kind='goal' AND user_id=? "
                      "ORDER BY started_at DESC", (user_id,))
@@ -47,7 +49,7 @@ def build_live_status(user_id: str, data_dir: str, sessions_root: str) -> dict:
     except Exception as exc:
         unreadable["goals"] = f"{type(exc).__name__}: {exc}"[:200]
     try:
-        rows = _rows(os.path.join(data_dir, "cron.db"),
+        rows = _rows(cron_db_path(data_dir),
                      "SELECT id, task, last_run_at FROM cron_jobs "
                      "WHERE status='running' AND user_id=?", (user_id,))
         out["cron"] = [{"id": r.get("id"), "task": _first_line(r.get("task")),
@@ -55,7 +57,7 @@ def build_live_status(user_id: str, data_dir: str, sessions_root: str) -> dict:
     except Exception as exc:
         unreadable["cron"] = f"{type(exc).__name__}: {exc}"[:200]
     try:
-        rows = _rows(os.path.join(data_dir, "session_registry.db"),
+        rows = _rows(session_registry_db_path(data_dir),
                      "SELECT session_id, worker_pid, created_at, last_seen_at "
                      "FROM active_sessions")
         live = []
@@ -118,7 +120,7 @@ def session_is_live(session_id: str, data_dir: str) -> "bool | None":
     if not sid:
         return None
     try:
-        rows = _rows(os.path.join(data_dir, "session_registry.db"),
+        rows = _rows(session_registry_db_path(data_dir),
                      "SELECT worker_pid FROM active_sessions WHERE session_id=?",
                      (sid,))
     except Exception:

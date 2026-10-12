@@ -24,7 +24,7 @@ _BINDING_RE = re.compile(
     re.MULTILINE,
 )
 
-_SCAN_DIRS = ("core", "cli", "agents", "modules", "tools", "api", "webview",
+_SCAN_DIRS = ("core", "polyrob", "cli", "agents", "modules", "tools", "api", "webview",
               "surfaces", "cron", "utils")
 
 

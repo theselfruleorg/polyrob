@@ -25,7 +25,7 @@ async def test_goal_run_capped_by_max_run_seconds(tmp_path, monkeypatch):
 
     monkeypatch.setattr(disp_mod, "_run_task_to_outcome", _hang)
     monkeypatch.setattr(
-        "agents.task.constants.AutonomyConfig.goal_max_run_seconds",
+        "core.config_policy.AutonomyConfig.goal_max_run_seconds",
         staticmethod(lambda: 0.2),
     )
 

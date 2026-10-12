@@ -351,23 +351,6 @@ async def get_available_tools(
     )
 
 
-def _owner_gate_and_bind(tool_name: str, user_id: str, read_actions, venue: str):
-    """CR-M14: an HTTP ``/execute`` of a trade or mutation verb is an OWNER act.
-
-    The route used to call the verb with no execution context, which
-    ``trade_turn_refusal`` read as a direct owner call — so any authenticated
-    tenant could place, cancel or re-lever orders past the wallet authority.
-    A non-read verb needs the bound owner (403 otherwise), and the caller is
-    bound as the ambient exec identity so the verb's own ``turn_refusal``
-    re-checks the SAME principal. Returns the token to reset in a finally."""
-    from core.exec_identity import set_exec_identity
-    from core.wallet.authority import network_verb_refusal
-    refusal = network_verb_refusal(tool_name, user_id, read_actions)
-    if refusal:
-        raise HTTPException(status_code=403, detail=refusal)
-    return set_exec_identity(user_id, f"http:{venue}")
-
-
 @router.post("/execute", response_model=ExecuteToolResponse)
 async def execute_tool(
     request: Request,
@@ -385,19 +368,18 @@ async def execute_tool(
     polymarket_tool = await get_polymarket_tool()
     db = await get_polymarket_db()
     
-    from core.exec_identity import reset_exec_identity
-    from polyrob_markets.polymarket.service import PM_READ_ACTIONS
-    token = _owner_gate_and_bind(data.tool_name, user_id, PM_READ_ACTIONS,
-                                 "polymarket")
+    from polyrob_markets.http_seat import execute_as_seat
+    from polyrob_markets.polymarket.service import pm_read_actions
 
-    # Set user context for the tool (task-local — CR-M14)
-    polymarket_tool.set_user_context(user_id)
-    
     start_time = time.time()
-    
+
     try:
-        # Execute the action on the tool
-        result = await polymarket_tool.execute_action(data.tool_name, data.arguments)
+        # W5: the one owner seat — the CR-M14 gate + bind, then the policy
+        # chain's seat stages around the verb (polyrob_markets/http_seat.py).
+        result = await execute_as_seat(
+            polymarket_tool, tool_id="polymarket", tool_name=data.tool_name,
+            arguments=data.arguments, user_id=user_id, read_actions=pm_read_actions(),
+            venue="polymarket")
         execution_time = (time.time() - start_time) * 1000
         
         # Log to audit
@@ -416,7 +398,9 @@ async def execute_tool(
             tool_name=data.tool_name,
             execution_time_ms=execution_time
         )
-        
+
+    except HTTPException:
+        raise   # the owner gate / policy chain refusal stays a 403
     except Exception as e:
         execution_time = (time.time() - start_time) * 1000
         
@@ -436,8 +420,6 @@ async def execute_tool(
             tool_name=data.tool_name,
             execution_time_ms=execution_time
         )
-    finally:
-        reset_exec_identity(token)
 
 
 # ========================================

@@ -65,9 +65,13 @@ def _owner_turn_text(agent) -> Optional[str]:
 def _orch_read_tainted(orchestrator) -> bool:
 	"""AGT-1: this turn has read third-party text — tool output, a forwarded
 	body, or a correspondent's message (the correspondent taint)."""
-	from core.security.read_taint import orchestrator_tainted
-	return (orchestrator_tainted(orchestrator)
-	        or getattr(orchestrator, "_correspondent_tainted", False) is True)
+	from core.security.taints import orchestrator_read_or_correspondent
+	return orchestrator_read_or_correspondent(orchestrator)
+
+
+def _orch_correspondent_tainted(orchestrator) -> bool:
+	from core.security.taints import correspondent_tainted
+	return correspondent_tainted(orchestrator)
 
 
 class StepExecutionMixin:
@@ -208,7 +212,7 @@ class StepExecutionMixin:
 
 	def _build_execution_context(self, browser_context):
 		"""Build the ActionExecutionContext for this step's action execution."""
-		from tools.controller.execution_context import ActionExecutionContext
+		from agents.task.loop_types.execution_context import ActionExecutionContext
 		# SK-F10: stamp the forged-turn marker (set by _drain_user_messages when the
 		# turn was opened by a self-wake / async-delegation-result re-entry, cleared
 		# on a genuine drained turn) so action closures (skill_manage,
@@ -243,7 +247,10 @@ class StepExecutionMixin:
 			          # genuine batch, else the session's opening task).
 			          "owner_text": _owner_turn_text(self),
 			          # AGT-1: the turn has read third-party content.
-			          "untrusted_read": _orch_read_tainted(self.orchestrator)},
+			          "untrusted_read": _orch_read_tainted(self.orchestrator),
+			          # W5: the correspondent taint on its own key, so a reader
+			          # of the read taint (an owner setting) keeps it apart.
+			          "correspondent_tainted": _orch_correspondent_tainted(self.orchestrator)},
 		)
 		return execution_context
 

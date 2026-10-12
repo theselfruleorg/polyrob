@@ -1,7 +1,7 @@
 """The action narrator (043 A14) — one human line per tool action, copy-driven.
 
 The three anchor lines come straight from
-``docs/design/040/web/chat-running.html``; the rest guard the hard rules the
+the interface design's running-chat mockup; the rest guard the hard rules the
 mockup's note states: one line, no ``[step]``/``[event]``/``[iter]`` trace, no
 ``repr()`` of the event, no raw machine name, and a failure that reads as one.
 """

@@ -191,12 +191,8 @@ async def check_payment_status(nonce: str, request: Request):
     from modules.x402.x402_integration import get_x402_config
     if not get_x402_config().get("enabled"):
         raise HTTPException(status_code=404, detail="x402 disabled")
-    from core.container import DependencyContainer
-    container = DependencyContainer.get_instance()
-    db = container.get_service('database_manager')
-
-    if not db:
-        raise HTTPException(status_code=503, detail="Database unavailable")
+    from api.dependencies import require_service
+    db = require_service("database_manager", missing="Database unavailable")
 
     result = await db.fetch_one("""
         SELECT id, status, amount_usd, asset, chain,

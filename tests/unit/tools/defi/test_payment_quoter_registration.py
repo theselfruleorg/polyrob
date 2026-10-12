@@ -83,6 +83,6 @@ def test_the_tools_tier_entry_points_call_the_one_helper(module_path):
 def test_core_never_imports_the_quoter_directly():
     """The seam exists because this import is forbidden; pin that it stays so."""
     import pathlib as _p
-    for name in ("core/bootstrap.py", "core/initialization.py"):
+    for name in ("polyrob/app/bootstrap.py", "polyrob/app/initialization.py"):
         assert "payment_quote" not in _p.Path(name).read_text(), (
             f"{name} imports the tools-tier quoter — use the container service")

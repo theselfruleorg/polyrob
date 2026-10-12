@@ -35,23 +35,34 @@ def test_flags_report_reflects_posture(monkeypatch):
     lines = flags_report({"AUTONOMY_POSTURE": "owner-visible"})
     judge = next(ln for ln in lines if "GOAL_COMPLETION_JUDGE" in ln)
     assert "True" in judge
-    assert "posture:owner-visible" in judge
+    assert "AUTONOMY_POSTURE=owner-visible" in judge
 
 
 def test_flags_report_env_wins(monkeypatch):
     monkeypatch.setenv("AUTONOMY_POSTURE", "owner-visible")
     lines = flags_report(
+        {"AUTONOMY_POSTURE": "owner-visible",
+         "POLYROB_OVERRIDES": "GOAL_COMPLETION_JUDGE=false"}
+    )
+    judge = next(ln for ln in lines if ln.strip().startswith("GOAL_COMPLETION_JUDGE"))
+    assert "False" in judge and "[POLYROB_OVERRIDES]" in judge
+
+
+def test_flags_report_marks_a_direct_member_line_ignored(monkeypatch):
+    """D7: a member set on its own line is shown at its real value + IGNORED."""
+    monkeypatch.setenv("AUTONOMY_POSTURE", "owner-visible")
+    lines = flags_report(
         {"AUTONOMY_POSTURE": "owner-visible", "GOAL_COMPLETION_JUDGE": "false"}
     )
-    judge = next(ln for ln in lines if "GOAL_COMPLETION_JUDGE" in ln)
-    assert "False" in judge and "[env]" in judge
+    judge = next(ln for ln in lines if ln.strip().startswith("GOAL_COMPLETION_JUDGE"))
+    assert "True" in judge and "IGNORED" in judge
 
 
 def test_doctor_flags_cli_smoke():
     runner = click.testing.CliRunner()
     result = runner.invoke(doctor, ["--flags"])
     assert result.exit_code == 0
-    assert "GOALS_ENABLED" in result.output
+    assert "AUTONOMY_POSTURE" in result.output
     assert "resolved flags" in result.output
 
 
@@ -66,7 +77,7 @@ def test_flags_report_cli_context_matches_doctor_report(monkeypatch):
     # independent of the 0.9.0 autonomy split.
     lines = flags_report({}, local_absent_means_on=True)
     kb = next(ln for ln in lines if ln.strip().startswith("KB_ENABLED "))
-    assert "True" in kb and "local=ON" in kb
+    assert "True" in kb and "POLYROB_LOCAL" in kb
     # and the server context resolves them OFF
     lines = flags_report({}, local_absent_means_on=False)
     kb = next(ln for ln in lines if ln.strip().startswith("KB_ENABLED "))
@@ -84,12 +95,12 @@ def test_flags_report_local_derived_extras(monkeypatch):
 def test_doctor_flags_default_is_public_tier():
     """067 F1: a bare --flags shows the public tier; --all shows every tier."""
     from core.flags import REGISTRY
-    assert REGISTRY["GOALS_ENABLED"].tier == "public"
+    assert REGISTRY["AUTONOMY_POSTURE"].tier == "public"
     assert REGISTRY["GEMINI_PROMPT_CACHE"].tier == "advanced"
     runner = click.testing.CliRunner()
     bare = runner.invoke(doctor, ["--flags"])
     assert bare.exit_code == 0, bare.output
-    assert "GOALS_ENABLED" in bare.output
+    assert "AUTONOMY_POSTURE" in bare.output
     assert "GEMINI_PROMPT_CACHE" not in bare.output
     assert "--all shows every flag" in bare.output
     full = runner.invoke(doctor, ["--flags", "--all"])

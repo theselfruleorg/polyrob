@@ -4,7 +4,7 @@ Observed prod stall: 0 ready goals + blocked ones → planner says "queue health
 nothing to add" → instance idle 14h. The planner must instead force NEW achievable
 work. Plus an owner kill-switch to halt all autonomous spend/dispatch.
 """
-from agents.task.constants import AutonomyConfig
+from core.config_policy import AutonomyConfig
 from agents.task.goals.board import GoalBoard
 from agents.task.goals.planner import build_planner_prompt
 

@@ -50,7 +50,7 @@ def test_genuine_owner_turn_never_gated(monkeypatch):
 
 
 def test_constants_accessor_default_off(monkeypatch):
-    from agents.task.constants import message_autonomous_allowlisted
+    from core.config_policy import message_autonomous_allowlisted
     monkeypatch.delenv("MESSAGE_AUTONOMOUS_ALLOWLISTED", raising=False)
     assert message_autonomous_allowlisted() is False
     monkeypatch.setenv("MESSAGE_AUTONOMOUS_ALLOWLISTED", "true")

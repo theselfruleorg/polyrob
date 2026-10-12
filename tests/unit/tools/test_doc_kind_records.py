@@ -20,11 +20,6 @@ LOG = "# X post queue\n\n- 2026-09-20 posted A\n"
 INSTR = "---\nkind: instruction\nsupersedes: old-rules.md\n---\n# Trading rules\n\n- never > $5\n"
 
 
-@pytest.fixture(autouse=True)
-def _armed(monkeypatch):
-	monkeypatch.delenv("DOC_KIND_ENFORCED", raising=False)
-
-
 def test_front_matter_is_read():
 	fields, body = parse_front_matter(INSTR)
 	assert fields["kind"] == "instruction" and body.startswith("# Trading rules")
@@ -53,11 +48,9 @@ def test_record_write_refusal(old, new, ok):
 		assert "RECORD" in reason and "append" in reason.lower() and "kind: instruction" in reason
 
 
-def test_only_documents_and_only_when_enforced(monkeypatch):
+def test_only_documents_and_not_this_sessions_own_file():
 	assert record_write_refusal("data.json", LOG, "x") is None
 	assert record_write_refusal("x.md", LOG, "x", written_this_session=True) is None
-	monkeypatch.setenv("DOC_KIND_ENFORCED", "false")
-	assert record_write_refusal("x.md", LOG, "x") is None
 
 
 def test_classify_tree(tmp_path):

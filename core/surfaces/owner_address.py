@@ -40,7 +40,7 @@ def _env_by_surface() -> dict:
 
 def owner_surface_order() -> List[str]:
     """Configured owner fan-out order. Default = legacy telegram-only."""
-    raw = os.getenv("OWNER_SURFACE") or os.getenv("OWNER_SURFACES") or ""
+    raw = os.getenv("OWNER_SURFACE") or ""
     order = [s.strip().lower() for s in raw.split(",") if s.strip()]
     return order or ["telegram"]
 

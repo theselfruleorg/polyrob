@@ -1,7 +1,7 @@
 """057: one answer to 'is this session autonomous', and the disclosure gate."""
 import pytest
 
-from agents.task.goals.autonomy_marker import mark_autonomous
+from core.autonomy_marker import mark_autonomous
 from agents.task.session_class import is_autonomous_session, tool_disclosure_enabled
 
 
@@ -24,7 +24,7 @@ def test_marked_session_is_autonomous():
 
 
 def test_probe_error_fails_closed_to_autonomous(monkeypatch):
-    import agents.task.goals.autonomy_marker as marker
+    import core.autonomy_marker as marker
 
     def _boom(_sid):
         raise RuntimeError("registry gone")

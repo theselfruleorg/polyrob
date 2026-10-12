@@ -90,8 +90,8 @@ def test_solana_extra_mint_in_the_simulation_refuses():
 
 
 def test_solana_swap_checks_every_simulated_mint_before_broadcast():
-    from tools.defi.trade_tool import DefiTradeTool
-    src = inspect.getsource(DefiTradeTool.solana_swap)
+    from tools.defi import solana_swap_verb  # W9: the verb body moved (phases)
+    src = inspect.getsource(solana_swap_verb)
     assert src.index("net_inflow_refusal") < src.index("_solana_send")
     assert src.index("_solana_simulate(") < src.index("net_inflow_refusal")
 

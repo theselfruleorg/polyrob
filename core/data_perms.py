@@ -156,10 +156,10 @@ class PermsReport:
 
     @property
     def remedy(self) -> str:
-        return ("re-run the deploy ownership pass via `bash scripts/deploy_when_idle.sh` "
-                "from the maintenance clone; it preserves the private wallet and "
-                "trusted pylibs overlay permissions "
-                "(and run owner CLI verbs as `sudo -u polyrob-agent polyrob …`)")
+        return ("re-run your deploy's data-ownership pass (the shared group, group-"
+                "writable, setgid dirs — docs/guide/self-hosting.md, \"Running it as "
+                "services\"), keeping the private wallet and trusted pylibs overlay "
+                "permissions (and run owner CLI verbs as `sudo -u polyrob-agent polyrob …`)")
 
 
 def _resolve_gid(group: str) -> Optional[int]:

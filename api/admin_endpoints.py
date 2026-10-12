@@ -22,7 +22,7 @@ from api.auth_constants import (
     validate_tier,
     extract_admin_info,
 )
-from api.dependencies import get_client_ip
+from api.dependencies import get_client_ip, require_service
 
 logger = logging.getLogger(__name__)
 
@@ -420,12 +420,7 @@ async def add_user_credits(
     credits: AddCreditsRequest
 ):
     """Add credits to user account (admin only)."""
-    from core.container import DependencyContainer
-    container = DependencyContainer.get_instance()
-    balance_mgr = container.get_service('balance_manager')
-
-    if not balance_mgr:
-        raise HTTPException(status_code=503, detail="Balance manager unavailable")
+    balance_mgr = require_service("balance_manager", missing="Balance manager unavailable")
 
     admin_id = getattr(request.state, 'user_id', 'unknown')
     client_ip = get_client_ip(request)
@@ -479,12 +474,7 @@ async def deduct_user_credits(
     credits: AddCreditsRequest
 ):
     """Deduct credits from user account (admin only)."""
-    from core.container import DependencyContainer
-    container = DependencyContainer.get_instance()
-    balance_mgr = container.get_service('balance_manager')
-
-    if not balance_mgr:
-        raise HTTPException(status_code=503, detail="Balance manager unavailable")
+    balance_mgr = require_service("balance_manager", missing="Balance manager unavailable")
 
     admin_id = getattr(request.state, 'user_id', 'unknown')
     client_ip = get_client_ip(request)
@@ -531,12 +521,7 @@ async def deduct_user_credits(
 @router.get("/users/{user_id}/credits", dependencies=[Depends(require_admin)])
 async def get_user_credits(request: Request, user_id: str):
     """Get user's credit balance and history (admin only)."""
-    from core.container import DependencyContainer
-    container = DependencyContainer.get_instance()
-    balance_mgr = container.get_service('balance_manager')
-
-    if not balance_mgr:
-        raise HTTPException(status_code=503, detail="Balance manager unavailable")
+    balance_mgr = require_service("balance_manager", missing="Balance manager unavailable")
 
     balance_info = await balance_mgr.get_balance(user_id)
     transactions = await balance_mgr.get_transaction_history(user_id, limit=50)

@@ -1,6 +1,6 @@
 """QW-3 (2026-07-19, assessment §3.3): the webview must browse the SAME
 workspace root the agent writes to. With POLYROB_PROJECT_DIR set the agent
-process runs pm() in project-root mode (core/bootstrap), but the webview's
+process runs pm() in project-root mode (polyrob/app/bootstrap), but the webview's
 startup pm() install ignored it — the file browser showed the EMPTY per-session
 dir while artifacts sat in the project dir. Single-tenant postures only:
 multitenant must NEVER share one project root across tenants.

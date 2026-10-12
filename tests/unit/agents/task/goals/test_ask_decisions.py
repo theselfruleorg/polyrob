@@ -92,7 +92,7 @@ def test_create_ask_force_skips_fuzzy_dedup(board, monkeypatch):
     """Two DISTINCT tool-approval requests can carry a near-identical generic
     title ("Approve x402_request?") — force=True must NOT fuzzy-merge them into
     one ask (an exact-hash caller already did its own precise dedup)."""
-    monkeypatch.setenv("GOAL_DEDUP_THRESHOLD", "0.3")  # aggressive, to prove force wins
+    monkeypatch.setattr("core.config_policy.goal_flags.GOAL_DEDUP_THRESHOLD", 0.3)  # aggressive, to prove force wins
     a1 = board.create_ask(user_id="rob", what="Approve x402_request? [aaa111]",
                           extra_payload={"request_hash": "aaa111"}, force=True)
     a2 = board.create_ask(user_id="rob", what="Approve x402_request? [bbb222]",

@@ -55,7 +55,7 @@ def test_user_mcp_service_registers_with_auth_off(monkeypatch):
     """The live prod shape: MCP on, ENABLE_AUTH off. The store must exist."""
     import aiosqlite
 
-    from core.initialization import initialize_user_mcp_service
+    from polyrob.app.initialization import initialize_user_mcp_service
 
     async def _run():
         async with aiosqlite.connect(":memory:") as conn:
@@ -72,7 +72,7 @@ def test_user_mcp_service_registers_with_auth_off(monkeypatch):
 
 
 def test_user_mcp_service_skipped_when_mcp_disabled(monkeypatch):
-    from core.initialization import initialize_user_mcp_service
+    from polyrob.app.initialization import initialize_user_mcp_service
 
     container = _StubContainer(_config(monkeypatch, mcp_enabled=False, enable_auth=True))
     asyncio.run(initialize_user_mcp_service(container))
@@ -82,7 +82,7 @@ def test_user_mcp_service_skipped_when_mcp_disabled(monkeypatch):
 
 def test_user_mcp_service_is_fail_open_without_a_database(monkeypatch):
     """No DB (a degraded CLI boot) must not kill startup — just no store."""
-    from core.initialization import initialize_user_mcp_service
+    from polyrob.app.initialization import initialize_user_mcp_service
 
     container = _StubContainer(_config(monkeypatch, mcp_enabled=True, enable_auth=False))
     container._services["database_manager"] = None
@@ -114,7 +114,7 @@ async def test_cli_container_registers_the_store_when_mcp_is_on(
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("MCP_ENABLED", "true")
     from core.container import DependencyContainer
-    from core.bootstrap import build_cli_container
+    from polyrob.app.bootstrap import build_cli_container
 
     DependencyContainer._instance = None
     container = await build_cli_container(require_llm=False)

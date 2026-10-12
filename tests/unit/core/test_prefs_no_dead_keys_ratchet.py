@@ -15,6 +15,8 @@ or mark it ``enforcement=ENFORCEMENT_ADVISORY`` — silence is not an option.
 import re
 from pathlib import Path
 
+from tests.support.repo_index import repo_index
+
 from core.prefs import ENFORCEMENT_ENFORCED, PREF_SCHEMA
 
 _REPO = Path(__file__).resolve().parents[3]
@@ -31,7 +33,7 @@ def _production_sources() -> list[tuple[Path, str]]:
         if rel == Path("core/prefs.py"):
             continue
         try:
-            out.append((rel, path.read_text(encoding="utf-8", errors="ignore")))
+            out.append((rel, repo_index().text(path, errors="ignore")))
         except OSError:
             continue
     return out

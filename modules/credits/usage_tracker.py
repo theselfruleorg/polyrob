@@ -27,6 +27,7 @@ import uuid
 import json
 import logging
 import os
+from core.env import bool_env
 from datetime import datetime
 
 # Import LLM module's TokenUsage (don't duplicate!)
@@ -151,9 +152,7 @@ class LLMUsageTracker:
         if fail_on_insufficient is not None:
             self.fail_on_insufficient = fail_on_insufficient
         else:
-            self.fail_on_insufficient = os.environ.get(
-                "FAIL_ON_INSUFFICIENT_CREDITS", "true"
-            ).lower() == "true"
+            self.fail_on_insufficient = bool_env("FAIL_ON_INSUFFICIENT_CREDITS", True)
 
         # x402 hard token cap: an x402 request prepaid for a bounded token budget
         # (the price = budget × max-model-rate × markup). Accumulate per session so a

@@ -24,8 +24,15 @@ def test_bare_pathmanager_data_root_env_still_wins(monkeypatch, tmp_path):
     assert Path(PathManager().data_root).resolve() == (tmp_path / "explicit").resolve()
 
 
-def test_bare_pathmanager_legacy_default_unchanged(monkeypatch):
+def test_bare_pathmanager_legacy_default_unchanged(monkeypatch, tmp_path):
     monkeypatch.delenv("DATA_ROOT", raising=False)
     monkeypatch.delenv("POLYROB_DATA_DIR", raising=False)
+    # tests/conftest.py points the legacy fallback at each test's tmp_path (xdist
+    # workers shared ./data/task). Pin the SHIPPED literal here, in a tmp cwd so
+    # PathManager's makedirs never writes into the repo.
+    import core.runtime_paths as rp
+    assert '_LEGACY_SESSIONS_DEFAULT = "./data/task"' in Path(rp.__file__).read_text()
+    monkeypatch.setattr(rp, "_LEGACY_SESSIONS_DEFAULT", "./data/task")
+    monkeypatch.chdir(tmp_path)
     from agents.task.path import PathManager
     assert Path(PathManager().data_root).resolve() == Path("./data/task").resolve()

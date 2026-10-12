@@ -138,7 +138,7 @@ def test_no_call_site_talks_to_dexscreener_token_directly():
     allowed = {"tools/defi/price_sources.py", "tools/defi/providers/dexscreener.py"}
     pat = re.compile(r"dexscreener\.token\(")
     bad = []
-    for top in ("tools", "core", "surfaces", "api", "cli", "cron", "webview"):
+    for top in ("tools", "core", "polyrob", "surfaces", "api", "cli", "cron", "webview"):
         for path in (REPO / top).rglob("*.py"):
             rel = path.relative_to(REPO).as_posix()
             if rel in allowed:
@@ -317,7 +317,7 @@ def test_goplus_does_not_cache_a_failure(monkeypatch):
 
 
 def test_a_goplus_error_body_is_not_cached(monkeypatch):
-    from core.intel import cache as intel_cache
+    from tools.intel import cache as intel_cache
     from tools.defi.providers import goplus, _http
     intel_cache.clear_all()
     calls = []
@@ -331,7 +331,7 @@ def test_a_goplus_error_body_is_not_cached(monkeypatch):
 
 
 def test_goplus_refuses_an_answer_for_another_token(monkeypatch):
-    from core.intel import cache as intel_cache
+    from tools.intel import cache as intel_cache
     from tools.defi.providers import goplus, _http
     intel_cache.clear_all()
     monkeypatch.setattr(_http, "get_json", lambda *a, **kw: {

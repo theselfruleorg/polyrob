@@ -16,7 +16,15 @@ a shell ``wc -l``. Two guards:
   size (a split that forgot to lower its row) fails, so the ratchet actually
   tightens. ``SLACK`` tolerates ordinary ±churn while still catching a real split
   (which removes hundreds of lines).
+
+W2 (2026-10-10 structural review): the ratchet used to cover only the files
+someone remembered to list, so growth moved to un-listed files (the five largest
+production files had no row). Now EVERY production ``.py`` file has a DEFAULT
+ceiling (``DEFAULT_CEILING``); a file above it needs an explicit row in
+``CEILINGS``, seeded at its live size. ``test_no_new_file_over_default`` is the
+guard: a new or newly-grown file over the default fails — split it instead.
 """
+import subprocess
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -94,6 +102,41 @@ CEILINGS = {
     "modules/llm/anthropic_client.py": 920,  # F12: breakpoint placement -> cache_hints.py; sampling routing + thinking clamp -> anthropic_sampling.py
     "modules/llm/openai_client.py": 901,
     "modules/memory/task/hierarchical_memory.py": 821,
+    # W2 (2026-10-10): every production file over DEFAULT_CEILING, frozen at its
+    # live size. Each is a split candidate (structural review dim 3, W9); lower
+    # the row in the commit that splits the file, delete it once <= the default.
+    "surfaces/telegram/harness.py": 2934,  # W9: admin verbs -> admin_verbs.py + *_ops.py
+    "core/wallet/tx_guard.py": 1579,  # W6: _authorize -> core/wallet/tx_guard_steps/
+    "packs/x/polyrob_x/twitter_tool.py": 2824,
+    "agents/task/goals/dispatcher.py": 1676,  # W9: _run_goal + its failure helpers -> goal_run.py
+    "packs/markets/polyrob_markets/polymarket/service.py": 2184,
+    "packs/markets/polyrob_markets/hyperliquid/service.py": 1907,
+    "webview/pages_new.py": 1858,
+    "cli/commands/wallet.py": 1841,
+    "webview/pages.py": 1841,
+    "tools/browser/context.py": 1793,
+    "tools/mcp/protocol.py": 1694,
+    "agents/task/agent/skill_manager.py": 1674,
+    "agents/task/agent/prompts.py": 1666,
+    "cli/commands/owner.py": 1646,
+    "agents/task/agent/core/next_action_internal.py": 1625,
+    "tools/browser/browser.py": 1604,
+    "core/prefs.py": 1569,
+    "tools/controller/registry/service.py": 1552,
+    "api/admin_endpoints.py": 1546,
+}
+
+# Every production .py file not listed above may hold at most this many lines.
+DEFAULT_CEILING = 1500
+
+# The production tree: the shipped packages (+ the entry point). Tests, scripts,
+# datagen and docs are not production; generated files are excluded explicitly.
+PROD_ROOTS = (
+    "agents/", "api/", "cli/", "core/", "cron/", "migrations/", "modules/",
+    "packs/", "surfaces/", "tools/", "utils/", "webview/", "main.py",
+)
+GENERATED = {
+    "core/flags_catalog.py",  # generated from docs/CONFIGURATION.md
 }
 
 # A ceiling may sit at most this many lines above the real size before the
@@ -110,6 +153,41 @@ def _line_count(rel: str) -> int:
     return path.read_text(errors="replace").count("\n")
 
 
+def _is_production(rel: str) -> bool:
+    parts = rel.split("/")
+    name = parts[-1]
+    if not rel.endswith(".py") or rel in GENERATED:
+        return False
+    if any(p in ("tests", "test") for p in parts[:-1]):
+        return False
+    if name.startswith("test_") or name.endswith("_test.py") or name == "conftest.py":
+        return False
+    return rel.startswith(PROD_ROOTS)
+
+
+def _production_files():
+    out = subprocess.run(
+        ["git", "ls-files", "-z", "--", "*.py"], cwd=REPO, capture_output=True, text=True,
+    ).stdout
+    return sorted(f for f in out.split("\0") if f and _is_production(f))
+
+
+def test_no_new_file_over_default():
+    """Any production file without a row may not exceed DEFAULT_CEILING."""
+    over = {}
+    for rel in _production_files():
+        if rel in CEILINGS:
+            continue
+        n = _line_count(rel)
+        if n > DEFAULT_CEILING:
+            over[rel] = n
+    assert not over, (
+        f"Production file(s) over the default ceiling ({DEFAULT_CEILING} lines) — split "
+        "the file (a new module/mixin), do not add a CEILINGS row for new growth:\n"
+        + "\n".join(f"  {f}: {n}" for f, n in sorted(over.items()))
+    )
+
+
 def test_no_god_file_growth():
     over = {}
     for rel, ceiling in CEILINGS.items():
@@ -118,7 +196,7 @@ def test_no_god_file_growth():
             over[rel] = (n, ceiling)
     assert not over, (
         "God-file(s) grew past their ceiling — extract new behaviour into a NEW "
-        "module/mixin instead of growing these (see AGENTS.md decomposition note):\n"
+        "module/mixin instead of growing these:\n"
         + "\n".join(f"  {f}: {n} > ceiling {c}" for f, (n, c) in sorted(over.items()))
     )
 

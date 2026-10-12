@@ -153,16 +153,11 @@ class AppServiceRegistry:
         self._init_schema()
 
     def _init_schema(self) -> None:
-        conn = wal_connect(self.db_path)
-        try:
-            conn.executescript(_SCHEMA)
-            have = {row[1] for row in conn.execute("PRAGMA table_info(app_services)")}
-            for col in ("approved_fingerprint", "approved_config", "approval_mac"):
-                if col not in have:  # a pre-fingerprint database, added in place
-                    conn.execute(f"ALTER TABLE app_services ADD COLUMN {col} TEXT")
-            conn.commit()
-        finally:
-            conn.close()
+        # A pre-fingerprint database gains the approval columns in place.
+        from core.sqlite_util import init_schema
+        init_schema(self.db_path, _SCHEMA, columns={"app_services": tuple(
+            (col, "TEXT") for col in
+            ("approved_fingerprint", "approved_config", "approval_mac"))})
 
     # --- row shape ---------------------------------------------------------
 

@@ -13,6 +13,8 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
+_OPERATOR_JWT_SECRET = os.environ.get("JWT_SECRET_KEY")
+
 # Test configuration
 TEST_DATA_ROOT = None
 
@@ -240,8 +242,11 @@ class TestWebViewUserExtraction:
         from webview.server import _fastapi
         import jwt as pyjwt
 
-        # Skip if JWT_SECRET_KEY not set
-        jwt_secret = os.environ.get("JWT_SECRET_KEY")
+        # Skip if the OPERATOR did not configure JWT_SECRET_KEY. Read at import
+        # (collection), not here: a webview test earlier in the same process
+        # writes a generated secret into os.environ, and under xdist that made
+        # this test run (and fail) or skip depending on which worker it landed on.
+        jwt_secret = _OPERATOR_JWT_SECRET
         if not jwt_secret:
             pytest.skip("JWT_SECRET_KEY not configured")
 

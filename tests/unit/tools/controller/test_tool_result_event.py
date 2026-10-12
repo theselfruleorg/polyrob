@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import core.artifacts as artmod
 from tools.controller.execution import ExecutionMixin
-from tools.controller.types import ActionResult
+from agents.task.loop_types.controller_types import ActionResult
 
 
 def _mixin_and_capture(monkeypatch, ledger=None, current_step=3):

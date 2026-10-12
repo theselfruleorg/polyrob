@@ -48,7 +48,7 @@ async def test_recall_lines_are_dated(provider):
     out = await provider.search("42", user_id=USER)
     today = time.strftime("%Y-%m-%d")
     assert out.startswith(f"- [{today}] ")
-    out_pf = await provider.prefetch("what happened", session_id="other", user_id=USER)
+    out_pf = await provider.prefetch("what was X", session_id="other", user_id=USER)
     assert f"[{today}]" in out_pf
 
 

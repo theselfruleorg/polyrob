@@ -10,8 +10,7 @@ deploy landed at step 8 of a live owner turn (and at step 4 of another at
 
 This wrapper exists so the other seats do not each re-derive the call: it is
 fail-open (a marker fault must never cost the human their turn — the caller
-gets ``False`` and the turn proceeds unmarked) and it is revertible with one
-flag.
+gets ``False`` and the turn proceeds unmarked).
 
 Note the email surface is ALREADY covered: it executes through the shared
 `surfaces.telegram.harness.act_on_inbound` → `_run_and_deliver`, which opens
@@ -26,20 +25,6 @@ from typing import Iterator, Optional
 
 logger = logging.getLogger(__name__)
 
-#: Revert switch for the whole helper. ON = a console/API-driven human turn
-#: holds the workspace and blocks a deploy for its duration, as a Telegram turn
-#: already does. OFF = the pre-057 behaviour, byte-identical.
-FLAG = "SURFACE_OWNER_TURN"
-
-
-def surface_owner_turn_enabled() -> bool:
-    # The literal is spelled here on purpose: `tests/unit/core/test_flags_reverse.py`
-    # scans for `bool_env(<literal name>, …)`, and a flag read through a constant is a flag
-    # the catalog can never learn about.
-    from core.env import bool_env
-    return bool_env("SURFACE_OWNER_TURN", True)
-
-
 @contextlib.contextmanager
 def surface_owner_turn(kind: str = "owner_chat", session_id: Optional[str] = None,
                        lock_timeout: float = 5.0) -> Iterator[bool]:
@@ -49,9 +34,6 @@ def surface_owner_turn(kind: str = "owner_chat", session_id: Optional[str] = Non
     marker, an absent data home or a contended lock all yield ``False`` and the
     turn runs exactly as it did before.
     """
-    if not surface_owner_turn_enabled():
-        yield False
-        return
     with contextlib.ExitStack() as stack:
         held = False
         try:

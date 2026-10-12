@@ -1254,7 +1254,7 @@ class DockerBackend(ExecutionBackend):
 
         A process that dies without calling ``teardown()`` leaves its persistent
         sandbox container running — this is the crash-safety backstop, meant to run
-        once at process start (documented call site: ``core/autonomy_runtime.py::
+        once at process start (documented call site: ``polyrob/app/autonomy_runtime.py::
         start_autonomy`` — not wired there by this change; see the P1-B report).
         Best-effort and fail-open: never raises, and a start-time parse failure for
         any one container means that container is left alone (not removed) rather

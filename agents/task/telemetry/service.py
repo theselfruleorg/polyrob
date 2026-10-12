@@ -28,7 +28,7 @@ except ImportError:
 
 from agents.task.telemetry.views import BaseTelemetryEvent, LLMRequestTelemetryEvent, AgentStepTelemetryEvent
 from agents.task.telemetry.sequence import SequenceGenerator, generate_event_id, get_timestamp_ms
-from agents.task.utils import SafeFileLock
+from core.file_lock import SafeFileLock
 from core.data_perms import apply_birth_mode
 from agents.task.path import get_safe_singleton
 from agents.task.path import pm
@@ -39,6 +39,11 @@ from agents.task.path import pm
 # Import logger
 from agents.task.logging_config import get_task_logger
 logger = get_task_logger('telemetry')
+
+# Internal tuning (were env knobs; defaults unchanged).
+TELEMETRY_BUFFER_SIZE = 500
+TELEMETRY_BUFFER_TIMEOUT = 60.0
+TELEMETRY_EVENTS_MAX_BYTES = 10485760  # 10MB
 
 
 
@@ -142,8 +147,8 @@ class ProductTelemetry:
 
 		# FIXED: Add telemetry optimization configuration
 		self._event_buffer = {}  # Buffer events by session_id
-		self._buffer_size = int(os.getenv('TELEMETRY_BUFFER_SIZE', '500'))  # Increased buffer size
-		self._buffer_timeout = float(os.getenv('TELEMETRY_BUFFER_TIMEOUT', '60.0'))  # Increased flush timeout
+		self._buffer_size = TELEMETRY_BUFFER_SIZE  # Increased buffer size
+		self._buffer_timeout = TELEMETRY_BUFFER_TIMEOUT  # Increased flush timeout
 		self._last_flush_times = {}  # Track last flush time per session
 		self._buffer_lock = threading.RLock()  # Thread safety for buffer operations
 
@@ -1184,7 +1189,7 @@ class ProductTelemetry:
 	def _rotate_events_file(self, telemetry_file: Path) -> None:
 		"""Rotate events.jsonl when it grows too large."""
 		try:
-			max_bytes = int(os.getenv('TELEMETRY_EVENTS_MAX_BYTES', '10485760'))  # 10MB
+			max_bytes = TELEMETRY_EVENTS_MAX_BYTES
 			if telemetry_file.exists() and telemetry_file.stat().st_size > max_bytes:
 				ts = time.strftime('%Y%m%d_%H%M%S', time.localtime())
 				rotated = telemetry_file.with_name(f"events_{ts}.jsonl")

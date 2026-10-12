@@ -2,7 +2,7 @@ import asyncio
 import shutil
 
 import pytest
-import core.autonomy_runtime as ar
+import polyrob.app.autonomy_runtime as ar
 
 
 @pytest.fixture(autouse=True)
@@ -623,7 +623,7 @@ async def test_boot_migrations_failure_is_fail_open(monkeypatch):
 # the settlement watcher never started under autonomous mode even though the
 # `x402_invoice` tool (tools/x402/__init__.py) was already wired to allow
 # invoice creation — invoices creatable but never settleable. Fixed with the
-# same guarded-OR pattern, applied LOCALLY (core/autonomy_runtime.py cannot
+# same guarded-OR pattern, applied LOCALLY (polyrob/app/autonomy_runtime.py cannot
 # import modules.x402 — that would put a server-tier module on the core
 # import graph, the C3 boundary — so it can't share the SSOT directly).
 # --------------------------------------------------------------------------
@@ -709,19 +709,19 @@ async def test_boot_migrations_skipped_without_container(monkeypatch):
 
 def test_live_sessions_returns_none_when_there_is_no_registry():
     """UNKNOWN, never empty. Empty means 'every session is gone' downstream."""
-    from core.autonomy_runtime import _live_session_ids
+    from polyrob.app.autonomy_runtime import _live_session_ids
     assert _live_session_ids(object()) is None
     assert _live_session_ids(None) is None
 
 
 def test_live_sessions_returns_none_when_the_registry_cannot_list():
-    from core.autonomy_runtime import _live_session_ids
+    from polyrob.app.autonomy_runtime import _live_session_ids
     agent = type("A", (), {"_registry": object()})()
     assert _live_session_ids(agent) is None
 
 
 def test_live_sessions_returns_none_when_listing_raises():
-    from core.autonomy_runtime import _live_session_ids
+    from polyrob.app.autonomy_runtime import _live_session_ids
 
     class _Boom:
         def session_ids(self):
@@ -734,7 +734,7 @@ def test_live_sessions_returns_none_when_listing_raises():
 def test_a_genuinely_empty_registry_is_an_empty_list_not_none():
     """The one case where sweeping everything IS correct: the registry answered,
     and it answered 'nothing is resident'."""
-    from core.autonomy_runtime import _live_session_ids
+    from polyrob.app.autonomy_runtime import _live_session_ids
 
     class _Empty:
         def session_ids(self):
@@ -745,7 +745,7 @@ def test_a_genuinely_empty_registry_is_an_empty_list_not_none():
 
 
 def test_live_sessions_passes_through_resident_ids():
-    from core.autonomy_runtime import _live_session_ids
+    from polyrob.app.autonomy_runtime import _live_session_ids
 
     class _Reg:
         def session_ids(self):
@@ -759,7 +759,7 @@ def test_the_reaper_resolver_needs_no_upward_import():
     """The layering fix, pinned: core must not reach into agents.* for this."""
     import inspect
 
-    import core.autonomy_runtime as ar
+    import polyrob.app.autonomy_runtime as ar
     src = inspect.getsource(ar)
     assert "agents.task.session_registry" not in src
 

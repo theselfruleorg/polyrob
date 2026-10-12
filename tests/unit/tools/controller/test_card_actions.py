@@ -118,7 +118,7 @@ def test_both_tools_refuse_rooms_and_leaves(kw, ctx_kw, needle):
 
 
 def test_choice_refused_in_an_autonomous_run():
-    from agents.task.goals.autonomy_marker import mark_autonomous
+    from core.autonomy_marker import mark_autonomous
     mark_autonomous("s-auto-1", None, cron_job_id="j1")
     fn, model, _ = _actions(sid="s-auto-1")["present_choice"]
     res = asyncio.run(fn(model(question="Which one?", options=["A", "B"]),

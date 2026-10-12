@@ -74,31 +74,10 @@ async def test_planner_fires_on_a_wide_board_that_the_old_gate_ignored(board, mo
     assert planned == ["u1"]
 
 
-# --- GOAL_PLANNER_SCALING: one revert for the planner half (spec R8) ---------
+# --- the planner half of stream scaling --------------------------------------
 
 
-def test_scaling_off_restores_the_pre_scaling_ceiling(monkeypatch):
-    """`GOAL_PLANNER_READY_CEILING` cannot serve as the revert: the derived value
-    is a `max()` of it, and pinning it to 1 corrupts the prompt to "Never exceed
-    1 ready goals total"."""
-    monkeypatch.delenv("GOAL_PLANNER_READY_CEILING", raising=False)
-    monkeypatch.setenv("GOAL_PLANNER_SCALING", "false")
-    assert planner_ceilings(16)["ready_ceiling"] == 5
-    assert planner_ceilings(3)["ready_ceiling"] == 5
-
-
-def test_scaling_off_restores_the_pre_scaling_prompt(board, monkeypatch):
-    monkeypatch.delenv("GOAL_PLANNER_READY_CEILING", raising=False)
-    monkeypatch.setenv("GOAL_PLANNER_SCALING", "false")
-    for i in range(12):
-        board.create_objective(user_id="u1", title=f"stream {i}", force=True)
-    prompt = build_planner_prompt(board, "u1", None)
-    assert "Never exceed 5 ready goals total" in prompt
-    assert "SERVE THESE OBJECTIVES FIRST" not in prompt
-
-
-def test_scaling_on_is_the_default(board, monkeypatch):
-    monkeypatch.delenv("GOAL_PLANNER_SCALING", raising=False)
+def test_scaling_is_the_shape(board, monkeypatch):
     monkeypatch.delenv("GOAL_PLANNER_READY_CEILING", raising=False)
     for i in range(12):
         board.create_objective(user_id="u1", title=f"stream {i}", force=True)
@@ -107,7 +86,12 @@ def test_scaling_on_is_the_default(board, monkeypatch):
     assert "SERVE THESE OBJECTIVES FIRST" in prompt
 
 
-def test_pinned_ceiling_still_wins_when_scaling_is_off(monkeypatch):
-    monkeypatch.setenv("GOAL_PLANNER_SCALING", "false")
+def test_the_ready_ceiling_floor(monkeypatch):
+    monkeypatch.delenv("GOAL_PLANNER_READY_CEILING", raising=False)
+    assert planner_ceilings(3)["ready_ceiling"] == 5
+    assert planner_ceilings(16)["ready_ceiling"] == 16
+
+
+def test_pinned_ceiling_wins(monkeypatch):
     monkeypatch.setenv("GOAL_PLANNER_READY_CEILING", "8")
     assert planner_ceilings(16)["ready_ceiling"] == 8

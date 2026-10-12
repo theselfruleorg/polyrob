@@ -90,10 +90,12 @@ async def test_an_unknown_tool_id_still_gets_an_honest_reason():
 
 def test_every_mapped_gate_flag_is_a_real_flag():
     """The tool->flag map must never name a flag that does not exist."""
+    from core.config_policy.members import MEMBER_FLAGS
     from core.flags_catalog import CATALOG
     from tools.controller.tool_load_report import TOOL_GATE_FLAGS
 
-    known = {row[0] for row in CATALOG}
+    # D7: a posture member has no catalog row but is a real flag.
+    known = {row[0] for row in CATALOG} | set(MEMBER_FLAGS)
     unknown = {f for f in TOOL_GATE_FLAGS.values() if f not in known}
     assert not unknown, f"tool_load_report names unknown flags: {sorted(unknown)}"
 
@@ -166,3 +168,100 @@ def test_m04_the_dimension_is_the_one_list():
     assert {"twitter", "x_browser", "email", "github", "publish", "app_service",
             "cronjob", "goal", "mcp"} <= got
     assert not ({"filesystem", "task", "browser", "web_fetch", "knowledge"} & got)
+
+
+# --- D5 (prod 72h, 2026-10-11): the same gap warned 43x --------------------------
+
+def test_a_repeated_gap_is_recorded_every_time_but_warned_once(monkeypatch):
+    """A long-lived owner session's persisted tool list re-requests `perplexity`
+    on every recreate. The gap stays RECORDED (the run reads it), but the WARNING
+    is once per process per (tool, reason)."""
+    from tools.controller import tool_management
+    monkeypatch.setattr(tool_management, "_WARNED_LOAD_GAPS", set())
+    warned = []
+
+    class _Log:
+        def warning(self, msg):
+            warned.append(msg)
+
+        def debug(self, msg):
+            pass
+
+    reason = "gated:unavailable-on-this-deploy — needs config: perplexity_api_key"
+    for _ in range(3):
+        ctl = types.SimpleNamespace(logger=_Log())
+        tool_management.ToolManagementMixin._record_tool_load_failure(ctl, "perplexity", reason)
+        assert tool_management.ToolManagementMixin.get_tool_load_failures(ctl) == {"perplexity": reason}
+    assert len(warned) == 1
+
+
+class _InertMcp(_Tool):
+    """MCPTool with MCP off / no configured server: no server_manager."""
+    server_manager = None
+
+
+@pytest.mark.asyncio
+async def test_mcp_without_a_server_is_not_offered(monkeypatch):
+    """D5 (prod 72h): MCP had no configured server, yet every owner session got the
+    `mcp` tool with 13 dead actions (and a 'no server_manager' warning)."""
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u1")
+    c = _controller(_Container({"mcp_tool": _InertMcp()}))
+    loaded = await c.load_tools_from_container(["mcp"])
+    assert "mcp" not in loaded
+    reason = c.get_tool_load_failures().get("mcp", "")
+    assert reason.startswith("gated:") and "no configured server" in reason, reason
+
+
+class _Mgr:
+    def __init__(self, connections=None):
+        self.connections = dict(connections or {})
+
+
+class _UserMcp:
+    def __init__(self, rows=None, boom=False):
+        self.rows, self.boom = list(rows or []), boom
+
+    async def get_user_servers(self, user_id, enabled_only=True):
+        if self.boom:
+            raise RuntimeError("db down")
+        return [r for r in self.rows if r == user_id]
+
+
+def _mcp_with(mgr):
+    t = _Tool()
+    t.server_manager = mgr
+    return t
+
+
+@pytest.mark.asyncio
+async def test_mcp_enabled_with_no_server_and_no_user_server_is_not_offered(monkeypatch):
+    """Review of aaf2a1190: MCP enabled with zero configured servers can still
+    have a server_manager. With no user server either, the 13 actions are dead."""
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u1")
+    c = _controller(_Container({"mcp_tool": _mcp_with(_Mgr()),
+                                "user_mcp_service": _UserMcp()}))
+    loaded = await c.load_tools_from_container(["mcp"])
+    assert "mcp" not in loaded
+    assert "no configured server" in c.get_tool_load_failures().get("mcp", "")
+
+
+@pytest.mark.asyncio
+async def test_a_user_mcp_server_keeps_the_tool_and_a_later_one_shows_next_load(monkeypatch):
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u1")
+    user_mcp = _UserMcp()
+    container = _Container({"mcp_tool": _mcp_with(_Mgr()), "user_mcp_service": user_mcp})
+    assert "mcp" not in await _controller(container).load_tools_from_container(["mcp"])
+    user_mcp.rows.append("u1")  # the user adds a server
+    c = _controller(container)  # next session
+    assert "mcp" in await c.load_tools_from_container(["mcp"])
+    assert "mcp" not in c.get_tool_load_failures()
+
+
+@pytest.mark.asyncio
+async def test_a_configured_server_or_an_unreadable_user_store_keeps_the_tool(monkeypatch):
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u1")
+    c = _controller(_Container({"mcp_tool": _mcp_with(_Mgr({"github": object()}))}))
+    assert "mcp" in await c.load_tools_from_container(["mcp"])
+    c = _controller(_Container({"mcp_tool": _mcp_with(_Mgr()),
+                                "user_mcp_service": _UserMcp(boom=True)}))
+    assert "mcp" in await c.load_tools_from_container(["mcp"])

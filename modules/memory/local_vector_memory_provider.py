@@ -423,7 +423,8 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
 
     # ---- retention (B3) ------------------------------------------------------
 
-    def prune_memories(self, *, older_than_ts: int) -> int:
+    def prune_memories(self, *, older_than_ts: int,
+                       autonomous_older_than_ts: Optional[int] = None) -> int:
         """Base FTS+provenance sweep, then the vector sidecar. mem_meta rowids
         are a SEPARATE id space from memories rowids, so the sidecar is swept by
         (user_id, content) of the doomed rows — collected before the base delete.
@@ -431,15 +432,18 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
         doomed = []
         try:
             from core.sqlite_util import execute_retry
-            rows = execute_retry(
-                self.db_path,
-                "SELECT m.user_id AS user_id, m.content AS content FROM memories m "
-                "JOIN mem_provenance p ON p.mem_rowid = m.rowid WHERE p.ts < ?",
-                (int(older_than_ts),), fetch="all")
-            doomed = [(r["user_id"], r["content"]) for r in (rows or [])]
+            ids = self._prunable_rowids(older_than_ts, autonomous_older_than_ts)
+            for i in range(0, len(ids), self._PRUNE_BATCH):
+                chunk = tuple(ids[i:i + self._PRUNE_BATCH])
+                rows = execute_retry(
+                    self.db_path,
+                    "SELECT user_id, content FROM memories WHERE rowid IN "
+                    f"({','.join('?' for _ in chunk)})", chunk, fetch="all")
+                doomed.extend((r["user_id"], r["content"]) for r in (rows or []))
         except Exception as e:
             logger.debug("local-vector: prune pre-scan skipped: %s", e)
-        removed = super().prune_memories(older_than_ts=older_than_ts)
+        removed = super().prune_memories(older_than_ts=older_than_ts,
+                                         autonomous_older_than_ts=autonomous_older_than_ts)
         if doomed and self._vec_ok:
             try:
                 self._vec_prune(doomed)

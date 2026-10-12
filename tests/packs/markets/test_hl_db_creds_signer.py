@@ -56,6 +56,9 @@ async def test_db_creds_path_passes_local_account_signer(monkeypatch):
 
     monkeypatch.setattr("polyrob_markets.hyperliquid.service.Exchange", FakeExchange, raising=False)
     monkeypatch.setattr("polyrob_markets.hyperliquid.service.HAS_SDK", True, raising=False)
+    # _has_sdk() is lazy: pin it as loaded or the first call re-imports the
+    # real SDK over the patched Exchange.
+    monkeypatch.setattr("polyrob_markets.hyperliquid.service._SDK_LOADED", True)
 
     tool = HyperliquidTool(config=types.SimpleNamespace(), container=None)
     tool._user_id = "dbuser"
@@ -85,6 +88,9 @@ async def test_db_creds_bad_key_fails_clean_no_key_leak(monkeypatch):
 
     monkeypatch.setattr("polyrob_markets.hyperliquid.service.Exchange", FakeExchange, raising=False)
     monkeypatch.setattr("polyrob_markets.hyperliquid.service.HAS_SDK", True, raising=False)
+    # _has_sdk() is lazy: pin it as loaded or the first call re-imports the
+    # real SDK over the patched Exchange.
+    monkeypatch.setattr("polyrob_markets.hyperliquid.service._SDK_LOADED", True)
 
     tool = HyperliquidTool(config=types.SimpleNamespace(), container=None)
     tool._user_id = "dbuser2"

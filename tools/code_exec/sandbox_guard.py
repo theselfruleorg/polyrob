@@ -67,12 +67,13 @@ def docker_socket_unreachable_reason(backend_name: str) -> Optional[str]:
 def require_sandbox_or_none(backend_name: str) -> Optional[str]:
     """None if ``backend_name`` may execute here; else a refusal reason.
 
-    Local mode allows host execution only without wallet custody. On a server the backend must advertise
-    ``capabilities["sandbox"] is True``.
+    Local mode allows host execution unless ``host_execution_refusal`` refuses (the
+    key-isolation floor, or the owner's ``host_exec_under_custody=refuse``). On a
+    server the backend must advertise ``capabilities["sandbox"] is True``.
     """
     from core.config_policy import local_mode_enabled
-    from core.security.host_execution import wallet_custody_enabled
-    if local_mode_enabled() and not wallet_custody_enabled():
+    from core.security.host_execution import host_execution_refusal
+    if local_mode_enabled() and host_execution_refusal() is None:
         return docker_socket_unreachable_reason(backend_name)
     from tools.code_exec import default_registry
     try:
@@ -95,12 +96,12 @@ def require_sandbox_or_none(backend_name: str) -> Optional[str]:
 def remote_shell_refusal(kind: str, capabilities) -> Optional[str]:
     """None if the shell may run on remote backend ``kind`` here; else the refusal
     (073 W6). The SAME rule as :func:`require_sandbox_or_none`: the single-user
-    local operator without wallet custody may use any backend; otherwise the
+    local operator may use any backend unless host execution is refused; otherwise the
     backend must advertise ``capabilities["sandbox"] is True`` — ssh only with the
     operator's ``CODE_EXEC_SSH_SANDBOXED=true`` attestation."""
     from core.config_policy import local_mode_enabled
-    from core.security.host_execution import wallet_custody_enabled
-    if local_mode_enabled() and not wallet_custody_enabled():
+    from core.security.host_execution import host_execution_refusal
+    if local_mode_enabled() and host_execution_refusal() is None:
         return None
     try:
         sandboxed = (capabilities or {}).get("sandbox") is True
@@ -139,7 +140,7 @@ def local_host_exec_refusal(execution_context: Any) -> Optional[str]:
 def code_exec_execution_blocked_reason() -> Optional[str]:
     """None if code execution may run now; else a refusal reason.
 
-    Local mode: require isolation when wallet custody is enabled. Server: refuse when CODE_EXEC_ENABLED is off, otherwise
+    Local mode: the host unless host execution is refused (``host_execution_refusal``). Server: refuse when CODE_EXEC_ENABLED is off, otherwise
     require a sandbox-capable backend. WHO may run code in local mode is
     :func:`local_host_exec_refusal`.
     """

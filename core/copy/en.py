@@ -6,7 +6,7 @@ running transcript's narrated actions (043 A14), which the console (JS), the
 CLI transcript and the pure Python narrator all render from the same source.
 
 The rules are the ones ``webview/copy/en.py`` is held to, and for the same
-reason (``docs/design/040/README.md`` rule 3): first person, monospace is for
+reason (rule 3 of the 040 interface design): first person, monospace is for
 values only (so no value is baked into a sentence — numbers arrive as
 ``{placeholders}``), and no machine name (no flag, no function, no tool id, no
 session hash) on a default line. A tool's own name is a machine name; the

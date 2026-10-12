@@ -52,6 +52,7 @@ async def test_unattended_python_run_code_is_not_refused_by_the_shell_rule(monke
 @pytest.mark.parametrize("language", ["bash", "sh", "shell", "SHELL", "zsh"])
 async def test_every_shell_language_of_run_code_is_classified(language, monkeypatch):
     monkeypatch.setattr("agents.task.session_class.is_autonomous_session", lambda sid: True)
+    monkeypatch.setenv("SECURITY_SETTINGS", "unattended_dangerous_shell=refuse")
     hook = make_command_guard_hook(shell_gated=True)
     assert "floor" in await hook("code_execution_run_code",
                                  {"language": language, "code": "echo x\n\nrm -rf /etc"}, _ctx())
@@ -87,11 +88,13 @@ async def test_other_actions_pass():
 
 
 @pytest.mark.asyncio
-async def test_unattended_dangerous_is_refused_when_gated(monkeypatch):
+async def test_unattended_dangerous_is_refused_when_the_owner_says_refuse(monkeypatch):
+    """D2: the refusal is the owner's setting (``unattended_dangerous_shell=refuse``)."""
     monkeypatch.setattr("agents.task.session_class.is_autonomous_session", lambda sid: True)
+    monkeypatch.setenv("SECURITY_SETTINGS", "unattended_dangerous_shell=refuse")
     hook = make_command_guard_hook(shell_gated=True)
     reason = await hook("shell_run", {"command": "rm -rf ../build"}, _ctx())
-    assert reason and "unattended" in reason
+    assert reason and "unattended" in reason and "SECURITY_SETTINGS" in reason
     # ...but a safe command in the same run passes
     assert await hook("shell_run", {"command": "ls"}, _ctx()) is None
 
@@ -296,3 +299,37 @@ async def test_text_typed_into_a_job_meets_the_floor_and_the_deny_list(action):
     # Ordinary input (a REPL line, an answer, a dangerous-class line) passes.
     for data in ("print(1)\n", "y\n", "", "docker ps\n"):
         assert await hook(action, {"job_id": "j1", "data": data}, _ctx()) is None
+
+
+# --- D2 (owner, 2026-10-10): the unattended dangerous class has an owner path ----
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("command", ["python - <<EOF\nprint(1)\nEOF", 'bash -c "make test"'])
+async def test_unattended_dangerous_runs_in_the_sandbox_by_default(monkeypatch, command):
+    monkeypatch.delenv("SECURITY_SETTINGS", raising=False)
+    monkeypatch.setattr("agents.task.session_class.is_autonomous_session", lambda sid: True)
+    monkeypatch.setattr("tools.shell.backend_pool.host_selected", lambda ctx: False)
+    hook = make_command_guard_hook(shell_gated=True)
+    assert await hook("shell_run", {"command": command}, _ctx()) is None
+    reason = make_shell_command_exemption("per_command")("shell_run", {"command": command}, _ctx())
+    assert reason and "sandbox" in reason       # no owner wait an unattended run cannot answer
+
+
+@pytest.mark.asyncio
+async def test_unattended_dangerous_on_the_host_is_still_refused(monkeypatch):
+    monkeypatch.delenv("SECURITY_SETTINGS", raising=False)
+    monkeypatch.setattr("agents.task.session_class.is_autonomous_session", lambda sid: True)
+    monkeypatch.setattr("tools.shell.backend_pool.host_selected", lambda ctx: True)
+    hook = make_command_guard_hook(shell_gated=True)
+    reason = await hook("shell_run", {"command": 'bash -c "make test"'}, _ctx())
+    assert reason and "host" in reason
+    assert make_shell_command_exemption("per_command")(
+        "shell_run", {"command": 'bash -c "make test"'}, _ctx()) is None
+
+
+def test_attended_dangerous_still_asks_the_owner(monkeypatch):
+    monkeypatch.delenv("SECURITY_SETTINGS", raising=False)
+    monkeypatch.setattr("agents.task.session_class.is_autonomous_session", lambda sid: False)
+    monkeypatch.setattr("tools.shell.backend_pool.host_selected", lambda ctx: False)
+    assert make_shell_command_exemption("per_command")(
+        "shell_run", {"command": 'bash -c "make test"'}, _ctx()) is None

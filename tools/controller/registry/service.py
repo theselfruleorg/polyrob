@@ -1,5 +1,6 @@
 import asyncio
 import os
+from core.env import bool_env
 import threading
 from collections import OrderedDict
 from inspect import Parameter, iscoroutinefunction, signature
@@ -10,7 +11,7 @@ import logging
 from modules.llm.adapters import BaseChatModel
 from pydantic import BaseModel, Field, create_model
 
-from tools.controller.registry.views import (
+from agents.task.loop_types.registry_views import (
 	ActionModel,
 	ActionRegistry,
 	RegisteredAction,
@@ -22,7 +23,7 @@ if TYPE_CHECKING:
 	# headless/browser-less install (this module is on the import path of
 	# nearly all of agents.task.agent).
 	from tools.browser.context import BrowserContext
-	from tools.controller.execution_context import ActionExecutionContext
+	from agents.task.loop_types.execution_context import ActionExecutionContext
 from tools.controller.registry.schema_generators import (
 	get_schema_generator,
 	ToolSchemaGenerator,
@@ -332,7 +333,7 @@ class Registry:
 		# Build execution context from parameters if not provided
 		if not execution_context:
 			# Import here to avoid circular dependency
-			from tools.controller.execution_context import ActionExecutionContext
+			from agents.task.loop_types.execution_context import ActionExecutionContext
 			execution_context = ActionExecutionContext(
 				browser_context=browser,
 				session_id=session_id or self.session_id,
@@ -1191,13 +1192,9 @@ class Registry:
 		# differs between a cron session, a goal session and a chat session that
 		# hold the SAME tools. A different prefix is a cold cache at 50x the
 		# cached input price. Sorting by action name makes two registries with
-		# the same ids emit identical bytes. Gated TOOL_SCHEMA_STABLE_ORDER
-		# (default ON since 2026-09-22 — the harness/cache review found every
-		# new process was a cold prefix on ~58 K schema tokens; `false` is the
-		# pre-057 registration-order escape).
-		from core.env import bool_env as _bool_env
-		if _bool_env("TOOL_SCHEMA_STABLE_ORDER", True):
-			all_actions.sort(key=lambda a: getattr(a, "name", "") or "")
+		# the same ids emit identical bytes (the 2026-09-22 harness/cache review
+		# found every new process was a cold prefix on ~58 K schema tokens).
+		all_actions.sort(key=lambda a: getattr(a, "name", "") or "")
 
 		# F13 (restart continuity): a restored session emits the order it emitted
 		# BEFORE the restart, so the tools block — the largest cached bytes in the
@@ -1221,7 +1218,7 @@ class Registry:
 		# bare-string/array-type normalization). Runs BEFORE the cache write and is
 		# composed downstream of DROP_TOOL (sanitize first => fewer tools dropped).
 		# Gated TOOL_SCHEMA_SANITIZE (default on; =false restores pre-port bytes).
-		if os.getenv("TOOL_SCHEMA_SANITIZE", "true").lower() != "false":
+		if bool_env("TOOL_SCHEMA_SANITIZE", True):
 			try:
 				from tools.controller.registry.schema_sanitizer import sanitize_emitted_tools
 				actions = sanitize_emitted_tools(actions, provider)

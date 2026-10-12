@@ -33,7 +33,7 @@ def serve(host, port, workers):
     # present. local_mode=True loads the same env layers every other CLI gate
     # reads (incl. ~/.polyrob/.env), so a key that works for `polyrob run`
     # also works here.
-    from core.bootstrap import load_env
+    from polyrob.app.bootstrap import load_env
     from modules.llm.profiles import usable_providers_with_credentials, no_key_message
     load_env(local_mode=True)
     if not usable_providers_with_credentials(os.environ):

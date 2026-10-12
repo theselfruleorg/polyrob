@@ -41,7 +41,7 @@ def _clean(monkeypatch):
 
 
 def test_shell_and_process_in_cli_registerable_set(monkeypatch):
-    import core.bootstrap as bootstrap
+    import polyrob.app.bootstrap as bootstrap
     assert "shell" in bootstrap._CLI_REGISTERABLE_TOOLS
     assert "process" in bootstrap._CLI_REGISTERABLE_TOOLS
     assert "self_env" in bootstrap._CLI_REGISTERABLE_TOOLS
@@ -53,7 +53,7 @@ async def test_register_cli_tools_registers_shell_process_at_posture_1(monkeypat
     c._refreeze_compute_posture_for_tests()
     config = _temp_config(monkeypatch, tmp_path)
     from core.container import DependencyContainer
-    from core.bootstrap import register_cli_tools
+    from polyrob.app.bootstrap import register_cli_tools
 
     DependencyContainer._instance = None
     container = DependencyContainer.get_instance(config)
@@ -71,7 +71,7 @@ async def test_register_cli_tools_omits_compute_tools_at_posture_0(monkeypatch, 
     c._refreeze_compute_posture_for_tests()
     config = _temp_config(monkeypatch, tmp_path)
     from core.container import DependencyContainer
-    from core.bootstrap import register_cli_tools
+    from polyrob.app.bootstrap import register_cli_tools
 
     DependencyContainer._instance = None
     container = DependencyContainer.get_instance(config)
@@ -88,7 +88,7 @@ async def test_register_cli_tools_registers_self_env_at_posture_2(monkeypatch, t
     c._refreeze_compute_posture_for_tests()
     config = _temp_config(monkeypatch, tmp_path)
     from core.container import DependencyContainer
-    from core.bootstrap import register_cli_tools
+    from polyrob.app.bootstrap import register_cli_tools
 
     DependencyContainer._instance = None
     container = DependencyContainer.get_instance(config)

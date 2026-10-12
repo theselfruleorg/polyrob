@@ -87,13 +87,6 @@ def test_cli_cron_schedule_and_digest_stamp_owner(tmp_path, monkeypatch):
     assert {j.payload.get("authored_by") for j in svc.list_jobs(user_id="rob")} == {"owner"}
 
 
-def test_operator_seeder_stamps_owner(tmp_path):
-    seed = pytest.importorskip("scripts._seed_cron", reason="scripts/ is not in the public tree").seed
-    job = seed(str(tmp_path / "cron.db"), {"task": "digest", "schedule_spec": "1d",
-                                            "user_id": "rob", "payload": {"digest": True}})
-    assert job.payload["authored_by"] == "owner" and job.payload["digest"] is True
-
-
 def test_cronjob_schedule_has_stamped_since_d2ef4acff():
     """The migration's cutoff rests on this: the agent's tool always stamps."""
     import inspect

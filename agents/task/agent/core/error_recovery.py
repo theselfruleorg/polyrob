@@ -487,13 +487,10 @@ class ErrorRecoveryMixin:
 	def _emit_retry_wait(self, reason: str, delay: float, provider: str = '') -> None:
 		"""019 P1: emit a retry_wait feed event before a backoff sleep.
 
-		Fail-open, flag-gated — surfaces show "retrying (rate_limit) 8s"
+		Fail-open — surfaces show "retrying (rate_limit) 8s"
 		instead of a silent stall while the handler sleeps.
 		"""
 		try:
-			from core.config_policy import AutonomyConfig
-			if not AutonomyConfig.run_events_enabled():
-				return
 			from agents.task.telemetry.views import RetryWaitEvent
 			self.telemetry_manager.capture_event(RetryWaitEvent(
 				agent_id=self.agent_id,

@@ -91,11 +91,11 @@ def test_get_json(isolated, monkeypatch):
 
 def test_list_group_filter_shows_only_that_group(isolated):
     from core.flags import REGISTRY
-    group = REGISTRY["GOALS_ENABLED"].group
+    group = REGISTRY["GOAL_DAILY_QUOTA"].group
     runner, config = _runner()
     res = runner.invoke(config, ["list", "--group", group])
     assert res.exit_code == 0, res.output
-    assert "GOALS_ENABLED" in res.output
+    assert "GOAL_DAILY_QUOTA" in res.output
     assert "style.verbosity" not in res.output  # prefs are a different group
 
 

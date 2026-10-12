@@ -3,9 +3,9 @@
 The REPL ``/help`` used to print one flat 55-row wall (27 rows past 80
 columns) with no ``/help <verb>``. This pins the replacement: a ten-group
 catalog derived from the registry's ``group`` field
-(``docs/design/040/cli/help-grouped-80.txt`` is the specification), and
+(the interface design's grouped-help mockup is the specification), and
 ``/help <verb>`` answering from ``help``/``help_long``/``elsewhere``
-(``docs/design/040/cli/help-verb-80.txt``).
+(the per-verb help mockup).
 
 Harness pattern mirrors ``tests/unit/cli/test_repl_owner_verbs.py``: a
 recorder renderer + a partial ``CommandContext``, handlers invoked directly.
@@ -207,7 +207,7 @@ def test_minimum_verbs_have_help_long(verb):
 
 
 def test_pause_help_long_is_the_mockup_verbatim():
-    """The /pause detail body is docs/design/040/cli/help-verb-80.txt,
+    """The /pause detail body is the per-verb help mockup,
     verbatim (043 A13 brief: 'keep the five lines as drawn')."""
     from cli.ui.commands.handlers import build_default_registry
 

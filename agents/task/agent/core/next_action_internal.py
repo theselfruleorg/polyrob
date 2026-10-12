@@ -20,7 +20,6 @@ from typing import Any, Callable, Dict, List, Optional, Type, TypeVar, Union, Tu
 from collections import deque  # ADDED: Import deque for bounded collections
 from agents.task.agent.tool_call_tracker import ToolCallTracker  # Robust tool call ID tracking
 
-from dotenv import load_dotenv
 
 # Import centralized constants
 from agents.task.constants import (
@@ -335,14 +334,17 @@ class NextActionInternalMixin:
 	def _classify_llm_error(e: Exception) -> str:
 		"""Classify an LLM-call exception into a retry bucket (P7 finalization:
 		extracted from _get_next_action_internal's except handler). Pure — decides
-		auth / parse / rate_limit / parameter_error / other from the message text.
-
+		billing / auth / parse / rate_limit / parameter_error / other from the text.
 		027: auth is checked FIRST and is never retried here (AUTH_PERMANENT —
 		the same key fails identically on every attempt), and the rate-limit
 		match is word-precise — the old bare ``"rate" in s`` matched 'geneRATE',
 		so every 'Failed to generate response: …' provider error (including a
 		401) was retried with backoff."""
 		s = str(e).lower()
+		# D3: z.ai "429 code 1113 Insufficient balance" is billing, never a retried rate limit.
+		from core.credit_sentinel import looks_like_credit_death
+		if isinstance(e, LLMPermanentError) or looks_like_credit_death(s):
+			return "billing"
 		if ("401" in s or "unauthorized" in s or "authentication" in s
 				or "invalid api key" in s or "api key not valid" in s):
 			return "auth"
@@ -880,19 +882,17 @@ Use double quotes only. Max {self.max_actions_per_step} actions."""
 									# 019 P0: llm_started span event — surfaces render
 									# "thinking" instead of dead air during LLM latency
 									# (the llm_usage completion record never reaches the
-									# feed). Fail-open; flag-gated.
+									# feed). Fail-open.
 									try:
-										from core.config_policy import AutonomyConfig as _RunEvCfg
-										if _RunEvCfg.run_events_enabled():
-											from agents.task.telemetry.views import LLMStartedEvent
-											self.telemetry_manager.capture_event(LLMStartedEvent(
-												agent_id=self.agent_id,
-												step=self.state.n_steps,
-												provider=provider,
-												model_name=self.model_name,
-												attempt=retry_count,
-												context_tokens_est=request_info.get("estimated_input_tokens"),
-											))
+										from agents.task.telemetry.views import LLMStartedEvent
+										self.telemetry_manager.capture_event(LLMStartedEvent(
+											agent_id=self.agent_id,
+											step=self.state.n_steps,
+											provider=provider,
+											model_name=self.model_name,
+											attempt=retry_count,
+											context_tokens_est=request_info.get("estimated_input_tokens"),
+										))
 									except Exception:
 										pass
 
@@ -1306,7 +1306,7 @@ Use double quotes only. Max {self.max_actions_per_step} actions."""
 										self.logger.debug(f"Sample tools that caused error: {sample}")
 									raise
 
-							except InsufficientCreditsError:
+							except (InsufficientCreditsError, LLMPermanentError):
 								# Credit death is FAIL-FAST, never a "try the next shape"
 								# signal. Without this the inline billing block's deliberate
 								# re-raise (see `except InsufficientCreditsError: raise` in the
@@ -1372,7 +1372,7 @@ Use double quotes only. Max {self.max_actions_per_step} actions."""
 								parsed = None
 								self.logger.warning("Structured output didn't return valid parsed output")
 
-						except InsufficientCreditsError:
+						except (InsufficientCreditsError, LLMPermanentError):
 							raise  # fail-fast: never bill another shape (see above)
 						except Exception as struct_error:
 							if not self._structured_output_warned:
@@ -1405,7 +1405,7 @@ Use double quotes only. Max {self.max_actions_per_step} actions."""
 								raise
 							parsed = None
 				
-				except InsufficientCreditsError:
+				except (InsufficientCreditsError, LLMPermanentError):
 					raise  # fail-fast: never bill another shape (see above)
 				except asyncio.TimeoutError:
 					# The inner fallbacks re-raise a timeout deliberately; without this

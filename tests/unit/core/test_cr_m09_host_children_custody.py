@@ -10,7 +10,7 @@ from core.lazy_deps import FeatureUnavailable
 
 @pytest.fixture
 def lazy_on(monkeypatch):
-    monkeypatch.setenv("LAZY_DEPS_ENABLED", "1")
+    monkeypatch.setenv("LAZY_DEPS_MODE", "trusted")
     monkeypatch.setattr(ld, "_dist_present", lambda name: False)
     for n in ("AGENT_WALLET_ENABLED", "AGENT_WALLET_MASTER_SEED",
               "PAYMENT_MASTER_SEED", "MASTER_SEED"):
@@ -108,10 +108,14 @@ def test_anysite_cli_runs_under_custody_with_a_scrubbed_env(monkeypatch, state):
     assert "anysite-key" in env.values()
 
 
-def test_other_host_children_keep_the_custody_refusal(monkeypatch):
-    """D4 relaxes anysite ONLY: the shared rule still refuses under custody,
-    hardened or not (git, LSP, MCP stdio, lazy installs — until the signer)."""
+def test_other_host_children_run_under_custody_unless_the_owner_refuses(monkeypatch):
+    """Owner decision D1 (2026-10-10) replaced the blanket custody refusal: with
+    isolation held, git/LSP/MCP stdio/lazy installs run; the owner's
+    SECURITY_SETTINGS row host_exec_under_custody=refuse still refuses them."""
     from core.security.host_execution import host_execution_refusal
     monkeypatch.setenv("AGENT_WALLET_ENABLED", "true")
+    monkeypatch.delenv("SECURITY_SETTINGS", raising=False)
     _hardening(monkeypatch, "held")
+    assert host_execution_refusal() is None
+    monkeypatch.setenv("SECURITY_SETTINGS", "host_exec_under_custody=refuse")
     assert "wallet custody" in (host_execution_refusal() or "")

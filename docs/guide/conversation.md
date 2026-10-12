@@ -54,7 +54,6 @@ from a background run is refused with this remedy.
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `OWNER_THREAD_ENABLED` | ON | write the thread from every rail and seat |
 | `OWNER_THREAD_INJECT` | ON | read it into sessions (tail, delta, referent, rail slice) |
 | `OWNER_THREAD_TAIL_HOURS` / `OWNER_THREAD_TAIL_ROWS` | 6 / 12 | the tail window |
 

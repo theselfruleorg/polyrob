@@ -61,9 +61,15 @@ def test_handover_flag_patch_is_403_at_owner_posture(monkeypatch, tmp_path, key)
 def test_ordinary_flag_still_writable(monkeypatch, tmp_path):
     """The denylist must not turn the config page into a read-only page."""
     c = _client(monkeypatch, tmp_path)
-    r = c.patch("/api/webgate/config/GOALS_ENABLED", json={"value": "on"})
+    r = c.patch("/api/webgate/config/TOOL_AVAILABILITY_HINT", json={"value": "on"})
     assert r.status_code == 200
-    assert "GOALS_ENABLED=on" in (tmp_path / "home" / ".env").read_text()
+    assert "TOOL_AVAILABILITY_HINT=on" in (tmp_path / "home" / ".env").read_text()
+
+
+def test_posture_member_is_not_console_writable(monkeypatch, tmp_path):
+    """D7: a member changes only through POLYROB_OVERRIDES (Access file)."""
+    c = _client(monkeypatch, tmp_path)
+    assert c.patch("/api/webgate/config/GOALS_ENABLED", json={"value": "on"}).status_code == 403
 
 
 def test_get_marks_handover_flags_unwritable(monkeypatch, tmp_path):

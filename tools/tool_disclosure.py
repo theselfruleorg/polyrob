@@ -51,7 +51,7 @@ def disclosure_ceiling(controller):
         # An OWNER-authored cron job carries the owner's standing authority
         # (CHAT-5): it loads what its task needs, like the owner's own chat.
         # Money tools stay explicit-grant-only (checked before the ceiling).
-        from agents.task.goals.autonomy_marker import owner_job_task_for_session
+        from core.autonomy_marker import owner_job_task_for_session
         if owner_job_task_for_session(sid):
             return None
         from tools.goal_tools import allowed_self_goal_tools
@@ -314,7 +314,7 @@ async def perform_load_tool(controller, tool_id: str, execution_context=None):
     refusal is an answer, not a retryable failure. Only a load that *should*
     have worked and didn't returns an error result.
     """
-    from tools.controller.types import ActionResult
+    from agents.task.loop_types.controller_types import ActionResult
     from tools.descriptors import get_tool_display_name
 
     display = get_tool_display_name((tool_id or "").strip())

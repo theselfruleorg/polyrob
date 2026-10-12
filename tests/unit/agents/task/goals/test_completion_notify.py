@@ -9,7 +9,7 @@ import asyncio
 
 from agents.task.goals.dispatcher import GoalDispatcher
 from agents.task.goals.board import Goal
-from agents.task.constants import AutonomyConfig
+from core.config_policy import AutonomyConfig
 
 
 class _Board:

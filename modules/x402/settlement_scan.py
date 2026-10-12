@@ -61,12 +61,19 @@ def _own_bridge_arrival(transfer: dict, treasury: str, chain: str,
     if raw is None or not asset_address or not chain:
         return None
     try:
-        from core.wallet import bridge_guard, chains
+        from core.wallet import bridge_guard, bridge_status, chains
         row = chains.get(chain)
-        if row is None or not getattr(row, "chain_id", 0):
+        if row is None:
+            return None
+        dest_id = int(getattr(row, "chain_id", 0) or 0)
+        if not dest_id:
+            # An SVM row has no EIP-155 id; bridge rows store the provider's
+            # pseudo id, registered as an alias of the registry name.
+            dest_id = bridge_status.provider_chain_id(chain) or 0
+        if not dest_id:
             return None
         return bridge_guard.own_bridge_arrival(
-            dest_chain_id=int(row.chain_id), recipient=treasury,
+            dest_chain_id=dest_id, recipient=treasury,
             currency=str(asset_address), amount_raw=int(raw))
     except Exception:
         logger.debug("bridge arrival correlation failed (fail-open)", exc_info=True)
@@ -207,7 +214,8 @@ def solana_settle_enabled() -> bool:
     strategy deserve a deliberate second decision.
     """
     from core.env import bool_env
-    if not bool_env("X402_SETTLE_ONCHAIN_DETECT", False):
+    from core.config_policy.members import member_flag
+    if not member_flag("X402_SETTLE_ONCHAIN_DETECT"):
         return False
     return bool_env("X402_SOLANA_SETTLE", False)
 def _scan_max_span() -> int:

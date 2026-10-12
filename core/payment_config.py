@@ -1,10 +1,10 @@
 """Single source of truth for resolving the payment/deposit master seed.
 
-Two env var names have existed historically: PAYMENT_MASTER_SEED (the name used
-in every deployment doc/template — DEPLOYMENT.md, ENV_FILE_README.md, the .env
-templates) and the legacy pydantic-settings alias MASTER_SEED (still set in the
-live production .env). E6 (2026-07-02 security audit) found the two entry points
-(core/initialization.py's container-built wallet_generator, and webview/server.py's
+The name is PAYMENT_MASTER_SEED. The legacy pydantic-settings alias MASTER_SEED
+was retired in 1.4: set alone it REFUSES (``RetiredFlagError``), because a silent
+fallback to "no seed" would disable — and a later rename could change — every
+derived deposit address. E6 (2026-07-02 security audit) found the two entry points
+(polyrob/app/initialization.py's container-built wallet_generator, and webview/server.py's
 own startup-time wallet_generator) each read only ONE of the two names — an
 operator following the documented PAYMENT_MASTER_SEED convention silently got a
 disabled wallet generator on the container path, and a future divergent value
@@ -16,8 +16,15 @@ from typing import Optional
 
 
 def resolve_master_seed() -> Optional[str]:
-    """Resolve the payment master seed. PAYMENT_MASTER_SEED wins; MASTER_SEED is
-    the back-compat fallback for the pre-existing production deployment."""
+    """Resolve the payment master seed from PAYMENT_MASTER_SEED.
+
+    Raises ``RetiredFlagError`` when only the retired MASTER_SEED is set."""
     # 066 P0.2: both names leave os.environ once the wallet config loads.
+    from core.config_policy.retired_flags import refuse_retired_alias
     from core.security.custody_env import custody_secret
-    return custody_secret("PAYMENT_MASTER_SEED") or custody_secret("MASTER_SEED") or None
+    seed = custody_secret("PAYMENT_MASTER_SEED") or None
+    refuse_retired_alias("MASTER_SEED", {
+        "MASTER_SEED": custody_secret("MASTER_SEED") or "",
+        "PAYMENT_MASTER_SEED": seed or "",
+    })
+    return seed

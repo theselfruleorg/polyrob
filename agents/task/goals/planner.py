@@ -60,18 +60,11 @@ def planner_ceilings(active_objectives: int) -> Dict[str, int]:
     Only the ready ceiling scales; per-run and social stay owner-set, because
     scaling THEM would raise spend and posting volume rather than coverage. Each
     is pinnable by env — a pinned value always wins over the derivation.
-
-    ``GOAL_PLANNER_SCALING=false`` reverts the DERIVATION (not the flags): the
-    ceiling falls back to :data:`PLANNER_READY_FLOOR`, which is the value the old
-    prompt literal carried, so the three numbers become 3 / 5 / 1 — byte-identical
-    to the pre-scaling prompt. Pinning ``GOAL_PLANNER_READY_CEILING`` can no
-    longer serve as that revert, because the derived value is a ``max()`` of it.
     """
-    from agents.task.constants import AutonomyConfig
+    from core.config_policy import AutonomyConfig
     ceiling = AutonomyConfig.goal_planner_ready_ceiling()
     if ceiling <= 0:
-        ceiling = (max(PLANNER_READY_FLOOR, int(active_objectives))
-                   if AutonomyConfig.goal_planner_scaling() else PLANNER_READY_FLOOR)
+        ceiling = max(PLANNER_READY_FLOOR, int(active_objectives))
     return {
         "per_run": max(1, AutonomyConfig.goal_planner_goals_per_run()),
         "ready_ceiling": ceiling,
@@ -82,7 +75,7 @@ def planner_ceilings(active_objectives: int) -> Dict[str, int]:
 def planner_session_tools() -> list:
     """Planner session toolset. Under autonomous mode the planner also gets read-only
     web_fetch so 'is this duplicate / still true?' checks are grounded, not guessed."""
-    from agents.task.constants import full_autonomy_enabled
+    from core.config_policy import full_autonomy_enabled
     tools = list(PLANNER_TOOLS)
     if full_autonomy_enabled() and "web_fetch" not in tools:
         tools.append("web_fetch")
@@ -271,10 +264,7 @@ def build_planner_prompt(board, user_id: str, deliverables_root: Optional[Path],
 
     # Code owns which stream is served next. Without this the model picks, and at
     # a dozen-plus standing objectives it picks the same two or three every run.
-    # Rides GOAL_PLANNER_SCALING so the whole planner half has ONE revert: with it
-    # off the prompt has no starvation block at all, which is the pre-scaling shape.
-    from agents.task.constants import AutonomyConfig as _AC
-    if len(objectives) > 1 and _AC.goal_planner_scaling():
+    if len(objectives) > 1:
         _now = time.time()
         _lines = []
         for i, (o, live, last) in enumerate(
@@ -295,7 +285,7 @@ def build_planner_prompt(board, user_id: str, deliverables_root: Optional[Path],
         # the last 7 days including done ones, and the planner kept re-proposing
         # yesterday's work under a new date/letter suffix. Say so explicitly.
         try:
-            from agents.task.constants import AutonomyConfig as _DAC
+            from core.config_policy import AutonomyConfig as _DAC
             _thr = f"{int(round(_DAC.goal_dedup_threshold() * 100))}%"
         except Exception:
             _thr = "60%"
@@ -420,7 +410,7 @@ def build_planner_prompt(board, user_id: str, deliverables_root: Optional[Path],
     # from memory instead of the CURRENT flag. Stamp the live value directly so a
     # stale recall can't outlive the fix (mirrors the BLOCKED-goal stamping above).
     try:
-        from agents.task.constants import AutonomyConfig as _EntryPauseCfg
+        from core.config_policy import AutonomyConfig as _EntryPauseCfg
         _paused = _EntryPauseCfg.entry_paused()
     except Exception:
         _paused = None

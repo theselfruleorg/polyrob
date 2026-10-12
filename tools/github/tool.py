@@ -107,12 +107,12 @@ class GitHubTool(BaseTool):
 
     @staticmethod
     def _ok(content):
-        from tools.controller.types import ActionResult
+        from agents.task.loop_types.controller_types import ActionResult
         return ActionResult(extracted_content=content)
 
     @staticmethod
     def _err(msg):
-        from tools.controller.types import ActionResult
+        from agents.task.loop_types.controller_types import ActionResult
         return ActionResult(error=msg)
 
     # -- auth -----------------------------------------------------------------

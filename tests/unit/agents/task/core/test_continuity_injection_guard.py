@@ -32,7 +32,7 @@ class _Agent(MemoryPrefetchMixin):
 
 async def _run(agent: _Agent) -> None:
     with (
-        patch("agents.task.goals.autonomy_marker.is_autonomous", return_value=True),
+        patch("core.autonomy_marker.is_autonomous", return_value=True),
         patch("agents.task.agent.core.episodic_digest.build_mission_continuity",
               new=AsyncMock(return_value=SENTINEL_MSG)),
     ):

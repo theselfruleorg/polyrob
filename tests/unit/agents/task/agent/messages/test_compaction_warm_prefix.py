@@ -134,20 +134,6 @@ async def test_an_aux_model_keeps_the_cold_shape(tmp_path):
 	assert "conversation body" in str(request[0].content)
 
 
-@pytest.mark.asyncio
-async def test_flag_off_keeps_the_cold_shape(monkeypatch, tmp_path):
-	monkeypatch.setenv("COMPACTION_WARM_PREFIX", "false")
-	llm = _RecordingLLM()
-	mm = _mm(llm)
-	mm._compaction_checkpoint_dir = str(tmp_path)
-	_fill(mm, turns=40)
-	assert await mm.llm_compact_history()
-
-	request = _summariser_request(llm)
-	assert len(request) == 1 and isinstance(request[0], HumanMessage)
-	assert "conversation body" in str(request[0].content)
-
-
 # ---------------------------------------------------------------------------
 # A provider that refuses the shape is learned once, not once per compaction
 # ---------------------------------------------------------------------------

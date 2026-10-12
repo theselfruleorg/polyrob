@@ -19,6 +19,7 @@ third-party data can neither pause nor resume; the owner uses /pause or /resume.
 module — the registry introspects the closure's first-param annotation to route
 the validated param model (GLM live-test bug 2026-06-20).
 """
+from core.runtime_paths import goals_db_path
 import logging
 import os
 from typing import List, Literal, Optional
@@ -125,7 +126,7 @@ def register_autonomy_control_action(controller) -> None:
 		if params.cancel_goals and res.effective:
 			try:
 				from agents.task.goals.board import GoalBoard
-				board = GoalBoard(os.path.join(data_dir, "goals.db"))
+				board = GoalBoard(goals_db_path(data_dir))
 				# board.list is a LIMIT-bounded dispatch window: loop until it drains.
 				n = 0
 				for _ in range(200):

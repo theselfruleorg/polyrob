@@ -137,7 +137,9 @@ def wrap_quote(verb: str, ctx: Any) -> Optional[Any]:
     args = list(getattr(ctx, "args", None) or [])
     if not args and verb in cards.FORM_VERBS:
         return _BuilderWrap(verb, [], ctx)
-    if verb not in cards.CONFIRMABLE_VERBS or not args or cards.executes(args):
+    if verb not in cards.CONFIRMABLE_VERBS or cards.executes(args):
+        return None
+    if not args and verb not in cards.BARE_CONFIRMABLE_VERBS:
         return None
     return _QuoteWrap(verb, args, ctx)
 

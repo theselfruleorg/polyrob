@@ -144,11 +144,9 @@ def dashboard(multitenant, posture, host, port, no_browser, set_password):
     # Must be set BEFORE importing webview.server (it reads the flag at import
     # time to mount-gate routes).
     if multitenant:
-        os.environ["WEBGATE_MULTITENANT"] = "true"
+        os.environ["POLYROB_POSTURE"] = "multitenant"
     elif posture:
         os.environ["POLYROB_POSTURE"] = posture
-    else:
-        os.environ.setdefault("WEBGATE_MULTITENANT", "false")
 
     # Safe-by-default fix: an explicit --host is a *local* CLI variable that
     # otherwise only reaches uvicorn.run() directly — it never fed webgate's
@@ -156,15 +154,15 @@ def dashboard(multitenant, posture, host, port, no_browser, set_password):
     # would bind publicly while webgate.posture() stayed "local" (no auth).
     # Feed it into WEBGATE_HOST so webgate.posture()'s host-derivation
     # (loopback -> local, else -> own_ops) sees the same host uvicorn binds to.
-    # No effect when --multitenant/--posture already set POLYROB_POSTURE /
-    # WEBGATE_MULTITENANT above (those win outright in webgate.posture()).
+    # No effect when --multitenant/--posture already set POLYROB_POSTURE
+    # above (it wins outright in webgate.posture()).
     if host:
         os.environ["WEBGATE_HOST"] = host
 
     # Key check: the dashboard is a viewer + chat UI, so a missing key is a WARN (the
     # UI still opens for view-only pages) rather than a hard exit — but surface it now
     # instead of letting chat fail deep in the request handler.
-    from core.bootstrap import load_env
+    from polyrob.app.bootstrap import load_env
     from modules.llm.profiles import usable_providers_with_credentials
     load_env(local_mode=True)
     if not usable_providers_with_credentials(os.environ):

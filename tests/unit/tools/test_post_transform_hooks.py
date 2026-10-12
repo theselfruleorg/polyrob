@@ -9,7 +9,7 @@ import pytest
 
 import agents.task.agent.service  # noqa: F401 — avoid import cycle
 from tools.controller.service import Controller
-from tools.controller.types import ActionResult
+from agents.task.loop_types.controller_types import ActionResult
 
 
 def _bare_controller() -> Controller:

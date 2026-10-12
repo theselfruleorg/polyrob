@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from core.config import BotConfig
 from core.exceptions import ConfigurationError, APIError, AuthenticationError, ToolError
 from tools.base_tool import BaseTool, ToolStatus
-from tools.controller.types import ActionResult
+from agents.task.loop_types.controller_types import ActionResult
 from tools.email_providers.mime import _decode, auto_headers, is_auto_generated
 
 
@@ -963,10 +963,10 @@ class EmailTool(EmailMailboxMixin, BaseTool):
             await notify_first_contact(self.container, user_id, session_id, "email", addr)
 
         # 057 WS-E: the per-rail proof rule rides WITH the receipt, from the ONE
-        # table (core/rails/verification.py). Fail-open to "": an unavailable
+        # table (tools/rails/verification.py). Fail-open to "": an unavailable
         # table must never turn a SUCCESSFUL send into an error.
         try:
-            from core.rails.verification import verification_line
+            from tools.rails.verification import verification_line
             _proof = verification_line("email", message_id=message_id)
         except Exception:
             _proof = ""

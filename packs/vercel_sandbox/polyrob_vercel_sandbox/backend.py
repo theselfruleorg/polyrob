@@ -6,7 +6,7 @@
   SDK's own ``VERCEL_OIDC_TOKEN``) authenticate the client in THIS process; never
   forwarded into the sandbox.
 - Runtime: ``VERCEL_SANDBOX_RUNTIME`` (default ``python3.13``).
-- Lifetime: ``VERCEL_SANDBOX_TIMEOUT_SEC`` (default 2700 — the provider caps it).
+- Lifetime: the constant ``VERCEL_SANDBOX_TIMEOUT_SEC`` (2700 — the provider caps it).
 - Persistence: none. A Vercel sandbox is ephemeral by the provider's design; a
   session's files live until the sandbox stops (teardown or the provider's
   timeout). There is no stop/resume to wire.
@@ -18,10 +18,12 @@
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
-from core.env import int_env
 from tools.code_exec.backends.remote_sandbox import RemoteSandboxBackend, env_value, require_sdk
 
 logger = logging.getLogger(__name__)
+
+#: Internal tuning (not env-driven): sandbox lifetime in seconds.
+VERCEL_SANDBOX_TIMEOUT_SEC = 2700
 
 
 class VercelSandboxBackend(RemoteSandboxBackend):
@@ -50,7 +52,7 @@ class VercelSandboxBackend(RemoteSandboxBackend):
         def _create():
             return sdk.Sandbox.create(
                 runtime=env_value("VERCEL_SANDBOX_RUNTIME") or "python3.13",
-                timeout=int_env("VERCEL_SANDBOX_TIMEOUT_SEC", 2700) * 1000,
+                timeout=VERCEL_SANDBOX_TIMEOUT_SEC * 1000,
                 **self._auth())
 
         return await self.in_thread(_create)

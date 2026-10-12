@@ -96,6 +96,10 @@ class AnthropicCompatClient(AnthropicClient):
             headers = self._spec.headers()
             if headers:
                 kwargs["default_headers"] = headers
+            # A credit refusal (z.ai 429 code 1113) is not retried by the SDK.
+            from modules.llm.credit_errors import no_retry_on_credit_refusal
+            kwargs["http_client"] = anthropic.DefaultAsyncHttpxClient(
+                event_hooks={"response": [no_retry_on_credit_refusal]})
             self._client = anthropic.AsyncAnthropic(**kwargs)
             self.logger.debug(f"{self._spec.display_name} client setup completed")
         except Exception as e:

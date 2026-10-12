@@ -25,7 +25,6 @@ in this module or in ``shell.html`` is a bug that
 import logging
 import os
 import time
-
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
@@ -38,6 +37,7 @@ from core.event_kinds import (
     CONSOLE_MEMORY_WRITE,
     CONSOLE_SELF_CONTEXT_WRITE,
 )
+from core.runtime_paths import cron_db_path
 from webview import webgate
 from webview.audit import console_write
 from webview.copy import has, t
@@ -691,7 +691,7 @@ def _bridges_body(user_id: str) -> dict:
     confident empty list. A genuinely empty board (no bridge ever recorded) is
     ``bridges: []`` with ``unreadable: None``.
     """
-    from core.wallet.bridge_guard import chain_name_for_id, open_bridges
+    from core.wallet.bridge_guard import arrival_chain_name, chain_name_for_id, open_bridges
     from core.wallet.chains import explorer_url
     try:
         rows = open_bridges(str(user_id))
@@ -713,7 +713,7 @@ def _bridges_body(user_id: str) -> dict:
             "id": r.get("id"),
             "state": r.get("state"),
             "origin_chain": origin_name,
-            "dest_chain": chain_name_for_id(r.get("dest_chain_id")),
+            "dest_chain": arrival_chain_name(r.get("dest_chain_id")),
             "currency_out": r.get("currency_out"),
             "amount_usd": r.get("amount_usd"),
             "tx_ref": tx_ref,
@@ -1034,7 +1034,7 @@ def _mcp_section() -> dict:
     except Exception as exc:
         return {"items": [], "error": _reason(exc),
                 "enabled": False}
-    from core.bootstrap import _cli_extra_gate
+    from polyrob.app.bootstrap import _cli_extra_gate
     enabled = _cli_extra_gate("mcp")
     items = []
     for name, cfg in (servers or {}).items():
@@ -1543,7 +1543,7 @@ async def api_cron_create(request: Request):
                                   and all(isinstance(x, str) for x in tools)):
         return JSONResponse({"ok": False, "message": t("work.create.tools_shape")},
                             status_code=400)
-    service = CronService(CronJobStore(os.path.join(_data_dir(), "cron.db")))
+    service = CronService(CronJobStore(cron_db_path(_data_dir())))
     try:
         job = create_cron(
             service, task=task, schedule_spec=schedule_spec, user_id=user_id,

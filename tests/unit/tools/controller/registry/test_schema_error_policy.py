@@ -11,7 +11,7 @@ import logging
 import pytest
 from pydantic import BaseModel, Field
 
-from tools.controller.registry.views import RegisteredAction
+from agents.task.loop_types.registry_views import RegisteredAction
 from tools.controller.registry import schema_generators as sg
 from tools.controller.registry.schema_generators import (
     OpenAISchemaGenerator,

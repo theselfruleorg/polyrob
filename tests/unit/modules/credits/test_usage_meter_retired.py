@@ -6,7 +6,7 @@ plan doc) — this just retires dead wiring.
 """
 import inspect
 
-import core.initialization as initialization
+import polyrob.app.initialization as initialization
 import agents.task.agent.core.construction as construction
 import agents.task.agent.core.run_loop as run_loop
 

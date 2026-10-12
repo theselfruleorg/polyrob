@@ -59,7 +59,7 @@ def test_flag_off_group_denied_legacy(workdir):
 
 def test_flag_on_unlisted_chat_denied(workdir):
     c = _Container(workdir)
-    env = {"GROUP_CHAT_ENABLED": "true", "POLYROB_OWNER_USER_ID": "u_owner"}
+    env = {"POLYROB_OVERRIDES": "GROUP_CHAT_ENABLED=true", "POLYROB_OWNER_USER_ID": "u_owner"}
     assert resolve_access_tier(c, _identity("u_owner"), env=env) \
         == AccessTier.DENIED
 
@@ -67,7 +67,7 @@ def test_flag_on_unlisted_chat_denied(workdir):
 def test_flag_on_owner_in_allowed_chat_is_owner(workdir):
     _allow(workdir)
     c = _Container(workdir)
-    env = {"GROUP_CHAT_ENABLED": "true", "POLYROB_OWNER_USER_ID": "u_owner"}
+    env = {"POLYROB_OVERRIDES": "GROUP_CHAT_ENABLED=true", "POLYROB_OWNER_USER_ID": "u_owner"}
     assert resolve_access_tier(c, _identity("u_owner"), env=env) \
         == AccessTier.OWNER
 
@@ -75,7 +75,7 @@ def test_flag_on_owner_in_allowed_chat_is_owner(workdir):
 def test_flag_on_stranger_in_allowed_chat_is_participant(workdir):
     _allow(workdir)
     c = _Container(workdir)
-    env = {"GROUP_CHAT_ENABLED": "true", "POLYROB_OWNER_USER_ID": "u_owner"}
+    env = {"POLYROB_OVERRIDES": "GROUP_CHAT_ENABLED=true", "POLYROB_OWNER_USER_ID": "u_owner"}
     assert resolve_access_tier(c, _identity("u_stranger"), env=env) \
         == AccessTier.GROUP_PARTICIPANT
 
@@ -84,14 +84,14 @@ def test_local_owner_bypass_refused_in_network_group(workdir):
     """POLYROB_LOCAL must not auto-own a forgeable group sender."""
     _allow(workdir)
     c = _Container(workdir)
-    env = {"GROUP_CHAT_ENABLED": "true", "POLYROB_LOCAL": "1"}
+    env = {"POLYROB_OVERRIDES": "GROUP_CHAT_ENABLED=true", "POLYROB_LOCAL": "1"}
     assert resolve_access_tier(c, _identity("u_anyone"), env=env) \
         == AccessTier.GROUP_PARTICIPANT
 
 
 def test_dm_flow_unchanged_by_group_flag(workdir):
     c = _Container(workdir)
-    env = {"GROUP_CHAT_ENABLED": "true", "POLYROB_OWNER_USER_ID": "u_owner"}
+    env = {"POLYROB_OVERRIDES": "GROUP_CHAT_ENABLED=true", "POLYROB_OWNER_USER_ID": "u_owner"}
     assert resolve_access_tier(c, _identity("u_owner", chat_type="dm"),
                                env=env) == AccessTier.OWNER
 
@@ -139,11 +139,11 @@ def test_group_flag_unset_autonomous_mode_enables_group_participant(monkeypatch,
 
 
 def test_group_flag_explicit_false_wins_over_autonomous_mode(monkeypatch, workdir):
-    """(c) explicit env false wins over the mode default."""
+    """(c) a POLYROB_OVERRIDES false entry wins over the mode default (D7)."""
     _enable_full(monkeypatch)
     _allow(workdir)
     c = _Container(workdir)
-    env = {"POLYROB_OWNER_USER_ID": "u_owner", "GROUP_CHAT_ENABLED": "false"}
+    env = {"POLYROB_OWNER_USER_ID": "u_owner", "POLYROB_OVERRIDES": "GROUP_CHAT_ENABLED=false"}
     assert resolve_access_tier(c, _identity("u_stranger"), env=env) \
         == AccessTier.DENIED
 
@@ -170,7 +170,7 @@ def test_blocked_member_is_denied(workdir):
     _allow(workdir)
     _roles(workdir).grant("discord", "chan-1", "u_bad", "blocked", granted_by="rob")
     c = _Container(workdir)
-    env = {"GROUP_CHAT_ENABLED": "true", "POLYROB_OWNER_USER_ID": "u_owner"}
+    env = {"POLYROB_OVERRIDES": "GROUP_CHAT_ENABLED=true", "POLYROB_OWNER_USER_ID": "u_owner"}
     assert resolve_access_tier(c, _identity("u_bad"), env=env) == AccessTier.DENIED
 
 
@@ -180,7 +180,7 @@ def test_blocked_owner_row_cannot_demote_the_owner(workdir):
     _allow(workdir)
     _roles(workdir).grant("discord", "chan-1", "u_owner", "blocked", granted_by="u_bad")
     c = _Container(workdir)
-    env = {"GROUP_CHAT_ENABLED": "true", "POLYROB_OWNER_USER_ID": "u_owner"}
+    env = {"POLYROB_OVERRIDES": "GROUP_CHAT_ENABLED=true", "POLYROB_OWNER_USER_ID": "u_owner"}
     assert resolve_access_tier(c, _identity("u_owner"), env=env) == AccessTier.OWNER
 
 
@@ -188,7 +188,7 @@ def test_chat_role_is_stamped_on_the_identity(workdir):
     _allow(workdir)
     _roles(workdir).grant("discord", "chan-1", "u_admin", "admin", granted_by="rob")
     c = _Container(workdir)
-    env = {"GROUP_CHAT_ENABLED": "true", "POLYROB_OWNER_USER_ID": "u_owner"}
+    env = {"POLYROB_OVERRIDES": "GROUP_CHAT_ENABLED=true", "POLYROB_OWNER_USER_ID": "u_owner"}
 
     admin = _identity("u_admin")
     assert resolve_access_tier(c, admin, env=env) == AccessTier.GROUP_MEMBER
@@ -211,7 +211,7 @@ def test_roles_key_on_the_raw_platform_id(workdir):
     _allow(workdir)
     _roles(workdir).grant("discord", "chan-1", "9911", "admin", granted_by="rob")
     c = _Container(workdir)
-    env = {"GROUP_CHAT_ENABLED": "true", "POLYROB_OWNER_USER_ID": "u_owner"}
+    env = {"POLYROB_OVERRIDES": "GROUP_CHAT_ENABLED=true", "POLYROB_OWNER_USER_ID": "u_owner"}
     ident = Identity(user_id="u_internal",
                      source=SessionSource(surface_id="discord", chat_id="chan-1",
                                           chat_type="group"),
@@ -241,7 +241,7 @@ def test_a_role_store_fault_reads_as_blocked_never_as_member(workdir, monkeypatc
     monkeypatch.setattr(gr.GroupRoles, "role", _boom)
     access._ROLE_FAULT_WARNED.clear()
     c = _Container(workdir)
-    env = {"GROUP_CHAT_ENABLED": "true", "POLYROB_OWNER_USER_ID": "u_owner"}
+    env = {"POLYROB_OVERRIDES": "GROUP_CHAT_ENABLED=true", "POLYROB_OWNER_USER_ID": "u_owner"}
     ident = _identity("u_admin")
     assert resolve_access_tier(c, ident, env=env) == AccessTier.DENIED
     assert ident.chat_role == "blocked"
@@ -260,7 +260,7 @@ def test_a_role_store_fault_never_locks_the_owner_out(workdir, monkeypatch):
     monkeypatch.setattr(gr.GroupRoles, "role", _boom)
     access._ROLE_FAULT_WARNED.clear()
     c = _Container(workdir)
-    env = {"GROUP_CHAT_ENABLED": "true", "POLYROB_OWNER_USER_ID": "u_owner"}
+    env = {"POLYROB_OVERRIDES": "GROUP_CHAT_ENABLED=true", "POLYROB_OWNER_USER_ID": "u_owner"}
     ident = _identity("u_owner")
     assert resolve_access_tier(c, ident, env=env) == AccessTier.OWNER
     assert ident.chat_role == "owner"
@@ -281,7 +281,7 @@ def test_a_paired_user_is_a_room_MEMBER_not_the_room_owner(workdir):
     store.approve(store.request("u_paired"))
     assert store.is_paired("u_paired")
     c = _Container(workdir)
-    env = {"GROUP_CHAT_ENABLED": "true", "POLYROB_OWNER_USER_ID": "u_owner"}
+    env = {"POLYROB_OVERRIDES": "GROUP_CHAT_ENABLED=true", "POLYROB_OWNER_USER_ID": "u_owner"}
 
     ident = _identity("u_paired")
     assert resolve_access_tier(c, ident, env=env) == AccessTier.GROUP_MEMBER
@@ -304,6 +304,15 @@ def test_a_paired_user_is_still_the_owner_in_a_DM(workdir):
     store = PairingStore(os.path.join(workdir, "pairing.db"))
     store.approve(store.request("u_paired"))
     c = _Container(workdir)
-    env = {"GROUP_CHAT_ENABLED": "true", "POLYROB_OWNER_USER_ID": "u_owner"}
+    env = {"POLYROB_OVERRIDES": "GROUP_CHAT_ENABLED=true", "POLYROB_OWNER_USER_ID": "u_owner"}
     assert resolve_access_tier(c, _identity("u_paired", chat_type="dm"), env=env) \
         == AccessTier.OWNER
+
+
+def test_direct_group_flag_is_ignored(workdir):
+    """D7: a direct GROUP_CHAT_ENABLED line is not a control (the bundle and
+    POLYROB_OVERRIDES are the only source), so it opens nothing."""
+    _allow(workdir)
+    c = _Container(workdir)
+    env = {"GROUP_CHAT_ENABLED": "true", "POLYROB_OWNER_USER_ID": "u_owner"}
+    assert resolve_access_tier(c, _identity("u_stranger"), env=env) == AccessTier.DENIED

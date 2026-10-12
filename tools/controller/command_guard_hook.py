@@ -5,9 +5,12 @@ Two pieces, both over ``core.security.command_guard.classify``:
 - :func:`make_command_guard_hook` — a fail-closed PRE hook, registered BEFORE the
   approval hooks, so a refused command never files an owner ask. It refuses the
   floor always, a command on the owner's deny list (``SHELL_DENY`` / ``shell.deny``)
-  always, and the dangerous class on an UNATTENDED turn (a goal / cron / planner
-  run) whenever `shell_run` is approval-gated: nobody is there to decide, so the
-  answer is no, not a 300 s wait (the usual unattended ``deny`` mode). In ``smart`` mode it
+  always. The dangerous class on an UNATTENDED turn (a goal / cron / planner run)
+  whenever `shell_run` is approval-gated follows the owner's ``SECURITY_SETTINGS``
+  row ``unattended_dangerous_shell`` (D2, 2026-10-10): ``sandbox`` (default) runs it
+  when the command runs in a sandbox container — never on the host — and
+  ``refuse`` refuses it. Nobody is there to answer an approval, so it is never a
+  300 s wait. In ``smart`` mode it
   also asks the aux model to triage a dangerous command (D3, below).
 - :func:`make_shell_command_exemption` — the approval hook's ``exempt_fn``: a command
   the guard calls ``ok``, or one on the owner's allow list (``SHELL_ALLOW`` /
@@ -122,6 +125,10 @@ def make_shell_command_exemption(mode: Optional[str] = None, *,
         hit = matches_any(command, allow, for_allow=True)
         if hit:
             return f"on the owner's shell allow list ({hit})"
+        if verdict.is_dangerous and _unattended(context) and _unattended_sandbox_ok(
+                action_name, context):
+            return ("an unattended run in a sandbox (SECURITY_SETTINGS "
+                    "unattended_dangerous_shell=sandbox)")
         if mode == "every":
             return None
         if verdict.level == OK:
@@ -147,6 +154,24 @@ def _unattended(context: Any) -> bool:
         return is_autonomous_session(getattr(context, "session_id", None))
     except Exception:
         return True
+
+
+def _unattended_sandbox_ok(action_name: str, context: Any) -> bool:
+    """D2: the owner's ``unattended_dangerous_shell`` row is ``sandbox`` AND this
+    command runs in a sandbox. ``shell_run`` asks the shell backend; ``run_code``
+    and ``run_tests`` run in a sandbox backend on a server (``sandbox_guard``
+    requires one), but may run on the host in local mode, so they do not qualify
+    there. Any doubt answers False (the refusal)."""
+    try:
+        from core.security import settings
+        if settings.value("unattended_dangerous_shell") != "sandbox":
+            return False
+        if action_name == "shell_run":
+            return not _runs_on_host(context)
+        from core.config_policy import local_mode_enabled
+        return not local_mode_enabled()
+    except Exception:
+        return False
 
 
 def _runs_on_host(context: Any) -> bool:
@@ -247,13 +272,21 @@ def make_command_guard_hook(*, shell_gated: bool, deny_globs: Sequence[str] = ()
         if not verdict.is_dangerous or not shell_gated:
             return None
         if _unattended(context):
+            if _unattended_sandbox_ok(action_name, context):
+                return None  # the exemption lets it skip the owner wait
+            from core.security import settings
             from core.security.refusals import record_refusal
             record_refusal("approval_denied", tool=action_name,
                            user_id=getattr(context, "user_id", None) or "",
                            session_id=getattr(context, "session_id", None) or "",
                            detail=f"unattended dangerous shell command: {verdict.reason}")
-            return (f"refused: this command {verdict.reason}, and an unattended run has no "
-                    "owner to approve it. Do it another way, or leave it for an owner turn.")
+            if settings.value("unattended_dangerous_shell") == "refuse":
+                why = settings.refusal_note("unattended_dangerous_shell")
+            else:
+                why = ("it would run on the host, and an unattended run runs the dangerous "
+                       "class only in a sandbox")
+            return (f"refused: this command {verdict.reason} in an unattended run; {why}. "
+                    "Do it another way, or leave it for an owner turn.")
         if mode == "smart" and llm_factory is not None:
             decision = await smart_triage(command, verdict.reason, llm_factory)
             if decision == "deny":

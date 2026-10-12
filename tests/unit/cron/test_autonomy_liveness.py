@@ -6,7 +6,7 @@ import types
 
 import pytest
 
-from agents.task.constants import AutonomyConfig
+from core.config_policy import AutonomyConfig
 
 
 # ---------------------------------------------------------------------------
@@ -53,7 +53,7 @@ def test_goal_planner_enabled_explicit_value_wins_over_local(monkeypatch):
 async def test_deliver_self_wake_holds_strong_ref_to_run_session_task(monkeypatch, tmp_path):
     """The asyncio.create_task(...) fired at the end of a successful self-wake
     dispatch must be retained in a module-level strong-ref set (mirrors
-    core/autonomy_runtime.py's _BACKGROUND_TASKS) -- otherwise asyncio's weak
+    polyrob/app/autonomy_runtime.py's _BACKGROUND_TASKS) -- otherwise asyncio's weak
     reference to a fire-and-forget task lets it be GC'd mid-run."""
     from agents.task.agent.core.self_wake import reset_reentry_budget
     from agents.task_agent_lite import TaskAgent, _SELF_WAKE_TASKS

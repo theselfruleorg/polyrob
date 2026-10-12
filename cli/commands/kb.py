@@ -26,7 +26,7 @@ import click
 # ---------------------------------------------------------------------------
 
 def _kb_enabled() -> bool:
-    from agents.task.constants import AutonomyConfig
+    from core.config_policy import AutonomyConfig
     return AutonomyConfig.kb_enabled()
 
 
@@ -49,8 +49,8 @@ def _require_kb_enabled() -> bool:
 
 def _bootstrap() -> None:
     """Sync setup preamble (project path + sqlite compat + env load)."""
-    from core.bootstrap import setup_project_path, setup_sqlite_compat
-    from core.bootstrap import load_env
+    from polyrob.app.bootstrap import setup_project_path, setup_sqlite_compat
+    from polyrob.app.bootstrap import load_env
     setup_project_path()
     setup_sqlite_compat()
     load_env(local_mode=True)
@@ -74,7 +74,7 @@ async def _ensure_memory_backend() -> None:
     data_dir = None
     import logging as _logging
     try:
-        from core.bootstrap import build_cli_container
+        from polyrob.app.bootstrap import build_cli_container
         # Suppress the container/LLM INFO boot logs (DependencyContainer registrations,
         # LLM init) so a one-shot `kb` command doesn't spew a wall of logs; restore after.
         _logging.disable(_logging.CRITICAL)
@@ -84,22 +84,15 @@ async def _ensure_memory_backend() -> None:
             _logging.disable(_logging.NOTSET)
         if container.has_service("embedding_model"):
             embedder = container.get_service("embedding_model")
-        # Reuse the container's project-scoped data_dir (.polyrob/) so the CLI KB lives
-        # in the same memory.db the agent uses.
-        data_dir = getattr(getattr(container, "config", None), "data_dir", None)
     except Exception as e:
         click.echo(click.style(f"note: container build skipped (FTS-only): {e}", dim=True))
 
-    if not data_dir:
-        # FTS-only fallback path: resolve the SAME data home the agent uses —
-        # _resolve_cli_data_home honors POLYROB_DATA_DIR (the headless case), so a
-        # container-build failure never silently points the KB at the wrong dir.
-        try:
-            from core.bootstrap import _resolve_cli_data_home
-            data_dir = str(_resolve_cli_data_home()[0])
-        except Exception:
-            from core.runtime_paths import resolve_data_home
-            data_dir = str(resolve_data_home())
+    # W8: the owner-verb seam, whatever the container said — the CLI container's
+    # data_dir is the SHELL's home, and on a deployed box with no env in the
+    # shell that is not the memory.db the agent uses (admin_data_dir adopts the
+    # deployed home, and refuses when it cannot read it).
+    from cli._admin_home import admin_data_dir
+    data_dir = admin_data_dir()
 
     try:
         # vector recall needs the embedder; without it this is FTS-only.

@@ -14,9 +14,20 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
+    # The fake preflight and the launchers write os.environ directly
+    # (setdefault, setdefault_flag -> POLYROB_OVERRIDES). monkeypatch.delenv on
+    # an ABSENT name records nothing to restore, so those writes leaked into
+    # every later test on the xdist worker (CORRESPONDENT_ACCESS_ENABLED=false
+    # denied every dispatcher route; the status snapshot read "degraded").
+    # Restore the whole environment instead.
+    import os
+    saved = dict(os.environ)
     for var in ("SINGULAR_CHAT_ENABLED", "TELEGRAM_SURFACE_ENABLED",
                 "CORRESPONDENT_ACCESS_ENABLED"):
         monkeypatch.delenv(var, raising=False)
+    yield
+    os.environ.clear()
+    os.environ.update(saved)
 
 
 def _fake_preflight_setting(monkeypatch, key: str, value: str):
@@ -32,12 +43,12 @@ def _fake_preflight_setting(monkeypatch, key: str, value: str):
 
 
 def _fail_container_build(monkeypatch):
-    import core.bootstrap
+    import polyrob.app.bootstrap
 
     async def boom(*a, **k):
         raise RuntimeError("stop before heavy build")
 
-    monkeypatch.setattr(core.bootstrap, "build_cli_container", boom)
+    monkeypatch.setattr(polyrob.app.bootstrap, "build_cli_container", boom)
 
 
 def test_run_surface_file_value_beats_extra_env_default(monkeypatch):

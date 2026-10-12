@@ -150,7 +150,7 @@ class RichRenderer(Renderer):
         # print it even if `_should_show_tool` now says no (e.g. a synchronous
         # delegate_task flips `last_step_sub_agent` mid-flight): a printed `→`
         # line must never be left unclosed. Unpaired completions (old feeds /
-        # RUN_EVENTS_ENABLED=off / replay) keep the legacy two-line form.
+        # replay) keep the legacy two-line form.
         paired = self._consume_start_printed(event.call_id)
         if not paired and not self._should_show_tool(event.action_name or event.tool_name):
             return
@@ -425,7 +425,7 @@ class RichRenderer(Renderer):
                 or norm == self._last_bubble_text
                 # OR-1: a bookkeeping done()-recap after a real reply is a confusing
                 # 2nd bubble in one-shot — suppress it (REPL already does).
-                or (dialog.SUPPRESS_DONE_RECAP and dialog.is_redundant_recap(norm, self._last_bubble_text))
+                or dialog.is_redundant_recap(norm, self._last_bubble_text)
             ):
                 self._teardown_box()
                 return

@@ -255,17 +255,14 @@ _STORE_CACHE: dict = {}
 
 
 def get_autonomy_state_store() -> Optional[AutonomyStateStore]:
-    """The store at the default path, or None when durability is off or the
-    store cannot be opened (fail-open to legacy in-memory behavior).
+    """The store at the default path, or None when the store cannot be
+    opened (fail-open to the in-memory registries).
 
     Memoized per resolved path — orchestrators are constructed per session and
     the store's schema init is blocking sqlite I/O; it must run once per
     process, not once per session.
     """
     try:
-        from agents.task.constants import AutonomyConfig
-        if not AutonomyConfig.autonomy_state_durable():
-            return None
         path = default_autonomy_state_db()
         with _STORE_LOCK:
             store = _STORE_CACHE.get(path)

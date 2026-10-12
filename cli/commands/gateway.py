@@ -17,8 +17,8 @@ so this module loads cleanly without any surface env being set.
 """
 import asyncio
 import os
-import signal
 import sys
+from typing import Optional
 
 import click
 from core.runtime_paths import data_dir_or_home
@@ -44,8 +44,11 @@ def gateway(port: int, host: str, telegram_token, skip: str, no_autonomy: bool,
             idle_when_empty: bool, verbose: bool):
     """Run every enabled chat surface in one process."""
     skip_ids = {s.strip().lower() for s in (skip or "").split(",") if s.strip()}
-    asyncio.run(_run_gateway(port, telegram_token, verbose, host=host, skip=skip_ids,
-                             autonomy=not no_autonomy, idle_when_empty=idle_when_empty))
+    code = asyncio.run(_run_gateway(port, telegram_token, verbose, host=host, skip=skip_ids,
+                                    autonomy=not no_autonomy, idle_when_empty=idle_when_empty))
+    if code:
+        # 077: a drained restart — the supervisor starts us again (exit 75).
+        sys.exit(code)
 
 
 def _enabled_specs(skip=frozenset()) -> list:
@@ -61,18 +64,19 @@ def _withheld_enabled(skip=frozenset()) -> list:
     """``(row, reason)`` for pack surfaces whose flag is on but whose pack did
     not load (067 P3b): named, never silently absent."""
     from core.surfaces.catalog import withheld_surfaces
-    from core.env import bool_env
+    from core.env import parse_bool
+    from core.config_policy.members import flag_raw
     return [(spec, why) for spec, why in withheld_surfaces()
-            if spec.id not in skip and bool_env(spec.enabled_flag, False)]
+            if spec.id not in skip and parse_bool(flag_raw(spec.enabled_flag) or None, False)]
 
 
 async def _run_gateway(port: int, telegram_token_opt, verbose: bool, *, host: str = "0.0.0.0",
                        skip=frozenset(), autonomy: bool = True,
-                       idle_when_empty: bool = False) -> None:
+                       idle_when_empty: bool = False) -> Optional[int]:
     import logging as _logging
     logger = _logging.getLogger(__name__)
 
-    from core.bootstrap import build_cli_container, setup_project_path, setup_sqlite_compat
+    from polyrob.app.bootstrap import build_cli_container, setup_project_path, setup_sqlite_compat
 
     setup_project_path()
     setup_sqlite_compat()
@@ -90,7 +94,18 @@ async def _run_gateway(port: int, telegram_token_opt, verbose: bool, *, host: st
     # preflight's load_env (026 P1.3 — the old before-load order made load_env's
     # override=False silently ignore a file-set CORRESPONDENT_ACCESS_ENABLED=false).
     os.environ.setdefault("SINGULAR_CHAT_ENABLED", "true")
-    os.environ.setdefault("CORRESPONDENT_ACCESS_ENABLED", "true")
+    from core.config_policy.members import setdefault_flag
+    setdefault_flag(os.environ, "CORRESPONDENT_ACCESS_ENABLED", "true")
+
+    # 077: stamp this start, and apply an update the owner asked for while
+    # nothing is live yet (it execs the new code on success).
+    from core.runtime_paths import resolve_data_home
+    from cli.commands._lifecycle_boot import boot_step
+    _life_home = resolve_data_home()
+    # Without autonomy (prod's gateway unit beside the agent unit) this process
+    # is SECONDARY: its own boot record, and it never applies an update.
+    _life_role = "" if autonomy else "gateway"
+    boot_step("gateway", data_home=_life_home, echo=click.echo, role=_life_role)
 
     # Nothing to run → decide BEFORE the container build (which costs hundreds of
     # MB): a service unit idles cheaply; an interactive run explains and exits.
@@ -98,6 +113,13 @@ async def _run_gateway(port: int, telegram_token_opt, verbose: bool, *, host: st
         click.echo(click.style("[gateway] ", fg="yellow")
                    + "no chat surface is configured here yet — idling until the next "
                      "restart (a deploy, or after `polyrob surfaces add <id>`).")
+        # Idle IS this process's healthy state: without the stamp every start
+        # counts as one more that never came up.
+        from core.lifecycle import mark_healthy
+        try:
+            mark_healthy(data_home=_life_home, role=_life_role)
+        except Exception:
+            logger.warning("lifecycle: boot record unreadable", exc_info=True)
         await asyncio.Event().wait()
         return
 
@@ -152,9 +174,9 @@ async def _run_gateway(port: int, telegram_token_opt, verbose: bool, *, host: st
     # --- Autonomy background loops (cron / goals / curator / surface GC) ---
     autonomy_handles = None
     try:
-        from agents.task.constants import local_mode_enabled
+        from core.config_policy import local_mode_enabled
         if autonomy and local_mode_enabled():
-            from core.autonomy_runtime import start_autonomy
+            from polyrob.app.autonomy_runtime import start_autonomy
             _data_dir = data_dir_or_home(getattr(getattr(container, "config", None), "data_dir", None))
             autonomy_handles = start_autonomy(task_agent=task_agent, data_dir=_data_dir)
     except Exception:
@@ -289,11 +311,12 @@ async def _run_gateway(port: int, telegram_token_opt, verbose: bool, *, host: st
 
     click.echo(click.style("Ctrl-C to stop", dim=True))
 
-    # --- Signal handling: cancel all running tasks ---
+    # --- Signal handling + the 077 restart watcher ---
     loop = asyncio.get_running_loop()
     gather_task = asyncio.ensure_future(asyncio.gather(*coroutines, return_exceptions=True))
 
-    def _stop(*_a):
+    def _stop_intake():
+        """Stop taking messages; the surfaces' run loops then return."""
         for _spec, got in launched:
             if got.on_signal is not None:
                 try:
@@ -302,17 +325,23 @@ async def _run_gateway(port: int, telegram_token_opt, verbose: bool, *, host: st
                     pass
         if web_server is not None:
             web_server.should_exit = True
+
+    def _stop(*_a):
+        _stop_intake()
         gather_task.cancel()
 
-    try:
-        loop.add_signal_handler(signal.SIGINT, _stop)
-        loop.add_signal_handler(signal.SIGTERM, _stop)
-    except (NotImplementedError, RuntimeError):
-        for _sig in (signal.SIGINT, signal.SIGTERM):
-            try:
-                signal.signal(_sig, lambda *_a: _stop())
-            except (ValueError, OSError, AttributeError):
-                pass  # SIGTERM may be unavailable on some platforms/threads
+    from cli.commands._lifecycle import (LifecycleWatcher, announce_boot,
+                                         install_stop_signals)
+    watcher = LifecycleWatcher(data_home=_life_home, container=container,
+                               stop_intake=_stop_intake, intake_done=gather_task.done,
+                               request_exit=gather_task.cancel,
+                               serves=frozenset(spec.id for spec, _got in launched),
+                               primary=not _life_role)
+    install_stop_signals(loop, data_home=_life_home, stop_intake=_stop_intake,
+                         intake_done=gather_task.done, stop_now=_stop, abort=watcher.abort)
+    watcher_task = asyncio.ensure_future(watcher.run())
+    await announce_boot(container, _life_home, role=_life_role,
+                        serves=frozenset(spec.id for spec, _got in launched))
 
     try:
         results = await gather_task
@@ -322,6 +351,15 @@ async def _run_gateway(port: int, telegram_token_opt, verbose: bool, *, host: st
     except asyncio.CancelledError:
         pass
     finally:
+        if (watcher.request is not None and watcher.exit_code is None
+                and not watcher.aborted and not watcher_task.done()):
+            # The surfaces stopped because a drain stopped intake: let it finish.
+            try:
+                await watcher_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        if not watcher_task.done():
+            watcher_task.cancel()
         click.echo("\n" + click.style("stopping gateway…", dim=True))
         await _stop_runtime()
         for _spec, got in launched:
@@ -331,3 +369,6 @@ async def _run_gateway(port: int, telegram_token_opt, verbose: bool, *, host: st
                 except Exception:
                     pass
         # The webhook server shuts itself down via should_exit; no explicit stop needed.
+        from core.lifecycle import mark_stopped
+        mark_stopped(data_home=_life_home, role=_life_role)
+    return watcher.exit_code

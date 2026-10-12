@@ -12,8 +12,8 @@ from typing import Optional
 from pydantic import BaseModel
 
 from tools.controller.execution import ExecutionMixin
-from tools.controller.execution_context import ActionExecutionContext
-from tools.controller.types import ActionResult
+from agents.task.loop_types.execution_context import ActionExecutionContext
+from agents.task.loop_types.controller_types import ActionResult
 
 
 class _P(BaseModel):

@@ -37,11 +37,18 @@ def test_package_data_ships_webview_static_and_templates():
     assert any("templates/" in g for g in globs), globs
 
 
-def test_package_data_keeps_web_dist_bundle():
-    """The built-bundle glob from doc 01 must stay (don't clobber it)."""
+def test_no_package_data_row_for_a_package_that_does_not_exist():
+    """D6 (2026-10-10): the old ``"polyrob" = ["web_dist/**/*"]`` row named a
+    package the wheel does not ship (the bundle was never built); every
+    package-data key must be a shipped top-level package or ``*``."""
     cfg = _pyproject()
     pkg_data = cfg["tool"]["setuptools"]["package-data"]
-    assert "polyrob" in pkg_data and any("web_dist" in g for g in pkg_data["polyrob"])
+    find = cfg["tool"]["setuptools"]["packages"]["find"]
+    roots = [_REPO / w for w in find["where"]]
+    for key in pkg_data:
+        if key == "*":
+            continue
+        assert any((r / key.replace(".", "/")).is_dir() for r in roots), key
 
 
 def test_webgate_asset_dir_falls_back_to_repo_webview_today():

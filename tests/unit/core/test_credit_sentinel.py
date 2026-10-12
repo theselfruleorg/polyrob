@@ -109,12 +109,12 @@ def test_dispatch_once_pauses_while_sentinel_active(data_dir):
     class _Agent:
         pass
 
-    os.environ["GOALS_ENABLED"] = "true"
+    os.environ["POLYROB_OVERRIDES"] = "GOALS_ENABLED=true"
     try:
         d = GoalDispatcher(_Board(), _Agent())
         assert asyncio.run(d.dispatch_once()) == 0
     finally:
-        os.environ.pop("GOALS_ENABLED", None)
+        os.environ.pop("POLYROB_OVERRIDES", None)
 
 
 def test_cron_llm_tick_skipped_while_sentinel_active(data_dir):

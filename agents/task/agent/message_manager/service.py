@@ -445,7 +445,7 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 			# contract. Only passed when true, so custom system_prompt_class
 			# implementations and interactive sessions stay byte-identical.
 			try:
-				from agents.task.goals.autonomy_marker import is_autonomous
+				from core.autonomy_marker import is_autonomous
 				if self.session_id and is_autonomous(self.session_id):
 					_prompt_kwargs["autonomous"] = True
 			except Exception:
@@ -881,9 +881,8 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		A later render that differs pushes ONE durable ``<tool-catalog-update>``
 		control message naming only the tool lines that changed; ``[7]`` is never
 		touched again. ``_tool_catalog_source`` advances either way, so the same
-		delta is never pushed twice. Gated ``TOOL_CATALOG_TAIL_UPDATES`` by the
-		caller (``agents/task/agent/core/runtime_catalog.py``); ``false`` keeps the
-		in-place rewrite.
+		delta is never pushed twice. Called by
+		``agents/task/agent/core/runtime_catalog.py``.
 		"""
 		if content is None:
 			return
@@ -933,19 +932,10 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		``foundation_layers.SELF_CONTEXT_BLOCKS``). Each non-empty block becomes
 		its OWN SELF_CONTEXT-origin foundation message, so the owner's rules are
 		no longer welded inside the operator-frozen SOUL block: each is capped,
-		dated and reported on its own. ``SELF_CONTEXT_COMBINED=true`` re-joins
-		them into the one pre-060 message, byte-identical (the same
-		``"\\n\\n".join`` over the same order). No non-empty block => inert.
+		dated and reported on its own. No non-empty block => inert.
 		"""
-		from agents.task.agent.messages.foundation_layers import self_context_combined
-		# Truthiness, not strip(): the combined join must stay byte-identical to
-		# the pre-060 `"\n\n".join(p for p in (...) if p)`.
 		texts = [(str(name), text) for name, text in (blocks or ())
-		         if isinstance(text, str) and text]
-		if self_context_combined():
-			self.set_self_context_message("\n\n".join(t for _n, t in texts))
-			return
-		texts = [(n, t) for n, t in texts if t.strip()]
+		         if isinstance(text, str) and text.strip()]
 		self._self_context_message = None
 		self._self_context_tokens = 0
 		if not texts:

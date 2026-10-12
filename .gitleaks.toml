@@ -35,6 +35,8 @@ paths = [
     # the shared secret-scrub battery test: one sample per rung (pem/bearer/kv/
     # provider/rob/aws/jwt) is exactly what it exists to contain
     '''tests/unit/core/test_shared_credential_patterns\.py''',
+    # secret-boundary review battery: abcdef0123456789 filler values it must redact
+    '''tests/unit/core/test_review_secret_boundaries\.py''',
     # 0.11.0 wave — credential-flow tests whose fixtures are 0123456789-filler
     # keys by construction (verified line-by-line at the 0.11.0 scrub gate)
     '''tests/unit/cli/test_config_cmd\.py''',

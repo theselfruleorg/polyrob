@@ -2,8 +2,11 @@
 import asyncio
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Type, Union
 
-from tools.controller.types import ActionResult
+from agents.task.loop_types.controller_types import ActionResult
 from tools.controller._helpers import ToolInfo
+
+#: (tool_id, reason) pairs already warned about in this process.
+_WARNED_LOAD_GAPS: Set[Tuple[str, str]] = set()
 
 
 class ToolManagementMixin:
@@ -26,6 +29,13 @@ class ToolManagementMixin:
 			failures = {}
 			self._tool_load_failures = failures
 		failures[tool_id] = reason
+		# D5: a long-lived session's persisted tool list re-requests a gated tool on
+		# every recreate (prod: perplexity 43x in 72h). The gap is still RECORDED
+		# above each time; the WARNING is once per process per (tool, reason).
+		if (tool_id, reason) in _WARNED_LOAD_GAPS:
+			self.logger.debug(f"✗ Tool '{tool_id}' not loaded — {reason} (repeat)")
+			return
+		_WARNED_LOAD_GAPS.add((tool_id, reason))
 		self.logger.warning(f"✗ Tool '{tool_id}' not loaded — {reason}")
 
 	def tool_gap_note(self) -> str:
@@ -147,6 +157,15 @@ class ToolManagementMixin:
 							else:
 								self.logger.warning(f"Tool '{tool_id}' has no initialize method")
 
+					# D5: offer `mcp` only when SOME server is reachable for this user
+					# (tools/controller/mcp_gate.py) — prod got 13 dead actions.
+					if tool_id == 'mcp':
+						from tools.controller.mcp_gate import mcp_unreachable_reason
+						_mcp_gap = await mcp_unreachable_reason(
+							tool, self.container, getattr(self, 'user_id', None))
+						if _mcp_gap:
+							self._record_tool_load_failure(tool_id, _mcp_gap)
+							continue
 					self.add_tool(tool_id, tool)
 					loaded[tool_id] = tool
 					self._clear_tool_load_failure(tool_id)

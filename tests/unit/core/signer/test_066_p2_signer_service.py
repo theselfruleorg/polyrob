@@ -362,6 +362,16 @@ def test_deposit_addresses_match_the_agent_side_generator(rig):
     assert got == DepositWalletGenerator("p" * 40).generate_deposit_address("u-1")
 
 
+def test_deposit_refuses_the_retired_master_seed_alias_alone(rig):
+    # MASTER_SEED was retired in 1.4: alone, the signer refuses with the rename
+    # instead of deriving nothing (or a different address) silently.
+    rig.secrets.pop("PAYMENT_MASTER_SEED")
+    rig.secrets["MASTER_SEED"] = "p" * 40
+    resp = rig.call("deposit.address", {"user_id": "u-1"})
+    _refused(resp, protocol.NOT_CONFIGURED)
+    assert "PAYMENT_MASTER_SEED" in str(resp)
+
+
 def test_a_signer_on_a_different_seed_refuses_to_start(signer_home):
     from tests.unit.core.signer.conftest import make_config
     from core.signer import runtime

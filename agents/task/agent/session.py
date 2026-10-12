@@ -18,7 +18,7 @@ import threading
 import shutil
 from enum import Enum
 
-from agents.task.utils import get_safe_file_lock
+from core.file_lock import get_safe_file_lock
 from agents.task.path import pm, get_safe_singleton
 from agents.task.constants import DEFAULT_USER_ID
 from core.data_perms import apply_birth_mode

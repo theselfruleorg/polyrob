@@ -34,7 +34,7 @@ class _Container:
 def _clean_env(monkeypatch):
     for k in ("POLYROB_REQUIRE_PAIRING", "POLYROB_LOCAL", "POLYROB_OWNER_USER_ID",
               "SURFACE_SUPER_ADMIN_USER_IDS", "CORRESPONDENT_ACCESS_ENABLED",
-              "GROUP_CHAT_ENABLED", "GROUP_REQUIRE_MENTION", "SESSION_RESET_MODE"):
+              "GROUP_CHAT_ENABLED", "GROUP_DEFAULT_MODE", "SESSION_RESET_MODE"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("SESSION_RESET_MODE", "none")
 
@@ -51,7 +51,6 @@ def _reset_owner_tenant_cache():
 def tele_db(tmp_path, monkeypatch):
     p = tmp_path / "telemetry_events.db"
     monkeypatch.setenv("TELEMETRY_EVENT_LOG_PATH", str(p))
-    monkeypatch.setenv("SECURITY_EVENT_LOG_ENABLED", "true")
     monkeypatch.setenv("TELEMETRY_EVENT_LOG_ENABLED", "true")
     import core.event_log as el
     el._INSTANCES.clear()

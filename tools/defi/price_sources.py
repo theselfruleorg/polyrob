@@ -1,9 +1,9 @@
-"""The price sources behind ``core.intel.price`` (071 §3.3, R5).
+"""The price sources behind ``tools.intel.price`` (071 §3.3, R5).
 
 ``core`` may not import ``tools``, so the sources register themselves here and
 every caller in the tools tier imports its price reading from THIS module:
 
-* :func:`quote`         — the full :class:`core.intel.model.PriceQuote` (display);
+* :func:`quote`         — the full :class:`tools.intel.model.PriceQuote` (display);
 * :func:`spend_price`   — a price that may bound a cap (high, not disputed);
 * :func:`exit_price`    — the guard's exit-exemption price (028);
 * :func:`indexer_price` — the primary pool price at any grade, never disputed;
@@ -25,8 +25,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, Optional
 
-from core.intel import price as _intel
-from core.intel.model import PriceQuote, SourceAnswer
+from tools.intel import price as _intel
+from tools.intel.model import PriceQuote, SourceAnswer
 
 logger = logging.getLogger(__name__)
 

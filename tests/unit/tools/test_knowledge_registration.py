@@ -42,7 +42,7 @@ class TestKnowledgeRegistration:
         from tools.descriptors import TOOL_DESCRIPTORS
         from tools.knowledge_ingest import register_knowledge_tool, KnowledgeTool
 
-        with patch.dict(os.environ, {"KB_ENABLED": "1"}, clear=False):
+        with patch.dict(os.environ, {"POLYROB_OVERRIDES": "KB_ENABLED=true"}, clear=False):
             result = register_knowledge_tool(force=False)
 
         assert result is True

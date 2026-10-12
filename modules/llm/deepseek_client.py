@@ -118,7 +118,8 @@ class DeepSeekClient(LLMClient):
 
         # Model and API configuration
         deepseek_config = config.get_llm_config()['deepseek']
-        self.model_type = deepseek_config.get('model', 'deepseek-chat')
+        from modules.llm.llm_client_registry import get_default_model
+        self.model_type = deepseek_config.get('model') or get_default_model('deepseek')
         self.api_key = deepseek_config.get('api_key')
         self.api_base = deepseek_config.get('api_url', 'https://api.deepseek.com/v1')
         self.last_response = None

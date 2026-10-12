@@ -4,7 +4,7 @@ Tier-2 endpoint state and, when absent, the one-command runbook — so the
 instead of a blocked goal nobody can close."""
 from cli.commands.doctor import doctor_report
 
-RUNBOOK = "scripts/setup_x402_endpoint.sh"
+RUNBOOK = "docs/guide/payments.md"
 
 
 def _joined(env):

@@ -85,7 +85,7 @@ def test_the_seat_context_is_an_owner_turn_never_none():
     asyncio.run(send_ops.send_reply(
         "owner", ["1", "native", "to", ADDR, "on", "base", "go"], tool=tool))
     ctx = tool.calls[-1][1]
-    assert ctx is not None and ctx.role == "owner" and ctx.user_id == "owner"
+    assert ctx is not None and ctx.role == "orchestrator" and ctx.user_id == "owner"
 
 
 def test_no_owner_no_send():

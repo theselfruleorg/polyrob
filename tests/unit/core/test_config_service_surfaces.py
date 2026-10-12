@@ -9,7 +9,8 @@ from core import config_service
 
 
 def test_console_surface_refuses_credential_flags():
-    for key in sorted(config_service.CONSOLE_UNWRITABLE_FLAGS):
+    for key in ("LLM_CUSTOM_PROVIDERS", "POLYROB_AUTH_STORE", "LLM_AUTH_STORE_ENABLED",
+                "LLM_CREDENTIAL_BORROW", "MEMORY_SCOPES_ENABLED"):
         res = config_service.set_value(key, "x", surface="console")
         assert res.ok is False, key
         assert "local CLI" in res.message, key

@@ -65,5 +65,7 @@ def test_generic_error_keeps_fast_retry_and_error_log(monkeypatch, caplog):
     with caplog.at_level(logging.ERROR):
         asyncio.run(h.run_polling())
 
-    assert slept == [1], "a generic transient error keeps the 1s fast retry"
+    # D4: the FIRST failure still retries fast (1 s step, jittered to 0.5-1 s);
+    # later ones back off — see test_poll_backoff.py.
+    assert len(slept) == 1 and 0.5 <= slept[0] <= 1.0
     assert any(r.levelno >= logging.ERROR for r in caplog.records)

@@ -81,7 +81,7 @@ FOUNDATION_LAYERS: Tuple[FoundationLayer, ...] = (
 	                MessageOrigin.SELF_CONTEXT, STANDING, group="self_context"),
 	# 060 WS-1: the same tier, unwelded — one message per declared block
 	# (SELF_CONTEXT_BLOCKS below). Exactly one of the two self-context layers is
-	# set in a session; SELF_CONTEXT_COMBINED=true selects the joined one.
+	# set in a session; set_self_context_blocks always fills this one.
 	FoundationLayer("self_context_blocks", "_self_context_blocks",
 	                "_self_context_blocks_tokens", MessageOrigin.SELF_CONTEXT, STANDING,
 	                group="self_context", optional=True),
@@ -148,28 +148,9 @@ SELF_CONTEXT_BLOCKS: Tuple[Tuple[str, str], ...] = (
 )
 
 
-def self_context_combined() -> bool:
-	"""``SELF_CONTEXT_COMBINED`` — re-join the self-context blocks into ONE
-	message, byte-identical to the pre-060 weld. Default OFF (unwelded)."""
-	from core.env import bool_env
-	return bool_env("SELF_CONTEXT_COMBINED", False)
-
-
 def tier_of(origin: Optional[str]) -> Optional[str]:
 	"""The tier of an origin, or None for an unknown origin."""
 	return ORIGIN_TIERS.get(origin) if origin else None
-
-
-def hmem_placement() -> str:
-	"""The first honest tier decision: where the VOLATILE H-MEM block rides.
-
-	``"tail"`` (default) — a suffix after the conversation, outside the cached
-	prefix. ``"prefix"`` — the legacy foundation placement
-	(``HMEM_TAIL_PLACEMENT=false``), which puts a VOLATILE block inside the
-	cached prefix and re-bills everything after it every step.
-	"""
-	from agents.task.constants import hmem_tail_placement
-	return "tail" if hmem_tail_placement() else "prefix"
 
 
 def layer_visible(manager: Any, layer: FoundationLayer) -> bool:
@@ -211,6 +192,6 @@ def foundation_messages(manager: Any) -> List[Any]:
 __all__ = [
 	"FROZEN", "STANDING", "SCOPED", "VOLATILE", "TIERS",
 	"FoundationLayer", "FOUNDATION_LAYERS", "HMEM_LAYER", "ORIGIN_TIERS",
-	"SELF_CONTEXT_BLOCKS", "self_context_combined",
-	"tier_of", "hmem_placement", "layer_messages", "foundation_messages",
+	"SELF_CONTEXT_BLOCKS",
+	"tier_of", "layer_messages", "foundation_messages",
 ]

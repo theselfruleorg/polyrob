@@ -19,6 +19,13 @@ manager) gets honest per-method manual instructions instead of a button that wou
 pretend. `polyrob update` with no flags prints the install method it detected, the
 current and latest versions, the schema state, and the right next command.
 
+**With the background service running** (`polyrob service install`), `--apply` does
+not swap code under it: the service finishes its current work, restarts, and applies
+the update as it starts — before it builds anything — then reports
+`Updated and back online on <version>`. A failed step, or a new version that does
+not start, rolls back to the snapshot and the old version starts. From chat, `/update`
+does the same. Details: [operate-the-service.md](operate-the-service.md).
+
 `--channel stable` (default) tracks releases, `pre` includes prereleases, `git` tracks
 a branch. Exit 1 from `--check` means the release source could not be reached or
 did not provide a usable version; it never means that the installed version is current.
@@ -92,6 +99,31 @@ polyrob config check
 
 ## 3. Version notes
 
+### Upgrading from 1.3.x
+
+Three changes need an edit before or right after the upgrade. Run `polyrob doctor`
+afterwards: it prints one line per name below that your env still sets, with its
+replacement.
+
+- **Posture members move into `POLYROB_OVERRIDES`.** The 51 flags a posture bundle sets
+  (for example `SHELL_TOOLS_ENABLED`, `GOALS_ENABLED`, `CRON_ENABLED`) are read only from
+  their bundle or from ONE line, `POLYROB_OVERRIDES=FLAG=value,FLAG=value`. A direct
+  `SHELL_TOOLS_ENABLED=false` line is now **ignored, not refused** — so a member you
+  turned off on its own line is back at its bundle default until you move it. The startup
+  log and `polyrob doctor` print the exact replacement line for your file.
+- **Four identity and money aliases refuse to start.** `BOT_INSTANCE_ID`,
+  `BOT_OWNER_USER_ID`, `MASTER_SEED` and `WEBGATE_MULTITENANT=true`, set without their new
+  name, stop the process and name the rename: `POLYROB_INSTANCE_ID`,
+  `POLYROB_OWNER_USER_ID`, `PAYMENT_MASTER_SEED`, `POLYROB_POSTURE=multitenant`. The other
+  retired flags are only ignored; their old default is now permanent.
+- **Moved modules, no shims.** `core.bootstrap`, `core.initialization`,
+  `core.autonomy_runtime` and `core.bot` are `polyrob.app.*`; `core.intel` and
+  `core.rails` are `tools.intel` and `tools.rails`. The agent loop's own types moved from
+  `tools/` to `agents.task.loop_types`: `tools.controller.types` is `controller_types`,
+  `tools.browser.views` is `browser_views`, `tools.dom.views` is `dom_views` and
+  `tools.controller.registry.views` is `registry_views`. `agents.task.goals.autonomy_marker`
+  is `core.autonomy_marker`. A pack imports host names from `polyrob.sdk` only.
+
 ### The unbound owner tenant is `local`
 
 POLYROB used to have four resolvers answering "who owns this install?", and they only
@@ -101,13 +133,13 @@ agreed when an owner was bound. Unbound, the REPL and the CLI wrote under the te
 unbound answer is `local`.
 
 **A bound install is unchanged.** If you set `POLYROB_OWNER_USER_ID` (or
-`BOT_OWNER_USER_ID`, or `SURFACE_SUPER_ADMIN_USER_IDS`), every seat resolved the same
+`BOT_OWNER_USER_ID` — retired in 1.4; it now refuses to start — or `SURFACE_SUPER_ADMIN_USER_IDS`), every seat resolved the same
 tenant before and after. The divergence was unbound-only. You can stop reading here.
 
 #### Case 1 — no owner bound at all
 
-An install that sets none of `POLYROB_OWNER_USER_ID`, `BOT_OWNER_USER_ID`,
-`SURFACE_SUPER_ADMIN_USER_IDS` or `POLYROB_LOCAL_OWNER`, **and** used the console or
+An install that sets none of `POLYROB_OWNER_USER_ID`, `BOT_OWNER_USER_ID` (retired in 1.4; it now
+refuses to start), `SURFACE_SUPER_ADMIN_USER_IDS` or `POLYROB_LOCAL_OWNER`, **and** used the console or
 received x402 income. Rows written under the tenant `polyrob` become invisible to the
 console, which now reads `local` alongside the REPL. Nothing is deleted; it is read
 under a different tenant. What moves:

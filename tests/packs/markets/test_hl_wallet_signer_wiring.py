@@ -30,6 +30,9 @@ async def test_exchange_uses_agent_wallet_account_when_enabled(monkeypatch):
     # Patch the SDK Exchange symbol + force HAS_SDK + a fake info client
     monkeypatch.setattr("polyrob_markets.hyperliquid.service.Exchange", FakeExchange, raising=False)
     monkeypatch.setattr("polyrob_markets.hyperliquid.service.HAS_SDK", True, raising=False)
+    # _has_sdk() is lazy: pin it as loaded or the first call re-imports the
+    # real SDK over the patched Exchange.
+    monkeypatch.setattr("polyrob_markets.hyperliquid.service._SDK_LOADED", True)
 
     # NOTE: brief shows config=None but BaseComponent.__init__ raises ValueError on falsy config.
     # Use a truthy stand-in (SimpleNamespace) instead — production behavior is unchanged.

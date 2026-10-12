@@ -124,11 +124,11 @@ def test_cli_init_subcommand_yes(tmp_path, monkeypatch):
     # NOT be seen by `wallet_init_cmd` (it already holds its own bound
     # reference). Use the existing hidden `--home` option instead (same
     # pattern as `set-cap`'s tests) — cleaner than patching the wrong name.
-    # The command also imports `load_env` locally (`from core.bootstrap import
+    # The command also imports `load_env` locally (`from polyrob.app.bootstrap import
     # load_env`) and calls it with local_mode=True, which would otherwise read
     # the developer's real ~/.polyrob/.env — patch the origin so the test
     # stays hermetic regardless of what's configured on the dev machine.
-    monkeypatch.setattr("core.bootstrap.load_env", lambda *a, **k: None)
+    monkeypatch.setattr("polyrob.app.bootstrap.load_env", lambda *a, **k: None)
     # L2: the generated mnemonic is only printed on a TTY. Force the CliRunner's
     # stream wrapper to report isatty()=True so this test exercises the TTY path
     # (the CliRunner default is non-TTY → redacted; see the redaction test below).
@@ -146,7 +146,7 @@ def test_cli_init_redacts_mnemonic_on_non_tty(tmp_path, monkeypatch):
     """L2: `polyrob wallet init --yes > file` must NOT write the mnemonic to a
     non-TTY stdout — it redacts and points at the interactive export."""
     pytest.importorskip("eth_account")
-    monkeypatch.setattr("core.bootstrap.load_env", lambda *a, **k: None)
+    monkeypatch.setattr("polyrob.app.bootstrap.load_env", lambda *a, **k: None)
     runner = CliRunner()  # CliRunner streams report isatty()=False by default
     result = runner.invoke(wallet_cmd, ["init", "--yes", "--home", str(tmp_path),
                                         "--data-dir", str(tmp_path / "w")])
@@ -163,7 +163,7 @@ def test_cli_init_redacts_mnemonic_on_non_tty(tmp_path, monkeypatch):
 def test_cli_init_yes_echoes_recipient_link(tmp_path, monkeypatch):
     """M15: under --yes the X402_PAYMENT_RECIPIENT write must be echoed, not silent."""
     pytest.importorskip("eth_account")
-    monkeypatch.setattr("core.bootstrap.load_env", lambda *a, **k: None)
+    monkeypatch.setattr("polyrob.app.bootstrap.load_env", lambda *a, **k: None)
     monkeypatch.delenv("X402_PAYMENT_RECIPIENT", raising=False)
     runner = CliRunner()
     result = runner.invoke(wallet_cmd, ["init", "--yes", "--home", str(tmp_path),
@@ -177,7 +177,7 @@ def test_cli_init_from_mnemonic_empty_prompts_hidden(tmp_path, monkeypatch):
     """M14: `--from-mnemonic ""` (empty value) triggers a HIDDEN prompt so the
     master secret never lands on the command line / shell history."""
     pytest.importorskip("eth_account")
-    monkeypatch.setattr("core.bootstrap.load_env", lambda *a, **k: None)
+    monkeypatch.setattr("polyrob.app.bootstrap.load_env", lambda *a, **k: None)
     monkeypatch.setattr("click.testing._NamedTextIOWrapper.isatty", lambda self: True)
     runner = CliRunner()
     result = runner.invoke(
@@ -197,7 +197,7 @@ def test_cli_init_from_mnemonic_empty_prompts_hidden(tmp_path, monkeypatch):
 def test_cli_init_from_mnemonic_empty_refuses_non_tty(tmp_path, monkeypatch):
     """M14: an empty `--from-mnemonic` on a non-TTY stdin is refused (never read a
     secret non-interactively)."""
-    monkeypatch.setattr("core.bootstrap.load_env", lambda *a, **k: None)
+    monkeypatch.setattr("polyrob.app.bootstrap.load_env", lambda *a, **k: None)
     runner = CliRunner()  # non-TTY stdin by default
     result = runner.invoke(wallet_cmd, ["init", "--from-mnemonic", "", "--yes",
                                         "--home", str(tmp_path)])
@@ -211,7 +211,7 @@ def test_cli_init_shows_the_default_daily_budget(tmp_path, monkeypatch):
     owner isn't silently left at $250/tx-unlimited (that posture requires an
     explicit opt-out now — see the sibling test below)."""
     pytest.importorskip("eth_account")
-    monkeypatch.setattr("core.bootstrap.load_env", lambda *a, **k: None)
+    monkeypatch.setattr("polyrob.app.bootstrap.load_env", lambda *a, **k: None)
     monkeypatch.delenv("WALLET_DAILY_CAP_USD", raising=False)
     runner = CliRunner()
     result = runner.invoke(wallet_cmd, ["init", "--yes", "--home", str(tmp_path),
@@ -227,7 +227,7 @@ def test_cli_init_shows_caps_and_setcap_hint_when_explicitly_disabled(tmp_path, 
     the set-cap hint when the operator has EXPLICITLY disabled the daily cap
     (H3, 2026-08-22: unset alone no longer means unlimited)."""
     pytest.importorskip("eth_account")
-    monkeypatch.setattr("core.bootstrap.load_env", lambda *a, **k: None)
+    monkeypatch.setattr("polyrob.app.bootstrap.load_env", lambda *a, **k: None)
     monkeypatch.setenv("WALLET_DAILY_CAP_USD", "none")
     runner = CliRunner()
     result = runner.invoke(wallet_cmd, ["init", "--yes", "--home", str(tmp_path),

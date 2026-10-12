@@ -87,9 +87,10 @@ async def verify_payment_for_request(
         import os
         if os.environ.get("ENVIRONMENT", "production") != "development":
             from api.auth_constants import has_full_access
-            tier_manager = container.get_service("tier_manager") if container else None
-            if tier_manager is None:
-                raise HTTPException(status_code=503, detail="Account tier verification unavailable")
+            from api.dependencies import require_service
+            _tiers_down = "Account tier verification unavailable"
+            tier_manager = require_service("tier_manager", missing=_tiers_down,
+                                           unavailable=_tiers_down)
             try:
                 tier = await tier_manager.get_user_tier(user_id)
             except Exception as exc:
@@ -99,12 +100,8 @@ async def verify_payment_for_request(
         # User authenticated → use credit system.
         # Admission does not charge a flat request fee. Each model call reserves
         # before inference; the usage tracker settles its actual cost once.
-        from core.container import DependencyContainer
-        container = DependencyContainer.get_instance()
-        balance_mgr = container.get_service('balance_manager')
-
-        if not balance_mgr:
-            raise HTTPException(status_code=503, detail="Credit system unavailable")
+        from api.dependencies import require_service
+        balance_mgr = require_service("balance_manager", missing="Credit system unavailable")
 
         has_credits = await balance_mgr.has_sufficient_balance(user_id, cost_credits)
 

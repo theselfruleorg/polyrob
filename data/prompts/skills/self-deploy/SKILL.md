@@ -24,7 +24,9 @@ Three rules for the whole procedure:
    thing yourself (an inbox, a goal, a cron job), pull it. An X account is
    NOT such a lever — see Step 2. Ask only for what needs a human: a secret
    you cannot mint, money, a CAPTCHA (you never solve one), an env flag (flags are frozen at process start and the env files are
-   hard-denied to you — an env change is ALWAYS an owner edit + restart).
+   hard-denied to you — an env change is ALWAYS an owner edit + restart; the
+   owner restarts from chat with `/restart`, and you may put that card in front
+   of him with `propose_action`).
 3. **Report facts, not hopes.** Every line of the readiness table is one of
    `ready` / `missing → <exact remedy>` / `unverified (<reason>)`. A check
    that did not run is not a check that passed.
@@ -83,7 +85,7 @@ signup, and the owner needs it to know who is writing.
   the OAuth 1.0a **Access Token and Secret** for that account, and set
   `TWITTER_API_KEY`, `TWITTER_API_SECRET_KEY`, `TWITTER_ACCESS_TOKEN`,
   `TWITTER_ACCESS_TOKEN_SECRET` (+ `TWITTER_BOT_USERNAME`) in the instance
-  env, then restart. A pay-per-use tier is enough; writes cost ~$0.015 each.
+  env, then `/restart`. A pay-per-use tier is enough; writes cost ~$0.015 each.
 
 **Standing work.** Only if `goals`/`cron` show as loaded AND the owner has
 told you what your mission is. Create the objective(s) with `goal_create`
@@ -97,9 +99,8 @@ the owner did not name.
 how they want you to operate, write them through `owner_doc_manage` /
 `self_context_manage` / `preferences(operation="contract_propose", text=…)`
 — never as loose files (`text` is the FULL owner doc: keep every existing
-line). On the owner's own turn, with `OWNER_RULES_IMMEDIATE` on (the
-default), the write applies immediately; on a forged or autonomous turn it
-is queued in `/pending`. Report what the result says — applied or queued.
+line). The write is always queued in `/pending` as a draft for the owner
+to activate. Report what the result says.
 
 ## Step 3 — Ask the owner, once, for exactly what is missing
 
@@ -119,7 +120,7 @@ Typical items:
 
 - **Model key** — if `agent_status` shows no usable provider you would not be
   running; skip. If a cheaper aux model is wanted, name the flag
-  (`AUX_MODEL_JUDGE` / `COMPACTION_MODEL`).
+  (`AUX_MODEL_JUDGE` / `AUX_MODEL_COMPACTION`).
 - **Funding** — give the EXACT addresses from `x402_wallet_status`, per chain,
   and say which asset is gas on each (ETH on Base/Robinhood/Ethereum, SOL on
   Solana, POL on Polygon). Say what you plan to do with the first dollars.

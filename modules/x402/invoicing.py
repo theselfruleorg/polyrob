@@ -84,17 +84,12 @@ def x402_invoicing_enabled() -> bool:
     unpayable/unsettleable under autonomous mode). Explicit X402_INVOICE_ENABLED
     always wins. Lazy + guarded import, fail-closed to OFF on any fault.
 
-    core/autonomy_runtime.py does NOT import this (a core-tier module importing
+    polyrob/app/autonomy_runtime.py does NOT import this (a core-tier module importing
     modules.x402 would put a server-tier module on the core import graph — the
     C3 boundary, see tests/test_core_server_boundary.py) and instead applies the
     same guarded-OR locally."""
-    from core.env import bool_env
-    try:
-        from core.config_policy import _mode_capability_default
-        default = _mode_capability_default("X402_INVOICE_ENABLED")
-    except Exception:
-        default = False
-    return bool_env("X402_INVOICE_ENABLED", default)
+    from core.config_policy.members import member_flag
+    return member_flag("X402_INVOICE_ENABLED")
 
 
 def x402_settle_onchain_detect_enabled() -> bool:
@@ -107,13 +102,8 @@ def x402_settle_onchain_detect_enabled() -> bool:
     actually scans (see `settlement_watcher.py::_resolve_scan_target`); this
     getter is the single flag-parse SSOT shared by that gate and the
     amount-jitter gate below."""
-    from core.env import bool_env
-    try:
-        from core.config_policy import _mode_capability_default
-        default = _mode_capability_default("X402_SETTLE_ONCHAIN_DETECT")
-    except Exception:
-        default = False
-    return bool_env("X402_SETTLE_ONCHAIN_DETECT", default)
+    from core.config_policy.members import member_flag
+    return member_flag("X402_SETTLE_ONCHAIN_DETECT")
 
 
 def x402_invoice_amount_jitter_enabled() -> bool:

@@ -271,15 +271,6 @@ class TestSkillCatalog:
         from agents.task.agent.skill_manager import SkillManager
         assert SkillManager().format_skill_catalog([]) == ""
 
-    def test_flag_default_on(self, monkeypatch):
-        # P1-1: progressive disclosure is now ON by default (catalog + load_skill).
-        # Explicitly OFF only when SKILL_PROGRESSIVE_DISCLOSURE is set to a falsey value.
-        # Access-time function (not an import-bound constant) — see FL-D2.
-        import agents.task.constants as c
-        monkeypatch.delenv("SKILL_PROGRESSIVE_DISCLOSURE", raising=False)
-        assert c.skill_progressive_disclosure() is True
-        monkeypatch.setenv("SKILL_PROGRESSIVE_DISCLOSURE", "false")
-        assert c.skill_progressive_disclosure() is False
 
 
 class TestLoadSkillResult:

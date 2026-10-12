@@ -28,6 +28,7 @@ not a listing.
 """
 from __future__ import annotations
 
+from core.runtime_paths import correspondents_db_path, goals_db_path
 import logging
 import os
 from typing import Any, Callable, Dict, List, Optional
@@ -113,7 +114,7 @@ def collect_self_evolution(user_id: str, *, data_dir: str,
 def collect_tool_approvals(user_id: str, *, data_dir: str) -> List[Item]:
     """Spend and tool grants the agent stopped on and queued for the owner."""
     from tools.controller.approval_queue import list_pending_tool_approvals
-    path = _store(os.path.join(data_dir, "goals.db"))
+    path = _store(goals_db_path(data_dir))
     if path is None:
         return []
     from agents.task.goals.board import GoalBoard
@@ -152,7 +153,7 @@ def collect_correspondents(user_id: str, *, data_dir: str) -> List[Item]:
     """
     from core.surfaces.correspondents import CorrespondentRegistry
     from core.surfaces.owner_admin import pending_correspondent_items
-    path = _store(os.path.join(data_dir, "correspondents.db"))
+    path = _store(correspondents_db_path(data_dir))
     if path is None:
         return []
     registry = CorrespondentRegistry(path)
@@ -192,7 +193,7 @@ def collect_asks(user_id: str, *, data_dir: str) -> List[Item]:
     """
     from agents.task.goals.board import ASK_OPEN, GoalBoard
     from core.goal_vocab import has_own_surface
-    path = _store(os.path.join(data_dir, "goals.db"))
+    path = _store(goals_db_path(data_dir))
     if path is None:
         return []
     board = GoalBoard(path)

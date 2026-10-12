@@ -8,7 +8,7 @@ from modules.llm.output_budget import (
     apply_output_budget, finish_reason_of, last_output_tokens,
     output_token_cap, output_was_truncated,
 )
-from agents.task.goals.autonomy_marker import mark_autonomous
+from core.autonomy_marker import mark_autonomous
 
 
 class _Client:

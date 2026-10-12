@@ -152,7 +152,7 @@ def deployed(tmp_path, monkeypatch):
         if k.startswith(("TELEGRAM_", "DISCORD_", "SLACK_", "SIGNAL_", "WHATSAPP_",
                          "TWITTER_", "GMAIL_", "AGENTMAIL_", "X_SURFACE", "EMAIL_")):
             monkeypatch.delenv(k, raising=False)
-    monkeypatch.setattr("core.bootstrap.load_env", lambda **k: None)
+    monkeypatch.setattr("polyrob.app.bootstrap.load_env", lambda **k: None)
     f = tmp_path / "polyrob.env"
     f.write_text(f"TELEGRAM_BOT_TOKEN={SECRET}\nexport DISCORD_BOT_TOKEN='d-tok'\n")
     monkeypatch.setattr("core.admin_data_home.DEPLOYED_ENV_FILE", str(f))

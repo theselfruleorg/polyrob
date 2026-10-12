@@ -65,8 +65,7 @@ class ConversationResumeMixin:
         Creates a fresh session for the binding's TENANT (never the correspondent),
         re-points the correspondent registry + conversation store at it, injects the
         reply as correspondent DATA (with the durable conversation context), and
-        spawns the run. Gated ``CONVERSATION_RESUME_ENABLED`` (default ON). Returns
-        True iff the reply was delivered into the replacement session.
+        spawns the run. Returns True iff the reply was delivered into the replacement session.
 
         T1.4 (single-flight): serialized per ``dead_session_id`` via ``_resume_locks``
         so two concurrent replies for the same dead session can't both create a
@@ -76,11 +75,10 @@ class ConversationResumeMixin:
         orchestrator unexpectedly exists for whatever it resolves to), it delivers
         into that session instead of minting a second one.
         """
-        from core.surfaces.config import SurfaceConfig
         # Deferred import (avoids a load-time circular import with
         # agents.task_agent_lite, which imports this mixin at module scope).
         from agents.task_agent_lite import _spawn_detached
-        if not SurfaceConfig.conversation_resume_enabled() or not surface:
+        if not surface:
             return False
         # 031 owner pause: minting a replacement session and running it is
         # autonomous work — held (the registry/store rows are untouched).

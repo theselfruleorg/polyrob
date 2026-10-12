@@ -36,6 +36,10 @@ from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 from core.wallet import abi
 
+#: EXECUTE_SELECTOR below hashes with eth_utils.keccak at IMPORT time, so this
+#: module needs the crypto extra to import (read by the CI bare-install walk).
+__requires_extra__ = "crypto"
+
 Rpc = Callable[[str, list], object]
 
 #: The canonical registry — same address and code on Ethereum, Base, 4663, 46630.

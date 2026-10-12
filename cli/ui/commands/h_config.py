@@ -30,7 +30,6 @@ exception) and never prints a secret env VALUE, only key names.
 
 from __future__ import annotations
 
-import difflib
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -89,7 +88,8 @@ def _all_names() -> List[str]:
 
 
 def _closest_match(key: str) -> Optional[str]:
-    hits = difflib.get_close_matches(key, _all_names(), n=1)
+    from core.key_suggest import suggest_keys
+    hits = suggest_keys(key, _all_names(), n=1)
     return hits[0] if hits else None
 
 
@@ -339,11 +339,10 @@ def _cmd_check(ctx: ConfigCtx, rest: List[str]) -> str:
     from core.paths import env_file_candidates
     from core.prefs import check_env_files, find_invalid_preferences
 
-    # check_env_files merges later-paths-win, so feed it REVERSED precedence:
-    # the SSOT helper's project-beats-home resolution survives the merge (R-1).
+    # The home .env is the one file the CLI writes (there is no project tier:
+    # ./.polyrob/.env is never loaded).
     cands = env_file_candidates(local_mode=True)
-    findings = list(check_env_files(
-        [c.path for c in reversed(cands) if c.tier in ("project", "home")]))
+    findings = list(check_env_files([c.path for c in cands if c.tier == "home"]))
 
     for key, err in find_invalid_preferences(ctx.home_dir, ctx.user_id):
         findings.append(f"preferences.toml: {key}: {err}")

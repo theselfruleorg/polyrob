@@ -45,7 +45,6 @@ def _rows(db_path):
 def tele_db(tmp_path, monkeypatch):
     p = tmp_path / "telemetry_events.db"
     monkeypatch.setenv("TELEMETRY_EVENT_LOG_PATH", str(p))
-    monkeypatch.setenv("SECURITY_EVENT_LOG_ENABLED", "true")
     monkeypatch.setenv("TELEMETRY_EVENT_LOG_ENABLED", "true")
     import core.event_log as el
     el._INSTANCES.clear()
@@ -112,13 +111,6 @@ def test_recording_is_fail_open(tele_db, monkeypatch):
 
     monkeypatch.setattr(access_log, "_log", _boom)
     access_log.record_route(_inbound(), _Decision(), tier="owner")  # must not raise
-
-
-def test_flag_off_writes_nothing(tele_db, monkeypatch):
-    monkeypatch.setenv("SECURITY_EVENT_LOG_ENABLED", "off")
-    from core.surfaces.access_log import record_route
-    record_route(_inbound(), _Decision(), tier="owner")
-    assert _rows(tele_db) == []
 
 
 def test_pre_route_drop_records_reason(tele_db):

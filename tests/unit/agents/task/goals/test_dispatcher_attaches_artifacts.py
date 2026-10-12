@@ -18,7 +18,7 @@ import pytest
 from agents.task.goals.board import Goal, STATUS_BLOCKED, STATUS_READY
 from agents.task.goals.dispatcher import GoalDispatcher
 from core.artifacts import get_artifact_ledger
-from tools.controller.types import ActionResult
+from agents.task.loop_types.controller_types import ActionResult
 
 
 class _Action:

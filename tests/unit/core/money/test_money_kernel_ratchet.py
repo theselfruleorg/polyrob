@@ -12,6 +12,8 @@ Also pinned: no second ``money_action`` / ``money_tool`` predicate outside
 import ast
 import pathlib
 
+from tests.support.repo_index import repo_index
+
 REPO = pathlib.Path(__file__).resolve().parents[4]
 PREDICATES = {"leaf_refusal", "turn_refusal", "spend_pause_refusal", "delegated_refusal"}
 SKIP_PARTS = {"tests", ".git", "node_modules", ".venv", "venv", "__pycache__",
@@ -20,11 +22,11 @@ SKIP_PARTS = {"tests", ".git", "node_modules", ".venv", "venv", "__pycache__",
 #: path -> (max call count, why it is not switched). Shrink-only.
 ALLOWED = {
     "core/wallet/tx_guard.py": (1, (
-        "tx_guard steps 1-2 run pause before turn origin with injected probes "
-        "(halted_fn, entry_paused_fn — the signer and tests inject them), an "
-        "exit-shaped entry-pause exemption keyed on the TxIntent, the monitor-exit "
-        "and autonomous lanes that feed step 9, and refusal telemetry; the kernel "
-        "order (principal first) and sentences differ")),
+        "the principal after the turn origin (W5: the turn origin itself asks the "
+        "kernel). Steps 1/1b keep their own pause: injected probes (halted_fn, "
+        "entry_paused_fn — the signer and tests inject them), an exit-shaped "
+        "entry-pause exemption keyed on the TxIntent, and sentences the golden "
+        "pins (tests/unit/core/wallet/tx_guard_golden.json)")),
     "packs/markets/polyrob_markets/trade_gate.py": (2, (
         "trade_turn_refusal refuses a forged turn BEFORE the principal; the kernel "
         "runs the principal first. Decisions are identical (162 combinations "
@@ -42,7 +44,7 @@ ALLOWED = {
 
 def _calls(path: pathlib.Path) -> int:
     n = 0
-    for node in ast.walk(ast.parse(path.read_text(errors="ignore"))):
+    for node in repo_index().nodes(path, errors="ignore"):
         if isinstance(node, ast.Call):
             f = node.func
             name = f.id if isinstance(f, ast.Name) else (
@@ -86,7 +88,7 @@ def test_one_money_predicate():
     for rel, p in _py_files():
         if rel.as_posix() == "core/money/classify.py":
             continue
-        for node in ast.walk(ast.parse(p.read_text(errors="ignore"))):
+        for node in repo_index().nodes(p, errors="ignore"):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and \
                     node.name in {"money_action", "money_tool"}:
                 defs.append(f"{rel}:{node.lineno}")

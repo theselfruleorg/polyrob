@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from agents.task.goals.autonomy_marker import mark_autonomous
+from core.autonomy_marker import mark_autonomous
 from agents.task.goals.board import GoalBoard, OBJ_PAUSED
 from tools.goal_tools import (
     GoalCreateAction, GoalTool, GoalUpdateAction,

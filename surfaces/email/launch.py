@@ -1,4 +1,5 @@
 """``polyrob gateway`` launch for email (IMAP poll + SMTP). See ``surfaces/_launch.py``."""
+from core.runtime_paths import correspondents_db_path
 import os
 
 from typing import Optional
@@ -32,14 +33,14 @@ def creds_error(config, env) -> Optional[str]:
 async def launch(ctx: LaunchContext):
     err = creds_error(getattr(ctx.container, "config", None), os.environ)
     if err:
-        ctx.warn(f"EMAIL_SURFACE_ENABLED=true but {err} Skipping Email.")
+        ctx.warn(f"the email surface is on but {err} Skipping Email.")
         return None
     try:
         from core.surfaces.correspondents import CorrespondentRegistry
         if ctx.container.get_service("correspondent_registry") is None:
             ctx.container.register_service(
                 "correspondent_registry",
-                CorrespondentRegistry(os.path.join(ctx.data_dir, "correspondents.db")),
+                CorrespondentRegistry(correspondents_db_path(ctx.data_dir)),
             )
     except Exception as exc:
         ctx.warn(f"correspondent registry unavailable: {exc}")

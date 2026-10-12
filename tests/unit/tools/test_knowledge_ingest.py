@@ -507,8 +507,8 @@ class TestKbIngest:
         from tools.knowledge_ingest import kb_ingest
         import tools.knowledge_ingest as ki_mod
 
-        monkeypatch.setenv("KB_CHUNK_TOKENS", "5")
-        monkeypatch.setenv("KB_CHUNK_OVERLAP", "0")
+        monkeypatch.setattr(ki_mod, "KB_CHUNK_TOKENS", 5)
+        monkeypatch.setattr(ki_mod, "KB_CHUNK_OVERLAP", 0)
         fpath = tmp_path / "doc.md"
         fpath.write_text(
             "# A\n\n" + ("alpha " * 40)

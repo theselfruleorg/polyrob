@@ -47,7 +47,8 @@ TELEGRAM_SURFACE_ENABLED=true
 
 # dmPolicy: "pairing" has two halves here
 POLYROB_REQUIRE_PAIRING=true            # a stranger must be approved to steer
-CORRESPONDENT_ACCESS_ENABLED=true       # a party the agent contacted may reply, as data
+# a party the agent contacted may reply, as data (a posture member: it rides POLYROB_OVERRIDES)
+POLYROB_OVERRIDES=CORRESPONDENT_ACCESS_ENABLED=true
 CORRESPONDENT_REQUIRE_APPROVAL=true
 ```
 

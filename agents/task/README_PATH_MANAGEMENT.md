@@ -36,7 +36,10 @@ file_path = pm().create_file_path(session_id, "results", "output.json")
 
 ## Directory Structure
 
-Each session gets its own directory with subdirectories:
+Each session gets its own directory with subdirectories. The root is
+`core.runtime_paths.resolve_session_data_root()`: `DATA_ROOT` if set, else
+`{POLYROB_DATA_DIR}/sessions`, else the legacy `./data/task` shown here (the local CLI
+uses `<polyrob_home>/data/sessions`):
 
 ```
 data/task/

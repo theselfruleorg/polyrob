@@ -88,17 +88,6 @@ def test_same_tenant_ambiguity_routes_to_latest_conversation(reg):
                        thread_id="t1")["session_id"] == "s1"
 
 
-def test_same_tenant_ambiguity_denies_when_latest_fallback_off(reg, monkeypatch):
-    monkeypatch.setenv("CORRESPONDENT_RESOLVE_LATEST", "false")
-    reg.seed(surface="email", address="john@acme.com", session_id="s1",
-             user_id="u_owner", thread_id="t1", provenance="owner",
-             require_approval=False, now=1000.0)
-    reg.seed(surface="email", address="john@acme.com", session_id="s2",
-             user_id="u_owner", thread_id="t2", provenance="owner",
-             require_approval=False, now=2000.0)
-    assert reg.resolve(surface="email", address="john@acme.com") is None
-
-
 def test_cross_tenant_ambiguity_still_denies(reg):
     """Two TENANTS bound to one address can never be disambiguated by recency —
     routing a reply into the wrong tenant is a data leak. Stays None."""

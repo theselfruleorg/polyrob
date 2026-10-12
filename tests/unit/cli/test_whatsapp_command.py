@@ -33,7 +33,7 @@ def test_whatsapp_exits_cleanly_when_no_creds(monkeypatch):
     async def _fake_build(**kwargs):
         return fake_container
 
-    monkeypatch.setattr("core.bootstrap.build_cli_container", _fake_build)
+    monkeypatch.setattr("polyrob.app.bootstrap.build_cli_container", _fake_build)
     monkeypatch.setattr("cli.keys.preflight_or_onboard", lambda **k: True)
 
     res = CliRunner().invoke(wa_mod.whatsapp, [])
@@ -93,7 +93,7 @@ def test_whatsapp_builds_harness_with_container_data_dir(monkeypatch):
     async def _fake_build(**kwargs):
         return fake_container
 
-    monkeypatch.setattr("core.bootstrap.build_cli_container", _fake_build)
+    monkeypatch.setattr("polyrob.app.bootstrap.build_cli_container", _fake_build)
     monkeypatch.setattr("cli.keys.preflight_or_onboard", lambda **k: True)
     monkeypatch.setattr("core.surfaces.bootstrap.install_surface_bus", lambda c: None)
     monkeypatch.setattr("core.surfaces.transcription.log_transcription_readiness", lambda c: None)

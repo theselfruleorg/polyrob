@@ -38,7 +38,6 @@ secret VALUE — only key names.
 """
 from __future__ import annotations
 
-import difflib
 from pathlib import Path
 from typing import Optional
 
@@ -96,7 +95,11 @@ def _env_path(is_global: bool) -> Path:
     Every write confirmation already prints the resolved path.
     """
     from core.config_service import _env_path as _service_env_path
-    return _service_env_path("global" if is_global else "project")
+    from core.config_service import legacy_project_env_path
+    if not is_global:
+        # ./.polyrob/.env — named only (the `unset` hint); never loaded, never written.
+        return legacy_project_env_path()
+    return _service_env_path("global")
 
 
 def _refuse_project_scope(key: str = "") -> None:
@@ -108,8 +111,8 @@ def _refuse_project_scope(key: str = "") -> None:
 def _write_env_flag(key: str, value: str, is_global: bool) -> Path:
     """Write KEY=VALUE through the ONE write path (026 P2).
 
-    ``core.config_service.set_value`` owns the 0600 upsert and the project-scope
-    gitignore housekeeping; this stays as the import site `polyrob auth` uses.
+    ``core.config_service.set_value`` owns the 0600 upsert (a project-scope
+    write is refused there); this stays as the import site `polyrob auth` uses.
     It writes raw (``allow_unknown``): its callers have already validated.
     Raises ``ClickException`` when the write is refused.
     """
@@ -136,7 +139,8 @@ def _service_set(key: str, value: str, *, is_global: bool,
 def _closest_match(key: str) -> Optional[str]:
     """Closest-match suggestion across BOTH namespaces (prefs + catalog flags)."""
     names = list(PREF_SCHEMA.keys()) + catalog_names()
-    hits = difflib.get_close_matches(key, names, n=1)
+    from core.key_suggest import suggest_keys
+    hits = suggest_keys(key, names, n=1)
     return hits[0] if hits else None
 
 
@@ -340,7 +344,7 @@ def unset_cmd(key, is_global):
 
 # --- `config migrate` — the explicit replacement for the retired backfill -----
 # (W1.1, HANDOFF-env-system-and-key-subscriptions-2026-08-14). The automatic
-# env-key backfill (core/bootstrap._backfill_provider_keys) silently imported
+# env-key backfill (the deleted core/bootstrap._backfill_provider_keys) silently imported
 # dead production keys and vanished them again the moment ONE real key was set.
 # This verb makes the same move explicit, once, with the user choosing per key.
 
@@ -400,7 +404,7 @@ def _migrate_sources() -> list:
 def collect_migration_candidates(home_env: dict) -> list:
     """``(key, value, source_path)`` for each secret-shaped key in a legacy env
     file that is absent from ~/.polyrob/.env. First source wins per key."""
-    from dotenv import dotenv_values  # parse parity with core.bootstrap.load_env
+    from dotenv import dotenv_values  # parse parity with polyrob.app.bootstrap.load_env
     out, seen = [], set(home_env)
     for src in _migrate_sources():
         if not src.exists():
@@ -424,8 +428,7 @@ def migrate_cmd(take_all):
     credential-shaped keys that ~/.polyrob/.env does not have yet, lists them
     BY NAME (values are never shown), and copies the ones you confirm.
     Idempotent: a key already present in ~/.polyrob/.env is never touched.
-    This replaces the retired automatic env-key backfill
-    (POLYROB_ENV_KEY_BACKFILL).
+    This replaces the retired automatic env-key backfill.
     """
     home_env_path = polyrob_home() / ".env"
     candidates = collect_migration_candidates(_read_env_file(home_env_path))
@@ -523,7 +526,7 @@ def path_cmd():
     for cand in env_file_candidates(resolved, local_mode=True):
         exists = cand.path.exists()
         listed.add(str(cand.path))
-        if cand.tier not in ("project", "home") and not exists:
+        if cand.tier != "home" and not exists:
             continue  # absent legacy tiers are noise
         label = display.get(cand.tier, cand.tier)
         note = _TIER_NOTES.get(cand.tier, "")

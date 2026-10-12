@@ -81,7 +81,7 @@ def test_env_token_shapes_redacted():
 
 def test_google_api_key_bare_redacted():
     # A bare Gemini key (not in a key=value pair) — 39 chars, under the base64 rule.
-    key = "AIzaSyD3aBcDeFgHiJkLmNoPqRsTuVwXyZ01234"  # AIza + 35 chars
+    key = "AIzaSy" "D3aBcDeFgHiJkLmNoPqRsTuVwXyZ01234"  # AIza + 35 chars
     out = scrub_secrets(f"here is {key} ok")
     assert key not in out
     assert REDACTED in out

@@ -12,7 +12,7 @@ import pathlib
 
 import pytest
 
-from core.surfaces.owner_turn import FLAG, surface_owner_turn
+from core.surfaces.owner_turn import surface_owner_turn
 
 REPO = pathlib.Path(__file__).resolve().parents[3]
 
@@ -52,13 +52,6 @@ def test_an_exception_in_the_body_still_clears_the_marker(data_home):
         with surface_owner_turn(kind="console_chat"):
             raise ValueError("turn blew up")
     assert _marker(data_home) is None
-
-
-def test_the_flag_reverts_to_the_pre_057_behaviour(data_home, monkeypatch):
-    monkeypatch.setenv(FLAG, "false")
-    with surface_owner_turn(kind="console_chat") as held:
-        assert held is False
-        assert _marker(data_home) is None
 
 
 def test_a_gate_fault_never_costs_the_human_their_turn(data_home, monkeypatch):

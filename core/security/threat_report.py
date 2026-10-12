@@ -37,8 +37,7 @@ def report_threat(origin: str, *, user_id: str = "", session_id: str = "",
     try:
         from core.event_log import event_log_enabled
         from core.event_kinds import INJECTION_FLAGGED
-        from core.security_flags import security_event_log_enabled
-        if not (security_event_log_enabled() and event_log_enabled()):
+        if not event_log_enabled():
             return
         _log().record(INJECTION_FLAGGED, user_id=str(user_id or ""),
                       session_id=str(session_id or ""), source="threat_scan",

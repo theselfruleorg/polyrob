@@ -17,9 +17,9 @@ published ``public_identity.json``) and signs NOTHING itself:
 Solana signing is not served by the signer yet: every Solana signing attempt
 refuses by name (fail closed) while the address stays readable.
 
-``remote_verified()`` is the latch ``host_execution_refusal`` reads (066 §5.6):
-True only once this process (a) holds no custody secret and (b) got the
-signer's identity and it matched the wallet of record.
+``remote_verified()`` is True only once this process (a) holds no custody
+secret and (b) got the signer's identity and it matched the wallet of record
+(the custody status section reads it).
 """
 import logging
 import threading

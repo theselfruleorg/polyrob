@@ -25,6 +25,6 @@ def test_both_seats_import_the_one_parser():
     import inspect
 
     import cli.ui.commands.h_kb as repl
-    import surfaces.telegram.harness as tg
+    import surfaces.telegram.kb_ops as tg  # W9: the Telegram /kb reply's home
     for mod in (repl, tg):
         assert "parse_kb_args" in inspect.getsource(mod), mod.__name__

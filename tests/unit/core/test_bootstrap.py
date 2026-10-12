@@ -1,4 +1,4 @@
-"""Tests for core/bootstrap.py — container construction extracted from FastAPI lifespan."""
+"""Tests for polyrob/app/bootstrap.py — container construction extracted from FastAPI lifespan."""
 
 import pytest
 import os
@@ -6,13 +6,13 @@ import os
 
 def test_build_container_is_importable():
     """bootstrap module exposes build_container."""
-    from core.bootstrap import build_container
+    from polyrob.app.bootstrap import build_container
     assert callable(build_container)
 
 
 def test_load_env_is_importable():
     """bootstrap module exposes load_env."""
-    from core.bootstrap import load_env
+    from polyrob.app.bootstrap import load_env
     assert callable(load_env)
 
 
@@ -23,7 +23,7 @@ def test_load_env_loads_dotenv(tmp_path, monkeypatch):
 
     monkeypatch.setenv("ENV", "test")
 
-    from core.bootstrap import load_env
+    from polyrob.app.bootstrap import load_env
     load_env(env="test", config_dir=str(tmp_path))
 
     assert os.environ.get("BOOTSTRAP_TEST_VAR") == "hello_from_test"
@@ -37,7 +37,7 @@ def test_load_env_local_overrides_env(tmp_path, monkeypatch):
     local_file = tmp_path / ".env.test.local"
     local_file.write_text("LAYER_TEST_VAR=from_local\n")
 
-    from core.bootstrap import load_env
+    from polyrob.app.bootstrap import load_env
     load_env(env="test", config_dir=str(tmp_path))
 
     assert os.environ.get("LAYER_TEST_VAR") == "from_local"
@@ -49,7 +49,7 @@ def test_load_env_local_skips_an_unreadable_project_candidate(tmp_path, monkeypa
     raised PermissionError and killed `polyrob owner asks`. A candidate the
     process cannot even stat is somebody else's file: skip it, keep loading."""
     from pathlib import Path
-    from core.bootstrap import load_env
+    from polyrob.app.bootstrap import load_env
     home = tmp_path / "home"
     (home / ".polyrob").mkdir(parents=True)
     (home / ".polyrob" / ".env").write_text("BOOTSTRAP_T_UNREADABLE=from_home\n")

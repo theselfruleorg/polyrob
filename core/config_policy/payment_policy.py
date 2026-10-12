@@ -140,7 +140,7 @@ def approval_grant_ttl_hours() -> float:
 def _refreeze_payment_approval_flags() -> None:
     """Re-snapshot the payment-approval flags from the current env (026 P1.1).
 
-    TWO legitimate callers, nothing else: ``core.bootstrap.load_env`` (EXACTLY
+    TWO legitimate callers, nothing else: ``polyrob.app.bootstrap.load_env`` (EXACTLY
     ONCE per process, after env-file layering, before any container/agent — so
     an owner-controlled ``.polyrob/.env`` value reaches the freeze; the
     once-guard lives in bootstrap) and tests (after a monkeypatch + in

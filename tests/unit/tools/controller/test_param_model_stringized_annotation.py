@@ -17,7 +17,7 @@ import logging
 
 import pytest
 
-from tools.controller.execution_context import ActionExecutionContext
+from agents.task.loop_types.execution_context import ActionExecutionContext
 from tools.controller.registry.service import Registry
 from tools.goal_tools import GoalCreateAction, GoalListAction, GoalTool
 

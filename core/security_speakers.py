@@ -24,6 +24,7 @@ spend join covers the sessions bound in this deployment's ``surfaces.db``.
 Layering: core-only reads through ``core.sqlite_util`` (045 §10 invariant 8).
 An absent store is ``unavailable(<reason>)`` — never a zero.
 """
+from core.runtime_paths import surfaces_db_path
 import datetime as _dt
 import os
 from dataclasses import dataclass, field
@@ -84,7 +85,7 @@ def top_chats_by_spend(data_dir: str, since_ts: float) -> List[Tuple[str, float]
     """Per-chat model spend over the window. Raises when either store is
     absent or unreadable, so the caller can name the reason."""
     from core.status_economics import bot_db_path
-    surfaces_db = os.path.join(str(data_dir), "surfaces.db")
+    surfaces_db = surfaces_db_path(str(data_dir))
     chats = _rows(
         surfaces_db,
         "SELECT session_id, surface_id, chat_id FROM session_chat_map "

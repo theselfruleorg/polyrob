@@ -21,8 +21,8 @@ import tools.controller.approval_queue as approval_queue  # noqa: F401 — pre-i
 # before any test monkeypatches approval._PROVIDERS["owner_queue"] (mirrors
 # tests/unit/tools/controller/test_payment_approval_mode.py).
 from core.prefs import write_preference
-from tools.controller.execution_context import ActionExecutionContext
-from tools.controller.types import ActionResult
+from agents.task.loop_types.execution_context import ActionExecutionContext
+from agents.task.loop_types.controller_types import ActionResult
 
 
 @pytest.fixture(autouse=True)

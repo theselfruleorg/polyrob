@@ -101,6 +101,7 @@ def test_rpc_flags_are_secret():
         "DEFI_SOLANA_RPC",
         "ETHEREUM_RPC_URL",
         "POLYGON_RPC_URL",
+        "SEPOLIA_RPC_URL",
         "X402_SETTLEMENT_RPC",
     ], matched
     for name in matched:
@@ -111,15 +112,15 @@ def test_rpc_flags_are_secret():
 
 def test_dynamic_default_hook():
     def dyn(name):
-        if name == "GOALS_ENABLED":
+        if name == "AUTONOMY_ENABLED":
             return True, "default(posture:test)"
         return None
 
-    r = resolve_flag("GOALS_ENABLED", {}, dynamic_default=dyn)
+    r = resolve_flag("AUTONOMY_ENABLED", {}, dynamic_default=dyn)
     assert r.value is True
     assert r.source == "default(posture:test)"
     # explicit env still beats the dynamic default
-    r = resolve_flag("GOALS_ENABLED", {"GOALS_ENABLED": "false"}, dynamic_default=dyn)
+    r = resolve_flag("AUTONOMY_ENABLED", {"AUTONOMY_ENABLED": "false"}, dynamic_default=dyn)
     assert r.value is False
     assert r.source == "env"
 
@@ -160,33 +161,14 @@ def test_catalog_defaults_never_truncated():
             "full cells (kind/default inference reads them)")
 
 
-def test_generator_parity_with_checked_in_catalog():
-    """The checked-in catalog must be exactly what the checked-in generator
-    produces (the standard generated-file contract).
-
-    ``scripts/`` is private-only (never shipped to the public repo — the whole
-    directory is on the publish denylist), so skip this parity check when the
-    generator is absent. The catalog itself still ships and its contract tests
-    above still run everywhere.
-    """
-    import subprocess
-    import sys as _sys
-    gen = REPO_ROOT / "scripts" / "gen_flags_catalog.py"
-    if not gen.exists():
-        import pytest
-        pytest.skip("flags-catalog generator is private-only (scripts/ not shipped)")
-    proc = subprocess.run(
-        [_sys.executable, str(gen), "--check"],
-        capture_output=True, text=True,
-    )
-    assert proc.returncode == 0, proc.stderr
-
-
 def test_bullet_documented_flags_are_registered():
     # Flags documented as bullets (e.g. WEB_FETCH_ALLOW_PRIVATE_URLS before it
     # got a table row, the _SAFE_LOCAL_FLAGS member list) must not be invisible.
-    for name in ("SELF_WAKE_ENABLED", "WEB_FETCH_ALLOW_PRIVATE_URLS", "KB_ENABLED"):
+    for name in ("WEB_FETCH_ALLOW_PRIVATE_URLS",):
         assert name in REGISTRY, name
+    # D7: the posture members are deliberately NOT registry rows.
+    for name in ("SELF_WAKE_ENABLED", "KB_ENABLED"):
+        assert name not in REGISTRY, name
 
 
 def test_pattern_only_flag_is_describable():
@@ -200,3 +182,13 @@ def test_pattern_only_flag_is_describable():
     assert resolve_flag("OWNER_SLACK_ID", {"OWNER_SLACK_ID": "U1"}).source == "env"
     info = config_service.explain("OWNER_SLACK_ID")
     assert info.namespace == "flag" and info.key == "OWNER_SLACK_ID"
+
+
+def test_voice_transcription_documented_default_matches_code(monkeypatch):
+    """The public catalog row states the code default (it said OFF while the code
+    transcribed every voice note, so `doctor --flags` reported the wrong state)."""
+    from core.surfaces.config import SurfaceConfig
+
+    monkeypatch.delenv("VOICE_TRANSCRIPTION_ENABLED", raising=False)
+    documented_on = REGISTRY["VOICE_TRANSCRIPTION_ENABLED"].default_doc == "ON"
+    assert documented_on == SurfaceConfig.voice_transcription_enabled()

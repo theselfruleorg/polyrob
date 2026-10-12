@@ -90,6 +90,15 @@ def resolve_runtime_config(
     return last_resort
 
 
+def _first_set(env, *names):
+    """The first of *names* set to a non-blank value — a blank CHAT_ never shadows DEFAULT_."""
+    for name in names:
+        value = (env.get(name) or "").strip()
+        if value:
+            return value
+    return None
+
+
 def operator_provider_pin(env=None):
     """The operator's serving-provider pin, if any (``CHAT_PROVIDER`` > ``DEFAULT_PROVIDER``).
 
@@ -101,7 +110,44 @@ def operator_provider_pin(env=None):
     the same pin ``task_agent_lite._resolve_chat_runtime`` honors for interactive runs.
     """
     env = _os.environ if env is None else env
-    return (env.get("CHAT_PROVIDER") or env.get("DEFAULT_PROVIDER") or "").strip() or None
+    return _first_set(env, "CHAT_PROVIDER", "DEFAULT_PROVIDER")
+
+
+def operator_model_pin(env=None):
+    """The operator's model pin, if any (``CHAT_MODEL`` > ``DEFAULT_MODEL``), read raw.
+
+    This module is the ONE reader of the four pin variables
+    (``tests/test_operator_pin_reader_ratchet.py``). Prefer ``operator_model_for`` — the
+    raw pin is only meaningful paired with ``operator_provider_pin``.
+    """
+    env = _os.environ if env is None else env
+    chat_provider = _first_set(env, "CHAT_PROVIDER")
+    default_provider = _first_set(env, "DEFAULT_PROVIDER")
+    if (chat_provider and default_provider
+            and canonicalize_provider(chat_provider) != canonicalize_provider(default_provider)):
+        # The pin is a PAIR: CHAT_PROVIDER wins the provider, so DEFAULT_MODEL —
+        # which names a DEFAULT_PROVIDER model — must not ride along with it.
+        return _first_set(env, "CHAT_MODEL")
+    return _first_set(env, "CHAT_MODEL", "DEFAULT_MODEL")
+
+
+def operator_model_for(provider, env=None):
+    """The operator's pinned model for *provider*, or ``None``.
+
+    The pin pair is read as a unit: the pinned model applies only when *provider* IS the
+    pinned provider. ``get_default_model`` consults this first, so every "default model
+    for this provider" read — cron, goals, the planner, the LLM clients, the fallback
+    rung, ``polyrob model list`` — serves the operator's model. Before, only chat read
+    the model half of the pin: a box pinned to ``openrouter`` + ``deepseek/...`` ran
+    every scheduled job on the registry default (``z-ai/glm-5.2``) (live prod
+    2026-10-12). Any other provider (a job's own pin, a credit-dead re-route) gets
+    ``None`` here and keeps its own default.
+    """
+    env = _os.environ if env is None else env
+    pinned = canonicalize_provider(operator_provider_pin(env))
+    if not provider or not pinned or canonicalize_provider(provider) != pinned:
+        return None
+    return operator_model_pin(env)
 
 
 def resolve_default_provider(env=None, *, last_resort=("openai", None)):
@@ -109,12 +155,14 @@ def resolve_default_provider(env=None, *, last_resort=("openai", None)):
 
     Thin wrapper over ``resolve_runtime_config`` that threads the operator pin
     (``CHAT_PROVIDER``/``DEFAULT_PROVIDER``) so autonomous dispatch honors it. ``model``
-    may be ``None`` (the caller fills it from the registry via ``get_default_model``).
+    is the operator's model pin for a pinned provider, else ``None`` (the caller fills it
+    from the registry via ``get_default_model``, which applies the same pin).
     """
     env = _os.environ if env is None else env
     return resolve_runtime_config(
         None, None, env=env,
         pinned_provider=operator_provider_pin(env),
+        pinned_model=operator_model_pin(env),
         last_resort=last_resort,
     )
 
@@ -167,9 +215,7 @@ def resolve_session_runtime(provider=None, model=None, env=None):
         # CHAT_ before DEFAULT_, mirroring operator_provider_pin's order — the
         # pin pair is read as a unit, so a CHAT_PROVIDER/CHAT_MODEL operator is
         # not silently served the registry default for their pinned provider.
-        pinned_model = (
-            env.get("CHAT_MODEL") or env.get("DEFAULT_MODEL") or ""
-        ).strip() or None
+        pinned_model = operator_model_pin(env)
         resolved_provider, resolved_model = resolve_runtime_config(
             provider or None,
             model or None,
@@ -189,7 +235,7 @@ def get_data_root() -> str:
     """Resolve the CLI/local runtime data home (where goals.db/cron.db/memory.db live).
 
     Delegates to the ONE data-home rule, ``core.runtime_paths.resolve_data_home``
-    (``POLYROB_DATA_DIR`` wins, else ``cwd/.polyrob``); ``core.bootstrap.
+    (``POLYROB_DATA_DIR`` wins, else ``<polyrob_home>/data``); ``polyrob.app.bootstrap.
     _resolve_cli_data_home`` resolves through the same seam, so the terminal-native
     ``polyrob goals``/``cron`` surfaces read the SAME database the autonomy dispatcher
     writes (``<data_root>/goals.db``). ``POLYROB_PROJECT_DIR`` moves only the

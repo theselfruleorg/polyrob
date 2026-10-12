@@ -7,17 +7,8 @@ opening or closing, or a single render exception re-billed the entire
 conversation behind it at uncached prices. The FIRST render stays the session
 baseline in [7]; a later change is delivered as ONE durable
 ``<tool-catalog-update>`` message at the TAIL, naming only the tool lines that
-moved. Gated ``TOOL_CATALOG_TAIL_UPDATES`` (default ON); ``false`` restores the
-in-place rewrite byte for byte.
+moved.
 """
-
-# The string the pre-F8 path substituted into [7] when the render raised. Kept
-# for the flag-off path only: under F8 a transient render error pushes NOTHING
-# (a different string in [7] is exactly the rewrite this change exists to stop),
-# and the runtime gates still refuse whatever the stale snapshot advertises.
-_RENDER_FAILED = ("<tool-catalog>Current capability snapshot unavailable. Do not infer "
-                  "availability from earlier snapshots; runtime tool and approval gates "
-                  "still apply.</tool-catalog>")
 
 
 def announce_late_tools(agent):
@@ -76,22 +67,16 @@ def refresh_tool_catalog(agent):
     if not hasattr(controller, "render_tool_catalog"):
         return
 
-    from core.env import bool_env
-    tail_updates = bool_env("TOOL_CATALOG_TAIL_UPDATES", True)
-
     try:
         content = controller.render_tool_catalog(is_leaf=(getattr(agent, "_role", None) == "leaf"))
     except Exception as e:
-        if tail_updates:
-            _debug(agent, f"tool-catalog render failed; keeping the pinned snapshot: {e}")
-            return
-        # Legacy path: keep running, but never keep advertising a stale snapshot.
-        content = _RENDER_FAILED
+        # A transient render error pushes NOTHING (a different string in [7] is
+        # exactly the rewrite F8 stops); the runtime gates still refuse whatever
+        # the stale snapshot advertises.
+        _debug(agent, f"tool-catalog render failed; keeping the pinned snapshot: {e}")
+        return
 
-    if tail_updates:
-        manager.update_tool_catalog(content)
-    else:
-        manager.set_tool_catalog_message(content)
+    manager.update_tool_catalog(content)
 
 
 def _debug(agent, message: str) -> None:

@@ -90,7 +90,8 @@ class SentLeg:
 
 
 def assert_order_matches_request(tx_data: dict, *, origin_chain_id: int,
-                                 amount_in_raw: int) -> Optional[str]:
+                                 amount_in_raw: int,
+                                 native_value_raw: Optional[int] = None) -> Optional[str]:
     """The wallet's own half of phase 1 for an EVM origin, or None if it holds.
 
     `RelayBridgeProvider._parse_quote` already asserted the quote against what we
@@ -124,9 +125,10 @@ def assert_order_matches_request(tx_data: dict, *, origin_chain_id: int,
                 "bridge that sends an unreadable amount cannot be asserted "
                 "against the arrival floor, which was computed from the amount "
                 "we declared.")
-    if value != int(amount_in_raw):
+    want_value = int(amount_in_raw if native_value_raw is None else native_value_raw)
+    if value != want_value:
         return (f"REFUSED — the deposit item sends {value} wei, not the declared "
-                f"{amount_in_raw}. That is a different order from the one that "
+                f"{want_value}. That is a different order from the one that "
                 f"was priced, and the arrival floor came from the priced one.")
 
     data = tx_data.get("data")
@@ -262,3 +264,196 @@ class EvmOriginLeg:
         if receipt.status == "pending":
             return SentLeg("pending", "no receipt within the timeout", tx_hash=tx_hash)
         return SentLeg("reverted", "receipt status 0", tx_hash=tx_hash)
+
+
+class EvmTokenOriginLeg:
+    """The pinned-USDC origin on an EVM chain: approve EXACTLY the amount to the
+    pinned Relay depository, confirm it, then the guarded deposit.
+
+    The two transactions cannot be simulated together — the deposit's
+    ``transferFrom`` reverts until the approval is mined — so :meth:`prepare`
+    simulates the approve (the guard values the grant and picks the lane) and
+    :meth:`send` simulates the deposit against the chain once the approval has
+    landed. If the deposit is refused or fails to broadcast, the approval is
+    revoked: an exact grant to a pinned contract is small, but a standing one is
+    still a claim nobody asked for.
+    """
+
+    def __init__(self, *, chain: str, signer, token: str, rail_factory: Optional[Callable] = None,
+                 authorize_fn: Optional[Callable] = None):
+        self._chain = chain
+        self._signer = signer
+        self._token = token
+        self._rail_factory = rail_factory
+        self._authorize_fn = authorize_fn
+        self._ctx: dict = {}
+        #: Set by the verb once the owner approved an above-ceiling bridge (or
+        #: the turn is the owner's own) — the deposit may then read
+        #: ``owner_queue`` without that being a refusal.
+        self.owner_cleared = False
+
+    def _authorize(self, intent, tx, *, gate, execution_context, tool):
+        from core.wallet import tx_guard
+        authorize = self._authorize_fn or tx_guard.authorize
+        try:
+            from tools.controller.action_registration import (
+                _is_autonomous_goal_turn, _is_forged_or_autonomous_turn)
+            forged_fn, autonomous_ok_fn = (_is_forged_or_autonomous_turn,
+                                           _is_autonomous_goal_turn)
+        except Exception:
+            forged_fn = autonomous_ok_fn = None
+        return authorize(
+            intent, tx, holder=self._signer.address, gate=gate,
+            execution_context=execution_context, tool_self=tool,
+            price_fn=getattr(tool, "_price", None),
+            fallback_price_fn=getattr(tool, "_fallback_price", None),
+            forged_fn=forged_fn, autonomous_ok_fn=autonomous_ok_fn)
+
+    def prepare(self, *, tx_data: dict, origin_chain_id: int, amount_in_raw: int,
+                amount_usd: Optional[float], gate, execution_context, tool,
+                idempotency_key: str, approve_spender: Optional[str] = None) -> PreparedLeg:
+        from core.wallet import tx_guard
+        from core.wallet.broadcast.evm import EvmRail
+        from tools.defi.providers import univ3
+
+        problem = assert_order_matches_request(
+            tx_data, origin_chain_id=origin_chain_id, amount_in_raw=amount_in_raw,
+            native_value_raw=0)
+        if problem:
+            return PreparedLeg(False, problem, header=f"  guard: {problem}\n")
+        depository = str(tx_data["to"])
+        if approve_spender and approve_spender.lower() != depository.lower():
+            why = (f"REFUSED — Relay's approve names {approve_spender}, but the "
+                   f"deposit is paid to {depository}. Nothing was signed.")
+            return PreparedLeg(False, why, header=f"  guard: {why}\n")
+        try:
+            rail = (self._rail_factory or EvmRail)(chain=self._chain, signer=self._signer)
+            approve_tx = rail.build_call(
+                to=self._token,
+                data=univ3.build_approve_data(spender=depository, amount_raw=int(amount_in_raw)),
+                value=0)
+        except Exception as exc:
+            return PreparedLeg(False, f"REFUSED — {exc}", header=f"  guard: REFUSED — {exc}\n")
+
+        declared_usd = (float(amount_usd) * (1.0 + VALUATION_TOLERANCE)
+                        if amount_usd is not None else 0.0)
+        intent = tx_guard.TxIntent(
+            chain=self._chain, token=self._token, to=depository, amount_raw=0,
+            max_spend_usd=declared_usd,
+            expected_allowance_grants=((self._token, depository, int(amount_in_raw)),),
+            is_allowance_op=True, idempotency_key=f"{idempotency_key}:approve")
+        decision = self._authorize(intent, approve_tx, gate=gate,
+                                   execution_context=execution_context, tool=tool)
+        header = (f"  approve: exactly {amount_in_raw} raw to the pinned depository {depository}\n"
+                  f"  simulated grant value: "
+                  f"{'unknown' if decision.amount_usd is None else f'${decision.amount_usd:.4f}'}\n"
+                  f"  guard: {decision.reason}\n  lane:  {decision.lane}\n"
+                  f"  deposit: simulated after the approval lands\n")
+        if not decision.allowed and decision.lane != "owner_queue":
+            return PreparedLeg(False, decision.reason, header=header)
+        if decision.sim_gas_used:
+            try:
+                approve_tx = rail.size_gas(approve_tx, decision.sim_gas_used)
+            except Exception as exc:
+                return PreparedLeg(False, f"REFUSED at gas sizing: {exc}",
+                                   header=header + f"  guard: REFUSED at gas sizing: {exc}\n")
+        self._ctx = dict(tx_data=tx_data, depository=depository, amount_in_raw=int(amount_in_raw),
+                         declared_usd=declared_usd, gate=gate, execution_context=execution_context,
+                         tool=tool, idempotency_key=idempotency_key)
+        return PreparedLeg(True, decision.reason, rail=rail, tx=approve_tx,
+                           amount_usd=decision.amount_usd,
+                           needs_owner_approval=not decision.allowed, header=header)
+
+    def _revoke(self, rail) -> str:
+        """approve(depository, 0), through tx_guard like every revoke verb."""
+        from core.wallet import tx_guard
+        from tools.defi.providers import univ3
+        ctx = self._ctx
+        try:
+            tx = rail.build_call(to=self._token, data=univ3.build_approve_data(
+                spender=ctx["depository"], amount_raw=0), value=0)
+            intent = tx_guard.TxIntent(
+                chain=self._chain, token=self._token, to=ctx["depository"], amount_raw=0,
+                max_spend_usd=0.01, expected_allowance_grants=(), is_allowance_op=True,
+                idempotency_key=f"{ctx['idempotency_key']}:revoke")
+            decision = self._authorize(intent, tx, gate=ctx["gate"],
+                                       execution_context=ctx["execution_context"],
+                                       tool=ctx["tool"])
+            if not decision.allowed:
+                raise RuntimeError(f"guard: {decision.reason}")
+            if decision.sim_gas_used:
+                tx = rail.size_gas(tx, decision.sim_gas_used)
+            tx_hash = rail.sign_and_send(tx)
+            return f"approval revoked ({tx_hash})"
+        except Exception as exc:
+            logger.warning("bridge: revoke after a failed deposit did not send", exc_info=True)
+            return (f"⚠️ the approval could NOT be revoked ({exc}) — run "
+                    f"revoke_approval for {self._ctx.get('depository')} on {self._chain}")
+
+    def send(self, prepared: PreparedLeg) -> SentLeg:
+        from core.wallet import tx_guard
+        rail, ctx = prepared.rail, self._ctx
+        # 1. the exact approval, confirmed before anything else
+        try:
+            approve_hash = rail.sign_and_send(prepared.tx)
+        except Exception as exc:
+            from core.wallet.broadcast.evm import broadcast_failure_text
+            return SentLeg("error", f"approval not sent: {broadcast_failure_text(exc)}; "
+                                    f"no deposit was sent")
+        why = ""
+        try:
+            receipt = rail.await_receipt(approve_hash)
+        except Exception as exc:
+            receipt = None
+            why = f"receipt read failed: {exc}"
+        if receipt is None or not receipt.succeeded:
+            why = (why if receipt is None else
+                   ("no receipt within the timeout" if receipt.status == "pending"
+                    else "approval reverted"))
+            if receipt is not None and receipt.status not in ("pending",):
+                return SentLeg("error", f"approval {approve_hash} not confirmed ({why}); no "
+                                        f"deposit was sent.")
+            # It may still land: approve(0) takes the next nonce, so it mines after
+            # it and the allowance ends at zero either way.
+            return SentLeg("error", f"approval {approve_hash} not confirmed ({why}); no "
+                                    f"deposit was sent; {self._revoke(rail)}")
+        # 2. the deposit, simulated now that the allowance exists
+        tx_data = ctx["tx_data"]
+        try:
+            deposit_tx = rail.build_call(to=ctx["depository"],
+                                         data=str(tx_data.get("data") or "0x"), value=0)
+        except Exception as exc:
+            return SentLeg("error", f"could not build the deposit: {exc}; {self._revoke(rail)}")
+        intent = tx_guard.TxIntent(
+            chain=self._chain, token=self._token, to=ctx["depository"],
+            amount_raw=ctx["amount_in_raw"], max_spend_usd=ctx["declared_usd"],
+            watch_spenders=(ctx["depository"],), idempotency_key=ctx["idempotency_key"])
+        decision = self._authorize(intent, deposit_tx, gate=ctx["gate"],
+                                   execution_context=ctx["execution_context"], tool=ctx["tool"])
+        if not (decision.allowed or (decision.lane == "owner_queue" and self.owner_cleared)):
+            return SentLeg("error", f"deposit refused by the guard: {decision.reason}; "
+                                    f"{self._revoke(rail)}")
+        if decision.sim_gas_used:
+            try:
+                deposit_tx = rail.size_gas(deposit_tx, decision.sim_gas_used)
+            except Exception as exc:
+                return SentLeg("error", f"deposit gas sizing failed: {exc}; {self._revoke(rail)}")
+        try:
+            tx_hash = rail.sign_and_send(deposit_tx)
+        except Exception as exc:
+            from core.wallet.broadcast.evm import broadcast_failure_text, outcome_unknown
+            if outcome_unknown(exc):
+                # It may have left: never revoke under it, never call it failed.
+                return SentLeg("unknown", broadcast_failure_text(exc))
+            return SentLeg("error", f"{broadcast_failure_text(exc)}; {self._revoke(rail)}")
+        return SentLeg("sent", f"approval {approve_hash}; deposit broadcast", tx_hash=tx_hash)
+
+    @staticmethod
+    def confirm(prepared: PreparedLeg, tx_hash: str) -> SentLeg:
+        return EvmOriginLeg.confirm(prepared, tx_hash)
+
+    def revoke_after_revert(self, prepared: PreparedLeg) -> str:
+        """The deposit landed REVERTED: the exact allowance is still open. Revoke it."""
+        if not self._ctx or prepared is None or prepared.rail is None:
+            return ""
+        return self._revoke(prepared.rail)

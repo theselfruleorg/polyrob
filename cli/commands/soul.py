@@ -7,6 +7,7 @@ these; the agent-writable tier is SELF, managed elsewhere).
 """
 from __future__ import annotations
 
+from cli._admin_home import as_root_option
 from pathlib import Path
 
 import click
@@ -60,10 +61,12 @@ def scaffold_soul(data_home: Path, *, name: str, mission: str,
 
 
 def _data_home() -> Path:
-    """CLI data home (same resolution the avatar commands use — one rule,
-    core.runtime_paths.resolve_data_home; dependency-light, cannot raise)."""
-    from core.runtime_paths import resolve_data_home
-    return Path(resolve_data_home())
+    """The data home ``soul init`` writes: the owner-verb seam
+    (``cli._admin_home.admin_data_dir``) — on a deployed box with no env in the
+    shell that is the DEPLOYED home, never the shell's ``~/.polyrob/data`` (W8).
+    A write: root on a deployed box refuses unless ``--as-root``."""
+    from cli._admin_home import admin_data_dir
+    return Path(admin_data_dir(write=True))
 
 
 @click.group("soul")
@@ -74,6 +77,7 @@ def soul():
 
 
 @soul.command("init")
+@as_root_option
 @click.option("--force", is_flag=True, help="Overwrite existing SOUL docs.")
 @click.option("--no-edit", is_flag=True, help="Skip opening $EDITOR after scaffolding.")
 @click.option("--name", "name_opt", default=None, metavar="NAME",

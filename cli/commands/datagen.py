@@ -107,8 +107,9 @@ def datagen_run(tasks_path, name, distribution, concurrency, max_steps,
                    + ", ".join(sorted(DISTRIBUTIONS)))
         sys.exit(2)
 
+    from core.config_policy.members import setdefault_flag
     for key, value in _DATAGEN_HYGIENE_ENV.items():
-        os.environ.setdefault(key, value)
+        setdefault_flag(os.environ, key, value)   # posture members -> POLYROB_OVERRIDES
 
     run_name = name or f"datagen-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
     stats = asyncio.run(_datagen_run_async(
@@ -125,7 +126,7 @@ async def _datagen_run_async(tasks_path, run_name, distribution, concurrency,
                              user_id, seed, resume) -> dict:
     import logging as _logging
 
-    from core.bootstrap import (build_cli_container, setup_project_path,
+    from polyrob.app.bootstrap import (build_cli_container, setup_project_path,
                                 setup_sqlite_compat)
     setup_project_path()
     setup_sqlite_compat()

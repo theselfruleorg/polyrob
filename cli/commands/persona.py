@@ -184,9 +184,9 @@ def persona_init_cmd(slug, preset, force, no_edit):
 def persona_list_cmd():
     """List the templates and the characters, marking the active one."""
     from cli.persona import build_persona_listing, cli_gate_on
-    from core.runtime_paths import resolve_data_home
+    from cli._admin_home import admin_data_dir
 
-    listing = build_persona_listing("local", Path(resolve_data_home()),
+    listing = build_persona_listing("local", Path(admin_data_dir(write=False)),
                                     gate=cli_gate_on())
     for title, rows in (("templates", listing["templates"]),
                         ("characters", listing["characters"])):
@@ -205,8 +205,8 @@ def persona_list_cmd():
 def persona_show_cmd(slug):
     """Print the rendered persona block for SLUG (default: the ACTIVE persona)."""
     from agents.personality.persona_resolver import load_character_dict
+    from cli._admin_home import admin_data_dir
     from cli.persona import active_persona_line, cli_gate_on, describe_active_persona
-    from core.runtime_paths import resolve_data_home
 
     gate = cli_gate_on()
 
@@ -221,7 +221,7 @@ def persona_show_cmd(slug):
         _echo_block(data)
         return
 
-    home = Path(resolve_data_home())
+    home = Path(admin_data_dir(write=False))
     click.echo(active_persona_line("local", home, gate=gate))
     info = describe_active_persona("local", home, gate=gate)
     if not info["gate"]:

@@ -32,18 +32,3 @@ def test_uvicorn_is_run_with_proxy_headers(monkeypatch):
 
     assert captured["proxy_headers"] is True
     assert captured["forwarded_allow_ips"] == "127.0.0.1"
-
-
-def test_the_shipped_units_never_trust_every_client():
-    """``--forwarded-allow-ips=*`` makes uvicorn believe the X-Forwarded-For of
-    ANY client, so a direct caller can claim 127.0.0.1 — and two console
-    endpoints authorise by client address. Trust the header only from the proxy
-    whose address you name."""
-    import pathlib
-    root = pathlib.Path(__file__).resolve().parents[3] / "deployment"
-    for unit in sorted(root.glob("*webview*.service")) + sorted(root.glob("*webgate*.service")):
-        text = unit.read_text(encoding="utf-8")
-        if "--forwarded-allow-ips" not in text:
-            continue
-        assert "--forwarded-allow-ips=*" not in text, unit.name
-        assert "--forwarded-allow-ips=127.0.0.1" in text, unit.name

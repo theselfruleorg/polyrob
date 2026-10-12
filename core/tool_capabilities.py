@@ -72,7 +72,7 @@ class ToolRow(frozenset):
     - ``cli`` — how the lightweight CLI container serves the tool: ``static`` (an
       always-present descriptor), ``optional`` (materialized by ``cli_registrar``,
       self-gating), ``incompatible`` (needs the heavy server container), ``none``
-      (never registered on the CLI). Derives ``core.bootstrap``'s ``_CLI_*`` tables.
+      (never registered on the CLI). Derives ``polyrob.app.bootstrap``'s ``_CLI_*`` tables.
     - ``cli_registrar`` — ``"module:function"`` of the ``register_optional_tool()``
       wrapper for an ``optional`` row; bootstrap imports it lazily, so core never
       imports the tool tier at module import.
@@ -137,7 +137,7 @@ TOOL_CAPABILITIES: Dict[str, FrozenSet[str]] = {
         gate=ToolGate(flag="KB_ENABLED",
                       tier="disabled",
                       label="KB_ENABLED",
-                      remedy="owner sets KB_ENABLED=true")),
+                      remedy="owner sets POLYROB_OVERRIDES=KB_ENABLED=true")),
     "alchemy": ToolRow(cli="incompatible"),            # read-only chain data
     "collabland": ToolRow(cli="incompatible"),
     # Read-only token sight (proposal 023 T0+T1). No signer, no broadcast, so
@@ -177,13 +177,14 @@ TOOL_CAPABILITIES: Dict[str, FrozenSet[str]] = {
         gate=ToolGate(flag="GOALS_ENABLED",
                       tier="disabled",
                       label="GOALS_ENABLED",
-                      remedy="owner sets GOALS_ENABLED=true")),
+                      remedy="owner sets POLYROB_OVERRIDES=GOALS_ENABLED=true")),
     "cronjob": ToolRow({"high_impact", "delegate_blocked", "shared_identity"},
         cli="optional", cli_registrar="tools.cronjob_tools:register_cronjob_tool",
         gate=ToolGate(flag="CRON_ENABLED",
                       tier="disabled",
                       label="CRON_ENABLED (AUTONOMY_POSTURE>=full)",
-                      remedy="owner raises AUTONOMY_POSTURE or sets CRON_ENABLED=true")),
+                      remedy=("owner raises AUTONOMY_POSTURE or sets "
+                              "POLYROB_OVERRIDES=CRON_ENABLED=true"))),
     # -- code / exec / self-modification --------------------------------------
     "code_execution": ToolRow({"high_impact", "delegate_blocked", "exec", "writes_code"},
         cli="optional", cli_registrar="tools.code_exec:register_code_exec_tool",
@@ -197,7 +198,7 @@ TOOL_CAPABILITIES: Dict[str, FrozenSet[str]] = {
         gate=ToolGate(flag="CODING_TOOLS_ENABLED",
                       tier="disabled",
                       label="CODING_TOOLS_ENABLED",
-                      remedy="owner sets CODING_TOOLS_ENABLED=true")),
+                      remedy="owner sets POLYROB_OVERRIDES=CODING_TOOLS_ENABLED=true")),
     "shell": ToolRow({"high_impact", "delegate_blocked", "exec", "writes_code"},
         cli="optional", cli_registrar="tools.shell:register_shell_tools",
         gate=ToolGate(flag="SHELL_TOOLS_ENABLED",
@@ -223,7 +224,8 @@ TOOL_CAPABILITIES: Dict[str, FrozenSet[str]] = {
         gate=ToolGate(flag="MCP_ENABLED",
                       tier="disabled",
                       label="MCP_ENABLED + config/mcp_config.json",
-                      remedy="owner sets MCP_ENABLED=true and configures servers")),
+                      remedy=("owner sets POLYROB_OVERRIDES=MCP_ENABLED=true and "
+                              "configures servers"))),
     "hf_deploy": ToolRow({"high_impact", "delegate_blocked", "shared_identity", "writes_public"},
         cli="optional", cli_registrar="tools.hf_deploy:register_hf_deploy_tool",
         gate=ToolGate(flag="HF_DEPLOY_ENABLED")),
@@ -257,7 +259,8 @@ TOOL_CAPABILITIES: Dict[str, FrozenSet[str]] = {
         gate=ToolGate(flag="X402_INVOICE_ENABLED",
                       tier="disabled",
                       label="X402_INVOICE_ENABLED",
-                      remedy="owner sets X402_INVOICE_ENABLED=true (auto-ON in autonomous mode)")),
+                      remedy=("owner sets POLYROB_OVERRIDES=X402_INVOICE_ENABLED=true "
+                              "(auto-ON in autonomous mode)"))),
     # On-chain money verbs (proposal 023 T3). Every call routes through
     # core/wallet/tx_guard.py; `money` also makes it explicit-grant-only, so the
     # agent can never self-serve it via load_tool.

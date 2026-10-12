@@ -32,7 +32,7 @@ def _x_oauth2_store_present() -> bool:
 
 
 def twitter_gate() -> bool:
-    """The live ``twitter`` gate (was ``core.bootstrap._cli_extra_gate``): X API
+    """The live ``twitter`` gate (was ``polyrob.app.bootstrap._cli_extra_gate``): X API
     credentials are configured — an OAuth 2.0 user token (env or the encrypted
     store) or the OAuth 1.0a user-context pair. Without them the tool is dead
     weight on the CLI."""

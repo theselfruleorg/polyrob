@@ -56,7 +56,6 @@ tools/
 │   ├── browser_manager.py          # Browser instance management
 │   ├── context.py                  # Browser context management
 │   ├── actions.py                  # Browser action definitions
-│   ├── views.py                    # Browser view models
 │   └── playwright_utils.py         # Playwright utilities
 │
 ├── alchemy/                        # Alchemy NFT API integration
@@ -94,24 +93,23 @@ tools/
 │   ├── approval.py                 # ApprovalProvider ABC + make_approval_hook
 │   ├── delegation.py               # evaluate_delegation role/depth policy
 │   ├── _helpers.py                 # observe/ToolInfo/make_denylist_hook/build_load_skill_result
-│   ├── execution_context.py        # Execution context management
-│   ├── types.py                    # ActionResult and shared types
 │   ├── views.py                    # Controller view models
 │   └── registry/                   # Action registry system
 │       ├── service.py              # Registry service (validation + schema cache)
 │       ├── schema_generators.py    # Per-provider schema generation
-│       ├── schema_sanitizer.py     # sanitize_emitted_tools (hostile-schema fixups)
-│       └── views.py                # Registry views
+│       └── schema_sanitizer.py     # sanitize_emitted_tools (hostile-schema fixups)
 │
 └── dom/                            # DOM manipulation utilities
     ├── __init__.py
     ├── service.py                  # DOM service
-    ├── views.py                    # DOM view models
-    ├── buildDomTree.js             # DOM tree builder
-    └── history_tree_processor/     # History processing
-        ├── service.py
-        └── view.py
+    └── buildDomTree.js             # DOM tree builder
 ```
+
+The agent loop's own types are not here: `ActionResult` and the controller types,
+the execution context, and the browser, DOM, DOM-history and registry view models
+live in `agents/task/loop_types/` (`controller_types.py`, `execution_context.py`,
+`browser_views.py`, `dom_views.py`, `dom_history_service.py`, `dom_history_view.py`,
+`registry_views.py`).
 
 ## Core Tool Framework
 
@@ -355,7 +353,8 @@ Plus the extracted collaborators:
 - **`approval.py`** — `ApprovalProvider` ABC (`AutoApprover`/`DenyByDefaultApprover`) +
   `make_approval_hook`
 - **`delegation.py`** — `evaluate_delegation` pure role/depth policy
-- **`types.py`** — `ActionResult` and shared types; **`execution_context.py`** — execution context
+- `ActionResult` and the execution context live in `agents/task/loop_types/`
+  (`controller_types.py`, `execution_context.py`)
 
 > NOTE: the mixin modules deliberately do **NOT** use `from __future__ import annotations` — it
 > stringizes the action closures' first-param annotations, which the Registry introspects to route

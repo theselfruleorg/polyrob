@@ -194,26 +194,22 @@ class TwitterWhoamiAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-# Write actions gated behind TWITTER_ENABLED (reads + own-mentions/whoami stay on).
-_TWITTER_WRITE_ACTIONS = frozenset({
-    "twitter_post", "twitter_reply", "twitter_quote", "twitter_thread",
-    "twitter_delete_tweet", "twitter_like", "twitter_unlike", "twitter_retweet",
-    "twitter_unretweet", "twitter_follow", "twitter_unfollow", "twitter_mute",
-    "twitter_unmute", "twitter_block", "twitter_dm",
-})
+def _twitter_write_actions():
+    """Write actions gated behind TWITTER_ENABLED: every twitter verb whose pack.toml
+    row names an effect class (W4); reads and ``twitter_poll_results`` stay on."""
+    from polyrob.sdk import action_ids_where
+    return action_ids_where(tool="twitter",
+                            effect=lambda e: e not in ("none", "inherit"))
 
 _FALSEY = {"0", "false", "no", "off", ""}
 
 
 def twitter_write_enabled() -> bool:
     """Gate for the Twitter WRITE surface (default OFF; ON under effective
-    AUTONOMY_MODE=autonomous via _mode_capability_default). Explicit
-    TWITTER_ENABLED always wins over the mode default."""
-    raw = os.getenv("TWITTER_ENABLED")
-    if raw is not None:
-        return raw.strip().lower() not in _FALSEY
-    from core.config_policy import _mode_capability_default
-    return _mode_capability_default("TWITTER_ENABLED")
+    AUTONOMY_MODE=autonomous). A POLYROB_OVERRIDES entry wins over the mode
+    default; a direct TWITTER_ENABLED line is ignored (D7)."""
+    from polyrob.sdk import member_flag
+    return member_flag("TWITTER_ENABLED")
 
 
 class TwitterTool(BaseTool):
@@ -309,7 +305,8 @@ class TwitterTool(BaseTool):
         self.oauth2_access_token = fresh
         try:
             self.dm_client = tweepy.Client(bearer_token=fresh, wait_on_rate_limit=False)
-            from polyrob_x.x_chat_client import XChatClient
+            from polyrob_x.x_chat_client import XChatClient, close_replaced_chat_client
+            close_replaced_chat_client(getattr(self, "chat_client", None))
             self.chat_client = XChatClient(
                 fresh, private_keys_b64=self.chat_private_keys_b64,
                 key_version=self.chat_key_version, passphrase=self.chat_passphrase)
@@ -1582,8 +1579,8 @@ class TwitterTool(BaseTool):
         if execution_context is None:
             return None  # owner-direct / CLI / programmatic call
         try:
-            from tools.controller.action_registration import _is_forged_or_autonomous_turn
-            if not _is_forged_or_autonomous_turn(execution_context, self):
+            from polyrob.sdk import is_forged_or_autonomous_turn
+            if not is_forged_or_autonomous_turn(execution_context, self):
                 return None  # genuine owner-interactive turn: never gated
         except Exception:
             return None  # can't prove autonomous origin -> don't gate (fail-open, not a money verb)
@@ -1669,8 +1666,8 @@ class TwitterTool(BaseTool):
         if execution_context is None:
             return None  # owner-direct / CLI / programmatic call
         try:
-            from tools.controller.action_registration import _is_forged_or_autonomous_turn
-            if not _is_forged_or_autonomous_turn(execution_context, self):
+            from polyrob.sdk import is_forged_or_autonomous_turn
+            if not is_forged_or_autonomous_turn(execution_context, self):
                 return None
             from core.autonomy_control import allows
             dec = allows("social_post")
@@ -1691,17 +1688,13 @@ class TwitterTool(BaseTool):
         if execution_context is None:
             return True
         try:
-            from tools.controller.action_registration import _is_forged_or_autonomous_turn
-            if _is_forged_or_autonomous_turn(execution_context, self):
+            # W5: the ONE owner-turn definition and the shared taint view.
+            from polyrob.sdk import is_forged_or_autonomous_turn, is_owner_tenant, turn_tainted
+            if is_forged_or_autonomous_turn(execution_context, self):
                 return False
-            meta = getattr(execution_context, "metadata", None) or {}
-            if isinstance(meta, dict) and meta.get("untrusted_read"):
+            if turn_tainted(execution_context):
                 return False
-            from core.config_policy import local_mode_enabled
-            from core.instance import is_owner_local_safe, resolve_owner_principal
-            return is_owner_local_safe(getattr(execution_context, "user_id", None),
-                                       owner_principal=resolve_owner_principal(),
-                                       local_enabled=local_mode_enabled())
+            return is_owner_tenant(execution_context)
         except Exception:
             self.logger.debug("twitter owner-turn probe failed (not an owner turn)",
                               exc_info=True)
@@ -1717,27 +1710,28 @@ class TwitterTool(BaseTool):
         if execution_context is None:
             return False
         try:
-            if getattr(execution_context, "is_sub_agent", False) or \
-                    getattr(execution_context, "role", "leaf") == "leaf":
+            # W5: the ONE owner-turn definition and the shared taint view.
+            from polyrob.sdk import (forged_kind, is_leaf, is_owner_tenant, is_room_turn,
+                                     turn_tainted)
+            if is_leaf(execution_context):
                 return False
-            meta = getattr(execution_context, "metadata", None) or {}
-            if not isinstance(meta, dict) or meta.get("untrusted_read"):
+            if not isinstance(getattr(execution_context, "metadata", None), dict) or \
+                    turn_tainted(execution_context):
                 return False
-            from core.security.forged_turns import FORGED_TURN_KINDS
-            if meta.get("turn_kind") in FORGED_TURN_KINDS or meta.get("turn_kind") == "group":
+            if forged_kind(execution_context) or is_room_turn(execution_context):
                 return False
-            from agents.task.goals.autonomy_marker import owner_job_task_for_session
+            from core.autonomy_marker import owner_job_task_for_session
             if not owner_job_task_for_session(getattr(execution_context, "session_id", None)):
                 return False
-            from core.config_policy import local_mode_enabled
-            from core.instance import is_owner_local_safe, resolve_owner_principal
-            return is_owner_local_safe(getattr(execution_context, "user_id", None),
-                                       owner_principal=resolve_owner_principal(),
-                                       local_enabled=local_mode_enabled())
+            return is_owner_tenant(execution_context)
         except Exception:
             self.logger.debug("twitter standing-job probe failed (not an owner job)",
                               exc_info=True)
             return False
+
+    def _with_reason(self, text: str, execution_context) -> str:
+        from polyrob_x.gate_reason import with_reason
+        return with_reason(self, text, execution_context)
 
     @staticmethod
     def _human_provider(provider) -> bool:
@@ -1793,8 +1787,10 @@ class TwitterTool(BaseTool):
                     "owner_queue", user_id=getattr(execution_context, "user_id", None))
                 provider_name = "owner_queue"
                 if not self._human_provider(provider):
-                    return (f"Twitter write '{action_name}' blocked: it needs the owner's "
-                            "approval and no owner approval queue is available.")
+                    return self._with_reason(
+                        f"Twitter write '{action_name}' blocked: it needs the owner's "
+                        "approval and no owner approval queue is available.",
+                        execution_context)
             from tools.controller.approval import approval_wait_timeout_sec
             timeout = approval_wait_timeout_sec(provider_name)
             # The controller cuts every `twitter` action at its tool timeout (60s
@@ -1819,16 +1815,19 @@ class TwitterTool(BaseTool):
         except asyncio.TimeoutError:
             self.logger.info("twitter approval for %s: no owner answer in %ss", action_name,
                              timeout)
-            return (f"Twitter write '{action_name}' is waiting for the owner's approval: "
-                    f"the owner was asked (Telegram card / /pending) and did not answer "
-                    f"within {int(timeout)}s. Nothing was posted yet. If the owner approves "
-                    "later, exactly this post is sent once with this text (the job is "
-                    "not re-run). Tell the owner it is waiting; do not retry it.")
+            return self._with_reason(
+                f"Twitter write '{action_name}' is waiting for the owner's approval: "
+                f"the owner was asked (Telegram card / /pending) and did not answer "
+                f"within {int(timeout)}s. Nothing was posted yet. If the owner approves "
+                "later, exactly this post is sent once with this text (the job is "
+                "not re-run). Tell the owner it is waiting; do not retry it.",
+                execution_context)
         except Exception as e:  # provider error → fail-closed deny
             self.logger.warning(f"twitter approval denied (error) for {action_name}: {e}")
             approved = False
         if approved is not True:
-            return f"Twitter write '{action_name}' blocked: approval denied."
+            return self._with_reason(f"Twitter write '{action_name}' blocked: approval denied.",
+                                     execution_context)
         return None
 
     async def _precheck_write(self, action_name: str, params, execution_context,
@@ -1884,7 +1883,7 @@ class TwitterTool(BaseTool):
         rendered video the agent could already read fine via the filesystem tool.
         Raises RuntimeError with a clear, actionable message on any bad path
         (never silently drops a file)."""
-        from tools.controller.message_send import _resolve_session_workspace
+        from polyrob.sdk import resolve_session_workspace as _resolve_session_workspace
         from core.surfaces.attachments import validate_media_paths
 
         session_id = getattr(execution_context, "session_id", None) if execution_context else None
@@ -1964,23 +1963,9 @@ class TwitterTool(BaseTool):
         return self._tweet_from_response(resp)
 
     async def _resolve_user_id(self, user: str) -> Optional[str]:
-        """Return a numeric user id; pass digit strings through, else resolve username."""
-        if str(user).isdigit():
-            return str(user)
-        if getattr(self, "oauth2_access_token", None) and not self._oauth2_relogin_needed():
-            try:
-                resp = await self._make_request(
-                    func=(self.dm_client or self.client).get_user,
-                    endpoint_type="users", username=str(user).lstrip("@"),
-                    user_auth=False)
-                if resp and getattr(resp, "data", None):
-                    return str(resp.data.id)
-            except Exception:
-                self.logger.debug("OAuth2 username lookup failed", exc_info=True)
-        info = await self.get_user_by_identifier(user)
-        if info and info.get("id"):
-            return str(info["id"])
-        return None
+        """@handle -> numeric id (listing cache, dead-target skip): ``handle_ids``."""
+        from polyrob_x.handle_ids import resolve_user_id
+        return await resolve_user_id(self, user)
 
     @staticmethod
     def _split_tweet_text(text: str, limit: int = _TWEET_MAX) -> List[str]:
@@ -2053,7 +2038,7 @@ class TwitterTool(BaseTool):
         if not self._enabled:
             return self._err("Twitter service not available - missing credentials")
         if not twitter_write_enabled():
-            return self._err("Twitter write surface disabled (set TWITTER_ENABLED=true)")
+            return self._err("Twitter write surface disabled (set POLYROB_OVERRIDES=TWITTER_ENABLED=true)")
         if self.client is None:
             # Live-capability check, not just static config: a dead client used
             # to sail past this gate and surface as an untyped AttributeError
@@ -2422,6 +2407,10 @@ class TwitterTool(BaseTool):
             conversation_id = params.conversation_id
             participants = None
             if params.participant:
+                from polyrob_x.handle_ids import dead_handle_error
+                dead = dead_handle_error(self, "DM read", params.participant)
+                if dead:
+                    return self._err(dead)
                 uid = await self._resolve_user_id(params.participant)
                 if not uid:
                     return self._err(
@@ -2439,6 +2428,8 @@ class TwitterTool(BaseTool):
             raw = await chat.get_conversations(
                 max_results=params.max_results,
                 pagination_token=params.pagination_token)
+            from polyrob_x.handle_ids import remember_handles
+            remember_handles((raw.get("includes") or {}).get("users"))
             meta = dict(raw.get("meta") or {})
             payload = {
                 "source": "x_chat_api",
@@ -2511,6 +2502,10 @@ class TwitterTool(BaseTool):
             if params.pagination_token:
                 kwargs["pagination_token"] = params.pagination_token
             if params.participant:
+                from polyrob_x.handle_ids import dead_handle_error
+                dead = dead_handle_error(self, "DM read", params.participant)
+                if dead:
+                    return self._err(dead)
                 uid = await self._resolve_user_id(params.participant)
                 if not uid:
                     return self._err(
@@ -2593,7 +2588,7 @@ class TwitterTool(BaseTool):
         """
         actions = super().get_actions()
         if not twitter_write_enabled():
-            for name in _TWITTER_WRITE_ACTIONS:
+            for name in _twitter_write_actions():
                 actions.pop(name, None)
         return actions
 
@@ -2762,7 +2757,7 @@ class TwitterTool(BaseTool):
             metadata.setdefault("fallback", self.CREDIT_402_FALLBACK)
         try:
             # Import ActionResult from canonical location
-            from tools.controller.types import ActionResult
+            from agents.task.loop_types.controller_types import ActionResult
             return ActionResult(
                 extracted_content=extracted_content,
                 error=error,
@@ -2798,15 +2793,16 @@ async def send_approved(tool_name: str, params: dict, task_agent=None):
     passed, because this IS the owner's approval. The job that asked is never
     re-run (prod 2026-10-08: that re-ran a buyback's swap to redeem one post)."""
     model = globals()[_LATE_MODELS[tool_name]]
-    from cron.delivery import _config_and_container
-    config, container = _config_and_container(task_agent)
-    from polyrob_x.cron_delivery import _build_twitter_tool
-    tool = _build_twitter_tool(config, container)
+    from polyrob.sdk import delivery_config_and_container
+    config, container = delivery_config_and_container(task_agent)
+    from polyrob_x.cron_delivery import build_ready_twitter_tool, close_quietly
+    tool = await build_ready_twitter_tool(config, container)
     token = _OWNER_APPROVED_ACTION.set(tool_name)
     try:
         res = await getattr(tool, tool_name)(model(**params), execution_context=None)
     finally:
         _OWNER_APPROVED_ACTION.reset(token)
+        await close_quietly(tool)
     err = getattr(res, "error", None)
     if err:
         return False, str(err)

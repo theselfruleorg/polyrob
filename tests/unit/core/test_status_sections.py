@@ -97,11 +97,13 @@ def test_moved_builders_stay_importable_from_the_snapshot():
     import core.status_money as M
     import core.status_room_actions as R
     import core.status_snapshot as ss
-    for name in ("_wallet_section", "_positions_line", "_money_section", "CREATION_VERBS",
-                 "_creations_section", "moves_section", "NFT_MOVE_VERBS",
-                 "_collectibles_section"):
+    for name in ("_positions_line", "_money_section", "CREATION_VERBS",
+                 "_creations_section", "moves_section", "_collectibles_section"):
         assert getattr(ss, name) is getattr(M, name), name
-    assert ss._room_actions_section is R._room_actions_section
+    # W9: the three re-export rows nobody read through the snapshot are gone.
+    for name in ("_wallet_section", "NFT_MOVE_VERBS"):
+        assert not hasattr(ss, name), name
+    assert not hasattr(ss, "_room_actions_section") and R._room_actions_section
     with pytest.raises(AttributeError):
         ss.no_such_name  # noqa: B018
 

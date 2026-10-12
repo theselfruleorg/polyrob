@@ -204,7 +204,7 @@ Memory system managing conversation context, user profiles, and cross-session re
 >   keyword+vector search, kept inside the same `memory.db` (no external vector service).
 >
 > These plug in behind the `MemoryProvider` seam (`provider.py` / `registry.py` /
-> `backend_factory.py`). See ../AGENTS.md (Memory System) for the full provider story.
+> `backend_factory.py`). The user-facing settings are in ../docs/guide/configuration.md (`MEMORY_BACKEND`).
 
 #### MemoryManager (`memory_manager.py`)
 
@@ -388,13 +388,12 @@ trustless agent discovery and trust — letting agents discover, choose, and int
 other agents across organizational boundaries without pre-existing trust. It layers on top
 of existing agent protocols (A2A, MCP).
 
-- **Decentralized identity** — NFT-based (ERC-721) agent identity on any EVM chain (`registration.py`)
-- **Portable reputation** — on-chain feedback scores that follow agents across platforms (`reputation.py`)
-- **Pluggable trust** — reputation, crypto-economic, or TEE validation (`validation.py`)
-- **Smart-contract interfaces / ABIs** — `contracts.py`; data models in `models.py`
+- **Registration file** — the ERC-8004 `tokenURI` target, served at `/eip8004/registration.json` (`registration.py`)
+- **Feedback grants** — EIP-712-signed, one-use (`reputation.py`, `feedback_replays.py`); the reputation store itself is an in-memory simulation
+- **Validation** — an in-memory simulation (`validation.py`); `contracts.py` is ABI reference with no caller
 
-See [modules/eip8004/README.md](eip8004/README.md) for the full specification, the three
-registries, configuration, and trust-flow examples.
+The on-chain identity mint lives in `core/wallet/erc8004.py` and the DeFi tool, not here.
+See [modules/eip8004/README.md](eip8004/README.md) for the status of each part.
 
 ## Module Initialization System
 

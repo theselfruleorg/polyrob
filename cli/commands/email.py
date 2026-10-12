@@ -8,6 +8,7 @@ parties via the email tool; their replies flow back here.
 Credentials: the existing gmail_email / gmail_app_password config (~/.polyrob/.env or
 config/.env.*). Nothing is committed.
 """
+from core.runtime_paths import correspondents_db_path
 import asyncio
 import logging
 import os
@@ -69,7 +70,7 @@ async def _run_email(poll_opt: Optional[int], verbose: bool):
             if container.get_service("correspondent_registry") is None:
                 container.register_service(
                     "correspondent_registry",
-                    CorrespondentRegistry(os.path.join(data_dir, "correspondents.db")),
+                    CorrespondentRegistry(correspondents_db_path(data_dir)),
                 )
         except Exception as e:
             click.echo(click.style("[polyrob] WARN: ", fg="yellow")
@@ -109,6 +110,7 @@ async def _run_email(poll_opt: Optional[int], verbose: bool):
         return SurfaceJob(harness=harness, run=harness.run_polling, announce=_announce)
 
     await run_surface(
+        surface_id="email",
         extra_env={"EMAIL_SURFACE_ENABLED": "true",
                    "CORRESPONDENT_ACCESS_ENABLED": "true"},
         verbose=verbose,

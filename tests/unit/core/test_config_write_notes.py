@@ -58,10 +58,10 @@ def _write_global(key, value):
 
 
 def test_process_env_divergence_notes(monkeypatch):
-    _write_global("GOALS_ENABLED", "true")
-    monkeypatch.setenv("GOALS_ENABLED", "false")
-    notes = post_write_notes("GOALS_ENABLED", "true", "global")
-    assert any("this process started with GOALS_ENABLED=false" in n
+    _write_global("TOOL_AVAILABILITY_HINT", "true")
+    monkeypatch.setenv("TOOL_AVAILABILITY_HINT", "false")
+    notes = post_write_notes("TOOL_AVAILABILITY_HINT", "true", "global")
+    assert any("this process started with TOOL_AVAILABILITY_HINT=false" in n
                for n in notes)
 
 

@@ -13,7 +13,7 @@ call site. This is the framework-level backstop: for a MONEY tool (the
 an empty result must be reported as "no output", never as success, so the next
 money tool that returns empty on a non-error path cannot recreate the incident.
 """
-from tools.controller.types import ActionResult
+from agents.task.loop_types.controller_types import ActionResult
 from agents.task.agent.core.result_processing import _pair_results_to_calls
 
 

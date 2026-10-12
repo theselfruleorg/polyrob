@@ -46,7 +46,7 @@ def test_grep_completeness_surfaces_and_hf_deploy():
     tools/hf_deploy/ must be in the manifest — the exact pattern that produced
     both prior generations of this bug."""
     found = set()
-    for sub in ("surfaces", "core/surfaces", "tools/hf_deploy", "agents", "core", "cli", "modules", "tools"):
+    for sub in ("surfaces", "core/surfaces", "tools/hf_deploy", "agents", "core", "polyrob", "cli", "modules", "tools"):
         for py in (REPO / sub).rglob("*.py"):
             found |= set(_DB_LITERAL.findall(
                 py.read_text(encoding="utf-8", errors="replace")))

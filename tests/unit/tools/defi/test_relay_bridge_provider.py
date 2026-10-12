@@ -157,3 +157,57 @@ def test_status_details_cannot_forge_output_lines():
     assert state == "pending"
     assert detail.startswith("provider detail:")
     assert "\n" not in detail and "\x1b" not in detail and len(detail) < 200
+
+
+BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+DEPOSITORY = "0x4cd00e387622c35bddb9b4c962c136462338bc31"
+
+
+def _erc20_body(spender=DEPOSITORY, approve_to=BASE_USDC):
+    approve_data = "0x095ea7b3" + "0" * 24 + spender[2:].lower() + "0" * 58 + "4c4b40"
+    return {
+        "requestId": "0xusdc",
+        "details": {
+            "sender": EVM, "recipient": SOL,
+            "currencyIn": {"amount": "5000000", "amountUsd": "5.0",
+                           "currency": {"chainId": 8453, "address": BASE_USDC,
+                                        "symbol": "USDC", "decimals": 6}},
+            "currencyOut": {"amount": "4990000", "amountUsd": "4.99",
+                            "currency": {"chainId": SOLANA, "address": SOL_USDC,
+                                         "symbol": "USDC", "decimals": 6}},
+            "slippageTolerance": {"destination": {"value": "10000"}},
+            "totalImpact": {"percent": "-0.2"}, "timeEstimate": 2,
+        },
+        "steps": [
+            {"id": "approve", "items": [{"data": {
+                "to": approve_to, "data": approve_data, "value": "0", "chainId": 8453}}]},
+            {"id": "deposit", "items": [{"data": {
+                "to": DEPOSITORY, "data": "0xe8017952", "value": "0", "chainId": 8453}}]},
+        ],
+    }
+
+
+def _ask_usdc(body):
+    return _ask(_provider(body), origin_chain_id=8453, dest_chain_id=SOLANA,
+                origin_currency=BASE_USDC, dest_currency=SOL_USDC,
+                amount_in_raw=5_000_000, sender=EVM, recipient=SOL)
+
+
+def test_an_erc20_origin_keeps_the_deposit_and_only_reads_the_approve():
+    q = _ask_usdc(_erc20_body())
+    assert q.tx_data["to"] == DEPOSITORY
+    assert q.approve_spender.lower() == DEPOSITORY
+
+
+def test_an_approve_step_on_another_token_is_refused():
+    with pytest.raises(RelayError, match="approve"):
+        _ask_usdc(_erc20_body(approve_to="0x4200000000000000000000000000000000000006"))
+
+
+def test_a_native_origin_never_accepts_two_steps():
+    body = _quote_body()
+    body["steps"] = body["steps"] * 2
+    body["steps"][0]["id"] = "approve"
+    with pytest.raises(RelayError, match="2 steps"):
+        _ask(_provider(body))

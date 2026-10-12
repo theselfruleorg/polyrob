@@ -26,7 +26,6 @@ def captured(monkeypatch):
     monkeypatch.setattr(
         "agents.task.telemetry.service.emit_feed_event", events.append
     )
-    monkeypatch.delenv("RUN_EVENTS_ENABLED", raising=False)
     return events
 
 
@@ -81,19 +80,10 @@ async def test_no_session_id_emits_nothing(captured):
 
 
 @pytest.mark.asyncio
-async def test_flag_off_emits_nothing(captured, monkeypatch):
-    monkeypatch.setenv("RUN_EVENTS_ENABLED", "off")
-    hook = make_approval_hook(AutoApprover(), {"run_code"})
-    assert await hook("run_code", {}, _ctx()) is None
-    assert captured == []
-
-
-@pytest.mark.asyncio
 async def test_emit_failure_never_breaks_the_hook(monkeypatch):
     def _boom(_event):
         raise RuntimeError("emitter down")
 
     monkeypatch.setattr("agents.task.telemetry.service.emit_feed_event", _boom)
-    monkeypatch.delenv("RUN_EVENTS_ENABLED", raising=False)
     hook = make_approval_hook(AutoApprover(), {"run_code"})
     assert await hook("run_code", {}, _ctx()) is None  # still allows

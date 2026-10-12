@@ -263,18 +263,28 @@ same signals the production deployer reads — a live turn, a running goal, a cr
 job running or due within two minutes, the workspace lock — and waits, printing
 what it is waiting on, up to `--wait-idle SECONDS` (default 1800). Still busy
 after that: it refuses and names the reason. `--no-wait` refuses at once;
-`--force` swaps under a busy agent anyway. After a successful `--apply` it names
-what is still running the OLD code — the background service, any `polyrob*`
-system unit, and any live REPL or chat surface. A resident server process is a
-different matter: waiting never ends it, so the update still refuses there and
-prints the stop/start steps for your units. Other options: `--channel
-stable|pre|git`, `-y/--yes`, `--json`.
+`--force` swaps under a busy agent anyway.
+
+**With the background service running, it goes through the service.** The service
+finishes its current work, restarts, and applies the update as it starts —
+snapshot, install, migrate, verify, then the new version — and `--apply` waits for
+its report (`✓ Updated and back online on 1.4.0`). A failed step, or a new
+version that does not start, rolls back. `--no-restart` keeps the old behaviour:
+refuse while a server process runs. With no service running it updates directly
+and then names what still runs the OLD code (`polyrob service restart`, any
+`polyrob*` system unit, a live REPL). Other options: `--channel stable|pre|git`,
+`-y/--yes`, `--json`. The full story, and `/update` from chat:
+[operate-the-service.md](operate-the-service.md).
 
 ### `polyrob service` — keep it running
 
 ```bash
 polyrob service install     # systemd user unit (Linux) or launchd agent (macOS)
-polyrob service status      # installed? running? which surfaces would start?
+polyrob service status      # running version vs disk, open restart, waiting settings
+polyrob service restart     # finish the current work, restart, report the version
+polyrob service restart --now        # restart at once
+polyrob service start | stop [--now]
+polyrob service logs [-f] [-n 100]
 polyrob service uninstall
 ```
 
@@ -282,6 +292,14 @@ Runs `polyrob gateway`, so every enabled surface starts from one unit. On Linux
 `loginctl enable-linger $USER` keeps a user unit alive after you log out. The
 unit pins `POLYROB_HOME` (and the active profile) explicitly, because a systemd
 user unit inherits nothing from your shell.
+
+`restart` asks the running service to finish its work (up to `--wait-idle
+SECONDS`, default 600), exit with code 75 — the unit's `RestartForceExitStatus=75`
+starts it again — and report back; busy past the wait, nothing restarts and the
+reason is printed. `stop` lets a live turn finish (up to 60 s). As root, every verb
+acts as the user that owns the service (`--user NAME` when several do), with the
+user bus filled in. `/restart` and `/update` do the same from chat:
+[operate-the-service.md](operate-the-service.md).
 
 ### `polyrob uninstall`
 
@@ -539,7 +557,7 @@ polyrob wallet export             # reveal the seed and per-venue keys — TTY o
 polyrob wallet overview           # identities, cached balances, limits, unresolved sends (--json)
 polyrob wallet book               # the ledger against every money chain
 polyrob wallet set-cap daily|per-tx USD [--env]
-polyrob wallet bridge <from> <to> <amount> [--execute] [--token-out native]
+polyrob wallet bridge <from> <to> <amount> [--execute] [--token-in native|usdc] [--token-out native]
 polyrob wallet bridges            # bridges not yet proven to have arrived
 polyrob wallet deploy-token SYMBOL SUPPLY NAME… [--chain base|solana] [--execute]
 polyrob wallet launch SYMBOL NAME… [--buy 0.1] [--logo URL] [--execute]
@@ -792,6 +810,8 @@ Inside the REPL every command starts with `/`. `/help` lists them grouped;
 | `/run [pause\|resume\|stop <n>]` | What runs in the background now, numbered; pause, resume or stop one run |
 | `/mode` | The effective autonomy posture, and how to change it |
 | `/dev <text>` | Message the on-host dev and ops loop directly |
+| `/restart [now]` | Restart the background service once its current work is done (`now`: at once); it reports its version when back. Confirmed with a card |
+| `/update [pre]` | Update the background service to the latest release: restart, snapshot, install, migrate, verify, rollback on failure; it reports how it went. Confirmed with a card |
 
 **remember**
 

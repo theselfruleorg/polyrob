@@ -42,7 +42,7 @@ _NEVER_LIVE_SEGMENTS: FrozenSet[str] = frozenset({
     "WEBHOOK", "INBOUND", "GATEWAY",
 })
 _NEVER_LIVE_EXACT: FrozenSet[str] = frozenset({
-    "AUTONOMY_MODE", "POLYROB_LOCAL", "ROB_LOCAL", "POLYROB_OWNER_USER_ID",
+    "AUTONOMY_MODE", "POLYROB_LOCAL", "POLYROB_OWNER_USER_ID",
     "AGENT_COMPUTE_POSTURE", "OUTBOUND_POLICY",
     # the cross-chain bridge (a "continuity bridge" is a memory feature, so the
     # segment alone cannot decide it)

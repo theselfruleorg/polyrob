@@ -47,7 +47,17 @@ loop, several front doors — each surface adapts inbound/outbound to the SAME
 - `polyrob goals` / `polyrob subagents` / `polyrob todos` — autonomy/
   delegation/workspace-todo admin.
 - `polyrob update --check|--dry-run|--apply|--rollback` — self-update with
-  snapshot + guarded migration + auto-rollback.
+  snapshot + guarded migration + auto-rollback. With the background service
+  running, `--apply` goes through it: drain, restart, apply before start,
+  report (`--no-restart` refuses instead).
+- `polyrob service install|status|start|stop|restart|logs|uninstall` — the
+  background service. `restart` asks it to finish its current work (up to
+  `--wait-idle`, default 600 s), exit 75 (the unit's `RestartForceExitStatus=75`
+  starts it again) and report its version; busy past the wait, nothing
+  restarts. `--now` cuts the work. As root, it acts as the user that owns the
+  service (`--user NAME` when several do). Chat twins: `/restart [now]`,
+  `/update [pre]` — owner-only, room-refused, confirmed with a card, answered
+  in the same chat when the service is back.
 
 ## Chat surfaces (Telegram, WhatsApp, Discord, Slack, Signal, X DMs, Email)
 

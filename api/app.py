@@ -5,6 +5,7 @@ Serves AutoV2 HTTP API endpoints.
 
 import hmac
 import os
+from core.env import bool_env
 import sys
 from core.security.session_tokens import decode_session_token
 
@@ -20,7 +21,6 @@ from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 import time
 from datetime import datetime
-from dotenv import load_dotenv
 
 # Set up project root
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -46,12 +46,12 @@ from core.exceptions import AuthError, InsufficientCreditsError
 from core.logging import setup_logging, get_component_logger
 from core.version import get_version
 
-# core.bot.Bot pulls core.initialization (the entire agent/LLM/embedder stack). It is only
+# polyrob.app.bot.Bot pulls polyrob.app.initialization (the entire agent/LLM/embedder stack). It is only
 # needed inside the lifespan (which builds the bot via build_server_bot), so it must NOT be
 # imported at module load — that dragged torch/SDKs/agents into every `import api.app`
 # (every uvicorn worker boot) — P0-S, 2026-06-26 runtime-architecture finalization.
 if TYPE_CHECKING:
-    from core.bot import Bot as CoreBot
+    from polyrob.app.bot import Bot as CoreBot
 
 # Import Task HTTP router
 from api.task_http_api import router as task_router
@@ -161,7 +161,7 @@ async def lifespan(app: FastAPI):
         # Initialize bot and container via shared bootstrap.
         # build_server_bot adds phase-6 server services (auth, billing,
         # payments) on top of the core phases 1-5 that build_bot does.
-        from core.bootstrap import build_server_bot
+        from polyrob.app.bootstrap import build_server_bot
         bot = await build_server_bot()
 
         app_state["config"] = bot.container.config
@@ -227,7 +227,7 @@ async def lifespan(app: FastAPI):
                     "the same data dir. Set API_AUTONOMY_RUNTIME=false on the "
                     "multi-worker processes and run the loops in exactly one."
                 )
-            from core.autonomy_runtime import start_autonomy
+            from polyrob.app.autonomy_runtime import start_autonomy
             autonomy_data_dir = getattr(bot.container.config, "data_dir", "data")
             autonomy_handles = start_autonomy(
                 task_agent=bot.container.get_agent("task_agent"),
@@ -582,7 +582,7 @@ def create_app() -> FastAPI:
     app_state["logger"] = logger
 
     # Load environment via shared bootstrap
-    from core.bootstrap import load_env
+    from polyrob.app.bootstrap import load_env
     env = load_env()
     logger.info(f"Using configuration environment: {env}")
 
@@ -1124,6 +1124,6 @@ if __name__ == "__main__":
         "api.app:get_app",
         host="127.0.0.1",
         port=9000,
-        reload=os.environ.get("UVICORN_RELOAD", "false").lower() == "true",
+        reload=bool_env("UVICORN_RELOAD", False),
         factory=True
     )

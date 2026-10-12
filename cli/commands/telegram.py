@@ -91,6 +91,7 @@ async def _run_telegram(token_opt: Optional[str], verbose: bool):
                           announce=_announce, on_stop=_halt)
 
     await run_surface(
+        surface_id="telegram",
         extra_env={"TELEGRAM_SURFACE_ENABLED": "true"},
         verbose=verbose,
         resolve_credentials=lambda: resolve_telegram_token(token_opt),

@@ -792,7 +792,7 @@ class TestServerByteIdentical:
         monkeypatch.delenv("POLYROB_LOCAL", raising=False)
         monkeypatch.delenv("PROJECT_CONTEXT_AUTOLOAD", raising=False)
 
-        from agents.task.constants import AutonomyConfig, local_mode_enabled
+        from core.config_policy import AutonomyConfig, local_mode_enabled
 
         assert not local_mode_enabled()
         # With local_mode_enabled() == False, the gate is False regardless of flag.
@@ -803,11 +803,11 @@ class TestServerByteIdentical:
         monkeypatch.setenv("POLYROB_LOCAL", "1")
         monkeypatch.setenv("PROJECT_CONTEXT_AUTOLOAD", "false")
 
-        from agents.task.constants import AutonomyConfig, local_mode_enabled
+        from core.config_policy import AutonomyConfig, local_mode_enabled
         import importlib
         import agents.task.constants as cts
         importlib.reload(cts)  # reload to pick up env changes
-        from agents.task.constants import AutonomyConfig as AC2, local_mode_enabled as lme2
+        from core.config_policy import AutonomyConfig as AC2, local_mode_enabled as lme2
 
         assert lme2()
         assert not AC2.project_context_autoload()
@@ -820,7 +820,7 @@ class TestServerByteIdentical:
         import importlib
         import agents.task.constants as cts
         importlib.reload(cts)
-        from agents.task.constants import AutonomyConfig as AC3, local_mode_enabled as lme3
+        from core.config_policy import AutonomyConfig as AC3, local_mode_enabled as lme3
 
         assert lme3()
         assert AC3.project_context_autoload()

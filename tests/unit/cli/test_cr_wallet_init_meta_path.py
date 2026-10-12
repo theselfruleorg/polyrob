@@ -28,7 +28,7 @@ def test_init_without_data_dir_writes_meta_under_wallet_dir(tmp_path, monkeypatc
     pytest.importorskip("eth_account")
     home = tmp_path / "datahome"
     home.mkdir()
-    monkeypatch.setattr("core.bootstrap.load_env", lambda *a, **k: None)
+    monkeypatch.setattr("polyrob.app.bootstrap.load_env", lambda *a, **k: None)
     monkeypatch.setattr("cli._admin_home.admin_data_dir", lambda **k: str(home))
     result = CliRunner().invoke(wallet_cmd, ["init", "--yes", "--home", str(tmp_path)])
     assert result.exit_code == 0, result.output

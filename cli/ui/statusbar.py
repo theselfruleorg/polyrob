@@ -83,7 +83,7 @@ def _activity_segment(state: SessionState) -> str:
     (``→navigate 43s``), the thinking marker (``✱ thinking 8s``), or the
     blocked-approval marker (``⏸ approval: send_email /pending``). Falls back
     to the legacy last-completed tool (``→read_file``) when no span event has
-    arrived (old feeds / RUN_EVENTS_ENABLED=off — byte-identical).
+    arrived (old feeds — byte-identical).
     """
     if not _is_active(state):
         return ""

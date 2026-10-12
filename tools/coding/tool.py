@@ -277,12 +277,12 @@ class CodingTool(BaseTool):
 
     @staticmethod
     def _ok(content, metadata: Optional[dict] = None):
-        from tools.controller.types import ActionResult
+        from agents.task.loop_types.controller_types import ActionResult
         return ActionResult(extracted_content=content, metadata=metadata)
 
     @staticmethod
     def _err(msg):
-        from tools.controller.types import ActionResult
+        from agents.task.loop_types.controller_types import ActionResult
         return ActionResult(error=msg)
 
     async def _with_diagnostics(self, msg: str, target: str, root: str) -> str:
@@ -326,7 +326,7 @@ class CodingTool(BaseTool):
         state. The safety basis is therefore NOT physical separation but:
         (a) the shadow git dir is named ``git``, not ``.git``, so git repo
         auto-discovery in the workspace never picks it up; (b) ``.polyrob/`` is
-        auto-gitignored (``core/bootstrap.py``, default-on), so the developer's
+        auto-gitignored (``polyrob/app/bootstrap.py``, default-on), so the developer's
         own repo never tracks it; (c) every shadow-git call passes an explicit
         ``--git-dir`` (``tools/coding/snapshot.py``), so the workspace's own
         ``.git`` is never touched; (d) only the single touched file is ever

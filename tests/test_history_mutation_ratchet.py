@@ -17,6 +17,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from tests.support.repo_index import repo_index
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # The verbs that cut the deque out from under a cached prefix.
@@ -37,14 +39,6 @@ ALLOWED: dict[str, tuple[int, str]] = {
 	"agents/task/agent/messages/persistence.py": (
 		1,
 		"restore from message_history.json replaces the whole deque",
-	),
-	"agents/task/agent/messages/retrieval.py": (
-		2,
-		"remove_last_state_message (tagged + legacy shape fallback) — reachable ONLY "
-		"on the STATE_MESSAGE_EPHEMERAL=false path. Under the default the state "
-		"message rides the one-shot ephemeral rail, never enters history, and the "
-		"method returns before either cut (F16(ii), 2026-09-23). Both lines go when "
-		"the flag is retired a minor release later",
 	),
 	"agents/task/agent/message_manager/service.py": (
 		1,
@@ -70,7 +64,7 @@ def _scan() -> dict[str, int]:
 		if rel in _DEFINITION_SITES:
 			continue
 		try:
-			text = path.read_text(encoding="utf-8", errors="ignore")
+			text = repo_index().text(path, errors="ignore")
 		except OSError:
 			continue
 		hits = sum(len(p.findall(text)) for p in _PATTERNS)

@@ -59,7 +59,7 @@ def trust_project_skills_effective() -> bool:
     from agents.task import constants
     if not constants.local_mode_enabled():
         return False
-    from agents.task.constants import _bool_env
+    from core.config_policy import _bool_env
     return _bool_env("POLYROB_TRUST_PROJECT_SKILLS", True)
 
 

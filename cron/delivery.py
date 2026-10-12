@@ -456,7 +456,7 @@ def _delivery_context(job: Any) -> Any:
     forged self-wake / delegation-result kinds), so every gate keyed on turn
     origin — the repeat-post cooldown, the approval lane, the 031 pause gate —
     treats it as autonomous rather than as a genuine owner turn."""
-    from tools.controller.execution_context import ActionExecutionContext
+    from agents.task.loop_types.execution_context import ActionExecutionContext
     return ActionExecutionContext(
         session_id=str(getattr(job, "session_id", "") or ""),
         user_id=str(getattr(job, "user_id", "") or ""),

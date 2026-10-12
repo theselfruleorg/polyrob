@@ -58,6 +58,7 @@ async def _run_slack(bot_opt, app_opt, verbose: bool):
         return SurfaceJob(harness=harness, run=harness.run, announce=_announce)
 
     await run_surface(
+        surface_id="slack",
         extra_env={"SLACK_SURFACE_ENABLED": "true"},
         verbose=verbose,
         resolve_credentials=lambda: resolve_slack_tokens(bot_opt, app_opt),

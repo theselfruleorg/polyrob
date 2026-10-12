@@ -55,8 +55,14 @@ def build_mcp_child_env(configured: Optional[Dict[str, object]] = None) -> Dict[
     """
     env: Dict[str, str] = {k: os.environ[k] for k in MCP_ENV_ALLOWLIST
                            if k in os.environ}
+    from core.security.custody_env import CUSTODY_SECRET_ENV, custody_secret
+    held = {v for v in (custody_secret(n) for n in CUSTODY_SECRET_ENV) if v}
     for key, value in (configured or {}).items():
         if value is None:
+            continue
+        # D1 (2026-10-10): stdio MCP runs beside the wallet, so a custody secret
+        # never reaches it — not by name, not as a `${VAR}`-resolved value.
+        if str(key) in CUSTODY_SECRET_ENV or str(value) in held:
             continue
         env[str(key)] = str(value)
     from core.security.agent_child import mark_agent_child

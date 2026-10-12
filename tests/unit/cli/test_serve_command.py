@@ -22,7 +22,7 @@ def test_serve_invokes_uvicorn(monkeypatch):
     # Deterministic preflight: a valid key present + no dependency on the machine's
     # config/.env (serve now gates on usable_providers_with_keys, so a valid-length
     # key is required to reach uvicorn).
-    monkeypatch.setattr("core.bootstrap.load_env", lambda **k: None)
+    monkeypatch.setattr("polyrob.app.bootstrap.load_env", lambda **k: None)
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-" + "a" * 32)
 
     from cli.commands.serve import serve
@@ -40,7 +40,7 @@ def test_serve_invokes_uvicorn(monkeypatch):
 def test_serve_rejects_malformed_key(monkeypatch):
     """A present-but-too-short key must NOT pass serve's preflight (it would boot
     uvicorn then crash in the lifespan). serve exits 1 without launching."""
-    monkeypatch.setattr("core.bootstrap.load_env", lambda **k: None)
+    monkeypatch.setattr("polyrob.app.bootstrap.load_env", lambda **k: None)
     for k in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
               "OPENROUTER_API_KEY", "NVIDIA_API_KEY", "DEEPSEEK_API_KEY"):
         monkeypatch.delenv(k, raising=False)
@@ -77,7 +77,7 @@ def test_serve_gate_reachable_without_repo_root_main(monkeypatch):
     import sys as _sys
 
     monkeypatch.setitem(_sys.modules, "main", None)  # simulate: main.py absent
-    monkeypatch.setattr("core.bootstrap.load_env", lambda **k: None)
+    monkeypatch.setattr("polyrob.app.bootstrap.load_env", lambda **k: None)
     for k in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
               "OPENROUTER_API_KEY", "NVIDIA_API_KEY", "DEEPSEEK_API_KEY"):
         monkeypatch.delenv(k, raising=False)
@@ -99,7 +99,7 @@ def test_serve_boots_without_repo_root_main(monkeypatch):
     calls = {}
     monkeypatch.setitem(_sys.modules, "main", None)
     monkeypatch.setattr("uvicorn.run", lambda target, *a, **k: calls.setdefault("target", target))
-    monkeypatch.setattr("core.bootstrap.load_env", lambda **k: None)
+    monkeypatch.setattr("polyrob.app.bootstrap.load_env", lambda **k: None)
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-" + "a" * 32)
 
     from cli.commands.serve import serve

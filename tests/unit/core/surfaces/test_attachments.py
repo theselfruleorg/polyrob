@@ -196,7 +196,6 @@ def test_a_raising_scanner_does_not_report_a_threat(tmp_path, monkeypatch):
     `injection_flagged` event because the scanner itself fell over."""
     db = tmp_path / "telemetry_events.db"
     monkeypatch.setenv("TELEMETRY_EVENT_LOG_PATH", str(db))
-    monkeypatch.setenv("SECURITY_EVENT_LOG_ENABLED", "true")
     monkeypatch.setenv("TELEMETRY_EVENT_LOG_ENABLED", "true")
     import core.event_log as el
     el._INSTANCES.clear()

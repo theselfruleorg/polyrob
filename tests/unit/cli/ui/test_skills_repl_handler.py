@@ -130,7 +130,7 @@ def test_skills_remove_not_found_is_graceful(monkeypatch):
 
 
 def test_skills_install_refuses_when_not_local(monkeypatch):
-    monkeypatch.setattr("agents.task.constants.local_mode_enabled", lambda: False)
+    monkeypatch.setattr("core.config_policy.local_mode_enabled", lambda: False)
 
     def _boom(*a, **k):
         raise AssertionError("dispatch_install must not be called when not local")
@@ -143,7 +143,7 @@ def test_skills_install_refuses_when_not_local(monkeypatch):
 
 
 def test_skills_install_dispatches_when_local(monkeypatch):
-    monkeypatch.setattr("agents.task.constants.local_mode_enabled", lambda: True)
+    monkeypatch.setattr("core.config_policy.local_mode_enabled", lambda: True)
     calls = {}
 
     def fake_dispatch_install(spec, *, user_id, trust="prompt", ref=None):
@@ -166,7 +166,7 @@ def test_skills_install_dispatches_when_local(monkeypatch):
 
 
 def test_skills_approve_refuses_when_not_local(monkeypatch):
-    monkeypatch.setattr("agents.task.constants.local_mode_enabled", lambda: False)
+    monkeypatch.setattr("core.config_policy.local_mode_enabled", lambda: False)
 
     def _boom(*a, **k):
         raise AssertionError("_approve must not be called when not local")
@@ -179,7 +179,7 @@ def test_skills_approve_refuses_when_not_local(monkeypatch):
 
 
 def test_skills_approve_dispatches_when_local(monkeypatch):
-    monkeypatch.setattr("agents.task.constants.local_mode_enabled", lambda: True)
+    monkeypatch.setattr("core.config_policy.local_mode_enabled", lambda: True)
     calls = []
 
     def fake_approve(name, *, user_id, source="local", resolved_sha=None):

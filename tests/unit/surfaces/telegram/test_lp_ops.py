@@ -49,3 +49,22 @@ def test_cli_help_and_no_implicit_broadcast(monkeypatch):
     result = runner.invoke(lp_cmd, ['collect', '42'])
     assert result.exit_code == 0, result.output
     assert seen[0][0] and seen[0][2]['dry_run'] is True
+
+
+@pytest.mark.asyncio
+async def test_lp_seat_runs_the_policy_chain(monkeypatch):
+    """W5: /lp cannot bypass the operator denylist an agent call meets."""
+    monkeypatch.setenv('POLYROB_TOOL_DENYLIST', 'defi_trade_lp_collect')
+    from tools.defi import trade_tool as T
+    called = []
+
+    async def _collect(self, params, ctx):
+        called.append(ctx)
+        return SimpleNamespace(error=None, extracted_content='collected')
+    monkeypatch.setattr(T.DefiTradeTool, 'lp_collect', _collect)
+    out = await L.dispatch('owner', 'collect', {'token_id': 1, 'chain': 'base'})
+    assert 'denylist' in (out.error or '') and called == []
+    monkeypatch.setenv('POLYROB_TOOL_DENYLIST', '')
+    out = await L.dispatch('owner', 'collect', {'token_id': 1, 'chain': 'base'})
+    assert out.extracted_content == 'collected'
+    assert called[0].metadata['turn_kind'] == 'owner_seat'

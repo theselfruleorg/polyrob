@@ -222,6 +222,19 @@ class SelfContextWriter:
         """The length the char cap is measured on (the whole body by default)."""
         return len(body)
 
+    def _cap_detail(self, body: str) -> str:
+        """Extra words for the over-cap error (none by default)."""
+        return ""
+
+    #: What a patch may edit, named in its errors.
+    _PATCH_SCOPE = "the doc"
+
+    def _patch_split(self, text: str):
+        """``(editable, frozen)`` with ``editable + frozen == text``. A patch
+        matches and replaces inside ``editable`` only. The whole doc by default;
+        the owner RULES doc freezes its ``## Superseded`` history."""
+        return text, ""
+
     def propose(self, content: str, *, user_id: str,
                 created_by: str = PROVENANCE_AGENT,
                 pending: Optional[bool] = None,
@@ -258,7 +271,8 @@ class SelfContextWriter:
         capped = self._capped_len(body)
         if capped > self._MAX_CHARS:
             return SelfContextWriteResult(False, errors=[
-                f"{self._CAP_NOUN} is {capped}/{self._MAX_CHARS} chars — {self._CAP_HINT}"])
+                f"{self._CAP_NOUN} is {capped}/{self._MAX_CHARS} chars — {self._CAP_HINT}"
+                + self._cap_detail(body)])
         if not body.strip():
             return SelfContextWriteResult(False, errors=["empty content"])
 
@@ -311,13 +325,26 @@ class SelfContextWriter:
         except Exception as e:
             return SelfContextWriteResult(False, errors=[f"read failed: {e}"])
 
-        count = current.count(old_string)
+        if not old_string:
+            return SelfContextWriteResult(False, errors=["old_string is empty"])
+        # Match and replace inside the EDITABLE part only (prod 2026-10-09/11:
+        # counting over the whole owner.md hit 4 retired copies in Superseded, and
+        # the replace_all the old hint advised rewrote that history).
+        editable, frozen = self._patch_split(current)
+        count = editable.count(old_string)
         if count == 0:
+            if frozen and old_string in frozen:
+                return SelfContextWriteResult(False, errors=[
+                    "old_string is only in the '## Superseded' history, which a patch "
+                    "never rewrites — patch the ACTIVE rule that replaced it instead"])
             return SelfContextWriteResult(False, errors=["old_string not found"])
         if count > 1 and not replace_all:
-            return SelfContextWriteResult(False, errors=[f"old_string occurs {count}× — pass replace_all=true"])
-        updated = (current.replace(old_string, new_string) if replace_all
-                   else current.replace(old_string, new_string, 1))
+            return SelfContextWriteResult(False, errors=[
+                f"old_string occurs {count}× in {self._PATCH_SCOPE} — make old_string "
+                f"longer so it matches one place, or pass replace_all=true to change "
+                f"all {count}"])
+        updated = (editable.replace(old_string, new_string) if replace_all
+                   else editable.replace(old_string, new_string, 1)) + frozen
 
         # Re-run the full gate; preserve the doc's pending/active state.
         # 057 WS-D: provenance rides through, and the baseline propose diffs

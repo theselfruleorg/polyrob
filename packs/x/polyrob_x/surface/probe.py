@@ -9,7 +9,7 @@ request signing; that goes through tweepy (the ``twitter`` extra) when installed
 and is also the answer when the OAuth 2.0 login is refused."""
 import asyncio
 
-from surfaces._probe import ProbeResult, http_json, missing
+from polyrob.sdk import ProbeResult, http_json, probe_missing as missing
 
 _OAUTH1 = ("TWITTER_API_KEY", "TWITTER_API_SECRET_KEY",
            "TWITTER_ACCESS_TOKEN", "TWITTER_ACCESS_TOKEN_SECRET")

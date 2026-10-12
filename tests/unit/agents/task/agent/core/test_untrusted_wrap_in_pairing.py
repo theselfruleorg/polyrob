@@ -5,7 +5,7 @@ builds in _add_tool_messages from controller.get_action_details(name).tool).
 """
 import pytest
 
-from tools.controller.types import ActionResult
+from agents.task.loop_types.controller_types import ActionResult
 from agents.task.agent.core.result_processing import _pair_results_to_calls
 
 

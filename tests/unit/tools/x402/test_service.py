@@ -171,7 +171,7 @@ async def test_kill_switch_probe_failure_fails_closed(monkeypatch):
     `except Exception: pass`, so an import/probe failure silently disabled the
     halt check on a money path. Simulate that failure and assert the payment is
     now REFUSED (not silently allowed through) and the client is never reached."""
-    from agents.task.constants import AutonomyConfig
+    from core.config_policy import AutonomyConfig
 
     def _raise():
         raise RuntimeError("boom: simulated import/probe failure")

@@ -473,7 +473,7 @@ nothing could ever match to a request.
 
 ### A2A Protocol (`/a2a/*`, `/.well-known/*`)
 
-Google's Agent-to-Agent protocol. See `api/a2a/*` and `../AGENTS.md`.
+Google's Agent-to-Agent protocol. See `api/a2a/` and ../docs/guide/api.md.
 
 ```http
 GET  /.well-known/agent.json      # Agent Card discovery (RFC 8615)

@@ -13,10 +13,6 @@ from agents.task.constants import resolve_aux_chain
 _ALL_AUX_ENV_KEYS = (
     "AUX_AUTO",
     "COMPACTION_AUTO_AUX",
-    "COMPACTION_MODEL",
-    "COMPACTION_PROVIDER",
-    "AUX_MODEL_JUDGE",
-    "AUX_PROVIDER",
     "AUX_MODEL_COMPACTION",
     "AUX_PROVIDER_COMPACTION",
     "AUX_FALLBACK_COMPACTION",
@@ -47,19 +43,25 @@ def test_primary_plus_fallbacks(monkeypatch):
     assert chain[2] == {"model": "gemini-flash", "provider": "gemini"}
 
 
-def test_legacy_compaction_env_still_works(monkeypatch):
+def test_compaction_slot_env(monkeypatch):
+    monkeypatch.setenv("AUX_MODEL_COMPACTION", "gpt-5-mini")
+    monkeypatch.setenv("AUX_PROVIDER_COMPACTION", "openai")
+    assert resolve_aux_chain("compaction", "anthropic")[0] == {
+        "model": "gpt-5-mini", "provider": "openai"}
+
+
+def test_retired_compaction_and_generic_aliases_are_not_read(monkeypatch):
+    # COMPACTION_MODEL / COMPACTION_PROVIDER / AUX_PROVIDER were retired after 1.4.
     monkeypatch.setenv("COMPACTION_MODEL", "gpt-5-mini")
-    assert resolve_aux_chain("compaction", "openai")[0]["model"] == "gpt-5-mini"
+    monkeypatch.setenv("COMPACTION_PROVIDER", "openai")
+    monkeypatch.setenv("AUX_PROVIDER", "gemini")
+    assert resolve_aux_chain("compaction", "openai") == []
+    monkeypatch.setenv("AUX_MODEL_JUDGE", "gpt-5-mini")
+    assert resolve_aux_chain("judge", "openai")[0]["provider"] is None
 
 
 def test_empty_when_unset():
     assert resolve_aux_chain("judge", "openrouter") == []
-
-
-def test_new_compaction_env_takes_precedence_over_legacy(monkeypatch):
-    monkeypatch.setenv("COMPACTION_MODEL", "gpt-5-mini")
-    monkeypatch.setenv("AUX_MODEL_COMPACTION", "claude-haiku-4-5")
-    assert resolve_aux_chain("compaction", "openai")[0]["model"] == "claude-haiku-4-5"
 
 
 def test_bare_model_fallback_keeps_default_provider(monkeypatch):
@@ -79,17 +81,6 @@ def test_reflection_inherits_compaction_model_and_provider_when_unset(monkeypatc
     assert chain[0] == {"model": "claude-haiku-4-5", "provider": "anthropic"}
 
 
-def test_reflection_inherits_legacy_compaction_provider_when_model_inherited(monkeypatch):
-    # Legacy knobs only (no new AUX_MODEL_COMPACTION/AUX_PROVIDER_COMPACTION set):
-    # reflection must still inherit COMPACTION_MODEL + COMPACTION_PROVIDER together,
-    # not fall through to the generic AUX_PROVIDER.
-    monkeypatch.setenv("COMPACTION_MODEL", "gpt-5-mini")
-    monkeypatch.setenv("COMPACTION_PROVIDER", "openai")
-    monkeypatch.setenv("AUX_PROVIDER", "gemini")  # decoy: must NOT win
-    chain = resolve_aux_chain("reflection", "anthropic")
-    assert chain[0] == {"model": "gpt-5-mini", "provider": "openai"}
-
-
 def test_reflection_uses_own_env_when_set(monkeypatch):
     # Reflection has its OWN model+provider+fallback configured: compaction's config
     # (even if also set) must NOT be consulted at all.
@@ -106,8 +97,7 @@ def test_reflection_uses_own_env_when_set(monkeypatch):
 def test_reflection_own_model_set_own_provider_unset_does_not_leak_compaction_provider(monkeypatch):
     # Reflection sets its OWN model but not its OWN provider, while compaction has a
     # provider configured. Since the model did NOT come from compaction-inheritance,
-    # compaction's provider must NOT apply — falls through to the generic AUX_PROVIDER
-    # (or None).
+    # compaction's provider must NOT apply — the provider stays None.
     monkeypatch.setenv("AUX_MODEL_COMPACTION", "gpt-5-mini")
     monkeypatch.setenv("AUX_PROVIDER_COMPACTION", "openai")
     monkeypatch.setenv("AUX_MODEL_REFLECTION", "claude-haiku-4-5")
@@ -125,13 +115,13 @@ def test_reflection_fallback_inherits_compaction_fallback_when_unset(monkeypatch
 
 def test_reflection_aux_auto_pairs_legacy_compaction_provider(monkeypatch):
     # Regression (B5 review): with all model envs unset, global AUX_AUTO=true and
-    # legacy COMPACTION_PROVIDER set, reflection must resolve via the COMPACTION
-    # inheritance branch (model from the cheap map + COMPACTION_PROVIDER paired) —
+    # AUX_PROVIDER_COMPACTION set, reflection must resolve via the COMPACTION
+    # inheritance branch (model from the cheap map + that provider paired) —
     # matching pre-B5 behavior where reflection reused _provision_compaction_llm().
     # The bug: resolve_aux_model("reflection") hit the global-AUX_AUTO early-exit
     # first, so inherited_from_compaction stayed False and the provider was dropped.
     monkeypatch.setenv("AUX_AUTO", "true")
-    monkeypatch.setenv("COMPACTION_PROVIDER", "anthropic")
+    monkeypatch.setenv("AUX_PROVIDER_COMPACTION", "anthropic")
     chain = resolve_aux_chain("reflection", "openai")
     assert chain[0] == {"model": "gpt-5-mini", "provider": "anthropic"}
 

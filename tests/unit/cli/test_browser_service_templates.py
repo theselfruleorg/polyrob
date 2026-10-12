@@ -1,5 +1,5 @@
-"""polyrob browser (049): the deployment files ARE the CLI's rendered templates,
-and the templates carry the boundary — sandbox ON, userns granted, egress
+"""polyrob browser (049): the CLI's rendered templates carry the boundary —
+sandbox ON, userns granted, egress
 chain dropping loopback/RFC1918/metadata for the browser UID, loopback-only CDP.
 """
 import os
@@ -8,24 +8,6 @@ from pathlib import Path
 import pytest
 
 from cli.commands import browser as b
-
-REPO = Path(__file__).resolve().parents[3]
-
-
-@pytest.mark.parametrize("name,path", [
-    ("unit", "deployment/polyrob-browser.service"),
-    ("server-unit", "deployment/polyrob-browser-server.service"),
-    ("egress-unit", "deployment/polyrob-browser-egress.service"),
-    ("egress-script", "deployment/hardening/polyrob-browser-egress.sh"),
-    ("apparmor", "deployment/hardening/apparmor/polyrob-browser"),
-])
-def test_deployment_file_is_the_rendered_template(name, path):
-    file = REPO / path
-    if not file.exists():
-        pytest.skip(f"{path} not shipped in this export")
-    assert file.read_text(encoding="utf-8") == b.TEMPLATES[name](), (
-        f"{path} drifted from cli/commands/browser.py — regenerate with "
-        f"`polyrob browser render {name}`")
 
 
 def test_unit_keeps_the_sandbox_and_stays_on_loopback():

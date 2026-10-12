@@ -9,9 +9,9 @@ import os
 import time
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Type, Union, TYPE_CHECKING
 
-from tools.controller.registry.views import ActionModel
-from tools.controller.types import ActionResult
-from tools.controller.execution_context import ActionExecutionContext
+from agents.task.loop_types.registry_views import ActionModel
+from agents.task.loop_types.controller_types import ActionResult
+from agents.task.loop_types.execution_context import ActionExecutionContext
 from agents.task.utils import time_execution_async, time_execution_sync
 from modules.llm.adapters import BaseChatModel
 from modules.llm.messages import AIMessage
@@ -103,9 +103,6 @@ class ExecutionMixin:
 		because ``record()`` has reserved keyword names. Fail-open: telemetry must
 		never break tool execution."""
 		try:
-			from core.config_policy.capability_toggles import tool_usage_telemetry
-			if not tool_usage_telemetry():
-				return
 			try:
 				details = self.get_action_details(action_type)
 				tool = str(getattr(details, "tool", "") or "") or "unknown"
@@ -383,7 +380,7 @@ class ExecutionMixin:
 					# is no longer the owner's own word (core/security/read_taint.py).
 					from core.security.read_taint import note_result
 					note_result(getattr(self, 'orchestrator', None), execution_context,
-					            action_type, tool_name, result)
+					            action_type, tool_name, result, params=action_params)
 					results.append(result)
 
 					# Log the result with detailed information
@@ -788,13 +785,9 @@ Check the controller registry and action implementations.
 	) -> None:
 		"""Emit the 019 ``tool_started`` span-start feed event (fail-open).
 
-		Gated by ``RUN_EVENTS_ENABLED``; a telemetry failure never affects
-		execution.
+		A telemetry failure never affects execution.
 		"""
 		try:
-			from core.config_policy import AutonomyConfig
-			if not AutonomyConfig.run_events_enabled():
-				return
 			if not self.orchestrator or not hasattr(self.orchestrator, 'telemetry_manager'):
 				return
 			telemetry_manager = self.orchestrator.telemetry_manager

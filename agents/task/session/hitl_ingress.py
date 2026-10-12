@@ -16,6 +16,9 @@ from typing import Any, Dict, List, Optional
 # kinds, etc. — is never expanded (expansion is a filesystem read on caller text).
 _TRUSTED_CONTEXT_REF_KINDS = {"comment", "continuation"}
 
+# Per-agent pending/queued message cap (internal tuning; was an env knob).
+MAX_QUEUED_MESSAGES = 10
+
 # B5 (2026-07-13 review): one lock for all taint mutations. The flag was a bare bool
 # raced by the owner-turn clear and the correspondent-inject set; contention is
 # negligible (a few writes per turn), so a module-level lock keeps it simple.
@@ -162,7 +165,7 @@ class HITLIngressMixin:
         # (allowlist). Forged/system kinds are never expanded — see _TRUSTED_CONTEXT_REF_KINDS.
         if kind in _TRUSTED_CONTEXT_REF_KINDS:
             try:
-                from agents.task.constants import AutonomyConfig
+                from core.config_policy import AutonomyConfig
                 if AutonomyConfig.context_references_enabled():
                     from agents.task.agent.messages.context_references import (
                         preprocess_context_references,
@@ -174,9 +177,6 @@ class HITLIngressMixin:
                     )
             except Exception:
                 pass  # fail-soft: leave text unchanged
-
-        # Get queue limit from environment
-        MAX_QUEUED_MESSAGES = int(os.environ.get('MAX_QUEUED_MESSAGES', '10'))
 
         # Get target agent
         if agent_id:

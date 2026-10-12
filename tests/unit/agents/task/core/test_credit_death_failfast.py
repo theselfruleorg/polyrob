@@ -121,7 +121,8 @@ def test_timeout_arm_precedes_the_generic_handler_in_the_chain():
         "the outer structured-output boundary must re-raise asyncio.TimeoutError "
         "before its generic handler, or a timeout costs a second full-timeout call"
     )
-    assert "except InsufficientCreditsError:" in window
+    # D3: the arm also carries LLMPermanentError (a provider credit refusal).
+    assert "except (InsufficientCreditsError, LLMPermanentError):" in window
 
 
 def test_insufficient_credits_error_is_importable_where_the_arms_reference_it():

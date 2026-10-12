@@ -25,13 +25,9 @@ def test_owner_email_explicit_env():
     assert resolve_owner_email(env={"POLYROB_OWNER_EMAIL": "owner@example.com"}) == "owner@example.com"
 
 
-def test_owner_email_bot_alias_env():
-    assert resolve_owner_email(env={"BOT_OWNER_EMAIL": "owner@example.com"}) == "owner@example.com"
-
-
-def test_owner_email_polyrob_wins_over_bot_alias():
-    env = {"POLYROB_OWNER_EMAIL": "a@x.com", "BOT_OWNER_EMAIL": "b@y.com"}
-    assert resolve_owner_email(env=env) == "a@x.com"
+def test_owner_email_retired_bot_alias_is_not_read():
+    # BOT_OWNER_EMAIL was retired in 1.4 (doctor warns on a stale line).
+    assert resolve_owner_email(env={"BOT_OWNER_EMAIL": "owner@example.com"}) is None
 
 
 def test_owner_email_none_when_unset():

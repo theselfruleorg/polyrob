@@ -41,11 +41,9 @@ def test_over_cap_error_forbids_deleting_a_standing_rule():
     assert "ask the owner" in hint
 
 
-def test_an_over_cap_doc_blocks_the_whole_block_not_a_truncation(tmp_path):
-    """⚠️ The read side BLOCKS rather than truncates, so the cap governs BOTH.
-
-    An over-cap owner.md does not lose its tail — it loses every rule it has.
-    """
+def test_an_over_cap_doc_loads_truncated_not_blocked(tmp_path):
+    """2026-10-11: the read side used to BLOCK an over-cap doc, so one extra char
+    dropped every owner rule. It now loads the head with a TRUNCATED banner."""
     from core.instance import self_tier_root
     root = self_tier_root(tmp_path, "rob", "rob")
     root.mkdir(parents=True, exist_ok=True)
@@ -53,6 +51,7 @@ def test_an_over_cap_doc_blocks_the_whole_block_not_a_truncation(tmp_path):
     line = "Owner prefers short answers.\n"
     (root / "owner.md").write_text(line * (OWNER_DOC_MAX_CHARS // len(line) + 10),
                                    encoding="utf-8")
-    assert "[BLOCKED" in load_owner_doc(tmp_path, "rob", "rob")
+    loaded = load_owner_doc(tmp_path, "rob", "rob")
+    assert "[BLOCKED" not in loaded and "TRUNCATED" in loaded
     (root / "owner.md").write_text("Owner prefers short answers.\n", encoding="utf-8")
     assert "short answers" in load_owner_doc(tmp_path, "rob", "rob")

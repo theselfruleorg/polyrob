@@ -14,7 +14,7 @@ from tests.unit.cron.test_runner_runloop_delivery import _job
 @pytest.fixture(autouse=True)
 def _clear_autonomy_marker():
     yield
-    from agents.task.goals import autonomy_marker
+    from core import autonomy_marker
     autonomy_marker._SESSIONS.clear()
 
 

@@ -7,7 +7,7 @@ from click.testing import CliRunner
 def _iso(tmp_path, monkeypatch):
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
     monkeypatch.setattr("core.runtime_paths.resolve_data_home", lambda: tmp_path)
-    monkeypatch.setattr("core.bootstrap.load_env", lambda *a, **k: None)
+    monkeypatch.setattr("polyrob.app.bootstrap.load_env", lambda *a, **k: None)
 
 
 def test_pause_resume_status_roundtrip(tmp_path, monkeypatch):

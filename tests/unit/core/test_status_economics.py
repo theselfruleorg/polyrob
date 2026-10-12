@@ -4,8 +4,6 @@ import os
 import sqlite3
 import time
 
-import pytest
-
 from core.status_economics import (bot_db_path, compute_economics, economics_section,
                                    runway_health)
 from core.status_snapshot import (SEVERITY_CRIT, SEVERITY_WARN, STATE_UNAVAILABLE,
@@ -141,32 +139,6 @@ def test_truncations_are_counted_from_the_event_log_not_a_finish_reason_nobody_w
     sec2 = economics_section("rob", str(tmp_path), now=now, window_sec=86400)
     assert sec2.data["truncated"] == 1 and sec2.data["truncated_source"] == "metadata"
     assert "output truncations 1 (metadata only)" in sec2.lines[2]
-
-
-def test_econ_window_script_prints_the_slice(tmp_path, monkeypatch):
-    import subprocess, sys
-    db = _usage_db(tmp_path, _rows())
-    con = sqlite3.connect(db)
-    con.execute("UPDATE usage_records SET timestamp='2026-09-19 03:00:00' WHERE session_id='s1'")
-    con.execute("UPDATE usage_records SET timestamp='2026-09-19 05:00:00' WHERE session_id='s2'")
-    con.commit(); con.close()
-    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-    # `scripts/` is owner-infra and does not ship in the public package, where a
-    # bare `pytest` still collects this file. An absent script is 'not this
-    # tree's concern', never a failure.
-    if not os.path.isfile(os.path.join(root, "scripts", "econ_window.py")):
-        pytest.skip("ops scripts absent (public package)")
-    env = dict(os.environ, PYTHONPATH=root, POLYROB_DATA_DIR=str(tmp_path))
-    env.pop("DB_PATH", None)
-    out = subprocess.run([sys.executable, os.path.join(root, "scripts", "econ_window.py"),
-                          "--since", "2026-09-19T04:00:00Z", "--user", "rob", "--json"],
-                         capture_output=True, text=True, env=env, check=True).stdout
-    data = json.loads(out)
-    assert data["calls"] == 1 and data["sessions"] == 1 and data["since"] == "2026-09-19 04:00:00"
-    text = subprocess.run([sys.executable, os.path.join(root, "scripts", "econ_window.py"),
-                           "--since", "2026-09-19 00:00:00", "--until", "2026-09-19 04:00:00", "--user", "rob"],
-                          capture_output=True, text=True, env=env, check=True).stdout
-    assert "2 calls · 1 sessions" in text and "truncations 1" in text
 
 
 def test_db_path_honours_DB_PATH(monkeypatch, tmp_path):

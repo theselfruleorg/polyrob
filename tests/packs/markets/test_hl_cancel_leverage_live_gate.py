@@ -26,7 +26,7 @@ import pytest
 from polyrob_markets.hyperliquid.service import (
     HyperliquidTool, CancelOrderParams, CancelAllOrdersParams, UpdateLeverageParams,
 )
-from tools.controller.execution_context import ActionExecutionContext
+from agents.task.loop_types.execution_context import ActionExecutionContext
 
 
 def _async(value):

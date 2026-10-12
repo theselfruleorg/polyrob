@@ -129,7 +129,7 @@ async def _run_session(
     """Create and execute a task session, rendering the feed to stdout."""
     import logging as _logging
 
-    from core.bootstrap import build_cli_container, setup_project_path, setup_sqlite_compat
+    from polyrob.app.bootstrap import build_cli_container, setup_project_path, setup_sqlite_compat
 
     from cli.commands._bootstrap import suppress_bootstrap_output
 
@@ -139,7 +139,7 @@ async def _run_session(
     # Pre-flight: load env layers first (so file-based keys are visible), then ensure a
     # usable provider key — onboard inline on a TTY, else print the canonical message and
     # exit. build_cli_container re-loads env idempotently (override=False).
-    from core.bootstrap import load_env
+    from polyrob.app.bootstrap import load_env
     from cli.keys import preflight_or_onboard
     load_env(local_mode=True)
     # POLYROB_LOCAL gates the OAuth/store credential rungs. build_cli_container
@@ -193,6 +193,9 @@ async def _run_session(
         with suppress_bootstrap_output():
             container = await build_cli_container(log_level=log_level)
     except Exception as e:
+        # Lift the disable on the failure path too: an in-process caller
+        # (CliRunner, an embedding) must not inherit logging switched off.
+        _logging.disable(_logging.NOTSET)
         click.echo(click.style("[polyrob] ERROR: ", fg="red") + f"failed to start: {e}")
         sys.exit(1)
     if not verbose:
@@ -244,7 +247,7 @@ async def _run_session(
     # C1/A3: expand @file/@folder/@diff/@url references in the task text (opt-in).
     # Confined to the invocation CWD so a reference can't read outside the working
     # dir or hit a private host; fails soft (oversized/unsafe refs become notes).
-    from agents.task.constants import AutonomyConfig
+    from core.config_policy import AutonomyConfig
     if task and AutonomyConfig.context_references_enabled():
         try:
             from agents.task.agent.messages.context_references import (
@@ -358,7 +361,7 @@ async def _run_session(
         from cli.ui.banner import print_banner
         from core.instance import FRAMEWORK_NAME, resolve_instance_id
         try:
-            from agents.task.constants import autonomy_enabled as _ae
+            from core.config_policy import autonomy_enabled as _ae
             _autonomy_on = _ae()
         except Exception:
             _autonomy_on = None

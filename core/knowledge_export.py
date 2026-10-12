@@ -18,6 +18,7 @@ this module never drags the server tier in (core/server boundary, C3 split).
 """
 from __future__ import annotations
 
+from core.runtime_paths import goals_db_path
 import json
 import logging
 import re
@@ -202,7 +203,7 @@ def _export_goals(out: Path, user_id: str, data_dir: str) -> int:
     try:
         import os
         from agents.task.goals.board import GoalBoard
-        board = GoalBoard(os.path.join(data_dir, "goals.db"))
+        board = GoalBoard(goals_db_path(data_dir))
         goals = board.list(user_id=user_id)
     except Exception:
         return 0

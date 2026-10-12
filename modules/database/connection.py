@@ -147,8 +147,8 @@ class DatabaseConnection:
     # migrations/version_manager.py). The live inline schema is created by the
     # component table classes (auth_tables/x402_tables/user_profiles/...);
     # tests/unit/migrations/test_inline_schema_at_head.py enforces that it
-    # matches migration HEAD. modules/database/schema.sql remains as the
-    # documented schema mirror only — nothing loads it at runtime.
+    # matches migration HEAD. (The unloaded schema.sql "mirror" was deleted
+    # 2026-10-10, W8 — a fourth schema source nothing read.)
 
     async def begin_transaction(self) -> None:
         """Begin a new transaction.

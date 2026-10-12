@@ -130,18 +130,17 @@ celerybeat.pid
 # mkdocs documentation
 /site
 
-# Documentation — ship only the public guide + reference docs; internal
-# planning/review/superpowers artifacts are kept out of the published tree.
-docs/*
-!docs/CONFIGURATION.md
-!docs/SKILL_AUTHORING_STANDARD.md
-!docs/comparison.md
-!docs/examples.md
-# WS-K5 (2026-09-22): AGENTS.md is an INDEX into these files, so they are not
-# optional internal notes — a clone without them has an index pointing at
-# nothing. `docs/architecture/` was already tracked file-by-file with `-f`.
-!docs/architecture/
-!docs/architecture/**
+# Documentation. Every file under docs/ is TRACKED by default (W13, 2026-10-10): the
+# old blanket `docs/*` rule silently untracked every new private doc whose author
+# forgot `git add -f`. What ships publicly is decided by scripts/public_manifest.txt +
+# scripts/private_paths.txt, not by this file. Ignore only genuinely local output
+# (this file ships, so it names no private tree — the scrub gate greps for them):
+docs/design/040/_*.json
+docs/design/040/marketing/exports/
+docs/design/070/refs/
+docs/design/070/shots/
+/docs/**/*.json
+/docs/**/.alloc.lock
 
 # mypy
 .mypy_cache/
@@ -219,8 +218,9 @@ secrets.json
 # ...but the safety globs must never swallow real source files: on a
 # case-insensitive checkout (macOS/Windows) `*_SECRET*` matches the
 # secret-guard TEST module, which broke the public release export
-# (fresh clone -> untracked -> git add refused). Re-include explicitly.
-!tests/unit/agents/task/core/test_secret_guard.py
+# (fresh clone -> untracked -> git add refused); `*_API_KEY*` hid
+# test_api_key_scopes.py the same way. Re-include every test module.
+!test_*.py
 
 # Browser automation
 playwright-report/
@@ -246,10 +246,6 @@ data/auto/
 config/.env.production
 
 # --- OSS: track user docs + seed data, keep internal/secrets ignored ---
-!docs/guide/
-!docs/guide/**
-!docs/assets/
-!docs/assets/**
 !data/__init__.py
 !data/prompts/
 !data/prompts/**
@@ -275,7 +271,7 @@ config/.env.production.*
 # artifact, regenerated every deploy. The source of truth is docs/.
 web/portal/docs/
 
-# Fly config lives in deployment/fly/fly.toml.template; the root copy is a local artefact.
+# A local Fly config is an operator artefact (the Fly kit was retired 2026-10-10).
 fly.toml
 
 # Brand renders produced ad hoc at the repo root by web/portal/brand/*.py — local
@@ -288,3 +284,6 @@ fly.toml
 # 062: generated at deploy from the repo-root install.sh (ONE file)
 web/portal/install.sh
 web/portal/install.sh.sha256
+
+# The ops loop's per-tick log (untracked; scripts/tick_rollup.py lands one commit a day).
+/.ops/

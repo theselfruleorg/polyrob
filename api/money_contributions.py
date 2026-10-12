@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
+from core.env import bool_env
 from typing import Any, Dict, List, Optional
 
 from api.contributions import (register_auth_method, register_card_payment_option,
@@ -30,7 +31,7 @@ def install_x402_middleware(app, logger) -> None:
     """Add x402 payment middleware (runs BEFORE JWT middleware due to LIFO order).
     This allows x402 payments to bypass JWT auth for pay-per-request access.
     Uses fastapi-x402 library for proper on-chain verification via Coinbase facilitator."""
-    x402_enabled = os.environ.get("X402_ENABLED", "false").lower() == "true"
+    x402_enabled = bool_env("X402_ENABLED", False)
     if x402_enabled:
         try:
             from modules.x402.middleware import X402PaymentMiddleware, install_auth_state_writer
@@ -52,13 +53,13 @@ def announce_payments(logger) -> None:
 
 
 def announce_x402(logger) -> None:
-    x402_enabled = os.environ.get("X402_ENABLED", "false").lower() == "true"
+    x402_enabled = bool_env("X402_ENABLED", False)
     logger.info(f"✅ x402 endpoints registered at /api/x402 (payments "
                 f"{'enabled' if x402_enabled else 'info-only'})")
 
 
 def announce_eip8004(logger) -> None:
-    eip8004_enabled = os.environ.get("EIP8004_ENABLED", "false").lower() == "true"
+    eip8004_enabled = bool_env("EIP8004_ENABLED", False)
     logger.info("✅ ERC-8004 Trustless Agents endpoints registered at /eip8004")
     logger.info("   - Registration: /eip8004/registration.json")
     logger.info("   - Reputation: /eip8004/reputation/*")

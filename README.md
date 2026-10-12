@@ -188,7 +188,9 @@ polyrob
 </details>
 
 Keep it running after you close the terminal with `polyrob service install` (a systemd user unit or
-a launchd agent). Update with `polyrob update --apply`; remove it with `polyrob uninstall`.
+a launchd agent). Restart it with `polyrob service restart` or `/restart` from your chat — it finishes
+its current work first and tells you its version when it is back. Update with `polyrob update --apply`
+or `/update`; remove it with `polyrob uninstall`.
 
 Run `polyrob` and you're talking to the agent. Give it a task in plain language and it plans, works,
 and reports back; ask a follow-up and it keeps going. `polyrob doctor` is a real preflight — it
@@ -486,6 +488,7 @@ Architecture overview → **[docs/guide/architecture.md](docs/guide/architecture
 | [docs/guide/profiles.md](docs/guide/profiles.md) | Named profiles — several isolated bots on one machine |
 | [docs/guide/instances.md](docs/guide/instances.md) | Instance identity — SOUL, character, avatar |
 | [docs/guide/upgrading.md](docs/guide/upgrading.md) | Upgrading an existing install |
+| [docs/guide/operate-the-service.md](docs/guide/operate-the-service.md) | Start, stop, restart and update the background service — from a shell, from chat, as root |
 | [docs/guide/migration/](docs/guide/migration/README.md) | Migrating from another agent framework |
 | [docs/guide/architecture.md](docs/guide/architecture.md) | Architecture overview |
 | [docs/guide/self-hosting.md](docs/guide/self-hosting.md) | Self-hosting / deployment |

@@ -4,7 +4,7 @@ fallback constructors in multi_act / execute_action) inherited full delegation
 privilege — the opposite of secure-by-default. The default must be 'leaf'; delegation
 is granted only when the role is set explicitly.
 """
-from tools.controller.execution_context import ActionExecutionContext
+from agents.task.loop_types.execution_context import ActionExecutionContext
 
 
 def test_default_role_is_leaf():

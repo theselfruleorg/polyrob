@@ -35,7 +35,7 @@ def _register_late(controller, name="late_echo"):
     @controller.registry.action("A late action registered after the freeze",
                                 param_model=_LateAction)
     async def late_echo(params: _LateAction, execution_context=None):
-        from tools.controller.types import ActionResult
+        from agents.task.loop_types.controller_types import ActionResult
         return ActionResult(extracted_content=params.text, include_in_memory=True)
 
 

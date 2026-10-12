@@ -7,7 +7,7 @@ written pref overrides the DEFAULT toolset NAME only when neither --tools nor
 still wins over the pref.
 """
 from core.prefs import write_preference
-from core.bootstrap import cli_unavailable_tools
+from core.cli_tool_tables import cli_unavailable_tools
 from agents.task.tool_defaults import cli_default_tools, resolve_toolset
 from cli.commands.run import _resolve_tool_list
 

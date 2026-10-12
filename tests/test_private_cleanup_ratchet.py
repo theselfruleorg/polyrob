@@ -18,8 +18,10 @@ See the 2026-08-21 singleton-teardown incident.
 import ast
 from pathlib import Path
 
+from tests.support.repo_index import repo_index
+
 REPO = Path(__file__).resolve().parent.parent
-PROD_DIRS = ("agents", "tools", "core", "api", "cli", "modules", "surfaces", "cron", "webview")
+PROD_DIRS = ("agents", "tools", "core", "polyrob", "api", "cli", "modules", "surfaces", "cron", "webview")
 
 # (repo-relative-path, lineno) — may only SHRINK. Currently empty; keep it so.
 ALLOWLIST = frozenset()
@@ -50,10 +52,10 @@ def _scan():
             if "__pycache__" in path.parts:
                 continue
             try:
-                tree = ast.parse(path.read_text(encoding="utf-8"))
+                nodes = repo_index().nodes(path)
             except SyntaxError:
                 continue
-            for node in ast.walk(tree):
+            for node in nodes:
                 if (isinstance(node, ast.Call)
                         and isinstance(node.func, ast.Attribute)
                         and node.func.attr == "_cleanup"

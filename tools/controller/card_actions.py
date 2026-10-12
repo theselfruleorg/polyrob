@@ -117,7 +117,7 @@ def register_card_actions(controller) -> None:
             return ActionResult(error=why, include_in_memory=True)
         sid = _session_id(controller, execution_context)
         try:
-            from agents.task.goals.autonomy_marker import is_autonomous
+            from core.autonomy_marker import is_autonomous
             if sid and is_autonomous(sid):
                 return ActionResult(
                     error=("Refused: an autonomous run cannot wait for a tap. Raise "
@@ -186,8 +186,9 @@ def register_card_actions(controller) -> None:
         "'Get a quote', sees the real simulated price and caps, and only then can "
         "Confirm. Use it instead of describing a command for the owner to type. Verbs: "
         "/send /swap /bridge /pay /claim /launch /deploy /nft /identity "
-        "/writeoff /unquarantine /wallet (trust|untrust), and /adopt <id> (the owner makes "
-        "a cron job or goal you wrote his own).",
+        "/writeoff /unquarantine /wallet (trust|untrust), /adopt <id> (the owner makes "
+        "a cron job or goal you wrote his own), and /restart or /update (your own background "
+        "service: it finishes its work, restarts and reports back).",
         param_model=ProposeAction,
     )
     async def propose_action(params: ProposeAction, execution_context=None) -> ActionResult:

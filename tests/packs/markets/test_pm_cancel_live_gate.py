@@ -21,7 +21,7 @@ import types
 import pytest
 
 from polyrob_markets.polymarket.service import PolymarketTool, CancelOrderParams, CancelAllOrdersParams
-from tools.controller.execution_context import ActionExecutionContext
+from agents.task.loop_types.execution_context import ActionExecutionContext
 
 
 def _async(value):

@@ -33,9 +33,8 @@ class ScopeStoreMixin:
         never the DROP path: ``mem_provenance`` holds live rows). The dedup index
         widens to ``(user_id, scope, content_hash)`` under a NEW name, because a
         name-matched ``CREATE INDEX IF NOT EXISTS`` never widens."""
-        cols = {r[1] for r in conn.execute("PRAGMA table_info(mem_provenance)").fetchall()}
-        if "scope" not in cols:
-            conn.execute("ALTER TABLE mem_provenance ADD COLUMN scope TEXT NOT NULL DEFAULT ''")
+        from core.sqlite_util import ensure_columns
+        ensure_columns(conn, "mem_provenance", (("scope", "TEXT NOT NULL DEFAULT ''"),))
         conn.execute("DROP INDEX IF EXISTS idx_mem_prov_user_hash")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_mem_prov_user_scope_hash "
                      "ON mem_provenance(user_id, scope, content_hash)")
@@ -222,20 +221,52 @@ class ScopeStoreMixin:
 
     # ---- age retention (B3, moved from sqlite_memory_provider) -------------
 
-    def prune_memories(self, *, older_than_ts: int) -> int:
+    # A row written by an autonomous run: its session has a cron/goal episode
+    # (the same origin signal recall uses to demote automation rows).
+    _AUTONOMOUS_SQL = (
+        "(m.user_id || char(31) || m.session_id) IN (SELECT user_id || char(31) || "
+        "session_id FROM episodes WHERE kind IN ('cron','goal'))")
+
+    def _prunable_rowids(self, older_than_ts: int,
+                         autonomous_older_than_ts: Optional[int] = None) -> List[int]:
+        """Stamped rows past the general cutoff, plus (B2, 2026-10-11) rows from
+        an autonomous run past the shorter autonomous cutoff, unless the row
+        carries an owner ruling, a lesson or a decision. Raises on a DB
+        error — the callers own the fail-open."""
+        rows = execute_retry(
+            self.db_path, "SELECT mem_rowid FROM mem_provenance WHERE ts < ?",
+            (int(older_than_ts),), fetch="all")
+        ids = {r["mem_rowid"] for r in (rows or [])}
+        if autonomous_older_than_ts is not None and autonomous_older_than_ts > older_than_ts:
+            try:
+                from modules.memory.write_filter import is_protected
+                auto = execute_retry(
+                    self.db_path,
+                    "SELECT p.mem_rowid AS mem_rowid, m.content AS content "
+                    "FROM mem_provenance p JOIN memories m ON m.rowid = p.mem_rowid "
+                    f"WHERE p.ts < ? AND {self._AUTONOMOUS_SQL}",
+                    (int(autonomous_older_than_ts),), fetch="all")
+                # An owner ruling / lesson / decision keeps the long window.
+                ids.update(r["mem_rowid"] for r in (auto or [])
+                           if not is_protected(r["content"] or ""))
+            except Exception as e:  # no episodes table yet: the general window only
+                logger.debug("autonomous memory window skipped: %s", e)
+        return sorted(ids)
+
+    def prune_memories(self, *, older_than_ts: int,
+                       autonomous_older_than_ts: Optional[int] = None) -> int:
         """Age-based retention for the cross-session store (B3), across ALL tenants.
         Deletes memories rows whose B2 provenance stamp is older than the cutoff
-        (+ the stamp itself). Legacy rows WITHOUT a provenance stamp are exempt —
-        their age is unknowable, and guessing risks deleting live recall. Called
-        from the curator tick on its own cadence, NEVER from the write path.
+        (+ the stamp itself). With ``autonomous_older_than_ts`` a row whose
+        session is a cron/goal run ages out at that (later, i.e. shorter-window)
+        cutoff instead — chat and owner rows keep the long window. Legacy rows
+        WITHOUT a provenance stamp are exempt — their age is unknowable, and
+        guessing risks deleting live recall. Called from the curator tick on its
+        own cadence, NEVER from the write path.
         Fail-open: any DB error degrades to 0 rather than raising.
         """
         try:
-            rows = execute_retry(
-                self.db_path,
-                "SELECT mem_rowid FROM mem_provenance WHERE ts < ?",
-                (int(older_than_ts),), fetch="all")
-            ids = [r["mem_rowid"] for r in (rows or [])]
+            ids = self._prunable_rowids(older_than_ts, autonomous_older_than_ts)
             if not ids:
                 return 0
             # Batched IN clauses: a multi-year backlog can exceed SQLite's bound-

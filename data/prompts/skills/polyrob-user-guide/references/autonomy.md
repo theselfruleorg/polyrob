@@ -68,7 +68,8 @@ console's auth model, see `references/surfaces.md`):
   installs actually stick, publishes a few loopback ports so you can test
   your own server). `2 self-maintain`: posture 1 plus the `self_env` tool
   (install_dep/read_source/patch_source/git_pull/restart_service — approval-
-  gated, never raw bash). `3 host`: full host access, single-tenant/local-only,
+  gated, never raw bash; an approved restart_service asks the service for the
+  drained restart — it finishes this turn, restarts and reports to the owner). `3 host`: full host access, single-tenant/local-only,
   not yet wired as a distinct backend.
 
 ## Compute-spend backstop

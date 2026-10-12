@@ -57,7 +57,7 @@ def ensure_env_loaded() -> None:
     global _env_loaded
     if _env_loaded:
         return
-    from core.bootstrap import load_env, setup_project_path, setup_sqlite_compat
+    from polyrob.app.bootstrap import load_env, setup_project_path, setup_sqlite_compat
     setup_project_path()
     setup_sqlite_compat()
     load_env(local_mode=True)
@@ -81,25 +81,27 @@ async def cli_container(log_level: str = "ERROR", require_llm: bool = True):
     """
     import logging as _logging
 
-    from core.bootstrap import build_cli_container, setup_project_path, setup_sqlite_compat
+    from polyrob.app.bootstrap import build_cli_container, setup_project_path, setup_sqlite_compat
 
     setup_project_path()
     setup_sqlite_compat()
 
     _logging.disable(_logging.CRITICAL)
-    if require_llm:
-        from cli.keys import preflight_or_onboard
-        if not preflight_or_onboard(interactive=False):
-            sys.exit(1)
-    # else: no preflight — env layering still happens at the same point it does
-    # on the keyed path (the very top of build_cli_container calls
-    # load_env(local_mode=True) before any flag-freezing agent import), so e.g.
-    # POLYROB_DATA_DIR from ~/.polyrob/.env is honored keyless too. Deliberately
-    # NO ensure_env_loaded() here: tests that mock build_cli_container would
-    # otherwise leak the developer's real env files into the test process.
-    container = await build_cli_container(log_level=log_level, require_llm=require_llm)
-    _logging.disable(_logging.NOTSET)
-    return container
+    try:
+        if require_llm:
+            from cli.keys import preflight_or_onboard
+            if not preflight_or_onboard(interactive=False):
+                sys.exit(1)
+        # else: no preflight — env layering still happens at the same point it does
+        # on the keyed path (the very top of build_cli_container calls
+        # load_env(local_mode=True) before any flag-freezing agent import), so e.g.
+        # POLYROB_DATA_DIR from ~/.polyrob/.env is honored keyless too. Deliberately
+        # NO ensure_env_loaded() here: tests that mock build_cli_container would
+        # otherwise leak the developer's real env files into the test process.
+        return await build_cli_container(log_level=log_level, require_llm=require_llm)
+    finally:
+        # A failed preflight or build must not leave logging off for the caller.
+        _logging.disable(_logging.NOTSET)
 
 
 @contextlib.contextmanager

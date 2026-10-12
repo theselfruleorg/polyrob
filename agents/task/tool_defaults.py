@@ -94,7 +94,7 @@ def resolve_toolset(name: str) -> list[str]:
 
 
 def _full_autonomy() -> bool:
-    from agents.task.constants import full_autonomy_enabled
+    from core.config_policy import full_autonomy_enabled
     return full_autonomy_enabled()
 
 
@@ -137,7 +137,7 @@ def with_compute_tools(tools: list[str]) -> list[str]:
     interactive toolset both delegate here — 014 A2). Mutates and returns
     *tools* for chaining. Posture 0 (or any resolver error) is a no-op."""
     try:
-        from agents.task.constants import compute_posture
+        from core.config_policy import compute_posture
         if compute_posture() >= 1:
             # 056 WS4: posture is the CEILING; each tool's own flag still decides.
             # Prod ran posture 1 with CODE_EXEC_ENABLED/SHELL_TOOLS_ENABLED off and
@@ -191,7 +191,7 @@ def cli_default_tools() -> list[str]:
     Either way the final list is intersected through ``cli_unavailable_tools`` so
     the agent is never advertised tools the CLI container can't register.
     """
-    from core.bootstrap import cli_unavailable_tools
+    from core.cli_tool_tables import cli_unavailable_tools
 
     toolset_name = os.environ.get("POLYROB_AGENT_TOOLSET", "").strip()
 

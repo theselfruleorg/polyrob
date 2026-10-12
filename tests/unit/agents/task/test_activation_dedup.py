@@ -19,7 +19,7 @@ asked to also pre-mark seeded/persona force-included skills as "activated" at
 session-construction time, before any load_skill call. Verified against the
 real injection flow (agents/task/agent/core/construction.py +
 skill_manager.format_skill_catalog): under the DEFAULT config
-(SKILL_PROGRESSIVE_DISCLOSURE=on), a seeded skill's FULL BODY is never eagerly
+(progressive disclosure), a seeded skill's FULL BODY is never eagerly
 injected anywhere -- only its one-line <skill-catalog> entry is -- so
 pre-marking it "activated" before the model ever calls load_skill would make
 its real instructions (e.g. the trading skills' >$500 confirmation-gate
@@ -125,7 +125,6 @@ def _bare_controller():
 
 @pytest.mark.asyncio
 async def test_load_skill_action_dedupes_across_repeated_calls(monkeypatch):
-    monkeypatch.setenv("SKILL_PROGRESSIVE_DISCLOSURE", "true")
     c = _bare_controller()
     c._session_skills = {"demo": SimpleNamespace(content="BODY TEXT")}
     c._register_default_actions()
@@ -145,7 +144,6 @@ async def test_load_skill_action_dedupes_across_repeated_calls(monkeypatch):
 async def test_load_skill_action_dedup_is_per_controller_instance(monkeypatch):
     """Session-scoped: a second, independent Controller (i.e. a different session)
     must NOT inherit the first session's activation state."""
-    monkeypatch.setenv("SKILL_PROGRESSIVE_DISCLOSURE", "true")
 
     c1 = _bare_controller()
     c1._session_skills = {"demo": SimpleNamespace(content="BODY TEXT")}

@@ -72,9 +72,9 @@ def test_explain_flag_chain_attributes_env_file(home, monkeypatch, tmp_path):
     from core.paths import polyrob_home
     envfile = polyrob_home() / ".env"
     envfile.parent.mkdir(parents=True, exist_ok=True)
-    envfile.write_text("GOALS_ENABLED=true\n")
-    monkeypatch.setenv("GOALS_ENABLED", "true")
-    info = cs.explain("GOALS_ENABLED", user_id="u1", home_dir=home)
+    envfile.write_text("TOOL_AVAILABILITY_HINT=true\n")
+    monkeypatch.setenv("TOOL_AVAILABILITY_HINT", "true")
+    info = cs.explain("TOOL_AVAILABILITY_HINT", user_id="u1", home_dir=home)
     origins = [s.origin for s in info.chain]
     assert "env:process" in origins
     assert any(o.startswith("env-file:") for o in origins)
@@ -155,7 +155,7 @@ def test_project_scope_env_write_is_refused_and_names_the_read_file(home, tmp_pa
 
 def test_global_write_is_seen_by_the_cli_env_loader(home, tmp_path):
     """Regression: a write and a read through the SAME resolution agree — the
-    file set_value writes is a file core.bootstrap.load_env loads in local
+    file set_value writes is a file polyrob.app.bootstrap.load_env loads in local
     mode (``core.paths.env_file_candidates``), holding the value."""
     from core.env_file import read_env_file
     from core.paths import env_file_candidates
@@ -167,10 +167,18 @@ def test_global_write_is_seen_by_the_cli_env_loader(home, tmp_path):
 
 
 def test_set_flag_global_scope_writes_home_env(home, tmp_path):
+    res = cs.set_value("TOOL_AVAILABILITY_HINT", "off", scope="global",
+                       user_id="u1", home_dir=home)
+    assert res.ok
+    assert "TOOL_AVAILABILITY_HINT=off" in (tmp_path / "polyrob-home" / ".env").read_text()
+
+
+def test_set_member_global_scope_writes_the_override_line(home, tmp_path):
     res = cs.set_value("GOALS_ENABLED", "off", scope="global",
                        user_id="u1", home_dir=home)
     assert res.ok
-    assert "GOALS_ENABLED=off" in (tmp_path / "polyrob-home" / ".env").read_text()
+    text = (tmp_path / "polyrob-home" / ".env").read_text()
+    assert "POLYROB_OVERRIDES=GOALS_ENABLED=false" in text
 
 
 def test_set_unknown_key_refused(home):

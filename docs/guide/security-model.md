@@ -284,12 +284,16 @@ rather than by a plain on/off flag:
 **The command guard** (`core/security/command_guard.py`) classes every shell
 command before it runs. The **floor** — deleting a root or home tree, a fork bomb,
 writing a raw disk, a root `curl | sh`, writing the agent's own config, wallet or
-signer state, stopping the agent's own service — is refused at every posture,
-inside the container too, and no approval lifts it. The **dangerous** class
+signer state in one command segment, reading the wallet seed, stopping the agent's
+own service — is refused at every posture, inside the container too, and no approval
+lifts it. The floor is judged per command segment: `grep -r ERROR
+/var/lib/polyrob/logs > errors.txt` reads a protected path and writes an ordinary
+file, so it is an owner decision, not the floor. The **dangerous** class
 (recursive delete, force-push, `sudo`, container and service control, nested
 interpreters, environment dumps, pipe-to-shell) waits for the owner wherever
-`shell_run` is approval-gated, and an unattended run's dangerous command is refused
-rather than queued. With `SHELL_APPROVAL_MODE=per_command` (the default) a safe
+`shell_run` is approval-gated. In an unattended run nobody can answer, so the
+owner's `SECURITY_SETTINGS` row `unattended_dangerous_shell` decides: `sandbox`
+(default) runs it inside the sandbox, never on the host; `refuse` refuses it. With `SHELL_APPROVAL_MODE=per_command` (the default) a safe
 command skips the wait; `every` makes every gated call wait; `smart` lets the aux model
 deny a dangerous command or approve it — but only inside a sandbox, never on the host.
 `SHELL_DENY` / `SHELL_ALLOW` (and the `shell.deny` / `shell.allow` prefs) refuse or pre-approve
@@ -385,28 +389,30 @@ These are not bugs to be quietly worked around; they are documented, deliberate
 trade-offs (or, in one case, an unwired-but-designed lever). Naming them precisely
 is the point of this page.
 
-### a) Local host execution is unavailable in custody processes
+### a) Host work runs beside the wallet; the key is isolated
 
-`tools/code_exec/sandbox_guard.py` requires a sandbox-capable backend whenever
-`AGENT_WALLET_ENABLED` is true **or** a supported master seed is present
-(`AGENT_WALLET_MASTER_SEED`, `PAYMENT_MASTER_SEED`, or legacy `MASTER_SEED`).
-`POLYROB_LOCAL=1` cannot bypass this requirement. Local instances without custody
-retain the host subprocess option; servers always require a sandbox backend.
-This gate controls the supported tool path, not arbitrary trusted Python code.
+Wallet custody does not refuse host work. Local `run_code`, git, LSP diagnostics,
+coding snapshots, MCP stdio, lazy installs and `self_env` run with the wallet
+present, in every signer mode. The key is protected by isolation, not by refusing
+the tool: the seed leaves `os.environ` when the wallet config loads, the process is
+non-dumpable (a same-UID child cannot read `/proc/<pid>/environ`), and every host
+child gets an allowlisted env with no custody secret. Two things still refuse
+(`core/security/host_execution.py::host_execution_refusal`): the floor row
+`key_isolation_gap` (a key is held and the non-dumpable hardening did not hold), and
+the owner's `SECURITY_SETTINGS` row `host_exec_under_custody=refuse`. Servers always
+require a sandbox backend for `run_code`. The trade-off: a host child runs with the
+agent's own OS user, so it can read files that user can read and, under a remote
+signer, call the signer socket (the signer's caps and on-box approvals bound it).
 
-### b) Host Git, diagnostics and snapshots refuse alongside custody
+### b) Host Git, diagnostics and snapshots
 
-`tools/git/tool.py`, `tools/coding/lsp.py` and `tools/coding/snapshot.py` check the
-same custody predicate before spawning host binaries. Git returns a refusal;
-diagnostics and snapshots skip their optional work. They do not route into
-Docker. In a non-custody process these helpers still run with the host user's
-privileges and must only consume trusted workspaces and configuration.
+`tools/git/tool.py`, `tools/coding/lsp.py` and `tools/coding/snapshot.py` ask the
+same rule before spawning host binaries. They run with the host user's privileges
+and must only consume trusted workspaces and configuration.
 
-### c) MCP stdio is refused in custody processes
+### c) MCP stdio children
 
-MCP stdio refuses to start when the wallet is enabled or a seed is present.
-Use a separately isolated HTTP service instead. Without custody, MCP children
-are spawned through `tools/mcp/child_env.py::build_mcp_child_env`
+MCP children are spawned through `tools/mcp/child_env.py::build_mcp_child_env`
 (called from `tools/mcp/protocol.py`), which constructs the child env from a
 **fixed allowlist** (PATH/HOME/locale/runtime-lookup vars only).
 Credential-shaped variables — `AGENT_WALLET_MASTER_SEED`, LLM provider keys, DB
@@ -444,7 +450,8 @@ admits a turn only when ALL hold:
 
 1. `compute_posture_allows(ctx, 3)` — the owner's own, non-delegated, non-forged turn;
 2. `POLYROB_LOCAL` is on;
-3. no signing key is in the process (`host_execution_refusal`, the custody rule);
+3. `host_execution_refusal` passes (key isolation holds and the owner's
+   `host_exec_under_custody` row allows it);
 4. the turn was typed at a foreground terminal of this process (`polyrob` or
    `polyrob run`). Telegram, the API, `/v1`, A2A, rooms and the web console never
    qualify — not even the console on loopback, because behind a reverse proxy every

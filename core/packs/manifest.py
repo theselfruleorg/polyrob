@@ -9,10 +9,11 @@ directory on ``sys.path`` alike).
 Shape::
 
     id = "echo"
-    version = "0.1.0"
+    version = "0.1.0"                # first-party: omit (inherits the core version)
     summary = "..."
     pack_api = 1
     requires_core = ">=1.0"          # a PEP 440 specifier set; "" = any
+                                     #  (first-party: omit -> "==<core version>")
     requires_packs = []              # other pack ids, loaded first
     tier = "third-party"             # first-party requires a core-reviewed identity
     extra = ""                       # the polyrob extra carrying the pack's SDKs
@@ -92,9 +93,9 @@ _TOP_KEYS = frozenset({"id", "version", "summary", "homepage", "license", "pack_
 _TOOL_KEYS = frozenset({"capabilities", "untrusted_output", "cli", "gate", "permissions",
                         "verbs", "requires"})
 #: A pack tool is registered by the loader's phase 2, never by the CLI's
-#: row-derived registrars (``core.bootstrap``): no ``optional`` (it would need a
+#: row-derived registrars (``polyrob.app.bootstrap``): no ``optional`` (it would need a
 #: ``cli_registrar``). ``static`` = the CLI container serves the tool once phase 2
-#: has put its descriptor in the init order (``core.bootstrap._CLI_STATIC_TOOLS``).
+#: has put its descriptor in the init order (``polyrob.app.bootstrap._CLI_STATIC_TOOLS``).
 _PACK_CLI_MODES = frozenset({"none", "static", "incompatible"})
 
 
@@ -257,9 +258,18 @@ def parse(data: Dict[str, Any], path: Path) -> Manifest:
     extra = _str(data, "extra")
     if extra and not _EXTRA_RE.match(extra):
         raise ManifestError(f"extra {extra!r} must match {_EXTRA_RE.pattern}")
+    version, requires_core = _str(data, "version"), _str(data, "requires_core")
+    if tier == "first-party":
+        # W11: a first-party pack ships INSIDE polyrob (067, one install), so it
+        # IS the core version. Absent fields inherit it — a release bump edits
+        # the version SSOT (pyproject.toml) only. The tier claim itself is
+        # identity-checked by the loader (dist polyrob + its entry point).
+        from core.version import get_version
+        version = version or get_version()
+        requires_core = requires_core or f"=={get_version()}"
     return Manifest(
-        id=pack_id, version=_str(data, "version"), summary=_str(data, "summary"),
-        pack_api=pack_api, requires_core=_str(data, "requires_core"),
+        id=pack_id, version=version, summary=_str(data, "summary"),
+        pack_api=pack_api, requires_core=requires_core,
         requires_packs=_str_list(data.get("requires_packs", []), "requires_packs"),
         tier=tier, capabilities=caps,
         tools=tuple(_tool(tid, spec) for tid, spec in tools.items()),

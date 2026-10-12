@@ -62,7 +62,7 @@ async def api_tokens_act(request: Request, action: str):
     if not chain or not address:
         return JSONResponse({"ok": False, "message": t("money.tokens.need_address")},
                             status_code=400)
-    ctx = tt.owner_seat_ctx(uid)
+    ctx = tt.owner_seat_ctx(uid, "console")
     db = _positions_db()
     if action == "trust":
         ok, msg = tt.trust(ctx, chain, address, str(body.get("symbol") or "") or None,

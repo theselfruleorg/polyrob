@@ -1,10 +1,8 @@
 # The data half of the markets pack (067 P4): read by core.packs.manifest
 # WITHOUT importing this package, registered in the loader's phase 1.
 id = "markets"
-version = "1.3.0"
 summary = "Prediction markets and perps: Polymarket and Hyperliquid (read tools, gated trade tools, API routes)"
 pack_api = 1
-requires_core = "==1.3.*"
 requires_packs = []
 tier = "first-party"
 # 067 (one install): the core extra that carries this pack's SDKs. The pack

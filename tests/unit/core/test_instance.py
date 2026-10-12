@@ -145,17 +145,30 @@ def test_instance_id_defaults_to_polyrob():
     assert resolve_instance_id(env={}) == "polyrob"
 
 
-def test_instance_id_from_bot_instance_id_env():
-    assert resolve_instance_id(env={"BOT_INSTANCE_ID": "acme"}) == "acme"
+def test_retired_bot_instance_id_alone_refuses():
+    # BOT_INSTANCE_ID was retired in 1.4: set alone it refuses with the rename
+    # instead of silently opening the default instance's data home.
+    from core.config_policy.retired_flags import RetiredFlagError
+    with pytest.raises(RetiredFlagError, match="POLYROB_INSTANCE_ID"):
+        resolve_instance_id(env={"BOT_INSTANCE_ID": "acme"})
 
 
-def test_instance_id_polyrob_env_wins_over_legacy_rob_alias():
-    # POLYROB_INSTANCE_ID is the canonical name; BOT_INSTANCE_ID also accepted.
+def test_instance_id_canonical_wins_over_retired_alias():
     env = {"BOT_INSTANCE_ID": "legacy", "POLYROB_INSTANCE_ID": "canonical"}
     assert resolve_instance_id(env=env) == "canonical"
 
 
+def test_retired_bot_owner_user_id_alone_refuses():
+    from core.config_policy.retired_flags import RetiredFlagError
+    from core.instance import resolve_owner_principal
+    with pytest.raises(RetiredFlagError, match="POLYROB_OWNER_USER_ID"):
+        resolve_owner_principal(env={"BOT_OWNER_USER_ID": "rob"})
+    assert resolve_owner_principal(
+        env={"BOT_OWNER_USER_ID": "old", "POLYROB_OWNER_USER_ID": "rob"}) == "rob"
+
+
 def test_instance_id_blank_falls_back_to_default():
+    assert resolve_instance_id(env={"POLYROB_INSTANCE_ID": "  "}) == "polyrob"
     assert resolve_instance_id(env={"BOT_INSTANCE_ID": "  "}) == "polyrob"
 
 

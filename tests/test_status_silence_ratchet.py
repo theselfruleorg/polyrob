@@ -21,6 +21,15 @@ REPO = Path(__file__).resolve().parent.parent
 # file -> max allowed SILENT except-handlers. Shrink-only.
 CEILINGS = {
     "core/status_snapshot.py": 0,
+    # W9 (2026-10-10): the types and section builders split out of the snapshot.
+    "core/status_types.py": 0,
+    "core/status_session.py": 0,
+    "core/status_work.py": 0,
+    "core/status_rails.py": 0,
+    "core/status_loops.py": 0,
+    "core/status_delivery.py": 0,
+    "core/status_rooms.py": 0,
+    "core/status_identity.py": 0,
     "core/status_knowledge.py": 0,
     "core/status_render.py": 0,
     "core/status_custody.py": 0,  # 066 P0
@@ -35,7 +44,13 @@ CEILINGS = {
     "agents/task/agent/core/live_health.py": 1,
     "core/config_policy/posture_card.py": 1,
     "cron/digest.py": 2,
-    "surfaces/telegram/harness.py": 34,
+    "surfaces/telegram/harness.py": 32,
+    # W9 (2026-10-10): the owner reply helpers that left harness.py.
+    "surfaces/telegram/status_ops.py": 0,
+    "surfaces/telegram/prefs_ops.py": 0,
+    "surfaces/telegram/kb_ops.py": 1,
+    "surfaces/telegram/approval_ops.py": 1,
+    "surfaces/telegram/admin_verbs.py": 0,
     # 2026-08-28: 10 -> 3. The three survivors are not status omissions:
     # a candidate-path scan `continue` (playwright probe), an env-file
     # candidate scan `continue`, and a float-parse fallback in

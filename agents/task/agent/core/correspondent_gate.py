@@ -261,16 +261,23 @@ def build_reply_allowed(
 
 def install_correspondent_gate(controller, orchestrator):
     """Enforce existing taint regardless of the flag admitting new correspondents."""
-    hook = make_correspondent_gate_hook(
-        lambda: bool(getattr(orchestrator, "_correspondent_tainted", False)),
+    hook = build_correspondent_gate(controller, orchestrator)
+    controller.register_pre_tool_call_hook(hook, fail_mode="closed")
+    return hook
+
+
+def build_correspondent_gate(controller, orchestrator):
+    """The correspondent gate over *orchestrator*'s taint (the policy chain,
+    ``tools/controller/policy_chain.py``, registers it in its order)."""
+    from core.security.taints import correspondent_probe
+    return make_correspondent_gate_hook(
+        correspondent_probe(orchestrator),
         resolve_tool=build_tool_resolver(controller),
         get_taint_sources=lambda: set(getattr(orchestrator, "_correspondent_taint_sources", None) or ()),
         reply_allowed=build_reply_allowed(
             lambda: getattr(orchestrator, "container", None),
             lambda: getattr(orchestrator, "user_id", "") or ""),
     )
-    controller.register_pre_tool_call_hook(hook, fail_mode="closed")
-    return hook
 
 
 def make_correspondent_gate_hook(

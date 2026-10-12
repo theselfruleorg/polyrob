@@ -37,7 +37,8 @@ def interactive_tool_ids() -> List[str]:
     if raw is not None:
         ids = [t.strip() for t in raw.split(",") if t.strip()]
         return ids or ["filesystem", "task"]
-    from agents.task.constants import autonomous_mode_tools, full_autonomy_enabled
+    from agents.task.constants import autonomous_mode_tools
+    from core.config_policy import full_autonomy_enabled
     from agents.task.tool_defaults import with_compute_tools, resolve_toolset
     if full_autonomy_enabled():
         # `autonomous_mode_tools()`, not the bare constant: it folds in the defi

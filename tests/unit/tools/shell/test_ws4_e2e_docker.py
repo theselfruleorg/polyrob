@@ -16,7 +16,7 @@ from tools.shell.tool import ShellTool, ShellRunParams
 from tools.shell.process_registry import ProcessRegistry
 from tools.shell.backend_pool import get_shell_backend, teardown_session
 from tools.shell.loopback_allow import clear_loopback_ports
-from tools.controller.execution_context import ActionExecutionContext
+from agents.task.loop_types.execution_context import ActionExecutionContext
 
 _needs_docker = pytest.mark.skipif(shutil.which("docker") is None, reason="docker not installed")
 

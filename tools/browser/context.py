@@ -49,14 +49,14 @@ PLAYWRIGHT_MISSING_HINT = (
 	"pip install 'polyrob[browser]' && python -m playwright install chromium"
 )
 
-from tools.browser.views import (
+from agents.task.loop_types.browser_views import (
 	BrowserError,
 	BrowserState,
 	TabInfo,
 	URLNotAllowedError,
 )
 from tools.dom.service import DomService
-from tools.dom.views import DOMElementNode, SelectorMap
+from agents.task.loop_types.dom_views import DOMElementNode, SelectorMap
 from utils.time_utils import time_execution_sync
 
 if TYPE_CHECKING:
@@ -885,9 +885,9 @@ class BrowserContext:
 					# Mark as cached
 					session.cached_state._is_cached = True
 
-			# Save cookies if a file is specified
-			if self.config.cookies_file:
-				asyncio.create_task(self.save_cookies())
+			if self.config.cookies_file:  # save cookies; retained, never GC'd mid-write
+				from core.async_bridge import spawn_retained
+				spawn_retained(self.save_cookies())
 
 			return session.cached_state
 		except Exception as e:

@@ -3,7 +3,7 @@ once at step 1 with a task-only query (cadence default 0 off-local) — and the
 step-1 brain enrichment is dead because next_goal is empty there. Autonomous
 sessions now default to cadence 3 (like local); an explicit env still wins.
 """
-from agents.task.constants import memory_prefetch_cadence
+from core.config_policy import memory_prefetch_cadence
 
 
 def test_autonomous_defaults_to_cadence_3(monkeypatch):

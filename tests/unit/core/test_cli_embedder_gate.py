@@ -57,7 +57,7 @@ def test_embedder_not_registered_by_default(monkeypatch):
     monkeypatch.setitem(sys.modules, "sentence_transformers", poisoned)
 
     # Force fresh import of bootstrap so it sees the patched env
-    import core.bootstrap as bootstrap
+    import polyrob.app.bootstrap as bootstrap
     importlib.reload(bootstrap)
 
     container = _FakeContainer()
@@ -98,7 +98,7 @@ def test_embedder_registered_lazily_when_kb_enabled(monkeypatch):
     stub.SentenceTransformer = _StubST
     monkeypatch.setitem(sys.modules, "sentence_transformers", stub)
 
-    import core.bootstrap as bootstrap
+    import polyrob.app.bootstrap as bootstrap
     importlib.reload(bootstrap)
     from core.embedding import LazyEmbedder
 
@@ -139,7 +139,7 @@ def test_embedder_failopen_when_st_not_installed(monkeypatch):
 
     monkeypatch.setattr(_ilu, "find_spec", _fake_find_spec)
 
-    import core.bootstrap as bootstrap
+    import polyrob.app.bootstrap as bootstrap
     importlib.reload(bootstrap)
 
     container = _FakeContainer()
@@ -169,7 +169,7 @@ def test_embedder_registered_when_local_vector_backend(monkeypatch):
     fake_st_mod.SentenceTransformer = _StubST
     monkeypatch.setitem(sys.modules, "sentence_transformers", fake_st_mod)
 
-    import core.bootstrap as bootstrap
+    import polyrob.app.bootstrap as bootstrap
     importlib.reload(bootstrap)
 
     container = _FakeContainer()
@@ -198,7 +198,7 @@ def test_embedder_registered_in_local_mode(monkeypatch):
     fake_st_mod.SentenceTransformer = _StubST
     monkeypatch.setitem(sys.modules, "sentence_transformers", fake_st_mod)
 
-    import core.bootstrap as bootstrap
+    import polyrob.app.bootstrap as bootstrap
     importlib.reload(bootstrap)
 
     container = _FakeContainer()
@@ -232,7 +232,7 @@ def test_embedder_not_double_registered(monkeypatch):
     fake_st_mod.SentenceTransformer = _CountedST
     monkeypatch.setitem(sys.modules, "sentence_transformers", fake_st_mod)
 
-    import core.bootstrap as bootstrap
+    import polyrob.app.bootstrap as bootstrap
     importlib.reload(bootstrap)
 
     container = _FakeContainer()

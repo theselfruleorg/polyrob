@@ -180,6 +180,6 @@ def test_cli_container_registers_database_manager_source():
     goal/cron runs have the x402 payment-request store (the live
     'payment-request store unavailable' blocker) and metering truth."""
     import inspect
-    import core.bootstrap as bootstrap
+    import polyrob.app.bootstrap as bootstrap
     src = inspect.getsource(bootstrap.build_cli_container)
     assert "database_manager" in src

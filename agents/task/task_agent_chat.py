@@ -92,7 +92,7 @@ class TaskAgentChatMixin:
                     # W1: a genuine user turn clears the self-wake re-entry budget so
                     # the agent can again earn forged continuations on its own work.
                     try:
-                        from agents.task.constants import AutonomyConfig
+                        from core.config_policy import AutonomyConfig
                         if AutonomyConfig.self_wake_enabled():
                             from agents.task.agent.core.self_wake import get_reentry_budget
                             get_reentry_budget().reset(existing_session_id)
@@ -454,7 +454,7 @@ class TaskAgentChatMixin:
         # workspace yet, and the process CWD (the install tree on a server) is never a
         # safe root for a remote caller: refuse @file/@folder/@diff until one exists.
         try:
-            from agents.task.constants import AutonomyConfig
+            from core.config_policy import AutonomyConfig
             if AutonomyConfig.context_references_enabled():
                 from agents.task.agent.messages.context_references import (
                     preprocess_context_references,

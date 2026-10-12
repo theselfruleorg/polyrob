@@ -18,9 +18,6 @@ fresh render.
 Fail direction: a missing, partial or unreadable ``foundation`` object ALWAYS
 falls back to the freshly built foundation. It never yields an empty prompt —
 the blob is validated in full before a single slot is replaced.
-
-Flag: ``FOUNDATION_REPLAY`` (default ON). ``false`` restores the pre-F13
-rebuild-always behaviour exactly.
 """
 
 from __future__ import annotations
@@ -29,7 +26,6 @@ import logging
 import os
 from typing import Any, Dict, List, Optional, Sequence
 
-from core.env import bool_env
 from agents.task.agent.messages.foundation_layers import FOUNDATION_LAYERS, layer_visible
 from modules.llm.messages import HumanMessage, MessageOrigin, SystemMessage
 
@@ -48,11 +44,6 @@ _OPTIONAL_KEYS = frozenset(layer.key for layer in FOUNDATION_LAYERS if layer.opt
 
 #: the identity triple that decides replay vs rebuild.
 IDENTITY_KEYS = ("model", "provider", "cwd")
-
-
-def foundation_replay_enabled() -> bool:
-	"""``FOUNDATION_REPLAY`` — replay the persisted foundation. Default ON."""
-	return bool_env("FOUNDATION_REPLAY", True)
 
 
 def emitted_tool_names(tools: Optional[Sequence[Any]]) -> List[str]:
@@ -166,13 +157,11 @@ def replay_foundation(manager: Any, blob: Any, log: Optional[Any] = None) -> boo
 	"""Replace the freshly built foundation with the persisted one.
 
 	Returns True when the persisted bytes were installed, False when the fresh
-	render stands (flag off, no/corrupt blob, or a changed identity triple —
+	render stands (no/corrupt blob, or a changed identity triple —
 	the last one logs ONE warning naming the cache cost).
 	"""
 	log = log or getattr(manager, "logger", None) or logger
 	if blob is None:
-		return False
-	if not foundation_replay_enabled():
 		return False
 
 	valid = _validated(blob)

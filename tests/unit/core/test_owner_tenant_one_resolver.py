@@ -265,7 +265,6 @@ def test_the_inline_tenant_stamps_read_the_one_resolver(dotted):
 _ENV_COMBINATIONS = [
     ("unbound", {}),
     ("bound", {"POLYROB_OWNER_USER_ID": "rob"}),
-    ("bot_owner", {"BOT_OWNER_USER_ID": "rob"}),
     ("local_owner", {"POLYROB_LOCAL_OWNER": "me"}),
     ("ladder", {"SURFACE_SUPER_ADMIN_USER_IDS": "u-admin,u-other"}),
     ("named_instance", {"POLYROB_INSTANCE_ID": "rob"}),

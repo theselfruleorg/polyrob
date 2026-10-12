@@ -106,7 +106,7 @@ async def perform_tool_call(controller, name: str, arguments, execution_context=
     Refusals are structured results (an answer the model can act on), never
     errors — a mis-shaped call is not a retryable failure.
     """
-    from tools.controller.types import ActionResult
+    from agents.task.loop_types.controller_types import ActionResult
 
     target = (name or "").strip()
     args = dict(arguments or {})

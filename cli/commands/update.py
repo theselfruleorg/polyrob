@@ -11,6 +11,7 @@ import json as _json
 import os
 import sys
 import urllib.request
+from typing import Optional
 
 import click
 
@@ -115,14 +116,14 @@ def _systemd_manual_steps(units: list) -> str:
     pip = f"{shlex.quote(sys.executable)} -m pip"
     if units:
         names = " ".join(units)
-        return ("cd <maintenance clone> && git pull --ff-only && bash scripts/deploy_prod.sh   "
-                f"(stops/starts {names}, migrates, verifies, auto-rolls back) — or, for a "
+        return ("run your deployment's own update from its source checkout (it stops/starts "
+                f"{names}, migrates, verifies and rolls back) — or, for a "
                 f"wheel install: sudo systemctl stop {names} && {pip} install -U polyrob && "
                 f"{_MIGRATE} && sudo systemctl daemon-reload && sudo systemctl start {names}")
     # Couldn't detect the unit set — name both known shapes and say how to check.
     return ("check which units exist (polyrob.service = headless agent, "
             "polyrob-x402-api.service = api): systemctl list-unit-files 'polyrob*' — then "
-            "cd <maintenance clone> && git pull --ff-only && bash scripts/deploy_prod.sh, or for a "
+            "run your deployment's own update from its source checkout, or for a "
             f"wheel install: stop them && {pip} install -U polyrob && {_MIGRATE} && "
             "sudo systemctl daemon-reload && sudo systemctl start <that unit>")
 
@@ -329,16 +330,202 @@ def _git_channel_status(ctx):
                         source_ref=f"branch {st['branch']}"), st
 
 
-def _do_apply(channel: str, assume_yes: bool, force: bool, as_json: bool,
-              wait_idle: float = 1800.0) -> None:
-    """Automated apply: wait for the wrap-up → snapshot → install → migrate →
-    verify → auto-rollback."""
+def _plan(channel: str):
+    """``(install ctx, status, branch state)`` — the check every apply path shares."""
     ctx = detect_install()
     git_state = None
     if channel == "git":
         status, git_state = _git_channel_status(ctx)
     else:
         status = resolve_status(channel=channel, fetch=_http_get, source=_source_for(ctx))
+    return ctx, status, git_state
+
+
+def _target_ref(channel: str, status) -> Optional[str]:
+    # Tag-pinned channels move HEAD to the released tag; --channel git fast-forwards a
+    # branch (target_ref=None). See cli/update/runners.py::build_runners.
+    return status.latest if channel != "git" else None
+
+
+def apply_for_boot(channel: str = "stable") -> dict:
+    """077: the update a ``/update`` (or ``update --apply`` against a running
+    service) asked for, applied by the agent process's BOOT step — the old
+    process has drained and exited, the new one has not built anything yet, so
+    nothing is live and the updater is never a child the restart kills.
+
+    The same plan → runners → ``apply_update`` as ``--apply``; no waiting and no
+    prompt (the owner confirmed the card). The result is a plain dict the boot
+    step stores on the request and the "back online" message reads. Never
+    raises."""
+    try:
+        ctx, status, git_state = _plan(channel)
+        if status.error is not None or status.latest is None:
+            return {"ok": False, "failed_step": "check", "error": status.human_note,
+                    "rolled_back": True, "from_version": status.current}
+        if not status.update_available and not (git_state and git_state.get("behind")):
+            return {"ok": False, "no_update": True, "from_version": status.current,
+                    "to_version": status.current}
+        runners = build_runners(ctx, target_ref=_target_ref(channel, status))
+        if runners is None:
+            return {"ok": False, "failed_step": "unsupported", "rolled_back": True,
+                    "error": f"no automated apply for a {ctx.method} install: "
+                             + _manual_steps_for(ctx.method, ctx.repo_root)}
+        uctx = resolve_update_context()
+        reasons = active_use_reasons(uctx.db_paths)  # this process is excluded
+        if reasons:
+            return {"ok": False, "failed_step": "in_use", "rolled_back": True,
+                    "error": "; ".join(reasons)}
+        with update_lock(uctx.snapshots_root):
+            res = apply_update(ctx=uctx, runners=runners,
+                               from_version=status.current, to_version=status.latest or "")
+        if res.ok:
+            try:
+                from cli.update.snapshot import prune_snapshots
+                prune_snapshots(uctx.snapshots_root, keep=3)
+            except Exception:
+                pass
+        return {"ok": bool(res.ok), "failed_step": res.failed_step or "",
+                "error": str(res.error) if res.error else "",
+                "rolled_back": bool(res.rolled_back),
+                "rollback_errors": list(res.rollback_errors),
+                "snapshot": res.snapshot.name if res.snapshot else "",
+                "from_version": status.current, "to_version": status.latest or "",
+                "method": ctx.method, "repo_root": str(ctx.repo_root or ""),
+                "old_sha": runners.state.get("old_sha", ""),
+                "old_branch": runners.state.get("old_branch", "")}
+    except Exception as exc:  # noqa: BLE001 — the boot must go on with the old code
+        return {"ok": False, "failed_step": "apply", "error": f"{type(exc).__name__}: {exc}",
+                "rolled_back": False}
+
+
+def rollback_for_boot(result: dict) -> dict:
+    """077: the update applied, but the new code never reached a healthy start
+    (``core.lifecycle.BOOT_FAILURE_ATTEMPTS`` starts in a row). Return the
+    checkout to the commit ``install()`` recorded and restore the pre-update
+    snapshot. Never raises; the dict says what happened."""
+    errors = []
+    try:
+        ctx = detect_install()
+        runners = build_runners(ctx, restore_to=(result.get("old_sha") or "",
+                                                 result.get("old_branch") or "HEAD"))
+        if runners is None or not result.get("old_sha"):
+            errors.append("code: no recorded commit to return to")
+        else:
+            runners.rollback_code()
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"code: {type(exc).__name__}: {exc}")
+    try:
+        uctx = resolve_update_context()
+        if result.get("snapshot"):
+            target = next((i for i in list_snapshots(uctx.snapshots_root)
+                           if i.name == result.get("snapshot") and i.complete), None)
+        else:
+            # An apply killed mid-way never reported its snapshot: the newest one —
+            # but only one taken by THIS apply. An older update's snapshot would
+            # overwrite every write since then; with none newer, the apply died
+            # before its snapshot completed, so nothing was migrated either.
+            target = latest_complete(uctx.snapshots_root)
+            started = float(result.get("started_at") or 0)
+            if target is not None and target.path.stat().st_mtime < started:
+                return {"ok": not errors, "errors": errors,
+                        "data": "not restored — no snapshot from this update"}
+        if target is None:
+            errors.append(f"data: snapshot {result.get('snapshot')!r} not found")
+        else:
+            with update_lock(uctx.snapshots_root):
+                restore_snapshot(target.path, data_home=uctx.data_home,
+                                 allowed_paths=[*uctx.config_paths, *uctx.dir_paths,
+                                                *uctx.db_paths])
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"data: {type(exc).__name__}: {exc}")
+    return {"ok": not errors, "errors": errors}
+
+
+def _running_service():
+    """The boot record of a SUPERVISED surface process that is alive, or None.
+
+    077: such a process is restarted through a request (drain → exit 75 →
+    the supervisor starts it → its boot step applies the update), never swapped
+    under. An unsupervised one (a terminal `polyrob gateway`) is the in-use
+    refusal below, as before."""
+    try:
+        from core import lifecycle as lc
+        boot = lc.read_boot(data_home=resolve_update_context().data_home)
+    except Exception:
+        return None
+    if not boot or not boot.get("supervisor"):
+        return None
+    pid = int(boot.get("pid") or 0)
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        return boot
+    except (OSError, ValueError):
+        return None
+    return boot
+
+
+def _apply_through_service(channel: str, status, ctx, boot: dict, assume_yes: bool,
+                           force: bool, as_json: bool, wait_idle: float) -> None:
+    """``update --apply`` against a running service: ask it to drain and restart
+    into the update, then wait for its own report."""
+    from cli.commands._service_ops import wait_for_request
+    from core import lifecycle as lc
+    if not as_json:
+        click.echo(f"Updating {status.current} → {status.latest} ({ctx.method}) through the "
+                   f"running service (pid {boot.get('pid')}).")
+        click.echo("Steps: wait for the agent to finish its work → restart → snapshot → install "
+                   "→ migrate → verify → start the new code (rollback on any failure, or if it "
+                   "does not start).")
+    if as_json and not assume_yes:
+        click.echo(_json.dumps({"applied": False, "reason": "confirmation_required",
+                               "hint": "pass --yes with --json"}))
+        sys.exit(EXIT_ERROR)
+    if not assume_yes and not click.confirm("Proceed?", default=False):
+        click.echo("Aborted.")
+        sys.exit(EXIT_UP_TO_DATE)
+    uctx = resolve_update_context()
+    req, created = lc.request_restart(
+        kind=lc.KIND_UPDATE, requested_by="cli", origin={"surface": "cli"},
+        reason="polyrob update --apply", channel=channel,
+        target_version=status.latest or "", drain_timeout=wait_idle, force=force,
+        data_home=uctx.data_home)
+    if not created and req.kind != lc.KIND_UPDATE:
+        msg = (f"A {req.describe()} is already open — let it finish, then run "
+               "`polyrob update --apply` again.")
+        click.echo(_json.dumps({"applied": False, "reason": "restart_pending", "detail": msg})
+                   if as_json else click.style(msg, fg="yellow"))
+        sys.exit(EXIT_ERROR)
+    if not created and not as_json:
+        click.echo(f"A {req.describe()} is already open — waiting for it.")
+    entry = wait_for_request(req.id, data_home=uctx.data_home,
+                             timeout=max(wait_idle, 0) + 900,
+                             echo=None if as_json else click.echo)
+    outcome = (entry or {}).get("outcome")
+    if outcome == "unclaimed":
+        entry = {"outcome": "unclaimed",
+                 "detail": ("No running service took the update request (it stopped, or it runs "
+                            "code older than the drained restart). Run `polyrob service stop`, "
+                            "then `polyrob update --apply` again, then `polyrob service start`.")}
+    ok = outcome == lc.OUTCOME_UPDATED
+    if as_json:
+        click.echo(_json.dumps({"applied": ok, "outcome": outcome or "timeout",
+                               "detail": (entry or {}).get("detail", ""),
+                               "version": (entry or {}).get("version"),
+                               "sha": (entry or {}).get("sha")}))
+    else:
+        detail = (entry or {}).get("detail") or ("no report from the service yet — check "
+                                                 "`polyrob service status`")
+        click.echo(click.style(detail, fg="green" if ok else "red"))
+    sys.exit(EXIT_UP_TO_DATE if ok else EXIT_ERROR)
+
+
+def _do_apply(channel: str, assume_yes: bool, force: bool, as_json: bool,
+              wait_idle: float = 1800.0, restart: bool = True) -> None:
+    """Automated apply: wait for the wrap-up → snapshot → install → migrate →
+    verify → auto-rollback. With a running service (and ``restart``), the
+    service drains, restarts and applies it at its boot (077)."""
+    ctx, status, git_state = _plan(channel)
     if status.error is not None or status.latest is None:
         msg = f"Cannot apply: {status.human_note}."
         click.echo(_json.dumps({"applied": False, "reason": "check_failed",
@@ -351,10 +538,7 @@ def _do_apply(channel: str, assume_yes: bool, force: bool, as_json: bool,
                    if as_json else msg)
         sys.exit(EXIT_UP_TO_DATE)
 
-    # Tag-pinned channels move HEAD to the released tag; --channel git fast-forwards a
-    # branch (target_ref=None). See cli/update/runners.py::build_runners.
-    target_ref = status.latest if channel != "git" else None
-    runners = build_runners(ctx, target_ref=target_ref)
+    runners = build_runners(ctx, target_ref=_target_ref(channel, status))
     if runners is None:
         manual = _manual_steps_for(ctx.method, ctx.repo_root)
         if as_json:
@@ -366,6 +550,12 @@ def _do_apply(channel: str, assume_yes: bool, force: bool, as_json: bool,
             fg="cyan"))
         click.echo(f"  {manual}")
         sys.exit(EXIT_ERROR)
+
+    boot = _running_service() if restart else None
+    if boot is not None:
+        _apply_through_service(channel, status, ctx, boot, assume_yes, force, as_json,
+                               wait_idle)
+        return  # exits
 
     uctx = resolve_update_context()
     # 058: perceive the agent's state and wait for the wrap-up. A live turn, a
@@ -413,7 +603,8 @@ def _do_apply(channel: str, assume_yes: bool, force: bool, as_json: bool,
         click.echo(click.style("Refusing to apply: POLYROB appears to be in use.", fg="red"))
         for r in reasons:
             click.echo(f"  - {r}")
-        click.echo("Stop the running server/REPL/agent first, then retry — or pass --force.")
+        click.echo("Stop the running server/REPL/agent first (`polyrob service stop`), then "
+                   "retry — or pass --force.")
         sys.exit(EXIT_ERROR)
 
     if not as_json:
@@ -475,24 +666,23 @@ def _do_apply(channel: str, assume_yes: bool, force: bool, as_json: bool,
 
 
 def _restart_hints() -> list:
-    """After a successful update, name what is still running the OLD code.
+    """After a direct apply (no running service took it), name what still runs
+    the OLD code and the one command that restarts it.
 
-    062: `polyrob service install` can now leave a background agent running,
-    and an update that rewrites the code under a live process changes nothing
-    until it restarts. Saying "updated" without saying that is the kind of
-    half-true report this repo keeps paying for.
+    062: an update that rewrites the code under a live process changes nothing
+    until it restarts. 077: a RUNNING supervised service never gets here — it
+    applies the update itself as it restarts — so the hint is for a service
+    that was stopped (or ``--no-restart``) and for system units.
     """
     out = []
     try:
-        from cli.commands.service import (LAUNCHD_LABEL, UNIT_NAME,
-                                          _launchd_plist_path, _platform,
+        from cli.commands.service import (_launchd_plist_path, _platform,
                                           _systemd_unit_path)
         plat = _platform()
-        if plat == "linux" and _systemd_unit_path().is_file():
-            out.append(f"  Restart the background service:  systemctl --user restart {UNIT_NAME}")
-        elif plat == "macos" and _launchd_plist_path().is_file():
-            out.append(f"  Restart the background service:  launchctl kickstart -k "
-                       f"gui/$(id -u)/{LAUNCHD_LABEL}")
+        if (plat == "linux" and _systemd_unit_path().is_file()) or \
+                (plat == "macos" and _launchd_plist_path().is_file()):
+            out.append("  Restart the background service on the new code:  "
+                       "polyrob service restart")
     except Exception:
         pass
     try:
@@ -528,9 +718,12 @@ def _restart_hints() -> list:
                    "to wrap up before swapping code (default 1800).")
 @click.option("--no-wait", "no_wait", is_flag=True,
               help="With --apply: refuse immediately when the agent is busy instead of waiting.")
+@click.option("--restart/--no-restart", "restart", default=True, show_default=True,
+              help="With --apply and a running background service: the service finishes its "
+                   "work, restarts and applies the update as it starts, then reports.")
 def update_cmd(check_only: bool, dry_run: bool, channel: str, do_apply: bool,
                do_rollback: bool, snapshot_name: str, do_list: bool, assume_yes: bool,
-               force: bool, as_json: bool, wait_idle: float, no_wait: bool):
+               force: bool, as_json: bool, wait_idle: float, no_wait: bool, restart: bool):
     """Check for and apply POLYROB updates."""
     if sum((check_only, dry_run, do_apply, do_rollback, do_list)) > 1:
         message = "Choose only one of --check, --dry-run, --apply, --rollback, --list-snapshots."
@@ -549,7 +742,8 @@ def update_cmd(check_only: bool, dry_run: bool, channel: str, do_apply: bool,
         _do_rollback(snapshot_name, assume_yes, as_json, force=force)
         return  # _do_rollback exits
     if do_apply:
-        _do_apply(channel, assume_yes, force, as_json, wait_idle=0.0 if no_wait else wait_idle)
+        _do_apply(channel, assume_yes, force, as_json, wait_idle=0.0 if no_wait else wait_idle,
+                  restart=restart)
         return  # _do_apply exits
 
     ctx = detect_install()

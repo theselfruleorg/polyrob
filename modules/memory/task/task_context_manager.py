@@ -46,6 +46,10 @@ logger = logging.getLogger(__name__)
 # permanent recallable memory.
 _REFLECTION_SUMMARY_MAX_CHARS = 2000
 
+#: Internal tuning (not env-driven): minimum findings before a session close
+#: runs a reflection.
+REFLECTION_SESSION_CLOSE_THRESHOLD = 5
+
 
 class SessionData:
     """Container for session-level components.
@@ -175,17 +179,14 @@ class TaskContextManager(BaseComponent):
         # is getattr(self, key, default) and REFLECTION_ON_SESSION_CLOSE is NOT a declared
         # field, so config.get NEVER read the environment — the flag was un-enableable dead
         # code (a byte-for-byte repeat of the UP-09 reflection-gate bug fixed 20 lines above).
-        from core.env import bool_env as _bool_env, int_env as _int_env
-        # Posture-governed default (AUTONOMY_POSTURE owner-visible/full
-        # turn it on; explicit env still wins). Lazy import + fail-open to the
-        # direct env read so modules.memory never hard-depends on agents.task.
+        # Posture member (AUTONOMY_POSTURE owner-visible/full turn it on; a
+        # POLYROB_OVERRIDES entry wins). Lazy import; a failed import reads OFF.
         try:
             from core.config_policy import AutonomyConfig as _AC
             self.reflection_on_session_close = _AC.reflection_on_session_close()
         except Exception:
-            self.reflection_on_session_close = _bool_env("REFLECTION_ON_SESSION_CLOSE", False)
-        self.reflection_session_close_threshold = _int_env(
-            "REFLECTION_SESSION_CLOSE_THRESHOLD", 5)
+            self.reflection_on_session_close = False
+        self.reflection_session_close_threshold = REFLECTION_SESSION_CLOSE_THRESHOLD
         self.forgetting_enabled = config.get("FORGETTING_ENABLED", True)
         # Storage cap for importance-based forgetting. Default lowered 500 -> 60 so
         # pruning actually engages (retriever displays ~15; 60 keeps headroom without
@@ -215,7 +216,7 @@ class TaskContextManager(BaseComponent):
         self.reflection_meter_ctx: Optional[dict] = None
         # ⚠️ PER-SESSION reflection context. The two attributes above are process-wide,
         # but this manager is a container SINGLETON shared by every session in the
-        # process (core/initialization.py registers memory_manager as
+        # process (polyrob/app/initialization.py registers memory_manager as
         # ServiceScope.SINGLETON, and every SessionOrchestrator gets the same
         # container). Agent construction wrote `reflection_llm`/`reflection_meter_ctx`
         # directly on the instance, so the LAST session to construct owned them: one

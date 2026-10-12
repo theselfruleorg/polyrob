@@ -13,13 +13,12 @@ seam and the ingest path that already exists — **no second chunker, no second
 walker, no second store.** `kb_ingest` keeps doing the work, so the secret skip,
 the binary skip, the byte cap and the unchanged-hash dedup all apply unchanged.
 
-Three gates, in order:
+Two gates, in order:
 
-1. `KB_AUTO_INGEST_ARTIFACTS` (default **ON**) — the revert.
-2. `KB_ENABLED` — an instance that never asked for a knowledge base must not
+1. `KB_ENABLED` — an instance that never asked for a knowledge base must not
    grow one. With KB off this module is a no-op even though the sqlite provider
    carries the KB mixin either way.
-3. :func:`should_ingest` — what a document IS. A run log is a RECORD, not
+2. :func:`should_ingest` — what a document IS. A run log is a RECORD, not
    knowledge: indexing one makes every recall noisier and is exactly the mix
    that put a live position table and an append-only log in one 1 MB file on
    2026-09-21. Until 060 WS-3 lands the declared marker, this reads the marker
@@ -33,8 +32,6 @@ from __future__ import annotations
 import logging
 import os
 from typing import Any, Dict, Optional, Set
-
-from core.env import bool_env
 
 logger = logging.getLogger(__name__)
 
@@ -68,9 +65,7 @@ _PENDING: Set[Any] = set()
 
 
 def kb_auto_ingest_enabled() -> bool:
-    """Both gates: the revert flag AND an instance that asked for a KB."""
-    if not bool_env("KB_AUTO_INGEST_ARTIFACTS", True):
-        return False
+    """The instance asked for a KB."""
     try:
         from core.config_policy.autonomy_config import AutonomyConfig
         return bool(AutonomyConfig.kb_enabled())

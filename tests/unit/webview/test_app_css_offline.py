@@ -1,7 +1,7 @@
 """The console's stylesheet family — offline-complete, ONE design, and it ships.
 
 The console stylesheet must remain fully offline:
-``webview/static/app/app.css`` used to be ``docs/design/040/mockup.css`` byte for
+``webview/static/app/app.css`` used to be the 040 mockup stylesheet byte for
 byte, frozen by a test in this file, while every ``layout.html`` page kept the
 refined terminal design in ``webview/static/css/``. Two visual products. The rule
 now: **mockups are schemas, not a stylesheet.** ``app.css`` is the five

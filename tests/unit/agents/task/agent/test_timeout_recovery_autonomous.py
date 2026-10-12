@@ -14,7 +14,7 @@ import pytest
 from pydantic import BaseModel
 
 from agents.task.agent.core.llm_runner import LLMRunnerMixin
-from tools.controller.registry.views import ActionModel
+from agents.task.loop_types.registry_views import ActionModel
 
 
 class _Send(BaseModel):

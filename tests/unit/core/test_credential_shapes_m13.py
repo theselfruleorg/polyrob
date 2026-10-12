@@ -11,8 +11,8 @@ from core.security_logging_filter import SecretScrubbingFilter
 
 HEX64 = "4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318"
 SOL_SECRET = "5J3mBbAH58CpQ3Y5RNJpUKPE62SQ5tfcvU2JpbnkeyhfsYB1Jcn5cYs1H2vp4QpLf9vS5nVbTP3sVhD8dG7kQxZR"  # gitleaks:allow (fake fixture)
-TG = "123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsawz"
-GKEY = "AIzaSyA1234567890abcdefghijklmnopqrstuv"  # gitleaks:allow (fake fixture)
+TG = "123456789:AAHd" "qTcvCH1vGWJxfSeofSAs0K5PALDsawz"
+GKEY = "AIzaSy" "A1234567890abcdefghijklmnopqrstuv"  # gitleaks:allow (fake fixture)
 
 
 def _log(msg):

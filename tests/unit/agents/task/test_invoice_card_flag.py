@@ -5,7 +5,7 @@
 An explicit ``INVOICE_CARD_ENABLED`` env value always wins over the local-mode default.
 """
 
-from agents.task.constants import invoice_card_enabled
+from core.config_policy import invoice_card_enabled
 
 
 def test_off_by_default(monkeypatch):

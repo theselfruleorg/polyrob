@@ -11,6 +11,6 @@ def test_anysite_tool_registered():
 
 
 def test_anysite_in_cli_registerable():
-    from core.bootstrap import cli_unavailable_tools
+    from core.cli_tool_tables import cli_unavailable_tools
     # anysite must NOT be reported unavailable in the CLI
     assert "anysite" not in cli_unavailable_tools(["anysite"])

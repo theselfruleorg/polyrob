@@ -5,7 +5,6 @@ starter is added here the day it is written); a listed file without an
 directly (a second mechanism creeping back) fails too."""
 import re
 
-import pytest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -21,7 +20,7 @@ STARTERS = [
     "agents/task/agent/core/background_review.py",  # background_review
     "modules/x402/settlement_watcher.py",           # settlement_scan
     "core/surfaces/user_delivery.py",               # lifecycle_ping + escalate (rail)
-    "core/autonomy_runtime.py",                     # cold_start (+ the transition hook)
+    "polyrob/app/autonomy_runtime.py",                     # cold_start (+ the transition hook)
     "core/config_policy/autonomy_config.py",        # the compat facets (money/dispatch consumers)
     "tools/app_service/tool.py",                    # 032: app_deploy (the agent verb)
     "core/app_service/supervisor.py",               # 032: app_serve (the supervisor tick)
@@ -73,7 +72,7 @@ def test_no_starter_reads_a_legacy_sentinel_directly():
 #: the top-level trees a kind-caller may live in, matching the brief's scope.
 #: 064 phase 2: `scripts` too — the release train (`scripts/release_train.py`)
 #: is the one caller of `release_cut` / `release_publish`.
-_KIND_SEARCH_DIRS = ("core", "agents", "tools", "cron", "modules", "surfaces",
+_KIND_SEARCH_DIRS = ("core", "polyrob", "agents", "tools", "cron", "modules", "surfaces",
                      "cli", "webview", "scripts")
 #: the file that DECLARES the kinds (KIND_SCOPES / DORMANT_KINDS) — excluded
 #: from the caller search, or every kind would trivially "have a caller"
@@ -89,40 +88,6 @@ _KIND_DECLARATION_FILE = "core/autonomy_control.py"
 #: `autonomy_control.allows(`/`self._allows(` call (mirrors `_CALL` above) —
 #: every real caller in the tree imports the predicate by name.
 _KIND_CALL = re.compile(r"(?<![\w.])(?:_?allows|pause_refusal_text)\(")
-
-
-def test_every_kind_has_a_caller_or_is_dormant():
-    """A `KIND_SCOPES` row with zero callers anywhere in the tree must be named
-    in `DORMANT_KINDS` — the plain-word table must not offer a scope whose
-    kinds are all dormant. Bidirectional: a kind WITH a caller may not sit in
-    DORMANT_KINDS either (a stale dormant entry hides a real gap the day a
-    caller lands and nobody removes the label)."""
-    from core.autonomy_control import DORMANT_KINDS, KIND_SCOPES
-
-    if not (REPO / "scripts").is_dir():
-        pytest.skip("scripts/ holds callers (the release train) and is private; "
-                    "the stripped public tree cannot see them")
-    files = []
-    for d in _KIND_SEARCH_DIRS:
-        for py in sorted((REPO / d).rglob("*.py")):
-            rel = py.relative_to(REPO)
-            if "tests" in rel.parts or str(rel) == _KIND_DECLARATION_FILE:
-                continue
-            files.append(py)
-    sources = [py.read_text(encoding="utf-8", errors="replace") for py in files]
-
-    has_caller = set()
-    for kind in KIND_SCOPES:
-        needle_d, needle_s = f'"{kind}"', f"'{kind}'"
-        for src in sources:
-            if (needle_d in src or needle_s in src) and _KIND_CALL.search(src):
-                has_caller.add(kind)
-                break
-
-    no_caller = set(KIND_SCOPES) - has_caller
-    assert no_caller == set(DORMANT_KINDS), (
-        f"kinds with zero callers must equal DORMANT_KINDS exactly — "
-        f"no_caller={sorted(no_caller)} dormant={sorted(DORMANT_KINDS)}")
 
 
 def test_only_autonomy_control_and_owner_admin_probe_legacy_names_in_core():

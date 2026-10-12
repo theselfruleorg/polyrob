@@ -21,17 +21,13 @@ exempts a file THIS session already wrote (the agent's own draft), and a write
 whose only change is to ADD the ``kind: instruction`` declaration on top of the
 unchanged body (the one-step way to declare a living document).
 
-``DOC_KIND_ENFORCED`` (default ON) — ``false`` restores judgement-only writes.
-
-Pure ``core`` (stdlib + ``core.env``).
+Pure ``core`` (stdlib only).
 """
 from __future__ import annotations
 
 import os
 import re
 from typing import Dict, List, Optional, Tuple
-
-from core.env import bool_env
 
 KIND_INSTRUCTION = "instruction"
 KIND_RECORD = "record"
@@ -43,12 +39,6 @@ DOC_SUFFIXES = (".md", ".markdown")
 
 _FM_RE = re.compile(r"\A---[ \t]*\r?\n(?P<body>.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.DOTALL)
 _KV_RE = re.compile(r"^\s*(?P<key>[A-Za-z_][\w-]*)\s*:\s*(?P<value>.*?)\s*$")
-
-
-def doc_kind_enforced() -> bool:
-    """``DOC_KIND_ENFORCED`` — refuse a rewrite of a RECORD. Default ON.
-    Literal name on purpose (``test_flags_reverse`` scans for it)."""
-    return bool_env("DOC_KIND_ENFORCED", True)
 
 
 def is_doc_path(path: str) -> bool:
@@ -107,7 +97,7 @@ def record_write_refusal(display_path: str, old: Optional[str], new: Optional[st
     one-step ``kind: instruction`` declaration. Everything else on a record is
     refused with the remedy named.
     """
-    if not doc_kind_enforced() or not is_doc_path(display_path):
+    if not is_doc_path(display_path):
         return None
     if old is None or not old.strip() or written_this_session:
         return None
@@ -176,6 +166,6 @@ def classify_tree(root: str, *, max_files: int = 2000, max_depth: int = 6) -> Di
 
 __all__ = [
     "KIND_INSTRUCTION", "KIND_RECORD", "KINDS", "DOC_SUFFIXES",
-    "doc_kind_enforced", "is_doc_path", "parse_front_matter", "doc_kind",
+    "is_doc_path", "parse_front_matter", "doc_kind",
     "is_declared", "supersedes", "record_write_refusal", "classify_tree",
 ]

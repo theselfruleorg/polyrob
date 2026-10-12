@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import time
 import uuid
 from typing import Any, Optional
@@ -24,11 +23,12 @@ logger = logging.getLogger(__name__)
 _SIGNAL_MAX = 2000
 
 
+#: Internal tuning (not env-driven): minimum seconds between two sends.
+SIGNAL_SEND_MIN_INTERVAL_SEC = 1.0
+
+
 def _min_interval() -> float:
-    try:
-        return float(os.getenv("SIGNAL_SEND_MIN_INTERVAL_SEC", "1.0"))
-    except ValueError:
-        return 1.0
+    return SIGNAL_SEND_MIN_INTERVAL_SEC
 
 
 def target_from_session_key(session_key: str) -> str:
@@ -60,8 +60,8 @@ def parse_envelope(envelope: dict, account: str,
     Skips our own sync messages, receipts and typing indicators. A group
     message keys the chat as ``group.<groupId>`` with chat_type "group"
     (W3 gating applies); Signal has no @mention concept → ``mentions_bot``
-    stays None (mention-gated groups therefore stay silent unless
-    GROUP_REQUIRE_MENTION=false).
+    stays None (mention-gated groups therefore stay silent unless the room's
+    ``chat.mode`` or ``GROUP_DEFAULT_MODE`` is ``active``).
     """
     if not isinstance(envelope, dict):
         return None

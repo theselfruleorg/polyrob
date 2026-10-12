@@ -77,6 +77,7 @@ _COMMANDS = ("/task", "/cancel", "/new", "/help",
              "/mcp",   # per-tenant MCP servers; owner-only (core/mcp_admin.py)
              "/kb", "/files",
              "/dev",  # owner ↔ on-host dev-loop rail (proposal 027 WS-1)
+             "/restart", "/update",  # 077: drained restart / update, card-confirmed
              "/start")  # Telegram first-contact convention -> welcome (030 L9);
                         # NOT owner-gated, so it stays out of _OWNER_ADMIN_COMMANDS
 
@@ -545,10 +546,8 @@ async def _route_inbound_impl(
                 # return site, so an owner COMMAND still gets through.
                 _may_reply, _cap_why = caps.may_reply(_surf, _chat)
                 _room_reply_capped = not _may_reply
-            # 044 T17: `chat.mode` decides whether this line wakes the agent.
-            # The legacy GROUP_REQUIRE_MENTION gate is still honoured, but as an
-            # ALIAS resolved inside ChatPolicy.defaults() — one gate, not two
-            # that can disagree. The owner-facing denial slug is unchanged
+            # 044 T17: `chat.mode` decides whether this line wakes the agent —
+            # the one group gate. The owner-facing denial slug is unchanged
             # (`no_mention`): what the owner sees is still "you were not
             # addressed", which is what every mode but `active` means.
             from core.runtime_paths import data_dir_or_home

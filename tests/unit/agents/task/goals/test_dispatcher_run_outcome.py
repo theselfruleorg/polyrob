@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 from agents.task.goals.board import Goal, STATUS_BLOCKED, STATUS_READY
 from agents.task.goals.dispatcher import GoalDispatcher
-from tools.controller.types import ActionResult
+from agents.task.loop_types.controller_types import ActionResult
 
 
 LIVE_BLOCKED_TEXT = (

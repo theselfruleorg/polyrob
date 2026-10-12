@@ -16,14 +16,13 @@ runs on a box with no unit-file env management. Nothing else needs it:
 - **The local CLI** keeps these files only as the LOWEST-precedence
   back-compat layers. CLI keys belong in `~/.polyrob/.env` — copy them once
   with `polyrob config migrate`. (The automatic key backfill from this
-  directory is retired; see `POLYROB_ENV_KEY_BACKFILL` in
-  `docs/CONFIGURATION.md`.)
+  directory is retired.)
 
 ## Environment names
 
 Exactly two names are meaningful: `development` (default) and `production`.
 There is **no staging environment**. The active name resolves
-`CONFIG_ENV` > `ENV` > `development` (`core/bootstrap.py::load_env`).
+`CONFIG_ENV` > `ENV` > `development` (`polyrob/app/bootstrap.py::load_env`).
 
 ## Layering (SSOT: `core.paths.env_file_candidates`)
 

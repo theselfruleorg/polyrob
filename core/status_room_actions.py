@@ -66,6 +66,6 @@ def _room_actions_section(user_id: str, data_dir: str) -> Section:
 
 
 register_status_section(
-    "room_actions", lambda ctx: _ss._guarded("room_actions", _ss._room_actions_section,
+    "room_actions", lambda ctx: _ss._guarded("room_actions", _room_actions_section,
                                              ctx.uid, ctx.data_dir),
     tenant=False)

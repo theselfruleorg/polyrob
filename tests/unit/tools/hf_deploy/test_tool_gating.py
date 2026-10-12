@@ -12,7 +12,7 @@ from tests.unit.tools.hf_deploy.test_tool_deploy import (
 
 
 def _ctx(**kw):
-    from tools.controller.execution_context import ActionExecutionContext
+    from agents.task.loop_types.execution_context import ActionExecutionContext
     base = dict(session_id="sess-hf", user_id="owner-1", role="orchestrator",
                 is_sub_agent=False)
     base.update(kw)
@@ -215,7 +215,7 @@ def test_first_publish_denied_for_autonomous_goal_run_under_full_autonomy(
     monkeypatch.setenv("POLYROB_LOCAL", "1")
     _constants.reset_autonomy_mode_warnings()
 
-    from agents.task.goals.autonomy_marker import mark_autonomous
+    from core.autonomy_marker import mark_autonomous
     mark_autonomous("sess-hf")  # the _ctx() default session_id
 
     tool = make_tool(tmp_path, orch=green_orch)

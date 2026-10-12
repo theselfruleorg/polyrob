@@ -7,9 +7,16 @@ from pathlib import Path
 import logging
 from typing import Any, Optional, Dict, List
 from pydantic import Field, field_validator, model_validator, PrivateAttr, BaseModel
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import (
+    BaseSettings,
+    DotEnvSettingsSource,
+    EnvSettingsSource,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
 
-from core.config_policy import _mode_capability_default
+from core.config_policy import _mode_capability_default  # noqa: F401 — patched by tests
+from core.config_policy.members import member_flag as _member_flag
 from core.env import parse_bool
 
 
@@ -31,6 +38,48 @@ from core.env import parse_bool
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Env binding: ONLY through an explicit alias.
+#
+# pydantic-settings binds every field to the env by default — by its alias or,
+# without one, implicitly by its field name (case-insensitive). That made every
+# internal field (BASE_DIR, CACHE_TTL, DOC_*, the BROWSER/AGENT JSON dicts...)
+# an undocumented operator knob. These two sources skip a field that declares
+# no alias: it keeps its default, a constructor kwarg, or a value set in code.
+# A field an operator may set MUST carry alias='NAME' (and a row in
+# docs/CONFIGURATION.md). tests/unit/core/test_config_env_binding.py.
+# ---------------------------------------------------------------------------
+
+
+def _env_bound(field) -> bool:
+    return bool(field.alias or field.validation_alias)
+
+
+class _AliasOnlyEnvSettingsSource(EnvSettingsSource):
+    def get_field_value(self, field, field_name):
+        if not _env_bound(field):
+            return None, field_name, False
+        return super().get_field_value(field, field_name)
+
+
+class _AliasOnlyDotEnvSettingsSource(DotEnvSettingsSource):
+    def get_field_value(self, field, field_name):
+        if not _env_bound(field):
+            return None, field_name, False
+        return super().get_field_value(field, field_name)
+
+
+def _env_kwargs(src: EnvSettingsSource) -> Dict[str, Any]:
+    return dict(
+        case_sensitive=src.case_sensitive,
+        env_prefix=src.env_prefix,
+        env_nested_delimiter=src.env_nested_delimiter,
+        env_ignore_empty=src.env_ignore_empty,
+        env_parse_none_str=src.env_parse_none_str,
+        env_parse_enums=src.env_parse_enums,
+    )
+
+
 class AgentConfig(BaseSettings):
     """Pure-agent configuration — LLM keys, sessions, paths, logging."""
 
@@ -39,18 +88,46 @@ class AgentConfig(BaseSettings):
         env_file_encoding='utf-8',
         extra='ignore',
         validate_assignment=True,
+        # A constructor kwarg by field name (data_dir=...) still reaches an
+        # aliased field; every alias equals the upper-cased field name.
+        populate_by_name=True,
     )
 
-    # Base settings
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type,
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ):
+        """Read the env and the .env file only for fields with an alias."""
+        sources = [init_settings]
+        if isinstance(env_settings, EnvSettingsSource):
+            env_settings = _AliasOnlyEnvSettingsSource(settings_cls, **_env_kwargs(env_settings))
+        sources.append(env_settings)
+        if isinstance(dotenv_settings, DotEnvSettingsSource):
+            dotenv_settings = _AliasOnlyDotEnvSettingsSource(
+                settings_cls,
+                env_file=dotenv_settings.env_file,
+                env_file_encoding=dotenv_settings.env_file_encoding,
+                **_env_kwargs(dotenv_settings),
+            )
+        sources.append(dotenv_settings)
+        sources.append(file_secret_settings)
+        return tuple(s for s in sources if s is not None)
+
+    # Base settings — internal (code root), never read from the env.
     base_dir: str = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    environment: str = "development"
+    environment: str = Field(default="development", alias='ENVIRONMENT')
 
     # Data paths
-    data_dir: str = Field(default="data")
+    data_dir: str = Field(default="data", alias='DATA_DIR')
     # R-2 B1 (2026-07-17): default aligned with the file the app ACTUALLY opens
     # (modules/database/database_manager.py derives <data_dir>/database/bot.db).
     # The old "data/bot.db" default was a decoy nothing ever opened.
-    db_path: str = Field(default="data/database/bot.db")
+    db_path: str = Field(default="data/database/bot.db", alias='DB_PATH')
 
     # Logging
     log_level: str = Field('INFO', alias='LOG_LEVEL')
@@ -70,26 +147,29 @@ class AgentConfig(BaseSettings):
     nvidia_api_url: Optional[str] = Field(default="https://integrate.api.nvidia.com/v1", alias='NVIDIA_API_URL')
     perplexity_api_key: Optional[str] = Field(default=None, alias='PERPLEXITY_API_KEY')
 
-    # Default agent persona
-    characters_dir: str = Field(default="agents/personality/characters", alias='CHARACTERS_DIR')
-    default_character: str = Field(default="polyrob", alias='DEFAULT_CHARACTER')
+    # characters_dir / default_character (CHARACTERS_DIR, DEFAULT_CHARACTER)
+    # deleted 2026-10-10: no reader. The persona dir resolves through
+    # agents/personality/persona_resolver.py (<data_dir>/characters first) and
+    # the persona name through PERSONALITY_DEFAULT_CHARACTER.
 
     # Session memory management
     session_ttl_seconds: int = Field(default=86400, alias='SESSION_TTL_SECONDS')
-    max_sessions_in_memory: int = Field(default=100, alias='MAX_SESSIONS_IN_MEMORY')
-    session_cleanup_interval: int = Field(default=600, alias='SESSION_CLEANUP_INTERVAL')
+    # No alias = not read from the env (internal tuning; _AliasOnlyEnvSettingsSource).
+    max_sessions_in_memory: int = Field(default=100)
+    session_cleanup_interval: int = Field(default=600)
     max_sessions_per_user: int = Field(default=10, alias='MAX_SESSIONS_PER_USER')
     # A session stuck in 'created' that never ran has no run-path activity timestamp,
     # so the TTL/LRU GC (which keys off _session_last_activity) never retires it — yet it
     # still counts toward max_sessions_per_user. This shorter TTL (keyed off created_at)
     # retires such never-run sessions so they stop consuming the per-user limit.
-    created_session_ttl_seconds: int = Field(default=3600, alias='CREATED_SESSION_TTL_SECONDS')
+    # Internal tuning: no alias, so not read from the env.
+    created_session_ttl_seconds: int = Field(default=3600)
 
     # Sub-agent delegation (C-DELEG: ON by default with conservative caps below —
     # depth=1, max 3 concurrent, 600s/900s timeouts. Set SUB_AGENTS_ENABLED=false to opt out.)
     sub_agents_enabled: bool = Field(default=True, alias='SUB_AGENTS_ENABLED')
-    sub_agent_timeout: int = Field(default=600, alias='SUB_AGENT_TIMEOUT')
-    parallel_subtasks_timeout: int = Field(default=900, alias='PARALLEL_SUBTASKS_TIMEOUT')
+    # The 600s/900s timeouts are module constants, not fields:
+    # TimeoutConfig.SUB_AGENT_TIMEOUT / PARALLEL_SUBTASKS_TIMEOUT.
     max_concurrent_sub_agents: int = Field(default=3, alias='MAX_CONCURRENT_SUB_AGENTS')
     max_sub_agent_depth: int = Field(default=1, alias='MAX_SUB_AGENT_DEPTH')
 
@@ -201,7 +281,8 @@ class ServerConfig(AgentConfig):
     # `SESSION_RETENTION_DAYS` (core/session_retention.py).
 
     # OCR scratch dir — no reader left, but _ensure_directories still creates it.
-    services_ocr_temp_dir: str = Field(default="data/temp", alias='SERVICES_OCR_TEMP_DIR')
+    # Internal: no alias, so the env cannot move it.
+    services_ocr_temp_dir: str = Field(default="data/temp")
     
     # LLM API keys live on AgentConfig (parent) — see top of file.
 
@@ -210,22 +291,22 @@ class ServerConfig(AgentConfig):
 
     # data_dir, db_path live on AgentConfig (parent).
 
-    # Cache Configuration
-    cache_size: int = Field(default=1000, alias='CACHE_SIZE')
+    # Cache Configuration (cache_ttl is internal: no alias, not env-bound)
+    cache_size: int = Field(default=1000)
     cache_ttl: int = Field(default=3600)
     
     # Browser Use Configuration
     max_browser_contexts: int = Field(default=25, alias='MAX_BROWSER_CONTEXTS', description="Maximum concurrent browser contexts")
-    max_contexts_per_session: int = Field(default=2, alias='MAX_CONTEXTS_PER_SESSION', description="Maximum browser contexts per session")
+    max_contexts_per_session: int = Field(default=2, description="Maximum browser contexts per session")
     browser_headless: bool = Field(default=True, alias='BROWSER_HEADLESS', description="Run browser in headless mode")
-    browser_context_timeout: float = Field(default=30.0, alias='BROWSER_CONTEXT_TIMEOUT', description="Timeout (s) for creating a browser context")
-    browser_stale_timeout: float = Field(default=300.0, alias='BROWSER_STALE_TIMEOUT', description="Idle timeout (s) before a context is considered stale")
-    browser_enable_pooling: bool = Field(default=True, alias='BROWSER_ENABLE_POOLING', description="Enable browser context pooling/reuse")
-    browser_wait_queue_backstop_interval: float = Field(default=15.0, alias='BROWSER_WAIT_QUEUE_BACKSTOP_INTERVAL', description="Poll interval (s) for the wait-queue backstop loop (primary path resolves waiters synchronously on release)")
+    browser_context_timeout: float = Field(default=30.0, description="Timeout (s) for creating a browser context")
+    browser_stale_timeout: float = Field(default=300.0, description="Idle timeout (s) before a context is considered stale")
+    browser_enable_pooling: bool = Field(default=True, description="Enable browser context pooling/reuse")
+    browser_wait_queue_backstop_interval: float = Field(default=15.0, description="Poll interval (s) for the wait-queue backstop loop (primary path resolves waiters synchronously on release)")
 
     # log_level lives on AgentConfig (parent).
     
-    # Document processor settings
+    # Document processor settings — internal tuning, no alias, not env-bound.
     doc_max_file_size: int = Field(default=20 * 1024 * 1024, description="Maximum file size for document processor (20MB)")
     doc_max_text_length: int = Field(default=100000, description="Maximum text length for document processor")
     doc_chunk_size: int = Field(default=4096, description="Chunk size for document processor")
@@ -264,25 +345,19 @@ class ServerConfig(AgentConfig):
     )
     
     # MCP environment variable bridging
-    mcp_enabled: bool = Field(default=False, alias='MCP_ENABLED', description="Enable MCP service globally")
+    # MCP_ENABLED is a posture member (D7): not env-bound here; the ONE member
+    # resolver (AUTONOMY_MODE bundle <- POLYROB_OVERRIDES) supplies the default.
+    mcp_enabled: bool = Field(default_factory=lambda: _member_flag("MCP_ENABLED"),
+                              description="Enable MCP service globally")
     mcp_servers_config: Optional[str] = Field(default=None, alias='MCP_SERVERS_CONFIG', description="JSON string containing MCP servers configuration")
 
     # Sub-agent config lives on AgentConfig (parent).
 
-    # Rate Limiting
+    # Rate Limiting (utils/rate_limit_manager.py defaults) — internal, no alias.
+    # `rate_limit` and the `goals` dict were deleted 2026-10-10: no reader.
     rate_limit_window: int = Field(default=60, description="Rate limit window in seconds")
     rate_limit_max_requests: int = Field(default=30, description="Maximum requests per window")
-    rate_limit: int = Field(
-        default=1,
-        description="Rate limit in seconds"
-    )
-    
-    # Goals and Behavior
-    goals: Dict[str, Any] = Field(
-        default_factory=dict,
-        description="Bot goals and behavior configuration"
-    )
-    
+
     # Memory feature flags — must be declared as real fields so pydantic-settings
     # reads the env var (getattr on an undeclared key always returns the default,
     # silently ignoring the environment — the Task 0.3 landmine).
@@ -290,11 +365,11 @@ class ServerConfig(AgentConfig):
     # POLYROB falsey-set by AgentConfig._coerce_bool_env_fields — no per-field
     # validator needed (that enumerated approach was the source of the "only 5
     # fields coerced" P0).
-    HIERARCHICAL_MEMORY_ENABLED: bool = True
-    COMPACTION_ENABLED: bool = True
-    SEMANTIC_RETRIEVAL_ENABLED: bool = True
-    REFLECTION_ENABLED: bool = True
-    FORGETTING_ENABLED: bool = True
+    HIERARCHICAL_MEMORY_ENABLED: bool = Field(default=True)
+    COMPACTION_ENABLED: bool = Field(default=True)
+    SEMANTIC_RETRIEVAL_ENABLED: bool = Field(default=True)
+    REFLECTION_ENABLED: bool = Field(default=True)
+    FORGETTING_ENABLED: bool = Field(default=True)
 
     # Embedding Configuration
     embedding: Dict[str, Any] = Field(
@@ -329,22 +404,9 @@ class ServerConfig(AgentConfig):
         
         return config
 
-    # Add these new fields to model_config
-    
-    embedding_dimension: int = Field(
-        default=384,
-        description="Dimension of embeddings",
-        alias='EMBEDDING_DIMENSION'
-    )
-    
-
-    # Add validators for new fields
-    @field_validator('embedding_dimension')
-    def validate_embedding_dimension(cls, v: int) -> int:
-        """Validate embedding dimension."""
-        if v <= 0:
-            raise ValueError("Embedding dimension must be positive")
-        return v
+    # embedding_dimension (EMBEDDING_DIMENSION) deleted 2026-10-10: it only fed
+    # the 'dimension' key above (getattr default 384 still does), which no
+    # caller of get_embedding_config() reads.
 
 
     # Private attributes
@@ -410,11 +472,7 @@ class ServerConfig(AgentConfig):
         # (single-owner instance) via _mode_capability_default (top-level import
         # since WS-1 ph4 — core.config_policy is core-tier and light). Guarded:
         # any resolution failure must never break config construction.
-        try:
-            _mode_default = _mode_capability_default("MCP_ENABLED")
-        except Exception:
-            _mode_default = False
-        if not (self.mcp_enabled or _mode_default) and not local_servers:
+        if not self.mcp_enabled and not local_servers:
             return
 
         # Priority 3: Load from config/mcp_config.json if it exists
@@ -586,28 +644,8 @@ class ServerConfig(AgentConfig):
     # REMOVED: get_model_config() and validate_model_name() 
     # Use modules.llm.model_registry.get_model_config() instead
 
-    # Browser settings
-    browser: dict = {
-        'headless': False,
-        'timeout': 30000,
-        'viewport': {
-            'width': 1280,
-            'height': 720
-        }
-    }
-    
-    # Agent settings
-    agent: dict = {
-        'max_steps': 50,
-        'retry_delay': 2,
-        'max_failures': 3
-    }
-    
-    # Controller settings
-    controller: dict = {
-        'loop_threshold': 3,
-        'max_url_visits': 2
-    }
+    # The `browser` / `agent` / `controller` dicts were deleted 2026-10-10: no
+    # reader (the browser pool reads the browser_* fields above).
 
     # REMOVED: model_configs dict - use modules.llm.model_registry instead
     # All model configurations (context windows, max tokens, pricing) are in model_registry.py
@@ -652,8 +690,10 @@ class ServerConfig(AgentConfig):
     # privy_app_id: Deleted - not needed anymore!
     # privy_app_secret: Deleted - not needed anymore!
 
-    # Wallet Generation (for deposit addresses)
-    master_seed: Optional[str] = Field(None, alias='MASTER_SEED', description="Master seed for deterministic wallet generation - KEEP SECRET!")
+    # Wallet Generation (for deposit addresses): the seed is NOT a settings
+    # field — core/payment_config.py::resolve_master_seed reads
+    # PAYMENT_MASTER_SEED from the custody store (the MASTER_SEED alias that
+    # used to live here was retired in 1.4).
 
     # Blockchain RPC URLs
     ethereum_rpc_url: Optional[str] = Field(None, alias='ETHEREUM_RPC_URL', description="Ethereum Mainnet RPC URL (e.g., Alchemy)")
@@ -669,9 +709,10 @@ class ServerConfig(AgentConfig):
     enable_auth: bool = Field(False, alias='ENABLE_AUTH', description="Enable authentication system")
     enable_credit_system: bool = Field(True, alias='ENABLE_CREDIT_SYSTEM', description="Enable credit tracking and metering")
     deposit_monitor_enabled: bool = Field(False, alias='DEPOSIT_MONITOR_ENABLED', description="Enable deposit monitoring service")
-    deposit_check_interval: int = Field(60, alias='DEPOSIT_CHECK_INTERVAL', description="Deposit check interval in seconds")
+    deposit_check_interval: int = Field(60, description="Deposit check interval in seconds")
     sweep_interval: int = Field(3600, alias='SWEEP_INTERVAL', description="Treasury sweep interval in seconds (default: 1 hour)")
-    min_sweep_usd: float = Field(50.0, alias='MIN_SWEEP_USD', description="Minimum USD amount to trigger sweep")
+    # min_sweep_usd (MIN_SWEEP_USD) deleted 2026-10-10: no reader —
+    # modules/payments/treasury_sweeper.py hard-codes its own 50.00 floor.
 
     # JWT Configuration
     jwt_secret_key: Optional[str] = Field(None, alias='JWT_SECRET_KEY', description="Secret key for JWT signing")

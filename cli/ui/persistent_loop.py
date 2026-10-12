@@ -1,6 +1,6 @@
 """persistent_loop.py — turn runner + scheduler for the bottom-anchored REPL (D5).
 
-Under ``POLYROB_PERSISTENT_INPUT`` the REPL is a long-lived prompt_toolkit
+On a cursor-capable TTY the REPL is a long-lived prompt_toolkit
 ``Application`` (``cli/ui/app.py::build_app``) and each turn runs as a background
 task while the bottom input/status region stays painted + live. This module holds
 the two pieces that are pure control flow (and so are unit-testable without a
@@ -13,8 +13,8 @@ terminal):
   gate assumes one turn at a time) and cancels it on Ctrl-C.
 
 The Application wiring (run_async + run_in_terminal print routing) lives in
-``cli/commands/chat.py``. This is the default REPL path on a TTY
-(``POLYROB_PERSISTENT_INPUT`` default ON; set 0/off for the legacy ephemeral prompt).
+``cli/commands/chat.py``. This is the REPL path on a cursor-capable TTY
+(non-TTY / ``--plain`` use the ephemeral prompt).
 """
 
 from __future__ import annotations

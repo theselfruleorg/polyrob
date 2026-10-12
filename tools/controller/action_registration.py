@@ -11,7 +11,7 @@ from core.runtime_paths import data_dir_or_home
 
 from pydantic import BaseModel, Field
 
-from tools.controller.types import ActionResult
+from agents.task.loop_types.controller_types import ActionResult
 from tools.controller.views import DoneAction, SendMessageAction
 from tools.controller.doc_authoring import DocAuthoringMixin
 from tools.controller._helpers import (
@@ -46,6 +46,9 @@ from tools.controller.emit import (  # noqa: E402
 	_publish_context,
 	_ROUTE_OUTCOME_NOT_DELIVERED,  # noqa: F401  (re-export for existing importers)
 )
+from tools.controller.send_message_route import (  # noqa: E402
+	route_autonomous_send, route_status, third_party_address_refusal,
+)
 
 
 class ActionRegistrationMixin(DocAuthoringMixin):
@@ -62,7 +65,10 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 		# Support multiple output models for flexibility
 		if self.output_model is None:
 			@self.registry.action(
-				'Send a message to the user (status update, question, or information)',
+				'Send a message to the user (status update, question, or information). '
+				'It goes ONLY to this session\'s own person: the chat you are in, or in a '
+				'scheduled/goal run your owner\'s private chat. It never posts to a room, '
+				'group or other recipient: use message(surface=..., target=..., text=...) for those.',
 				param_model=SendMessageAction
 			)
 			async def send_message(params: SendMessageAction, execution_context=None):
@@ -81,7 +87,7 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 				"""
 				# C5: what became of any workspace file this message named. Initialised
 				# here so every return path is safe on branches that skip the mirror.
-				_attach_note = None
+				_attach_note = _route_outcome = None
 				import time
 				# Check if this is a sub-agent (skip side effects for isolation)
 				is_sub_agent = execution_context.is_sub_agent if execution_context else False
@@ -90,6 +96,10 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 					# Sub-agent: Just log and return - output captured via normal result flow
 					self.logger.debug(f"💬 Sub-agent message (captured in result): {params.text[:100]}...")
 					return ActionResult(extracted_content=f"Message: {params.text}", include_in_memory=True)
+				# 2026-10-09 den→owner-DM: an autonomous "@handle …" line is not for the owner.
+				_misaddressed = third_party_address_refusal(self, params.text)
+				if _misaddressed is not None:
+					return _misaddressed
 				# 2026-10-06: never deliver the identical reply twice in one turn.
 				from core.surfaces.turn_reply import REPEAT_REPLY_NOTE, is_repeat_reply
 				if is_repeat_reply(getattr(self, 'orchestrator', None), params.text):
@@ -166,16 +176,7 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 					# delivery rail (dedup + rate caps + durable fallback). Strict
 					# scope: own principal only; arbitrary recipients stay the gated
 					# `message` tool's job. Fail-open — never fails the action.
-					_route_outcome = None
-					try:
-						from core.surfaces.user_delivery import maybe_deliver_autonomous_send
-						_route_outcome = await maybe_deliver_autonomous_send(
-							self.orchestrator, self.session_id, params.text)
-						if _route_outcome is not None:
-							self.logger.info(
-								f"💬 Autonomous send_message routed to user: {_route_outcome}")
-					except Exception as e:
-						self.logger.debug(f"Autonomous send routing failed (fail-open): {e}")
+					_route_outcome = await route_autonomous_send(self, params.text)
 
 				# CONTINUOUS CHAT MODE: If waiting for response, stop execution
 				# User will reply via continuous chat, session will resume with their response
@@ -202,7 +203,7 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 							metadata={'conversational_reply': True}
 						)
 					self.logger.info("💬 Message sent. Stopping execution to wait for user response via continuous chat")
-					_route_status = _describe_route_outcome(_route_outcome)
+					_route_status = route_status(_route_outcome)
 					_paused_summary = (f"Message sent to user. Task paused - will resume when user responds. — {_route_status}"
 						if _route_status else "Message sent to user. Task paused - will resume when user responds.")
 					if _attach_note:
@@ -218,7 +219,7 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 				# R1: tag it so the run loop can recognize a turn whose only output was a
 				# user-facing reply (no productive tool work) and end it — otherwise a
 				# chat reply loops and re-greets, since non-blocking sends keep is_done False.
-				_route_status = _describe_route_outcome(_route_outcome)
+				_route_status = route_status(_route_outcome)
 				_send_summary = (f"Message sent to user (non-blocking) — {_route_status}"
 					if _route_status else "Message sent to user (non-blocking)")
 				if _attach_note:
@@ -308,165 +309,162 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 				self.logger.info(f'Task marked as done with structured output')
 				return ActionResult(is_done=True)
 
-		# S-1: progressive skill disclosure. When enabled, the system injects only a
-		# compact <skill-catalog>; the agent pulls a skill's full body on demand with
-		# this tool. Off by default (skills are eager-injected full-body, no tool).
-		from agents.task.constants import skill_progressive_disclosure
-		if skill_progressive_disclosure():
-			class LoadSkillAction(BaseModel):
-				skill_id: str
+		# S-1: progressive skill disclosure. The system injects only a compact
+		# <skill-catalog>; the agent pulls a skill's full body on demand with
+		# this tool.
+		class LoadSkillAction(BaseModel):
+			skill_id: str
 
-			@self.registry.action(
-				"Load a skill's full instructions on demand (see <skill-catalog>). "
-				"Call before doing work the skill covers.",
-				param_model=LoadSkillAction,
-			)
-			async def load_skill(params: LoadSkillAction, execution_context=None):
-				# Task 17: resolve the skill's on-disk dir (fail-open to None — an
-				# in-memory-only skill or a lookup error just means no resource list
-				# is advertised, not a broken load_skill).
+		@self.registry.action(
+			"Load a skill's full instructions on demand (see <skill-catalog>). "
+			"Call before doing work the skill covers.",
+			param_model=LoadSkillAction,
+		)
+		async def load_skill(params: LoadSkillAction, execution_context=None):
+			# Task 17: resolve the skill's on-disk dir (fail-open to None — an
+			# in-memory-only skill or a lookup error just means no resource list
+			# is advertised, not a broken load_skill).
+			skill_dir = None
+			uid = getattr(execution_context, 'user_id', None) or getattr(self, 'user_id', None)
+			_skill_manager = None
+			try:
+				from agents.task.agent.skill_manager import get_skill_manager
+				_skill_manager = get_skill_manager()
+				skill_dir = _skill_manager.resolve_skill_dir(params.skill_id, uid)
+			except Exception:
 				skill_dir = None
-				uid = getattr(execution_context, 'user_id', None) or getattr(self, 'user_id', None)
-				_skill_manager = None
+			result = build_load_skill_result(
+				getattr(self, '_session_skills', {}), params.skill_id,
+				activated=getattr(self, '_activated_skills', None),
+				skill_dir=skill_dir,
+			)
+			# SK-F1: a skill that never made it into (or was capped out of)
+			# _session_skills is still on disk — fall back to a tenant-scoped
+			# disk load via the manager's existing resolver (excludes
+			# `.pending/` drafts, since those live at a different path)
+			# instead of erroring on every skill the eager/catalog pass didn't
+			# preload. Only attempted on the "unknown id" failure shape.
+			if result.error and _skill_manager is not None:
 				try:
-					from agents.task.agent.skill_manager import get_skill_manager
-					_skill_manager = get_skill_manager()
-					skill_dir = _skill_manager.resolve_skill_dir(params.skill_id, uid)
-				except Exception:
-					skill_dir = None
-				result = build_load_skill_result(
-					getattr(self, '_session_skills', {}), params.skill_id,
-					activated=getattr(self, '_activated_skills', None),
-					skill_dir=skill_dir,
-				)
-				# SK-F1: a skill that never made it into (or was capped out of)
-				# _session_skills is still on disk — fall back to a tenant-scoped
-				# disk load via the manager's existing resolver (excludes
-				# `.pending/` drafts, since those live at a different path)
-				# instead of erroring on every skill the eager/catalog pass didn't
-				# preload. Only attempted on the "unknown id" failure shape.
-				if result.error and _skill_manager is not None:
+					sid = (params.skill_id or "").strip().strip('"')
+					# SK-F1: sid is LLM-controlled and _load_skill_content does no
+					# traversal filtering of its own (it just Path-joins). Gate the
+					# fallback on resolve_skill_dir's existing guard (rejects '/',
+					# '\\', '..', whitespace-padding, absolute-path-shaped ids) so a
+					# crafted id like "../other_uid/secret-skill" cannot escape into
+					# another tenant's directory. A rejected id falls through with
+					# content="" -> same "Unknown skill_id" error shape as before,
+					# no exception leaks to the model.
+					content = ""
+					# P1-1: make the auto_activate gate REAL on the load path. A gated
+					# skill (auto_activate:false — the money/trading playbooks) is only
+					# loadable when the session has actually loaded its required tools;
+					# otherwise refuse (same "Unknown skill_id" shape) so a model that
+					# guesses the id cannot pull the gated playbook. A legitimately-
+					# available gated skill is preloaded into _session_skills via the
+					# catalog and never reaches this fallback.
+					_loaded_tool_ids = []
 					try:
-						sid = (params.skill_id or "").strip().strip('"')
-						# SK-F1: sid is LLM-controlled and _load_skill_content does no
-						# traversal filtering of its own (it just Path-joins). Gate the
-						# fallback on resolve_skill_dir's existing guard (rejects '/',
-						# '\\', '..', whitespace-padding, absolute-path-shaped ids) so a
-						# crafted id like "../other_uid/secret-skill" cannot escape into
-						# another tenant's directory. A rejected id falls through with
-						# content="" -> same "Unknown skill_id" error shape as before,
-						# no exception leaks to the model.
-						content = ""
-						# P1-1: make the auto_activate gate REAL on the load path. A gated
-						# skill (auto_activate:false — the money/trading playbooks) is only
-						# loadable when the session has actually loaded its required tools;
-						# otherwise refuse (same "Unknown skill_id" shape) so a model that
-						# guesses the id cannot pull the gated playbook. A legitimately-
-						# available gated skill is preloaded into _session_skills via the
-						# catalog and never reaches this fallback.
+						_loaded_tool_ids = self.list_tools()
+					except Exception:
 						_loaded_tool_ids = []
-						try:
-							_loaded_tool_ids = self.list_tools()
-						except Exception:
-							_loaded_tool_ids = []
-						_gate_ok = True
-						try:
-							_gate_ok = _skill_manager.may_load_skill(sid, tool_ids=_loaded_tool_ids, user_id=uid)
-						except Exception:
-							_gate_ok = True  # fail-open on the gate check; path/tenant guards still apply
-						if _gate_ok and _skill_manager.resolve_skill_dir(sid, uid) is not None:
-							content = _skill_manager._load_skill_content(sid, user_id=uid)
-						if content:
-							from agents.task.agent.skill_manager import MatchedSkill
-							fallback_skill = MatchedSkill(
-								skill_id=sid,
-								priority=0,
-								match_reasons=["disk-fallback"],
-								content=content,
-							)
-							# P2-22: register the fallback-loaded skill into _session_skills
-							# so a follow-up read_skill_resource (which gates on membership
-							# there) can serve the resources this load result advertises —
-							# previously it refused "Call load_skill first" for a skill the
-							# model had JUST loaded via the disk fallback.
-							_ss = getattr(self, '_session_skills', None)
-							if isinstance(_ss, dict):
-								_ss[sid] = fallback_skill
-							result = build_load_skill_result(
-								{sid: fallback_skill}, sid,
-								activated=getattr(self, '_activated_skills', None),
-								skill_dir=skill_dir,
-							)
-					except Exception:
-						pass
-				if result.metadata and result.metadata.get('skill_loaded'):
-					self.logger.info(f"📖 Loaded skill on demand: {result.metadata['skill_loaded']}")
-					# W2-D: provenance/reuse metric — bumped at the closure (which has
-					# execution_context), NOT the pure build_load_skill_result helper.
-					# Fail-open: a metrics write must never break a skill load.
+					_gate_ok = True
 					try:
-						uid = getattr(execution_context, 'user_id', None) or getattr(self, 'user_id', None)
-						if uid:
-							from modules.skills.skill_usage import get_skill_usage_store
-							# SK-F1: use the actually-resolved/loaded id
-							# (result.metadata['skill_loaded'] is always the
-							# stripped/unquoted sid -- set identically by
-							# build_load_skill_result on both the eager and
-							# disk-fallback paths), not the raw params.skill_id,
-							# so quote/whitespace-padded ids don't fragment
-							# curator metrics under two different keys. The enclosing
-							# `if ... get('skill_loaded')` guarantees this is truthy
-							# (D1: the old `or params.skill_id` fallback was dead).
-							loaded_id = result.metadata['skill_loaded']
-							get_skill_usage_store().bump_load(loaded_id, uid)
+						_gate_ok = _skill_manager.may_load_skill(sid, tool_ids=_loaded_tool_ids, user_id=uid)
 					except Exception:
-						pass
-				return result
-
-			# Task 17: read-only resource access for an already-loaded skill (references/
-			# assets, e.g. an authored skill's REFERENCE.md). NEVER executes anything —
-			# a skill's scripts/*.sh are readable as text, never run. Gated by the same
-			# SKILL_PROGRESSIVE_DISCLOSURE flag as load_skill since it's only useful once
-			# _session_skills is populated (refusal is a no-op otherwise).
-			class ReadSkillResourceAction(BaseModel):
-				skill_id: str
-				resource_path: str
-
-			@self.registry.action(
-				"Read a resource file (reference doc, asset, etc.) that belongs to a skill "
-				"you have already loaded via load_skill (see metadata.skill_resources on that "
-				"call's result for the available paths). Read-only — this NEVER executes "
-				"scripts or other files, it only returns their text content.",
-				param_model=ReadSkillResourceAction,
-			)
-			async def read_skill_resource(params: ReadSkillResourceAction, execution_context=None):
-				session_skills = getattr(self, '_session_skills', {}) or {}
-				sid = (params.skill_id or "").strip().strip('"')
-				if sid not in session_skills:
-					available = ", ".join(session_skills.keys()) or "(none)"
-					return ActionResult(
-						error=(
-							f"Skill '{sid}' is not loaded this session (available: {available}). "
-							"Call load_skill first."
-						),
-						include_in_memory=True,
-					)
-				skill_dir = None
-				try:
-					from agents.task.agent.skill_manager import get_skill_manager
-					uid = getattr(execution_context, 'user_id', None) or getattr(self, 'user_id', None)
-					skill_dir = get_skill_manager().resolve_skill_dir(sid, uid)
+						_gate_ok = True  # fail-open on the gate check; path/tenant guards still apply
+					if _gate_ok and _skill_manager.resolve_skill_dir(sid, uid) is not None:
+						content = _skill_manager._load_skill_content(sid, user_id=uid)
+					if content:
+						from agents.task.agent.skill_manager import MatchedSkill
+						fallback_skill = MatchedSkill(
+							skill_id=sid,
+							priority=0,
+							match_reasons=["disk-fallback"],
+							content=content,
+						)
+						# P2-22: register the fallback-loaded skill into _session_skills
+						# so a follow-up read_skill_resource (which gates on membership
+						# there) can serve the resources this load result advertises —
+						# previously it refused "Call load_skill first" for a skill the
+						# model had JUST loaded via the disk fallback.
+						_ss = getattr(self, '_session_skills', None)
+						if isinstance(_ss, dict):
+							_ss[sid] = fallback_skill
+						result = build_load_skill_result(
+							{sid: fallback_skill}, sid,
+							activated=getattr(self, '_activated_skills', None),
+							skill_dir=skill_dir,
+						)
 				except Exception:
-					skill_dir = None
-				if skill_dir is None:
-					return ActionResult(
-						error=f"Skill '{sid}' has no on-disk resources available.",
-						include_in_memory=True,
-					)
-				ok, content = read_skill_resource_confined(skill_dir, params.resource_path)
-				if not ok:
-					return ActionResult(error=content, include_in_memory=True)
-				return ActionResult(extracted_content=content, include_in_memory=True)
+					pass
+			if result.metadata and result.metadata.get('skill_loaded'):
+				self.logger.info(f"📖 Loaded skill on demand: {result.metadata['skill_loaded']}")
+				# W2-D: provenance/reuse metric — bumped at the closure (which has
+				# execution_context), NOT the pure build_load_skill_result helper.
+				# Fail-open: a metrics write must never break a skill load.
+				try:
+					uid = getattr(execution_context, 'user_id', None) or getattr(self, 'user_id', None)
+					if uid:
+						from modules.skills.skill_usage import get_skill_usage_store
+						# SK-F1: use the actually-resolved/loaded id
+						# (result.metadata['skill_loaded'] is always the
+						# stripped/unquoted sid -- set identically by
+						# build_load_skill_result on both the eager and
+						# disk-fallback paths), not the raw params.skill_id,
+						# so quote/whitespace-padded ids don't fragment
+						# curator metrics under two different keys. The enclosing
+						# `if ... get('skill_loaded')` guarantees this is truthy
+						# (D1: the old `or params.skill_id` fallback was dead).
+						loaded_id = result.metadata['skill_loaded']
+						get_skill_usage_store().bump_load(loaded_id, uid)
+				except Exception:
+					pass
+			return result
+
+		# Task 17: read-only resource access for an already-loaded skill (references/
+		# assets, e.g. an authored skill's REFERENCE.md). NEVER executes anything —
+		# a skill's scripts/*.sh are readable as text, never run. Only useful once
+		# _session_skills is populated (refusal is a no-op otherwise).
+		class ReadSkillResourceAction(BaseModel):
+			skill_id: str
+			resource_path: str
+
+		@self.registry.action(
+			"Read a resource file (reference doc, asset, etc.) that belongs to a skill "
+			"you have already loaded via load_skill (see metadata.skill_resources on that "
+			"call's result for the available paths). Read-only — this NEVER executes "
+			"scripts or other files, it only returns their text content.",
+			param_model=ReadSkillResourceAction,
+		)
+		async def read_skill_resource(params: ReadSkillResourceAction, execution_context=None):
+			session_skills = getattr(self, '_session_skills', {}) or {}
+			sid = (params.skill_id or "").strip().strip('"')
+			if sid not in session_skills:
+				available = ", ".join(session_skills.keys()) or "(none)"
+				return ActionResult(
+					error=(
+						f"Skill '{sid}' is not loaded this session (available: {available}). "
+						"Call load_skill first."
+					),
+					include_in_memory=True,
+				)
+			skill_dir = None
+			try:
+				from agents.task.agent.skill_manager import get_skill_manager
+				uid = getattr(execution_context, 'user_id', None) or getattr(self, 'user_id', None)
+				skill_dir = get_skill_manager().resolve_skill_dir(sid, uid)
+			except Exception:
+				skill_dir = None
+			if skill_dir is None:
+				return ActionResult(
+					error=f"Skill '{sid}' has no on-disk resources available.",
+					include_in_memory=True,
+				)
+			ok, content = read_skill_resource_confined(skill_dir, params.resource_path)
+			if not ok:
+				return ActionResult(error=content, include_in_memory=True)
+			return ActionResult(extracted_content=content, include_in_memory=True)
 
 		# S2 (dynamic tool rig, 2026-07-19): self-serve tool loading. The honest
 		# <tool-catalog> foundation block (S1) advertises every known tool with a
@@ -1348,7 +1346,7 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 					info = config_service.explain(params.key, user_id=user_id,
 					                              home_dir=data_dir)
 				except KeyError:
-					return ActionResult(error=f"unknown setting: {params.key}",
+					return ActionResult(error=config_service.unknown_key_message(params.key),
 					                    include_in_memory=True)
 				out = [f"{info.key} = {info.effective}   ({info.source})",
 				       f"namespace: {info.namespace} | kind: {info.kind} | "

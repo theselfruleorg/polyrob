@@ -51,7 +51,7 @@ def test_telegram_builds_harness_with_container_data_dir(monkeypatch):
     async def _fake_build(**kwargs):
         return fake_container
 
-    monkeypatch.setattr("core.bootstrap.build_cli_container", _fake_build)
+    monkeypatch.setattr("polyrob.app.bootstrap.build_cli_container", _fake_build)
     monkeypatch.setattr("cli.keys.preflight_or_onboard", lambda **k: True)
     monkeypatch.setattr("core.surfaces.bootstrap.install_surface_bus", lambda c: None)
 

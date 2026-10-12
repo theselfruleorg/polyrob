@@ -13,12 +13,16 @@ import os
 from typing import Any, Optional
 
 from core.surfaces.idempotency import IdempotencyStore
-from surfaces._shared import BaseHarness, TextSink, register_surface_and_sink
+from polyrob.sdk import BaseHarness, TextSink, register_surface_and_sink
 from polyrob_x.surface.client import XDMClient
 from polyrob_x.surface.poller import XCursorStore, XDMPoller, parse_dm_event
 from polyrob_x.surface.surface import XSurface
 
 logger = logging.getLogger(__name__)
+
+#: Internal tuning (not env-driven): DM poll interval in seconds. DM reads are
+#: 15 req/15 min per user, so faster polling only earns 429s.
+X_DM_POLL_SEC = 90
 
 
 def XSink(client: Any) -> TextSink:  # noqa: N802 — kept name
@@ -79,10 +83,7 @@ def build_x_harness(container: Any, task_agent: Any, *,
     dedup = IdempotencyStore(os.path.join(data_dir, "x_dedup.db"))
     cursor = XCursorStore(os.path.join(data_dir, "x_cursor.json"))
     if poll_sec is None:
-        try:
-            poll_sec = float(os.getenv("X_DM_POLL_SEC", "90"))
-        except ValueError:
-            poll_sec = 90.0
+        poll_sec = float(X_DM_POLL_SEC)
     harness = XHarness(container, task_agent, client, dedup)
     harness._poller = XDMPoller(client, harness.handle_event, cursor,
                                 poll_sec=poll_sec)

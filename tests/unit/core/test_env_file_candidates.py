@@ -48,7 +48,7 @@ def test_helper_order_is_load_env_resolution_local(tmp_path, monkeypatch):
     for c in cands:
         c.path.parent.mkdir(parents=True, exist_ok=True)
         c.path.write_text(f"{PROBE}={c.tier}\n")
-    from core.bootstrap import load_env
+    from polyrob.app.bootstrap import load_env
     for i, expected in enumerate(cands):
         monkeypatch.delenv(PROBE, raising=False)
         load_env("development", local_mode=True)
@@ -65,7 +65,7 @@ def test_helper_order_is_load_env_resolution_server(tmp_path, monkeypatch):
     for c in cands:
         c.path.parent.mkdir(parents=True, exist_ok=True)
         c.path.write_text(f"{PROBE}={c.tier}\n")
-    from core.bootstrap import load_env
+    from polyrob.app.bootstrap import load_env
     for i, expected in enumerate(cands):
         monkeypatch.delenv(PROBE, raising=False)
         load_env("development", local_mode=False)

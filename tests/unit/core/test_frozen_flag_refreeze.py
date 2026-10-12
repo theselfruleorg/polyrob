@@ -1,6 +1,6 @@
 """026 P1.1 — the import-frozen policy flags must see the env-file ladder.
 
-Failure mode A: ``core/bootstrap.py`` imports ``core.config_policy`` at module
+Failure mode A: ``polyrob/app/bootstrap.py`` imports ``core.config_policy`` at module
 scope, so AGENT_COMPUTE_POSTURE and the payment-approval flags froze BEFORE
 any entrypoint ran ``load_env`` — writing them to any ``.polyrob/.env`` was a
 permanent no-op on every CLI path. ``load_env`` now re-freezes them EXACTLY
@@ -13,7 +13,7 @@ import os
 
 import pytest
 
-import core.bootstrap as bootstrap
+import polyrob.app.bootstrap as bootstrap
 from core.config_policy import policy
 
 

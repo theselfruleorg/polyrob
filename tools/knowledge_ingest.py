@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from pydantic import BaseModel, ConfigDict, Field
 
 from tools.base_tool import BaseTool
-from tools.controller.types import ActionResult
+from agents.task.loop_types.controller_types import ActionResult
 from core.security.secret_guard import (
     is_secret_path,
     is_binary_file,
@@ -33,8 +33,12 @@ from core.security.confined_read import read_confined_bytes
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Env-driven knobs (read inline, not in constants.py)
+# Knobs. KB_MAX_BYTES is env-driven; the rest are internal tuning constants.
 # ---------------------------------------------------------------------------
+
+KB_MAX_FILES = 2000
+KB_CHUNK_TOKENS = 800
+KB_CHUNK_OVERLAP = 100
 
 
 def _int_env(name: str, default: int) -> int:
@@ -43,7 +47,7 @@ def _int_env(name: str, default: int) -> int:
 
 
 def _kb_max_files() -> int:
-    return _int_env("KB_MAX_FILES", 2000)
+    return KB_MAX_FILES
 
 
 def _kb_max_bytes() -> int:
@@ -51,11 +55,11 @@ def _kb_max_bytes() -> int:
 
 
 def _kb_chunk_tokens() -> int:
-    return _int_env("KB_CHUNK_TOKENS", 800)
+    return KB_CHUNK_TOKENS
 
 
 def _kb_chunk_overlap() -> int:
-    return _int_env("KB_CHUNK_OVERLAP", 100)
+    return KB_CHUNK_OVERLAP
 
 
 # ---------------------------------------------------------------------------

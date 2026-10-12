@@ -25,6 +25,7 @@ Fail-open in the direction of today's behaviour: any error, missing store, or
 missing tenant answers "no" — i.e. the timeout is recorded as a failure exactly
 as before. Nothing here ever CREATES ``goals.db``.
 """
+from core.runtime_paths import goals_db_path
 import logging
 import os
 from typing import Optional
@@ -35,7 +36,7 @@ logger = logging.getLogger(__name__)
 def goals_db_beside(cron_db_path: str) -> str:
     """``goals.db`` in the same data home as *cron_db_path* (they are siblings —
     both are opened from ``data_dir`` by the autonomy runtime)."""
-    return os.path.join(os.path.dirname(os.path.abspath(cron_db_path)), "goals.db")
+    return goals_db_path(os.path.dirname(os.path.abspath(cron_db_path)))
 
 
 def open_owner_ask_since(user_id: str, since: float, *,

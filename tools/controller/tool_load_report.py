@@ -63,7 +63,8 @@ def action_id_gap(tool_id: str, has_action) -> Optional[str]:
             return None
     except Exception:
         logger.debug("has_action probe failed for %r", tool_id, exc_info=True)
-    set_to = os.getenv(flag)
+    from core.config_policy.members import flag_raw
+    set_to = flag_raw(flag)
     state = f"{flag}={set_to!r}" if set_to else f"{flag} is off"
     return (f"gated:disabled-by-flag — '{tool_id}' is an agent action, not a tool, "
             f"and it is not registered on this deploy ({state}); the owner enables "
@@ -103,7 +104,8 @@ def describe_missing_tool(tool_id: str, *, container=None,
         # flag IS the answer. (`os.environ` rather than the per-tool predicate:
         # this is a diagnostic string, and the predicates live behind imports that
         # a degraded deploy may not have.)
-        set_to = os.getenv(flag)
+        from core.config_policy.members import flag_raw
+        set_to = flag_raw(flag)
         state = f"{flag}={set_to!r}" if set_to else f"{flag} is off"
         return (f"gated:disabled-by-flag — not registered on this deploy "
                 f"({state}); the owner enables it, the agent cannot")

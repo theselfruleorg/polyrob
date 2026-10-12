@@ -21,7 +21,7 @@ from tools.cronjob_tools import CronJobTool, CronScheduleAction
 @pytest.fixture(autouse=True)
 def _clear_autonomy_marker():
 	yield
-	from agents.task.goals import autonomy_marker
+	from core import autonomy_marker
 	autonomy_marker._SESSIONS.clear()
 
 

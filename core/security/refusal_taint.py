@@ -123,11 +123,21 @@ def taints(detail: Optional[str], kind: Optional[str] = None) -> bool:
     return kind != PRECONDITION
 
 
+def enabled() -> bool:
+    """The owner's ``SECURITY_SETTINGS`` row ``refusal_taint`` (D1, 2026-10-10):
+    ``hold`` (default) or ``off`` — off, a run is never held."""
+    try:
+        from core.security import settings
+        return settings.value("refusal_taint") != "off"
+    except Exception:
+        return True
+
+
 def mark(session_id: Optional[str], *, action: str = "", user_id: str = "",
          detail: str = "") -> None:
     """Taint the run ``session_id`` belongs to. The first mark per run emits."""
     key = run_key(session_id)
-    if not key:
+    if not key or not enabled():
         return
     from core.security import refusal_taint_store
     try:
@@ -153,7 +163,7 @@ def mark(session_id: Optional[str], *, action: str = "", user_id: str = "",
 
 def is_tainted(session_id: Optional[str]) -> bool:
     key = run_key(session_id)
-    if not key:
+    if not key or not enabled():
         return False
     with _LOCK:
         if key in _STORE_FAILED:

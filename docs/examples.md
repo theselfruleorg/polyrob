@@ -42,7 +42,8 @@ extract name, funding, investors and product focus, and write a comparison table
 ## 2. Work on a schedule
 
 Cron is POLYROB's durable scheduler: jobs survive restarts and are tenant-scoped.
-It needs `CRON_ENABLED=true` (on by itself at `AUTONOMY_POSTURE=full`).
+It needs `CRON_ENABLED` on (`polyrob config set CRON_ENABLED true`; on by itself at
+`AUTONOMY_POSTURE=full`).
 
 ```bash
 polyrob cron schedule "Check https://example.com/product/12345 and tell me if it is under $500" "every day 09:00"
@@ -157,7 +158,7 @@ polyrob owner show
 a managed inbox on first run — no IMAP or SMTP setup. The legacy path still works:
 
 ```bash
-EMAIL_SURFACE_ENABLED=true
+POLYROB_OVERRIDES=EMAIL_SURFACE_ENABLED=true
 GMAIL_EMAIL=bot@example.com
 GMAIL_APP_PASSWORD=your-16-char-app-password
 polyrob email
@@ -390,9 +391,9 @@ polyrob wallet book      # every money chain, one verdict, then what disagrees
 **5. Invoice, and let the chain settle it:**
 
 ```bash
-X402_INVOICE_ENABLED=true
-X402_SETTLE_ONCHAIN_DETECT=true       # a plain USDC transfer settles it, no facilitator
-INVOICE_CARD_ENABLED=true             # a branded QR card is attached to the delivery
+# X402_SETTLE_ONCHAIN_DETECT: a plain USDC transfer settles it, no facilitator
+# INVOICE_CARD_ENABLED: a branded QR card is attached to the delivery
+POLYROB_OVERRIDES=X402_INVOICE_ENABLED=true,X402_SETTLE_ONCHAIN_DETECT=true,INVOICE_CARD_ENABLED=true
 ```
 
 ```bash
@@ -456,7 +457,7 @@ async def github_webhook(request):
 ```
 
 Posting the comment itself needs the optional `github` tool
-(`GITHUB_TOOL_ENABLED=true` + `GITHUB_TOKEN`); PR comments are high-impact and
+(`POLYROB_OVERRIDES=GITHUB_TOOL_ENABLED=true` + `GITHUB_TOKEN`); PR comments are high-impact and
 approval-gated.
 
 **In CI**, run it as a command:

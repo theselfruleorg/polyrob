@@ -35,7 +35,7 @@ from modules.memory.recall_consolidation import RecallConsolidationMixin
 from modules.memory.sqlite_kb_store import KbStoreMixin
 from modules.memory.sqlite_episodes_store import EpisodeStoreMixin
 from modules.memory.sqlite_scope_store import ScopeStoreMixin
-from modules.memory import scope as _scope
+from modules.memory import scope as _scope, write_filter as _wf  # B2: write noise filter
 
 
 def _require_user_id() -> bool:
@@ -170,7 +170,7 @@ class SqliteMemoryProvider(CuratedNotesStoreMixin, KbStoreMixin, EpisodeStoreMix
         consistent across the two halves). The D8 cap is applied HERE for the same
         reason — a truncated FTS row must match its embedded twin byte-for-byte."""
         u, a = strip_turn_fences(user_content, assistant_content)  # 070 W1.5: no fence is stored
-        content = ("" if a is None else a.strip() if cls._store_answer_only()
+        content = ("" if not (a := _wf.clean(a)) else a.strip() if cls._store_answer_only()
                    else f"User: {u}\nAssistant: {a}".strip())
         from core.secret_scrub import scrub_secret_shapes
         content = scrub_secret_shapes(content)
@@ -259,9 +259,9 @@ class SqliteMemoryProvider(CuratedNotesStoreMixin, KbStoreMixin, EpisodeStoreMix
 
     @staticmethod
     def _fts_match(terms: list) -> str:
-        """Sanitized FTS5 OR-query over the first 12 terms (quoting each term
-        disables FTS query syntax injection)."""
-        return " OR ".join(f'"{t}"' for t in terms[:12])
+        """Quoted (injection-safe) FTS5 OR-query over <=12 informative terms (B1, fts_terms)."""
+        from modules.memory.fts_terms import select_terms
+        return " OR ".join(f'"{t}"' for t in select_terms(terms))
 
     async def search(self, query: str, *, user_id=None, session_id: str = None,
                      limit: int = 5, sort: str = None, before_id: int = None,

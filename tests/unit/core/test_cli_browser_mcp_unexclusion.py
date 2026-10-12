@@ -13,7 +13,7 @@ import types
 
 import pytest
 
-from core.bootstrap import (
+from polyrob.app.bootstrap import (
     _CLI_INCOMPATIBLE,
     _CLI_REGISTERABLE_TOOLS,
     cli_unavailable_tools,

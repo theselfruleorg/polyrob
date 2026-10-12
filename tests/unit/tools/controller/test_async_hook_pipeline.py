@@ -12,7 +12,7 @@ import logging
 import pytest
 
 from tools.controller.hooks import HookPipeline
-from tools.controller.types import ActionResult
+from agents.task.loop_types.controller_types import ActionResult
 
 
 def _pipe() -> HookPipeline:

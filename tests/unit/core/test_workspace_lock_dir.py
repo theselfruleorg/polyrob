@@ -8,7 +8,7 @@ follow the project. Byte-identical for both legacy branches.
 
 from pathlib import Path
 
-from core.bootstrap import _resolve_workspace_lock_dir
+from polyrob.app.bootstrap import _resolve_workspace_lock_dir
 
 
 def test_lock_dir_is_data_home_when_not_project_root():

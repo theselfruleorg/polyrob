@@ -21,8 +21,8 @@ Drift resolved UP here (2026-08-09):
   (discord's pattern, kept per-surface rather than globalized).
 
 All heavy imports stay INSIDE ``run_surface`` at call time so tests can
-monkeypatch the source-module attributes (``core.bootstrap.build_cli_container``,
-``surfaces.*.harness.build_*``, ``agents.task.constants.local_mode_enabled``, …)
+monkeypatch the source-module attributes (``polyrob.app.bootstrap.build_cli_container``,
+``surfaces.*.harness.build_*``, ``core.config_policy.local_mode_enabled``, …)
 and so the command modules import cleanly with no surface env set.
 
 ``gateway.py`` deliberately does NOT use this runner: it launches MULTIPLE
@@ -34,7 +34,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import signal as _signal
 import sys
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Mapping, Optional, Sequence
@@ -76,6 +75,7 @@ async def run_surface(
     post_bus: Optional[Callable[[Any], None]] = None,
     autonomy_precheck: Optional[Callable[[], bool]] = None,
     silence_loggers: Sequence[str] = (),
+    surface_id: str = "",
 ) -> None:
     """Run one network surface end to end.
 
@@ -95,10 +95,15 @@ async def run_surface(
       6. ``autonomy_precheck()`` inside the fail-open autonomy block — return
          False to skip ``start_autonomy`` after doing your own logging (email's
          EMAIL_AUTONOMY_RUNTIME gate).
+
+    077: after the env loads, the boot step stamps this start (and applies an
+    update the owner asked for); a :class:`LifecycleWatcher` drains for a
+    restart request and the process exits with 75; SIGTERM finishes the live
+    work (bounded) before it stops.
     """
     import logging as _logging
 
-    from core.bootstrap import (build_cli_container, setup_project_path,
+    from polyrob.app.bootstrap import (build_cli_container, setup_project_path,
                                 setup_sqlite_compat)
     from core.runtime_paths import data_dir_or_home
 
@@ -119,11 +124,21 @@ async def run_surface(
     # file), and BEFORE the container build so the bus installs during
     # TaskAgent construction too.
     os.environ.setdefault("SINGULAR_CHAT_ENABLED", "true")
+    from core.config_policy.members import setdefault_flag
     for _key, _value in (extra_env or {}).items():
-        os.environ.setdefault(_key, _value)
+        setdefault_flag(os.environ, _key, _value)   # a posture member -> POLYROB_OVERRIDES
+
+    from core.runtime_paths import resolve_data_home
+    from cli.commands._lifecycle_boot import boot_step
+    _life_home = resolve_data_home()
+    # A surface command with its own autonomy gate (email) is a SECONDARY process
+    # beside the agent: its own boot record, and it never applies an update.
+    _life_role = "" if autonomy_precheck is None else (surface_id or "surface")
+    boot_step(surface_id or "surface", data_home=_life_home, echo=click.echo,
+              role=_life_role)
 
     # Resolve surface credentials NOW — preflight_or_onboard already loaded the
-    # env layers (./.polyrob/.env etc.), so fail fast on a missing token.
+    # env layers (core.paths.env_file_candidates), so fail fast on a missing token.
     creds = resolve_credentials() if resolve_credentials is not None else None
 
     # A headless run (systemd: stderr is the journal, not a TTY) MUST log — a
@@ -214,9 +229,9 @@ async def run_surface(
     autonomy_handles = None
     try:
         if autonomy_precheck is None or autonomy_precheck():
-            from agents.task.constants import local_mode_enabled
+            from core.config_policy import local_mode_enabled
             if local_mode_enabled():
-                from core.autonomy_runtime import start_autonomy
+                from polyrob.app.autonomy_runtime import start_autonomy
                 autonomy_handles = start_autonomy(task_agent=task_agent,
                                                   data_dir=data_dir)
     except Exception:
@@ -235,29 +250,45 @@ async def run_surface(
     loop = asyncio.get_running_loop()
     run_task = asyncio.ensure_future(job.run())
 
+    def _stop_intake():
+        if job.on_stop is not None:
+            job.on_stop()
+        elif job.cancel_on_stop:
+            run_task.cancel()
+
     def _stop(*_a):
         if job.on_stop is not None:
             job.on_stop()
         if job.cancel_on_stop:
             run_task.cancel()
 
-    # Robust install (discord's pattern, resolved UP for all surfaces):
-    # add_signal_handler where the loop supports it, else plain signal.signal.
-    try:
-        loop.add_signal_handler(_signal.SIGINT, _stop)
-        loop.add_signal_handler(_signal.SIGTERM, _stop)
-    except (NotImplementedError, RuntimeError):
-        for _sig in (_signal.SIGINT, _signal.SIGTERM):
-            try:
-                _signal.signal(_sig, lambda *_a: _stop())
-            except (ValueError, OSError, AttributeError):
-                pass  # SIGTERM may be unavailable on some platforms/threads
+    from cli.commands._lifecycle import (LifecycleWatcher, announce_boot,
+                                         install_stop_signals)
+    watcher = LifecycleWatcher(
+        data_home=_life_home, container=container, stop_intake=_stop_intake,
+        intake_done=run_task.done, request_exit=_stop,
+        serves=frozenset({surface_id} if surface_id else ()),
+        primary=not _life_role)
+    install_stop_signals(loop, data_home=_life_home, stop_intake=_stop_intake,
+                         intake_done=run_task.done, stop_now=_stop, abort=watcher.abort)
+    watcher_task = asyncio.ensure_future(watcher.run())
+    await announce_boot(container, _life_home, role=_life_role,
+                        serves=frozenset({surface_id} if surface_id else ()))
 
     try:
         await run_task
     except asyncio.CancelledError:
         pass
     finally:
+        if (watcher.request is not None and watcher.exit_code is None
+                and not watcher.aborted and not watcher_task.done()):
+            # Intake stopped for a drain: let the drain finish.
+            try:
+                await watcher_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        if not watcher_task.done():
+            watcher_task.cancel()
         click.echo("\n" + click.style(stopping_message, dim=True))
         if autonomy_handles is not None:
             try:
@@ -276,3 +307,8 @@ async def run_surface(
                 pass
         else:
             await job.harness.stop()
+    from core.lifecycle import mark_stopped
+    mark_stopped(data_home=_life_home, role=_life_role)
+    if watcher.exit_code:
+        # 077: a drained restart — the supervisor starts this process again.
+        sys.exit(watcher.exit_code)

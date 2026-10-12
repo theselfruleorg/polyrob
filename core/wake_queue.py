@@ -16,7 +16,7 @@ This queue is the honest cross-process shape:
 
   * the DECIDING process ENQUEUES a durable wake row (survives a restart of
     either service; needs no new open port);
-  * the OWNING process's autonomy tick (``core/autonomy_runtime.py`` wake-drain
+  * the OWNING process's autonomy tick (``polyrob/app/autonomy_runtime.py`` wake-drain
     ticker) CLAIMS the row via a single-winner CAS and delivers it IN-PROCESS
     through the same ``deliver_self_wake`` rail — where the session really lives.
 

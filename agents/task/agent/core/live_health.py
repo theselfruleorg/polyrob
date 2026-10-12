@@ -49,7 +49,7 @@ class LiveHealthMixin:
             from agents.task.session_class import correspondent_facing
             if correspondent_facing(getattr(self, "orchestrator", None)):
                 return  # H16: output goes to a correspondent — no owner-tenant state
-            from agents.task.constants import AutonomyConfig
+            from core.config_policy import AutonomyConfig
             if not AutonomyConfig.live_health_context():
                 return
             orch = getattr(self, "orchestrator", None)

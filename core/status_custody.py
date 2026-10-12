@@ -142,7 +142,9 @@ def _signer_ping_line(sec: Section) -> str:
         sec.health.append(HealthItem(
             key="signer_unreachable",
             severity=SEVERITY_CRIT if sec.data.get("signer_mode") == "remote" else SEVERITY_WARN,
-            text=f"polyrob-signer did not answer ({type(exc).__name__})",
+            text=f"polyrob-signer did not answer ({type(exc).__name__})"
+                 + ("" if sec.data.get("signer_mode") == "remote"
+                    else " — shadow: the agent's own caps apply until it answers"),
             remedy="`sudo systemctl status polyrob-signer`; journal: `journalctl -u polyrob-signer`"))
         return f"signer: unreachable ({type(exc).__name__}: {exc})"
     sec.data["signer_reachable"] = True
@@ -200,8 +202,26 @@ def _shadow_line(sec: Section) -> str:
     return line
 
 
+def custody_with_settings() -> Section:
+    """The custody section plus the owner's effective security settings (D1,
+    2026-10-10: one typed table, ``core.security.settings``). The owner reads
+    them where status already lives — ``/status`` and ``polyrob doctor``."""
+    sec = custody_section()
+    from core.security import settings as ss
+    sec.lines.append(ss.status_line())
+    sec.data["security_settings"] = ss.effective()
+    bad = ss.invalid_entries()
+    if bad:
+        sec.health.append(HealthItem(
+            key="security_settings_invalid", severity=SEVERITY_WARN,
+            text=f"{ss.ENV} entries ignored (the default applies): " + ", ".join(bad)[:300],
+            remedy="fix the entry in the env file: name=value, names and values as listed "
+                   "in docs/CONFIGURATION.md"))
+    return sec
+
+
 from core.status_sections import register_status_section  # noqa: E402
 
 # 067 P5a: the ``custody`` slot (process-level: no tenant needed).
-register_status_section("custody", lambda ctx: _guarded("custody", custody_section),
+register_status_section("custody", lambda ctx: _guarded("custody", custody_with_settings),
                         tenant=False)

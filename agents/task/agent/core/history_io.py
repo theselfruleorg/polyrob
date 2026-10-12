@@ -14,7 +14,7 @@ from typing import List, Optional
 
 from agents.task.constants import MemoryConfig
 from agents.task.agent.views import AgentOutput, ActionResult, AgentHistory
-from tools.browser.views import BrowserState, BrowserStateHistory
+from agents.task.loop_types.browser_views import BrowserState, BrowserStateHistory
 from agents.task.path import pm
 
 
@@ -132,7 +132,7 @@ class HistoryIOMixin:
         which inspects history[-1].result[-1].error) reports an honest 'error'
         instead of 'completed' when the loop halts outside the step pipeline
         (e.g. the RUN_BUDGET_USD gate). Lives here, not in run_loop, because the
-        blank BrowserStateHistory needs this module's tools.browser.views import
+        blank BrowserStateHistory needs this module's agents.task.loop_types.browser_views import
         (a new agents->tools edge in run_loop would fail the layering ratchet).
         In-memory only: the per-step history file is written by _make_history_item.
         """
@@ -164,7 +164,7 @@ class HistoryIOMixin:
             self.logger.warning("No history available to create GIF")
             return None
 
-        from utils.gif_utils import create_history_gif
+        from agents.task.gif_utils import create_history_gif
         return create_history_gif(
             history_items=list(self.history.history),
             session_id=self.session_id,
@@ -179,7 +179,7 @@ class HistoryIOMixin:
         Returns:
             List of screenshot file paths (not base64 data to save memory)
         """
-        from utils.gif_utils import get_conversation_screenshots
+        from agents.task.gif_utils import get_conversation_screenshots
         history_items = list(self.history.history) if self.history and hasattr(self.history, 'history') else None
         return get_conversation_screenshots(
             history_items=history_items,

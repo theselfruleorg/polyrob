@@ -58,11 +58,11 @@ def _channel_proof() -> str:
     This prose — "Telegram never echoes a bot's own posts back, so the send
     receipt IS the confirmation" — lived ONLY here, in two copies, inside a
     read action. The rail that needs it is the SEND path, which never read it.
-    Now both render the same row (`core/rails/verification.py`), so there is one
+    Now both render the same row (`tools/rails/verification.py`), so there is one
     sentence to keep true.
     """
     try:
-        from core.rails.verification import GUIDE_PATH, verification_line
+        from tools.rails.verification import GUIDE_PATH, verification_line
         line = verification_line("telegram_channel")
         return f"{line} (full table: {GUIDE_PATH})" if line else ""
     except Exception:
@@ -114,15 +114,6 @@ def _mark_read_taint(controller, execution_context) -> None:
     try:
         from core.security.read_taint import mark
         mark(orch, execution_context)
-        return
-    except Exception:
-        pass
-    try:
-        if orch is not None:
-            setattr(orch, "_untrusted_read", True)
-        meta = getattr(execution_context, "metadata", None)
-        if isinstance(meta, dict):
-            meta["untrusted_read"] = True
     except Exception:
         logger.warning("room_read: could not mark the turn tainted", exc_info=True)
 

@@ -70,7 +70,7 @@ def _home(tmp_path, monkeypatch):
 
 
 def test_cron_session_without_goal_tool_raises_a_rail_stamped_ask(tmp_path, monkeypatch):
-    from agents.task.goals.autonomy_marker import mark_autonomous
+    from core.autonomy_marker import mark_autonomous
     mark_autonomous("s-cron-7", None, cron_job_id="exit-rail")
     delivered = []
 
@@ -144,7 +144,7 @@ def test_ambiguous_answer_lists_the_open_asks(tmp_path):
 
 
 def test_autonomous_wait_refusal_shape(tmp_path):
-    from agents.task.goals.autonomy_marker import mark_autonomous
+    from core.autonomy_marker import mark_autonomous
     from tools.controller.owner_ask_action import autonomous_wait_refusal
     mark_autonomous("s-auto-w", "goal-w")
     assert autonomous_wait_refusal(None, "s-interactive") is None
@@ -214,7 +214,7 @@ def test_h04_tainted_or_correspondent_session_cannot_raise_or_answer(tmp_path):
 
 
 def test_h04_group_and_autonomous_turns_cannot_answer(tmp_path):
-    from agents.task.goals.autonomy_marker import mark_autonomous
+    from core.autonomy_marker import mark_autonomous
     board = _board(tmp_path)
     board.create_ask(user_id="rob", what="A or B?")
     c, fn, model = _register(tmp_path)

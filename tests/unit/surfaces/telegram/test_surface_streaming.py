@@ -1,7 +1,7 @@
 """#8: TelegramSurface incremental streaming — live editMessageText as partial deltas
 arrive, gated stream.telegram (default OFF = buffered one-send-on-finalize).
-The edit cadence is flood-throttled (TELEGRAM_STREAM_EDIT_INTERVAL_SEC); tests set it
-to 0 for deterministic per-delta edits.
+The edit cadence is flood-throttled (core.surfaces.config.TELEGRAM_STREAM_EDIT_INTERVAL_SEC);
+tests patch it to 0 for deterministic per-delta edits.
 """
 from tests.support.owner_prefs import set_owner_pref
 import pytest
@@ -35,7 +35,7 @@ def _om(text, *, partial, stream_id="sid"):
 @pytest.mark.asyncio
 async def test_incremental_stream_edits_one_message_in_place(monkeypatch):
     set_owner_pref(monkeypatch, "stream.telegram", True)
-    monkeypatch.setenv("TELEGRAM_STREAM_EDIT_INTERVAL_SEC", "0")  # edit on every delta
+    monkeypatch.setattr("core.surfaces.config.TELEGRAM_STREAM_EDIT_INTERVAL_SEC", 0.0)  # edit on every delta
     bot = _FakeBot()
     s = TelegramSurface(bot)
     await s.stream(_om("Hel", partial=True))
@@ -78,7 +78,7 @@ async def test_finalize_without_partials_just_sends(monkeypatch):
 @pytest.mark.asyncio
 async def test_overflow_splits_on_finalize(monkeypatch):
     set_owner_pref(monkeypatch, "stream.telegram", True)
-    monkeypatch.setenv("TELEGRAM_STREAM_EDIT_INTERVAL_SEC", "0")
+    monkeypatch.setattr("core.surfaces.config.TELEGRAM_STREAM_EDIT_INTERVAL_SEC", 0.0)
     bot = _FakeBot()
     s = TelegramSurface(bot)
     big = "x" * 5000
@@ -95,7 +95,7 @@ async def test_discrete_reply_finalizes_live_bubble_no_duplicate(monkeypatch):
     then the turn's discrete reply (partial=False, via send()) commits that SAME message
     with the clean text — no second message is sent."""
     set_owner_pref(monkeypatch, "stream.telegram", True)
-    monkeypatch.setenv("TELEGRAM_STREAM_EDIT_INTERVAL_SEC", "0")
+    monkeypatch.setattr("core.surfaces.config.TELEGRAM_STREAM_EDIT_INTERVAL_SEC", 0.0)
     bot = _FakeBot()
     s = TelegramSurface(bot)
     # Stream deltas (stream_id == session_key, as feed.py now emits).
@@ -139,7 +139,7 @@ async def test_unchanged_text_not_re_edited(monkeypatch):
     """A finalize whose text equals the last rendered live text must not re-edit
     (Telegram rejects an unchanged edit with 'message is not modified')."""
     set_owner_pref(monkeypatch, "stream.telegram", True)
-    monkeypatch.setenv("TELEGRAM_STREAM_EDIT_INTERVAL_SEC", "0")
+    monkeypatch.setattr("core.surfaces.config.TELEGRAM_STREAM_EDIT_INTERVAL_SEC", 0.0)
     bot = _FakeBot()
     s = TelegramSurface(bot)
     await s.stream(_om("done", partial=True))   # sends "done"

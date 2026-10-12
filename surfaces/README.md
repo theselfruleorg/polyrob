@@ -1,8 +1,8 @@
 # Surfaces Package — chat-surface adapters
 
-_Last reviewed: 2026-09-23 (064 S2b wave F). The access model is
-`docs/architecture/components/chat-access-model.md`; the owner-seat contracts are
-`docs/architecture/components/interface-contracts.md`._
+_Last reviewed: 2026-10-10. The access model and the owner-seat contracts are described
+for users in [`docs/guide/groups.md`](../docs/guide/groups.md) and
+[`docs/guide/owner-controls.md`](../docs/guide/owner-controls.md)._
 
 ## Overview
 

@@ -28,7 +28,7 @@ from core.config_policy.local_profile import local_mode_enabled
 # - Default CLOSED: unset/garbage/out-of-range -> 0. Garbage NEVER rounds up —
 #   only the literal values 0|1|2|3 are accepted (a typo'd "9" must not grant the
 #   host tier).
-# - FROZEN AT IMPORT (re-frozen ONCE by `core.bootstrap.load_env` after
+# - FROZEN AT IMPORT (re-frozen ONCE by `polyrob.app.bootstrap.load_env` after
 #   env-file layering, 026 P1.1): a mid-process env mutation (e.g. a
 #   prompt-injected write that reached an env-mutating surface) can never
 #   raise the running posture. Operators set it in real process env (systemd
@@ -59,7 +59,7 @@ def compute_posture() -> int:
 def _refreeze_compute_posture() -> int:
     """Re-snapshot the frozen posture from the current env (026 P1.1).
 
-    Callers: ``core.bootstrap.load_env`` (once per process, after env-file
+    Callers: ``polyrob.app.bootstrap.load_env`` (once per process, after env-file
     layering, before any agent code — see the payment twin above) and tests.
     A mid-session env mutation still cannot raise the running posture.
     """
@@ -97,23 +97,9 @@ def compute_posture_allows(execution_context, min_posture: int) -> bool:
     try:
         if compute_posture() < min_posture:
             return False
-        if execution_context is None:
-            return False
-        if getattr(execution_context, "is_sub_agent", False):
-            return False
-        if getattr(execution_context, "role", "leaf") != "orchestrator":
-            return False
-        metadata = getattr(execution_context, "metadata", None) or {}
-        # R-4: the forged-turn kinds SSOT is core-tier now — no fallback needed.
-        from core.security.forged_turns import FORGED_TURN_KINDS as _kinds
-        if metadata.get("turn_kind") in _kinds:
-            return False
-        from core.instance import is_owner_local_safe, resolve_owner_principal
-        return is_owner_local_safe(
-            getattr(execution_context, "user_id", None),
-            owner_principal=resolve_owner_principal(),
-            local_enabled=local_mode_enabled(),
-        )
+        # W5: the turn clauses (b)-(d) are the ONE owner-turn definition.
+        from core.security.owner_turn import compute_turn_allows
+        return compute_turn_allows(execution_context)
     except Exception:
         return False  # fail-closed: can't prove entitlement -> deny
 

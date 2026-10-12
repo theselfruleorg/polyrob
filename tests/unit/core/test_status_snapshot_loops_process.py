@@ -272,7 +272,7 @@ def test_non_positive_pid_is_treated_as_legacy(tmp_path):
 @pytest.mark.asyncio
 async def test_start_autonomy_stamps_pid_and_role(monkeypatch):
     """Without the pid the reader has nothing to attribute a row to."""
-    import core.autonomy_runtime as ar
+    import polyrob.app.autonomy_runtime as ar
 
     class _FakeTicker:
         async def run_forever(self, *, stop_event):
@@ -306,7 +306,7 @@ def test_service_role_is_derived_from_argv_not_an_env_var(monkeypatch):
     more thing an operator could set to something untrue."""
     import sys
 
-    import core.autonomy_runtime as ar
+    import polyrob.app.autonomy_runtime as ar
 
     monkeypatch.setattr(sys, "argv", ["/opt/polyrob/venv/bin/polyrob", "telegram"])
     assert ar._service_role() == "telegram"
@@ -329,7 +329,7 @@ def test_a_group_options_value_is_not_the_subcommand(monkeypatch):
     `cli/polyrob.py::cli`; their argument is the next token."""
     import sys
 
-    import core.autonomy_runtime as ar
+    import polyrob.app.autonomy_runtime as ar
 
     for opt in ("-P", "--profile"):
         monkeypatch.setattr(sys, "argv", ["polyrob", opt, "work", "telegram"])
@@ -360,7 +360,7 @@ def test_uvicorn_console_and_api_are_named_apart(monkeypatch):
     get two names."""
     import sys
 
-    import core.autonomy_runtime as ar
+    import polyrob.app.autonomy_runtime as ar
 
     uvicorn_m = "/opt/polyrob/venv/lib/python3.11/site-packages/uvicorn/__main__.py"
     monkeypatch.setattr(sys, "argv", [
@@ -383,7 +383,7 @@ def test_uvicorn_console_and_api_are_named_apart(monkeypatch):
 def test_service_role_never_raises(monkeypatch):
     import sys
 
-    import core.autonomy_runtime as ar
+    import polyrob.app.autonomy_runtime as ar
 
     monkeypatch.setattr(sys, "argv", [None, object()])
     assert isinstance(ar._service_role(), str)

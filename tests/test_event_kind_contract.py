@@ -17,11 +17,12 @@ Scanner scope: git-tracked source dirs only (never tests/scripts/docs).
 """
 import ast
 import re
-import subprocess
 from pathlib import Path
 
+from tests.support.repo_index import repo_index
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SOURCE_DIRS = ("core", "modules", "agents", "tools", "api", "cli", "surfaces", "webview", "cron")
+SOURCE_DIRS = ("core", "polyrob", "modules", "agents", "tools", "api", "cli", "surfaces", "webview", "cron")
 CATALOG = REPO_ROOT / "core" / "event_kinds.py"
 
 # (callee attr/name, restricted-to-path-prefix or None)
@@ -50,9 +51,8 @@ def _catalog():
 
 
 def _source_files():
-    out = subprocess.run(["git", "ls-files", "--", *SOURCE_DIRS], cwd=REPO_ROOT,
-                         capture_output=True, text=True, timeout=30)
-    files = [REPO_ROOT / p for p in out.stdout.split() if p.endswith(".py")]
+    files = [REPO_ROOT / p for p in repo_index().tracked()
+             if p.endswith(".py") and p.split("/", 1)[0] in SOURCE_DIRS]
     return [f for f in files if f.is_file() and "tests" not in f.parts and f != CATALOG]
 
 
@@ -63,6 +63,14 @@ def _callee_name(node):
         parent = _callee_name(node.value)
         return f"{parent}.{node.attr}" if parent else ""
     return ""
+
+
+def _not_utf8(f):
+    try:
+        repo_index().text(f)
+        return False
+    except UnicodeDecodeError:
+        return True
 
 
 def _event_emit_calls(tree):
@@ -83,14 +91,15 @@ def _event_emit_calls(tree):
 
 def _producer_literals():
     found = {}
+    idx = repo_index()
     for f in _source_files():
         rel = f.relative_to(REPO_ROOT).as_posix()
         try:
-            tree = ast.parse(f.read_text(errors="replace"))
+            tree = ast.parse(idx.text(f, errors="replace")) if _not_utf8(f) else idx.tree(f)
         except SyntaxError:
             continue
         emit_calls = _event_emit_calls(tree)
-        for node in ast.walk(tree):
+        for node in (ast.walk(tree) if _not_utf8(f) else idx.nodes(f)):
             if not (isinstance(node, ast.Call) and node.args
                     and isinstance(node.args[0], ast.Constant)
                     and isinstance(node.args[0].value, str)):
@@ -118,11 +127,17 @@ def test_every_produced_kind_is_catalogued():
 
 def test_every_catalogued_kind_is_used_in_code():
     kinds = _catalog()
-    corpus = "\n".join(f.read_text(errors="replace") for f in _source_files())
+    idx = repo_index()
+    corpus = "\n".join(idx.text(f, errors="replace") for f in _source_files())
+    # One pass over the corpus instead of two regex searches per kind: a NAME made
+    # of word characters matches r"\bNAME\b" exactly when it is a whole \w+ run,
+    # and a [a-z_]+ literal matches r"['\"]lit['\"]" exactly when it is a whole
+    # [a-z_]+ run with a quote on each side.
+    words = set(re.findall(r"\w+", corpus))
+    quoted = set(re.findall(r"(?<=['\"])[a-z_]+(?=['\"])", corpus))
     dead = sorted(
         name for name, literal in kinds.items()
-        if not re.search(r"\b" + name + r"\b", corpus)
-        and not re.search(r"['\"]" + literal + r"['\"]", corpus)
+        if name not in words and literal not in quoted
     )
     assert not dead, (
         "Catalogued event kind(s) with no producer or consumer in shipped source — "

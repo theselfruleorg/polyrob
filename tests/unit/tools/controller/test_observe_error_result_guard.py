@@ -8,7 +8,7 @@ import asyncio
 import logging
 
 from tools.controller.execution import ExecutionMixin
-from tools.controller.types import ActionResult
+from agents.task.loop_types.controller_types import ActionResult
 
 
 class _Stub(ExecutionMixin):

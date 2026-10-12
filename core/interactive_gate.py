@@ -36,8 +36,6 @@ def _workspace_lock_path() -> Optional[str]:
         # ticks and the deploy waiter could not see an owner turn at all. Derive
         # <data_dir>/locks when the data dir is known; a box with neither is a
         # bare dev checkout and stays lock-free as before.
-        if not _marker_enabled():
-            return None
         data = os.environ.get("POLYROB_DATA_DIR")
         if not data:
             return None
@@ -58,11 +56,6 @@ def _workspace_lock_path() -> Optional[str]:
     return os.path.join(root, "workspace.turn.lock")
 
 
-def _marker_enabled() -> bool:
-    from core.env import bool_env
-    return bool_env("INTERACTIVE_GATE_MARKER", True)
-
-
 def turn_marker_path() -> Optional[str]:
     """`<POLYROB_DATA_DIR>/locks/turn.active` — the out-of-process fact "a human
     turn is live" (pid, kind, started, session_id). Read by
@@ -73,23 +66,32 @@ def turn_marker_path() -> Optional[str]:
     .polyrob, so the marker used to land there while every out-of-process reader
     looked under the data dir — a deploy fired at step 8 of a live owner turn
     (and at step 4 of another at 10:36Z). The per-workspace LOCK stays with the
-    workspace; the MARKER lives under the data dir whenever one is known, and
-    only falls back to the lock dir on a bare dev checkout.
+    workspace; the MARKER lives under the data dir whenever one is known.
+
+    077 F8 (2026-10-12): with no POLYROB_DATA_DIR (the self-host `systemd --user`
+    unit) the marker used to fall back to the LOCK dir — ``<cwd>/.polyrob``, i.e.
+    whatever the unit's WorkingDirectory was — while ``polyrob update --apply``
+    (which builds no container, so has no lock dir) read
+    ``<data_home>/locks/turn.active``: the updater could not see a live owner
+    turn. The marker now resolves from the DATA HOME rule
+    (``core.runtime_paths.resolve_data_home`` — POLYROB_HOME alone decides it), so
+    the writer and every reader agree whatever the working directory is. A
+    process with neither a data dir nor a lock dir (a bare checkout, a unit test)
+    still writes no marker.
     """
-    if not _marker_enabled():
-        return None
     data = os.environ.get("POLYROB_DATA_DIR")
     if data:
         root = os.path.join(data, "locks")
-        try:
-            os.makedirs(root, exist_ok=True)
-        except OSError:
+    else:
+        if _workspace_lock_path() is None:
             return None
-        return os.path.join(root, "turn.active")
-    lp = _workspace_lock_path()
-    if lp is None:
+        from core.runtime_paths import resolve_data_home
+        root = os.path.join(str(resolve_data_home()), "locks")
+    try:
+        os.makedirs(root, exist_ok=True)
+    except OSError:
         return None
-    return os.path.join(os.path.dirname(lp), "turn.active")
+    return os.path.join(root, "turn.active")
 
 
 def _write_turn_marker(kind: str, session_id: Optional[str]) -> None:
@@ -97,8 +99,8 @@ def _write_turn_marker(kind: str, session_id: Optional[str]) -> None:
     mp = turn_marker_path()
     if mp is None:
         logging.getLogger(__name__).info(
-            "turn marker NOT written (no marker path: lock dir/data dir unset or "
-            "INTERACTIVE_GATE_MARKER off) kind=%s session=%s", kind, session_id)
+            "turn marker NOT written (no marker path: lock dir/data dir unset) "
+            "kind=%s session=%s", kind, session_id)
         return
     import json
     import time
@@ -120,6 +122,15 @@ def _clear_turn_marker() -> None:
     mp = turn_marker_path()
     if mp is None:
         return
+    try:
+        # One marker per data home: a second process's live turn may have
+        # rewritten it — never clear THAT one (077 review).
+        import json
+        with open(mp, encoding="utf-8") as f:
+            if int((json.load(f) or {}).get("pid") or 0) not in (0, os.getpid()):
+                return
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
     try:
         os.unlink(mp)
         import logging
@@ -152,9 +163,12 @@ def read_turn_marker() -> Optional[dict]:
         return None
 
 
+#: Internal tuning (not env-driven): seconds to wait for the workspace lock.
+CLI_WORKSPACE_LOCK_TIMEOUT = 30.0
+
+
 def _workspace_lock_timeout() -> float:
-    from core.env import float_env
-    return float_env("CLI_WORKSPACE_LOCK_TIMEOUT", 30.0)
+    return CLI_WORKSPACE_LOCK_TIMEOUT
 
 
 @contextlib.contextmanager
@@ -171,7 +185,7 @@ def workspace_turn_lock(timeout: Optional[float] = None):
     if lp is None:
         yield None
         return
-    from agents.task.utils import SafeFileLock
+    from core.file_lock import SafeFileLock
 
     to = _workspace_lock_timeout() if timeout is None else timeout
     with SafeFileLock(lp, timeout=to):
@@ -219,7 +233,7 @@ def owner_turn(kind: str = "owner_chat", session_id: Optional[str] = None,
             lp = _workspace_lock_path()
             if lp is not None:
                 try:
-                    from agents.task.utils import SafeFileLock
+                    from core.file_lock import SafeFileLock
                     lock = SafeFileLock(lp, timeout=lock_timeout)
                     lock.__enter__()
                 except Exception as e:  # contention/timeout: proceed unlocked

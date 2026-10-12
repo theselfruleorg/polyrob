@@ -156,7 +156,7 @@ async def run_migrations(command: str = 'upgrade'):
         # provider SDKs just to inspect a SQLite file.
         from core.config import BotConfig
         from core.container import DependencyContainer
-        from core.initialization import initialize_core
+        from polyrob.app.initialization import initialize_core
         from migrations.version_manager import DatabaseVersionManager
 
         # Initialize

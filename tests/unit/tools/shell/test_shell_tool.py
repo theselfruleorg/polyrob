@@ -15,7 +15,7 @@ from tools.shell.tool import ShellTool, ShellRunParams
 from tools.shell.state import ShellState, STATE_SENTINEL
 from tools.shell.process_registry import ProcessRegistry
 from tools.code_exec.result import ExecutionResult
-from tools.controller.execution_context import ActionExecutionContext
+from agents.task.loop_types.execution_context import ActionExecutionContext
 
 
 class _FakeBackend:

@@ -22,7 +22,7 @@ time and writes the row through ``GoalBoard.create(actor="rail", rail_id=...)``,
 so the ONE predicate checks it again.
 
 The tick (:func:`seed_due_rails`) runs in-process from the shared autonomy runtime
-(``core/autonomy_runtime.py``, beside the goal dispatcher), so it works for
+(``polyrob/app/autonomy_runtime.py``, beside the goal dispatcher), so it works for
 ``pip install polyrob``, a terminal ``rob`` and the server alike. It does three
 things the retired stream script did not:
 
@@ -43,6 +43,7 @@ the acting leg can never silently become a pause on the accounting.
 """
 from __future__ import annotations
 
+from core.runtime_paths import goals_db_path
 import json
 import logging
 import re
@@ -549,7 +550,7 @@ def seed_due_rails(board: Any, *, now: Optional[float] = None,
 
 
 class RailsTicker:
-    """The in-process rails loop (started by ``core.autonomy_runtime``)."""
+    """The in-process rails loop (started by ``polyrob.app.autonomy_runtime``)."""
 
     def __init__(self, board: Any, interval_seconds: int = RAILS_TICK_SEC):
         self.board = board
@@ -568,7 +569,7 @@ class RailsTicker:
 def build_rails_ticker(*, data_dir: str) -> RailsTicker:
     import os
     from agents.task.goals.board import GoalBoard
-    return RailsTicker(GoalBoard(os.path.join(data_dir, "goals.db")))
+    return RailsTicker(GoalBoard(goals_db_path(data_dir)))
 
 
 # --- import / export (036 §4.4) -------------------------------------------------------

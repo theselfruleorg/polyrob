@@ -1,7 +1,7 @@
 """043 C3 — rule 1 of the design system, held to by the product.
 
 *One nav component. It rotates axis at 768 px. It never forks.*
-(``docs/design/040/README.md``, owner decision 2026-09-13.)
+(the 040 interface design, owner decision 2026-09-13.)
 
 The console today presents **15 flat top-level destinations**; the mockups
 present five. The regression this file exists to prevent is not "the nav looks

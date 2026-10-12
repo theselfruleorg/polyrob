@@ -219,10 +219,12 @@ def test_b4_child_work_inherits_and_may_only_restate_the_target():
 def test_b4_every_acquiring_verb_consults_the_boundary():
     import inspect
     from tools.defi.trade_tool import DefiTradeTool
+    from tools.defi import solana_swap_verb  # W9: the verb bodies moved
+    from tools.defi.swap_verb import perform_swap
     from tools.goal_tools import GoalTool as GoalTools
     from tools.launchpad.tool import LaunchpadTool
     import tools.cronjob_tools as cj
-    for fn in (DefiTradeTool.swap, DefiTradeTool.solana_swap, DefiTradeTool.call,
+    for fn in (perform_swap, solana_swap_verb, DefiTradeTool.call,
                DefiTradeTool.lp_add, DefiTradeTool.deploy_token,
                DefiTradeTool.deploy_contract, DefiTradeTool.solana_deploy_token,
                LaunchpadTool.launchpad_buy, LaunchpadTool.launchpad_launch):
@@ -234,8 +236,8 @@ def test_b4_every_acquiring_verb_consults_the_boundary():
 
 def test_b4_solana_target_check_covers_canonical_outputs():
     import inspect
-    from tools.defi.trade_tool import DefiTradeTool
-    src = inspect.getsource(DefiTradeTool.solana_swap)
+    from tools.defi import solana_swap_verb  # W9: the verb body moved (phases)
+    src = inspect.getsource(solana_swap_verb)
     assert src.index("acquisition_refusal") < src.index("if token_out not in (usdc_mint")
 
 

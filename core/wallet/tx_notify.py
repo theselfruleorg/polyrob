@@ -87,11 +87,6 @@ _HEADLINE = {
 }
 
 
-def enabled() -> bool:
-    from core.env import bool_env
-    return bool_env("TX_NOTIFY_ENABLED", True)
-
-
 def sent_hold_sec() -> float:
     """Seconds a BROADCAST line waits for its settlement before going out alone."""
     import os
@@ -295,12 +290,10 @@ async def notify(container: Any, user_id: Optional[str], notice: TxNotice, *,
                  hold_sec: float = 0.0) -> str:
     """Deliver one notice. Never raises, never blocks a settled transaction.
 
-    Returns the delivery outcome, or ``"skipped"``/``"error"``. The return value
+    Returns the delivery outcome, ``"collapsed"`` or ``"error"``. The return value
     exists for tests and telemetry; no caller branches on it, because a failed
     notification must not change what happened to the money.
     """
-    if not enabled():
-        return "skipped"
     # The durable record is immediate; only the owner's line may wait.
     _emit_event(user_id, notice, settled=settled, session_id=session_id)
     ref = str(notice.tx_ref or "")

@@ -13,7 +13,7 @@ def test_core_imports_without_fastapi():
                 raise ImportError("blocked server dep: " + name)
             return _real(name, *a, **k)
         builtins.__import__ = _block
-        import core.bootstrap            # noqa
+        import polyrob.app.bootstrap            # noqa
         import agents.task_agent_lite     # noqa
         import agents.task.agent.conversation  # noqa
         print("CORE_IMPORTS_OK")

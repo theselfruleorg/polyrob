@@ -69,7 +69,7 @@ def test_too_big_params_are_not_stored():
 async def test_the_queue_writes_the_params_on_its_ask(tmp_path, monkeypatch):
     """The real ``request()`` path stores the params the web card renders."""
     from agents.task.goals.board import ASK_OPEN
-    from tools.controller.execution_context import ActionExecutionContext
+    from agents.task.loop_types.execution_context import ActionExecutionContext
     monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u1")
     board = GoalBoard(str(tmp_path / "goals.db"))
     provider = aq.OwnerQueueApprover(board=board, poll_interval=0.02,

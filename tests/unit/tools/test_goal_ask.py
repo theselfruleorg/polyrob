@@ -66,7 +66,7 @@ def test_a_leaf_or_sub_agent_cannot_raise_an_owner_ask(tmp_path):
 def test_blocks_goal_ids_are_recorded(tmp_path):
     t = _tool(tmp_path)
     g = t._goal_board.create(user_id="rob", title="buy PNL tranche 15", force=True)
-    from agents.task.goals.autonomy_marker import mark_autonomous
+    from core.autonomy_marker import mark_autonomous
     mark_autonomous("ask-own-goal", g.id)
     r = asyncio.run(t.goal_ask(GoalAskAction(what="decide X", blocks_goal_ids=[g.id]), _ctx(session_id="ask-own-goal")))
     assert not r.error
@@ -93,7 +93,7 @@ def test_an_option_question_carries_tap_options(tmp_path):
 
 
 def test_autonomous_ask_cannot_hold_an_unrelated_goal(tmp_path):
-    from agents.task.goals.autonomy_marker import mark_autonomous
+    from core.autonomy_marker import mark_autonomous
     tool = _tool(tmp_path)
     goal = tool._goal_board.create(user_id="rob", title="unrelated goal", force=True)
     mark_autonomous("other-goal-run", "own-goal")

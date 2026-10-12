@@ -4,14 +4,15 @@ ONE pre-tool-call hook on the Controller, registered fail-closed next to the
 wallet authority hook. Every outbound rail passes it because every outbound
 rail is an action the Controller dispatches — there is no per-tool copy.
 
-:data:`OUTBOUND_TEXT_FIELDS` is the ONE table of outbound verbs and the param
-fields that carry their words. ``tests/unit/tools/controller/
+:data:`OUTBOUND_TEXT_FIELDS` is the table of outbound verbs and the param
+fields that carry their words, derived from the ``text_fields`` column of the
+verb-policy rows (``core/verb_policy_rows.py``; a pack's in its ``pack.toml``). ``tests/unit/tools/controller/
 test_financial_claim_gate.py`` enumerates every action of every tool whose
 catalog permissions include ``social.post`` / ``email.send`` (plus the
 Controller's own ``message`` / ``send_message``) and fails when a text-bearing
 verb is missing here — a new outbound verb cannot skip the gate by accident.
 
-The pure detection + matching lives in ``core.rails.financial_claims``; this
+The pure detection + matching lives in ``tools.rails.financial_claims``; this
 module only reads the two settled-money stores:
 
 - money OUT — the wallet PolicyGate audit log (every booked spend, all venues);
@@ -24,36 +25,26 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
-from core.rails.financial_claims import (
+from core.lazy_views import lazy_module_getattr, view
+from tools.rails.financial_claims import (
     RECEIVE, SPEND, RecordsRead, SettledRecord, detect_claims, outbound_texts,
     verify_claim,
 )
 
 logger = logging.getLogger(__name__)
 
-#: action name -> the param fields whose text leaves the box.
-OUTBOUND_TEXT_FIELDS: Dict[str, Tuple[str, ...]] = {
-    # Controller built-ins (tools/controller/action_registration.py)
-    "message": ("text",),
-    "send_message": ("text",),
-    # email (tools/email_tool.py)
-    "email_send": ("subject", "body", "html"),
-    "email_reply": ("body", "html"),
-    "email_forward": ("note",),
-    # X API (the X pack: polyrob_x/twitter_tool.py)
-    "twitter_post": ("text", "poll_options"),
-    "twitter_reply": ("text",),
-    "twitter_quote": ("text",),
-    "twitter_thread": ("texts",),
-    "twitter_dm": ("text",),
-    # X browser rail (the X pack: polyrob_x/x_browser/tool.py)
-    "x_post": ("text",),
-    "x_reply": ("text",),
-    "x_dm": ("text",),
-    # Permanent public writes through an NFT account.
-    "agent_nft_journal": ("text",),
-    "agent_nft_bind_identity": ("agent_uri",),
-}
+
+def _build_outbound_text_fields() -> Dict[str, Tuple[str, ...]]:
+    """action name -> the param fields whose text leaves the box: the
+    ``text_fields`` column of the verb-policy rows (W4), core and pack rows."""
+    from core.verb_policy import ordered_ids_where, policy_for
+    return {n: policy_for(n).text_fields for n in ordered_ids_where(text_fields=bool)}
+
+
+#: action name -> the param fields whose text leaves the box (lazy; a derived
+#: view of the ``text_fields`` column, built on first read).
+__getattr__ = lazy_module_getattr(__name__, {
+    "OUTBOUND_TEXT_FIELDS": _build_outbound_text_fields})
 
 
 def _epoch(value: Any) -> float:
@@ -76,8 +67,12 @@ def _epoch(value: Any) -> float:
 
 
 def gate_enabled() -> bool:
+    """The owner's ``SECURITY_SETTINGS`` row ``financial_claim_gate`` (on|off,
+    default on); the older ``FINANCIAL_CLAIM_GATE_ENABLED=false`` also turns it off."""
     from core.env import bool_env
-    return bool_env("FINANCIAL_CLAIM_GATE_ENABLED", True)
+    from core.security import settings
+    return (settings.value("financial_claim_gate") != "off"
+            and bool_env("FINANCIAL_CLAIM_GATE_ENABLED", True))
 
 
 def _spend_records() -> Tuple[List[SettledRecord], Optional[str]]:
@@ -167,7 +162,7 @@ async def check_outbound(action_name: str, params: Any, user_id: str,
                          context: Any = None, controller: Any = None) -> Optional[str]:
     """``None`` to allow; the named refusal to block. Non-outbound actions and
     outbound text with no financial claim return ``None`` without any read."""
-    fields = OUTBOUND_TEXT_FIELDS.get(str(action_name or ""))
+    fields = view(__name__, "OUTBOUND_TEXT_FIELDS").get(str(action_name or ""))
     if not fields or not gate_enabled():
         return None
     text = "\n".join(outbound_texts(params, fields))

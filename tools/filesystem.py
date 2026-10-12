@@ -282,7 +282,7 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
         }, indent=2)
         artifact_id = verification.get("artifact_id") if isinstance(verification, dict) else None
         if artifact_id:
-            from tools.controller.types import ActionResult
+            from agents.task.loop_types.controller_types import ActionResult
             return ActionResult(extracted_content=payload, metadata={"artifact_id": artifact_id})
         return payload
 

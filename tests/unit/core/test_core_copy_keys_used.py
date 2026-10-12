@@ -15,7 +15,7 @@ from core.copy.en import STRINGS
 
 _REPO = Path(__file__).resolve().parents[3]
 _COPY_FILE = _REPO / "core" / "copy" / "en.py"
-_SCAN_DIRS = ("agents", "api", "cli", "core", "cron", "modules", "packs",
+_SCAN_DIRS = ("agents", "api", "cli", "core", "polyrob", "cron", "modules", "packs",
               "surfaces", "tools", "utils", "webview")
 _SUFFIXES = (".py", ".html", ".js")
 

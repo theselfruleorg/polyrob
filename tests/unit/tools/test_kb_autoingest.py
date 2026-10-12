@@ -2,7 +2,7 @@
 
 Prod on 2026-09-22: 76 indexed sources against 473 registered documents. The
 `/kb` seats were correct; the store was nearly empty of the agent's own work
-because ingestion was manual. These tests pin the three gates and the one
+because ingestion was manual. These tests pin the two gates and the one
 property that matters most — a RECORD (a run log) is never indexed as
 knowledge, whoever asks.
 """
@@ -16,7 +16,6 @@ from tools import kb_autoingest as ai
 @pytest.fixture(autouse=True)
 def kb_on(monkeypatch):
     monkeypatch.setenv("KB_ENABLED", "1")
-    monkeypatch.delenv("KB_AUTO_INGEST_ARTIFACTS", raising=False)
 
 
 def _write(tmp_path, name, body="# a report\n\nsome knowledge\n"):
@@ -27,11 +26,6 @@ def _write(tmp_path, name, body="# a report\n\nsome knowledge\n"):
 
 def test_enabled_by_default_when_the_kb_is_on():
     assert ai.kb_auto_ingest_enabled() is True
-
-
-def test_the_flag_is_the_revert(monkeypatch):
-    monkeypatch.setenv("KB_AUTO_INGEST_ARTIFACTS", "off")
-    assert ai.kb_auto_ingest_enabled() is False
 
 
 def test_inert_when_the_instance_never_asked_for_a_kb(monkeypatch):
@@ -99,7 +93,7 @@ async def test_ingest_reuses_the_one_ingest_path(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_force_skips_enablement_but_never_the_kind_rule(tmp_path, monkeypatch):
-    monkeypatch.setenv("KB_AUTO_INGEST_ARTIFACTS", "off")
+    monkeypatch.setenv("KB_ENABLED", "false")
     seen = []
 
     async def fake_kb_ingest(path, **kw):

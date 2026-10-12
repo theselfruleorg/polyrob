@@ -33,7 +33,7 @@ from agents.task import tool_defaults as td
 from agents.task import constants as c
 from core.config_policy import rigs
 from core.config_policy.profiles import PROFILES
-from core.bootstrap import cli_unavailable_tools
+from core.cli_tool_tables import cli_unavailable_tools
 lists = {
     "cli_default": resolve_tool_list(None, None)[0],
     "cli_research": resolve_tool_list(None, "research")[0],
@@ -70,7 +70,6 @@ print(json.dumps({"lists": lists, "raw": list(PROFILES["toolset:research"]),
 def test_core_boots_and_every_default_list_drops_absent_pack_ids():
     env = {k: v for k, v in os.environ.items()
            if k not in ("POLYROB_PACKS", "POLYROB_PACKS_DISABLED", "AUTONOMY_MODE")}
-    env["POLYROB_ENV_KEY_BACKFILL"] = "0"
     out = subprocess.run([sys.executable, "-c", _PROBE], cwd=str(REPO), env=env,
                          capture_output=True, text=True, timeout=240)
     assert out.returncode == 0, out.stderr[-3000:]

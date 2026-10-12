@@ -5,7 +5,8 @@ default ``/var/lib/polyrob``: a headless deploy is expected to set
 ``POLYROB_DATA_DIR`` explicitly. That expectation holds for the DAEMON — systemd
 exports it from ``EnvironmentFile=/etc/polyrob/polyrob.env`` — and breaks for the
 OWNER standing in an SSH shell, where the variable is simply absent and the
-resolution falls through to ``cwd/.polyrob``. So ``polyrob autonomy pause`` run
+resolution falls through to the shell's local home (``cwd/.polyrob`` then; since
+DATA-4 ``<polyrob_home>/data``). So ``polyrob autonomy pause`` run
 from ``~`` on the production box wrote ``AUTONOMY_PAUSE.json`` into
 ``/root/.polyrob/``, read it back from that same wrong place, and printed a
 confident "⏸ Paused everything" the running daemon never saw. Stray
@@ -178,15 +179,25 @@ def _shell_has(*keys: str) -> bool:
 def admin_instance_id() -> str:
     """The instance id an owner-control verb must act on."""
     from core.instance import is_safe_tenant_id, resolve_instance_id
+    # BOT_INSTANCE_ID (retired 1.4) in the shell: resolve_instance_id refuses it.
     if _shell_has("POLYROB_INSTANCE_ID", "BOT_INSTANCE_ID", "POLYROB_PROFILE"):
         return resolve_instance_id()
-    for key in ("POLYROB_INSTANCE_ID", "BOT_INSTANCE_ID"):
-        declared = (deployed_env_value(key) or "").strip()
-        # An unsafe id is REFUSED, never rewritten (the profile-name rule): it
-        # would resolve a path outside the identity tier.
-        if declared and is_safe_tenant_id(declared):
-            return declared
+    _refuse_deployed_alias("BOT_INSTANCE_ID", "POLYROB_INSTANCE_ID")
+    declared = (deployed_env_value("POLYROB_INSTANCE_ID") or "").strip()
+    # An unsafe id is REFUSED, never rewritten (the profile-name rule): it
+    # would resolve a path outside the identity tier.
+    if declared and is_safe_tenant_id(declared):
+        return declared
     return resolve_instance_id()
+
+
+def _refuse_deployed_alias(alias: str, canonical: str) -> None:
+    """A deployed env file that still declares only a retired alias refuses."""
+    from core.config_policy.retired_flags import refuse_retired_alias
+    refuse_retired_alias(alias, {
+        alias: deployed_env_value(alias) or "",
+        canonical: deployed_env_value(canonical) or "",
+    })
 
 
 def admin_owner_principal() -> str:
@@ -207,12 +218,13 @@ def admin_owner_principal() -> str:
     reads (see ``docs/guide/upgrading.md``, 2026-09-15).
     """
     from core.instance import is_safe_tenant_id, resolve_owner_user_id
+    # BOT_OWNER_USER_ID (retired 1.4) in the shell: the resolver refuses it.
     if _shell_has("POLYROB_OWNER_USER_ID", "BOT_OWNER_USER_ID"):
         return resolve_owner_user_id()
-    for key in ("POLYROB_OWNER_USER_ID", "BOT_OWNER_USER_ID"):
-        declared = (deployed_env_value(key) or "").strip()
-        if declared and is_safe_tenant_id(declared):
-            return declared
+    _refuse_deployed_alias("BOT_OWNER_USER_ID", "POLYROB_OWNER_USER_ID")
+    declared = (deployed_env_value("POLYROB_OWNER_USER_ID") or "").strip()
+    if declared and is_safe_tenant_id(declared):
+        return declared
     return resolve_owner_user_id()
 
 

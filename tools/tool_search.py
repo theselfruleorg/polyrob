@@ -174,7 +174,7 @@ async def perform_tool_search(controller, query: str, limit: int = 8,
                               execution_context=None):
     """The ``tool_search`` action. Read-only; safe for leaves (shows honest
     per-tool status, never refuses the search itself)."""
-    from tools.controller.types import ActionResult
+    from agents.task.loop_types.controller_types import ActionResult
 
     sr = search_tools(query, container=getattr(controller, "container", None),
                       loaded_ids=set(controller.list_tools()),
@@ -287,7 +287,7 @@ def describe_tool(tool_id: str, *, container, loaded_ids, is_leaf: bool,
 
 async def perform_tool_describe(controller, tool_id: str, execution_context=None):
     """The ``tool_describe`` action. Read-only; safe for leaves."""
-    from tools.controller.types import ActionResult
+    from agents.task.loop_types.controller_types import ActionResult
     content = describe_tool(
         tool_id,
         container=getattr(controller, "container", None),

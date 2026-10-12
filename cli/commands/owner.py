@@ -5,6 +5,7 @@ correspondents the agent is talking to, and approve a pending one. This is the s
 admin seam for the WS-A three-tier access model (owner can command; correspondents are
 DATA-only; unknown senders are denied).
 """
+from core.runtime_paths import correspondents_db_path, goals_db_path, surfaces_db_path
 import json
 import logging
 import os
@@ -32,12 +33,12 @@ def _canon(address: str) -> str:
 
 def _registry(data_dir: str):
     from core.surfaces.correspondents import CorrespondentRegistry
-    return CorrespondentRegistry(os.path.join(data_dir, "correspondents.db"))
+    return CorrespondentRegistry(correspondents_db_path(data_dir))
 
 
 def _allowlist(data_dir: str):
     from core.surfaces.outbound_allowlist import OutboundAllowlist
-    return OutboundAllowlist(os.path.join(data_dir, "surfaces.db"))
+    return OutboundAllowlist(surfaces_db_path(data_dir))
 
 
 def _do_allow(allowlist, user_id, surface, target, note=""):
@@ -109,7 +110,7 @@ def owner():
     # live in the .env layer, so without this `owner show` reports "unbound" and
     # `owner invite` can't honour a file-set access posture. Mirrors serve/kb/model
     # (order + local_mode=True).
-    from core.bootstrap import load_env, setup_project_path, setup_sqlite_compat
+    from polyrob.app.bootstrap import load_env, setup_project_path, setup_sqlite_compat
     setup_project_path()
     setup_sqlite_compat()
     load_env(local_mode=True)
@@ -133,7 +134,7 @@ def show():
         op = click.style("(unbound — run `polyrob init`, or set the owner on the "
                          "deployment and re-run)", fg="yellow")
     click.echo(click.style("owner: ", bold=True) + op)
-    from agents.task.constants import autonomy_mode_display
+    from core.config_policy import autonomy_mode_display
     click.echo(f"autonomy mode: {autonomy_mode_display()}")
     click.echo(f"correspondent access: {'on' if s['correspondent_access_enabled'] else 'off'}"
                f"  (require approval: {'yes' if s['require_approval'] else 'no'},"
@@ -636,7 +637,6 @@ def _goal_board():
     """The board under the SAME home ``_data_dir()`` adopts — the asks and the
     correspondents of one `pending` listing must come from one data home."""
     from agents.task.goals.board import GoalBoard
-    from core.runtime_paths import goals_db_path
     return GoalBoard(goals_db_path(_data_dir(write=None)))
 
 
@@ -896,7 +896,7 @@ def _bot_db_path():
     """The live ``bot.db`` (the x402 invoice home): ``DB_PATH`` wins, else the
     first existing candidate layout under the ADMIN data home.
 
-    C11: this resolved through ``core.bootstrap._resolve_cli_data_home`` — a
+    C11: this resolved through ``polyrob.app.bootstrap._resolve_cli_data_home`` — a
     THIRD resolver — so on a deployed box with no ``POLYROB_DATA_DIR`` in the
     shell, ``owner invoices``/``settle``/``sub`` read a different home from the
     one every sibling owner verb (and the running service) uses, and answered a
@@ -1396,7 +1396,7 @@ def groups_admins(surface, chat_id, as_json):
     from core.surfaces.group_admin import normalize_chat_id
     from core.surfaces.group_roles import GroupRoles
     chat = normalize_chat_id(chat_id)
-    db = _os.path.join(_data_dir(write=False), "surfaces.db")
+    db = surfaces_db_path(_data_dir(write=False))
     if not _os.path.exists(db):
         # A read never CREATES a store: an absent file is "nothing recorded",
         # and saying so beats opening one so the answer can be an empty list.

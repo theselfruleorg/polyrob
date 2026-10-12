@@ -1,7 +1,7 @@
 """``polyrob gateway`` launch for X (Twitter) DMs (polling). See ``surfaces/_launch.py``."""
 import os
 
-from surfaces._launch import LaunchContext, harness_launched
+from polyrob.sdk import LaunchContext, harness_launched
 
 _OAUTH1 = ("TWITTER_API_KEY", "TWITTER_API_SECRET_KEY",
            "TWITTER_ACCESS_TOKEN", "TWITTER_ACCESS_TOKEN_SECRET")

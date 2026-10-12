@@ -505,8 +505,8 @@ class PersistenceMixin:
 
 			# F13: prefer the persisted foundation bytes over the freshly rendered
 			# ones, so the prompt prefix survives the restart. No-op (and the fresh
-			# render stands) when FOUNDATION_REPLAY is off, when the file predates
-			# F13, when the blob is incomplete, or when model/provider/cwd changed.
+			# render stands) when the file predates F13, when the blob is
+			# incomplete, or when model/provider/cwd changed.
 			try:
 				from agents.task.agent.messages.foundation_replay import replay_foundation
 				replay_foundation(self, history_data.get("foundation"), log=self.logger)

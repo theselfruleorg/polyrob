@@ -8,6 +8,7 @@ import importlib
 import json
 import logging
 import os
+from core.env import bool_env
 import re
 import subprocess
 import traceback
@@ -17,6 +18,7 @@ from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Type, TypeVar, Union, Tuple
+from types import SimpleNamespace
 from collections import deque  # ADDED: Import deque for bounded collections
 from agents.task.agent.tool_call_tracker import ToolCallTracker  # Robust tool call ID tracking
 
@@ -66,10 +68,10 @@ def _resolve_session_vision(agent, use_vision: bool, llm) -> bool:
 def _bump_eager_skill_usage(matched_skills, user_id, logger) -> None:
     """SK-F3: record a provenance load for every eager-injected skill.
 
-    With SKILL_PROGRESSIVE_DISCLOSURE off, skills are embedded full-body directly
-    into the system message and the agent never calls ``load_skill`` — the only
-    other place usage is bumped (``action_registration.py``'s ``load_skill``
-    closure). Without this, the curator (W5) sees zero loads for an authored
+    A pinned (eager) skill is embedded full-body directly into the system message
+    and the agent never calls ``load_skill`` for it — the only other place usage
+    is bumped (``action_registration.py``'s ``load_skill`` closure). Without
+    this, the curator (W5) sees zero loads for an authored
     skill that IS actively guiding the agent every turn and archives it as
     unused. Pure module-level function so it's unit-testable without
     constructing a full ``Agent``. Fail-open — a metrics write must never break
@@ -127,6 +129,8 @@ from core.exceptions import (
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from agents.task.agent.message_manager.service import MessageManager
+from agents.task.agent.core.construction_helpers import AgentConstructionHelpersMixin
+from agents.task.agent.core.run_state import StepResultState
 from agents.task.agent.core.llm_runner import LLMRunnerMixin
 from agents.task.agent.core.memory_writer import MemoryWriterMixin
 from agents.task.agent.core.step import StepMixin
@@ -235,314 +239,48 @@ def report_missing_rail_skills(agent, pinned: list, matched) -> list:
 	     attrs={"missing": missing, "pinned": list(pinned)})
 	return missing
 
-class AgentConstructionMixin:
+class AgentConstructionMixin(AgentConstructionHelpersMixin):
 	"""Agent.__init__ (the ~660L constructor) split whole out of the Agent class so
 	service.py drops under 700L (P9). Agent inherits __init__ from this mixin; from_params
 	(in service.py) still builds AgentConfig/AgentDeps and calls cls(config, deps). Imports
 	above are service.py's full set so every name the constructor references resolves."""
 
-	def _resolve_surface_profile(self):
-		"""The bound chat surface's capabilities for the <surface> prompt block (G6).
-
-		Resolved through the ONE binding seam (``core.surfaces.binding``), which
-		reads the session_chat_registry the orchestrator was bound to before
-		``initialize()``. Returns None off a chat surface (goal/cron/`polyrob run`/
-		raw API) — the prompt then stays byte-identical to the pre-G6 build.
-		Fail-open: a resolution fault must never break agent construction.
-		"""
-		try:
-			from core.surfaces.binding import surface_profile
-			profile = surface_profile(self.orchestrator)
-			if profile is None:
-				# DATA-10: a RESUMED correspondent session binds no chat key, so
-				# no profile resolves — and an unbound session reads as the
-				# owner's DM. A correspondent-facing session is never that.
-				from agents.task.session_class import correspondent_facing
-				if correspondent_facing(self.orchestrator):
-					return {"surface_id": "chat", "correspondent": True}
-			return profile
-		except Exception as e:
-			self.logger.debug(f"surface profile unresolved (non-fatal): {e}")
-			return None
-
-	def _room_policy(self):
-		"""The bound ROOM's ``chat.*`` overlay (044 T17), or None off a room.
-
-		A room's style is the ROOM's, not the owner's: his private
-		``style.tone``/``style.verbosity`` describe how he wants to be spoken to
-		in his DM, and a public room full of other humans is a different
-		audience. Resolved once at construction (session-stable, so the prompt
-		cache holds) and fail-open — an unreadable policy costs the room its
-		style, never the session.
-		"""
-		cached = getattr(self, "_room_policy_resolved", False)
-		if cached:
-			return self._room_policy_value
-		self._room_policy_resolved = True
-		self._room_policy_value = None
-		orch = getattr(self, "orchestrator", None)
-		try:
-			from core.surfaces.room_policy import is_public_session
-			if not is_public_session(orch):
-				return None
-			from core.runtime_paths import data_dir_or_home
-			from core.surfaces.binding import surface_profile
-			from core.surfaces.chat_policy import load_for_chat
-			profile = surface_profile(orch) or {}
-			chat_id = str(profile.get("chat_id") or "")
-			if not chat_id:
-				return None
-			_cfg = getattr(getattr(orch, "container", None), "config", None)
-			self._room_policy_value = load_for_chat(
-				data_dir_or_home(getattr(_cfg, "data_dir", None)),
-				str(profile.get("surface_id") or ""), chat_id)
-			return self._room_policy_value
-		except Exception as e:
-			self.logger.debug(f"room policy unresolved (non-fatal): {e}")
-			return None
-
-	def _room_style_block(self) -> str:
-		"""The ROOM's style line for SELF_CONTEXT (044 T17), or "".
-
-		A public session deliberately carries none of the owner's private
-		contract or style (they describe his DM, not a room full of other
-		humans), which left a room with no style line at all. This gives the room
-		its own — rendered by the SAME `core.prefs.render_style_line`, so a room
-		tone is validated, threat-scanned and formatted exactly like the owner's.
-		"""
-		policy = self._room_policy()
-		if policy is None:
-			return ""
-		try:
-			from core.prefs import render_style_line
-			fields = {}
-			if policy.verbosity:
-				fields["style.verbosity"] = policy.verbosity
-			if policy.language:
-				fields["style.language"] = policy.language
-			if policy.tone:
-				fields["style.tone"] = policy.tone
-			return render_style_line(fields) if fields else ""
-		except Exception as e:
-			self.logger.debug(f"room style line unresolved (non-fatal): {e}")
-			return ""
-
-	def _resolve_verbosity(self):
-		"""The reply-length budget for the <message-shape> block (C2).
-
-		In a ROOM the room's own ``chat.verbosity`` decides — and a room with none
-		set gets the prompt default, NEVER the owner's private ``style.verbosity``
-		(that pref describes his DM, not a room; see ``_room_policy``). Everywhere
-		else the owner's ``style.verbosity`` pref decides. ``core.prefs`` is the SSOT for the
-		VALUE in both cases; the prompt owns how it is spoken to the model.
-		Resolved once here (session-stable) so the system prompt stays
-		byte-identical across steps and the prompt cache holds. Returns None when
-		nothing is set — the prompt then uses its "normal" default and the build
-		is unchanged. Fail-open: a prefs fault must never break agent construction.
-		"""
-		try:
-			from core.surfaces.room_policy import is_public_session
-			if is_public_session(getattr(self, "orchestrator", None)):
-				room = self._room_policy()
-				if room is not None and room.verbosity:
-					return str(room.verbosity)
-				return None
-			from core.instance import resolve_instance_id
-			from core.prefs import load_preferences
-			from core.runtime_paths import data_dir_or_home
-			_container = getattr(getattr(self, "orchestrator", None), "container", None)
-			_cfg = getattr(_container, "config", None)
-			_data_dir = data_dir_or_home(getattr(_cfg, "data_dir", None))
-			_uid = getattr(getattr(self, "orchestrator", None), "user_id", None)
-			prefs = load_preferences(_data_dir, _uid, resolve_instance_id())
-			value = prefs.get("style.verbosity")
-			return str(value) if value else None
-		except Exception as e:
-			self.logger.debug(f"verbosity pref unresolved (non-fatal): {e}")
-			return None
-
-	def _load_project_context(self) -> None:
-		"""Auto-load the frozen PROJECT_CONTEXT foundation message (C9, P7 finalization:
-		extracted from __init__).
-		  - Local CLI single-owner: loaded TRUSTED (steering), gated on
-		    project_context_autoload() (default ON under POLYROB_LOCAL).
-		  - Server: loaded ONLY under project_context_server_mode(), then injected
-		    UNTRUSTED-WRAPPED (framed as DATA) since the repo may be one merely opened.
-		Fully fail-open — any error loads nothing. Server byte-identical by default."""
-		from core.surfaces.room_policy import is_public_session
-		if is_public_session(getattr(self, "orchestrator", None)):
-			return
-		try:
-			from agents.task.constants import AutonomyConfig, local_mode_enabled
-			from agents.task.agent.core.project_context import build_project_context_message
-			_local = local_mode_enabled()
-			# Server tier searches the tenant's session workspace, NEVER the process
-			# CWD (install dir); on any failure leave it None so server-mode loads nothing.
-			_workspace_dir = None
-			if not _local:
-				try:
-					from agents.task.path import pm
-					_workspace_dir = str(pm().get_workspace_dir(
-						self.orchestrator.session_id,
-						getattr(self.orchestrator, "user_id", None),
-					))
-				except Exception:
-					_workspace_dir = None
-			# F25: the cap follows the MODEL WINDOW (4 % of it, clamped to 4 K–40 K)
-			# instead of a fixed 20 000 tokens — 20 K was 10 % of a 200 K window and
-			# 2 % of a 1 M one. An operator who PINNED PROJECT_CONTEXT_MAX_TOKENS to
-			# anything other than the default still wins: we only offer the window
-			# when the flag is at its default.
-			from agents.task.agent.core.project_context import (
-				DEFAULT_PROJECT_CONTEXT_CAP_TOKENS,
-			)
-			_cap_tokens = AutonomyConfig.project_context_max_tokens()
-			_context_window = None
-			if _cap_tokens == DEFAULT_PROJECT_CONTEXT_CAP_TOKENS:
-				_window = getattr(self.message_manager, "max_input_tokens", None)
-				if isinstance(_window, int) and _window > 0:
-					_context_window = _window
-			_proj_ctx = build_project_context_message(
-				local=_local,
-				autoload=AutonomyConfig.project_context_autoload(),
-				server_mode=AutonomyConfig.project_context_server_mode(),
-				cwd=os.getcwd(),
-				workspace_dir=_workspace_dir,
-				cap_tokens=_cap_tokens,
-				context_window=_context_window,
-			)
-			self.message_manager.set_project_context_message(_proj_ctx)
-		except Exception as e:
-			self.logger.debug(f"Could not load project context (non-fatal): {e}")
-
-	def _restore_tool_call_tracker(self, orchestrator) -> None:
-		"""Restore saved tool-call-tracker state from a previous session (P7
-		finalization: extracted from __init__). Best-effort — reads self.session_id /
-		self.tool_call_tracker, fail-open on any error."""
-		if not (self.session_id and orchestrator):
-			return
-		try:
-			from agents.task.path import pm
-			tool_calls_file = pm().create_file_path(
-				session_id=self.session_id,
-				subdir_name="data",
-				filename="tool_calls.json",
-				user_id=orchestrator.user_id if hasattr(orchestrator, 'user_id') else None
-			)
-			if tool_calls_file.exists():
-				if self.tool_call_tracker.load_from_file(tool_calls_file):
-					self.logger.info("📂 Restored tool call tracker state from previous session")
-		except Exception as e:
-			self.logger.debug(f"No tool call tracker state to restore: {e}")
-
-	def _normalize_save_conversation_path(self, save_conversation_path) -> None:
-		"""Normalize + store save_conversation_path via the path manager (P7
-		finalization: extracted from __init__). Sets self.save_conversation_path to a
-		pm()-resolved logs path, or None when unset."""
-		if save_conversation_path:
-			from agents.task.path import pm
-			self.save_conversation_path = str(pm().create_file_path(
-				self.orchestrator.session_id,
-				"logs",
-				os.path.basename(save_conversation_path) or "conversation",
-				user_id=self.orchestrator.user_id,
-			))
-			self.logger.info(f"Using normalized conversation path: {self.save_conversation_path}")
-		else:
-			self.save_conversation_path = None
-
-	def _setup_memory_profiling(self) -> None:
-		"""Optional tracemalloc profiling behind PROFILE_MEM=1 (P7 finalization:
-		extracted from __init__). Self-contained — reads only self.logger and
-		registers an atexit dump; a no-op when the flag is off."""
-		if os.getenv("PROFILE_MEM") != "1":
-			return
-		try:
-			import tracemalloc
-			import atexit
-			import pprint
-
-			tracemalloc.start()
-			self.logger.info("Memory profiling enabled - tracemalloc started")
-
-			@atexit.register
-			def _dump_memory_stats():
-				try:
-					top = tracemalloc.take_snapshot().statistics("lineno")[:20]
-					self.logger.info("Top 20 memory allocations:")
-					pprint.pprint(top)
-				except Exception as e:
-					self.logger.warning(f"Error dumping memory stats: {e}")
-		except ImportError:
-			self.logger.warning("tracemalloc not available for memory profiling")
-		except Exception as e:
-			self.logger.warning(f"Failed to set up memory profiling: {e}")
-
-	@staticmethod
-	def _validate_construction_params(*, max_failures, retry_delay, max_input_tokens,
-	                                  max_actions_per_step, max_error_length, task, orchestrator):
-		"""Validate critical construction parameters (P7 finalization: extracted from
-		__init__). Pure — raises ROBValidationError on invalid input, sets no state."""
-		if not isinstance(max_failures, int) or max_failures < 0:
-			raise ROBValidationError(f"max_failures must be a non-negative integer, got {max_failures}")
-		if not isinstance(retry_delay, int) or retry_delay < 0:
-			raise ROBValidationError(f"retry_delay must be a non-negative integer, got {retry_delay}")
-		if max_input_tokens is not None and (not isinstance(max_input_tokens, int) or max_input_tokens <= 0):
-			raise ROBValidationError(f"max_input_tokens must be a positive integer or None, got {max_input_tokens}")
-		if not isinstance(max_actions_per_step, int) or max_actions_per_step <= 0:
-			raise ROBValidationError(f"max_actions_per_step must be a positive integer, got {max_actions_per_step}")
-		if not isinstance(max_error_length, int) or max_error_length <= 0:
-			raise ROBValidationError(f"max_error_length must be a positive integer, got {max_error_length}")
-		if not task or not isinstance(task, str):
-			raise ROBValidationError("task must be a non-empty string")
-		if not orchestrator:
-			raise ROBValidationError("orchestrator is required - Agent cannot run standalone")
-
-	def _wire_runtime_state(self) -> None:
-		"""Self-only runtime bookkeeping (B03, S7 2026-08-29): stall-detection counters,
-		the per-run ``session_data`` dict, the native-tools debug switch and the
-		loop-detection deques/thresholds. Extracted verbatim from ``__init__`` — this
-		block read no constructor locals, so it is safe to hoist; the ``locals()``-
-		consuming profile block above it is deliberately NOT extracted."""
-		# Stall detection tracking
-		self._last_action_count = 0
-		self._stall_check_interval = 30.0  # Check every 30 seconds
-		self._stall_check_task = None
-		self._llm_call_in_progress = False  # Track when waiting for LLM response
-		self._llm_call_start_time = None  # When the current LLM call started
-
-		# Create a session data dictionary for later use
-		self.session_data = {
-			"agent_id": self.agent_id,
-			"task": self.task,
-			"model_name": self.model_name,
-			"created_at": datetime.now().isoformat(),
-			"steps": [],
-			"llm_requests": []
-		}
-
-		# Native tools debug flag
-		self._native_tools_debug = os.environ.get('NATIVE_TOOLS_DEBUG', '').lower() == 'true'
-		if self._native_tools_debug:
-			self.logger.setLevel(logging.DEBUG)
-			self.logger.info("[NATIVE_TOOLS] Debug mode enabled")
-
-		# Loop detection variables with improved thresholds
-		self._previous_actions = deque(maxlen=LoopDetectionConfig.MEMORY_WINDOW_SIZE)  # Use consistent window size
-		self._recent_action_names = deque(maxlen=LoopDetectionConfig.MEMORY_WINDOW_SIZE)  # names, for _has_active_browser_usage
-		self._action_repetition_counter = 0
-		self._max_allowed_repetitions = LoopDetectionConfig.MAX_ALLOWED_REPETITIONS
-		self._last_browser_states = deque(maxlen=3)  # MODIFIED: Use bounded deque instead of list
-		self._unchanged_state_count = 0
-		self._state_change_threshold = LoopDetectionConfig.STATE_CHANGE_THRESHOLD
-
 	def __init__(self, config: AgentConfig, deps: AgentDeps):
 		"""Initialize Agent from a config + deps pair.
 
-		The original 31-param constructor body is preserved verbatim below; the
-		parameters are simply unpacked from config/deps into the same local names
-		the body already uses (PR9 item #2 — typed construction surface).
+		W9 (2026-10-10): the body is a sequence of per-subsystem builders
+		(``_init_*`` below), called in the order the old 1000-line body ran. They
+		share one namespace ``p`` — the constructor locals the old body passed from
+		block to block (``llm``/the limits rebound by profile and session config,
+		``use_native_tools`` after the reconcile, the skills -> MessageManager hand-off,
+		the reflection model -> metering hand-off).
 		"""
+		p = SimpleNamespace(config=config, deps=deps)
+		self._init_unpack(p)
+		self._init_identity(p)
+		self._init_profile(p)
+		self._init_session_config(p)
+		self._init_agent_id(p)
+		self._init_basic_config(p)
+		self._init_controller(p)
+		self._init_tool_calling(p)
+		self._init_task_memory(p)
+		self._init_memory_backend(p)
+		self._init_skills(p)
+		self._init_message_manager(p)
+		self._init_self_context(p)
+		self._init_runtime_context(p)
+		self._init_aux_models(p)
+		self._init_state(p)
+		self._wire_runtime_state()
+		self._initialize_memory_management()  # bounded collections
+		self._init_metering(p)
+		self._save_initial_task()  # task.json for the webview chat
+		self._init_tool_output_log(p)
+
+	def _init_unpack(self, p) -> None:
+		"""Unpack AgentDeps/AgentConfig into the builder namespace ``p`` and validate."""
+		config, deps = p.config, p.deps
 		# --- unpack deps ---
 		llm = deps.llm
 		orchestrator = deps.orchestrator
@@ -588,7 +326,23 @@ class AgentConstructionMixin:
 			max_input_tokens=max_input_tokens, max_actions_per_step=max_actions_per_step,
 			max_error_length=max_error_length, task=task, orchestrator=orchestrator,
 		)
+		p.agent_name, p.available_file_paths, p.generate_gif = agent_name, available_file_paths, generate_gif
+		p.include_attributes, p.initial_actions, p.injected_controller = include_attributes, initial_actions, injected_controller
+		p.is_sub_agent, p.llm, p.max_actions_per_step, p.max_error_length = is_sub_agent, llm, max_actions_per_step, max_error_length
+		p.max_failures, p.max_input_tokens, p.max_step_timeout = max_failures, max_input_tokens, max_step_timeout
+		p.orchestrator, p.page_extraction_llm, p.parent_session_id = orchestrator, page_extraction_llm, parent_session_id
+		p.profile_id, p.profile_overrides, p.register_done_callback = profile_id, profile_overrides, register_done_callback
+		p.register_new_step_callback, p.retry_delay, p.role = register_new_step_callback, retry_delay, role
+		p.save_conversation_path, p.save_conversation_path_encoding = save_conversation_path, save_conversation_path_encoding
+		p.sensitive_data, p.session_config, p.stall_timeout_seconds = sensitive_data, session_config, stall_timeout_seconds
+		p.step_timeout_seconds, p.system_prompt_class, p.task = step_timeout_seconds, system_prompt_class, task
+		p.tool_calling_method, p.use_native_tools, p.use_vision = tool_calling_method, use_native_tools, use_vision
+		p.validate_output = validate_output
 
+	def _init_identity(self, p) -> None:
+		"""Orchestrator link, name, sub-agent/role flags, tool-call tracker, logger."""
+		agent_name, is_sub_agent, orchestrator, parent_session_id = p.agent_name, p.is_sub_agent, p.orchestrator, p.parent_session_id
+		role = p.role
 		# Store orchestrator reference (single source of truth for session_id and user_id)
 		# DO NOT copy session_id or user_id - use properties instead
 		self.orchestrator = orchestrator
@@ -626,12 +380,19 @@ class AgentConstructionMixin:
 		# tool-call-tracker state from a previous session — after logger init.
 		self._restore_tool_call_tracker(orchestrator)
 
+	def _init_profile(self, p) -> None:
+		"""Apply a named profile: system message, LLM, enabled actions, limits."""
+		llm, max_actions_per_step, max_failures = p.llm, p.max_actions_per_step, p.max_failures
+		max_input_tokens, profile_id, profile_overrides = p.max_input_tokens, p.profile_id, p.profile_overrides
+		tool_calling_method = p.tool_calling_method
 		# Apply profile configuration if specified (after logger is initialized)
 		if profile_id:
 			from agents.task.agent.profile_manager import ProfileManager
 
 			# Load and apply profile configuration
-			updated_config = ProfileManager.load_and_apply(profile_id, locals(), profile_overrides)
+			# __init__ used to pass its own locals(); p holds the same names.
+			_init_locals = dict(vars(p), self=self)
+			updated_config = ProfileManager.load_and_apply(profile_id, _init_locals, profile_overrides)
 
 			# Apply system message if profile provided one
 			if '_profile_system_message' in updated_config:
@@ -663,7 +424,16 @@ class AgentConstructionMixin:
 					max_input_tokens=max_input_tokens,
 					max_failures=max_failures,
 				)
+		p.llm = llm
+		p.max_failures = max_failures
+		p.max_actions_per_step = max_actions_per_step
+		p.max_input_tokens = max_input_tokens
+		p.tool_calling_method = tool_calling_method
 
+	def _init_session_config(self, p) -> None:
+		"""Apply a TaskSessionConfig: its limits and its LLM override."""
+		llm, session_config, max_failures, max_actions_per_step = p.llm, p.session_config, p.max_failures, p.max_actions_per_step
+		max_input_tokens = p.max_input_tokens
 		# Initialize tool call adapter for normalizing tool calls across providers
 		# This is initialized later after controller is set up
 		
@@ -720,8 +490,13 @@ class AgentConstructionMixin:
 			except Exception as e:
 				self.logger.warning(f"Failed to apply session config: {e}")
 				# Continue with individual parameters as fallback
-		
-		
+		p.llm = llm
+		p.max_failures = max_failures
+		p.max_actions_per_step = max_actions_per_step
+		p.max_input_tokens = max_input_tokens
+
+	def _init_agent_id(self, p) -> None:
+		"""Optional memory profiling, the agent id and the HITL manager."""
 		# HRE removed - was experimental feature
 		
 		
@@ -748,6 +523,14 @@ class AgentConstructionMixin:
 			telemetry_manager=self.telemetry_manager
 		)
 
+	def _init_basic_config(self, p) -> None:
+		"""Scalar configuration, the session vision gate, timeouts, step/result state."""
+		available_file_paths, generate_gif, include_attributes = p.available_file_paths, p.generate_gif, p.include_attributes
+		llm, max_error_length, max_input_tokens = p.llm, p.max_error_length, p.max_input_tokens
+		max_step_timeout, page_extraction_llm, save_conversation_path = p.max_step_timeout, p.page_extraction_llm, p.save_conversation_path
+		save_conversation_path_encoding, sensitive_data = p.save_conversation_path_encoding, p.sensitive_data
+		stall_timeout_seconds, step_timeout_seconds = p.stall_timeout_seconds, p.step_timeout_seconds
+		task, use_native_tools, use_vision = p.task, p.use_native_tools, p.use_vision
 		# NOTE: model_name will be available via property after MessageManager is created
 		# DO NOT extract it here - MessageManager is the single source of truth
 
@@ -806,7 +589,7 @@ class AgentConstructionMixin:
 		self.save_conversation_path_encoding = save_conversation_path_encoding
 		
 		# State tracking
-		self._last_result = None
+		self.step_state = StepResultState()  # owns _last_result (W9, core/run_state.py)
 		self._cancelled = False  # Cancellation flag for stopping execution
 		self._deferred_mcp_actions: List[Dict[str, Any]] = []  # MCP actions deferred from previous step
 		self._max_mcp_deferrals = 2  # Cap deferrals to prevent infinite loops
@@ -829,8 +612,10 @@ class AgentConstructionMixin:
 		self.max_input_tokens = max_input_tokens  # Store max_input_tokens for MessageManager
 		self.generate_gif = generate_gif
 
-
-
+	def _init_controller(self, p) -> None:
+		"""The controller (injected or shared), its correspondent + room gates, ActionModel."""
+		injected_controller, max_actions_per_step = p.injected_controller, p.max_actions_per_step
+		system_prompt_class = p.system_prompt_class
 		# Controller: an injected (least-privilege child) controller takes precedence
 		# (UP-05); otherwise the shared orchestrator controller. All downstream
 		# derivations (ActionModel, action_descriptions, mcp_servers_info,
@@ -841,23 +626,23 @@ class AgentConstructionMixin:
 
 		self.max_actions_per_step = max_actions_per_step
 
-		# An existing taint always enforces its gate, even if correspondent
-		# admission has since been disabled by configuration.
+		# The session tier of the ONE policy chain (W5, core/security/policy_order.py):
+		# the correspondent gate — an existing taint always enforces it, even if
+		# correspondent admission has since been disabled — then the 044 T5 room
+		# gate, registered for EVERY session and deciding per call from the
+		# orchestrator's PUBLIC flag, so a session that becomes room-bound is gated
+		# without a rebuild. Both fail closed.
 		if self.controller is not None and hasattr(self.controller, "register_pre_tool_call_hook"):
-			from agents.task.agent.core.correspondent_gate import install_correspondent_gate
-			install_correspondent_gate(self.controller, self.orchestrator)
-
-		# 044 T5: the room gate — registered for EVERY session, decides per call
-		# from the orchestrator's PUBLIC flag, so a session that becomes room-bound
-		# is gated without a rebuild. Fail-closed.
-		if self.controller is not None and hasattr(self.controller, "register_pre_tool_call_hook"):
+			from agents.task.agent.core.correspondent_gate import (
+				build_correspondent_gate, build_tool_resolver)
 			from core.surfaces.room_policy import is_public_session, make_room_gate_hook
-			from agents.task.agent.core.correspondent_gate import build_tool_resolver
+			from core.security.policy_order import install_session_gates
 			_orch_room = self.orchestrator
-			self.controller.register_pre_tool_call_hook(
-				make_room_gate_hook(lambda: is_public_session(_orch_room),
-				                    resolve_tool=build_tool_resolver(self.controller)),
-				fail_mode="closed")
+			install_session_gates(
+				self.controller,
+				correspondent_hook=build_correspondent_gate(self.controller, self.orchestrator),
+				room_hook=make_room_gate_hook(lambda: is_public_session(_orch_room),
+				                              resolve_tool=build_tool_resolver(self.controller)))
 
 		# ToolCallAdapter removed - functionality integrated into MessageManager and Registry
 		# (tool calls now flow through ToolCallBuilder + Registry).
@@ -878,7 +663,10 @@ class AgentConstructionMixin:
 			self._action_model_names = None
 
 		self._set_version_and_source()
-		
+
+	def _init_tool_calling(self, p) -> None:
+		"""Tool-calling method, the native-tools reconcile, action descriptions, MCP info."""
+		llm, tool_calling_method, use_native_tools = p.llm, p.tool_calling_method, p.use_native_tools
 		# Token limits are now calculated by MessageManager (SINGLE SOURCE OF TRUTH)
 		# Just pass max_input_tokens override if provided, otherwise MessageManager auto-calculates
 
@@ -912,7 +700,10 @@ class AgentConstructionMixin:
 
 		# Get MCP server info for dynamic prompt generation (no hardcoded examples)
 		self.mcp_servers_info = self.controller.get_mcp_servers_info()
+		p.use_native_tools = use_native_tools
 
+	def _init_task_memory(self, p) -> None:
+		"""H-MEM: a NullTaskContextManager for sub-agents, else the container's or a dedicated one."""
 		# Hierarchical Memory System - MANDATORY for main agents, SKIPPED for sub-agents
 		# Sub-agents don't need H-MEM - they do focused tasks and return results
 		self.task_context_manager = None
@@ -938,22 +729,30 @@ class AgentConstructionMixin:
 
 			# If not available, create dedicated instance for this session
 			if not self.task_context_manager:
-				self.logger.warning(
-					"No memory_manager in container — creating a dedicated "
-					"TaskContextManager for this session (cross-agent memory will NOT "
-					"be shared)"
+				# The normal case under `build_cli_container` (the CLI, `polyrob
+				# telegram`, every prod session): only `initialize_core` registers
+				# memory_manager. H-MEM is per-session state, so a per-session
+				# manager loses nothing — cross-session recall rides the memory
+				# provider registry, and sub-agents use the Null manager anyway.
+				self.logger.info(
+					"No memory_manager in container — using a per-session "
+					"TaskContextManager (cross-session recall still uses the memory provider)"
 				)
 				from modules.memory.task.task_context_manager import TaskContextManager
 				from core.config import BotConfig
 
 				# Create instance
-				config = self.orchestrator.container.config if self.orchestrator.container else BotConfig()
+				# A separate name: p.config stays the AgentConfig (persona_block source).
+				bot_config = self.orchestrator.container.config if self.orchestrator.container else BotConfig()
 				self.task_context_manager = TaskContextManager(
 					name=f"task_context_{self.session_id}",
-					config=config
+					config=bot_config
 				)
 				self._created_task_context_manager = True
 
+	def _init_memory_backend(self, p) -> None:
+		"""The optional cross-session memory backend + the first-session recall-tool repair."""
+		use_native_tools = p.use_native_tools
 		# Opt-in external cross-session memory backend (MEMORY_BACKEND=sqlite|local_vector).
 		# Registered once via the existing one-external-provider registry; the live
 		# prefetch/sync_turn wiring (step.py + _save_step_to_memory) already routes through
@@ -1009,6 +808,8 @@ class AgentConstructionMixin:
 		except Exception as _aidx_err:
 			self.logger.debug(f"action-index recompute skipped: {_aidx_err}")
 
+	def _init_skills(self, p) -> None:
+		"""Match this session's skills; leaves ``p.system_message`` and ``p.skill_content``."""
 		# Load skills for this session and embed into system message
 		# Skills are per-session prompt extensions that provide context-aware guidance
 		system_message = getattr(self, '_profile_system_message', None)
@@ -1051,13 +852,10 @@ class AgentConstructionMixin:
 			# S9 fix (default OFF -> byte-identical): with progressive disclosure, optionally
 			# expose ALL available skills in the catalog so the agent can discover + load_skill
 			# any of them (not just trigger-matched ones). Matched skills stay first (priority).
-			from agents.task.constants import (
-				skill_progressive_disclosure as _prog_disc,
-				skill_catalog_include_all as _catalog_include_all,
-			)
+			from agents.task.constants import skill_catalog_include_all as _catalog_include_all
 			# Access-time read (not the import-bound constant) so the local-mode
 			# default (ON under POLYROB_LOCAL) is honored for the terminal agent.
-			if _prog_disc() and _catalog_include_all():
+			if _catalog_include_all():
 				try:
 					_seen = {s.skill_id for s in matched_skills}
 					# SK-F1: the builtin library is 23 rules and every authored skill
@@ -1070,41 +868,31 @@ class AgentConstructionMixin:
 					self.logger.debug(f"catalog-include-all skipped (non-fatal): {_cat_err}")
 
 			if matched_skills:
-				# S-1: progressive disclosure. When enabled, inject only a compact
-				# <skill-catalog> and let the agent pull full bodies via load_skill;
-				# otherwise (default) embed full bodies as today. Either way the
-				# matched skills (with pre-loaded bodies) are handed to the controller
-				# so load_skill can serve them without re-reading disk.
-				from agents.task.constants import skill_progressive_disclosure
-				if skill_progressive_disclosure():
-					# D5: a matched skill must reach the model, not only rank first
-					# in a catalog it may never act on. Pin the matched bodies that
-					# fit a bounded budget (safety prerequisites first); mark the
-					# rest LOAD FIRST in the catalog.
-					_eager, _load_first = skill_manager.split_progressive(_session_matched)
-					skill_content = skill_manager.format_progressive(
-						_eager, matched_skills, _load_first)
-					if self.controller is not None:
-						self.controller._session_skills = {s.skill_id: s for s in matched_skills}
-						_act = getattr(self.controller, '_activated_skills', None)
-						if isinstance(_act, set):
-							_act.update(s.skill_id for s in _eager)
-					if _eager:
-						_bump_eager_skill_usage(_eager, user_id, self.logger)
-					self.logger.info(
-						f"✨ Skill catalog ({len(matched_skills)}) for session "
-						f"[progressive disclosure]: {[s.skill_id for s in matched_skills]}; "
-						f"pinned {[s.skill_id for s in _eager]}; load first {sorted(_load_first)}"
-					)
-				else:
-					skill_content = skill_manager.format_skills_for_prompt(matched_skills)
-					self.logger.info(f"✨ Loaded {len(matched_skills)} skills for session: {[s.skill_id for s in matched_skills]}")
-					# SK-F3: with progressive disclosure OFF, skills are eager-injected
-					# full-body (no load_skill call), so usage was never recorded and the
-					# curator archived authored skills as "never used." Bump provenance
-					# here too, at the only choke point this path has.
-					_bump_eager_skill_usage(matched_skills, user_id, self.logger)
-				
+				# S-1: progressive disclosure. Inject only a compact <skill-catalog>
+				# (plus the pinned bodies that fit) and let the agent pull full bodies
+				# via load_skill. The matched skills (with pre-loaded bodies) are
+				# handed to the controller so load_skill can serve them without
+				# re-reading disk.
+				# D5: a matched skill must reach the model, not only rank first
+				# in a catalog it may never act on. Pin the matched bodies that
+				# fit a bounded budget (safety prerequisites first); mark the
+				# rest LOAD FIRST in the catalog.
+				_eager, _load_first = skill_manager.split_progressive(_session_matched)
+				skill_content = skill_manager.format_progressive(
+					_eager, matched_skills, _load_first)
+				if self.controller is not None:
+					self.controller._session_skills = {s.skill_id: s for s in matched_skills}
+					_act = getattr(self.controller, '_activated_skills', None)
+					if isinstance(_act, set):
+						_act.update(s.skill_id for s in _eager)
+				if _eager:
+					_bump_eager_skill_usage(_eager, user_id, self.logger)
+				self.logger.info(
+					f"✨ Skill catalog ({len(matched_skills)}) for session "
+					f"[progressive disclosure]: {[s.skill_id for s in matched_skills]}; "
+					f"pinned {[s.skill_id for s in _eager]}; load first {sorted(_load_first)}"
+				)
+
 				# Save skills info to session directory for webview
 				try:
 					from agents.task.path import pm
@@ -1153,7 +941,12 @@ class AgentConstructionMixin:
 
 		# Store skill content for embedding later if SystemPrompt generates the message
 		self._skill_content = skill_content
+		p.system_message = system_message
+		p.skill_content = skill_content
 
+	def _init_message_manager(self, p) -> None:
+		"""The MessageManager (model/provider SSOT) and its pinned foundation messages."""
+		config, skill_content, system_message, use_native_tools = p.config, p.skill_content, p.system_message, p.use_native_tools
 		# Initialize message manager with proper session ID and optional profile system message
 		# MessageManager becomes the SINGLE SOURCE OF TRUTH for model_name and provider_name
 		self.message_manager = MessageManager(
@@ -1244,6 +1037,9 @@ class AgentConstructionMixin:
 		# Recheck disclosure at assembly/replay: a correspondent can enter later.
 		from agents.task.session_class import may_write_owner_memory
 		self.message_manager._owner_context_allowed = lambda: may_write_owner_memory(self.orchestrator)
+
+	def _init_self_context(self, p) -> None:
+		"""SOUL / owner facts / contract / SELF doc foundation blocks (none in a room)."""
 		# polyrob Phase C: pin operator-authored SOUL/IDENTITY self-context as a frozen
 		# foundation message, read ONCE at session start from <data_dir>/identity/. This
 		# is operator-write-only (the agent never authors it in this cut). Empty/absent
@@ -1296,7 +1092,7 @@ class AgentConstructionMixin:
 			# the join below (byte-identical to legacy).
 			_contract_block = ""
 			try:
-				from agents.task.constants import AutonomyConfig as _ContractAC
+				from core.config_policy import AutonomyConfig as _ContractAC
 				if not _private and _ContractAC.contract_doc_enabled():
 					from core.instance import load_contract_doc
 					_contract_doc = load_contract_doc(_data_dir, _uid, resolve_instance_id())
@@ -1328,8 +1124,7 @@ class AgentConstructionMixin:
 			except Exception:
 				_awareness = ""
 			# 060 WS-1: the declared blocks, in foundation_layers.SELF_CONTEXT_BLOCKS
-			# order. Unwelded (default) each is its own foundation message; with
-			# SELF_CONTEXT_COMBINED=true the manager re-joins them byte-identically.
+			# order. Each non-empty block is its own foundation message.
 			self.message_manager.set_self_context_blocks((
 				("awareness", _awareness), ("soul", _soul), ("owner_rules", _owner_doc),
 				("contract", _contract_block), ("self_doc", _self_doc),
@@ -1337,6 +1132,8 @@ class AgentConstructionMixin:
 		except Exception as e:
 			self.logger.debug(f"Could not load self-context (non-fatal): {e}")
 
+	def _init_runtime_context(self, p) -> None:
+		"""Project context, the runtime identity line and the <environment> block."""
 		# C9 + Phase 2: auto-load project context (P7: extracted to _load_project_context).
 		self._load_project_context()
 
@@ -1379,8 +1176,10 @@ class AgentConstructionMixin:
 		except Exception as e:
 			self.logger.debug(f"Could not pin environment context (non-fatal): {e}")
 
+	def _init_aux_models(self, p) -> None:
+		"""Compaction + reflection aux models (``p._reflection_llm``); the judge stays lazy."""
 		# A5: optional cheap auxiliary model for compaction only. Inert unless
-		# COMPACTION_MODEL is set; on any failure aux_llm stays None and
+		# AUX_MODEL_COMPACTION is set; on any failure aux_llm stays None and
 		# llm_compact_history transparently uses the main model (current behaviour).
 		try:
 			self.message_manager.aux_llm = self._provision_compaction_llm()
@@ -1420,7 +1219,13 @@ class AgentConstructionMixin:
 		# ever flipped it, and the run loop never validated the true final answer).
 		# See OutputValidationMixin._validate_output for the lazy provision site.
 		self._judge_llm = None
+		p._reflection_llm = _reflection_llm
 
+	def _init_state(self, p) -> None:
+		"""Callbacks, AgentState (restored when saved), workspace context, history, limits."""
+		initial_actions, max_failures, orchestrator = p.initial_actions, p.max_failures, p.orchestrator
+		register_done_callback, register_new_step_callback = p.register_done_callback, p.register_new_step_callback
+		retry_delay, save_conversation_path, validate_output = p.retry_delay, p.save_conversation_path, p.validate_output
 		# Log model name from MessageManager (single source of truth)
 		self.logger.debug(f"Using model: {self.message_manager.model_name}")
 		
@@ -1486,14 +1291,10 @@ class AgentConstructionMixin:
 		# Use Controller's high-level API instead of directly accessing registry
 		registered_commands = self.controller.get_action_names()
 		self.logger.debug(f"Registered commands: {len(registered_commands)} commands - {', '.join(registered_commands)}")
-		
-		self._wire_runtime_state()
 
-		# No need for these locks that can cause deadlocks
-
-		# FIXED: Initialize memory management for bounded collections
-		self._initialize_memory_management()
-
+	def _init_metering(self, p) -> None:
+		"""The usage tracker and the aux/reflection billing context."""
+		_reflection_llm = p._reflection_llm
 		# Get usage tracker if available (UNIFIED tracking - replaces usage_meter + telemetry)
 		# This is the preferred method for token tracking
 		if self.orchestrator and hasattr(self.orchestrator, 'usage_tracker'):
@@ -1550,9 +1351,8 @@ class AgentConstructionMixin:
 		# (db + balance_manager). Kept as None for back-compat attribute access.
 		self.usage_meter = None
 
-		# Save initial task to task.json for webview chat
-		self._save_initial_task()
-
+	def _init_tool_output_log(self, p) -> None:
+		"""Per-session tool output log path (logs/tool_outputs.jsonl)."""
 		# OPTIMIZATION: Setup tool output logging (Task 1 - Nov 14, 2025)
 		self.tool_output_log_path = None
 		if self.orchestrator and self.orchestrator.session_id and self.orchestrator.user_id:

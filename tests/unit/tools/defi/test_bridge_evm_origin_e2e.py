@@ -355,9 +355,117 @@ def test_a_quote_with_no_usd_value_refuses_before_the_guard(rig, monkeypatch):
     assert "max_spend_usd" not in text
 
 
-def test_bridging_INTO_solana_still_refuses(rig):
+SOL_ID = 792703809
+NATIVE_SVM = "11111111111111111111111111111111"
+SOL_OUT_RAW, SOL_FLOOR_RAW = 520_000_000, 515_000_000
+
+
+def _sol_quote(**over):
+    d = dict(dest_chain_id=SOL_ID, recipient=_Wallet.solana_address,
+             currency_out=NATIVE_SVM, amount_out_raw=SOL_OUT_RAW,
+             min_out_raw=SOL_FLOOR_RAW, decimals_out=9, symbol_out="SOL",
+             amount_out_formatted=SOL_OUT_RAW / 1e9,
+             min_out_formatted=SOL_FLOOR_RAW / 1e9)
+    d.update(over)
+    return _quote(**d)
+
+
+@pytest.fixture
+def delivered(monkeypatch):
+    """Relay names one destination tx; reading it on-chain pays us `paid`."""
+    paid = {"raw": SOL_OUT_RAW, "seen": []}
+    monkeypatch.setattr("core.wallet.bridge_status.read_out_txs", lambda rid: ["5igSig"])
+
+    def _inflow(sig, owner, mint=None, **_kw):
+        paid["seen"].append((sig, owner, mint))
+        return paid["raw"]
+    monkeypatch.setattr("core.wallet.solana_onchain.tx_inflow", _inflow)
+    return paid
+
+
+def test_bridging_INTO_solana_measures_the_arrival_in_lamports(rig, monkeypatch, delivered):
+    """The owner could not fund the Solana lab on 2026-10-12: the verb refused
+    every SVM destination because phase 2 only knew `eth_getBalance`."""
+    asked = {}
+
+    class _SolProvider(_Provider):
+        def quote(self, **kw):
+            asked.update(kw)
+            return self._quote
+
+    monkeypatch.setattr("tools.defi.providers.relay_bridge.RelayBridgeProvider",
+                        lambda *a, **k: _SolProvider(quote=_sol_quote()))
+    seq = iter([10 ** 8, 10 ** 8 + SOL_OUT_RAW])
+    read = []
+
+    def _lamports(addr, **_kw):
+        read.append(addr)
+        return next(seq, 10 ** 8 + SOL_OUT_RAW)
+    monkeypatch.setattr("core.wallet.solana_onchain.native_balance_raw", _lamports)
+    monkeypatch.setattr(bridge_guard, "native_balance_raw",
+                        lambda *a: pytest.fail("an SVM arrival read eth_getBalance"))
     r = _run(_Tool(), _params(to_chain="solana"))
-    assert "bridging INTO Solana is not supported" in (r.error or "")
+    text = r.content or r.error or ""
+    assert asked["recipient"] == _Wallet.solana_address
+    assert asked["dest_currency"] == NATIVE_SVM
+    assert "phase 2 : ARRIVED" in text, text
+    assert set(read) == {_Wallet.solana_address}
+
+
+def test_bridging_usdc_INTO_solana_reads_the_spl_balance(rig, monkeypatch, delivered):
+    usdc = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+    monkeypatch.setattr(
+        "tools.defi.providers.relay_bridge.RelayBridgeProvider",
+        lambda *a, **k: _Provider(quote=_sol_quote(
+            currency_out=usdc, decimals_out=6, symbol_out="USDC",
+            amount_out_raw=93_000_000, min_out_raw=92_500_000,
+            amount_out_formatted=93.0, min_out_formatted=92.5)))
+    monkeypatch.setattr("core.wallet.solana_onchain.mint_decimals", lambda m, **k: 6)
+    monkeypatch.setattr(_Tool, "_price", lambda self, c, a: 1.0 if a == usdc else 93.6 / AMOUNT_ETH)
+    monkeypatch.setattr("core.wallet.solana_onchain.token_balance_raw",
+                        lambda addr, mint, **k: 0)
+    delivered["raw"] = 93_000_000
+    r = _run(_Tool(), _params(to_chain="solana", token_out="usdc"))
+    text = r.content or r.error or ""
+    assert "phase 2 : ARRIVED" in text, text
+    assert delivered["seen"] == [("5igSig", _Wallet.solana_address, usdc)]
+
+
+def test_a_solana_balance_rise_without_a_delivering_tx_is_not_an_arrival(
+        rig, monkeypatch, delivered):
+    """The lab trades on this wallet: a swap fill during the window raises the
+    balance too. Only the delivering transaction's own change proves arrival."""
+    monkeypatch.setattr("tools.defi.providers.relay_bridge.RelayBridgeProvider",
+                        lambda *a, **k: _Provider(quote=_sol_quote(),
+                                                  status=("pending", "waiting")))
+    seq = iter([10 ** 8])
+    monkeypatch.setattr("core.wallet.solana_onchain.native_balance_raw",
+                        lambda addr, **k: next(seq, 10 ** 8 + 10 * SOL_OUT_RAW))
+    import functools
+    monkeypatch.setattr(bridge_guard, "await_arrival", functools.partial(
+        bridge_guard.await_arrival, deadline_sec=0, sleep=lambda s: None))
+    r = _run(_Tool(), _params(to_chain="solana"))
+    text = r.content or r.error or ""
+    assert "ARRIVED" not in text
+    assert "IN FLIGHT" in text, text
+
+
+def test_an_unreadable_solana_balance_refuses_before_sending(rig, monkeypatch):
+    monkeypatch.setattr("tools.defi.providers.relay_bridge.RelayBridgeProvider",
+                        lambda *a, **k: _Provider(quote=_sol_quote()))
+    monkeypatch.setattr("core.wallet.solana_onchain.native_balance_raw",
+                        lambda addr, **k: None)
+    r = _run(_Tool(), _params(to_chain="solana"))
+    assert "RESULT: NOT SENT" in (r.content or "")
+    assert all(i.sent is None for i in _Rail.instances)
+
+
+def test_a_quote_for_another_chain_than_solana_is_refused(rig, monkeypatch):
+    monkeypatch.setattr("tools.defi.providers.relay_bridge.RelayBridgeProvider",
+                        lambda *a, **k: _Provider(quote=_sol_quote(dest_chain_id=BASE_ID)))
+    r = _run(_Tool(), _params(to_chain="solana"))
+    assert "RESULT: NOT SENT" in (r.content or "")
+    assert all(i.sent is None for i in _Rail.instances)
 
 
 def test_the_amount_is_converted_with_Decimal_not_float(rig):
@@ -468,3 +576,80 @@ def test_cr_l03_a_refusal_on_the_recheck_broadcasts_nothing(rig, monkeypatch):
     assert "re-check after approval" in (r.content or "")
     assert "RESULT: NOT SENT" in (r.content or "")
     assert all(i.sent is None for i in _Rail.instances)
+
+
+# -- pinned-USDC origin on an EVM chain ------------------------------------
+
+BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+USDC_IN_RAW = 93_600_000
+
+
+@pytest.fixture
+def usdc_origin(rig, monkeypatch):
+    """Base USDC -> Robinhood ETH: the approve and the deposit each go through
+    the guard; every sent transaction is kept in order."""
+    sent, intents = [], []
+
+    class _SeqRail(_Rail):
+        def sign_and_send(self, tx):
+            sent.append(tx)
+            self.sent = tx
+            return f"0xhash{len(sent)}"
+    monkeypatch.setattr("core.wallet.broadcast.evm.EvmRail", _SeqRail)
+    monkeypatch.setattr("core.wallet.tokens.get_token_identity",
+                        lambda chain, addr, **k: SimpleNamespace(decimals=6))
+    monkeypatch.setattr(_Tool, "_price",
+                        lambda self, c, a: 1.0 if str(a).lower() == BASE_USDC.lower() else 2600.0)
+    verdicts = {"deposit": True}
+
+    def _authorize(intent, tx, **kw):
+        intents.append(intent)
+        ok = intent.is_allowance_op or verdicts["deposit"]
+        return SimpleNamespace(allowed=ok, reason="authorized" if ok else "refused: test",
+                               lane="autonomous" if ok else "refuse",
+                               amount_usd=93.6, sim_gas_used=80_000)
+    monkeypatch.setattr("core.wallet.tx_guard.authorize", _authorize)
+    quote = _quote(currency_in=BASE_USDC, decimals_in=6, amount_in_raw=USDC_IN_RAW,
+                   symbol_in="USDC", amount_in_formatted=93.6,
+                   tx_data={"to": DEPOSITORY, "data": "0xe8017952", "value": "0",
+                            "chainId": BASE_ID},
+                   approve_spender=DEPOSITORY)
+    monkeypatch.setattr("tools.defi.providers.relay_bridge.RelayBridgeProvider",
+                        lambda *a, **k: _Provider(quote=quote))
+    return SimpleNamespace(sent=sent, intents=intents, verdicts=verdicts)
+
+
+def test_a_usdc_origin_approves_exactly_then_deposits(usdc_origin):
+    r = _run(_Tool(), _params(token_in="usdc", amount=93.6))
+    text = r.content or r.error or ""
+    assert "phase 2 : ARRIVED" in text, text
+    approve, deposit = usdc_origin.sent
+    assert approve["to"] == BASE_USDC
+    assert approve["data"].startswith("0x095ea7b3")
+    assert DEPOSITORY[2:].lower() in approve["data"].lower()
+    assert int(approve["data"][-64:], 16) == USDC_IN_RAW, "the grant must be EXACT"
+    assert deposit["to"] == DEPOSITORY and deposit["value"] == 0
+    grant, send = usdc_origin.intents[0], usdc_origin.intents[-1]
+    assert grant.expected_allowance_grants == ((BASE_USDC, DEPOSITORY, USDC_IN_RAW),)
+    assert send.token == BASE_USDC and send.amount_raw == USDC_IN_RAW
+
+
+def test_a_refused_deposit_revokes_the_approval(usdc_origin):
+    usdc_origin.verdicts["deposit"] = False
+    r = _run(_Tool(), _params(token_in="usdc", amount=93.6))
+    text = r.content or r.error or ""
+    assert "deposit refused" in text and "approval revoked" in text, text
+    approve, revoke = usdc_origin.sent
+    assert int(revoke["data"][-64:], 16) == 0
+    assert len(usdc_origin.sent) == 2, "no deposit may be signed"
+
+
+def test_an_approve_naming_another_spender_is_refused(usdc_origin, monkeypatch):
+    quote = _quote(currency_in=BASE_USDC, decimals_in=6, amount_in_raw=USDC_IN_RAW,
+                   tx_data={"to": DEPOSITORY, "data": "0x", "value": "0", "chainId": BASE_ID},
+                   approve_spender="0x000000000000000000000000000000000000dEaD")
+    monkeypatch.setattr("tools.defi.providers.relay_bridge.RelayBridgeProvider",
+                        lambda *a, **k: _Provider(quote=quote))
+    r = _run(_Tool(), _params(token_in="usdc", amount=93.6))
+    assert "RESULT: NOT SENT" in (r.content or "")
+    assert not usdc_origin.sent

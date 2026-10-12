@@ -48,7 +48,7 @@ def test_loop_table_has_nine_loop_rows():
     """043 A8/A42 — the panel names all 8 loops `start_autonomy` can start
     (cron/goals/curator/sandbox-reap/surface-gc/quiet-release/settlement/
     bridges) plus the planner, matching the liveness set the status snapshot
-    checks (core/autonomy_runtime.py::start_autonomy)."""
+    checks (polyrob/app/autonomy_runtime.py::start_autonomy)."""
     snap = _autonomy_snapshot("local", "data")
     names = dict(snap["flags"])
     loop_rows = {"cron", "goals", "curator", "sandbox-reap", "surface-gc",

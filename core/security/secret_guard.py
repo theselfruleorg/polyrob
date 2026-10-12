@@ -75,7 +75,7 @@ SECRET_NAME_GLOBS: tuple[str, ...] = (
     # guard). M2 added the snapshot globs only to CREDENTIAL_NAME_GLOBS below,
     # leaving this list unable to catch a snapshot-backed copy of a secret
     # config file (`.polyrob/snapshots/<ts>/config/00_.env.production` — a
-    # renamed copy of `config/.env.production`, which can hold MASTER_SEED)
+    # renamed copy of `config/.env.production`, which can hold PAYMENT_MASTER_SEED)
     # from flowing into model context via read-only ingestion paths. See the
     # CREDENTIAL_NAME_GLOBS comment below for the full rationale — the same
     # three globs, same reasoning, applied here.
@@ -184,7 +184,7 @@ CREDENTIAL_NAME_GLOBS: tuple[str, ...] = (
     # INDEX PREFIX on the copy name (`config/00_.env.production`,
     # `dirs/00_wallet/`). That prefix defeats every basename-exact / adjacent-
     # component rule above (`.env*`, `config/.env.*`, `wallet/meta.json`, ...) —
-    # a local box's `config/.env.production` (holds MASTER_SEED) becomes
+    # a local box's `config/.env.production` (holds PAYMENT_MASTER_SEED) becomes
     # `read_file`-able once backed up. Two independent nets close this:
     #  1. `*.env.*` — a basename-only glob (deliberately broad: it matches ANY
     #     name containing literal ".env." wherever it sits, incl. a numeric

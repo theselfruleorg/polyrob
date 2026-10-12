@@ -9,7 +9,7 @@ import pytest
 
 import agents.task.constants as c
 from tools.code_exec.tool import CodeExecutionTool, RunCodeParams
-from tools.controller.execution_context import ActionExecutionContext
+from agents.task.loop_types.execution_context import ActionExecutionContext
 
 
 class _RecordingBackend:

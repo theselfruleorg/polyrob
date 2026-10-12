@@ -461,3 +461,21 @@ class XChatClient:
             await self._session.close()
         self._session = None
         self._owns_session = False
+
+
+_CLOSING_CLIENTS: set = set()
+
+
+def close_replaced_chat_client(old) -> None:
+    """Close the aiohttp session of an XChatClient a token refresh replaces —
+    dropping it unclosed logged 'Unclosed client session' on prod. Fail-open;
+    with no running loop there is nothing open to close."""
+    close = getattr(old, "close", None)
+    if close is None:
+        return
+    try:
+        task = asyncio.get_running_loop().create_task(close())
+    except RuntimeError:
+        return
+    _CLOSING_CLIENTS.add(task)
+    task.add_done_callback(_CLOSING_CLIENTS.discard)

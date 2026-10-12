@@ -17,7 +17,7 @@ def owner_ctx(monkeypatch):
     """An execution context that PASSES compute_posture_allows(ctx, 2):
     posture frozen to 2, owner principal matches, orchestrator role, not a
     sub-agent, no forged turn_kind stamp."""
-    from tools.controller.execution_context import ActionExecutionContext
+    from agents.task.loop_types.execution_context import ActionExecutionContext
 
     monkeypatch.setenv("AGENT_COMPUTE_POSTURE", "2")
     _constants._refreeze_compute_posture_for_tests()

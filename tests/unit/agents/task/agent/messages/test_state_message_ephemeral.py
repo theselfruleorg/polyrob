@@ -11,8 +11,6 @@ ride the tail of ONE ``get_messages_for_llm()`` call and disappear. So the
 invariant this file pins is simply:
 
     no state message is ever in ``history``
-
-with ``STATE_MESSAGE_EPHEMERAL=false`` restoring the old append + splice.
 """
 
 from __future__ import annotations
@@ -28,8 +26,8 @@ from agents.task.agent.prompts import SystemPrompt
 from agents.task.agent.views import AgentStepInfo
 from agents.task.path import get_path_manager, pm, set_path_manager
 from modules.llm.messages import HumanMessage
-from tools.browser.views import BrowserState
-from tools.dom.views import DOMElementNode
+from agents.task.loop_types.browser_views import BrowserState
+from agents.task.loop_types.dom_views import DOMElementNode
 
 from tests.support.prefix_cache import serialize_messages
 
@@ -194,27 +192,3 @@ def _normalised(messages) -> list:
 	return [_CLOCK.sub("Current date and time: <t>", s)
 	        for s in serialize_messages(messages)]
 
-
-def test_flag_off_appends_into_history_and_the_splice_still_works(monkeypatch):
-	monkeypatch.setenv("STATE_MESSAGE_EPHEMERAL", "false")
-	mm = _mm("s-ephemeral-off")
-	_add_state(mm)
-
-	assert any(_is_state(m) for m in _history_messages(mm))
-	mm.remove_last_state_message()
-	assert not any(_is_state(m) for m in _history_messages(mm))
-
-
-def test_flag_off_sends_the_same_bytes(monkeypatch):
-	"""OFF must reproduce today's request exactly — that is the acceptance test."""
-	monkeypatch.setenv("STATE_MESSAGE_EPHEMERAL", "false")
-	off = _mm("s-ephemeral-bytes-off")
-	_add_state(off)
-	off_assembly = _normalised(off.get_messages_for_llm())
-
-	monkeypatch.setenv("STATE_MESSAGE_EPHEMERAL", "true")
-	on = _mm("s-ephemeral-bytes-on")
-	_add_state(on)
-	on_assembly = _normalised(on.get_messages_for_llm())
-
-	assert on_assembly == off_assembly

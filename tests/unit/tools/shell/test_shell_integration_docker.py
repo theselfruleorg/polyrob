@@ -15,7 +15,7 @@ import agents.task.constants as c
 from tools.shell.tool import ShellTool, ShellRunParams
 from tools.shell.process_tool import ProcessTool, ProcessJobParams
 from tools.shell.process_registry import ProcessRegistry
-from tools.controller.execution_context import ActionExecutionContext
+from agents.task.loop_types.execution_context import ActionExecutionContext
 
 _needs_docker = pytest.mark.skipif(shutil.which("docker") is None, reason="docker not installed")
 

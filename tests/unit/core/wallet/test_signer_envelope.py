@@ -73,11 +73,36 @@ def test_inside_the_signer_process_no_self_ping(tmp_path, monkeypatch):
     assert calls == []
 
 
-def test_an_unanswering_signer_clamps_to_zero_until_first_confirmation(tmp_path, monkeypatch):
+def test_an_unanswering_REMOTE_signer_clamps_to_zero_until_first_confirmation(tmp_path, monkeypatch):
+    """Remote mode: the signer holds the key, so nothing can sign without it."""
     _pref(tmp_path, monkeypatch)
-    _signer(monkeypatch, fail=True)
+    _signer(monkeypatch, mode="remote", fail=True)
     assert effective_max_per_tx_usd("u1", tmp_path, env=PROD_ENV) == 0.0
     assert effective_daily_cap_usd("u1", tmp_path, env=PROD_ENV) == 0.0
+    assert env_mod.signer_unanswered() and env_mod.spend_held_by_signer()
+
+
+def test_an_unanswering_SHADOW_signer_falls_back_to_the_local_caps(tmp_path, monkeypatch):
+    """D5 (owner, 2026-10-10): shadow signs locally; a signer unit that never
+    answered must not zero every cap. The local caps apply and the owner sees
+    a notice naming the signer."""
+    _pref(tmp_path, monkeypatch)
+    _signer(monkeypatch, mode="shadow", fail=True)
+    assert effective_max_per_tx_usd("u1", tmp_path, env=PROD_ENV) == 3000.0
+    assert effective_daily_cap_usd("u1", tmp_path, env=PROD_ENV) == 7000.0
+    assert env_mod.signer_unanswered() is True
+    assert env_mod.spend_held_by_signer() is False
+    text = env_mod.unanswered_text()
+    assert "shadow" in text and "$0" not in text and "polyrob-signer" in text
+
+
+def test_a_shadow_signer_that_answered_once_keeps_its_last_good_caps(tmp_path, monkeypatch):
+    _pref(tmp_path, monkeypatch)
+    _signer(monkeypatch, mode="shadow", caps=PROD_SIGNER)
+    assert effective_max_per_tx_usd("u1", tmp_path, env=PROD_ENV) == 120.0
+    env_mod._cache["at"] = -1e9          # expire the good answer
+    _signer(monkeypatch, mode="shadow", fail=True)
+    assert effective_max_per_tx_usd("u1", tmp_path, env=PROD_ENV) == 120.0
 
 
 def test_a_wider_signer_changes_nothing(tmp_path, monkeypatch):
@@ -208,7 +233,7 @@ def test_a_failed_ping_keeps_the_last_good_caps(monkeypatch):
 
 
 def test_a_failure_is_retried_after_the_short_ttl(monkeypatch):
-    calls = _signer(monkeypatch, fail=True)
+    calls = _signer(monkeypatch, mode="remote", fail=True)
     clock = [1000.0]
     monkeypatch.setattr(env_mod.time, "monotonic", lambda: clock[0])
     assert env_mod.signer_caps() == dict.fromkeys(env_mod.LEGS, 0.0)
@@ -229,7 +254,7 @@ def test_readouts_never_show_the_zero_clamp_as_a_signer_cap(tmp_path, monkeypatc
     import core.wallet.config as cfg
     from cli.commands.wallet import _signer_bound
     from surfaces.telegram.owner_ops import _signer_bound_lines
-    _signer(monkeypatch, fail=True)
+    _signer(monkeypatch, mode="remote", fail=True)
     monkeypatch.setattr(cfg, "configured_caps_now", lambda *a, **k: (3000.0, 7000.0))
     assert env_mod.signer_caps() == dict.fromkeys(env_mod.LEGS, 0.0)   # gate: closed
     assert env_mod.reported_caps() is None

@@ -116,38 +116,3 @@ def test_the_data_home_manifest_is_still_denied_to_agent_file_writes(home):
     # NOTE: the guard is typed `path: Path` and uses `path.parts` — a str argument
     # raises AttributeError mid-function rather than answering. Callers pass Path.
     assert is_protected_config_path(Path(S.ensure_manifest_seeded())) is True
-
-
-def test_the_hourly_seeder_seeds_the_owner_editable_copy(home, monkeypatch, tmp_path):
-    """034 §12.3: something has to create the data-home copy on a fresh install.
-
-    The hourly stream seeder is that seam — after its first tick the owner-editable
-    manifest exists and `default_manifest_path()` prefers it, so an owner edit made
-    from chat is outside the deploy's reach from then on.
-    """
-    import importlib.util
-    from pathlib import Path as _P
-    root = _P(__file__).resolve().parents[5]
-    seeder = root / "scripts" / "seed_streams.py"
-    if not seeder.is_file():
-        import pytest as _pt
-        _pt.skip("scripts/seed_streams.py is operator tooling, absent from the public tree")
-
-    from agents.task.goals import streams as S
-    assert not _P(S.home_manifest_path()).exists()
-
-    spec = importlib.util.spec_from_file_location("_seed_streams_home", seeder)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-
-    class _Args:
-        db = str(tmp_path / "goals.db")
-        user_id = "rob"
-        manifest = None
-        stream = None
-        dry_run = True
-        force = False
-
-    mod._run(_Args())
-    assert _P(S.home_manifest_path()).is_file(), \
-        "the hourly seeder must create the owner-editable manifest copy"

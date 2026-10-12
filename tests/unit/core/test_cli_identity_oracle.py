@@ -23,7 +23,7 @@ async def test_cli_container_identity_matches_resolve_identity_with_owner(tmp_pa
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
     with patch("modules.llm.llm_manager.LLMManager._initialize", AsyncMock()):
-        from core.bootstrap import build_cli_container
+        from polyrob.app.bootstrap import build_cli_container
         container = await build_cli_container()
     assert resolve_identity() == "rob"
     assert container.get_service("identity").resolve() == "rob"
@@ -37,7 +37,7 @@ async def test_cli_container_identity_falls_back_to_local_without_owner(tmp_path
     monkeypatch.delenv("BOT_OWNER_USER_ID", raising=False)
     monkeypatch.delenv("SURFACE_SUPER_ADMIN_USER_IDS", raising=False)
     with patch("modules.llm.llm_manager.LLMManager._initialize", AsyncMock()):
-        from core.bootstrap import build_cli_container
+        from polyrob.app.bootstrap import build_cli_container
         container = await build_cli_container()
     assert resolve_identity() == "local"
     assert container.get_service("identity").resolve() == "local"

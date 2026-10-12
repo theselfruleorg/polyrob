@@ -275,14 +275,14 @@ async def test_auto_mode_renewal_skipped_while_halted_and_retries_after_resume(
         watcher = SettlementWatcher(agent, db=db, goal_board=_board(tmp_path))
 
         # HALTED: no invoice minted.
-        monkeypatch.setattr("agents.task.constants.AutonomyConfig.autonomy_halted",
+        monkeypatch.setattr("core.config_policy.AutonomyConfig.autonomy_halted",
                             lambda: True)
         out1 = await watcher.tick_once()
         assert out1["subscription_renewals_invoiced"] == 0
         assert await invoicing.list_payment_requests(user_id="rob", db=db) == []
 
         # RESUMED: the same due subscription now mints normally.
-        monkeypatch.setattr("agents.task.constants.AutonomyConfig.autonomy_halted",
+        monkeypatch.setattr("core.config_policy.AutonomyConfig.autonomy_halted",
                             lambda: False)
         out2 = await watcher.tick_once()
         assert out2["subscription_renewals_invoiced"] == 1
@@ -305,7 +305,7 @@ async def test_renewal_fails_closed_when_halt_probe_raises(tmp_path, monkeypatch
 
         def _boom():
             raise RuntimeError("halt probe blew up")
-        monkeypatch.setattr("agents.task.constants.AutonomyConfig.autonomy_halted", _boom)
+        monkeypatch.setattr("core.config_policy.AutonomyConfig.autonomy_halted", _boom)
         out = await watcher.tick_once()
         assert out["subscription_renewals_invoiced"] == 0
         assert await invoicing.list_payment_requests(user_id="rob", db=db) == []
@@ -335,14 +335,14 @@ async def test_approve_mode_halt_does_not_burn_approved_grant(tmp_path, monkeypa
         assert ok is True
 
         # HALTED: the approved grant is held, NOT consumed, no invoice.
-        monkeypatch.setattr("agents.task.constants.AutonomyConfig.autonomy_halted",
+        monkeypatch.setattr("core.config_policy.AutonomyConfig.autonomy_halted",
                             lambda: True)
         out_halted = await watcher.tick_once()
         assert out_halted["subscription_renewals_invoiced"] == 0
         assert await invoicing.list_payment_requests(user_id="rob", db=db) == []
 
         # RESUMED: the SAME grant is still consumable -> the invoice mints once.
-        monkeypatch.setattr("agents.task.constants.AutonomyConfig.autonomy_halted",
+        monkeypatch.setattr("core.config_policy.AutonomyConfig.autonomy_halted",
                             lambda: False)
         out_resumed = await watcher.tick_once()
         assert out_resumed["subscription_renewals_invoiced"] == 1

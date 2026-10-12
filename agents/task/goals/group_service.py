@@ -29,6 +29,7 @@ nothing from tools/surfaces.
 """
 from __future__ import annotations
 
+from core.runtime_paths import surfaces_db_path
 import logging
 import os
 import time
@@ -117,7 +118,7 @@ def _ledger(container: Any):
     if svc is not None:
         return svc
     try:
-        path = os.path.join(_data_home(container), "surfaces.db")
+        path = surfaces_db_path(_data_home(container))
         if not os.path.exists(path):
             return None
         from core.surfaces.group_ledger import GroupLedger

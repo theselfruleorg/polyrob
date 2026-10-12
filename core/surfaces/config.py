@@ -14,6 +14,7 @@ from core.config_policy import (
     _mode_capability_default,
     full_autonomy_enabled,
     local_mode_enabled,
+    member_flag,
 )
 
 
@@ -21,6 +22,11 @@ def _int_env(name: str, default: int) -> int:
     # Blank-string handling matches core.env.int_env (int("") raises -> default).
     from core.env import int_env
     return int_env(name, default)
+
+
+#: Internal tuning (not env-driven): minimum seconds between live Telegram
+#: stream edits.
+TELEGRAM_STREAM_EDIT_INTERVAL_SEC = 1.5
 
 
 class SurfaceConfig:
@@ -40,6 +46,9 @@ class SurfaceConfig:
         if spec is None:
             return False
         flag = spec.enabled_flag
+        from core.config_policy.members import is_member
+        if is_member(flag):   # D7: the bundle + its override line are the only source
+            return member_flag(flag)
         if (os.environ.get(flag) or "").strip():
             return _bool_env(flag, False)
         if spec.auto_start and spec.credentials and not spec.missing_credentials(os.environ):
@@ -86,20 +95,7 @@ class SurfaceConfig:
     def group_chat_enabled() -> bool:
         """W3: group/channel ingress (allowlisted chats, mention-gated).
         (ON under effective AUTONOMY_MODE=autonomous.)"""
-        return _bool_env("GROUP_CHAT_ENABLED", _mode_capability_default("GROUP_CHAT_ENABLED"))
-
-    @staticmethod
-    def group_require_mention() -> bool:
-        """W3: in groups, act only when the bot is @mentioned (default ON).
-
-        ⚠️ 044 T17 retired this as a GATE. The routing boundary now asks
-        ``core/surfaces/chat_policy.py::mode_allows_trigger``, and this flag
-        survives for ONE release as an alias resolved inside
-        ``ChatPolicy.defaults()``: ``GROUP_REQUIRE_MENTION=false`` means
-        ``chat.mode=active``. Nothing else reads it — set ``GROUP_DEFAULT_MODE``
-        (or a per-room ``chat.mode``) instead.
-        """
-        return _bool_env("GROUP_REQUIRE_MENTION", True)
+        return member_flag("GROUP_CHAT_ENABLED")
 
     @staticmethod
     def chat_intent_classifier_enabled() -> bool:
@@ -114,7 +110,7 @@ class SurfaceConfig:
         only as a known correspondent (its reply is DATA delivered to the originating
         session, never a steering turn).
         (ON under effective AUTONOMY_MODE=autonomous.)"""
-        return _bool_env("CORRESPONDENT_ACCESS_ENABLED", _mode_capability_default("CORRESPONDENT_ACCESS_ENABLED"))
+        return member_flag("CORRESPONDENT_ACCESS_ENABLED")
 
     @staticmethod
     def correspondent_require_approval() -> bool:
@@ -140,31 +136,13 @@ class SurfaceConfig:
         a deliberate posture change (the default remains owner-in-the-loop per
         round). All other high-impact tools stay blocked regardless.
         (ON under effective AUTONOMY_MODE=autonomous.)"""
-        return _bool_env("CORRESPONDENT_REPLY_ENABLED", _mode_capability_default("CORRESPONDENT_REPLY_ENABLED"))
+        return member_flag("CORRESPONDENT_REPLY_ENABLED")
 
     @staticmethod
     def correspondent_reply_max_rounds() -> int:
         """D1: outbound messages per correspondent per 24h allowed under the scoped
         tainted-reply exemption (counted from the ConversationStore)."""
         return _int_env("CORRESPONDENT_REPLY_MAX_ROUNDS", 5)
-
-    @staticmethod
-    def conversation_resume_enabled() -> bool:
-        """E6/A6: when a correspondent replies to a conversation whose originating
-        session is dead (missing / unrecreatable), create a replacement session
-        seeded with the durable conversation context and re-point the bindings —
-        instead of silently dropping their message. Default ON (the drop was the
-        bug); false restores the legacy drop+audit behavior."""
-        return _bool_env("CONVERSATION_RESUME_ENABLED", True)
-
-    @staticmethod
-    def correspondent_resolve_latest() -> bool:
-        """A4: when one tenant has SEVERAL active bindings for one address (multiple
-        sessions contacted the same person) and a reply carries no usable thread
-        anchor, route it to the most recently active binding instead of denying.
-        Default ON; false restores the legacy 'ambiguous -> quarantine' behavior.
-        Cross-tenant ambiguity ALWAYS denies regardless of this flag."""
-        return _bool_env("CORRESPONDENT_RESOLVE_LATEST", True)
 
     @staticmethod
     def correspondent_ttl_days() -> int:
@@ -218,12 +196,9 @@ class SurfaceConfig:
     @staticmethod
     def telegram_stream_edit_interval_sec() -> float:
         """Minimum seconds between live stream edits (flood-control). Telegram tolerates
-        only a few edits/sec; 1.5s is conservative. `0` edits on every delta (tests)."""
-        try:
-            v = os.getenv("TELEGRAM_STREAM_EDIT_INTERVAL_SEC")
-            return float(v) if v is not None and v.strip() != "" else 1.5
-        except (TypeError, ValueError):
-            return 1.5
+        only a few edits/sec; 1.5s is conservative. `0` edits on every delta (tests
+        patch the module constant)."""
+        return TELEGRAM_STREAM_EDIT_INTERVAL_SEC
 
     # --- P0.1 session-boundary policy ---------------------------------------
     @staticmethod

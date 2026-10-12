@@ -19,8 +19,14 @@ the signer's cap is refused by the agent's own gate (the owner chose the signer
 as the envelope; a shadow week with a lower signer cap is not a free pass).
 
 A signer that stops answering keeps its LAST GOOD caps (tighter is the safe
-reading). A signer that has never answered clamps every spend cap to zero, including
-in shadow mode.
+reading). A signer that has never answered:
+
+* ``remote`` — clamps every spend cap to zero: the signer holds the key, so
+  nothing can sign without it anyway;
+* ``shadow`` — imposes no envelope (D5, owner 2026-10-10): shadow signs
+  locally, so the agent's own caps apply, and every readout names the silent
+  signer (:func:`unanswered_text`). A signer unit that is down at boot no
+  longer blocks every spend until a root fix.
 """
 from __future__ import annotations
 
@@ -63,39 +69,53 @@ def _num(value) -> Optional[float]:
     return out if math.isfinite(out) and out >= 0 else None
 
 
-def _enabled() -> bool:
+def _mode() -> Optional[str]:
+    """``shadow``/``remote`` when an installed signer applies here, else None."""
     if os.environ.get(SIGNER_PROCESS_ENV):
-        return False
+        return None
     try:
         from core.signer import MODE_LOCAL, signer_mode
-        return signer_mode() != MODE_LOCAL
+        mode = signer_mode()
+        return None if mode == MODE_LOCAL else mode
     except Exception:
-        return False
+        return None
+
+
+def _enabled() -> bool:
+    return _mode() is not None
 
 
 def signer_caps() -> Optional[dict]:
     """``{leg: value}`` for :data:`LEGS` from the signer's ``ping``, cached
     (the gate asks on every spend check). ``None`` in local mode, inside the
-    signer; before the first successful ping enabled signers impose zero caps.
-    After one good answer a failed ping returns the last good caps."""
-    if not _enabled():
+    signer, and for a ``shadow`` signer that has never answered (D5: the local
+    caps apply). Before the first successful ping a ``remote`` signer imposes
+    zero caps. After one good answer a failed ping returns the last good caps."""
+    mode = _mode()
+    if mode is None:
         return None
     hit, caps = _cached(time.monotonic())
-    if hit:
-        return caps
-    with _refresh:
-        hit, caps = _cached(time.monotonic())   # another thread refreshed it
-        if hit:
-            return caps
-        fresh = _ping()
-        now = time.monotonic()
-        with _lock:
-            if fresh is not None:
-                _cache.update(at=now, ttl=_TTL_SEC, caps=fresh, good=fresh)
-            else:
-                _cache.update(at=now, ttl=_FAIL_TTL_SEC,
-                              caps=_cache.get("good") or dict.fromkeys(LEGS, 0.0))
-            return _cache["caps"]
+    if not hit:
+        with _refresh:
+            hit, caps = _cached(time.monotonic())   # another thread refreshed it
+            if not hit:
+                fresh = _ping()
+                now = time.monotonic()
+                with _lock:
+                    if fresh is not None:
+                        _cache.update(at=now, ttl=_TTL_SEC, caps=fresh, good=fresh)
+                    else:
+                        _cache.update(at=now, ttl=_FAIL_TTL_SEC,
+                                      caps=_cache.get("good") or dict.fromkeys(LEGS, 0.0))
+                    caps = _cache["caps"]
+    if mode != "remote" and _never_answered():
+        return None
+    return caps
+
+
+def _never_answered() -> bool:
+    with _lock:
+        return bool(_cache) and _cache.get("good") is None
 
 
 def _cached(now: float):
@@ -119,24 +139,40 @@ def _ping() -> Optional[dict]:
 def reported_caps() -> Optional[dict]:
     """For READOUTS: the caps the signer last actually reported, or None (local
     mode, inside the signer, or a signer that has never answered). Never the
-    zero clamp :func:`signer_caps` imposes on a silent signer: read as a cap,
-    that zero told the owner to raise ``signer.toml`` when the fix is to start
-    the signer."""
-    if signer_caps() is None:
+    zero clamp :func:`signer_caps` imposes on a silent remote signer: read as a
+    cap, that zero told the owner to raise ``signer.toml`` when the fix is to
+    start the signer."""
+    if not _enabled():
         return None
+    signer_caps()           # refresh the cache when it is due
     with _lock:
         return _cache.get("good")
 
 
 def signer_unanswered() -> bool:
-    """A signer is installed but has never answered: every spend cap is zero."""
-    return signer_caps() is not None and reported_caps() is None
+    """A signer is installed (``shadow``/``remote``) but has never answered."""
+    return _enabled() and reported_caps() is None
 
 
-#: What a readout says instead of a "bound by the signer" line when the
+def spend_held_by_signer() -> bool:
+    """A ``remote`` signer that never answered holds every spend at $0 (the
+    shadow fallback does not: D5)."""
+    return signer_unanswered() and _mode() == "remote"
+
+
+#: What a readout says instead of a "bound by the signer" line when a REMOTE
 #: signer has never answered.
 UNANSWERED_TEXT = ("the wallet signer has not answered, so every spend cap is held at "
                    "$0 until it does. Check it: `sudo systemctl status polyrob-signer`")
+#: The same for a SHADOW signer (D5): the local caps apply meanwhile.
+SHADOW_UNANSWERED_TEXT = ("the wallet signer (shadow) has not answered, so the agent's own "
+                          "caps apply until it does. Check it: "
+                          "`sudo systemctl status polyrob-signer`")
+
+
+def unanswered_text() -> str:
+    """The owner-facing notice for a signer that has never answered, by mode."""
+    return UNANSWERED_TEXT if _mode() == "remote" else SHADOW_UNANSWERED_TEXT
 
 
 def reset_cache() -> None:

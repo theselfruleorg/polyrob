@@ -5,8 +5,6 @@
 - `release_notes()` reads the CHANGELOG.md next to the code, honestly absent.
 - an unreadable self-context doc is NOT the same as an absent one.
 """
-from pathlib import Path
-
 import pytest
 
 import core.version as v
@@ -95,16 +93,6 @@ def test_unreadable_self_context_doc_is_not_silent(tmp_path, caplog):
 def test_absent_self_context_stays_empty(tmp_path):
     from core.instance import load_self_context
     assert load_self_context(tmp_path) == ""
-
-
-def test_the_deploy_ships_and_rolls_back_the_changelog():
-    root = Path(__file__).resolve().parents[3]
-    if not (root / "scripts/deploy_prod.sh").exists():
-        pytest.skip("the deploy scripts are not in the public tree")
-    prod = (root / "scripts/deploy_prod.sh").read_text(encoding="utf-8")
-    assert 'rsync -a "$TMP/CHANGELOG.md" "$APP_DIR/CHANGELOG.md"' in prod
-    tx = (root / "scripts/deploy_transaction.sh").read_text(encoding="utf-8")
-    assert tx.count("CHANGELOG.md") >= 3  # snapshot, restore, absent-ok
 
 
 def test_unreadable_self_md_is_not_silent(tmp_path):

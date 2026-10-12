@@ -177,3 +177,21 @@ def test_absent_env_file_is_still_a_local_box(nothing_deployed):
     assert adh.deployed_env_value("POLYROB_INSTANCE_ID") is None
     assert isinstance(adh.admin_instance_id(), str)
     assert isinstance(adh.admin_owner_principal(), str)
+
+
+# --- 1.4: a deployed env file that declares only a retired alias refuses ------
+
+@pytest.mark.parametrize("alias,fn", [
+    ("BOT_INSTANCE_ID", "admin_instance_id"),
+    ("BOT_OWNER_USER_ID", "admin_owner_principal"),
+])
+def test_deployed_retired_identity_alias_refuses(tmp_path, monkeypatch,
+                                                 nothing_deployed, alias, fn):
+    import core.admin_data_home as adh
+    from core.config_policy.retired_flags import RetiredFlagError
+    for k in ("POLYROB_INSTANCE_ID", "BOT_INSTANCE_ID", "POLYROB_PROFILE",
+              "POLYROB_OWNER_USER_ID", "BOT_OWNER_USER_ID"):
+        monkeypatch.delenv(k, raising=False)
+    _deploy(tmp_path, monkeypatch, body=f"{alias}=rob\n")
+    with pytest.raises(RetiredFlagError, match="POLYROB_"):
+        getattr(adh, fn)()

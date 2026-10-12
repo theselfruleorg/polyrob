@@ -91,7 +91,7 @@ def workspace_lock_busy(lock_dir: Optional[Path] = None) -> bool:
     if not os.path.exists(lock_path):
         return False
     try:
-        from agents.task.utils import SafeFileLock
+        from core.file_lock import SafeFileLock
 
         probe = SafeFileLock(lock_path, timeout=0)
         try:
@@ -305,7 +305,7 @@ def update_lock(root: Path, *, name: str = "update.lock"):
     lock = None
     try:
         try:
-            from agents.task.utils import SafeFileLock
+            from core.file_lock import SafeFileLock
 
             lock = SafeFileLock(str(lock_path), timeout=0)
             lock.__enter__()  # raises TimeoutError on cross-process contention

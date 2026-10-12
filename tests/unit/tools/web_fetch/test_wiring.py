@@ -10,5 +10,5 @@ def test_valid_tool_id():
 
 
 def test_cli_registerable():
-	from core.bootstrap import cli_unavailable_tools
+	from core.cli_tool_tables import cli_unavailable_tools
 	assert cli_unavailable_tools(["web_fetch"]) == []

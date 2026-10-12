@@ -6,7 +6,7 @@ Regression: the group callback never called ``load_env``, so file-set config
 honour a file-set CORRESPONDENT_ACCESS_ENABLED. Every sibling long-running command
 (serve/dashboard/kb/model) loads env first; ``owner`` now matches.
 """
-import core.bootstrap as bootstrap
+import polyrob.app.bootstrap as bootstrap
 from cli.commands.owner import owner
 from click.testing import CliRunner
 

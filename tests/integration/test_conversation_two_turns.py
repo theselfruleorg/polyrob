@@ -105,7 +105,7 @@ async def test_conversation_two_turns_end_to_end(monkeypatch, tmp_path):
 
     # No network during LLM client init (matches the established test pattern).
     with patch("modules.llm.llm_manager.LLMManager._initialize", AsyncMock()):
-        from core.bootstrap import build_cli_container
+        from polyrob.app.bootstrap import build_cli_container
         container = await build_cli_container(log_level="ERROR")
 
     task_agent = container.get_agent("task_agent")

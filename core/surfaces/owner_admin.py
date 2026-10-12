@@ -224,13 +224,12 @@ def _deployed_owner_principal() -> "str | None":
     """
     from core.admin_data_home import deployed_env_value
     from core.instance import is_safe_tenant_id
-    for key in ("POLYROB_OWNER_USER_ID", "BOT_OWNER_USER_ID"):
-        try:
-            declared = (deployed_env_value(key) or "").strip()
-        except Exception:
-            return None
-        if declared and is_safe_tenant_id(declared):
-            return declared
+    try:
+        declared = (deployed_env_value("POLYROB_OWNER_USER_ID") or "").strip()
+    except Exception:
+        return None
+    if declared and is_safe_tenant_id(declared):
+        return declared
     return None
 
 
@@ -254,8 +253,7 @@ def owner_access_summary() -> Dict[str, Any]:
     source = "env" if principal else "none"
     if not principal and not any(
             (os.environ.get(k) or "").strip()
-            for k in ("POLYROB_OWNER_USER_ID", "BOT_OWNER_USER_ID",
-                      "SURFACE_SUPER_ADMIN_USER_IDS")):
+            for k in ("POLYROB_OWNER_USER_ID", "SURFACE_SUPER_ADMIN_USER_IDS")):
         deployed = _deployed_owner_principal()
         if deployed:
             principal, source = deployed, "deployed"

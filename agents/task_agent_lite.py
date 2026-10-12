@@ -8,6 +8,7 @@ This is a thin wrapper that delegates all real work to the task package componen
 Key principle: NO DUPLICATION - all logic exists in the task package.
 """
 
+from core.runtime_paths import session_registry_db_path
 import logging
 import asyncio
 import time
@@ -170,7 +171,7 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
             from agents.task.sqlite_session_registry import SqliteSessionRegistry
             from core.runtime_paths import data_dir_or_home
             data_dir = data_dir_or_home(getattr(config, "data_dir", None) if config else None)
-            return SqliteSessionRegistry(os.path.join(data_dir, "session_registry.db"))
+            return SqliteSessionRegistry(session_registry_db_path(data_dir))
         return SessionRegistry()
 
     def get_orchestrator(self, session_id: str):
@@ -206,7 +207,7 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
                 # autonomous work — held while paused (the owner's own chat
                 # session keeps its background results).
                 try:
-                    from agents.task.goals.autonomy_marker import is_autonomous
+                    from core.autonomy_marker import is_autonomous
                     from core.autonomy_control import allows
                     if is_autonomous(session_id):
                         _dec = allows("self_wake")
@@ -412,7 +413,7 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
                 use_vision=request.get('use_vision', True),
                 session_config=request.get('session_config'),
                 skills=request.get('skills'), **memory_scope_fields(request),
-                money_target=request.get('money_target'),
+                money_target=request.get('money_target'), recall_seed=request.get('recall_seed'),
             )
 
         from agents.task.billed_request import credit_billing_required, validate_billed_request
@@ -458,7 +459,7 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
         # a transport flag.
         orchestrator._public_session = room_session_source(kwargs.get("session_source"))
         orchestrator._rail_skill_ids = list(session_request.skills or [])  # 060 WS-5
-        orchestrator._money_target = session_request.money_target  # 068 G2
+        orchestrator._money_target, orchestrator._recall_seed = (session_request.money_target, session_request.recall_seed)  # 068 G2; B1
         bind_memory_scope(actual_id, session_request)  # 025: goal/cron memory scope
         # H16: a session created FOR a correspondent (conversation resume) is
         # third-party-facing for its whole life — owner-only state (the owner

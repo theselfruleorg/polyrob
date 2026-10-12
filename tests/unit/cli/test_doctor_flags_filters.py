@@ -54,10 +54,10 @@ def test_search_filter_narrows_to_matching_flag_names():
 
 
 def test_group_and_search_combine_as_and():
-    lines = flags_report({}, group="tools", search="cron")
+    lines = flags_report({}, group="tools", search="mcp_exec")
     rows = _flag_rows(lines)
     assert rows
-    assert all("CRON" in ln for ln in rows)
+    assert all("MCP_EXEC" in ln for ln in rows)
     assert all("code-exec" in h for h in _headers(lines))
 
 

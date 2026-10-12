@@ -8,7 +8,7 @@ import importlib
 
 
 def test_no_dedicated_skills_console_page_yet(monkeypatch):
-    monkeypatch.setenv("WEBGATE_MULTITENANT", "false")
+    monkeypatch.delenv("WEBGATE_MULTITENANT", raising=False)
     monkeypatch.setenv("ENV", "development")
     import webview.server as server
     server = importlib.reload(server)

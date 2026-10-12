@@ -42,7 +42,7 @@ def _enabled() -> bool:
     from core.env import bool_env
     if not bool_env("ENV_CONTEXT_BLOCK", True):
         return False
-    from agents.task.constants import local_mode_enabled, full_autonomy_enabled
+    from core.config_policy import local_mode_enabled, full_autonomy_enabled
     return bool(local_mode_enabled() or full_autonomy_enabled())
 
 
@@ -52,7 +52,7 @@ def build_environment_context(session_id: str, user_id: Optional[str],
     try:
         if not _enabled():
             return None
-        from agents.task.constants import (autonomy_enabled, autonomy_mode_display,
+        from core.config_policy import (autonomy_enabled, autonomy_mode_display,
                                            autonomy_posture, compute_posture)
         from agents.task.path import pm
         from core.instance import resolve_instance_id

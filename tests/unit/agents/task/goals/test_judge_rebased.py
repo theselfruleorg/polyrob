@@ -15,7 +15,7 @@ import pytest
 
 from agents.task.goals.board import Goal, STATUS_READY
 from agents.task.goals.dispatcher import GoalDispatcher
-from tools.controller.types import ActionResult
+from agents.task.loop_types.controller_types import ActionResult
 
 
 class _JudgeLLM:
@@ -186,7 +186,7 @@ def test_interactive_chat_untouched():
 
 def test_background_review_skips_autonomous_sessions(monkeypatch):
     from agents.task.agent.core.background_review import BackgroundReviewMixin
-    from agents.task.goals.autonomy_marker import mark_autonomous, _SESSIONS
+    from core.autonomy_marker import mark_autonomous, _SESSIONS
     monkeypatch.setenv("BACKGROUND_REVIEW_ENABLED", "true")
     monkeypatch.setenv("SKILLS_WRITABLE", "true")
     monkeypatch.setenv("BG_REVIEW_INTERVAL", "1")

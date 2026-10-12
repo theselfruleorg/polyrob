@@ -50,7 +50,7 @@ class SkillCurator:
         bookkeeping states recorded in curator_state; ``archive`` is the only
         filesystem effect (and it is recoverable).
         """
-        from agents.task.constants import AutonomyConfig
+        from core.config_policy import AutonomyConfig
         stale_days = AutonomyConfig.curator_stale_days()
         archive_days = AutonomyConfig.curator_archive_days()
         now = self._now()
@@ -147,7 +147,7 @@ class SkillCurator:
 
     def should_run(self) -> bool:
         """Idle/interval gate: only run once per CURATOR_INTERVAL_HOURS."""
-        from agents.task.constants import AutonomyConfig
+        from core.config_policy import AutonomyConfig
         interval_s = AutonomyConfig.curator_interval_hours() * 3600.0
         last = self.usage.get_state("curator:last_run")
         if last is None:
@@ -208,7 +208,7 @@ class SkillCurator:
         own cadence — never the write path. Global sweep (all tenants); fail-open
         so a memory-backend hiccup never breaks the curator tick."""
         try:
-            from agents.task.constants import AutonomyConfig
+            from core.config_policy import AutonomyConfig
             from modules.memory.registry import get_memory_registry
             prov = get_memory_registry().active()
             if prov is not None and hasattr(prov, "prune_episodes"):
@@ -255,7 +255,7 @@ class SkillCurator:
         the aux-model clustering/contradiction pass stays deferred until a
         concrete merge policy exists (the CURATOR_LLM_MERGE lesson)."""
         try:
-            from agents.task.constants import AutonomyConfig
+            from core.config_policy import AutonomyConfig
             if not AutonomyConfig.knowledge_curator_enabled():
                 return
             from modules.memory.registry import get_memory_registry
@@ -297,7 +297,7 @@ class SkillCurator:
         Global across tenants, like its two sibling sweeps, and fail-open.
         """
         try:
-            from agents.task.constants import AutonomyConfig
+            from core.config_policy import AutonomyConfig
             from modules.memory.registry import get_memory_registry
             if not AutonomyConfig.memory_consolidate():
                 return
@@ -320,19 +320,32 @@ class SkillCurator:
         contract as the episode sweep: curator cadence only, all tenants,
         fail-open. MEMORY_RETENTION_DAYS <= 0 disables. Only rows with a B2
         provenance stamp are age-prunable (legacy rows are exempt inside the
-        provider)."""
+        provider). Rows an autonomous (cron/goal) run wrote age out after the
+        shorter `retention.AUTONOMOUS_RETENTION_DAYS` (B2, 2026-10-11). The
+        count is logged on EVERY pass, zero included — a sweep that never
+        deletes must be visible as one."""
         try:
-            from agents.task.constants import AutonomyConfig
+            from core.config_policy import AutonomyConfig
             from modules.memory.registry import get_memory_registry
+            from modules.memory.retention import autonomous_window_days, purge_noise_rows
             days = AutonomyConfig.memory_retention_days()
             if days <= 0:
+                logger.info("curator: memory retention disabled (MEMORY_RETENTION_DAYS=%d)", days)
                 return
             prov = get_memory_registry().active()
+            # The one-time purge runs FIRST so its pre-purge backup holds every
+            # row, including the ones the age sweep below removes.
+            if prov is not None and getattr(prov, "db_path", ""):
+                got = purge_noise_rows(prov)
+                if not got.get("skipped") or got.get("backup_failed"):
+                    logger.info("curator: memory noise purge %s", got)
             if prov is not None and hasattr(prov, "prune_memories"):
-                cutoff = int(self._now()) - days * 86400
-                removed = prov.prune_memories(older_than_ts=cutoff)
-                if removed:
-                    logger.info("curator: pruned %d old memories", removed)
+                auto_days = autonomous_window_days(days)
+                now = int(self._now())
+                removed = prov.prune_memories(older_than_ts=now - days * 86400,
+                                              autonomous_older_than_ts=now - auto_days * 86400)
+                logger.info("curator: pruned %d old memories (window %dd, autonomous runs %dd)",
+                            removed, days, auto_days)
         except Exception:
             logger.warning("memory prune skipped", exc_info=True)
         # 025: an unpromoted memory SCOPE is working memory, not an archive —

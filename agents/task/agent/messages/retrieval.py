@@ -18,7 +18,6 @@ from modules.llm.messages import (
     MessageOrigin, make_control_message,
 )
 from agents.task.agent.messages.foundation_layers import foundation_messages
-from agents.task.constants import hmem_tail_placement  # module-level: tests monkeypatch it
 
 
 def drop_usage_anchor(manager: Any, reason: str = "") -> None:
@@ -213,17 +212,14 @@ class MessageRetrievalMixin:
 		foundation = foundation_messages(self)
 
 		# 1.3: Hierarchical memory.
-		# Placement (Phase 0.1): legacy = pinned in the foundation ahead of the
-		# conversation; tail = held here and appended as a dynamic SUFFIX after the
-		# conversation (see combine step below). The H-MEM block changes every step,
-		# so in the foundation prefix it broke the prompt cache for everything after
-		# it; as a tail suffix the stable foundation + growing conversation stay a
-		# cacheable prefix. Either way it is NEVER subject to tool-sequence repair.
+		# Placement (Phase 0.1): held here and appended as a dynamic SUFFIX after
+		# the conversation (see combine step below). The H-MEM block changes every
+		# step, so in the foundation prefix it broke the prompt cache for everything
+		# after it; as a tail suffix the stable foundation + growing conversation
+		# stay a cacheable prefix. It is NEVER subject to tool-sequence repair.
+		# 060 WS-2: VOLATILE H-MEM rides the tail, outside the cached prefix.
 		memory_injected = False
-		hmem_msg = None  # held for tail placement
-		# 060 WS-2: the one tier decision the assembly makes itself (VOLATILE H-MEM
-		# rides the tail, outside the cached prefix, unless HMEM_TAIL_PLACEMENT=false).
-		tail_placement = hmem_tail_placement()
+		hmem_msg = None  # appended after the conversation
 
 		# FIX #1: Explicit warnings when H-MEM cannot be injected (was silently skipped)
 		if not self.task_context_manager:
@@ -243,14 +239,10 @@ class MessageRetrievalMixin:
 					# Chat-schema: tag injected hierarchical memory as MEMORY control
 					# content (origin + <session-memory> envelope), not a user turn.
 					context_msg = make_control_message(context, MessageOrigin.MEMORY)
-					if tail_placement:
-						hmem_msg = context_msg  # appended after conversation below
-					else:
-						foundation.append(context_msg)
+					hmem_msg = context_msg  # appended after conversation below
 					memory_injected = True
 					context_tokens = len(context.split()) * 1.3  # Rough estimate
-					where = "tail suffix" if tail_placement else "foundation"
-					self.logger.debug(f"✅ H-MEM in {where} (protected from repair) - ~{context_tokens:.0f} tokens")
+					self.logger.debug(f"✅ H-MEM in tail suffix (protected from repair) - ~{context_tokens:.0f} tokens")
 				else:
 					self.logger.debug("H-MEM returned empty context (session may be new)")
 			except Exception as e:
@@ -625,54 +617,13 @@ class MessageRetrievalMixin:
 		return timeout
 
 	def remove_last_state_message(self) -> None:
-		"""Remove the last state message from history to avoid bloat.
+		"""No-op, kept for its callers in ``core/step.py``.
 
-		State messages are typically HumanMessages containing browser state or
-		other contextual information. This method removes them after processing
-		to prevent history bloat.
-
-		F16(ii): under ``STATE_MESSAGE_EPHEMERAL`` (default ON) there is nothing to
-		remove — the state message rode the one-shot ephemeral rail and never
-		entered ``history`` — so this is a NO-OP kept for its five callers in
-		``core/step.py``. It must return before the legacy shape fallback below,
-		which would otherwise delete an unrelated HumanMessage (a user's multimodal
-		turn) now that no tagged message is ever in history.
+		F16(ii): the per-step state message rides the one-shot ephemeral rail and
+		never enters ``history``, so there is nothing to remove. (The old splice
+		rebuilt the whole deque and colded every cached byte behind it.)
 		"""
-		from agents.task.constants import state_message_ephemeral
-		if state_message_ephemeral():
-			return
-
-		# SECURITY FIX: Protect iteration and removal with lock
-		with self._history_lock:
-			if not self.history.messages:
-				return
-
-			# CX-H1: tag-first removal. A shape-based scan ("list content OR
-			# contains 'Current url:'") can't tell a minimal (non-browser)
-			# state message apart from a user's multimodal image turn — both
-			# can be the nearest match, and the wrong one gets deleted.
-			# add_state_message now stamps every state message it builds with
-			# metadata["state_message"]=True, so scan for the tag first across
-			# the WHOLE history. Only if no tagged message exists anywhere
-			# (e.g. history loaded from disk that predates the tag) fall back
-			# once to the old shape heuristic.
-			for i in range(len(self.history.messages) - 1, -1, -1):
-				msg = self.history.messages[i].message if hasattr(self.history.messages[i], 'message') else self.history.messages[i]
-				if isinstance(msg, HumanMessage) and (getattr(msg, "metadata", None) or {}).get("state_message"):
-					self.history.remove_message(i)
-					self.logger.debug(f"Removed tagged state message at index {i}")
-					return
-
-			# Legacy fallback: no tagged message found anywhere in history.
-			for i in range(len(self.history.messages) - 1, -1, -1):
-				msg = self.history.messages[i].message if hasattr(self.history.messages[i], 'message') else self.history.messages[i]
-				if isinstance(msg, HumanMessage):
-					# Check if it looks like a state message (pre-tag heuristic)
-					if isinstance(msg.content, list) or (isinstance(msg.content, str) and 'Current url:' in msg.content):
-						self.history.remove_message(i)
-						self.logger.debug(f"Removed state message (legacy shape fallback) at index {i}")
-						return
-	
+		return None
 
 	def get_llm_parameters(self) -> dict:
 		"""Extract LLM parameters for logging and telemetry.

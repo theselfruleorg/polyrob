@@ -12,7 +12,6 @@ def tele_db(tmp_path, monkeypatch):
     """045 lane 3: telemetry sink for the report_threat pinning test below."""
     p = tmp_path / "telemetry_events.db"
     monkeypatch.setenv("TELEMETRY_EVENT_LOG_PATH", str(p))
-    monkeypatch.setenv("SECURITY_EVENT_LOG_ENABLED", "true")
     monkeypatch.setenv("TELEMETRY_EVENT_LOG_ENABLED", "true")
     import core.event_log as el
     el._INSTANCES.clear()

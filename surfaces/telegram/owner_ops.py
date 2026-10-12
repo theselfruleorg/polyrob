@@ -92,9 +92,9 @@ def _cron_off_note() -> str:
     reassuring reply. An unreadable probe now says it is unreadable.
 
     ⚠️ D72: names what the owner can DO from the chat he is in. A server
-    command is not reachable from a phone; `/status` and `/config set` are
-    (CRON_ENABLED is chat-writable through the config oracle, like the /mode
-    copy's AUTONOMY_ENABLED).
+    command is not reachable from a phone; `/status` is. D7 (2026-10-10):
+    CRON_ENABLED is a posture member, set only by AUTONOMY_POSTURE or the
+    POLYROB_OVERRIDES line (Access file) — so the reply names the host verb.
     """
     try:
         from tools.cronjob_tools import cron_enabled
@@ -106,8 +106,8 @@ def _cron_off_note() -> str:
                 f"({type(exc).__name__}) — the job is stored, but I cannot "
                 f"promise anything will run it. Check with /status.")
     return ("\n⚠️ My scheduler is switched off — the job is stored but nothing "
-            "will run it. Turn it on from here with `/config set CRON_ENABLED "
-            "true` (applies on the next restart).")
+            "will run it. Turn it on on the host with `polyrob config set "
+            "CRON_ENABLED true` (applies on the next restart).")
 
 
 _CRON_ADD_USAGE = (
@@ -809,12 +809,13 @@ def _signer_bound_lines(user_id: Optional[str]) -> List[str]:
     try:
         from core.runtime_paths import prefs_home_dir
         from core.wallet.config import configured_caps_now
-        from core.wallet.signer_envelope import (UNANSWERED_TEXT, bound_legs, bound_text,
-                                                 reported_caps, signer_unanswered)
+        from core.wallet.signer_envelope import (bound_legs, bound_text, reported_caps,
+                                                 signer_unanswered, unanswered_text)
         if signer_unanswered():
             # The zero clamp of a silent signer is not a cap to raise in
             # signer.toml: say the signer is down instead.
-            return ["⚠️ " + UNANSWERED_TEXT[0].upper() + UNANSWERED_TEXT[1:]]
+            text = unanswered_text()
+            return ["⚠️ " + text[0].upper() + text[1:]]
         caps = reported_caps()
         if caps is None:
             return []
@@ -995,7 +996,7 @@ def bridge_chain_names() -> str:
 
 async def bridge_reply(user_id: Optional[str], data_dir: str,
                        args: List[str]) -> str:
-    """`/bridge <from> <to> <amount> [as <asset>] [go]` — move value across chains.
+    """`/bridge <from> <to> <amount> [from usdc] [as <asset>] [go]` — move value across chains.
 
     Why this exists: the bridge shipped CLI-only, which meant the one person
     allowed to run it had to SSH to the box. The owner's standing directive is
@@ -1021,14 +1022,15 @@ async def bridge_reply(user_id: Optional[str], data_dir: str,
     if not user_id:
         return "Only the owner can bridge."
     if len(args) < 3:
-        return ("Usage: /bridge <from> <to> <amount> [as <asset>] [go]\n"
+        return ("Usage: /bridge <from> <to> <amount> [from usdc] [as <asset>] [go]\n"
                 "e.g. /bridge solana robinhood 0.9          — quote only\n"
                 "     /bridge solana robinhood 0.9 go       — execute\n"
-                "     /bridge solana base 0.9 as usdc go    — arrive in USDC\n\n"
+                "     /bridge robinhood solana 0.1 as usdc go  — ETH in, USDC on Solana\n"
+                "     /bridge base solana 50 from usdc as usdc — USDC to USDC\n\n"
                 f"Chains: {bridge_chain_names()}.\n"
-                "Origin asset is NATIVE only (SOL on solana, ETH on an EVM "
-                "chain). `as` picks what ARRIVES: native (default), or a token "
-                "pinned for that chain.\n"
+                "The origin is NATIVE (SOL/ETH), or `from usdc` for the chain's "
+                "pinned USDC. `as` picks what ARRIVES: native (default), or a "
+                "token pinned for that chain.\n"
                 "Under your autonomous ceiling it runs and reports; above it, "
                 "it waits for you in /pending.")
 
@@ -1044,9 +1046,15 @@ async def bridge_reply(user_id: Optional[str], data_dir: str,
             token_out = tokens[i + 1]
             tokens = tokens[:i] + tokens[i + 2:]
             break
+    token_in = "native"
+    for i, word in enumerate(tokens):
+        if word.lower() in ("from", "with") and i + 1 < len(tokens):
+            token_in = tokens[i + 1]
+            tokens = tokens[:i] + tokens[i + 2:]
+            break
 
     if len(tokens) < 3:
-        return "Usage: /bridge <from> <to> <amount> [as <asset>] [go]"
+        return "Usage: /bridge <from> <to> <amount> [from usdc] [as <asset>] [go]"
     from_chain, to_chain, amount_raw = tokens[0], tokens[1], tokens[2]
     try:
         amount = float(amount_raw)
@@ -1055,8 +1063,6 @@ async def bridge_reply(user_id: Optional[str], data_dir: str,
     except ValueError:
         return f"Amount must be a positive number, got {amount_raw!r}."
 
-    from types import SimpleNamespace
-
     try:
         from tools.defi.bridge_verb import perform_bridge
         from tools.defi.trade_tool import BridgeParams, DefiTradeTool
@@ -1064,11 +1070,12 @@ async def bridge_reply(user_id: Optional[str], data_dir: str,
         return f"The bridge rail is unavailable: {exc}"
 
     params = BridgeParams(from_chain=from_chain, to_chain=to_chain,
-                          amount=amount, token_out=token_out,
+                          amount=amount, token_in=token_in, token_out=token_out,
                           dry_run=not execute)
     # A genuine owner chat turn. Not forged, not a sub-agent — the same seat the
     # CLI is, reached from the phone instead of a shell.
-    ctx = SimpleNamespace(user_id=user_id, role="owner", is_sub_agent=False)
+    from core.security.turn_facts import owner_seat_context
+    ctx = owner_seat_context(user_id, seat="telegram")
     try:
         result = await perform_bridge(DefiTradeTool(), params, ctx)
     except Exception as exc:
@@ -1083,7 +1090,8 @@ async def bridge_reply(user_id: Optional[str], data_dir: str,
                 "bug — do NOT retry until it is understood; assume nothing "
                 "about what happened to the funds.")
     if not execute:
-        _as = f" as {token_out}" if token_out != "native" else ""
+        _as = ((f" from {token_in}" if token_in != "native" else "")
+               + (f" as {token_out}" if token_out != "native" else ""))
         body += ("\n\nAdd `go` to execute: "
                  f"/bridge {from_chain} {to_chain} {amount_raw}{_as} go")
     return body

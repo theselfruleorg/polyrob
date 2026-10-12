@@ -15,7 +15,7 @@ import pytest
 
 import agents.task.constants as c
 import core.security.host_execution as he
-from tools.controller.execution_context import ActionExecutionContext
+from agents.task.loop_types.execution_context import ActionExecutionContext
 from tools.shell import backend_pool
 from tools.shell.host_executor import HostShellExecutor, host_child_env
 from tools.shell.output import shape_output, strip_ansi

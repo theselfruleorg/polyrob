@@ -12,7 +12,7 @@ from modules.memory.sqlite_memory_provider import SqliteMemoryProvider
 import modules.memory.registry as reg
 from agents.task.agent.core.episodic_digest import build_mission_continuity
 from agents.task.agent.core import memory_prefetch as mp
-from agents.task.goals.autonomy_marker import mark_autonomous
+from core.autonomy_marker import mark_autonomous
 
 
 @pytest.fixture

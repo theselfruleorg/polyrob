@@ -3,8 +3,8 @@ accepted a DISPUTED quote (DexScreener and GeckoTerminal far apart). It now
 refuses to verify the route on a dispute — the buy is held to the unchecked
 ticket — while two agreeing sources (the owner's PNL buyback today: 1.3 %
 apart) still verify it."""
-from core.intel import price as P
-from core.intel.model import SourceAnswer
+from tools.intel import price as P
+from tools.intel.model import SourceAnswer
 
 ADDR = "0x" + "b" * 40
 

@@ -32,13 +32,13 @@ def _register_fake_fetch(controller, calls):
     """A fake action under the REAL registered name of the web_fetch verb."""
     @controller.registry.action("fake fetch", param_model=_FetchParams)
     async def web_fetch_fetch_url(params: _FetchParams, execution_context=None):
-        from tools.controller.types import ActionResult
+        from agents.task.loop_types.controller_types import ActionResult
         calls.append((params.url, getattr(execution_context, "metadata", {}).get("via")))
         return ActionResult(extracted_content=f"PAGE<{params.url}>", include_in_memory=True)
 
 
 def _ctx():
-    from tools.controller.execution_context import ActionExecutionContext
+    from agents.task.loop_types.execution_context import ActionExecutionContext
     return ActionExecutionContext(role="orchestrator", session_id="s1", user_id="u1",
                                   metadata={"turn_kind": None})
 
@@ -171,7 +171,7 @@ async def test_refused_without_the_compute_posture(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_refused_for_a_leaf_or_sub_agent(tmp_path, armed):
-    from tools.controller.execution_context import ActionExecutionContext
+    from agents.task.loop_types.execution_context import ActionExecutionContext
     c = _make_controller(tmp_path)
     t = _tool(tmp_path, c)
     for ctx in (ActionExecutionContext(role="leaf", session_id="s1"),

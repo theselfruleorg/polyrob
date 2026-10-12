@@ -59,7 +59,7 @@ def no_builtin_keys(monkeypatch):
 # --- Q5: model list status column ---------------------------------------------
 
 def _run_model_list(monkeypatch):
-    monkeypatch.setattr("core.bootstrap.load_env", lambda **k: None)
+    monkeypatch.setattr("polyrob.app.bootstrap.load_env", lambda **k: None)
     from cli.commands.model import model_list
     res = CliRunner().invoke(model_list, [], color=False)
     assert res.exit_code == 0, f"{res.output!r} exc={res.exception!r}"

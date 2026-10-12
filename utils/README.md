@@ -23,13 +23,11 @@ utils/
 ├── README.md                       # This documentation
 │
 ├── rate_limit_manager.py           # Comprehensive rate limiting system
-├── user_utils.py                   # User management and validation
 ├── auth_utils.py                   # Authentication utilities
 │
 ├── time_utils.py                   # Performance timing and measurement
 ├── circuit_breaker.py              # Circuit breaker pattern
 │
-├── gif_utils.py                    # GIF generation utilities
 ├── path_validator.py               # Path validation utilities
 ├── bounded_collections.py          # Size-limited collections
 └── result_size.py                  # Result-size guards
@@ -108,18 +106,6 @@ async def get_remaining_requests(self, operation: str) -> int:
 
 async def get_reset_time(self, operation: str) -> float:
     """Get time until rate limit resets"""
-```
-
-### 2. User Utilities (`user_utils.py`)
-
-User management, validation, and data processing.
-
-```python
-def validate_wallet_address(address: str) -> Tuple[bool, str]:
-    """Validate Ethereum wallet address"""
-
-def generate_user_id(seed=None) -> str:
-    """Generate unique hash-based user ID"""
 ```
 
 ### 3. Authentication Utilities (`auth_utils.py`)
@@ -227,48 +213,6 @@ except CircuitBreakerError:
     result = cached_data
 ```
 
-### 8. GIF Utilities (`gif_utils.py`)
-
-GIF generation for conversation history visualization.
-
-These are synchronous functions.
-
-```python
-def create_history_gif(
-    history_items: List,
-    session_id: str,
-    output_path: Optional[str] = None,
-    user_id: Optional[str] = None,
-    max_screenshots: int = 20
-) -> Optional[str]:
-    """Create a GIF from history items with screenshots"""
-
-def get_conversation_screenshots(
-    history_items: Optional[List],
-    session_id: str,
-    user_id: Optional[str] = None,
-    max_screenshots: int = 20
-) -> List[str]:
-    """Retrieve screenshot paths from history or session directory"""
-
-def create_gif_with_retry(
-    screenshots: List[str],
-    output_path: str,
-    caption_texts: Optional[List[str]] = None,
-    max_retries: int = 3,
-    delay_seconds: float = 0.5,
-    user_id: Optional[str] = None
-) -> bool:
-    """Create a GIF from screenshot paths with retry logic"""
-
-def create_text_only_gif(
-    output_path: str,
-    texts: List[str],
-    user_id: Optional[str] = None
-) -> bool:
-    """Create a text-only GIF when image processing fails"""
-```
-
 ### 9. Path Validator (`path_validator.py`)
 
 Secure path validation to prevent directory traversal.
@@ -345,29 +289,8 @@ async def fetch_with_fallback(url: str):
 
 ## Exports
 
-```python
-__all__ = [
-    # Timing utilities
-    'time_execution_sync',
-    'time_execution_async',
-    
-    # GIF utilities
-    'create_history_gif',
-    'get_conversation_screenshots',
-    'create_gif_with_retry',
-    'create_text_only_gif',
-    
-    # User utilities
-    'extract_user_data',
-    'validate_email',
-    'validate_wallet_address',
-    'generate_user_id',
-    'is_valid_hash_id',
-    'get_id_type',
-    'get_or_create_user_from_data',
-    'format_user_display_name'
-]
-```
+None: `utils/__init__.py` re-exports nothing; import the module you need.
+The GIF helpers moved to `agents/task/gif_utils.py` (W7); `user_utils.py` had no importer and is deleted.
 
 ## Best Practices
 

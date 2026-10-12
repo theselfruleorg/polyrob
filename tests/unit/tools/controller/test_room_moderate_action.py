@@ -305,7 +305,7 @@ def test_room_read_flags_a_deleted_line():
 # --- CHAT-5: whose decision a moderation is ---------------------------------
 
 def _autonomous(monkeypatch, sid, job_id, task, agent_authored=False):
-    from agents.task.goals import autonomy_marker as am
+    from core import autonomy_marker as am
     am.mark_autonomous(sid, cron_job_id=job_id)
     if not agent_authored:
         am.note_owner_job(job_id, task)

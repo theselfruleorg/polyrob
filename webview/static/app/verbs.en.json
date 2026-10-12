@@ -260,6 +260,18 @@
       "aliases": []
     },
     {
+      "name": "/restart",
+      "group": "control",
+      "help": "Restart me once my current work is done",
+      "aliases": []
+    },
+    {
+      "name": "/update",
+      "group": "control",
+      "help": "Update me to the latest release, then report back",
+      "aliases": []
+    },
+    {
       "name": "/recap",
       "group": "remember",
       "help": "The same as /journey",

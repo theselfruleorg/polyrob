@@ -42,15 +42,7 @@ def test_min_tokens_constant():
     assert cache_hints.GEMINI_EXPLICIT_CACHE_MIN_TOKENS == 2048
 
 
-def test_tools_breakpoint_noop_when_flag_off(monkeypatch):
-    monkeypatch.setenv("OPENROUTER_PROMPT_CACHE", "false")
-    tools = [{"type": "function", "function": {"name": "a"}}]
-    out = cache_hints.apply_openrouter_tools_cache_control(tools, "anthropic/claude-3.5")
-    assert "cache_control" not in out[-1]
-
-
 def test_tools_breakpoint_marks_last_when_on(monkeypatch):
-    monkeypatch.setenv("OPENROUTER_PROMPT_CACHE", "true")
     monkeypatch.delenv("LLM_PROMPT_CACHE", raising=False)
     tools = [{"type": "function", "function": {"name": "a"}},
              {"type": "function", "function": {"name": "b"}}]
@@ -60,7 +52,6 @@ def test_tools_breakpoint_marks_last_when_on(monkeypatch):
 
 
 def test_tools_breakpoint_noop_for_automatic_model(monkeypatch):
-    monkeypatch.setenv("OPENROUTER_PROMPT_CACHE", "true")
     tools = [{"type": "function", "function": {"name": "a"}}]
     out = cache_hints.apply_openrouter_tools_cache_control(tools, "openai/gpt-4o")
     assert "cache_control" not in out[-1]

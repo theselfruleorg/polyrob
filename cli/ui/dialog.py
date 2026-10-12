@@ -74,17 +74,6 @@ PREFER_ACTION_TEXT = os.getenv("CLI_PREFER_ACTION_TEXT", "true").strip().lower()
     "no",
 )
 
-#: OR-1: in one-shot, when the agent already sent a reply via send_message and then
-#: calls done() with a bookkeeping recap ("Responded to the greeting…"), the recap
-#: renders as a confusing SECOND bubble. Suppress it (mirror REPL). Default ON; set
-#: CLI_SUPPRESS_DONE_RECAP=off to restore the legacy double bubble.
-SUPPRESS_DONE_RECAP = os.getenv("CLI_SUPPRESS_DONE_RECAP", "true").strip().lower() not in (
-    "0",
-    "false",
-    "off",
-    "no",
-)
-
 #: C6: the recap heuristic moved to ``core/surfaces/recap.py`` so every seat
 #: inherits it — this lived here, in ONE renderer, while Telegram, the webview
 #: console and email had nothing (finding F3). Re-exported so existing import

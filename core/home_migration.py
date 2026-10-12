@@ -4,7 +4,7 @@ Copy-not-move, marker-gated, fail-open. Protects an existing operator's
 ``~/.rob/.env`` (provider keys), ``cli.json`` (model choice), ``mcp.json`` and
 ``history`` when the framework config-home is renamed (doc 02). Non-destructive:
 the legacy ``~/.rob`` is left intact and also remains a read-only fallback in
-``core/bootstrap.load_env``.
+``polyrob/app/bootstrap.load_env``.
 
 Dependency-light, ``os``/``pathlib`` only — no ``from __future__ import
 annotations`` (it imports nothing on the registry-closure path).
@@ -74,7 +74,7 @@ def migrate_identity_instance_once(data_home=None) -> None:
     as :func:`migrate_rob_home_once`.
 
     Runs ONLY when the default instance id is in effect: an explicit
-    ``POLYROB_INSTANCE_ID``/``BOT_INSTANCE_ID`` (e.g. prod pinning ``rob``)
+    ``POLYROB_INSTANCE_ID`` (e.g. prod pinning ``rob``)
     keeps reading its own tree and needs no copy.
     """
     try:

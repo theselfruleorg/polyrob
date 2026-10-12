@@ -44,7 +44,8 @@ def _latest_stamp(text: str) -> str:
 def _owner_rules(sec: Section, data_dir: str, uid: str, instance_id: str,
                  pending_kinds: Dict[str, List[dict]]) -> None:
     from core.doc_claims import active_rule_lines, superseded_entries
-    from core.instance import is_unreadable_note, load_owner_doc, self_tier_root
+    from core.instance import (OWNER_TRUNCATED_PREFIX, is_unreadable_note,
+                               load_owner_doc, self_tier_root)
     raw = _read(self_tier_root(data_dir, uid, instance_id) / "owner.md")
     info: Dict[str, Any] = {"surface": "owner_rules"}
     if raw is None:
@@ -78,6 +79,13 @@ def _owner_rules(sec: Section, data_dir: str, uid: str, instance_id: str,
             text=("owner rules are WRITTEN but NOT LOADED — owner.md failed the load "
                   "guard (identity scan or over the cap), so no session reads them"),
             remedy="open owner.md; shorten it or remove the flagged text, then /status"))
+    if info["loaded"] and loaded.startswith(OWNER_TRUNCATED_PREFIX):
+        info["truncated"] = True
+        sec.health.append(HealthItem(
+            key="rules_owner_truncated", severity=SEVERITY_WARN,
+            text=("owner rules are over the cap — the END of owner.md is NOT in the "
+                  "prompt (the head still loads)"),
+            remedy="ask the agent to tighten the wording of owner.md, then /status"))
     for item in pending:
         preview = (item.get("preview") or "").strip()[:100]
         sec.health.append(HealthItem(
@@ -229,10 +237,9 @@ def _goal_prose(sec: Section, uid: str, data_dir: str) -> None:
 def _workspace_doctrine(sec: Section, uid: str, data_dir: str) -> None:
     """060 WS-3: the persistent workspace's marked documents (``kind:`` front-matter).
     Undeclared documents are RECORDS; only ``kind: instruction`` ones are doctrine."""
-    from core.doc_kind import classify_tree, doc_kind_enforced
+    from core.doc_kind import classify_tree
     info: Dict[str, Any] = dict(classify_tree(str(Path(data_dir) / "workspace")))
     info["surface"] = "workspace_doctrine"
-    info["enforced"] = doc_kind_enforced()
     sec.data["workspace_doctrine"] = info
     if info.get("state"):
         sec.lines.append(f"workspace doctrine: {info['state']}")
@@ -241,8 +248,6 @@ def _workspace_doctrine(sec: Section, uid: str, data_dir: str) -> None:
             f"{info['record']} declared record(s) · {info['undeclared']} undeclared (records)")
     if info.get("unreadable"):
         line += f" · {info['unreadable']} unreadable"
-    if not info["enforced"]:
-        line += " · record guard OFF"
     sec.lines.append(line)
 
 

@@ -9,12 +9,11 @@ publisher is configured, and attaches the artifacts to a GitHub Release.
 
 Choose a Semantic Versioning number and update these files together:
 
-- `pyproject.toml`: project version (the build source of truth)
-- `core/version.py`: source-tree fallback
-- `tests/test_version_consistency.py`: literal release pin and test name
+- `pyproject.toml`: project version — the ONLY version literal. `core/version.py`
+  derives it (its fallback is `0+unknown`, never a release), and
+  `tests/test_version_consistency.py` fails on any second literal
 - `CHANGELOG.md`: a dated `## [X.Y.Z] — YYYY-MM-DD` section with a fresh,
   empty `## [Unreleased]` section above it
-- `cli/ui/banner.py`: example versions in docstrings
 
 Do not change the database schema version merely to match the application
 version. Schema migrations have their own version sequence.
@@ -65,15 +64,12 @@ the `polyrob` wheel (067, one install): there is ONE distribution to build, chec
 and upload. Their SDKs are core extras (`twitter`, `anysite`, `crypto`; each
 `pack.toml` names its own). In the release PR:
 
-- set each `packs/*/*/pack.toml` `version = "X.Y.Z"` and its `requires_core` to
-  `==X.Y.*`;
-- regenerate the pack index (its first-party rows carry `dist = "polyrob"` and the
-  core version) and check it:
+- nothing to edit: a first-party `pack.toml` carries no `version` or
+  `requires_core` (it inherits the core version), and the first-party index rows
+  are built at runtime from the `polyrob.packs` entry points. Check them:
 
 ```bash
-python scripts/gen_pack_index.py
-python scripts/gen_pack_index.py --check
-pytest tests/unit/core/packs tests/unit/core/test_lock_closure_packs.py
+pytest tests/unit/core/packs tests/unit/core/test_lock_closure_packs.py tests/test_version_consistency.py
 ```
 
 The wheel smoke test above covers the packs. After the bare install,

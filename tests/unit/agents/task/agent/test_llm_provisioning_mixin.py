@@ -69,7 +69,7 @@ def test_provision_aux_llm_walks_chain_to_first_success(monkeypatch):
 
 def test_provision_aux_llm_returns_none_when_all_candidates_fail(monkeypatch):
     # Hermeticity: ambient AUX_* must not change the candidate chain length/shape.
-    for _v in ("AUX_PROVIDER_JUDGE", "AUX_PROVIDER", "AUX_AUTO", "AUX_MODEL"):
+    for _v in ("AUX_PROVIDER_JUDGE", "AUX_AUTO", "AUX_MODEL"):
         monkeypatch.delenv(_v, raising=False)
     monkeypatch.setenv("AUX_MODEL_JUDGE", "claude-haiku-4-5")
     monkeypatch.setenv("AUX_FALLBACK_JUDGE", "openai/gpt-5-mini")
@@ -91,7 +91,7 @@ def test_provision_aux_llm_no_trying_next_on_final_candidate(monkeypatch, caplog
     # next candidate" — only the final "All aux candidates ... failed" summary.
     # Hermeticity: ambient AUX_* must not add candidates (which would reintroduce
     # a "trying next candidate" line).
-    for _v in ("AUX_PROVIDER_JUDGE", "AUX_PROVIDER", "AUX_AUTO", "AUX_MODEL"):
+    for _v in ("AUX_PROVIDER_JUDGE", "AUX_AUTO", "AUX_MODEL"):
         monkeypatch.delenv(_v, raising=False)
     monkeypatch.setenv("AUX_MODEL_JUDGE", "claude-haiku-4-5")
     monkeypatch.delenv("AUX_FALLBACK_JUDGE", raising=False)

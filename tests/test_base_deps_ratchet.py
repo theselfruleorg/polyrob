@@ -29,6 +29,8 @@ BASE = frozenset({
     "tiktoken",
     "multidict",  # Already required by aiohttp; explicit security floor for every install.
     "httpx",  # Was transitive via openai until openai 3.x moved to httpx2; core and tools import it.
+    "beautifulsoup4",  # tools/filesystem_docproc.py imports bs4; already transitive via markdownify.
+    "yarl",  # core/security/pinned_resolver.py imports it; already transitive via aiohttp.
 })
 
 

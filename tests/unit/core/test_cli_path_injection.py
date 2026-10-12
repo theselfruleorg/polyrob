@@ -9,7 +9,7 @@ async def test_cli_container_workspace_is_cwd(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")  # lazy validation, no call
     # Prevent real LLM API calls during container boot.
     with patch("modules.llm.llm_manager.LLMManager._initialize", new=AsyncMock()):
-        from core.bootstrap import build_cli_container
+        from polyrob.app.bootstrap import build_cli_container
         container = await build_cli_container()
     pm_service = container.get_service("path_manager")
     assert pm_service is not None
@@ -24,7 +24,7 @@ async def test_cli_container_shares_global_pm_singleton_no_env_shim(tmp_path, mo
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     monkeypatch.delenv("DATA_ROOT", raising=False)
     with patch("modules.llm.llm_manager.LLMManager._initialize", new=AsyncMock()):
-        from core.bootstrap import build_cli_container
+        from polyrob.app.bootstrap import build_cli_container
         container = await build_cli_container()
     from agents.task.path import pm
     injected = container.get_service("path_manager")

@@ -1,7 +1,7 @@
 # Proof per rail
 
-<!-- GENERATED from core/rails/verification.py — do not edit by hand.
-     Regenerate: python -c "import pathlib, core.rails.verification as v; pathlib.Path('docs/guide/rails-verification.md').write_text(v.render_guide())" -->
+<!-- GENERATED from tools/rails/verification.py — do not edit by hand.
+     Regenerate: python -c "import pathlib, tools.rails.verification as v; pathlib.Path('docs/guide/rails-verification.md').write_text(v.render_guide())" -->
 
 "Did that land?" has a different answer on every rail, and getting it
 wrong costs a turn in both directions. An agent that re-reads a Telegram
@@ -11,7 +11,7 @@ delivered post as unconfirmed. An agent that treats a transaction hash as
 a result will wrongly report a no-op as done.
 
 This page is generated from the one table in the code
-(`core/rails/verification.py`), which is also what every tool result's
+(`tools/rails/verification.py`), which is also what every tool result's
 `proof:` line is rendered from. There is no second copy to disagree with.
 
 **What this table states is what CAN be proved, never that anything WAS.**

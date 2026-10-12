@@ -642,18 +642,14 @@ class CompactorMixin:
 	def _warm_summarization_available(self, compaction_llm) -> bool:
 		"""Can this summarisation ride the prefix the step call just cached?
 
-		Three conditions, all necessary:
+		Two conditions, both necessary:
 
-		* the flag (``COMPACTION_WARM_PREFIX``, default ON);
 		* the summariser is the SESSION'S OWN client — a different model has a
 		  different cache entry, so the warm shape would only add bytes (Pi solves
 		  the same problem with ``cacheRetention:"none"``; POLYROB has no such knob);
 		* this client has not already refused the shape (see
 		  :meth:`_invoke_warm_summarization`).
 		"""
-		from agents.task.constants import compaction_warm_prefix
-		if not compaction_warm_prefix():
-			return False
 		if compaction_llm is None or compaction_llm is not getattr(self, "llm", None):
 			return False
 		return not getattr(compaction_llm, _WARM_UNAVAILABLE_ATTR, False)

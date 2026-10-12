@@ -5,7 +5,7 @@
   in THIS process (else the SDK's own ``~/.modal.toml``). They are never
   forwarded into the sandbox.
 - Image: ``MODAL_SANDBOX_IMAGE`` (default ``python:3.12-slim``, from a registry).
-- Lifetime: ``MODAL_SANDBOX_TIMEOUT_SEC`` (default 3600) — Modal's own hard cap.
+- Lifetime: the constant ``MODAL_SANDBOX_TIMEOUT_SEC`` (3600) — Modal's own hard cap.
 - Persistence: ``MODAL_SANDBOX_SNAPSHOT`` (default OFF). On teardown of a session
   sandbox the filesystem is snapshotted and the image id kept locally; the next
   setup for the same session starts from that image (files and installs survive a
@@ -17,12 +17,14 @@ import logging
 import os
 from typing import Any, Dict, List, Optional, Tuple
 
-from core.env import bool_env, int_env
+from core.env import bool_env
 from tools.code_exec.backends.remote_sandbox import RemoteSandboxBackend, env_value, require_sdk
 
 logger = logging.getLogger(__name__)
 
 APP_NAME = "polyrob-sandbox"
+#: Internal tuning (not env-driven): sandbox lifetime in seconds.
+MODAL_SANDBOX_TIMEOUT_SEC = 3600
 
 
 class ModalBackend(RemoteSandboxBackend):
@@ -56,7 +58,7 @@ class ModalBackend(RemoteSandboxBackend):
             app = modal.App.lookup(APP_NAME, create_if_missing=True, **extra)
             sb = modal.Sandbox.create(
                 "sleep", "infinity", app=app, image=self._image(modal),
-                timeout=int_env("MODAL_SANDBOX_TIMEOUT_SEC", 3600),
+                timeout=MODAL_SANDBOX_TIMEOUT_SEC,
                 block_network=not self.network_enabled(), **extra)
             proc = sb.exec("mkdir", "-p", self.workdir)
             proc.wait()

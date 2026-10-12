@@ -7,6 +7,7 @@ This file links to A2A agent card, MCP endpoints, wallet addresses, etc.
 import json
 import logging
 import os
+from core.env import bool_env
 from pathlib import Path
 from typing import Optional
 
@@ -18,7 +19,7 @@ logger = logging.getLogger(__name__)
 def get_eip8004_config() -> EIP8004Config:
     """Get ERC-8004 configuration from environment."""
     return EIP8004Config(
-        enabled=os.environ.get("EIP8004_ENABLED", "false").lower() == "true",
+        enabled=bool_env("EIP8004_ENABLED", False),
         chain_id=int(os.environ.get("EIP8004_CHAIN_ID", "8453")),  # Base
         identity_registry_address=os.environ.get("EIP8004_IDENTITY_REGISTRY"),
         reputation_registry_address=os.environ.get("EIP8004_REPUTATION_REGISTRY"),
@@ -157,17 +158,13 @@ def build_registration_file(
     # core/config.py (pydantic bool). The old `== "true"` treated MCP_ENABLED=1 as False
     # while BotConfig treated it as True — the agent card could advertise MCP as disabled
     # while MCP was actually running.
-    from core.env import bool_env
-    mcp_enabled = bool_env("MCP_ENABLED", False)
-    # Proposal 013 (T2): the same OR as core/config.py's consumer seam — under
-    # effective AUTONOMY_MODE=autonomous, MCP defaults ON here too so the agent
-    # card never disagrees with what core/config.py actually built. Lazy +
-    # guarded import (fail to False) to avoid an import cycle / hard dependency.
+    # A posture member (D7): the ONE member resolver, so the agent card never
+    # disagrees with what core/config.py actually built. Fail to False.
     try:
-        from core.config_policy import _mode_capability_default
-        mcp_enabled = mcp_enabled or _mode_capability_default("MCP_ENABLED")
+        from core.config_policy.members import member_flag
+        mcp_enabled = member_flag("MCP_ENABLED")
     except Exception:
-        pass
+        mcp_enabled = False
     if mcp_enabled:
         endpoints.append(Endpoint(
             name="MCP",
@@ -193,7 +190,7 @@ def build_registration_file(
         ))
     
     # x402 Payment Endpoint
-    x402_enabled = os.environ.get("X402_ENABLED", "false").lower() == "true"
+    x402_enabled = bool_env("X402_ENABLED", False)
     if x402_enabled:
         endpoints.append(Endpoint(
             name="x402",
@@ -230,7 +227,7 @@ def build_registration_file(
     except Exception:
         logger.debug("eip8004: could not read the on-chain record", exc_info=True)
 
-    onchain_enabled = os.environ.get("EIP8004_ONCHAIN_ENABLED", "false").lower() == "true"
+    onchain_enabled = bool_env("EIP8004_ONCHAIN_ENABLED", False)
 
     # B16: `trustMode: onchain` is a claim a reader CAN CHECK — it says "look me
     # up in a registry". So it may only be emitted when there is something to

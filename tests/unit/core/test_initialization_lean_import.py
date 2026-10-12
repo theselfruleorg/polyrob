@@ -1,8 +1,8 @@
-"""058 lean core — ``core.initialization`` must import on a venv WITHOUT the
+"""058 lean core — ``polyrob.app.initialization`` must import on a venv WITHOUT the
 optional provider SDKs.
 
 Why: the 2026-09-21 20:31Z prod deploy ABORTED at the DB-migration step —
-``migrations/migrate.py`` imports ``core.initialization``, which eagerly pulled
+``migrations/migrate.py`` imports ``polyrob.app.initialization``, which eagerly pulled
 ``GeminiClient`` through the lazy ``modules.llm`` package, and
 ``gemini_client.py`` imports ``google.generativeai`` at module load. The prod
 extras (``server,browser,crypto,…``) do not carry ``[gemini]``, so the migration
@@ -27,7 +27,7 @@ _PROBE = f"""
 import sys
 for name in {_BLOCKED!r}:
     sys.modules[name] = None  # makes `import <name>` raise ImportError
-import core.initialization as init
+import polyrob.app.initialization as init
 assert hasattr(init, "initialize_core"), "bootstrap entry point missing"
 print("lean-import-ok")
 """
@@ -39,7 +39,7 @@ def test_bootstrap_imports_without_the_optional_provider_sdks():
         cwd=str(_REPO), capture_output=True, text=True, timeout=120,
     )
     assert proc.returncode == 0, (
-        "core.initialization must not eager-import an optional provider SDK\n"
+        "polyrob.app.initialization must not eager-import an optional provider SDK\n"
         f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr[-3000:]}"
     )
     assert "lean-import-ok" in proc.stdout

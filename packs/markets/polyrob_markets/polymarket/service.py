@@ -2147,20 +2147,15 @@ class PolymarketTool(UserCredentialCacheMixin, BaseTool):
 # READ / TRADE SPLIT (additive)
 # =============================================================================
 
-# Wallet-free read actions. Discovery + market data are public (Gamma/CLOB reads);
-# positions/trades are public via the Data API. Order-status reads (get_open_orders/
-# get_order_history) and get_balance stay on the gated trade tool (CLOB auth).
-PM_READ_ACTIONS = frozenset({
-    "search_markets", "get_trending_markets", "filter_markets_by_category",
-    "get_featured_markets", "get_closing_soon_markets", "get_sports_markets",
-    "get_crypto_markets", "get_market_details", "get_current_price", "get_orderbook",
-    "get_spread", "get_market_volume", "get_all_positions", "get_portfolio_summary",
-    "get_trade_history",
-})
+# Wallet-free read actions (public Gamma/CLOB/Data API reads): W4 — the bare names of the
+# polymarket_data rows in pack.toml. Order status and get_balance stay on the trade tool.
+def pm_read_actions():
+    from polyrob.sdk import action_ids_where as ids, bare_action_name as bare
+    return frozenset(bare("polymarket_data", n) for n in ids(tool="polymarket_data"))
 
 
 class PolymarketDataTool(PolymarketTool):
-    """Read-only Polymarket tool (no wallet, delegatable). Exposes only PM_READ_ACTIONS;
+    """Read-only Polymarket tool (no wallet, delegatable). Exposes only pm_read_actions();
     trade actions are filtered at registration, advertisement, and execution."""
 
     tool_id = "polymarket_data"
@@ -2168,13 +2163,15 @@ class PolymarketDataTool(PolymarketTool):
     description = "Polymarket prediction markets — read-only market data & research (no wallet)"
 
     def get_actions(self) -> Dict[str, Any]:
-        return {k: v for k, v in super().get_actions().items() if k in PM_READ_ACTIONS}
+        reads = pm_read_actions()
+        return {k: v for k, v in super().get_actions().items() if k in reads}
 
     def get_available_tools(self) -> List[Dict[str, Any]]:
-        return [t for t in super().get_available_tools() if t.get("name") in PM_READ_ACTIONS]
+        reads = pm_read_actions()
+        return [t for t in super().get_available_tools() if t.get("name") in reads]
 
     async def execute_action(self, tool_name: str, arguments: Dict[str, Any]):
-        if tool_name not in PM_READ_ACTIONS:
+        if tool_name not in pm_read_actions():
             return ExecutionResult(
                 success=False,
                 error=f"'{tool_name}' is a trade action; use the gated 'polymarket' tool. "

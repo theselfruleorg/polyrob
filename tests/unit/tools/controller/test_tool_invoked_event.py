@@ -2,12 +2,9 @@
 the agent reaches for. ONE helper (``_record_invocation``) is called from the
 success path AND the error-observation path, so an invocation that failed is
 counted too; the tool id resolves through the EXISTING ``get_action_details``
-resolver; ``attrs`` is an explicit dict; ``TOOL_USAGE_TELEMETRY=false`` emits
-nothing (byte-identical OFF)."""
+resolver; ``attrs`` is an explicit dict."""
 from pathlib import Path
 from types import SimpleNamespace
-
-import pytest
 
 from tools.controller import execution as ex
 
@@ -32,7 +29,6 @@ def _capture(monkeypatch):
 
 
 def test_success_emits_tool_invoked_with_tool_action_ok_and_ms(monkeypatch):
-    monkeypatch.delenv("TOOL_USAGE_TELEMETRY", raising=False)
     seen = _capture(monkeypatch)
     ctx = SimpleNamespace(user_id="u1", session_id="s1")
     result = SimpleNamespace(error=None)
@@ -59,13 +55,6 @@ def test_unresolvable_action_records_unknown_tool_not_nothing(monkeypatch):
     seen = _capture(monkeypatch)
     _Ctrl(tool=None)._record_invocation("mystery", SimpleNamespace(error=None), None, started_ns=0)
     assert seen[0][1]["attrs"]["tool"] == "unknown"
-
-
-def test_flag_off_emits_nothing(monkeypatch):
-    monkeypatch.setenv("TOOL_USAGE_TELEMETRY", "false")
-    seen = _capture(monkeypatch)
-    _Ctrl()._record_invocation("read_file", SimpleNamespace(error=None), None, started_ns=0)
-    assert seen == []
 
 
 def test_a_raising_resolver_never_breaks_execution(monkeypatch):

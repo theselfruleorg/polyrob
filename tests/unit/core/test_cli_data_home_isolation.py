@@ -9,7 +9,7 @@ move the data home OUTSIDE the code tree AND drop the workspace==cwd exception.
 
 from pathlib import Path
 
-from core.bootstrap import _resolve_cli_data_home
+from polyrob.app.bootstrap import _resolve_cli_data_home
 from core.path_safety import is_within_root
 
 

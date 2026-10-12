@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "polyrob"
-version = "1.3.0"
+version = "1.4.0"
 description = "POLYROB — autonomous AI agent framework"
 requires-python = ">=3.11"
 license = "MIT"
@@ -34,6 +34,9 @@ dependencies = [
   # openai 3.x moved to httpx2, so httpx is no longer transitive; core, tools and
   # the email provider import it directly.
   "httpx>=0.27",
+  # W11: imported directly, so declared (both were transitive by accident —
+  # beautifulsoup4 via markdownify, yarl via aiohttp; zero added weight).
+  "beautifulsoup4>=4.12", "yarl>=1.9",
 ]
 
 [project.optional-dependencies]
@@ -56,7 +59,8 @@ memory-vector = ["sentence-transformers>=3.0.0", "apsw>=3.46", "sqlite-vec>=0.1.
 # 058 T1.5/T1.6: imageio the run-history GIF (numpy is its array dependency); qrcode
 # the invoice card's QR block. Each degrades and says so.
 media = ["numpy>=1.24.0", "imageio>=2.37.0", "qrcode>=7.4"]
-crypto = ["web3>=6.0.0", "eth-account>=0.10.0", "x402>=2.13.0", "fastapi-x402>=0.1.8", "hyperliquid-python-sdk>=0.21.0", "py-clob-client-v2>=0.1.0"]
+# eth-utils / eth-abi: imported directly (core/wallet, tools/defi); transitive via web3.
+crypto = ["web3>=6.0.0", "eth-account>=0.10.0", "eth-utils>=2.0", "eth-abi>=4.0", "x402>=2.13.0", "fastapi-x402>=0.1.8", "hyperliquid-python-sdk>=0.21.0", "py-clob-client-v2>=0.1.0"]
 # Solana is its own extra, not part of `crypto`: it is a second curve and a
 # second transaction model, and a deployment that only trades EVM should not
 # carry a Rust-backed dependency it never imports.
@@ -90,7 +94,7 @@ hf = ["huggingface_hub>=0.20.0"]
 modal = ["modal>=0.73"]
 daytona = ["daytona>=0.21"]
 vercel-sandbox = ["vercel>=0.3"]
-dev = ["pytest>=7.0.0", "pytest-asyncio>=0.23.0", "ruff>=0.6", "build", "twine"]
+dev = ["pytest>=7.0.0", "pytest-asyncio>=0.23.0", "pytest-xdist>=3.5", "pytest-timeout>=2.3", "ruff>=0.6", "build", "twine"]
 all = ["polyrob[gemini,anthropic,server,browser,memory-vector,media,docs,anysite,crypto,solana,telegram,twitter,voice,feishu,hf,modal,daytona,vercel-sandbox]"]
 
 [project.urls]
@@ -102,8 +106,8 @@ Issues = "https://github.com/theselfruleorg/polyrob/issues"
 polyrob = "cli.polyrob:main"
 
 # 067 (owner decision 2026-09-25, "one install"): the first-party packs ship
-# INSIDE this distribution. Their identity is (dist "polyrob", this entry point)
-# — core/packs/index.json. Their SDKs stay optional through the extras each
+# INSIDE this distribution. Their identity is (dist "polyrob", this entry point),
+# built at runtime by core/packs/index.py. Their SDKs stay optional through the extras each
 # pack.toml names (`extra =`): x -> twitter, discovery -> anysite, markets -> crypto,
 # modal -> modal, daytona -> daytona, vercel_sandbox -> vercel-sandbox (singularity: none).
 # A new first-party pack = a packs/<dir>/<package>/ with a pack.toml, a row here,
@@ -122,7 +126,8 @@ x = "polyrob_x:pack"
 # top-level package (polyrob_x, ...), found beside core's.
 where = [".", "packs/daytona", "packs/discovery", "packs/markets", "packs/modal",
          "packs/singularity", "packs/vercel_sandbox", "packs/x"]
-include = ["cli*","core*","agents*","modules*","tools*","api*","utils*","cron*","surfaces*","webview*","datagen*","data","assets*","migrations*",
+# "polyrob" (W11) is the namespace's first module, polyrob.sdk (the pack SDK).
+include = ["cli*","core*","agents*","modules*","tools*","api*","utils*","cron*","surfaces*","webview*","datagen*","data","assets*","migrations*","polyrob","polyrob.app*",
            "polyrob_daytona*","polyrob_discovery*","polyrob_markets*","polyrob_modal*",
            "polyrob_singularity*","polyrob_vercel_sandbox*","polyrob_x*"]
 # webview/dev is the console's dev-only test rig (node, vitest, axe results); it
@@ -153,9 +158,6 @@ exclude = ["*.node_modules", "*.node_modules.*", "*.__pycache__", "*.__pycache__
 # .js, so without this the installed wheel silently fell back to a broken
 # minimal DOM-tree builder.
 "tools" = ["dom/*.js"]
-# Built webgate bundle (produced by doc 03). Matches nothing until the bundle is
-# built, so it's inert today — no behavior change. core/assets.py resolves it.
-"polyrob" = ["web_dist/**/*"]
 # Bundled fonts (DejaVu, permissive Bitstream Vera license) — modules/cards/cards.py
 # reads assets/fonts/dejavu/*.ttf by path at runtime to render invoice cards
 # in Pillow (no headless browser). Without this the wheel omits them and card

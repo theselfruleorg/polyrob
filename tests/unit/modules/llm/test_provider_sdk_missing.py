@@ -66,14 +66,14 @@ def test_openai_compat_client_imports_without_the_anthropic_sdk(block_sdks):
 
 
 def test_gemini_client_refuses_naming_the_extra_when_lazy_is_off(block_sdks, monkeypatch):
-    monkeypatch.setenv("LAZY_DEPS_ENABLED", "false")
+    monkeypatch.setenv("LAZY_DEPS_MODE", "off")
     from modules.llm.llm_client_registry import create_llm_client
     with pytest.raises(FeatureUnavailable, match=r"polyrob\[gemini\]"):
         create_llm_client("gemini", _config())
 
 
 def test_anthropic_compat_refuses_naming_the_extra_when_lazy_is_off(block_sdks, monkeypatch):
-    monkeypatch.setenv("LAZY_DEPS_ENABLED", "false")
+    monkeypatch.setenv("LAZY_DEPS_MODE", "off")
     from modules.llm.llm_client_registry import create_llm_client
     with pytest.raises(FeatureUnavailable, match=r"polyrob\[anthropic\]"):
         create_llm_client("zai-coding", _config())
@@ -81,7 +81,7 @@ def test_anthropic_compat_refuses_naming_the_extra_when_lazy_is_off(block_sdks, 
 
 def test_gemini_client_calls_ensure_once_then_imports(block_sdks, monkeypatch):
     monkeypatch.setenv("POLYROB_LOCAL", "1")
-    monkeypatch.delenv("LAZY_DEPS_ENABLED", raising=False)
+    monkeypatch.delenv("LAZY_DEPS_MODE", raising=False)
     import core.lazy_deps as ld
     calls = []
 
@@ -99,7 +99,7 @@ def test_gemini_client_calls_ensure_once_then_imports(block_sdks, monkeypatch):
 def test_factory_branch_lets_feature_unavailable_propagate(block_sdks, monkeypatch):
     """llm_factory wraps every failure in a generic ValueError; the remedy must
     survive that handler."""
-    monkeypatch.setenv("LAZY_DEPS_ENABLED", "false")
+    monkeypatch.setenv("LAZY_DEPS_MODE", "off")
     from modules.llm.llm_factory import create_chat_model
 
     class _Stub:  # never reaches the adapter

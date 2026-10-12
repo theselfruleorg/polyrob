@@ -14,7 +14,7 @@ project-root workspace like all other ``.polyrob/`` session state). Safety
 comes from mechanism, not placement: the shadow git dir is ``<snap_dir>/git``
 (not ``.git``, so workspace repo auto-discovery never finds it), every call
 passes an explicit ``--git-dir`` (the workspace's own ``.git`` is never
-touched), ``.polyrob/`` is auto-gitignored (``core/bootstrap.py``, default-on),
+touched), ``.polyrob/`` is auto-gitignored (``polyrob/app/bootstrap.py``, default-on),
 and only the single touched file is ever staged.
 
 Every function is a graceful no-op on ANY failure (git absent, timeout, weird

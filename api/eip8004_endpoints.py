@@ -9,6 +9,7 @@ Reference: https://eips.ethereum.org/EIPS/eip-8004
 """
 
 import os
+from core.env import bool_env
 import logging
 from typing import Optional, Dict, Any, List
 from fastapi import APIRouter, Request, HTTPException, Depends
@@ -42,7 +43,7 @@ def require_eip8004_enabled() -> bool:
     Discovery/read endpoints stay open; only the state-changing surface is hidden
     unless an operator explicitly enables ERC-8004.
     """
-    if os.environ.get("EIP8004_ENABLED", "false").lower() != "true":
+    if not bool_env("EIP8004_ENABLED", False):
         raise HTTPException(status_code=404, detail="ERC-8004 not enabled")
     return True
 

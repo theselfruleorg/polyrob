@@ -40,7 +40,7 @@ what it never moves, and how it can be clamped.
 interactive tool group on (coding, git, knowledge base, context references,
 project context, the message tool, agent status, verify-before-done,
 preferences, invoice cards, the dynamic tool rig), the memory default to
-`local_vector`, and on-demand installs of optional extras (`LAZY_DEPS_ENABLED`).
+`local_vector`, and on-demand installs of optional extras (`LAZY_DEPS_MODE`).
 Never moves: the self-directed loops (axis 2), money, host access. The CLI sets
 it for you; never set it on a shared server.
 
@@ -86,8 +86,21 @@ access, secrets.
 §10), host access beyond axis 5, secrets, and the owner pause (§6). Each keeps
 its own gate under every combination of the six.
 
-An explicit per-flag value always beats an axis default. The full flag list is
-an appendix (§14); you should not need it to run the agent.
+**An axis is the only source of its member flags.** The flags an axis turns on
+(`KB_ENABLED`, `GOALS_ENABLED`, `SHELL_TOOLS_ENABLED`, `MCP_ENABLED`, … — 51 in
+all, listed in the "Posture bundles" table of `docs/CONFIGURATION.md`) are not
+settings of their own. To change one member, add it to the ONE override line:
+
+```bash
+POLYROB_OVERRIDES=GIT_TOOLS_ENABLED=false,KB_ENABLED=true
+```
+
+`polyrob config set GIT_TOOLS_ENABLED false` writes that entry for you. Only the
+env file or the local CLI writes this line — never the console, a chat or the
+agent. A member set on its own line (`GIT_TOOLS_ENABLED=false`) is ignored: the
+agent still starts, and `polyrob doctor` and `/status` show the line to use
+instead. The full flag list is an appendix (§14); you should not need it to run
+the agent.
 
 ---
 
@@ -245,6 +258,10 @@ polyrob model set-default anthropic claude-sonnet-4-5   # persists DEFAULT_PROVI
 polyrob run -p openai -m gpt-5 "…"                      # per run
 ```
 
+The pinned model serves every run on the pinned provider — chat, scheduled jobs,
+goals and the planner. `CHAT_PROVIDER`/`CHAT_MODEL` win over the `DEFAULT_` pair;
+`DEFAULT_MODEL` never applies to a different `CHAT_PROVIDER`.
+
 `DEEPSEEK_API_KEY` is never auto-selected (its direct client has no tool
 calling); pass `-p deepseek` or reach DeepSeek through OpenRouter.
 `PERPLEXITY_API_KEY` is a web-search tool key, not a provider.
@@ -317,8 +334,8 @@ Prompt caching is on by default and needs no configuration. If you want to
 change it: `ANTHROPIC_CACHE_TTL` (`auto` | `5m` | `1h`) sets the cache window
 Anthropic holds your prompt for — `auto` gives an interactive chat 1 hour and
 an autonomous cron or goal run 5 minutes, which is the right trade in each
-case. `OPENROUTER_PROMPT_CACHE`, `ANTHROPIC_PROMPT_CACHE` and
-`GEMINI_PROMPT_CACHE` turn a provider's caching off. Everything about caching
+case. `LLM_PROMPT_CACHE` (or `ANTHROPIC_PROMPT_CACHE`) set to `false` turns caching
+off; `GEMINI_PROMPT_CACHE` opts in to Gemini's explicit cache. Everything about caching
 that costs or saves money shows up in `polyrob doctor` and in `/context`.
 
 ### Your own endpoint (`providers.yaml`)
@@ -422,8 +439,8 @@ shows the clamp on the mode row.
 
 **If you set axis 3 or 4, skip axis 2 — they turn it on.** Choosing
 `AUTONOMY_MODE=autonomous` or an `owner-visible`/`full` posture flips
-`AUTONOMY_ENABLED` on for you, so a deliberate choice is never left inert. An
-explicit per-flag value always wins over any group default.
+`AUTONOMY_ENABLED` on for you, so a deliberate choice is never left inert. To
+change one loop flag, use its `POLYROB_OVERRIDES` entry (§1).
 
 **What never moves with the dial:** spending money, host access and secrets.
 Each keeps its own gate (§10, §7) under every mode — see §1.
@@ -509,7 +526,7 @@ you name with `CODE_EXEC_SSH_HOST` and must be attested disposable with
 
 ### MCP
 
-`MCP_ENABLED=true` connects the outbound `mcp` tool to the servers in
+`polyrob config set MCP_ENABLED true` connects the outbound `mcp` tool to the servers in
 `config/mcp_config.json` (secrets as `${VAR}` placeholders). Adding a server
 from chat — and what an added server can and cannot reach — is in
 [owner-controls.md](owner-controls.md#mcp-servers-giving-the-agent-new-tools).
@@ -581,7 +598,7 @@ with `polyrob owner pair revoke <user_id>`.
 Groups are a different regime: the agent answers anyone in a room you have
 allowed, from a read-only room toolset, with per-chat roles and a per-chat
 policy (`chat.mode`, `chat.instructions`, caps, quiet hours). Enable with
-`GROUP_CHAT_ENABLED=true` (on under `AUTONOMY_MODE=autonomous`), then
+`polyrob config set GROUP_CHAT_ENABLED true` (on under `AUTONOMY_MODE=autonomous`), then
 `/groups allow here` in the room. The full setup, including the BotFather
 privacy-mode step, is in [groups.md](groups.md).
 

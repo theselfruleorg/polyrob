@@ -306,11 +306,8 @@ class LLMManager(InventoryMixin, BaseComponent):
             # Create fallback OpenAI client
             from modules.llm.openai_client import OpenAIClient
             fallback_client = OpenAIClient(self.config, name="openai_fallback_client")
-            fallback_client.model_type = 'gpt-5'  # Always use gpt-5 for fallback
-            fallback_client.api_key = api_key
-            
-            # FIXED: Configure fallback client with proper token limits from registry
-            self._configure_client_token_limits(fallback_client, 'gpt-5')
+            fallback_client.api_key = api_key  # model: OpenAIClient → get_default_model('openai')
+            self._configure_client_token_limits(fallback_client, fallback_client.model_type)
             
             # Initialize the fallback client
             await fallback_client.initialize()
@@ -340,9 +337,9 @@ class LLMManager(InventoryMixin, BaseComponent):
         # the hardcoded ``priority_order`` below (e.g. an exhausted OpenRouter) is
         # always chosen primary and its 402 trips the provider-credit sentinel before
         # a funded pinned provider (e.g. ``zai-coding``) is ever used. Fail-open: a
-        # pin whose client isn't registered falls through to the priority order.
-        import os
-        pinned_provider = os.environ.get('CHAT_PROVIDER') or os.environ.get('DEFAULT_PROVIDER')
+        # pin whose client isn't registered falls through; an alias (`glm`) → `zai_client`.
+        from core.runtime_config import canonicalize_provider, operator_provider_pin
+        pinned_provider = canonicalize_provider(operator_provider_pin())
         if pinned_provider:
             pinned_client = f"{pinned_provider}_client"
             if pinned_client in self.clients:

@@ -166,7 +166,7 @@ class SkillWriterMixin:
 
     def _resolve_pending(self, created_by: str, pending: Optional[bool],
                          *, overwriting_active: bool = False) -> bool:
-        from agents.task.constants import AutonomyConfig
+        from core.config_policy import AutonomyConfig
         # Protect curated ACTIVE skills: a non-owner author (agent or background) may
         # never silently replace one — force a .pending proposal (owner promotes).
         if (overwriting_active and created_by != PROVENANCE_USER

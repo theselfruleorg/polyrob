@@ -404,7 +404,7 @@ async def test_apply_settlement_cancelled_error_rolls_back_and_propagates(tmp_pa
     """asyncio.CancelledError derives from BaseException (NOT Exception) since
     Python 3.8 — `issubclass(asyncio.CancelledError, Exception)` is False. If
     the settlement watcher ticker is force-cancelled (autonomy-runtime
-    shutdown, ``core/autonomy_runtime.py``'s ``_STOP_GRACE_SEC`` timeout)
+    shutdown, ``polyrob/app/autonomy_runtime.py``'s ``_STOP_GRACE_SEC`` timeout)
     while `apply_settlement` is awaiting the `paid_through` UPDATE INSIDE its
     transaction, a bare `except Exception:` lets the cancellation skip
     straight past the rollback. That leaves

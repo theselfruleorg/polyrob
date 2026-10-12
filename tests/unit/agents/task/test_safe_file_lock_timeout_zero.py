@@ -6,7 +6,7 @@ import os
 
 import pytest
 
-from agents.task.utils import SafeFileLock
+from core.file_lock import SafeFileLock
 
 
 def test_timeout_zero_acquires_free_lock(tmp_path):

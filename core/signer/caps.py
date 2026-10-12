@@ -1,6 +1,6 @@
 """``/etc/polyrob/signer.toml`` — the policy the agent cannot change (066 §5.3).
 
-Root writes it (``deployment/hardening/install-signer.sh`` generates it from the
+Root writes it (the signer provisioning generates it from the
 caps IN USE — owner decision D6: keep current values, never new numbers);
 ``polyrob-signer`` reads it at start. The agent-side caps
 (``AGENT_WALLET_MAX_PER_TX_USD``, ``WALLET_DAILY_CAP_USD``, the owner's
@@ -241,7 +241,7 @@ def _toml_str(value: str) -> str:
 
 def render_signer_toml(cfg: SignerConfig) -> str:
     """The inverse of :func:`parse_signer_config` (used by provisioning)."""
-    lines = ["# /etc/polyrob/signer.toml — written by deployment/hardening/install-signer.sh",
+    lines = ["# /etc/polyrob/signer.toml — written by the signer provisioning (root)",
              "# (066 P2). The hard caps are the values IN USE when it ran (owner D6).",
              "# Root-owned; the agent cannot change it. Edit, then restart polyrob-signer.",
              "", "[caps]",

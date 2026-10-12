@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from tools.controller.types import ActionResult
+from agents.task.loop_types.controller_types import ActionResult
 
 
 # ---------------------------------------------------------------------------
@@ -363,7 +363,7 @@ async def test_run_task_to_outcome_success_carries_reply():
 @pytest.mark.asyncio
 async def test_run_task_to_outcome_marks_autonomous():
     from agents.task.runtime.run_as_session import run_task_to_outcome
-    from agents.task.goals.autonomy_marker import is_autonomous
+    from core.autonomy_marker import is_autonomous
     await run_task_to_outcome(
         _RunFake("sess-auto", "Session completed successfully"),
         user_id="u1", request={"task": "t"}, autonomous=True)

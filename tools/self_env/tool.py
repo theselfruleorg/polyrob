@@ -10,7 +10,7 @@ from typing import Optional, Tuple
 from pydantic import BaseModel, Field
 
 from tools.base_tool import BaseTool
-from tools.controller.types import ActionResult
+from agents.task.loop_types.controller_types import ActionResult
 
 # Conservative pip requirement-spec shape. Dependency changes are proposals only;
 # a trusted updater resolves and installs a reviewed lock delta.
@@ -34,7 +34,8 @@ class PatchSourceParams(BaseModel):
 
 
 class RestartParams(BaseModel):
-    pass
+    reason: str = Field("", max_length=300,
+                        description="One line for the owner: why a restart is needed now.")
 
 
 class GitPullParams(BaseModel):
@@ -65,7 +66,8 @@ class SelfEnvTool(BaseTool):
         return ActionResult(error=(
             "self_env requires the self-maintain compute posture "
             "(AGENT_COMPUTE_POSTURE>=2) and an owner-steered, non-delegated turn; "
-            "each verb is also approval-gated. Self-maintenance is disabled in wallet custody processes."
+            "each verb is also approval-gated. Under wallet custody it also needs key isolation "
+            "and the owner's SECURITY_SETTINGS host_exec_under_custody=allow (the default)."
         ))
 
     def _emit(self, *, action: str, item_id: str = "", ok: bool = True,
@@ -246,18 +248,59 @@ class SelfEnvTool(BaseTool):
         self._emit(action="git_pull", item_id="", ok=False, execution_context=execution_context,
                    reason="trusted_updater_required")
         return ActionResult(error=("git pull is not available to the running agent. "
-                                   "Use the trusted `polyrob update` supervisor path, which stages, "
-                                   "validates, health-checks, and rolls back code."))
+                                   "Updates go through the trusted update path — the owner sends "
+                                   "/update (or runs `polyrob update --apply`), which snapshots, "
+                                   "migrates, verifies, restarts and rolls back on failure."))
 
     @BaseTool.action(
-        "Explain that restarts require the trusted supervisor after a verified update",
+        "Ask for a restart of your own background service (e.g. a setting that only "
+        "applies at the next start). The owner approves the call; then the service "
+        "finishes this turn, restarts, and tells the owner its version. You never "
+        "restart anything yourself.",
         param_model=RestartParams,
     )
     async def self_env_restart_service(self, params: RestartParams, execution_context=None):
+        """077: runs only after the owner approved this call (``always_queued``);
+        writes the ONE restart request (``core.lifecycle``). The process that runs
+        the chat surfaces drains for it — this turn ends first — and the
+        supervisor starts it again. The agent holds no right over the supervisor."""
         if not self._allowed(execution_context):
             return self._deny()
-        self._emit(action="restart_service", item_id="", ok=False, execution_context=execution_context,
-                   reason="trusted_supervisor_required")
-        return ActionResult(error=("restart is not available to the running agent. A trusted supervisor may "
-                                   "restart only after it has durably recorded the owner-visible result and "
-                                   "verified the approved update."))
+        from core import lifecycle as lc
+        from core.runtime_paths import data_dir_or_home
+        home = data_dir_or_home(getattr(getattr(getattr(self, "container", None), "config", None),
+                                        "data_dir", None))
+        try:
+            boot = lc.read_boot(data_home=home)
+        except lc.LifecycleUnreadable as exc:
+            boot, why = None, f"the start record is unreadable ({exc})"
+        else:
+            why = "no background service of mine runs under a supervisor"
+        alive = False
+        if boot and boot.get("supervisor"):
+            try:
+                os.kill(int(boot.get("pid") or 0), 0)
+                alive = True
+            except PermissionError:
+                alive = True
+            except (OSError, ValueError):
+                alive = False
+        if not alive:
+            self._emit(action="restart_service", ok=False, execution_context=execution_context,
+                       reason="no_supervisor")
+            return ActionResult(error=(f"restart not requested: {why}, so nothing would start "
+                                       "it again. The owner runs `polyrob service install` once."))
+        user_id = str(getattr(execution_context, "user_id", "") or "")
+        req, created = lc.request_restart(
+            requested_by="the agent (owner-approved)",
+            origin={"surface": "agent", "user_id": user_id},
+            reason=(params.reason or "self_env_restart_service")[:300], data_home=home)
+        self._emit(action="restart_service", item_id=req.id, ok=True,
+                   execution_context=execution_context, created=created)
+        return ActionResult(
+            extracted_content=(
+                ("Restart requested" if created else f"A restart was already requested "
+                 f"({req.describe()})") + ". Nothing has restarted yet: the service finishes "
+                "this turn and its other work first, then restarts and tells the owner its "
+                "version. Do not say it restarted."),
+            include_in_memory=True)
