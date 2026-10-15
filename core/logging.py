@@ -156,7 +156,7 @@ class ComfyFormatter(logging.Formatter):
             timestamp = self._format_timestamp(record)
             name = self._format_component_name(record)
             level_color = self.COLORS.get(record.levelname, self.MSG_COLOR)
-            emoji = self._get_status_emoji(record.msg)
+            emoji = self._get_status_emoji(record.getMessage())
             message = self._format_message(record, level_color)
 
             # Combine all elements
@@ -231,7 +231,7 @@ class ComfyFormatter(logging.Formatter):
 
     def _format_message(self, record, level_color: str) -> str:
         """Format the message with appropriate styling."""
-        msg = str(record.msg)
+        msg = record.getMessage()
 
         # Handle special message types
         if record.levelname in ('WARNING', 'ERROR', 'CRITICAL'):
